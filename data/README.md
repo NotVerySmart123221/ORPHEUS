@@ -46,7 +46,7 @@ Keep both files and their source locations private. The packer records per-file 
 
 ## Reference inventory and research notes
 
-The following records document the research tools and Python reference behavior.
+The following records document the research tools and Python reference behavior. The named tools live on [`main`](https://github.com/leafall903/ORPHEUS/tree/main/tools); run the Python tool commands below from a `main` checkout.
 
 | File | Purpose |
 | --- | --- |
@@ -75,7 +75,7 @@ The raw reference capture was from client 1.68 and was decoded using 1.74 schema
 
 ### Optional static ray geometry
 
-In the prepared research checkout, use the local 104319 installation to generate the extra ray data for the selected maps.
+In a `main` checkout, use the local 104319 installation to generate the extra ray data for the selected maps.
 
 ```powershell
 .\.venv\Scripts\python.exe tools\build_collision.py 0688 0CD3 --ray-geometry
@@ -83,7 +83,7 @@ In the prepared research checkout, use the local 104319 installation to generate
 
 The tool reads the installation from `game_path.txt` or an executable path given with `--game`. It writes `0688.rays.col` and `0CD3.rays.col` beside the existing movement caches. Runtime preparation copies each selected map's optional ray cache into the external pack and records its SHA-256.
 
-Explicit static queries can use `collision.RayWorld.load(map_guid, mode_guid)`. It verifies the map and original chunk key, then selects props for the requested mode. A missing or mismatched cache produces a load error. Base coverage includes the core chunk and the supported static shapes in the existing prop index. Sphere and capsule props with positive uniform scale use analytic intersections. Nonuniformly scaled round props retain the existing triangle projection.
+In the Python reference on `main`, explicit static queries can use `collision.RayWorld.load(map_guid, mode_guid)`. It verifies the map and original chunk key, then selects props for the requested mode. A missing or mismatched cache produces a load error. Base coverage includes the core chunk and the supported static shapes in the existing prop index. Sphere and capsule props with positive uniform scale use analytic intersections. Nonuniformly scaled round props retain the existing triangle projection.
 
 For a wider static query, use PowerShell 7 and the built DataTool from OWLib revision `7afe5f52706e7002ed8c2717299cd60846f3fa3a`. List unindexed client-made root definitions, export their local records and build the selected ray caches.
 
@@ -134,5 +134,5 @@ Add `--mode-xml 'C:\path\to\xml\0C5'` to the same extraction command to include 
 To serve the bot spawn and death graphs from a prepared pack, include the six Practice Range bot body indexes `1403`, `143E`, `146E`, `14A9`, `14D2` and `14ED`, then pass the generated bundle to the runtime preparation tool. Point `ORPHEUS_RUNTIME_DIR` at the new pack when starting the server.
 
 ```powershell
-.\.venv\Scripts\python.exe tools\prepare_server_runtime.py --source 'C:\path\to\local-research' --destination 'C:\path\to\orpheus-bot-runtime' --map 0688 --game-graphs 'C:\path\to\entity-graphs.json.gz'
+cargo run --locked -p orpheus-runtime --bin prepare_server_runtime -- --source 'C:\path\to\local-research' --destination 'C:\path\to\orpheus-bot-runtime' --map 0688 --game-graphs 'C:\path\to\entity-graphs.json.gz'
 ```

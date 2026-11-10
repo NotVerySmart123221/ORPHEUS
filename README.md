@@ -6,7 +6,7 @@ ORPHEUS is an independent, open-source server reimplementation for **Overwatch 1
 
 > **Rust developer preview.** You can build and run synthetic tests from the public source. Native startup needs an authorized, prepared 104319 runtime. A publicly reproducible original-client authentication setup and a Rust one-click client launcher are still open.
 
-This is the Rust branch. The [default branch](https://github.com/leafall903/ORPHEUS/tree/main) contains the community-maintained Python server and its Windows launcher.
+This is the Rust branch. It contains only the native server and the sources its contributors need. The [default branch](https://github.com/leafall903/ORPHEUS/tree/main) contains the community-maintained Python server, which is also the behavioral reference, with its Windows launcher, tests and data tools.
 
 [Contribute](CONTRIBUTING.md) · [Python/Rust parity](docs/RUST_PARITY.md) · [Architecture](docs/NATIVE_SERVER_ARCHITECTURE.md) · [Roadmap](docs/ROADMAP.md) · [Changelog](CHANGELOG.md) · [Open issues](https://github.com/leafall903/ORPHEUS/issues)
 
@@ -32,7 +32,7 @@ cd ORPHEUS
 cargo test --locked --workspace --all-targets
 ```
 
-Python reference checks have their own setup and selected test list. Review that list before running Python test discovery. [Contribution guide](CONTRIBUTING.md#public-source-checks)
+The contribution guide lists the default and inspector checks that public CI runs. [Contribution guide](CONTRIBUTING.md#public-source-checks)
 
 ## Run the native server
 
@@ -71,7 +71,7 @@ Open [127.0.0.1:3726](http://127.0.0.1:3726/) after startup. The [architecture g
 | `rust/crates/collision` | Collision cache decoding, static queries and contact solver |
 | `rust/crates/runtime` | External runtime inventory, preflight and independent preparation tool |
 | `rust/tests` | Native CLI integration tests |
-| `ow174`, `tests`, `relay` | Python behavioral reference and Windows launcher sources |
-| `docs`, `tools` | Architecture, acceptance criteria and research tools |
+| `relay` | C++ relay source for connecting the original client |
+| `docs` | Architecture, acceptance criteria and research records |
 
 ORPHEUS is an unofficial preservation project. The public source retains the upstream [MIT notice](LICENSE) and [credits](CREDITS.md). Keep game clients, commercial assets, signing material, content keys, private logs, captures and dumps out of the repository and public discussion.

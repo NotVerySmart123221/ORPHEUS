@@ -17,7 +17,7 @@ The [migration guide](RUST_MIGRATION.md) defines the acceptance gate. The [resto
 
 ## Reference and cutover policy
 
-- Use the Python code on `rust` as a read-only behavioral reference. Keep Python `main` and Rust `rust` contributions on their respective branches.
+- Use the Python code on `main`, from a separate checkout, as the behavioral reference. Keep Python `main` and Rust `rust` contributions on their respective branches.
 - Evaluate new Python behavior against the target build and the cutover checklist. Record the source and expected result before deciding whether to port it. Community estimates remain provisional.
 - Pin the Python comparison commits before starting cutover acceptance. During the cutover window, keep the pinned reference limited to fixes that unblock verification. Any change to community development policy on `main` belongs in a separate maintainer decision.
 - Keep game data, private captures, resource keys and signing material local. Public test fixtures must be safe to publish.

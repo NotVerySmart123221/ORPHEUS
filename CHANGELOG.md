@@ -6,6 +6,12 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-11
 
+#### Rust-only branch tree
+
+- Removed the Python server (`ow174/`), its tests and golden fixtures, the dashboard JavaScript test, the Python and PowerShell data tools, the synthetic command replay fixture, the Python launchers, `requirements.txt`, `pyproject.toml`, `WIP.md`, the Python CI job and the Python editor, attribute and packaging ignore entries. Kept ignore patterns for `__pycache__/`, `*.py[cod]` and `.venv/`, which a clone switched from `main` leaves behind. No Rust build, test or tool uses the removed files.
+- Kept the Rust workspace, the C++ client relay, the research and format records, the data provenance guide, the license, credits and history. The Python reference, its tests and the data tools live on `main`. The contributor guide lists only the two Rust CI lanes and the prepared-runtime check. Contributor documentation points to `main` for the Python reference, tests and data tools; research records and provenance comments keep their original paths.
+- Passed formatting, both Clippy lanes, 354 default and 357 inspector workspace tests and 82 relative documentation link checks. No Rust source changed. Original-client acceptance is unaffected because no runtime behavior changed.
+
 #### Make the native inspector opt-in
 
 - Made the loopback HTTP inspector a default-off Cargo feature. Moved its web assets to `rust/assets/inspector`. The CLI explains how to enable the feature when `--debug-port` is requested.
