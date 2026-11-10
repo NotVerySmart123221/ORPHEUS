@@ -59,7 +59,7 @@ cargo run --locked --bin orpheus_server -- --data-dir 'C:\path\to\local-state'
 
 The preparation command copies files from an already prepared checkout and writes a manifest. Omit `--map` to copy all available prepared caches. The native server listens on loopback and can run without a game installation or relay DLL. It reads `profiles/`, `profile.json` and `default_account.txt` from the local state directory. To reuse saved profiles, point it at the existing state directory and use one server at a time. See [Rust migration](docs/RUST_MIGRATION.md) and [runtime data provenance](data/README.md).
 
-Append `--debug-port 3726` to enable the read-only inspector, then visit [the local dashboard](http://127.0.0.1:3726/). It shows active actor state and a sample of the prepared Practice Range collision layers. The map sample is visible while the server is idle. [Inspector details](docs/NATIVE_SERVER_ARCHITECTURE.md#collision-and-live-inspection).
+Append `--debug-port 3726` to enable the read-only inspector, then visit [the local dashboard](http://127.0.0.1:3726/). It shows active actors and the prepared Practice Range collision layers. Use a room actor or enter XYZ coordinates to inspect a smaller region. The spawn sample is available while the server is idle. [Inspector details](docs/NATIVE_SERVER_ARCHITECTURE.md#collision-and-live-inspection).
 
 ## Project layout
 

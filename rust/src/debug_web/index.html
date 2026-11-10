@@ -27,6 +27,16 @@
     </section>
 
     <p id="scene" class="scene" aria-live="polite">Waiting for server data.</p>
+    <form id="geometry-form" class="toolbar geometry-controls" aria-label="Collision sample">
+      <label>X <input id="center-x" type="number" step="any" min="-65536" max="65536" required></label>
+      <label>Y <input id="center-y" type="number" step="any" min="-65536" max="65536" required></label>
+      <label>Z <input id="center-z" type="number" step="any" min="-65536" max="65536" required></label>
+      <label>Half extent (m) <input id="half-extent" type="number" value="8" min="1" max="16" step="any" required></label>
+      <button id="sample-point" type="submit">Sample point</button>
+      <label>Actor <select id="geometry-actor" disabled></select></label>
+      <button id="sample-actor" type="button" disabled>Sample actor position</button>
+      <button id="sample-spawn" type="button">Restore spawn sample</button>
+    </form>
     <div class="views">
       <section class="view" aria-label="Top view">
         <h2>Top <span class="code">X / Z</span></h2>
@@ -46,6 +56,7 @@
       <span><i class="sample dead"></i> Dead actor</span>
     </div>
     <p id="geometry-info" class="notes"></p>
+    <p id="geometry-status" class="notes" role="status"></p>
 
     <section class="entity-panel" aria-labelledby="actor-heading">
       <h2 id="actor-heading">Actors <span id="actor-count" class="code"></span></h2>

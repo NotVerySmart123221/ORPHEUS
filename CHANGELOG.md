@@ -6,6 +6,11 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Local collision region inspection
+
+- Added a bounded collision sample centered on an active actor or an entered XYZ point. The server uses its loaded collision indexes and keeps sampling off the match worker. The inspector reports geometry source and truncation.
+- Passed 334 public Rust tests, formatting and Clippy. Two prepared 104319 checks verified the loaded collision and an uncapped sample around the highest patrol waypoint. Headless Chrome rendered the real scene and verified layer toggling, coordinate sampling and the spawn reset. The reported original-client wall crossing remains unverified.
+
 #### Event-driven Lua patrol pilot
 
 - Moved the existing patrol waits and next-waypoint decision into an embedded Lua policy. The worker validates the policy at startup and validates each event result before applying it. Collision, movement, timing and packet delivery stay in Rust.

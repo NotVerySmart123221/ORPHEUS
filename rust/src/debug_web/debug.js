@@ -2,6 +2,12 @@
 
 const byId = (id) => document.getElementById(id);
 const roomSelect = byId("room");
+const actorSelect = byId("geometry-actor");
+const centerInputs = ["center-x", "center-y", "center-z"].map(byId);
+const halfExtent = byId("half-extent");
+const sampleActor = byId("sample-actor");
+const sampleSpawn = byId("sample-spawn");
+const samplePoint = byId("sample-point");
 const connection = byId("connection");
 const layers = ["triangles", "proxies", "actors"].map(byId);
 const views = [
@@ -23,6 +29,9 @@ function setText(element, text) {
 let snapshot;
 let geometry;
 let roomOptions = "";
+let actorOptions = "";
+let geometryLoading = false;
+let geometryMessage = "";
 
 async function getJson(route) {
   const response = await fetch("/api/debug/v1/" + route, {
@@ -40,6 +49,31 @@ function selectedRoom() {
 
 function matchingGeometry(room) {
   return geometry && (!room || room.map === geometry.map) ? geometry : undefined;
+}
+
+function renderGeometryControls(actors) {
+  const choices = actors.filter(({ position }) => position.every(Number.isFinite));
+  const options = JSON.stringify(choices.map(({ entity, kind }) => [entity, kind]));
+  if (options !== actorOptions) {
+    const previous = actorSelect.value;
+    actorSelect.replaceChildren();
+    if (choices.length === 0) {
+      actorSelect.add(new Option("No available actor", ""));
+    } else {
+      for (const { entity, kind } of choices) {
+        actorSelect.add(new Option(kind + " · " + entity, String(entity)));
+      }
+      if (choices.some(({ entity }) => String(entity) === previous)) {
+        actorSelect.value = previous;
+      }
+    }
+    actorOptions = options;
+  }
+  actorSelect.disabled = geometryLoading || choices.length === 0;
+  sampleActor.disabled = actorSelect.disabled;
+  samplePoint.disabled = geometryLoading;
+  sampleSpawn.disabled = geometryLoading;
+  setText(byId("geometry-status"), geometryMessage);
 }
 
 function render() {
@@ -78,7 +112,7 @@ function render() {
   if (sample) {
     const { triangles, proxies } = sample.counts;
     const limited = Object.keys(sample.truncated).filter((key) => sample.truncated[key]);
-    const extent = sample.bounds.max.map((value, axis) => value - sample.bounds.min[axis]);
+    const extent = sample.bounds.max.map((value, axis) => number(value - sample.bounds.min[axis]));
     info.textContent = [
       triangles + " probe triangles",
       sample.sources.proxies ? proxies + " broad-phase bounds" : "Contact bounds unavailable",
@@ -90,6 +124,7 @@ function render() {
     info.textContent = geometry ? "No collision sample for this room's map." : "Collision sample unavailable.";
   }
 
+  renderGeometryControls(geometry && !sample ? [] : actors);
   renderActors(actors);
   for (const view of views) {
     renderView(view, sample, actors);
@@ -155,7 +190,9 @@ function renderView({ canvas, vertical, up }, sample, actors) {
   const ctx = canvas.getContext("2d");
   ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
   ctx.clearRect(0, 0, width, height);
-  const positionedActors = actors.filter((actor) => actor.position.every(Number.isFinite));
+  const volume = sample?.origin_source === "requested-center" ? sample.bounds : undefined;
+  const positionedActors = actors.filter(({ position }) => position.every((value, axis) =>
+    Number.isFinite(value) && (!volume || (volume.min[axis] <= value && value <= volume.max[axis]))));
   const { min, max } = sample?.bounds ?? actorBounds(positionedActors);
   const scale = Math.min(
     Math.max(1, width - 32) / Math.max(1, max[0] - min[0]),
@@ -233,29 +270,69 @@ function drawGrid(ctx, { min, max, vertical, scale, x, y }) {
   ctx.fillText(step + " m grid", left + 5, top + 13);
 }
 
-async function poll() {
+function setCenterInputs(center) {
+  center.forEach((value, axis) => {
+    centerInputs[axis].value = String(value);
+  });
+}
+
+async function loadGeometry(route, resetCenter = false) {
+  if (geometryLoading) {
+    return;
+  }
+  geometryLoading = true;
+  geometryMessage = "Loading collision sample.";
+  render();
   try {
-    const [state, sample] = await Promise.allSettled([
-      getJson("state"),
-      geometry ?? getJson("geometry"),
-    ]);
-    if (sample.status === "fulfilled") {
-      geometry = sample.value;
+    geometry = await getJson(route);
+    if (resetCenter || centerInputs.every(({ value }) => value === "")) {
+      setCenterInputs(geometry.origin);
     }
-    if (state.status === "fulfilled") {
-      snapshot = state.value;
-      connection.dataset.state = "live";
-      setText(connection, "Live · read-only");
-    } else {
-      connection.dataset.state = "stale";
-      setText(connection, snapshot ? "Stale · last available state" : "Server state unavailable");
-    }
-    render();
+    geometryMessage = "";
+  } catch (error) {
+    geometryMessage = "Collision sample unavailable (" + error.message + ")."
+      + (geometry ? " Showing the previous sample." : "");
   } finally {
+    geometryLoading = false;
+    render();
+  }
+}
+
+function sampleRegion(center) {
+  if (center.every(Number.isFinite) && halfExtent.reportValidity()) {
+    void loadGeometry("geometry?center=" + center.join(",") + "&half_extent=" + halfExtent.valueAsNumber);
+  }
+}
+
+async function poll() {
+  if (!geometry && !geometryLoading) {
+    void loadGeometry("geometry");
+  }
+  try {
+    snapshot = await getJson("state");
+    connection.dataset.state = "live";
+    setText(connection, "Live · read-only");
+  } catch {
+    connection.dataset.state = "stale";
+    setText(connection, snapshot ? "Stale · last available state" : "Server state unavailable");
+  } finally {
+    render();
     window.setTimeout(poll, pollDelay);
   }
 }
 
+byId("geometry-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  sampleRegion(centerInputs.map(({ valueAsNumber }) => valueAsNumber));
+});
+sampleActor.addEventListener("click", () => {
+  const actor = selectedRoom()?.actors.find(({ entity }) => String(entity) === actorSelect.value);
+  if (actor) {
+    setCenterInputs(actor.position);
+    sampleRegion(actor.position);
+  }
+});
+sampleSpawn.addEventListener("click", () => void loadGeometry("geometry", true));
 roomSelect.addEventListener("change", render);
 for (const layer of layers) {
   layer.addEventListener("change", render);

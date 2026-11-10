@@ -57,7 +57,7 @@ cargo run --locked --bin orpheus_server -- --data-dir 'C:\path\to\local-state'
 
 准备命令会从已准备好的检出目录复制文件并写入清单。省略 `--map` 会复制所有已经准备好的缓存。原生服务端使用本地回环地址，可独立于游戏安装和中继 DLL 运行。它从状态目录读取 `profiles/`、`profile.json` 和 `default_account.txt`。复用现有存档时请指向已有状态目录，同一时间只运行一个服务端。详见 [Rust 迁移](docs/RUST_MIGRATION.md)和[运行数据来源](data/README.md)。
 
-在命令末尾添加 `--debug-port 3726` 可启用只读调试面板，然后打开[本地面板](http://127.0.0.1:3726/)。面板显示活跃对局的实体状态和靶场碰撞分层采样。空闲时也能查看地图采样。[面板细节](docs/NATIVE_SERVER_ARCHITECTURE.md#collision-and-live-inspection)。
+在命令末尾添加 `--debug-port 3726` 可启用只读调试面板，然后打开[本地面板](http://127.0.0.1:3726/)。面板显示活跃对局的实体状态和靶场碰撞分层采样。可用房间内的角色位置或手动输入 XYZ 坐标查看局部，空闲时也能查看出生点采样。[面板细节](docs/NATIVE_SERVER_ARCHITECTURE.md#collision-and-live-inspection)。
 
 ## 项目结构
 

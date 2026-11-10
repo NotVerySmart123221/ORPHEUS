@@ -135,7 +135,7 @@ impl Server {
         )?);
         let game_addr = game.local_addr();
         let debug = if let Some(port) = config.debug_port {
-            let geometry = serde_json::to_vec(&scene.debug_geometry().view()).map_err(invalid)?;
+            let geometry = scene.debug_geometry();
             let worker = Arc::clone(&game);
             Some(DebugHttp::bind(port, geometry, move || {
                 worker.debug_snapshot()

@@ -9,6 +9,7 @@ use std::{
 };
 
 use crate::{
+    debug_geometry::{DebugGeometry, GeometryRegion},
     game_debug::Snapshot,
     service_tcp::{PeerStream, PeerWorkers, accept},
 };
@@ -17,6 +18,7 @@ const ACCEPT_POLL: Duration = Duration::from_millis(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_PEERS: usize = 8;
 const MAX_REQUEST_BYTES: usize = 8192;
+const MAX_REGION_QUERY_BYTES: usize = 128;
 const HTML: &str = include_str!("debug_web/index.html");
 const CSS: &str = include_str!("debug_web/debug.css");
 const SCRIPT: &str = include_str!("debug_web/debug.js");
@@ -30,9 +32,10 @@ pub(crate) struct DebugHttp {
 impl DebugHttp {
     pub(crate) fn bind(
         port: u16,
-        geometry: Vec<u8>,
+        geometry: DebugGeometry,
         state: impl Fn() -> io::Result<Snapshot> + Send + Sync + 'static,
     ) -> io::Result<Self> {
+        let initial_geometry = serde_json::to_vec(&geometry.view()).map_err(io::Error::other)?;
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))?;
         listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;
@@ -41,6 +44,7 @@ impl DebugHttp {
             origin: format!("http://{host}"),
             host,
             geometry,
+            initial_geometry,
             state: Box::new(state),
         });
         let (stop, shutdown) = mpsc::channel();
@@ -78,7 +82,8 @@ impl Drop for DebugHttp {
 struct Endpoint {
     host: String,
     origin: String,
-    geometry: Vec<u8>,
+    geometry: DebugGeometry,
+    initial_geometry: Vec<u8>,
     state: Box<dyn Fn() -> io::Result<Snapshot> + Send + Sync>,
 }
 
@@ -147,32 +152,44 @@ fn serve_peer(mut socket: PeerStream, endpoint: &Endpoint) -> io::Result<()> {
     if request.method != Some("GET") {
         return error_response(&mut socket, "405 Method Not Allowed");
     }
-    match request.path {
-        Some("/") => respond(
+    let path = request.path.unwrap_or_default();
+    let (route, query) = path
+        .split_once('?')
+        .map_or((path, None), |(route, query)| (route, Some(query)));
+    match (route, query) {
+        ("/", None) => respond(
             &mut socket,
             "200 OK",
             "text/html; charset=utf-8",
             HTML.as_bytes(),
         ),
-        Some("/debug.css") => respond(
+        ("/debug.css", None) => respond(
             &mut socket,
             "200 OK",
             "text/css; charset=utf-8",
             CSS.as_bytes(),
         ),
-        Some("/debug.js") => respond(
+        ("/debug.js", None) => respond(
             &mut socket,
             "200 OK",
             "text/javascript; charset=utf-8",
             SCRIPT.as_bytes(),
         ),
-        Some("/api/debug/v1/geometry") => respond(
+        ("/api/debug/v1/geometry", None) => respond(
             &mut socket,
             "200 OK",
             "application/json",
-            &endpoint.geometry,
+            &endpoint.initial_geometry,
         ),
-        Some("/api/debug/v1/state") => {
+        ("/api/debug/v1/geometry", Some(query)) => {
+            let Some(region) = parse_geometry_region(query) else {
+                return error_response(&mut socket, "400 Bad Request");
+            };
+            let body =
+                serde_json::to_vec(&endpoint.geometry.region(region)).map_err(io::Error::other)?;
+            respond(&mut socket, "200 OK", "application/json", &body)
+        }
+        ("/api/debug/v1/state", None) => {
             let Ok(state) = (endpoint.state)() else {
                 return error_response(&mut socket, "503 Service Unavailable");
             };
@@ -181,6 +198,32 @@ fn serve_peer(mut socket: PeerStream, endpoint: &Endpoint) -> io::Result<()> {
         }
         _ => error_response(&mut socket, "404 Not Found"),
     }
+}
+
+fn parse_geometry_region(query: &str) -> Option<GeometryRegion> {
+    if query.len() > MAX_REGION_QUERY_BYTES {
+        return None;
+    }
+    let (mut center, mut half_extent) = (None, None);
+    for parameter in query.split('&') {
+        match parameter.split_once('=')? {
+            ("center", value) if center.is_none() => center = Some(value),
+            ("half_extent", value) if half_extent.is_none() => {
+                half_extent = Some(value.parse().ok()?)
+            }
+            _ => return None,
+        }
+    }
+    let mut axes = center?.split(',');
+    let center = [
+        axes.next()?.parse().ok()?,
+        axes.next()?.parse().ok()?,
+        axes.next()?.parse().ok()?,
+    ];
+    if axes.next().is_some() {
+        return None;
+    }
+    GeometryRegion::new(center, half_extent?)
 }
 
 fn allowed_headers(headers: &[httparse::Header<'_>], endpoint: &Endpoint) -> bool {
@@ -249,9 +292,33 @@ fn respond(
 
 #[cfg(test)]
 mod tests {
-    use std::net::TcpStream;
+    use std::{collections::BTreeSet, net::TcpStream};
 
     use super::*;
+    use crate::{
+        collision_cache::CollisionCache, collision_scene::CollisionScene, game_content::GameMap,
+    };
+    use serde_json::{Value, json};
+
+    fn fixture_geometry() -> DebugGeometry {
+        let cache = CollisionCache {
+            header: serde_json::from_value(json!({
+                "meshes": [], "hulls": 0, "models": 0, "placements": 0, "identifiers": [],
+            }))
+            .unwrap(),
+            meshes: vec![],
+            hulls: vec![],
+            models: vec![],
+            placements: vec![],
+        };
+        DebugGeometry::new(
+            &GameMap::practice_range(),
+            "fixture.col".into(),
+            0x18,
+            Arc::new(CollisionScene::movement_probe(&cache, &BTreeSet::new()).unwrap()),
+            None,
+        )
+    }
 
     fn request(addr: SocketAddr, raw: &str) -> String {
         let mut socket = TcpStream::connect(addr).unwrap();
@@ -264,7 +331,7 @@ mod tests {
 
     #[test]
     fn serves_loopback_assets_geometry_and_live_state() {
-        let mut http = DebugHttp::bind(0, br#"{"map":"0000000000000000"}"#.to_vec(), || {
+        let mut http = DebugHttp::bind(0, fixture_geometry(), || {
             Ok(Snapshot {
                 tick: 42,
                 rooms: Vec::new(),
@@ -289,8 +356,14 @@ mod tests {
             assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
         }
         for (route, expected) in [
-            ("geometry", r#"{"map":"0000000000000000"}"#),
-            ("state", r#"{"tick":42,"rooms":[],"truncated":false}"#),
+            (
+                "geometry",
+                json!({"map": "0800000000000688", "origin_source": "first-player-spawn"}),
+            ),
+            (
+                "state",
+                json!({"tick": 42, "rooms": [], "truncated": false}),
+            ),
         ] {
             let response = request(
                 addr,
@@ -301,10 +374,10 @@ mod tests {
             assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
             assert!(response.contains("Content-Type: application/json"));
             let (_, body) = response.split_once("\r\n\r\n").unwrap();
-            assert_eq!(
-                serde_json::from_str::<serde_json::Value>(body).unwrap(),
-                serde_json::from_str::<serde_json::Value>(expected).unwrap()
-            );
+            let body: Value = serde_json::from_str(body).unwrap();
+            for (field, expected) in expected.as_object().unwrap() {
+                assert_eq!(&body[field], expected);
+            }
         }
 
         http.stop().unwrap();
@@ -313,8 +386,62 @@ mod tests {
     }
 
     #[test]
+    fn serves_requested_geometry_and_rejects_invalid_regions() {
+        let http = DebugHttp::bind(0, fixture_geometry(), || unreachable!()).unwrap();
+        let addr = http.addr();
+        let query = |parameters| {
+            request(
+                addr,
+                &format!(
+                    "GET /api/debug/v1/geometry?{parameters} HTTP/1.1\r\nHost: {addr}\r\n\r\n"
+                ),
+            )
+        };
+        let response = query("half_extent=2&center=200,18,-4");
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+        let (_, body) = response.split_once("\r\n\r\n").unwrap();
+        let sample = serde_json::from_str::<Value>(body).unwrap();
+        assert_eq!(sample["origin"], json!([200.0, 18.0, -4.0]));
+        assert_eq!(sample["origin_source"], "requested-center");
+        assert_eq!(sample["bounds"]["min"], json!([198.0, 16.0, -6.0]));
+        assert_eq!(sample["bounds"]["max"], json!([202.0, 20.0, -2.0]));
+        assert_eq!(sample["sources"]["movement_cache"], "fixture.col");
+        assert_eq!(
+            sample["truncated"],
+            json!({"triangles": false, "proxies": false})
+        );
+
+        for parameters in [
+            "",
+            "center=0,0,0",
+            "center=0,0&half_extent=2",
+            "center=0,0,0,0&half_extent=2",
+            "center=0,0,0&half_extent=NaN",
+            "center=0,inf,0&half_extent=2",
+            "center=0,0,-65537&half_extent=2",
+            "center=0,0,0&half_extent=0.5",
+            "center=0,0,0&half_extent=17",
+            "center=0,0,0&half_extent=2&center=1,1,1",
+            "center=0,0,0&half_extent=2&half_extent=3",
+            "center=0,0,0&half_extent=oops&half_extent=3",
+            "center=0,0,0&half_extent=2&extra=1",
+        ] {
+            let response = query(parameters);
+            assert!(
+                response.starts_with("HTTP/1.1 400 "),
+                "{parameters}: {response}"
+            );
+        }
+        let overlong = format!(
+            "center=0,0,0&half_extent=2.{}",
+            "0".repeat(MAX_REGION_QUERY_BYTES)
+        );
+        assert!(query(&overlong).starts_with("HTTP/1.1 400 "));
+    }
+
+    #[test]
     fn caps_request_bytes_and_header_count() {
-        let http = DebugHttp::bind(0, Vec::new(), || unreachable!()).unwrap();
+        let http = DebugHttp::bind(0, fixture_geometry(), || unreachable!()).unwrap();
         let addr = http.addr();
         let mut request_line = format!("GET / HTTP/1.1\r\nHost: {addr}\r\nLong: ");
         request_line.push_str(&"x".repeat(MAX_REQUEST_BYTES - request_line.len()));
@@ -330,7 +457,7 @@ mod tests {
 
     #[test]
     fn refuses_untrusted_requests_and_hides_snapshot_errors() {
-        let http = DebugHttp::bind(0, Vec::new(), || {
+        let http = DebugHttp::bind(0, fixture_geometry(), || {
             Err(io::Error::other("private simulation error"))
         })
         .unwrap();
