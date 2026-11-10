@@ -41,7 +41,8 @@ class FindGameTests(TempDirTest):
             with self.subTest(selected=selected), patch.object(collision, "GAME_PATH_FILE", saved):
                 self.assertEqual(game.find_game(selected, saved=saved), exe.resolve())
                 self.assertEqual(saved.read_text(encoding="utf-8"), str(exe.resolve()))
-                self.assertEqual(collision.installed_game(), folder.resolve())
+                root = collision.installed_game()
+                self.assertTrue(root is not None and root.samefile(folder))
 
     def test_an_unpacked_game_is_found_and_remembered(self):
         exe = self.make_game()
@@ -79,7 +80,8 @@ class FindGameTests(TempDirTest):
         saved.write_text(str(launcher), encoding="utf-8-sig")
         with patch.object(game, "pick_game") as pick, patch.object(collision, "GAME_PATH_FILE", saved):
             self.assertEqual(game.find_game(saved=saved), exe.resolve())
-            self.assertEqual(collision.installed_game(), folder.resolve())
+            root = collision.installed_game()
+            self.assertTrue(root is not None and root.samefile(folder))
         pick.assert_not_called()
 
     def test_an_explicit_path_that_is_not_the_game_does_not_fall_back(self):
