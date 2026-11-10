@@ -769,6 +769,9 @@ impl State {
         self.peers.shift_remove(&connection);
         if let Some((id, slot)) = self.seats.remove(&connection) {
             let room = self.rooms.get_mut(&id).expect("reserved match");
+            if let Some(world) = &mut room.world {
+                world.scene.retire_projectiles(connection);
+            }
             room.players[slot].gone = true;
             room.remaining -= 1;
             if room.remaining == 0 {
@@ -897,6 +900,9 @@ impl State {
             }
             if leave {
                 peer.clear_world();
+                if let Some(world) = &mut room.world {
+                    world.scene.retire_projectiles(connection);
+                }
                 peer.loading = MapReadiness::default();
                 if self.links.begin_leaving(connection, now) {
                     let _ = peer.reliable(&self.schemas, leave_message());
@@ -936,6 +942,11 @@ impl State {
                 send_reliable,
             } => {
                 if entered {
+                    for room in self.rooms.values_mut() {
+                        if let Some(world) = &mut room.world {
+                            world.scene.clear_projectiles();
+                        }
+                    }
                     for (&connection, peer) in &mut self.peers {
                         peer.clear_world();
                         if self.links.begin_leaving(connection, now) {
@@ -969,11 +980,14 @@ impl State {
                     tick,
                     now,
                 };
-                let mut hits = Vec::new();
-                let (bots, queries) = world.scene.bot_simulation();
-                let _ = peer.world.advance_projectiles(tick, |source, flight| {
-                    bots.step_projectile(&queries, source, flight, context, &mut hits)
-                });
+                let Some((owner, launches)) = peer.world.take_projectile_launches() else {
+                    world.scene.retire_projectiles(connection);
+                    continue;
+                };
+                let (simulation, queries) = world.scene.bot_simulation();
+                let (outcomes, hits) =
+                    simulation.advance_projectiles(&queries, connection, owner, launches, context);
+                let _ = peer.world.finish_projectiles(owner, tick, outcomes);
                 for hit in hits {
                     peer.bot_hit(hit);
                 }
@@ -990,13 +1004,16 @@ impl State {
         }
         for (&connection, peer) in &mut self.peers {
             let (id, slot) = self.seats[&connection];
-            let room = &self.rooms[&id];
+            let room = self.rooms.get_mut(&id).expect("admitted room");
             if !drain
                 && peer
                     .advance_loading(&self.schemas, room, slot, now, tick)
                     .is_err()
             {
                 peer.clear_world();
+                if let Some(world) = &mut room.world {
+                    world.scene.retire_projectiles(connection);
+                }
                 peer.loading = MapReadiness::default();
                 if self.links.begin_leaving(connection, now) {
                     let _ = peer.reliable(&self.schemas, leave_message());

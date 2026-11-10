@@ -20,7 +20,7 @@ use crate::{
     debug_geometry::DebugGeometry,
     game_bots::{Bot, BotCatalog, BotWalk},
     game_clock::FIRST_TICK,
-    game_combat::RoomBots,
+    game_combat::RoomSimulation,
     game_content::{GameMap, PRACTICE_RANGE_MAP, PRACTICE_RANGE_MODE},
     game_controller::Controller,
     game_debug::Actor,
@@ -106,7 +106,7 @@ pub struct PreparedScene {
     controller: Controller,
     mode_ui: BitWriter,
     initial_board: Component,
-    bots: RoomBots,
+    simulation: RoomSimulation,
     scripted_bots: usize,
     movers: Arc<MoverCatalog>,
     heroes: Arc<HeroCatalog>,
@@ -195,7 +195,7 @@ impl SceneAssets {
             controller,
             mode_ui,
             initial_board,
-            bots: RoomBots::new(bots),
+            simulation: RoomSimulation::new(bots),
             scripted_bots,
             movers: Arc::clone(&self.movers),
             heroes: Arc::clone(&self.heroes),
@@ -380,28 +380,32 @@ impl PreparedScene {
     }
 
     pub fn bots(&self) -> impl ExactSizeIterator<Item = &Bot> {
-        self.bots.bodies()
+        self.simulation.bodies()
     }
 
     pub(crate) fn bot_actors(&self) -> impl ExactSizeIterator<Item = Actor> {
-        self.bots.debug_actors()
+        self.simulation.debug_actors()
     }
 
-    pub(crate) fn bot_simulation(&mut self) -> (&mut RoomBots, BotQueries<'_>) {
+    pub(crate) fn bot_simulation(&mut self) -> (&mut RoomSimulation, BotQueries<'_>) {
         (
-            &mut self.bots,
-            BotQueries {
-                free_for_all: self.map.free_for_all,
-                movers: &self.movers,
-                ground: &self.ground,
-            },
+            &mut self.simulation,
+            BotQueries::new(self.map.free_for_all, &self.movers, &self.ground),
         )
+    }
+
+    pub(crate) fn retire_projectiles(&mut self, connection: u32) {
+        self.simulation.retire_projectiles(connection);
+    }
+
+    pub(crate) fn clear_projectiles(&mut self) {
+        self.simulation.clear_projectiles();
     }
 
     pub(crate) fn step_bots(&mut self, tick: u32, patrol: &PatrolScript) {
         let floor = self.ground.triangles();
         let map = &self.map;
-        self.bots.for_each_body_mut(|bot| {
+        self.simulation.for_each_body_mut(|bot| {
             if let Err(error) = bot.step(
                 tick,
                 patrol,
@@ -427,7 +431,19 @@ pub(crate) struct BotQueries<'a> {
     ground: &'a CollisionScene,
 }
 
-impl BotQueries<'_> {
+impl<'a> BotQueries<'a> {
+    pub(crate) fn new(
+        free_for_all: bool,
+        movers: &'a MoverCatalog,
+        ground: &'a CollisionScene,
+    ) -> Self {
+        Self {
+            free_for_all,
+            movers,
+            ground,
+        }
+    }
+
     pub(crate) fn free_for_all(&self) -> bool {
         self.free_for_all
     }
@@ -505,7 +521,12 @@ mod tests {
         ));
         let before = first.bots().next().unwrap().position;
         let after = [before[0] + 1.0, before[1], before[2]];
-        second.bots.body_mut(BOT_ENTITY).unwrap().position = after;
+        second
+            .bot_simulation()
+            .0
+            .body_mut(BOT_ENTITY)
+            .unwrap()
+            .position = after;
         assert_eq!(first.bots().next().unwrap().position, before);
         assert_eq!(second.bots().next().unwrap().position, after);
     }

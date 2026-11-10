@@ -6,6 +6,11 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Room ECS projectile flight
+
+- Transferred admitted flights to generational room entities. The room owns physics, collision and damage, and the connection applies terminal outcomes to the matching prediction lease. Body replacement, leave and room drain retire the relevant flights.
+- Passed 339 public Rust tests, formatting, Clippy and prepared encrypted volley, Helix and owner VM loopbacks. New checks cover repeated prediction tokens across owners, stale body generations and completed or failed flight release. Player movement remains connection-owned. Original-client acceptance is pending.
+
 #### Reuse prepared map collision across rooms
 
 - Reused the immutable ground and contact indexes across preparations with the same map, mode and contact requirements. Room bodies and movement state stay independent. The cache retains one key and runs outside the simulation worker.

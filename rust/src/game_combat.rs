@@ -4,7 +4,7 @@
 //! the command and pose at consumption, and owns identity-gated delivery.
 //! Hit selection, damage, and respawn order follow ow174/game/combat.py.
 
-use std::{io, time::Duration};
+use std::{collections::HashMap, io, time::Duration};
 
 use bevy_ecs::{component::Component, entity::Entity, world::World};
 use indexmap::IndexMap;
@@ -16,8 +16,10 @@ use crate::{
     game_debug::{Actor, ActorKind},
     game_heroes::SOLDIER,
     game_hitscan::{HitDefinition, HitscanShot, Impact, TargetHistory, ViewFrame},
+    game_projectiles::ProjectileToken,
+    game_replication::BodyId,
     match_scene::bot_create,
-    projectile_flight::{FlightEnd, ProjectileBallistics, ProjectileFlight},
+    projectile_flight::{ProjectileBallistics, ProjectileFlight},
     scene_assets::BotQueries,
     script_init::ShotEvent,
     vitals::{Death, Vitals},
@@ -92,16 +94,37 @@ impl BotState {
     }
 }
 
-/// The room owns each live bot body and its combat state on the same entity.
-pub(crate) struct RoomBots {
+#[derive(Component)]
+pub(crate) struct AdmittedFlight {
+    pub token: ProjectileToken,
+    pub flight: ProjectileFlight,
+}
+
+pub(crate) enum FlightOutcome {
+    Ended {
+        token: ProjectileToken,
+        travelled: f64,
+    },
+    Failed(ProjectileToken),
+}
+
+struct FlightBatch {
+    owner: BodyId,
+    order: Vec<Entity>,
+}
+
+/// Room-authoritative bot bodies and in-flight projectiles.
+pub(crate) struct RoomSimulation {
     world: World,
     // Wire lookup also preserves the authored spawner order across respawns.
     by_wire: IndexMap<u32, Entity>,
     next_bot: u32,
     combat_active: bool,
+    // Handle lists preserve launch order within the worker's ordered peer turns.
+    projectiles: HashMap<u32, FlightBatch>,
 }
 
-impl RoomBots {
+impl RoomSimulation {
     pub(crate) fn new(bots: Vec<Bot>) -> Self {
         let mut world = World::new();
         let next_bot = BOT_ENTITY + bots.len() as u32;
@@ -114,6 +137,7 @@ impl RoomBots {
             by_wire,
             next_bot,
             combat_active: false,
+            projectiles: HashMap::new(),
         }
     }
 
@@ -218,33 +242,95 @@ impl RoomBots {
         Ok(self.apply_bot_impact(shot.source, shot.shot_frame, context, &impact))
     }
 
-    pub(crate) fn step_projectile(
+    pub(crate) fn advance_projectiles(
         &mut self,
         queries: &BotQueries<'_>,
-        source: u32,
-        flight: &mut ProjectileFlight,
+        connection: u32,
+        owner: BodyId,
+        launches: Vec<AdmittedFlight>,
         context: ShotContext,
-        hits: &mut Vec<BotHit>,
-    ) -> io::Result<Option<FlightEnd>> {
-        self.activate_combat();
-        let candidates: Vec<_> = self
-            .bodies()
-            .filter(|bot| eligible_bot(bot, source, context.team, queries.free_for_all()))
-            .map(|bot| (bot.entity, queries.target(bot)))
-            .collect();
-        let end = flight
-            .advance(context.tick, &candidates, |origin, direction, reach| {
-                queries.hitscan_wall(origin, direction, reach)
-            })
-            .map_err(io::Error::other)?;
-        if let Some(end) = &end {
-            hits.extend(
-                end.impacts.iter().filter_map(|impact| {
-                    self.apply_bot_impact(source, context.tick, context, impact)
-                }),
-            );
+    ) -> (Vec<FlightOutcome>, Vec<BotHit>) {
+        if self
+            .projectiles
+            .get(&connection)
+            .is_some_and(|batch| batch.owner != owner)
+        {
+            self.retire_projectiles(connection);
         }
-        Ok(end)
+        let mut order = self
+            .projectiles
+            .remove(&connection)
+            .map_or_else(Vec::new, |batch| batch.order);
+        order.extend(
+            launches
+                .into_iter()
+                .map(|launch| self.world.spawn(launch).id()),
+        );
+        let mut outcomes = Vec::new();
+        let mut hits = Vec::new();
+        if order.is_empty() {
+            return (outcomes, hits);
+        }
+
+        self.activate_combat();
+        order.retain(|&entity| {
+            // An earlier flight may have killed a target in this same tick.
+            let candidates: Vec<_> = self
+                .bodies()
+                .filter(|bot| eligible_bot(bot, owner.entity, context.team, queries.free_for_all()))
+                .map(|bot| (bot.entity, queries.target(bot)))
+                .collect();
+            let (token, result) = {
+                let mut active = self
+                    .world
+                    .get_mut::<AdmittedFlight>(entity)
+                    .expect("live flight handle");
+                let result =
+                    active
+                        .flight
+                        .advance(context.tick, &candidates, |origin, direction, reach| {
+                            queries.hitscan_wall(origin, direction, reach)
+                        });
+                (active.token, result)
+            };
+            match result {
+                Ok(None) => return true,
+                Ok(Some(end)) => {
+                    hits.extend(end.impacts.iter().filter_map(|impact| {
+                        self.apply_bot_impact(owner.entity, context.tick, context, impact)
+                    }));
+                    outcomes.push(FlightOutcome::Ended {
+                        token,
+                        travelled: end.travelled,
+                    });
+                }
+                Err(_) => outcomes.push(FlightOutcome::Failed(token)),
+            }
+            let removed = self.world.despawn(entity);
+            debug_assert!(removed);
+            false
+        });
+        if !order.is_empty() {
+            self.projectiles
+                .insert(connection, FlightBatch { owner, order });
+        }
+        (outcomes, hits)
+    }
+
+    pub(crate) fn retire_projectiles(&mut self, connection: u32) {
+        if let Some(batch) = self.projectiles.remove(&connection) {
+            for entity in batch.order {
+                let removed = self.world.despawn(entity);
+                debug_assert!(removed);
+            }
+        }
+    }
+
+    pub(crate) fn clear_projectiles(&mut self) {
+        for entity in self.projectiles.drain().flat_map(|(_, batch)| batch.order) {
+            let removed = self.world.despawn(entity);
+            debug_assert!(removed);
+        }
     }
 
     fn apply_bot_impact(
@@ -402,15 +488,147 @@ mod tests {
         now: Duration::from_secs(4),
     };
 
-    fn state(bots: &RoomBots, wire_id: u32) -> Option<&BotState> {
+    fn state(bots: &RoomSimulation, wire_id: u32) -> Option<&BotState> {
         bots.world.get(*bots.by_wire.get(&wire_id)?)
+    }
+
+    fn flight_fixture(owner: BodyId, speed: f64) -> AdmittedFlight {
+        use crate::game_projectiles::{OwnerProjectiles, ProjectileLeases};
+
+        let frame = FIXTURE_CONTEXT.tick;
+        let definition = 0x0400_0000_0000_072c;
+        let leases = ProjectileLeases::new(0, frame, [definition]).unwrap();
+        let token = OwnerProjectiles::new(owner.entity, leases)
+            .admit(
+                ShotEvent {
+                    entity: owner.entity,
+                    instance: 1,
+                    graph: 42,
+                    raw_state: 0,
+                    frame,
+                    time_ms: 0,
+                    activation: 1,
+                    activation_ms: 0,
+                    ordinal: 0,
+                },
+                definition,
+                3,
+            )
+            .unwrap();
+        let flight = ProjectileFlight::new(
+            ProjectileBallistics {
+                speed,
+                lifetime: 0.04,
+                definition: Some(definition),
+                direct: None,
+                blast: None,
+            },
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            None,
+        )
+        .unwrap();
+        AdmittedFlight { token, flight }
+    }
+
+    #[test]
+    fn projectile_flights_keep_peer_generation_and_report_terminal_outcomes() {
+        use crate::{
+            collision_cache::{CollisionCache, Mesh, Triangle},
+            collision_scene::CollisionScene,
+            mover_settings::MoverCatalog,
+        };
+
+        let cache = CollisionCache {
+            header: serde_json::from_str(
+                r#"{"meshes":[[3,1]],"hulls":0,"models":0,"placements":0,"identifiers":[]}"#,
+            )
+            .unwrap(),
+            meshes: vec![Mesh {
+                vertices: vec![[-1.0, 0.0, 0.0], [-1.0, 2.0, 0.0], [-1.0, 0.0, 1.0]],
+                triangles: vec![Triangle {
+                    corners: [0, 1, 2],
+                    wings: [-1; 3],
+                    mask: 0x18,
+                    surface: 0,
+                }],
+            }],
+            hulls: vec![],
+            models: vec![],
+            placements: vec![],
+        };
+        let ground = CollisionScene::movement_probe(&cache, &Default::default()).unwrap();
+        let movers = MoverCatalog::default();
+        let queries = BotQueries::new(false, &movers, &ground);
+        let mut simulation = RoomSimulation::new(Vec::new());
+        let mut context = FIXTURE_CONTEXT;
+        let owner = BodyId {
+            entity: 0xa000_0101,
+            generation: 1,
+        };
+        let other = BodyId {
+            entity: 0xa100_0101,
+            generation: 1,
+        };
+        let first = flight_fixture(owner, 1.0);
+        let second = flight_fixture(other, 1.0);
+        let token = first.token;
+        assert_eq!(token, second.token);
+        for (connection, owner, flight) in [(7, owner, first), (8, other, second)] {
+            let (outcomes, hits) =
+                simulation.advance_projectiles(&queries, connection, owner, vec![flight], context);
+            assert!(outcomes.is_empty() && hits.is_empty());
+        }
+        let old_handle = simulation.projectiles[&7].order[0];
+        let other_handle = simulation.projectiles[&8].order[0];
+
+        context.tick += 3;
+        let owner = BodyId {
+            generation: 2,
+            ..owner
+        };
+        let (outcomes, hits) =
+            simulation.advance_projectiles(&queries, 7, owner, Vec::new(), context);
+        assert!(outcomes.is_empty() && hits.is_empty());
+        assert!(simulation.world.get::<AdmittedFlight>(old_handle).is_none());
+        assert!(
+            simulation
+                .world
+                .get::<AdmittedFlight>(other_handle)
+                .is_some()
+        );
+
+        let (outcomes, hits) =
+            simulation.advance_projectiles(&queries, 8, other, Vec::new(), context);
+        assert!(hits.is_empty());
+        assert!(matches!(
+            outcomes.as_slice(),
+            [FlightOutcome::Ended { token: observed, travelled }]
+                if *observed == token && (*travelled - 0.04).abs() < 1e-12
+        ));
+        assert!(
+            simulation
+                .world
+                .get::<AdmittedFlight>(other_handle)
+                .is_none()
+        );
+
+        let too_far = flight_fixture(owner, 10_000_000.0);
+        let (outcomes, hits) =
+            simulation.advance_projectiles(&queries, 7, owner, vec![too_far], context);
+        assert!(hits.is_empty());
+        assert!(
+            matches!(outcomes.as_slice(), [FlightOutcome::Failed(observed)] if *observed == token)
+        );
+        assert!(simulation.projectiles.is_empty());
+        assert!(simulation.world.entities().is_empty());
     }
 
     #[test]
     fn bot_damage_history_and_respawn_follow_identity_after_scene_reorder() {
         use crate::game_hitscan::TargetPose;
 
-        let mut bots = RoomBots::new(fixture_bots());
+        let mut bots = RoomSimulation::new(fixture_bots());
         bots.activate_combat();
         let first = BOT_ENTITY;
         let second = BOT_ENTITY + 1;
@@ -504,7 +722,7 @@ mod tests {
 
     #[test]
     fn failed_respawn_batch_preserves_all_due_bodies() {
-        let mut bots = RoomBots::new(fixture_bots());
+        let mut bots = RoomSimulation::new(fixture_bots());
         let identities = [BOT_ENTITY, BOT_ENTITY + 1];
         let handles = [bots.by_wire[&identities[0]], bots.by_wire[&identities[1]]];
         let context = FIXTURE_CONTEXT;

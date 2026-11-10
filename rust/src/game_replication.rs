@@ -14,7 +14,9 @@ use crate::{
     game_body::{BodyCreate, BodyView, body_create, owner_pose},
     game_bots::BOT_RECORD_DELAY,
     game_clock::{MAX_LEASE_FRAME, SEND_EVERY, TICK_PERIOD},
-    game_combat::{BotReplacement, PosedHitscan, PosedProjectile, PosedShot},
+    game_combat::{
+        AdmittedFlight, BotReplacement, FlightOutcome, PosedHitscan, PosedProjectile, PosedShot,
+    },
     game_controller::ControllerFrame,
     game_debug::{Actor, ActorKind},
     game_egress::{DeliveryReport, FrameRecords, GameEgress, RecordSource, SendError, SentFrame},
@@ -27,7 +29,7 @@ use crate::{
     mover_correction::CorrectionHistory,
     mover_kinematics::Poses,
     mover_modifiers::{Modifier, ModifierKey},
-    projectile_flight::{FlightEnd, ProjectileFlight},
+    projectile_flight::ProjectileFlight,
     scene_assets::PreparedScene,
     script_init::Snapshot,
     script_player::OwnerBodySpawn,
@@ -52,9 +54,9 @@ const MAX_PENDING_INPUT: usize = 256;
 const MAX_SCRIPT_TAIL: u32 = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct BodyId {
-    entity: u32,
-    generation: u64,
+pub(crate) struct BodyId {
+    pub entity: u32,
+    pub generation: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -110,7 +112,7 @@ struct BodyScript {
     unsent_delta: Option<(u32, DeltaKind)>,
     corrections: Option<CorrectionHistory>,
     projectiles: Option<OwnerProjectiles>,
-    flights: Vec<(ProjectileToken, ProjectileFlight)>,
+    launches: Vec<AdmittedFlight>,
 }
 
 impl BodyScript {
@@ -139,7 +141,7 @@ impl BodyScript {
             unsent_delta: None,
             corrections,
             projectiles,
-            flights: Vec::new(),
+            launches: Vec::new(),
         })
     }
 
@@ -209,7 +211,7 @@ impl BodyScript {
             return;
         };
         if let Some(token) = projectiles.admit(projectile.shot, definition, bound) {
-            self.flights.push((token, flight));
+            self.launches.push(AdmittedFlight { token, flight });
         }
     }
 
@@ -1161,33 +1163,36 @@ impl WorldDelivery {
         std::mem::take(&mut self.hitscan)
     }
 
-    pub(crate) fn advance_projectiles(
+    pub(crate) fn take_projectile_launches(&mut self) -> Option<(BodyId, Vec<AdmittedFlight>)> {
+        let script = self.body_script.as_mut()?;
+        script.projectiles.as_ref()?;
+        Some((script.id, std::mem::take(&mut script.launches)))
+    }
+
+    pub(crate) fn finish_projectiles(
         &mut self,
+        id: BodyId,
         tick: u32,
-        mut step: impl FnMut(u32, &mut ProjectileFlight) -> io::Result<Option<FlightEnd>>,
+        outcomes: Vec<FlightOutcome>,
     ) -> io::Result<()> {
-        let Some(script) = &mut self.body_script else {
+        let Some(projectiles) = self
+            .body_script
+            .as_mut()
+            .filter(|script| script.id == id)
+            .and_then(|script| script.projectiles.as_mut())
+        else {
             return Ok(());
         };
-        let Some(projectiles) = &mut script.projectiles else {
-            return Ok(());
-        };
-        let id = script.id;
         let mut deliveries = Vec::new();
-        script
-            .flights
-            .retain_mut(|(token, flight)| match step(id.entity, flight) {
-                Ok(None) => true,
-                Ok(Some(end)) => {
-                    let travelled = (end.travelled / TICK_PERIOD.as_secs_f64()).ceil() as u32;
-                    projectiles.flight_ended(*token, travelled, tick);
-                    false
+        for outcome in outcomes {
+            match outcome {
+                FlightOutcome::Ended { token, travelled } => {
+                    let travelled = (travelled / TICK_PERIOD.as_secs_f64()).ceil() as u32;
+                    projectiles.flight_ended(token, travelled, tick);
                 }
-                Err(_) => {
-                    projectiles.cancel(*token, &mut deliveries);
-                    false
-                }
-            });
+                FlightOutcome::Failed(token) => projectiles.cancel(token, &mut deliveries),
+            }
+        }
         deliveries.extend(projectiles.advance(tick));
         self.queue_projectiles(id, deliveries)
     }
@@ -2114,6 +2119,96 @@ mod tests {
         world.acknowledge(outcome(destroy, true), Duration::ZERO);
         assert!(world.queued.is_empty());
         assert!(world.projectile_destroys.is_empty());
+    }
+
+    #[test]
+    fn room_flight_outcomes_release_only_the_current_owner_alias() {
+        use crate::{projectile_flight::ProjectileBallistics, script_init::ShotEvent};
+
+        const DEFINITION: u64 = 0x0400_0000_0000_072c;
+        let id = avatar(1, 2);
+        for completed in [false, true] {
+            let mut world = WorldDelivery::new(OWNER);
+            world.started = Some(100);
+            activate_script(&mut world, id, SOLDIER, Arc::default());
+            let leases = ProjectileLeases::new(0, 100, [DEFINITION]).unwrap();
+            let alias = leases.entity(DEFINITION, 101, 0).unwrap();
+            let script = world.body_script.as_mut().unwrap();
+            script.projectiles = Some(OwnerProjectiles::new(id.entity, leases));
+            script.launch_projectile(PosedProjectile {
+                shot: ShotEvent {
+                    entity: id.entity,
+                    instance: 1,
+                    graph: 42,
+                    raw_state: 0,
+                    frame: 101,
+                    time_ms: 101 * FRAME_MS,
+                    activation: 1,
+                    activation_ms: 101 * FRAME_MS,
+                    ordinal: 0,
+                },
+                ballistics: ProjectileBallistics {
+                    speed: 1.0,
+                    lifetime: 2.0,
+                    definition: Some(DEFINITION),
+                    direct: None,
+                    blast: None,
+                },
+                origin: [0.0; 3],
+                direction: [1.0, 0.0, 0.0],
+            });
+            let (owner, launches) = world.take_projectile_launches().unwrap();
+            assert_eq!(owner, id);
+            let [launch] = launches.as_slice() else {
+                panic!("one accepted flight");
+            };
+            let token = launch.token;
+            assert!(world.take_projectile_launches().unwrap().1.is_empty());
+            world
+                .finish_projectiles(avatar(1, 1), 133, vec![FlightOutcome::Failed(token)])
+                .unwrap();
+            assert!(world.queued.is_empty());
+
+            world.finish_projectiles(id, 133, Vec::new()).unwrap();
+            let confirm = Arc::clone(&world.queued[0]);
+            assert_eq!(confirm.update.entity, alias);
+            assert!(matches!(
+                confirm.delivery,
+                Delivery::ProjectileConfirm { .. }
+            ));
+            world.created.insert(id.entity);
+            world.bound = Some(id);
+            world.sent(&[0]);
+            world.acknowledge(outcome(confirm, true), Duration::ZERO);
+
+            let finished = if completed {
+                FlightOutcome::Ended {
+                    token,
+                    travelled: 30.25 * TICK_PERIOD.as_secs_f64(),
+                }
+            } else {
+                FlightOutcome::Failed(token)
+            };
+            world.finish_projectiles(id, 134, vec![finished]).unwrap();
+            if completed {
+                world.finish_projectiles(id, 137, Vec::new()).unwrap();
+                assert!(world.queued.is_empty());
+                world.finish_projectiles(id, 138, Vec::new()).unwrap();
+            }
+            let [release] = world.queued.as_slice() else {
+                panic!("one predicted alias retirement");
+            };
+            assert_eq!(release.update.entity, alias);
+            assert!(matches!(release.update.operation, Some(Operation::Destroy)));
+            assert_eq!(release.update.ch2.is_some(), completed);
+            if let Some(bits) = &release.update.ch2 {
+                let mut reader = BitReader::new(bits.as_bytes());
+                assert!(!reader.bit().unwrap());
+                assert!(reader.bit().unwrap());
+                assert_eq!(reader.var_b().unwrap(), u32::MAX);
+                assert_eq!(reader.var_b().unwrap(), 138 + 4096 + 1);
+            }
+        }
     }
 
     #[test]
