@@ -112,6 +112,12 @@ struct WorldStart {
     card: PlayerCard,
 }
 
+struct RoomWorld {
+    scene: Box<PreparedScene>,
+    card: PlayerCard,
+    patrol: PatrolScript,
+}
+
 impl GameService {
     pub fn bind(address: SocketAddr, schemas: Arc<Schemas>) -> io::Result<Self> {
         Self::bind_with_timing(address, schemas, false)
@@ -343,7 +349,7 @@ struct Room {
     map: GameMap,
     players: Vec<Player>,
     remaining: usize,
-    world: Option<WorldStart>,
+    world: Option<RoomWorld>,
 }
 
 impl Room {
@@ -557,7 +563,7 @@ impl Peer {
 
 struct State {
     schemas: Arc<Schemas>,
-    patrol: PatrolScript,
+    preloaded_patrol: Option<PatrolScript>,
     clock: GameClock,
     timing: Option<WorkerTiming>,
     links: GameConnections,
@@ -572,7 +578,7 @@ impl State {
     fn new(schemas: Arc<Schemas>, patrol: PatrolScript) -> Self {
         Self {
             schemas,
-            patrol,
+            preloaded_patrol: Some(patrol),
             clock: GameClock::default(),
             timing: None,
             links: GameConnections::default(),
@@ -608,7 +614,7 @@ impl State {
         if remaining == 0 || remaining > usize::from(u8::MAX) {
             return Err(invalid("invalid match roster size"));
         }
-        let room = Room {
+        let mut room = Room {
             map,
             players: players
                 .into_iter()
@@ -620,13 +626,24 @@ impl State {
                 })
                 .collect(),
             remaining,
-            world,
+            world: None,
         };
         let initial = room.message(0, true);
         let bytes = encode(&self.schemas, initial.id, &initial.fields).map_err(invalid)?;
         let payload = frame(u32::MAX, u32::MAX, &[(0, bytes)], &[], &[]).map_err(invalid)?;
         if payload.len() > MAX_PAYLOAD {
             return Err(invalid("match roster exceeds the game datagram budget"));
+        }
+        if let Some(WorldStart { scene, card }) = world {
+            let patrol = match self.preloaded_patrol.take() {
+                Some(patrol) => patrol,
+                None => PatrolScript::load()?,
+            };
+            room.world = Some(RoomWorld {
+                scene,
+                card,
+                patrol,
+            });
         }
 
         let mut tickets = Vec::with_capacity(remaining);
@@ -964,7 +981,7 @@ impl State {
         if !drain {
             for room in self.rooms.values_mut() {
                 if let Some(world) = &mut room.world {
-                    world.scene.step_bots(tick, &self.patrol);
+                    world.scene.step_bots(tick, &world.patrol);
                 }
             }
             for (&connection, peer) in &mut self.peers {
@@ -1437,6 +1454,51 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a prepared 104319 Practice Range pack"]
+    fn prepared_rooms_keep_patrol_script_state_local() {
+        use crate::{patrol_script::WaitEvent, scene_assets::SceneAssets};
+
+        let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+        let schemas = Arc::new(Schemas::load(runtime.join("data/game_schemas_174.json")).unwrap());
+        let assets = SceneAssets::load(runtime).unwrap();
+        let stateful = PatrolScript::from_source(
+            "local count = 10; return 1, function() count = count + 1; return count end",
+        )
+        .unwrap();
+        let mut state = State::new(schemas, stateful);
+        let second = [MATCH[0], MATCH[1] + 1];
+        for id in [MATCH, second] {
+            let map = GameMap::practice_range();
+            let scene = assets.prepare(map.clone()).unwrap();
+            state
+                .open_match(
+                    id,
+                    map,
+                    player(),
+                    Some(WorldStart {
+                        scene: Box::new(scene),
+                        card: PlayerCard::default(),
+                    }),
+                    Duration::ZERO,
+                )
+                .unwrap();
+        }
+        let wait = |id, frame| {
+            state.rooms[&id]
+                .world
+                .as_ref()
+                .unwrap()
+                .patrol
+                .wait(WaitEvent::Spawn, frame)
+                .unwrap()
+        };
+        assert_eq!(wait(MATCH, FIRST_TICK), 11.0);
+        assert_eq!(wait(second, FIRST_TICK), 3.0);
+        assert_eq!(wait(MATCH, FIRST_TICK + 1), 12.0);
+        assert_eq!(wait(second, FIRST_TICK + 1), 3.0);
+    }
+
+    #[test]
     #[ignore = "requires the separately prepared 104319 game schemas"]
     fn worker_serves_loading_using_the_retail_schemas() {
         let root = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
@@ -1669,9 +1731,10 @@ mod tests {
                 map: scene.map().clone(),
                 remaining: players.len(),
                 players,
-                world: Some(WorldStart {
+                world: Some(RoomWorld {
                     scene: Box::new(scene),
                     card: PlayerCard::default(),
+                    patrol: PatrolScript::load().unwrap(),
                 }),
             },
         );

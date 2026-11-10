@@ -6,6 +6,11 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Isolate Lua policy state by room
+
+- Gave each prepared room a private Lua patrol VM on the match worker. The server validates the bundled policy at startup and uses that instance for the first prepared room. Later rooms initialize independent instances. Room retirement drops their policy state with the room.
+- Passed 339 public Rust tests, formatting and Clippy. Three prepared regressions cover stateful Lua isolation between rooms, the elevated patrol movement sequence and encrypted world delivery. Original-client acceptance is pending.
+
 #### Repeatable two-room timing workload
 
 - Added an opt-in workload with two encrypted UDP clients in independent solo rooms. Both clients must advance input and receive fixture hits. The report separates worker timing and scheduling from packet and world-frame arrivals, and records both scene preparation times.
