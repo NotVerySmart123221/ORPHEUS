@@ -37,6 +37,7 @@ matchmaking.json
 /data/*.json.gz
 /data/game_schemas_174.txt
 /ow174/bnet/descriptors.pb
+/src/ow174/bnet/descriptors.pb
 
 # Logs and research output
 logs/

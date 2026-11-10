@@ -34,7 +34,7 @@ discovers `runtime-data/` when it contains `manifest.json` or `data/`. An explic
 Run the preflight from the repository root.
 
 ```powershell
-py -3.12 -B -m ow174 --check-runtime
+.\scripts\START.bat --check-runtime
 ```
 
 The default check covers the retail lobby, Battle.net descriptor set and match data. It reports missing paths and validates the signing input's length. Practice Range also needs build 104319 collision data. For a server-only session, supply `collision/0688.col` in the pack. An enabled local client launch can build the cache using the installation and the prepared collision indexes.
@@ -49,7 +49,9 @@ Add `--catalogs $catalogs` to use the four locally generated catalogs in place o
 
 ### Generate missing client data while packing
 
-Use `--game` with `--data-tool` to generate any missing hero, map and unlock catalogs. Add `--owlib` to also generate missing Arcade cards, hero body mappings, movers, graph bundles and stat tables. The packer uses only the XML types needed by the missing files. It keeps any existing prepared files. With `--game` and an explicit `--map 0688`, it can also build a missing Practice Range collision cache from the local game and the prepared collision indexes.
+Use `--game` with `--data-tool` to generate missing hero, map and unlock catalogs. Add `--owlib` to also generate missing Arcade cards, hero body mappings, movers, graph bundles, stat tables, bot spawners and queue rules. Bot spawners use local game storage and a generated or prepared collision prop index. Queue rules use local game exports and prepared retail templates. The packer uses only the XML types needed by the missing files and keeps existing prepared files.
+
+With `--map 0688`, the packer can supply a missing map table using the server's built-in Practice Range definition. With the pinned DataTool and PowerShell 7 it can read the selected collision chunk indexes from the local manifests. For `0688` it can also generate a missing prop index from client map placements and root model collision shapes. When it generates the prop index, it rebuilds the base cache and omits any older optional ray cache.
 
 ```powershell
 $source = 'C:\path\to\authorized-prepared-checkout'
@@ -64,25 +66,26 @@ To reuse local 104319 XML exports, supply their parent directory with `--client-
 
 ## Input provenance and current limits
 
-The pinned upstream runtime inventory and the extraction tools identify the sources of these files. The upstream MIT notice applies to its software and documentation. Separate redistribution permission for the game exports, capture contents and signing material remains unverified. The repository publishes the tools and the project-authored ultimate charge estimates. [Upstream inventory](https://github.com/LizRollin/overwatch-1.74-lobby-server/blob/9f8f3bcb5eccab6fb7738bee3c2371fcf0623f29/data/README.md) · [Ultimate charge estimates](../ow174/game/ult_charge.py)
+The pinned upstream runtime inventory and the extraction tools identify the sources of these files. The upstream MIT notice applies to its software and documentation. Separate redistribution permission for the game exports, capture contents and signing material remains unverified. Runtime preparation uses local inputs. The repository publishes the tools and the project-authored ultimate charge estimates. [Upstream inventory](https://github.com/LizRollin/overwatch-1.74-lobby-server/blob/9f8f3bcb5eccab6fb7738bee3c2371fcf0623f29/data/README.md) · [Ultimate charge estimates](../src/ow174/game/ult_charge.py)
 
 | Runtime input | Source and current preparation route |
 | --- | --- |
 | `extracted_heroes.json`, `extracted_maps.json`, `extracted_items.json`, `extracted_general_unlocks.json` | Generated locally from the game by the packer or the standalone [catalog generator](#generate-client-catalogs). |
 | `arcade_cards_174.json`, `game_heroes_174.json` | Generated from `0C7` and `075` XML. Hero body mapping also uses the hero catalog. [Arcade extractor](../tools/extract_arcade_cards.py) · [Hero extractor](../tools/extract_game_heroes.py) |
 | `game_movers_174.json`, `game_graphs_174.json.gz`, `game_stats_174.json` | Generated from local gameplay XML and hero body mappings. The graph bundle also needs the OWLib enum definitions. [Mover extractor](../tools/extract_game_movers.py) · [Graph extractor](../tools/extract_game_graphs.py) · [Statistics extractor](../tools/extract_game_stats.py) |
-| `collision/0688.col` | Generated from local game storage and prepared collision indexes. [Collision builder](../tools/build_collision.py) |
-| `ai_spawners_174.json` | The existing generator reads local game storage, matching collision prop indexes and hero XML. [Spawner extractor](../tools/extract_ai_spawners.py) |
-| `game_maps_174.json` | The existing generator needs local XML, raw map chunks and an additional map entity export. [Map extractor](../tools/extract_game_maps.py) |
-| `game_queues_174.json` | The existing generator needs local game exports and prepared reference templates. [Queue extractor](../tools/extract_game_queues.py) |
-| `collision_keys_174.json`, `collision_props_174.json` | Prepared indexes into game storage. The record exporter handles selected local records. A complete index generator is still missing. [Record exporter](../tools/export_casc_records.ps1) |
+| `collision/0688.col` | Generated from local game storage and generated or prepared collision indexes. [Collision builder](../tools/build_collision.py) |
+| `ai_spawners_174.json` | Generated for selected maps from local game storage, a generated or prepared collision prop index, and `075` and `003` XML. [Spawner extractor](../tools/extract_ai_spawners.py) |
+| `game_maps_174.json` | For a pack explicitly limited to `0688`, the packer can use the server's built-in Practice Range definition. The full map table needs local XML, raw map chunks and an additional map entity export. [Map extractor](../tools/extract_game_maps.py) |
+| `game_queues_174.json` | Generated from local game exports and the prepared retail templates. [Queue extractor](../tools/extract_game_queues.py) |
+| `collision_keys_174.json` | The packer can generate the selected maps' core collision chunk indexes from local manifests using PowerShell 7 and the pinned DataTool. [Record exporter](../tools/export_casc_records.ps1) |
+| `collision_props_174.json` | For `--map 0688`, generated from local manifests and storage with the pinned DataTool. Other maps and expanded ray geometry still need prepared inputs. [Record exporter](../tools/export_casc_records.ps1) |
 | `schemas_174.json`, `game_schemas_174.json`, `statescript_codecs_174.json` | Research-derived protocol layouts. The existing tools need prepared analysis inputs beyond the game folder. [Schema tool](../tools/dump_schemas.py) · [Codec tool](../tools/extract_statescript_codecs.py) |
 | `retail_templates.json` | Derived from a reference server session. The public setup still needs an authorized input or a separately implemented replacement. |
 | `bnet/descriptors.pb` | Battle.net protobuf descriptors derived from the 1.74 client. A complete publicly reproducible source and build path remain unverified. |
 | `resource_keys_174.json`, `lobby_state_blob.key` | Content access and lobby signing material retained locally. The deployment flow requires the authorized prepared inputs. |
 | `game_ult_charge_174.json` | Optional local override. The project-authored estimates are already in the public server source. |
 
-Full self-hosting from the game folder alone remains open.
+The Practice Range path still requires prepared `retail_templates.json`, `schemas_174.json`, `game_schemas_174.json`, `statescript_codecs_174.json`, `bnet/descriptors.pb`, `resource_keys_174.json` and `lobby_state_blob.key`. Full self-hosting from the game folder alone remains open.
 
 Keep game files, dumps, raw captures, signing input and generated runtime files in local storage. Share missing file names or a redacted error when reporting a setup failure.
 
