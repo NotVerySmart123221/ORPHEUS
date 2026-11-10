@@ -57,10 +57,10 @@ The launcher creates a Python environment if needed and remembers the selected i
 
 ### Separate deployment data
 
-A complete authorized runtime includes protocol data, signing input, gameplay graphs and map collision. The public tools cover catalog generation and packaging. Preparing the entire runtime from a game folder alone remains open. [Runtime guide](data/README.md)
+A complete authorized runtime includes protocol data, signing input, gameplay graphs and map collision. The runtime guide lists the source and preparation route for each required file. Preparing the entire runtime from a game folder alone remains open. [Runtime guide](data/README.md)
 
 - `tools/prepare_client_catalogs.py` generates four catalog JSON files locally from the target game installation with pinned DataTool. [Generate client catalogs](data/README.md#generate-client-catalogs)
-- `tools/prepare_server_runtime.py` assembles already prepared inputs, including the chosen map cache, and writes a manifest. Pass `--catalogs` to use the generated catalogs. The other authorized inputs must be ready in the source checkout.
+- `tools/prepare_server_runtime.py` assembles the runtime and writes a manifest. Optional game and DataTool arguments generate missing catalogs, gameplay data and map caches from local inputs. The remaining authorized files must be ready in the source checkout. [Generate missing data while packing](data/README.md#generate-missing-client-data-while-packing)
 
 For a new Practice Range pack in the default location, run this from the ORPHEUS directory with an authorized prepared source checkout.
 

@@ -1,16 +1,22 @@
-"""Copy the runtime files from a prepared local checkout into an external directory."""
+"""Assemble a runtime from authorized inputs and optionally generate missing client data."""
 
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ow174.paths import CLIENT_CATALOGS, LOBBY_RUNTIME_DATA, MATCH_RUNTIME_DATA, ULT_CHARGE_OVERRIDE
+from ow174.game.casc import CascError, game_root
+from ow174.paths import CLIENT_CATALOGS, LOBBY_RUNTIME_DATA, MATCH_RUNTIME_DATA, ROOT, ULT_CHARGE_OVERRIDE
+from tools.prepare_client_catalogs import prepare_catalogs, require_target_build
+from tools.prepare_client_gameplay import XML_TYPES, export_xml, prepare_gameplay
 
 
 def prepare(
@@ -20,12 +26,25 @@ def prepare(
     *,
     game_graphs: Path | None = None,
     catalogs: Path | None = None,
+    game: Path | None = None,
+    data_tool: Path | None = None,
+    owlib: Path | None = None,
+    client_xml: Path | None = None,
 ) -> None:
     source, destination = source.resolve(), destination.resolve()
     if not source.is_dir():
         raise ValueError("The prepared checkout does not exist")
     if destination.is_relative_to(source) or destination.exists():
         raise ValueError("Choose a new destination outside the source checkout")
+    if data_tool is not None and game is None:
+        raise ValueError("--data-tool requires --game")
+    if owlib is not None and client_xml is None and data_tool is None:
+        raise ValueError("--owlib requires --client-xml or --game with --data-tool")
+    if game is not None:
+        game = game_root(game.resolve())
+        require_target_build(game)
+        if destination.is_relative_to(game):
+            raise ValueError("Choose a destination outside the game installation")
 
     inputs = {f"data/{name}": source / "data" / name for name in LOBBY_RUNTIME_DATA + MATCH_RUNTIME_DATA}
     if catalogs is not None:
@@ -40,21 +59,81 @@ def prepare(
     if maps:
         if any(not re.fullmatch("[0-9a-fA-F]{4,8}", value) for value in maps):
             raise ValueError("Map indexes must contain four to eight hexadecimal digits")
-        caches = [cache / f"{value.upper()}.col" for value in maps]
+        caches = [cache / f"{index:04X}.col" for index in dict.fromkeys(int(value, 16) for value in maps)]
     else:
         caches = sorted(path for path in cache.glob("*.col") if re.fullmatch("[0-9a-fA-F]{4,8}", path.stem))
-    if not caches:
-        raise ValueError("No prepared collision caches were found")
     inputs.update({f"collision/{path.name}": path for path in caches})
     for path in caches:
         rays = path.with_suffix(".rays.col")
         if rays.is_file():
             inputs[f"collision/{rays.name}"] = rays
-    missing = [name for name, path in inputs.items() if not path.is_file()]
+    missing_catalogs = {
+        name for name in CLIENT_CATALOGS if data_tool is not None and catalogs is None
+        and not inputs[f"data/{name}"].is_file()
+    }
+    missing_gameplay = {
+        name for name in XML_TYPES if (owlib is not None or client_xml is not None)
+        and (name != "game_graphs_174.json.gz" or (owlib is not None and game_graphs is None))
+        and not inputs[f"data/{name}"].is_file()
+    }
+    missing_caches = [path for path in caches if game is not None and not path.is_file()]
+    generated = {f"data/{name}" for name in missing_catalogs | missing_gameplay}
+    generated.update(f"collision/{path.name}" for path in missing_caches)
+    missing = [name for name, path in inputs.items() if name not in generated and not path.is_file()]
     if missing:
         raise ValueError("Missing runtime inputs: " + ", ".join(missing))
+    if not caches:
+        raise ValueError("No prepared collision caches were found. Select --map 0688 for Practice Range")
 
-    destination.mkdir(parents=True)
+    with tempfile.TemporaryDirectory(prefix="orpheus-client-data-") as folder:
+        staging = Path(folder)
+        if missing_catalogs:
+            assert game is not None and data_tool is not None
+            local_catalogs = staging / "catalogs"
+            prepare_catalogs(game, data_tool, local_catalogs)
+            inputs.update({f"data/{name}": local_catalogs / name for name in missing_catalogs})
+        if missing_gameplay:
+            if client_xml is None:
+                assert game is not None and data_tool is not None
+                client_xml = staging / "xml"
+                export_xml(game, data_tool, client_xml, missing_gameplay)
+            data_paths = {
+                Path(name).name: path for name, path in inputs.items() if name.startswith("data/")
+            }
+            gameplay = prepare_gameplay(client_xml, owlib, staging / "gameplay", data_paths, missing_gameplay)
+            inputs.update({f"data/{name}": path for name, path in gameplay.items()})
+        if missing_caches:
+            assert game is not None
+            local_cache = _build_collision(staging / "map-runtime", game, missing_caches, inputs)
+            inputs.update({f"collision/{path.name}": local_cache / path.name for path in missing_caches})
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".orpheus-setup-", dir=destination.parent) as output_dir:
+            output = Path(output_dir) / "runtime"
+            _write_runtime(output, inputs)
+            output.rename(destination)
+
+
+def _build_collision(
+    staging: Path, game: Path, maps: list[Path], inputs: dict[str, Path],
+) -> Path:
+    (staging / "data").mkdir(parents=True)
+    for name in ("collision_keys_174.json", "collision_props_174.json", "game_maps_174.json"):
+        relative = f"data/{name}"
+        shutil.copyfile(inputs[relative], staging / relative)
+    subprocess.run(
+        [
+            sys.executable, "-B", str(ROOT / "tools" / "build_collision.py"),
+            *(path.stem for path in maps), "--game", str(game),
+        ],
+        env={**os.environ, "ORPHEUS_RUNTIME_DIR": str(staging)},
+        check=True,
+        timeout=600,
+    )
+    return staging / "collision"
+
+
+def _write_runtime(destination: Path, inputs: dict[str, Path]) -> None:
+    destination.mkdir()
     manifest = {}
     for name, path in sorted(inputs.items()):
         output = destination / name
@@ -75,12 +154,17 @@ def main() -> None:
     parser.add_argument("--map", dest="maps", action="append", default=[], help="map index such as 0688")
     parser.add_argument("--game-graphs", type=Path, help="local graph bundle for the new pack")
     parser.add_argument("--catalogs", type=Path, help="local directory from prepare_client_catalogs.py")
+    parser.add_argument("--game", type=Path, help="104319 install for missing client data and map caches")
+    parser.add_argument("--data-tool", type=Path, help="pinned DataTool.exe for local game exports")
+    parser.add_argument("--owlib", type=Path, help="pinned OWLib checkout to enable gameplay XML generation")
+    parser.add_argument("--client-xml", type=Path, help="use existing local 104319 DataTool XML")
     args = parser.parse_args()
     try:
         prepare(
             args.source, args.destination, args.maps, game_graphs=args.game_graphs, catalogs=args.catalogs,
+            game=args.game, data_tool=args.data_tool, owlib=args.owlib, client_xml=args.client_xml,
         )
-    except (OSError, ValueError) as error:
+    except (CascError, OSError, ValueError, subprocess.SubprocessError) as error:
         parser.error(str(error))
     print(f"Prepared runtime data at {args.destination.resolve()}")
 

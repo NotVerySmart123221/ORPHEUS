@@ -29,12 +29,23 @@ def require_target_build(root: Path) -> None:
         raise ValueError(f"Expected Overwatch {TARGET_BUILD} in .build.info, found {found}")
 
 
-def prepare_catalogs(game: Path, data_tool: Path, destination: Path) -> None:
-    root = game_root(game.resolve())
-    require_target_build(root)
+def run_data_tool(data_tool: Path, root: Path, *args: str) -> None:
     data_tool = data_tool.resolve()
     if not data_tool.is_file():
         raise ValueError("Select the built DataTool.exe from the pinned OWLib checkout")
+    subprocess.run(
+        [
+            str(data_tool), str(root), *args, "--args-reset", "--skip-keys", "--online=false",
+            "--cache=false", "--cache-data=false", "--allow-manifest-fallback=false",
+        ],
+        check=True,
+        timeout=300,
+    )
+
+
+def prepare_catalogs(game: Path, data_tool: Path, destination: Path) -> None:
+    root = game_root(game.resolve())
+    require_target_build(root)
     destination = destination.resolve()
     if destination.exists() or destination.is_relative_to(ROOT) or destination.is_relative_to(root):
         raise ValueError("Choose a new destination outside the ORPHEUS and game directories")
@@ -45,15 +56,7 @@ def prepare_catalogs(game: Path, data_tool: Path, destination: Path) -> None:
         staging.mkdir()
         for name, mode in zip(CLIENT_CATALOGS, MODES, strict=True):
             output = staging / name
-            subprocess.run(
-                [
-                    str(data_tool), str(root), mode, "--json", f"--out={output}", "--args-reset",
-                    "--skip-keys", "--online=false", "--cache=false", "--cache-data=false",
-                    "--allow-manifest-fallback=false",
-                ],
-                check=True,
-                timeout=300,
-            )
+            run_data_tool(data_tool, root, mode, "--json", f"--out={output}")
             data = json.loads(output.read_text(encoding="utf-8-sig"))
             if not isinstance(data, dict) or not data:
                 raise ValueError(f"DataTool produced an empty or invalid catalog for {name}")

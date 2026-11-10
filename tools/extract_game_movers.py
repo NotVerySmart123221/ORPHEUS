@@ -86,12 +86,8 @@ def mover_of(text: str) -> dict | None:
     return values
 
 
-def main(argv: list[str]) -> None:
-    if len(argv) < 2:
-        raise SystemExit(__doc__)
-    folder = Path(argv[1])
-    heroes = list(json.loads((DATA_DIR / "game_heroes_174.json").read_text(encoding="utf-8")).values())
-    spawners = DATA_DIR / "ai_spawners_174.json"
+def collect(folder: Path, hero_table: Path, spawners: Path) -> dict:
+    heroes = list(json.loads(hero_table.read_text(encoding="utf-8")).values())
     if spawners.is_file():
         heroes += json.loads(spawners.read_text(encoding="utf-8"))["heroes"].values()
     table = {}
@@ -103,9 +99,16 @@ def main(argv: list[str]) -> None:
             print(f"skipped {hero['name']}: no character mover in {dump}")
             continue
         table[hero["body"]] = {"name": hero["name"], **values}
+    return dict(sorted(table.items()))
+
+
+def main(argv: list[str]) -> None:
+    if len(argv) < 2:
+        raise SystemExit(__doc__)
+    table = collect(Path(argv[1]), DATA_DIR / "game_heroes_174.json", DATA_DIR / "ai_spawners_174.json")
     out = DATA_DIR / "game_movers_174.json"
     out.write_text(
-        json.dumps(dict(sorted(table.items())), indent=1, ensure_ascii=False) + "\n", encoding="utf-8"
+        json.dumps(table, indent=1, ensure_ascii=False) + "\n", encoding="utf-8"
     )
     print(f"{len(table)} bodies -> {out}")
 

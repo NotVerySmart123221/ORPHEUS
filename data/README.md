@@ -47,18 +47,42 @@ py -3.12 -B tools\prepare_server_runtime.py --source 'C:\path\to\prepared-checko
 
 Add `--catalogs $catalogs` to use the four locally generated catalogs in place of the source checkout's copies.
 
+### Generate missing client data while packing
+
+Use `--game` with `--data-tool` to generate any missing hero, map and unlock catalogs. Add `--owlib` to also generate missing Arcade cards, hero body mappings, movers, graph bundles and stat tables. The packer uses only the XML types needed by the missing files. It keeps any existing prepared files. With `--game` and an explicit `--map 0688`, it can also build a missing Practice Range collision cache from the local game and the prepared collision indexes.
+
+```powershell
+$source = 'C:\path\to\authorized-prepared-checkout'
+$game = 'C:\path\to\Overwatch'
+$owlib = 'C:\path\to\owlib-174'
+$dataTool = Join-Path $owlib 'DataTool\bin\Release\net6.0\DataTool.exe'
+py -3.12 -B tools\prepare_server_runtime.py --source $source --destination .\runtime-data --map 0688 `
+    --game $game --data-tool $dataTool --owlib $owlib
+```
+
+To reuse local 104319 XML exports, supply their parent directory with `--client-xml`. A missing graph bundle also needs the pinned OWLib source for its enum definitions. The packer checks the remaining authorized inputs before starting export. See the table below for inputs the generation step cannot supply.
+
 ## Input provenance and current limits
 
-| Inputs | Current preparation route |
-| --- | --- |
-| Four hero, map and unlock catalogs | Run the [catalog generator](#generate-client-catalogs) against the target installation. |
-| Arcade cards and hero body mapping | Use local DataTool XML for types `0C7` and `075` respectively. Hero body mapping also uses the generated hero catalog. [Arcade extractor](../tools/extract_arcade_cards.py) · [Hero extractor](../tools/extract_game_heroes.py) |
-| Mover parameters, state graphs and statistics | Use local DataTool XML for `003`, `003` and `01B`, or `054`, `075` and `062` respectively. Mover and statistics extraction use the hero body mapping. [Mover extractor](../tools/extract_game_movers.py) · [Graph extractor](../tools/extract_game_graphs.py) · [Statistics extractor](../tools/extract_game_stats.py) |
-| Queue rules, gameplay map records and bot routes | The current extractors also rely on prepared reference templates, map placement exports or collision indexes. [Queue extractor](../tools/extract_game_queues.py) · [Map extractor](../tools/extract_game_maps.py) · [Spawner extractor](../tools/extract_ai_spawners.py) |
-| Map collision cache | Run `tools/build_collision.py 0688 --game <game-folder>` from a checkout with the matching collision indexes, or with `ORPHEUS_RUNTIME_DIR` pointing to a local pack that has those indexes. |
-| Retail templates, Battle.net descriptors, lobby signing input, resource keys, and required protocol and collision indexes | The current Python server needs these prepared inputs. The public repository has no complete generation or distribution path for them. |
+The pinned upstream runtime inventory and the extraction tools identify the sources of these files. The upstream MIT notice applies to its software and documentation. Separate redistribution permission for the game exports, capture contents and signing material remains unverified. The repository publishes the tools and the project-authored ultimate charge estimates. [Upstream inventory](https://github.com/LizRollin/overwatch-1.74-lobby-server/blob/9f8f3bcb5eccab6fb7738bee3c2371fcf0623f29/data/README.md) · [Ultimate charge estimates](../ow174/game/ult_charge.py)
 
-The retail templates originate in a reference server session. Fully setting up a local host from the game folder alone remains an open task.
+| Runtime input | Source and current preparation route |
+| --- | --- |
+| `extracted_heroes.json`, `extracted_maps.json`, `extracted_items.json`, `extracted_general_unlocks.json` | Generated locally from the game by the packer or the standalone [catalog generator](#generate-client-catalogs). |
+| `arcade_cards_174.json`, `game_heroes_174.json` | Generated from `0C7` and `075` XML. Hero body mapping also uses the hero catalog. [Arcade extractor](../tools/extract_arcade_cards.py) · [Hero extractor](../tools/extract_game_heroes.py) |
+| `game_movers_174.json`, `game_graphs_174.json.gz`, `game_stats_174.json` | Generated from local gameplay XML and hero body mappings. The graph bundle also needs the OWLib enum definitions. [Mover extractor](../tools/extract_game_movers.py) · [Graph extractor](../tools/extract_game_graphs.py) · [Statistics extractor](../tools/extract_game_stats.py) |
+| `collision/0688.col` | Generated from local game storage and prepared collision indexes. [Collision builder](../tools/build_collision.py) |
+| `ai_spawners_174.json` | The existing generator reads local game storage, matching collision prop indexes and hero XML. [Spawner extractor](../tools/extract_ai_spawners.py) |
+| `game_maps_174.json` | The existing generator needs local XML, raw map chunks and an additional map entity export. [Map extractor](../tools/extract_game_maps.py) |
+| `game_queues_174.json` | The existing generator needs local game exports and prepared reference templates. [Queue extractor](../tools/extract_game_queues.py) |
+| `collision_keys_174.json`, `collision_props_174.json` | Prepared indexes into game storage. The record exporter handles selected local records. A complete index generator is still missing. [Record exporter](../tools/export_casc_records.ps1) |
+| `schemas_174.json`, `game_schemas_174.json`, `statescript_codecs_174.json` | Research-derived protocol layouts. The existing tools need prepared analysis inputs beyond the game folder. [Schema tool](../tools/dump_schemas.py) · [Codec tool](../tools/extract_statescript_codecs.py) |
+| `retail_templates.json` | Derived from a reference server session. The public setup still needs an authorized input or a separately implemented replacement. |
+| `bnet/descriptors.pb` | Battle.net protobuf descriptors derived from the 1.74 client. A complete publicly reproducible source and build path remain unverified. |
+| `resource_keys_174.json`, `lobby_state_blob.key` | Content access and lobby signing material retained locally. The deployment flow requires the authorized prepared inputs. |
+| `game_ult_charge_174.json` | Optional local override. The project-authored estimates are already in the public server source. |
+
+Full self-hosting from the game folder alone remains open.
 
 Keep game files, dumps, raw captures, signing input and generated runtime files in local storage. Share missing file names or a redacted error when reporting a setup failure.
 

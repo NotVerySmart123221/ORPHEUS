@@ -55,10 +55,10 @@ py -3.12 -B -m ow174 --check-runtime
 
 ### 独立的部署数据
 
-完整的授权运行数据包括协议数据、签名所需数据、玩法状态脚本图和地图碰撞缓存。现有公开工具可生成部分目录数据并打包。仅从游戏目录生成完整运行数据仍是待完成的任务。[运行数据指南](data/README.md)
+完整的授权运行数据包括协议数据、签名所需数据、玩法状态脚本图和地图碰撞缓存。运行数据指南列出了每个必需文件的来源与准备方式。仅从游戏目录生成完整运行数据仍是待完成的任务。[运行数据指南](data/README.md)
 
 - `tools/prepare_client_catalogs.py` 使用指定版本的 DataTool，从目标游戏安装在本地提取四项 JSON 目录数据。[生成客户端目录数据](data/README.md#generate-client-catalogs)
-- `tools/prepare_server_runtime.py` 将已准备好的输入和选定地图缓存打包并写入清单。可通过 `--catalogs` 指定上一步生成的目录数据，其余授权输入需事先放入源目录。
+- `tools/prepare_server_runtime.py` 打包运行数据并写入清单。可选的游戏目录和 DataTool 参数能在本地补齐缺少的目录、玩法数据和地图缓存。其余授权输入需事先放入源目录。[打包时生成缺项](data/README.md#generate-missing-client-data-while-packing)
 
 从 ORPHEUS 目录运行以下命令，即可使用已获授权的准备目录，在默认位置生成一份新的靶场数据包。
 

@@ -37,6 +37,7 @@ foreach ($module in @(
     'test_replay_values.py',
     'test_casc_bundle.py',
     'test_prepare_client_catalogs.py',
+    'test_prepare_server_runtime.py',
     'test_script_expr_budget.py',
     'test_script_membership.py',
     'test_script_raycast.py',

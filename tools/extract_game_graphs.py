@@ -575,11 +575,11 @@ def ai_graph_roots(path: Path) -> set[int]:
 
 def collect(
     xml_dir: Path, enums: EnumTables, entity_indexes: tuple[int, ...] = (), mode_xml: Path | None = None,
-    *, ai_spawners: Path | None = None,
+    *, ai_spawners: Path | None = None, hero_table: Path | None = None,
 ) -> dict:
     variables = mode_variables(mode_xml, enums) if mode_xml is not None else None
     ai_roots = ai_graph_roots(ai_spawners) if ai_spawners is not None else set()
-    heroes = json.loads(HEROES.read_text(encoding="utf-8"))
+    heroes = json.loads((hero_table or HEROES).read_text(encoding="utf-8"))
     bodies, reason, queue = {}, {}, []
     for hero, entry in heroes.items():
         body = int(entry["body"], 16)
@@ -633,6 +633,12 @@ def entity_index(text: str) -> int:
     return int(text, 16)
 
 
+def write_bundle(output: Path, data: dict) -> None:
+    content = {key: value for key, value in data.items() if key != "_reason"}
+    text = json.dumps(content, separators=(",", ":"), ensure_ascii=False)
+    output.write_bytes(gzip.compress(text.encode("utf-8"), compresslevel=9, mtime=0))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--xml", type=Path, required=True, help="DataTool XML dump")
@@ -667,12 +673,11 @@ def main() -> None:
         print(f"{why}: {' '.join(f'{index:04X}' for index in sorted(indexes))}")
     if data["missing"]:
         print("referenced but not in the dump: " + " ".join(f"{index:04X}" for index in data["missing"]))
-    text = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
-    output.write_bytes(gzip.compress(text.encode("utf-8"), compresslevel=9, mtime=0))
+    write_bundle(output, data)
     nodes = sum(len(graph["nodes"]) for graph in data["graphs"])
     print(f"{len(data['graphs'])} graphs, {nodes} nodes, {len(data['bodies'])} hero bodies, "
           f"{len(data.get('entities', {}))} additional entity definitions -> {output}")
-    print(f"{output.stat().st_size / 1e6:.2f} MB ({len(text) / 1e6:.1f} MB of JSON)")
+    print(f"{output.stat().st_size / 1e6:.2f} MB compressed")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,21 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Local generation during runtime packing
+
+- Documented the source and preparation route for every required Python runtime input.
+  Kept extracted data and signing inputs local. The public source already includes the
+  project-authored ultimate charge estimates.
+- Added optional generation of missing catalogs, five gameplay datasets and the selected
+  map cache during packing. The packer checks remaining prepared inputs before export
+  and preserves existing prepared data. It can reuse local 104319 XML exports.
+- Rebuilt 32 hero mappings, 38 movers and 373 graphs from retained 104319 XML.
+  The hero mappings matched the reference and the generated graphs reported one unresolved
+  reference. The reassembled runtime passed headless Practice Range startup.
+- The public source checks passed with 153 Python tests, 6 fixture skips and 2 dashboard
+  tests. Synthetic checks cover the DataTool and collision generation handoffs. Fresh
+  104319 export, original-client play and game-folder-only deployment remain open.
+
 #### Local Practice Range setup
 
 - Made self-hosted Practice Range the first setup path in the English and Simplified Chinese
