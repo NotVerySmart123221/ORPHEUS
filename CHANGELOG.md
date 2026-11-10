@@ -6,6 +6,12 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### One ECS entity per live bot body
+
+- Moved the bot transform, collider and patrol state onto the same Bevy entity as vitals, rewind history and respawn. One ordered wire-ID index preserves spawner order and lets movement, hits, replication and the inspector address the same body.
+- Kept the existing combat activation boundary and the retire-before-create delivery order. Prepared replacements retain their original spawn slot and receive a fresh body handle.
+- Passed 334 public Rust tests, 62 prepared base-pack tests, the enriched timer fixture, formatting, Clippy and the Rust 1.85.1 build check. Encrypted world tests still cover initial baselines, hit delivery, bot replacement and Lua patrol visibility. Player and projectile authority remain separate. Original-client acceptance is pending.
+
 #### Local collision region inspection
 
 - Added a bounded collision sample centered on an active actor or an entered XYZ point. The server uses its loaded collision indexes and keeps sampling off the match worker. The inspector reports geometry source and truncation.

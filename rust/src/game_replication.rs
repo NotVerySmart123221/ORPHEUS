@@ -1003,12 +1003,8 @@ impl WorldDelivery {
         tick: u32,
     ) -> io::Result<()> {
         let records = scene.initial_world(viewer)?;
-        self.bots.extend(
-            scene
-                .bots()
-                .iter()
-                .map(|bot| (bot.entity, BotLifetime::Live)),
-        );
+        self.bots
+            .extend(scene.bots().map(|bot| (bot.entity, BotLifetime::Live)));
         for update in records {
             if self.bots.contains_key(&update.entity) {
                 self.push(Record {
@@ -1503,7 +1499,6 @@ impl WorldDelivery {
         }
         scene
             .bots()
-            .iter()
             .filter(|bot| self.created.contains(&bot.entity) && bot.record_due(tick, SEND_EVERY))
             .map(|bot| EntityUpdate {
                 entity: bot.entity,

@@ -519,13 +519,14 @@ mod tests {
         use std::path::PathBuf;
 
         let root = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
-        let scene = SceneAssets::load(&root)
+        let mut scene = SceneAssets::load(&root)
             .unwrap()
             .prepare(GameMap::practice_range())
             .unwrap();
         let schemas = Schemas::load(root.join("data/game_schemas_174.json")).unwrap();
-        let bot = scene.bots().iter().find(|bot| bot.spawn.team == 1).unwrap();
-        let target = scene.bot_target(bot);
+        let (bots, queries) = scene.bot_simulation();
+        let bot = bots.bodies().find(|bot| bot.spawn.team == 1).unwrap();
+        let target = queries.target(bot);
         let trace = |yaw, distance, height, frame| {
             let [x, y, z] = target.feet;
             let origin = if yaw == 0 {
@@ -540,7 +541,7 @@ mod tests {
             };
             HitscanShot::from_command(origin, &command, 180.0, RIFLE)
                 .resolve([(bot.entity, target)], |origin, direction, length| {
-                    scene.hitscan_wall(origin, direction, length)
+                    queries.hitscan_wall(origin, direction, length)
                 })
                 .unwrap()
         };

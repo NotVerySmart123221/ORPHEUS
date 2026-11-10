@@ -20,8 +20,10 @@ use crate::{
     debug_geometry::DebugGeometry,
     game_bots::{Bot, BotCatalog, BotWalk},
     game_clock::FIRST_TICK,
+    game_combat::RoomBots,
     game_content::{GameMap, PRACTICE_RANGE_MAP, PRACTICE_RANGE_MODE},
     game_controller::Controller,
+    game_debug::Actor,
     game_heroes::{Hero, HeroCatalog, SOLDIER},
     game_instance::RETAIL_QUANTA,
     game_pools::PoolCatalog,
@@ -89,7 +91,7 @@ pub struct PreparedScene {
     controller: Controller,
     mode_ui: BitWriter,
     initial_board: Component,
-    bots: Vec<Bot>,
+    bots: RoomBots,
     scripted_bots: usize,
     movers: Arc<MoverCatalog>,
     heroes: Arc<HeroCatalog>,
@@ -187,7 +189,7 @@ impl SceneAssets {
             controller,
             mode_ui,
             initial_board,
-            bots,
+            bots: RoomBots::new(bots),
             scripted_bots,
             movers: Arc::clone(&self.movers),
             heroes: Arc::clone(&self.heroes),
@@ -327,15 +329,60 @@ impl PreparedScene {
         &self.mode_ui
     }
 
-    pub fn bots(&self) -> &[Bot] {
-        &self.bots
+    pub fn bots(&self) -> impl ExactSizeIterator<Item = &Bot> {
+        self.bots.bodies()
     }
 
-    pub(crate) fn bots_mut(&mut self) -> &mut [Bot] {
-        &mut self.bots
+    pub(crate) fn bot_actors(&self) -> impl ExactSizeIterator<Item = Actor> {
+        self.bots.debug_actors()
     }
 
-    pub(crate) fn bot_target(&self, bot: &Bot) -> crate::game_hitscan::TargetPose {
+    pub(crate) fn bot_simulation(&mut self) -> (&mut RoomBots, BotQueries<'_>) {
+        (
+            &mut self.bots,
+            BotQueries {
+                free_for_all: self.map.free_for_all,
+                movers: &self.movers,
+                ground: &self.ground,
+            },
+        )
+    }
+
+    pub(crate) fn step_bots(&mut self, tick: u32, patrol: &PatrolScript) {
+        let floor = self.ground.triangles();
+        let map = &self.map;
+        self.bots.for_each_body_mut(|bot| {
+            if let Err(error) = bot.step(
+                tick,
+                patrol,
+                ground_height(floor, mover_category(map, bot.spawn.team)),
+            ) {
+                eprintln!(
+                    "Patrol for bot {:08x} stopped at frame {tick}: {error}",
+                    bot.entity
+                );
+            }
+        });
+    }
+
+    pub fn initial_world(&self, viewer: &PlayerAppearance<'_>) -> io::Result<Vec<EntityUpdate>> {
+        initial_world(&self.map, viewer, self.initial_board.clone(), self.bots())
+    }
+}
+
+/// Map queries used by bot simulation without borrowing its entity storage.
+pub(crate) struct BotQueries<'a> {
+    free_for_all: bool,
+    movers: &'a MoverCatalog,
+    ground: &'a CollisionScene,
+}
+
+impl BotQueries<'_> {
+    pub(crate) fn free_for_all(&self) -> bool {
+        self.free_for_all
+    }
+
+    pub(crate) fn target(&self, bot: &Bot) -> crate::game_hitscan::TargetPose {
         let settings = self.movers.for_body(Some(bot.spawn.body));
         crate::game_hitscan::TargetPose {
             feet: bot.position,
@@ -354,26 +401,6 @@ impl PreparedScene {
         self.ground
             .cast_ray(origin, direction, reach, MOVER_CATEGORY)
             .map(|hit| hit.map(|hit| hit.distance))
-    }
-
-    pub(crate) fn step_bots(&mut self, tick: u32, patrol: &PatrolScript) {
-        let floor = self.ground.triangles();
-        for bot in &mut self.bots {
-            if let Err(error) = bot.step(
-                tick,
-                patrol,
-                ground_height(floor, mover_category(&self.map, bot.spawn.team)),
-            ) {
-                eprintln!(
-                    "Patrol for bot {:08x} stopped at frame {tick}: {error}",
-                    bot.entity
-                );
-            }
-        }
-    }
-
-    pub fn initial_world(&self, viewer: &PlayerAppearance<'_>) -> io::Result<Vec<EntityUpdate>> {
-        initial_world(&self.map, viewer, self.initial_board.clone(), &self.bots)
     }
 }
 
@@ -485,7 +512,6 @@ mod tests {
         let mut previous = bots.map(|entity| {
             scene
                 .bots()
-                .iter()
                 .find(|bot| bot.entity == entity)
                 .unwrap()
                 .position
@@ -496,11 +522,7 @@ mod tests {
         for tick in 1001..=2900 {
             scene.step_bots(tick, &patrol);
             for (slot, entity) in bots.into_iter().enumerate() {
-                let bot = scene
-                    .bots()
-                    .iter()
-                    .find(|bot| bot.entity == entity)
-                    .unwrap();
+                let bot = scene.bots().find(|bot| bot.entity == entity).unwrap();
                 let before = previous[slot];
                 previous[slot] = bot.position;
                 let delta =

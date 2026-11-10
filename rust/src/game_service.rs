@@ -21,7 +21,7 @@ use mio::{Events, Interest, Poll, Token, Waker, net::UdpSocket};
 
 use crate::{
     game_clock::{FIRST_TICK, GameClock, Step, next_tick_after},
-    game_combat::{BotHit, BotReplacement, Combat, ShotContext},
+    game_combat::{BotHit, BotReplacement, ShotContext},
     game_combat_messages::CombatNotice,
     game_connection::{GameConnections, MAX_CONNECTION_ID, Outgoing, SILENCE_TIME},
     game_content::{GameMap, PRACTICE_RANGE_MODE},
@@ -109,7 +109,6 @@ struct OpenRequest {
 struct WorldStart {
     scene: Box<PreparedScene>,
     card: PlayerCard,
-    combat: Option<Combat>,
 }
 
 impl GameService {
@@ -205,7 +204,6 @@ impl GameService {
                 world: Some(WorldStart {
                     scene: Box::new(scene),
                     card,
-                    combat: None,
                 }),
                 reply,
             }))
@@ -706,26 +704,9 @@ impl State {
                 truncated = true;
                 break;
             }
-            let bots = world.scene.bots();
-            truncated |= bots.len() > MAX_DEBUG_ACTORS;
-            let actors = bots
-                .iter()
-                .take(MAX_DEBUG_ACTORS)
-                .map(|bot| game_debug::Actor {
-                    entity: bot.entity,
-                    generation: None,
-                    kind: game_debug::ActorKind::Bot,
-                    team: bot.spawn.team,
-                    position: bot.position,
-                    velocity: bot.velocity,
-                    alive: !bot.dead,
-                    health: world.combat.as_ref().map_or_else(
-                        || Some(bot.spawn.health),
-                        |combat| combat.debug_health(bot.entity),
-                    ),
-                    script_active: bot.patrol_active(),
-                })
-                .collect();
+            let actors = world.scene.bot_actors();
+            truncated |= actors.len() > MAX_DEBUG_ACTORS;
+            let actors = actors.take(MAX_DEBUG_ACTORS).collect();
             rooms.insert(
                 id,
                 game_debug::Room {
@@ -878,15 +859,12 @@ impl State {
             let shots = peer.world.take_hitscan();
             if (!leave && peer.world.combat_body_active()) || !shots.is_empty() {
                 let world = room.world.as_mut().expect("prepared world with combat");
-                let combat = world
-                    .combat
-                    .get_or_insert_with(|| Combat::new(&world.scene));
+                let (bots, queries) = world.scene.bot_simulation();
+                bots.activate_combat();
                 for shot in shots {
-                    if let Ok(Some(hit)) =
-                        combat.hitscan(&mut world.scene, shot, context, |entity| {
-                            peer.world.identity_ready(entity)
-                        })
-                    {
+                    if let Ok(Some(hit)) = bots.hitscan(&queries, shot, context, |entity| {
+                        peer.world.identity_ready(entity)
+                    }) {
                         peer.bot_hit(hit);
                     }
                 }
@@ -957,11 +935,9 @@ impl State {
                     now,
                 };
                 let mut hits = Vec::new();
+                let (bots, queries) = world.scene.bot_simulation();
                 let _ = peer.world.advance_projectiles(tick, |source, flight| {
-                    let combat = world
-                        .combat
-                        .get_or_insert_with(|| Combat::new(&world.scene));
-                    combat.step_projectile(&mut world.scene, source, flight, context, &mut hits)
+                    bots.step_projectile(&queries, source, flight, context, &mut hits)
                 });
                 for hit in hits {
                     peer.bot_hit(hit);
@@ -969,13 +945,10 @@ impl State {
             }
             for (&id, room) in &mut self.rooms {
                 if let Some(world) = &mut room.world {
-                    if let Some(combat) = &mut world.combat {
-                        if let Ok(replacements) = combat.respawn_due(&mut world.scene, tick, now) {
-                            if !replacements.is_empty() {
-                                spawned.insert(id, replacements);
-                            }
-                        }
-                        combat.record_poses(&world.scene, tick);
+                    let (bots, queries) = world.scene.bot_simulation();
+                    let replacements = bots.finish_tick(&queries, tick, now).unwrap_or_default();
+                    if !replacements.is_empty() {
+                        spawned.insert(id, replacements);
                     }
                 }
             }
@@ -1614,7 +1587,6 @@ mod tests {
                 world: Some(WorldStart {
                     scene: Box::new(scene),
                     card: PlayerCard::default(),
-                    combat: None,
                 }),
             },
         );
@@ -1762,28 +1734,24 @@ mod tests {
                     let factory = match fixture {
                         PreparedFixture::Combat => {
                             let [x, y, z] = scene.map().spawn_point(0, 0).unwrap().0;
-                            let bot = scene
-                                .bots_mut()
-                                .iter_mut()
-                                .find(|bot| bot.entity == BOT_ENTITY + 1)
-                                .unwrap();
-                            bot.position = [x - 4.0, y, z];
+                            let (bots, _) = scene.bot_simulation();
+                            bots.body_mut(BOT_ENTITY + 1).unwrap().position = [x - 4.0, y, z];
                             fixture_hitscan_factory(100.0)
                         }
                         PreparedFixture::Projectile => {
                             let [x, y, z] = scene.map().spawn_point(0, 0).unwrap().0;
-                            let bots = scene.bots_mut();
+                            let (bots, _) = scene.bot_simulation();
                             assert_eq!(
-                                bots[..3]
-                                    .iter()
+                                bots.bodies()
+                                    .take(3)
                                     .map(|bot| bot.spawn.team)
                                     .collect::<Vec<_>>(),
                                 [0, 1, 1]
                             );
-                            assert!(bots[..3].iter().all(|bot| bot.spawn.route.is_empty()));
-                            bots[0].position = [x - 3.5, y, z];
-                            bots[1].position = [x - 5.0, y, z];
-                            bots[2].position = [x - 5.0, y, z + 0.8];
+                            assert!(bots.bodies().take(3).all(|bot| bot.spawn.route.is_empty()));
+                            bots.body_mut(BOT_ENTITY).unwrap().position = [x - 3.5, y, z];
+                            bots.body_mut(BOT_ENTITY + 1).unwrap().position = [x - 5.0, y, z];
+                            bots.body_mut(BOT_ENTITY + 2).unwrap().position = [x - 5.0, y, z + 0.8];
                             fixture_projectile_factory(40.0)
                         }
                         _ => fixture_body_factory().0,
@@ -1966,6 +1934,10 @@ mod tests {
                     .unwrap();
                 assert!(matches!(bot.kind, game_debug::ActorKind::Bot));
                 assert!(bot.alive && bot.health.is_some_and(|health| health > 0.0));
+                assert!(!bot.script_active);
+                assert!(room.actors.iter().any(|actor| {
+                    matches!(actor.kind, game_debug::ActorKind::Bot) && actor.script_active
+                }));
             }
         }
         server.stop().unwrap();

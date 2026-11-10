@@ -151,13 +151,14 @@ pub fn bot_create(bot: &Bot, vitals: Option<&crate::vitals::Vitals>) -> io::Resu
 }
 
 /// Build the initial world before the local player picks a hero.
-pub fn initial_world(
+pub fn initial_world<'a>(
     map: &GameMap,
     player: &PlayerAppearance<'_>,
     board: Component,
-    bots: &[Bot],
+    bots: impl IntoIterator<Item = &'a Bot>,
 ) -> io::Result<Vec<EntityUpdate>> {
-    let mut updates = Vec::with_capacity(map.placeables.len() + 2 + bots.len());
+    let bots = bots.into_iter();
+    let mut updates = Vec::with_capacity(map.placeables.len() + 2 + bots.size_hint().0);
     updates.extend(map.placeables.iter().map(|&index| EntityUpdate {
         entity: 0x8000_0000 | index,
         operation: Some(Operation::Placeable(index)),
