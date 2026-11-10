@@ -6,9 +6,95 @@
 
 ORPHEUS is an open-source server reimplementation for **Overwatch 1 retail 1.74.0.0.104319**. It is an independent, unofficial research and game preservation project. The long-term goal is to reproduce the server behavior and client-facing events for this build across its heroes, maps and modes. The server is still in development, with Soldier: 76 in the Practice Range as the first end-to-end target.
 
-[Join an existing server](#join-an-existing-server) · [Host your own server](#separate-deployment-data)
+[Test skills in the local Practice Range](#local-practice-range) · [Join an existing server](#join-an-existing-server)
 
 [Contribute](CONTRIBUTING.md) · [Roadmap](docs/ROADMAP.md) · [Rust branch](https://github.com/leafall903/ORPHEUS/tree/rust) · [Verification record](docs/STATE.md) · [Changelog](CHANGELOG.md) · [Open issues](https://github.com/leafall903/ORPHEUS/issues)
+
+## Run locally
+
+The `main` branch contains the community-maintained Python server and Windows launcher. Native server development continues on the separate `rust` branch.
+
+### Local Practice Range
+
+Each tester runs ORPHEUS and the original client on the same Windows PC. Install 64-bit Python 3.12 and use your authorized **1.74.0.0.104319** installation and prepared Practice Range runtime. [Download the Python source ZIP](https://github.com/leafall903/ORPHEUS/archive/refs/heads/main.zip)
+
+#### Place and check the runtime
+
+Extract ORPHEUS and put the prepared pack under `runtime-data/` in the extracted checkout. Put `data/`, `bnet/` and `collision/` directly inside `runtime-data/`.
+
+```text
+ORPHEUS/
+  runtime-data/
+    manifest.json
+    data/
+    bnet/descriptors.pb
+    collision/0688.col
+```
+
+ORPHEUS detects this directory when it contains `manifest.json` or `data/`. An explicit `ORPHEUS_RUNTIME_DIR` takes precedence, and the legacy checkout layout remains the fallback. From the ORPHEUS directory, run the startup preflight. It lists missing startup inputs and checks the signing input length. Map collision is checked when a scene loads.
+
+```powershell
+py -3.12 -B -m ow174 --check-runtime
+```
+
+#### Build the Windows relay once
+
+If you need a local `relay/owwfd_relay.dll` build, install the x64 MSVC Build Tools. Open the x64 Native Tools Command Prompt and run this from the ORPHEUS directory.
+
+```bat
+.\relay\build.bat
+```
+
+#### Launch the game and test a skill
+
+Pass the game installation directory or its `_retail_\Overwatch.exe` to the launcher. With no path argument, the launcher uses its saved client path or opens a file picker.
+
+```powershell
+.\START_LOCAL.cmd --game-exe 'C:\path\to\Overwatch'
+```
+
+The launcher creates a Python environment if needed and remembers the selected installation for future launches and collision preparation. Enter the Practice Range, pick the hero you are testing, and record the exact input and outcome for one skill at a time. [Original-client verification](CONTRIBUTING.md#original-client-verification)
+
+### Separate deployment data
+
+A complete authorized runtime includes protocol data, signing input, gameplay graphs and map collision. The public tools cover catalog generation and packaging. Preparing the entire runtime from a game folder alone remains open. [Runtime guide](data/README.md)
+
+- `tools/prepare_client_catalogs.py` generates four catalog JSON files locally from the target game installation with pinned DataTool. [Generate client catalogs](data/README.md#generate-client-catalogs)
+- `tools/prepare_server_runtime.py` assembles already prepared inputs, including the chosen map cache, and writes a manifest. Pass `--catalogs` to use the generated catalogs. The other authorized inputs must be ready in the source checkout.
+
+For a new Practice Range pack in the default location, run this from the ORPHEUS directory with an authorized prepared source checkout.
+
+```powershell
+py -3.12 -B tools/prepare_server_runtime.py --source 'C:\path\to\prepared-checkout' --destination .\runtime-data --map 0688
+```
+
+### Server-only checks
+
+With the runtime in place, run `START_SERVER_LOCAL.cmd` to start the loopback services and dashboard at `http://127.0.0.1:3725`. This entry needs the Python environment and prepared runtime.
+
+### Join an existing server
+
+On Windows, use the **1.74.0.0.104319** client and 64-bit Python 3.12. Ask the host for the address of their running, compatible ORPHEUS server. The host runs the service with its authorized runtime. The player launcher needs the game folder and host address and runs without a local server runtime or Windows relay.
+
+Open `JOIN_SERVER.cmd` from the same checkout. Enter the address as `host:port`, then select the client if prompted. You can also pass the address and game folder directly in PowerShell.
+
+```powershell
+.\JOIN_SERVER.cmd --server 'HOST:3724' --game-exe 'C:\path\to\Overwatch'
+```
+
+The launcher requests the client's simpler tournament menu. Original-client verification is pending.
+
+### Source-only checks
+
+Use Windows with 64-bit Python 3.12. The source tests below use synthetic fixtures. Node.js 24 is used for the separate dashboard test.
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt "ruff==0.17.3"
+.\.venv\Scripts\python.exe -B -m unittest discover -s tests -p test_game_commands.py
+```
+
+See the [full public checks](CONTRIBUTING.md#public-source-checks) before running broader test discovery.
 
 ## Current status
 
@@ -26,73 +112,8 @@ An automated result covers the fixture or replay named in its evidence. A manual
 
 - **Developers and AI-assisted contributors** can start with the public source tests. The guide covers Codex, Claude Code and the same review requirements for all submissions. [Contribution guide](CONTRIBUTING.md)
 - **Reverse engineers** can help pin a single field, state transition, event or timing rule to build 104319. Start with the relevant evidence and report uncertainty explicitly. [Research evidence](docs/RESEARCH_EVIDENCE.txt)
-- **Players** using the target client on a compatible server can report a short, repeatable gameplay result. Reports of working behavior are welcome alongside bugs. [Gameplay verification](https://github.com/leafall903/ORPHEUS/issues/new?template=gameplay-verification.yml)
+- **Players** can run the local Practice Range and report a short, repeatable gameplay result. Reports of working behavior are welcome alongside bugs. [Gameplay verification](https://github.com/leafall903/ORPHEUS/issues/new?template=gameplay-verification.yml)
 - **New contributors** can look for tasks that use the public checkout and synthetic data. [Good first issues](https://github.com/leafall903/ORPHEUS/labels/good%20first%20issue)
-
-## Run locally
-
-The `main` branch contains the community-maintained Python server and Windows launcher. Native server development continues on the separate `rust` branch.
-
-### Join an existing server
-
-On Windows, use the **1.74.0.0.104319** client and 64-bit Python 3.12. Ask the host for the address of their running, compatible ORPHEUS server. The host runs the service with its authorized runtime. The player launcher needs the game folder and host address and runs without a local server runtime or Windows relay.
-
-Extract the [Python source ZIP](https://github.com/leafall903/ORPHEUS/archive/refs/heads/main.zip) and open `JOIN_SERVER.cmd`. Enter the address as `host:port`, then select the client if prompted. You can also pass the address and game folder directly in PowerShell.
-
-```powershell
-.\JOIN_SERVER.cmd --server 'HOST:3724' --game-exe 'C:\path\to\Overwatch'
-```
-
-The launcher requests the client's simpler tournament menu. Original-client verification is pending.
-
-### Separate deployment data
-
-Hosting your own server requires a complete, authorized runtime for build **1.74.0.0.104319**. It includes protocol data, signing input, gameplay graphs and map collision caches. Preparing the full runtime from a game folder remains an open task. See the [runtime guide](data/README.md) for required files and available preparation steps.
-
-Set `ORPHEUS_RUNTIME_DIR` to your prepared pack. The preflight lists missing startup inputs and checks the signing input length. Run it before installing Python dependencies if needed. Map collision is checked separately when a scene loads.
-
-```powershell
-$env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\orpheus-runtime'
-py -3.12 -B -m ow174 --check-runtime
-```
-
-The public catalog generator can produce four input files locally from your own target-build installation and pinned DataTool. Pass its output directory with `--catalogs` to the packer. The remaining authorized inputs are still required. [Generate client catalogs](data/README.md#generate-client-catalogs)
-
-If you already have the required inputs in a local research checkout, the Python packer copies them into a new directory and writes a manifest. Use `--map 0688` for the Practice Range or omit it to copy all prepared map caches.
-
-```powershell
-py -3.12 -B tools/prepare_server_runtime.py --source 'C:\path\to\local-research' --destination 'C:\path\to\orpheus-runtime' --map 0688
-```
-
-### Start your own server
-
-For server-only checks, run `START_SERVER_LOCAL.cmd` with `ORPHEUS_RUNTIME_DIR` set. It starts the local loopback services and dashboard at `http://127.0.0.1:3725` using the prepared runtime. This entry needs only the runtime and Python environment.
-
-To host and play with the retail menu on the same machine, use the target-build game installation and a trusted local `relay/owwfd_relay.dll` build. For a first build, install the x64 MSVC Build Tools, open the x64 Native Tools Command Prompt, and run this from the repository root.
-
-```bat
-.\relay\build.bat
-```
-
-With the runtime configured and relay built, pass the installation directory or its `_retail_\Overwatch.exe` to the local launcher. With no path argument, the launcher uses its saved client path or opens a file picker.
-
-```powershell
-.\START_LOCAL.cmd --game-exe 'C:\path\to\Overwatch'
-```
-
-The launcher creates a Python environment if needed and remembers the selected installation for future launches and collision preparation. See [original-client verification](CONTRIBUTING.md#original-client-verification) for what to record during a playtest.
-
-### Source-only checks
-
-Use Windows with 64-bit Python 3.12. The source tests below use synthetic fixtures. Node.js 24 is used for the separate dashboard test.
-
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt "ruff==0.17.3"
-.\.venv\Scripts\python.exe -B -m unittest discover -s tests -p test_game_commands.py
-```
-
-See the [full public checks](CONTRIBUTING.md#public-source-checks) before running broader test discovery.
 
 ## Project layout
 

@@ -4,9 +4,18 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+
+def _runtime_directory(root: Path, override: str | None) -> Path | None:
+    if override:
+        return Path(override).resolve()
+    local = root / "runtime-data"
+    if (local / "manifest.json").is_file() or (local / "data").is_dir():
+        return local.resolve()
+    return None
+
+
 ROOT = Path(__file__).resolve().parent.parent
-_runtime_directory = os.environ.get("ORPHEUS_RUNTIME_DIR")
-RUNTIME_DIR = Path(_runtime_directory).resolve() if _runtime_directory else None
+RUNTIME_DIR = _runtime_directory(ROOT, os.environ.get("ORPHEUS_RUNTIME_DIR"))
 DATA_DIR = (RUNTIME_DIR or ROOT) / "data"
 COLLISION_CACHE_DIR = RUNTIME_DIR / "collision" if RUNTIME_DIR is not None else ROOT / "cache" / "collision"
 BNET_DESCRIPTORS = (RUNTIME_DIR or ROOT / "ow174") / "bnet" / "descriptors.pb"

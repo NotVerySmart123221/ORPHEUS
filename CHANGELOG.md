@@ -6,6 +6,17 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Local Practice Range setup
+
+- Made self-hosted Practice Range the first setup path in the English and Simplified Chinese
+  READMEs. Documented which inputs the packer assembles and the four catalogs the game folder
+  can supply. Complete runtime generation from the game folder remains open.
+- Detect an existing pack under the checkout's ignored `runtime-data/` directory. An explicit
+  `ORPHEUS_RUNTIME_DIR` takes precedence, and the legacy checkout layout remains available.
+- Added tests for local pack discovery, explicit path precedence and legacy lookup.
+  A clean source ZIP with an authorized local pack passed preflight and the server-only
+  Practice Range startup check. Original-client play remains to be verified.
+
 #### Player join and client catalog preparation
 
 - Added `JOIN_SERVER.cmd` for joining a compatible running server in tournament mode with the target

@@ -4,9 +4,95 @@
 
 ORPHEUS 是面向 **《守望先锋 1》正式服 1.74.0.0.104319** 的开源服务端复刻项目，独立开展非官方研究与游戏保存工作。长期目标是还原该版本各英雄、地图和模式的服务端行为，以及服务端向客户端发送的事件。服务端仍在开发中，首个端到端验证场景是士兵 76 与训练靶场。
 
-[加入现有服务器](#加入现有服务器) · [自行开服](#独立的部署数据)
+[在本地训练靶场测试技能](#本地训练靶场) · [加入现有服务器](#加入现有服务器)
 
 [参与贡献](CONTRIBUTING.md) · [路线图](docs/ROADMAP.md) · [Rust 分支](https://github.com/leafall903/ORPHEUS/tree/rust) · [验证记录](docs/STATE.md) · [更新日志](CHANGELOG.md) · [待处理问题](https://github.com/leafall903/ORPHEUS/issues)
+
+## 在本地运行
+
+`main` 是由社区维护的 Python 服务端与 Windows 启动器分支。Rust 原生服务端在独立的 `rust` 分支继续开发。
+
+### 本地训练靶场
+
+每位测试者在自己的 Windows 电脑上运行 ORPHEUS 和原版客户端。准备 64 位 Python 3.12、已获授权的 **1.74.0.0.104319** 游戏安装，以及准备好的训练靶场运行数据。[下载 Python 源码 ZIP](https://github.com/leafall903/ORPHEUS/archive/refs/heads/main.zip)
+
+#### 放置并预检运行数据
+
+解压 ORPHEUS，将准备好的数据包放入解压目录下的 `runtime-data/`。让 `data/`、`bnet/` 和 `collision/` 直接位于 `runtime-data/` 下。
+
+```text
+ORPHEUS/
+  runtime-data/
+    manifest.json
+    data/
+    bnet/descriptors.pb
+    collision/0688.col
+```
+
+ORPHEUS 会在该目录含有 `manifest.json` 或 `data/` 时自动识别数据包。显式设置的 `ORPHEUS_RUNTIME_DIR` 优先，其次是自动识别，最后使用旧版目录结构。在 ORPHEUS 目录执行启动预检，查看缺失的启动输入和签名输入长度检查结果。地图碰撞会在加载场景时检查。
+
+```powershell
+py -3.12 -B -m ow174 --check-runtime
+```
+
+#### 首次编译 Windows 中继
+
+需要本地编译 `relay/owwfd_relay.dll` 时，先安装 x64 MSVC Build Tools，打开 x64 Native Tools 命令提示符，在 ORPHEUS 目录执行。
+
+```bat
+.\relay\build.bat
+```
+
+#### 启动游戏并测试技能
+
+把游戏安装目录或其中的 `_retail_\Overwatch.exe` 传给启动器。省略路径时，启动器会使用已保存的客户端路径或打开文件选择框。
+
+```powershell
+.\START_LOCAL.cmd --game-exe 'C:\path\to\Overwatch'
+```
+
+启动器会在需要时创建 Python 环境，并保存所选安装目录，供下次启动和准备碰撞数据使用。进入训练靶场，选定要测试的英雄，每次记录一个技能的准确操作和实际结果。[原版客户端验证步骤](CONTRIBUTING.md#original-client-verification)
+
+### 独立的部署数据
+
+完整的授权运行数据包括协议数据、签名所需数据、玩法状态脚本图和地图碰撞缓存。现有公开工具可生成部分目录数据并打包。仅从游戏目录生成完整运行数据仍是待完成的任务。[运行数据指南](data/README.md)
+
+- `tools/prepare_client_catalogs.py` 使用指定版本的 DataTool，从目标游戏安装在本地提取四项 JSON 目录数据。[生成客户端目录数据](data/README.md#generate-client-catalogs)
+- `tools/prepare_server_runtime.py` 将已准备好的输入和选定地图缓存打包并写入清单。可通过 `--catalogs` 指定上一步生成的目录数据，其余授权输入需事先放入源目录。
+
+从 ORPHEUS 目录运行以下命令，即可使用已获授权的准备目录，在默认位置生成一份新的靶场数据包。
+
+```powershell
+py -3.12 -B tools/prepare_server_runtime.py --source 'C:\path\to\prepared-checkout' --destination .\runtime-data --map 0688
+```
+
+### 纯服务端检查
+
+放置运行数据后，可执行 `START_SERVER_LOCAL.cmd` 启动本地回环服务。管理面板地址为 `http://127.0.0.1:3725`。此入口需要 Python 环境和准备好的运行数据。
+
+### 加入现有服务器
+
+在 Windows 上准备 **1.74.0.0.104319** 客户端和 64 位 Python 3.12，向服主获取正在运行的兼容 ORPHEUS 服务器地址。授权的服务端运行数据由服主准备。玩家端使用游戏目录和服务器地址，无需准备本地服务端运行数据或 Windows 中继。
+
+在同一个 ORPHEUS 目录下打开 `JOIN_SERVER.cmd`，输入 `主机:端口`，并在提示时选择游戏客户端。也可以在 PowerShell 直接传入服务器地址和游戏目录。
+
+```powershell
+.\JOIN_SERVER.cmd --server 'HOST:3724' --game-exe 'C:\path\to\Overwatch'
+```
+
+启动器以简化的锦标赛模式运行客户端，仍待原版客户端验证。
+
+### 公开源码检查
+
+文档以 Windows 和 64 位 Python 3.12 为运行环境。以下源码测试使用合成数据。单独的管理面板测试使用 Node.js 24。
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt "ruff==0.17.3"
+.\.venv\Scripts\python.exe -B -m unittest discover -s tests -p test_game_commands.py
+```
+
+扩大测试范围之前，请查看[完整的公开源码检查清单](CONTRIBUTING.md#public-source-checks)。
 
 ## 当前进度
 
@@ -24,73 +110,8 @@ ORPHEUS 是面向 **《守望先锋 1》正式服 1.74.0.0.104319** 的开源服
 
 - **开发者和使用 AI 工具的贡献者**可以从公开源码测试入手。贡献指南涵盖 Codex、Claude Code，并为所有提交规定统一的审查要求。[贡献指南](CONTRIBUTING.md)
 - **逆向研究者**可以帮助确认 104319 版本中的单个字段、状态切换、事件或时序规则。请从相关证据出发，并明确说明尚不确定的部分。[研究证据](docs/RESEARCH_EVIDENCE.txt)
-- **玩家**可使用目标版本客户端连接兼容服务器，提交简短且可复现的游玩结果。欢迎同时报告正常行为和缺陷。[游玩验证表单](https://github.com/leafall903/ORPHEUS/issues/new?template=gameplay-verification.yml)
+- **玩家**可以在自己的电脑上启动训练靶场，提交简短且可复现的游玩结果。欢迎同时报告正常行为和缺陷。[游玩验证表单](https://github.com/leafall903/ORPHEUS/issues/new?template=gameplay-verification.yml)
 - **初次参与者**可以查找只需公开源码和合成数据即可完成的任务。[适合入门的问题](https://github.com/leafall903/ORPHEUS/labels/good%20first%20issue)
-
-## 在本地运行
-
-`main` 是由社区维护的 Python 服务端与 Windows 启动器分支。Rust 原生服务端在独立的 `rust` 分支继续开发。
-
-### 加入现有服务器
-
-在 Windows 上准备 **1.74.0.0.104319** 客户端和 64 位 Python 3.12，向服主获取正在运行的兼容 ORPHEUS 服务器地址。授权的服务端运行数据由服主准备。玩家端使用游戏目录和服务器地址，无需准备本地服务端运行数据或 Windows 中继。
-
-下载并解压 [Python 源码 ZIP](https://github.com/leafall903/ORPHEUS/archive/refs/heads/main.zip)，打开 `JOIN_SERVER.cmd`，输入 `主机:端口`，并在提示时选择游戏客户端。也可以在 PowerShell 直接传入服务器地址和游戏目录。
-
-```powershell
-.\JOIN_SERVER.cmd --server 'HOST:3724' --game-exe 'C:\path\to\Overwatch'
-```
-
-启动器以简化的锦标赛模式运行客户端，仍待原版客户端验证。
-
-### 独立的部署数据
-
-自行开服需要 **1.74.0.0.104319** 版本完整且已获授权的服务端运行数据，其中包括协议数据、签名所需数据、玩法状态脚本图和地图碰撞缓存。仅从游戏目录准备完整运行数据仍是待完成的任务。所需文件及准备步骤见[运行数据指南](data/README.md)。
-
-将 `ORPHEUS_RUNTIME_DIR` 指向准备好的数据包。启动预检会列出缺失的启动输入并检查签名输入的长度，可以在安装 Python 依赖前运行。地图碰撞缓存会在加载场景时另行检查。
-
-```powershell
-$env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\orpheus-runtime'
-py -3.12 -B -m ow174 --check-runtime
-```
-
-公开的客户端数据提取工具可通过目标版本游戏安装和指定版本的 DataTool 在本地生成四项输入。打包时可用 `--catalogs` 指定这些文件的输出目录，其余已获授权的输入仍需另行准备。见[生成客户端目录数据](data/README.md#generate-client-catalogs)。
-
-如果本地研究目录已有所需输入，可用 Python 打包工具将文件复制到新的目录并写入清单。靶场使用 `--map 0688`，省略该参数可复制所有已准备好的地图缓存。
-
-```powershell
-py -3.12 -B tools/prepare_server_runtime.py --source 'C:\path\to\local-research' --destination 'C:\path\to\orpheus-runtime' --map 0688
-```
-
-### 启动自己的服务器
-
-运行纯服务端前先设置 `ORPHEUS_RUNTIME_DIR`，然后执行 `START_SERVER_LOCAL.cmd`。它会启动本地回环服务，管理面板地址是 `http://127.0.0.1:3725`。这一入口只需要已准备好的运行数据和 Python 环境。
-
-在同一台电脑开服并使用正式服菜单游玩，需要目标版本的游戏安装和 Windows 中继。已有可信的本地编译产物 `relay/owwfd_relay.dll` 时可以复用。首次编译请安装 x64 MSVC Build Tools，打开 x64 Native Tools 命令提示符，在仓库根目录执行。
-
-```bat
-.\relay\build.bat
-```
-
-配置运行数据并编译中继后，把游戏安装目录或其中的 `_retail_\Overwatch.exe` 传给本地启动器。省略路径参数时，启动器会使用已保存的客户端路径或打开文件选择框。
-
-```powershell
-.\START_LOCAL.cmd --game-exe 'C:\path\to\Overwatch'
-```
-
-启动器会在需要时创建 Python 环境，并保存所选安装目录，供下次启动和准备碰撞数据使用。测试记录应包含的信息见[原版客户端验证步骤](CONTRIBUTING.md#original-client-verification)。
-
-### 公开源码检查
-
-文档以 Windows 和 64 位 Python 3.12 为运行环境。以下源码测试使用合成数据。单独的管理面板测试使用 Node.js 24。
-
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt "ruff==0.17.3"
-.\.venv\Scripts\python.exe -B -m unittest discover -s tests -p test_game_commands.py
-```
-
-扩大测试范围之前，请查看[完整的公开源码检查清单](CONTRIBUTING.md#public-source-checks)。
 
 ## 项目结构
 

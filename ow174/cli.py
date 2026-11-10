@@ -254,11 +254,11 @@ def _paths(args: argparse.Namespace) -> Paths:
 def _require_runtime(args: argparse.Namespace) -> None:
     missing = missing_runtime_files(matches=args.game_port > 0, bnet=args.mode in ("retail", "host"))
     if missing:
-        source = "ORPHEUS_RUNTIME_DIR" if RUNTIME_DIR is not None else "the source checkout"
+        source = "the configured runtime directory" if RUNTIME_DIR is not None else "the source checkout"
         raise LaunchError(
             f"Missing runtime files in {source}: {', '.join(missing)}. "
-            "See data/README.md for supported inputs and preparation. "
-            "Selecting the game directory alone cannot supply these files."
+            "Place a complete authorized pack in runtime-data/ or set ORPHEUS_RUNTIME_DIR. "
+            "See data/README.md for preparation."
         )
     try:
         lobby_state_blob_key()

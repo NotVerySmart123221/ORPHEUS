@@ -180,6 +180,30 @@ class NoLaunchTests(unittest.TestCase):
             )
 
 
+class RuntimeDirectoryTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
+        self.local = self.root / "runtime-data"
+        self.local.mkdir()
+
+    def test_empty_runtime_directory_preserves_legacy_lookup(self):
+        self.assertIsNone(paths._runtime_directory(self.root, ""))
+
+    def test_local_pack_is_discovered_with_a_manifest_or_data_directory(self):
+        marker = self.local / "manifest.json"
+        marker.write_text("{}", encoding="utf-8")
+        self.assertEqual(paths._runtime_directory(self.root, None), self.local)
+        marker.unlink()
+        (self.local / "data").mkdir()
+        self.assertEqual(paths._runtime_directory(self.root, None), self.local)
+
+    def test_explicit_path_takes_precedence_even_if_it_is_missing(self):
+        (self.local / "data").mkdir()
+        override = self.root / "other-runtime"
+        self.assertEqual(paths._runtime_directory(self.root, str(override)), override)
+        self.assertFalse(override.exists())
+
+
 class RuntimeCheckTests(unittest.TestCase):
     def setUp(self):
         self.folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
@@ -225,7 +249,7 @@ class RuntimeCheckTests(unittest.TestCase):
                     with self.assertLogs("ow174", level="ERROR") as messages:
                         self.assertEqual(cli.main(args), 1)
                     error = "\n".join(messages.output)
-                    source = "ORPHEUS_RUNTIME_DIR" if external else "the source checkout"
+                    source = "the configured runtime directory" if external else "the source checkout"
                     self.assertIn(f"Missing runtime files in {source}", error)
                     self.assertIn("data/retail_templates.json", error)
                     self.assertIn("data/game_graphs_174.json.gz", error)

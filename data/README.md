@@ -2,8 +2,6 @@
 
 The Python server targets Overwatch retail **1.74.0.0.104319**. A clean checkout supports the public source checks. Serving the original client requires a local runtime assembled from authorized inputs. See [separate deployment data](../README.md#separate-deployment-data).
 
-Players joining a compatible running server through [JOIN_SERVER.cmd](../JOIN_SERVER.cmd) use the game installation and the host address. The server operator prepares the runtime.
-
 ## Generate client catalogs
 
 The four catalog files can be generated from your authorized 104319 installation. Use the [pinned OWLib source](https://github.com/overtools/OWLib/tree/7afe5f52706e7002ed8c2717299cd60846f3fa3a) with its submodules and the x64 .NET 6 SDK.
@@ -28,19 +26,23 @@ The command runs OWLib's hero, map and unlock list modes and writes `extracted_h
 
 ## Check or prepare a local runtime
 
-With Python 3.12 installed, run this from the repository root. Set `ORPHEUS_RUNTIME_DIR` to check a specific pack. Leave it unset to check the legacy checkout layout.
+With Python 3.12 installed, unpack your authorized pack so that `runtime-data/data/`,
+`runtime-data/bnet/` and `runtime-data/collision/` are directly under the checkout. ORPHEUS
+discovers `runtime-data/` when it contains `manifest.json` or `data/`. An explicit
+`ORPHEUS_RUNTIME_DIR` takes precedence. Without either, ORPHEUS uses the legacy checkout layout.
+
+Run the preflight from the repository root.
 
 ```powershell
-$env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\orpheus-runtime'
 py -3.12 -B -m ow174 --check-runtime
 ```
 
 The default check covers the retail lobby, Battle.net descriptor set and match data. It reports missing paths and validates the signing input's length. Practice Range also needs build 104319 collision data. For a server-only session, supply `collision/0688.col` in the pack. An enabled local client launch can build the cache using the installation and the prepared collision indexes.
 
-If you already have a prepared local research checkout, assemble a new pack with the Python tool. It copies the required files and selected map cache into a new directory and writes a SHA-256 inventory.
+If you already have a prepared local research checkout, assemble a new pack with the Python tool. It copies the required files and selected map cache into a new directory and writes a SHA-256 inventory. From a separate prepared source, you can target `runtime-data` directly.
 
 ```powershell
-py -3.12 -B tools\prepare_server_runtime.py --source 'C:\path\to\prepared-checkout' --destination 'C:\path\to\orpheus-runtime' --map 0688
+py -3.12 -B tools\prepare_server_runtime.py --source 'C:\path\to\prepared-checkout' --destination .\runtime-data --map 0688
 ```
 
 Add `--catalogs $catalogs` to use the four locally generated catalogs in place of the source checkout's copies.

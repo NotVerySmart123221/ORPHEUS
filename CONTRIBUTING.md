@@ -17,7 +17,7 @@ Submit changes from a topic branch on your fork to `main`. Use your own Git auth
 
 ## Public source checks
 
-Run these Python and JavaScript checks from the repository root. They use public source and synthetic fixtures.
+Run these Python and JavaScript checks from a clean checkout without a local `runtime-data/` pack. Clear `ORPHEUS_RUNTIME_DIR` to match CI. The checks use public source and synthetic fixtures.
 
 ```powershell
 Remove-Item Env:ORPHEUS_RUNTIME_DIR -ErrorAction SilentlyContinue
