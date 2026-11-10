@@ -573,7 +573,15 @@ mod tests {
 
     #[test]
     #[ignore = "requires a prepared 104319 Practice Range pack without bot VM graphs"]
-    fn stock_soldier_requires_more_vm_support_before_prepared_attach() {
+    fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
+        use crate::commands::Command;
+        use crate::game_replication::BodyStep;
+        use crate::script_init::{Snapshot, StateKind};
+        use crate::script_snapshot_wire::{View, uncertain_polled_switch};
+        use crate::script_stream::{BodyStream, DeltaKind};
+        use crate::script_wire::Value;
+        use std::collections::BTreeSet;
+
         let runtime = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
         let assets = SceneAssets::load(runtime).unwrap();
         let scene = assets.prepare(GameMap::practice_range()).unwrap();
@@ -588,16 +596,232 @@ mod tests {
             pose: scene.player_spawn_mover(hero.body, 0).unwrap().pose(),
             quanta: RETAIL_QUANTA,
         };
-        let Err(blocked) = scene.owner_body_runtime(hero, spawn) else {
-            panic!("the stock owner VM was expected to require more graph support");
-        };
-        assert_eq!(blocked.kind(), io::ErrorKind::Unsupported);
-        let first_blocker = if assets.graphs.bodies()[&hero.body].target_tags.is_some() {
-            "UnsupportedAction(\"STUStatescriptActionEffect\")"
+        if assets.graphs.bodies()[&hero.body].target_tags.is_some() {
+            let mut runtime = scene.owner_body_runtime(hero, spawn).unwrap().unwrap();
+            let snapshot = runtime.snapshot().unwrap();
+            let encoder = runtime.encoder();
+            // The authored message table stays in the VM for lookups.
+            let table = &snapshot.instances[&24];
+            assert_eq!(table.graph, 0x05ad);
+            assert!(matches!(&table.variables[&29859], Value::Map(entries) if entries.len() == 20));
+            let mut streams = Vec::new();
+            for view in [View::Owner, View::Observer] {
+                let projected = encoder.project(snapshot, view).unwrap();
+                let mut stream = BodyStream::new(spawn.entity);
+                let baseline = encoder.queue_full(&mut stream, &projected).unwrap();
+                stream.create_arrived();
+                stream.arrived(baseline.last);
+                // Only the unbound table is omitted, as Python omits its None.
+                let sent = projected.instance_variables(24).unwrap();
+                assert!(!sent.contains_key(&29859));
+                for (&variable, value) in &table.variables {
+                    let value = snapshot
+                        .resolved_bindings
+                        .get(&(24, variable))
+                        .unwrap_or(value);
+                    if variable != 29859 && !matches!(value, Value::Null) {
+                        assert_eq!(sent.get(&variable), Some(value), "{variable}");
+                    }
+                }
+                streams.push((stream, projected));
+            }
+            // A live session: idle for about 3 s, hold fire for 1.5 s, reload,
+            // fire briefly, stand until the idle fidget plays, fire through it,
+            // then hold forward and Sprint. Both streams project and encode
+            // every frame, as the worker sends them.
+            let int = |value: Option<&Value>| match value {
+                None => None,
+                Some(Value::Integer(value)) => Some(*value),
+                Some(value) => panic!("unexpected integer {value:?}"),
+            };
+            let flag = |value: Option<&Value>| match value {
+                None => None,
+                Some(Value::Bool(value)) => Some(*value),
+                Some(value) => panic!("unexpected flag {value:?}"),
+            };
+            // A switch polled on a native the owner client may answer
+            // differently stays off the owner stream.
+            let uncertain = |snapshot: &Snapshot| {
+                let mut found = BTreeSet::new();
+                for (&id, instance) in &snapshot.instances {
+                    let graph = assets.graphs.graph(instance.graph).unwrap();
+                    for (&raw, state) in &instance.states {
+                        let node = graph.state(usize::from(raw)).unwrap();
+                        if state.active && uncertain_polled_switch(node, state) {
+                            found.insert((id, raw));
+                        }
+                    }
+                }
+                found
+            };
+            // The reference withholds these switches too, and two more in
+            // instance 9, which this tree retires at startup. Instance 18 is
+            // one of the tagged weapon-manager subgraphs the reference lacks.
+            let withheld = BTreeSet::from([
+                (1, 10),
+                (1, 15),
+                (1, 20),
+                (1, 21),
+                (1, 22),
+                (1, 23),
+                (2, 12),
+                (2, 13),
+                (2, 14),
+                (12, 25),
+                (12, 28),
+                (12, 30),
+                (12, 48),
+                (13, 17),
+                (18, 0),
+            ]);
+            assert_eq!(uncertain(snapshot), withheld);
+            for (_, projected) in &streams {
+                for &(id, raw) in &withheld {
+                    assert!(!projected.instance_states(id).unwrap().contains(&raw));
+                }
+            }
+            let mut mover = scene.player_spawn_mover(hero.body, 0).unwrap();
+            let mut owner = Vec::new();
+            let mut owner_hud = Vec::new();
+            for t in 1..=900 {
+                let frame = FIRST_TICK + t;
+                let (forward, buttons) = match t {
+                    188..=281 | 520..=540 | 600..=640 => (0, 1),
+                    300 => (0, 0x400),
+                    700 => (127, 8),
+                    701..=760 => (127, 0),
+                    _ => (0, 0),
+                };
+                let command = Command {
+                    frame,
+                    forward,
+                    buttons,
+                    ..Command::default()
+                };
+                mover
+                    .step(scene.movement_index(), command, 0.016, |_, _| {})
+                    .unwrap();
+                runtime.advance(command, &mover, BodyStep::Posed).unwrap();
+                if let Some(modifiers) = runtime.movement_modifiers() {
+                    mover.track_modifiers(frame, modifiers);
+                }
+                runtime.take_shots(Some(command), &mover);
+                let snapshot = runtime.snapshot().unwrap();
+                // The worker cancels the body script at the first diagnostic.
+                assert!(
+                    snapshot.diagnostics.is_empty(),
+                    "{t}: {:?}",
+                    snapshot.diagnostics
+                );
+                // The idle fidget animation has no authored duration. Like
+                // the reference, it stays on without a timer until held fire
+                // ends it.
+                let idle = &snapshot.instances[&14];
+                assert_eq!(idle.graph, 0x02c5);
+                let playing = idle.states.get(&19).is_some_and(|state| state.active);
+                if playing {
+                    assert_eq!(idle.states[&19].kind, StateKind::Anim);
+                    assert!(
+                        snapshot
+                            .pending_timers
+                            .get(&14)
+                            .into_iter()
+                            .flatten()
+                            .all(|timer| timer.raw_state != 19)
+                    );
+                }
+                assert_eq!(playing, (586..600).contains(&t), "{t}");
+                // Sprint starts on the press with forward held, runs while
+                // forward stays held and drives its HUD flag, as in the
+                // reference.
+                let sprint = &snapshot.instances[&5];
+                assert_eq!(sprint.graph, 0x0255);
+                let (flags, hud) = match t {
+                    700 => (5, Some(1)),
+                    701..=760 => (1, Some(1)),
+                    761.. => (0, Some(0)),
+                    _ => (0, None),
+                };
+                assert_eq!(
+                    (sprint.states[&1].kind, int(sprint.variables.get(&699))),
+                    (StateKind::Ability { flags }, hud),
+                    "{t}"
+                );
+                let excluded = uncertain(snapshot);
+                let encoder = runtime.encoder();
+                for (stream, initial) in &mut streams {
+                    let next = encoder.project_next(snapshot, initial).unwrap();
+                    let kind = match initial.view() {
+                        View::Owner => stream.owner_kind(frame, false, false).unwrap(),
+                        View::Observer => Some(DeltaKind::Observer { resend: false }),
+                    };
+                    let Some(kind) = kind else { continue };
+                    let delta = encoder.queue_delta(stream, &next, kind, runtime.frame_ms());
+                    if let Some(chunk) = delta.unwrap() {
+                        stream.sent(chunk.last);
+                        stream.arrived(chunk.last);
+                    }
+                    if next.view() != View::Owner {
+                        continue;
+                    }
+                    for &(id, raw) in &excluded {
+                        assert!(!next.instance_states(id).unwrap().contains(&raw), "{t}");
+                    }
+                    let rifle = next.instance_variables(11).unwrap();
+                    let fact = (int(rifle.get(&53)), flag(rifle.get(&51)));
+                    if owner.last().is_none_or(|&(_, last)| last != fact) {
+                        owner.push((t, fact));
+                    }
+                    let hud = int(next.instance_variables(5).unwrap().get(&699));
+                    if owner_hud.last().is_none_or(|&(_, last)| last != hud) {
+                        owner_hud.push((t, hud));
+                    }
+                }
+            }
+            assert_eq!(streams[0].0.command_frame(), FIRST_TICK + 900);
+            // The owner frames carry the Sprint HUD flag the client shows.
+            assert_eq!(owner_hud, [(1, None), (700, Some(1)), (761, Some(0))]);
+            // The frozen reference produces the same rifle ammo and reload
+            // transitions from these inputs: 14 rounds in 1.5 s, the magazine
+            // refilled 47 frames after the reload press, the reload ended 46
+            // frames later, and six rounds through the idle fidget.
+            let mut expected = vec![(1, (Some(30), None))];
+            for (t, ammo) in [
+                188, 195, 201, 208, 215, 222, 229, 236, 243, 250, 257, 264, 271, 278,
+            ]
+            .into_iter()
+            .zip((16..30).rev())
+            {
+                expected.push((t, (Some(ammo), None)));
+            }
+            expected.extend([
+                (300, (Some(16), Some(true))),
+                (347, (Some(30), Some(true))),
+                (393, (Some(30), Some(false))),
+                (520, (Some(29), Some(false))),
+                (527, (Some(28), Some(false))),
+                (533, (Some(27), Some(false))),
+                (540, (Some(26), Some(false))),
+                (600, (Some(25), Some(false))),
+                (607, (Some(24), Some(false))),
+                (613, (Some(23), Some(false))),
+                (620, (Some(22), Some(false))),
+                (627, (Some(21), Some(false))),
+                (634, (Some(20), Some(false))),
+            ]);
+            assert_eq!(owner, expected);
         } else {
-            "UnsupportedConfig(\"STU_AC829876\")"
-        };
-        assert!(blocked.to_string().contains(first_blocker), "{blocked}");
+            let Err(blocked) = scene.owner_body_runtime(hero, spawn) else {
+                panic!("the untagged stock owner body was expected to stop before attach");
+            };
+            assert_eq!(blocked.kind(), io::ErrorKind::Unsupported);
+            assert!(
+                blocked
+                    .to_string()
+                    .contains("UnsupportedConfig(\"STU_AC829876\")"),
+                "{blocked}"
+            );
+        }
         let tracer = scene.heroes().find_hero("Tracer").unwrap();
         assert!(scene.owner_body_runtime(tracer, spawn).unwrap().is_none());
     }

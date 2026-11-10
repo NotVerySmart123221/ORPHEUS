@@ -157,12 +157,28 @@ impl BodyScript {
             self.runtime.advance(command, mover, step)?;
             self.frame = command.frame;
         }
-        if !self
-            .runtime
-            .snapshot()
-            .is_some_and(Snapshot::initialization_complete)
-        {
-            return Err(invalid("body VM reached an unsupported state"));
+        match self.runtime.snapshot() {
+            Some(snapshot) if snapshot.initialization_complete() => {}
+            Some(snapshot) => {
+                let sites: Vec<String> = snapshot
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| match diagnostic.site.node {
+                        Some(node) => {
+                            format!(
+                                "{:04X}:{node}:{:?}",
+                                diagnostic.site.graph, diagnostic.issue
+                            )
+                        }
+                        None => format!("{:04X}:-:{:?}", diagnostic.site.graph, diagnostic.issue),
+                    })
+                    .collect();
+                return Err(invalid(format!(
+                    "body VM reached an unsupported state: {}",
+                    sites.join(", ")
+                )));
+            }
+            None => return Err(invalid("body VM has no snapshot")),
         }
         if step == BodyStep::UnposedTimer {
             // Combat discards the neutral interval's reports at its boundary.
@@ -972,7 +988,11 @@ impl WorldDelivery {
         {
             Ok(Some(record)) => record,
             Ok(None) => return,
-            Err(_) => {
+            Err(error) => {
+                eprintln!(
+                    "body {:08X} owner statescript stopped: {error}",
+                    script.id.entity
+                );
                 self.cancel_body_script();
                 return;
             }
@@ -1322,7 +1342,11 @@ impl WorldDelivery {
                 if let Some(script) = script.as_mut().filter(|_| !failed) {
                     match script.advance(mover, command, BodyStep::Posed) {
                         Ok(shots) => hitscan.extend(shots),
-                        Err(_) => {
+                        Err(error) => {
+                            eprintln!(
+                                "body owner statescript stopped at frame {}: {error}",
+                                command.frame
+                            );
                             mover.track_modifiers(command.frame, &BTreeMap::new());
                             failed = true;
                         }
@@ -1783,7 +1807,9 @@ mod tests {
     fn native_world_resumes_a_gap_before_switching_the_body_and_acknowledging_input() {
         let runtime = std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap();
         let assets = SceneAssets::load(runtime).unwrap();
-        let scene = assets.prepare(GameMap::practice_range()).unwrap();
+        let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
+        // The poses below are checked against a mover without VM modifiers.
+        scene.owner_body_factory = None;
         let owner = 0xa000_0100;
         let viewer = PlayerAppearance {
             entity: owner,

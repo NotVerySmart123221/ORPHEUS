@@ -26,6 +26,45 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Rust stock Soldier idle fidget, Sprint and owner switch polling
+
+- Left an animation without an authored duration on until a transition or its parent ends it, as the reference does, which knows the asset's length no better. Only the shape seen on the reached `02C5` idle fidget, node 51, is accepted: no client removal flag and no consumer of the animation-finished or finished plug. Any other shape still stops the body with the missing duration. Like the reference, the server does not end the state at the asset's length, so its finished and end follows wait for that transition.
+- Passed the payload-free `STU_E9694EFD` action through its output, as the reference's unmodeled fallback does. Only the exact authored build 104319 form is accepted: the node header, no sync variables or state slot, and two unlinked plugs. Every instance in both packs has that form.
+- Left switches polled on a native outside the reference's client-agreed set out of owner frames, and kept sending their live subgraphs, as the reference does. The record persists across activations, like the reference's. Observer frames are unchanged. Natives are classified only for watched evaluations.
+- The tagged stock Soldier owner VM now runs idle, held fire, reload, a second burst, the idle fidget, fire during the fidget and Sprint over 900 frames without diagnostics in the prepared session test. Its owner frames match the frozen reference's ammo, reload and Sprint HUD transitions. The withheld switches at spawn match the reference's for every instance the two trees share.
+- Passed 348 public Rust tests and 62 tagged base-runtime checks. The enriched-runtime firing placement check needs a bot-graph pack that was unavailable. The untagged bundle also passed the stock owner and Sprint regressions. Cargo formatting, Clippy and Git diff checks passed.
+- Original-client check on the native server: the body stayed attached through 16 seconds of idle, firing, reload and Sprint, and the worker logged no script stop. Firing lowered the ammo display, reload refilled it to 30, and Sprint showed its active icon while the body ran forward. The view rendered normally after spawn without opening the in-game menu. A scripted held button fired two rounds and then stopped on both the native and the reference server, so continuous fire still needs a check with a physical mouse. Original-client acceptance remains pending.
+
+#### Rust body script stop diagnostics
+
+- Logged the reason when the live worker stops an owner body script, with each initialization diagnostic as graph, node and issue. Previously the worker cancelled the script silently. This exposed the `02C5`, node 51 animation duration stop during held fire in the original client.
+- Passed 326 public Rust tests and 60 tagged base-runtime checks. Cargo formatting and Clippy passed.
+
+#### Rust stock Soldier owner session
+
+- Skipped the parameters of a game message that has no recipients. The reference evaluates them first but delivers none, so the only difference is any random draw they would make. A routed message still refuses an unsupported parameter.
+- Followed the output plug of stat criteria actions, as the reference's no-op does.
+- Answered the `STU_ED45C5E8` entity selector with the reference's unmodeled null default, at the player site in the Practice Range only, and only when every operand is the owner or a zero literal. The resolved current possessor sends the idle body into a periodic branch in graph `01CA` that the reference never takes, because it leaves that query unanswered. That graph handles the message it sends to the selection, so null probably drops a local delivery. The relay form with a set flag and dynamic subjects stay unsupported. The original server's selection remains unverified.
+- The tagged stock Soldier owner VM now runs idle, held fire, reload and a second burst without diagnostics in the prepared session test. Its owner frames match the frozen reference's ammo and reload transitions frame by frame. Sprint activation stops at the `STU_E9694EFD` action at `0255`, which the reference only passes through its unmodeled fallback. The untagged bundle still stops at `STU_AC829876` during startup.
+- Passed 326 public Rust tests and 60 tagged base-runtime checks. The enriched-runtime firing placement check needs a bot-graph pack that was unavailable. The untagged bundle also passed the stock owner and loopback regressions. Cargo formatting, Clippy and Git diff checks passed.
+- Original-client check on the native server: the body no longer stops one second after spawn. Holding fire in the live worker stops the owner VM at an animation duration query in graph `02C5`, node 51, so the ammo display still empties at once and reload does not start. After spawn the view stays black until the in-game menu is opened and closed. Original-client acceptance remains pending.
+
+#### Rust stock Soldier owner attach
+
+- Omitted an unbound script map from owner and observer snapshots, as the reference omits the None it evaluates for an authored `STU_7757D403` message table. The map stays in the VM for message lookups. A bound map is still refused, and the wire form of maps remains unverified.
+- The tagged stock Soldier body now attaches. Its preflight encodes the 24-instance tree in both views without the message table in instance 24, variable 29859. About one second after spawn, the idle owner VM stops at the `STU_ED45C5E8` recipient selector in graph `01CA`, which the reference also evaluates to None. The untagged bundle still stops at `STU_AC829876` during startup.
+- The encrypted stock loopback now expects owner corrections exactly when the tagged body attaches. The native gap regression runs without an owner VM, because it checks poses from the plain mover.
+- Passed 324 public Rust tests and 60 tagged base-runtime checks. The enriched-runtime firing placement check needs a bot-graph pack that was unavailable. The untagged bundle also passed the stock owner and loopback regressions. Cargo formatting and Clippy passed.
+- Original-client check on the native server with the tagged pack: Soldier: 76 now spawns in the Practice Range with the rifle, 200 health, 30 rounds, the three ability icons, the ultimate meter and the crosshair, and walks normally. Holding fire empties the ammo display at once and reload does not start, consistent with the owner VM stopping after spawn. Original-client acceptance remains pending.
+
+#### Rust Soldier startup effects and snapshot diagnostics
+
+- Continued the authored one-shot effect action through its output without server state, following the reference server. Like the reference, the server never flags the remote slot of a networked effect. Effects that bind a dynamic `m_37B02425` remain unsupported because that field's role is unverified in build 104319.
+- Listed every initialization diagnostic as graph, node and issue when the snapshot preflight refuses a body. A script map variable now names its owner and variable instead of failing later without a location. Network serialization of maps remains unverified.
+- The tagged Soldier startup now completes without diagnostics at `01C7`, node `74`. The preflight stops at the authored message table in instance 24, variable 29859. Stock weapon attachment needs the 104319 map wire form, or evidence that the original server omits such variables.
+- Passed 322 public Rust tests and 60 tagged base-runtime checks. The enriched-runtime firing placement check needs a bot-graph pack that was unavailable. Cargo formatting and Clippy passed.
+- Original-client check on the native server before this change: login, the menus and the Practice Range load, and Soldier: 76 spawns without the rifle or HUD. The preflight still refuses the stock body, so that result is unchanged. Original-client acceptance remains pending.
+
 #### Rust developer preview and runtime preflight
 
 - Replaced the inherited status table with separate Python, Rust and original-client evidence. The bilingual README separates public Rust checks, prepared deployment and client acceptance. Added the cutover parity checklist.

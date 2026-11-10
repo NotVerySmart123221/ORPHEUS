@@ -58,6 +58,24 @@ impl ProjectedSnapshot {
             .volley
             .map(|volley| volley.identity)
     }
+
+    #[cfg(test)]
+    pub(crate) fn instance_variables(&self, instance: u16) -> Option<&Variables> {
+        Some(&self.instances.get(&instance)?.variables.values)
+    }
+
+    /// The raw indices of the states this frame lists for the instance.
+    #[cfg(test)]
+    pub(crate) fn instance_states(&self, instance: u16) -> Option<BTreeSet<u16>> {
+        Some(
+            self.instances
+                .get(&instance)?
+                .states
+                .keys()
+                .copied()
+                .collect(),
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -124,10 +142,13 @@ pub struct StateSite {
 pub enum SnapshotError {
     Incomplete {
         entity: u32,
-        diagnostics: usize,
-        first: String,
+        diagnostics: Vec<String>,
     },
     MissingBoundValue {
+        owner: u16,
+        variable: u32,
+    },
+    UnsupportedMap {
         owner: u16,
         variable: u32,
     },
@@ -172,17 +193,24 @@ impl fmt::Display for SnapshotError {
             Self::Incomplete {
                 entity,
                 diagnostics,
-                first,
             } => {
                 write!(
                     f,
-                    "body {entity:08X} has {diagnostics} initialization diagnostics, first {first}"
+                    "body {entity:08X} has {} initialization diagnostics: {}",
+                    diagnostics.len(),
+                    diagnostics.join(", ")
                 )
             }
             Self::MissingBoundValue { owner, variable } => {
                 write!(
                     f,
                     "missing resolved value for bound variable {owner}:{variable}"
+                )
+            }
+            Self::UnsupportedMap { owner, variable } => {
+                write!(
+                    f,
+                    "variable {owner}:{variable} holds a map without a verified wire form"
                 )
             }
             Self::InvalidBinding {
@@ -298,8 +326,19 @@ impl<'a> SnapshotEncoder<'a> {
         if !snapshot.initialization_complete() {
             return Err(SnapshotError::Incomplete {
                 entity: snapshot.entity,
-                diagnostics: snapshot.diagnostics.len(),
-                first: format!("{:?}", snapshot.diagnostics.first()),
+                diagnostics: snapshot
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| {
+                        let site = diagnostic.site;
+                        match site.node {
+                            Some(node) => {
+                                format!("{:04X}:{node}:{:?}", site.graph, diagnostic.issue)
+                            }
+                            None => format!("{:04X}:-:{:?}", site.graph, diagnostic.issue),
+                        }
+                    })
+                    .collect(),
             });
         }
         let mut entity_exclusions = frozen
@@ -332,6 +371,9 @@ impl<'a> SnapshotEncoder<'a> {
                 }
                 let codec = self.codecs.codec(&node.class);
                 if !state.active && !(state.activation != 0 && codec.is_some_and(Codec::stec)) {
+                    continue;
+                }
+                if view == View::Owner && uncertain_polled_switch(node, state) {
                     continue;
                 }
                 let payload = codec
@@ -407,6 +449,16 @@ impl<'a> SnapshotEncoder<'a> {
                 }
                 None => base,
             };
+            // Python evaluates an authored `STU_7757D403` message table to None
+            // and never sends an unbound None (`script.driver` `_add_var`,
+            // `observers._add_vars`), so an unbound map is omitted like null.
+            // A bound map has no reference form and stays refused.
+            if matches!(value, Value::Map(_)) {
+                if bindings.is_some() {
+                    return Err(SnapshotError::UnsupportedMap { owner, variable });
+                }
+                continue;
+            }
             if let Some(bindings) = bindings.filter(|_| view == View::Owner) {
                 let links = self.project_bindings(snapshot, owner, variable, bindings)?;
                 if !links.is_empty() {
@@ -1131,6 +1183,18 @@ fn presenter(node: &Node) -> bool {
     node.class == "STUStatescriptStateUXPresenter" || node.fields.get("m_45216F79").is_some()
 }
 
+/// A polled switch whose condition read a native the owner client may answer
+/// differently. The client re-checks such a switch every update with its own
+/// answer, so the reference leaves it out of owner frames and keeps sending
+/// its live subgraph (driver.py `_add_state`).
+pub(crate) fn uncertain_polled_switch(node: &Node, state: &State) -> bool {
+    state.reads_untrusted_native()
+        && matches!(
+            node.class.as_str(),
+            "STUStatescriptStateBooleanSwitch" | "STU_DEBD057B"
+        )
+}
+
 fn state_payload(state: &State, codec: &Codec) -> Option<StatePayload> {
     Some(match (state.kind, codec.codec.as_deref()) {
         (
@@ -1477,6 +1541,209 @@ mod tests {
     }
 
     #[test]
+    fn owner_frames_withhold_switches_polled_on_natives_the_client_may_answer_differently() {
+        let untrusted = json!({"$":"STU_E95A9C77","m_EE729DCB":0});
+        let fixture = graph(
+            42,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({
+                        "m_outPlug":{"$":"Plug","links":[[1,"m_beginPlug"],[2,"m_beginPlug"],
+                            [3,"m_beginPlug"],[4,"m_beginPlug"]],"m_FF3DAF1E":[]}
+                    }),
+                ),
+                node(
+                    1,
+                    "STUStatescriptStateBooleanSwitch",
+                    Some(0),
+                    json!({
+                        "m_condition":untrusted,
+                        "m_falseSubgraphPlug":{"$":"Plug","links":[[5,"m_beginPlug"]],
+                            "m_FF3DAF1E":[4]}
+                    }),
+                ),
+                node(
+                    2,
+                    "STUStatescriptStateBooleanSwitch",
+                    Some(1),
+                    json!({"m_condition":{"$":"STU_4A101787","m_EE729DCB":0}}),
+                ),
+                node(
+                    3,
+                    "STUStatescriptStateBooleanSwitch",
+                    Some(2),
+                    json!({
+                        "m_condition":{"$":"STUConfigVarDynamic","m_identifier":100,
+                            "m_60DB8F99":false}
+                    }),
+                ),
+                node(4, "STU_DEBD057B", Some(3), json!({"m_262AE982":untrusted})),
+                node(5, "STUStatescriptState", Some(4), json!({})),
+            ],
+            json!([1, 2, 3, 4, 5]),
+            json!([0]),
+            json!([1]),
+            json!([]),
+        );
+        let graphs = GraphStore::from_json(
+            &serde_json::to_vec(&json!({
+                "version":1, "graphs":[fixture], "bodies":{}, "missing":[]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let snapshot = initialize(
+            &graphs,
+            ENTITY,
+            Variables::new(),
+            vec![Root::new(1, 42)],
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        assert!(
+            snapshot.initialization_complete(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        let states = &snapshot.instances[&1].states;
+        assert!(states.values().all(|state| state.active));
+        let flagged: Vec<_> = (0..5)
+            .map(|raw| states[&raw].reads_untrusted_native())
+            .collect();
+        assert_eq!(flagged, [true, false, false, true, false]);
+        let mut raw: Json = serde_json::from_str(CODECS).unwrap();
+        raw["classes"]["DEBD057B"] = json!({
+            "name":"STU_DEBD057B","codec":"none","stec":false,"status":"VERIFIED","layout":[]
+        });
+        let codecs = CodecTable::from_json(&raw.to_string()).unwrap();
+        let encoder = SnapshotEncoder::new(&graphs, &codecs);
+        // The live subgraph of a withheld switch is still sent.
+        let owner = encoder.project(&snapshot, View::Owner).unwrap();
+        assert_eq!(owner.instance_states(1), Some(BTreeSet::from([1, 2, 4])));
+        // Observer frames carry every remote state that is on.
+        let observer = encoder.project(&snapshot, View::Observer).unwrap();
+        assert_eq!(observer.instance_states(1), Some(BTreeSet::from([0])));
+    }
+
+    #[test]
+    fn a_switch_withheld_once_stays_off_owner_frames_after_it_begins_again() {
+        use crate::script_init::Component;
+        use std::sync::Arc;
+
+        let variable = json!({"$":"STUConfigVarDynamic","m_identifier":100,"m_60DB8F99":false});
+        let message = |position, message: &str, input, params: Json| {
+            node(
+                position,
+                "STUStatescriptEntryGameMessage",
+                None,
+                json!({
+                    "m_gameMessage":{"m_gameMessage":message},
+                    "m_params":params,
+                    "m_outPlug":{"$":"Plug","links":[[1,input]],"m_FF3DAF1E":[]}
+                }),
+            )
+        };
+        // The native answers only while the variable is unset.
+        let fixture = graph(
+            42,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({"m_outPlug":{"$":"Plug","links":[[1,"m_beginPlug"]],"m_FF3DAF1E":[]}}),
+                ),
+                node(
+                    1,
+                    "STUStatescriptStateBooleanSwitch",
+                    Some(0),
+                    json!({
+                        "m_condition":{
+                            "$":"STU_91EFD5B1",
+                            "m_value":variable,
+                            "m_default":{"$":"STU_E95A9C77","m_EE729DCB":0},
+                        }
+                    }),
+                ),
+                message(2, "0x0240000000000001", "m_F198FD3A", json!([])),
+                message(
+                    3,
+                    "0x0240000000000002",
+                    "m_beginPlug",
+                    json!([{"m_B5051BCE":"0x0A40000000000004","m_out_Var":variable}]),
+                ),
+            ],
+            json!([1]),
+            json!([0, 2, 3]),
+            json!([1]),
+            json!([]),
+        );
+        let graphs = Arc::new(
+            GraphStore::from_json(
+                &serde_json::to_vec(&json!({
+                    "version":1, "graphs":[fixture], "bodies":{}, "missing":[]
+                }))
+                .unwrap(),
+            )
+            .unwrap(),
+        );
+        let mut component = Component::start(
+            Arc::clone(&graphs),
+            ENTITY,
+            Variables::new(),
+            vec![Root::new(1, 42)],
+            0,
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        let codecs = CodecTable::from_json(CODECS).unwrap();
+        let encoder = SnapshotEncoder::new(&graphs, &codecs);
+        let switch = |component: &Component| {
+            let snapshot = component.snapshot().unwrap();
+            assert!(
+                snapshot.initialization_complete(),
+                "{:?}",
+                snapshot.diagnostics
+            );
+            let state = &snapshot.instances[&1].states[&0];
+            let owner = encoder.project(snapshot, View::Owner).unwrap();
+            (
+                state.active,
+                state.activation,
+                state.kind,
+                state.reads_untrusted_native(),
+                owner.instance_states(1).unwrap().contains(&0),
+            )
+        };
+        assert_eq!(
+            switch(&component),
+            (true, 1, StateKind::BooleanSwitch(false), true, false)
+        );
+        for (guid, expected) in [
+            (
+                0x0240_0000_0000_0001,
+                (false, 1, StateKind::BooleanSwitch(false), true, false),
+            ),
+            // Like the reference's per-instance record, the flag survives
+            // the end, although this activation reads only the variable.
+            (
+                0x0240_0000_0000_0002,
+                (true, 2, StateKind::BooleanSwitch(true), true, false),
+            ),
+        ] {
+            let parameter = Variables::from([(4, Value::Bool(true))]);
+            assert_eq!(component.queue_message(1, guid, parameter).unwrap(), 1);
+            component.run_now(&mut EmptyWorld).unwrap();
+            assert_eq!(switch(&component), expected);
+        }
+    }
+
+    #[test]
     fn unsupported_active_states_and_initialization_diagnostics_are_explicit() {
         let (graphs, mut snapshot) = fixture();
         let mut raw: Json = serde_json::from_str(CODECS).unwrap();
@@ -1504,11 +1771,23 @@ mod tests {
             },
             issue: Issue::UnsupportedAction("fixture".into()),
         });
-        assert!(matches!(
-            encoder.project(&snapshot, View::Observer),
-            Err(SnapshotError::Incomplete { entity: ENTITY, diagnostics: 1, first })
-                if first.contains("fixture")
-        ));
+        snapshot.diagnostics.push(Diagnostic {
+            site: Site {
+                entity: ENTITY,
+                instance: 1,
+                graph: 42,
+                node: Some(7),
+            },
+            issue: Issue::UnsupportedState("later".into()),
+        });
+        let error = encoder.project(&snapshot, View::Observer).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "body {ENTITY:08X} has 2 initialization diagnostics: \
+                 002A:-:UnsupportedAction(\"fixture\"), 002A:7:UnsupportedState(\"later\")"
+            )
+        );
     }
 
     #[test]
@@ -1517,18 +1796,7 @@ mod tests {
         let codecs = CodecTable::from_json(CODECS).unwrap();
         let encoder = SnapshotEncoder::new(&graphs, &codecs);
         let baseline = encoder.project(&snapshot, View::Owner).unwrap();
-        snapshot.bindings.insert(
-            (0, 55),
-            vec![crate::script_init::StackBinding {
-                instance: 1,
-                raw_state: 2,
-                slot: 0,
-                priority: crate::script_expr::StackPriority {
-                    level: 0,
-                    above_equals: true,
-                },
-            }],
-        );
+        snapshot.bindings.insert((0, 55), vec![invalid_binding()]);
         for view in [View::Owner, View::Observer] {
             assert!(matches!(
                 encoder.project(&snapshot, view),
@@ -1549,6 +1817,116 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    /// Raw state 2 is not a stack, so projecting this binding fails.
+    fn invalid_binding() -> StackBinding {
+        StackBinding {
+            instance: 1,
+            raw_state: 2,
+            slot: 0,
+            priority: crate::script_expr::StackPriority {
+                level: 0,
+                above_equals: true,
+            },
+        }
+    }
+
+    fn table() -> Value {
+        Value::Map(vec![(Value::Asset(1), Value::Integer(2))])
+    }
+
+    fn set_variable(snapshot: &mut Snapshot, owner: u16, variable: u32, value: Option<Value>) {
+        let values = match owner {
+            0 => &mut snapshot.variables,
+            id => &mut snapshot.instances.get_mut(&id).unwrap().variables,
+        };
+        match value {
+            Some(value) => values.insert(variable, value),
+            None => values.shift_remove(&variable),
+        };
+    }
+
+    #[test]
+    fn unbound_maps_are_omitted_like_null_in_both_scopes_and_views() {
+        let (graphs, mut snapshot) = fixture();
+        let codecs = CodecTable::from_json(CODECS).unwrap();
+        let encoder = SnapshotEncoder::new(&graphs, &codecs);
+        for owner in [0, 1] {
+            for view in [View::Owner, View::Observer] {
+                let mut full = |value| {
+                    set_variable(&mut snapshot, owner, 77, value);
+                    let projected = encoder.project(&snapshot, view).unwrap();
+                    let values = match owner {
+                        0 => &projected.variables.values,
+                        id => &projected.instances[&id].variables.values,
+                    };
+                    assert!(!values.contains_key(&77));
+                    let bits = encoder.full(&projected).unwrap();
+                    (bits.bit_len(), bits.as_bytes().to_vec())
+                };
+                let omitted = full(None);
+                assert_eq!(full(Some(table())), omitted);
+                assert_eq!(full(Some(Value::Null)), omitted);
+            }
+        }
+    }
+
+    #[test]
+    fn bound_maps_are_refused_before_their_bindings_are_checked() {
+        let (graphs, mut snapshot) = fixture();
+        let codecs = CodecTable::from_json(CODECS).unwrap();
+        let encoder = SnapshotEncoder::new(&graphs, &codecs);
+        snapshot.bindings.insert((1, 77), vec![invalid_binding()]);
+        set_variable(&mut snapshot, 1, 77, Some(Value::Null));
+        snapshot.resolved_bindings.insert((1, 77), table());
+        for view in [View::Owner, View::Observer] {
+            let error = encoder.project(&snapshot, view).unwrap_err();
+            assert!(matches!(
+                error,
+                SnapshotError::UnsupportedMap {
+                    owner: 1,
+                    variable: 77,
+                }
+            ));
+            assert_eq!(
+                error.to_string(),
+                "variable 1:77 holds a map without a verified wire form"
+            );
+        }
+    }
+
+    #[test]
+    fn a_variable_becoming_a_map_deltas_like_it_becoming_null() {
+        let (graphs, mut snapshot) = fixture();
+        let codecs = CodecTable::from_json(CODECS).unwrap();
+        let encoder = SnapshotEncoder::new(&graphs, &codecs);
+        let mut deltas = |view, kind, value| {
+            set_variable(&mut snapshot, 1, 77, Some(Value::Integer(5)));
+            let mut stream = BodyStream::new(ENTITY);
+            let baseline = encoder
+                .queue_full(&mut stream, &encoder.project(&snapshot, view).unwrap())
+                .unwrap();
+            stream.create_arrived();
+            stream.arrived(baseline.last);
+            set_variable(&mut snapshot, 1, 77, Some(value));
+            let next = encoder.project(&snapshot, view).unwrap();
+            let chunk = encoder
+                .queue_delta(&mut stream, &next, kind, 16)
+                .unwrap()
+                .unwrap();
+            let keys: Vec<_> = stream.pending().map(|(_, _, keys)| keys.clone()).collect();
+            let bits = chunk.update.chunk.unwrap();
+            (bits.bit_len(), bits.as_bytes().to_vec(), keys)
+        };
+        for (view, kind) in [
+            (View::Owner, DeltaKind::InitialOwner(1000)),
+            (View::Observer, DeltaKind::Observer { resend: false }),
+        ] {
+            let map = deltas(view, kind, table());
+            assert!(map.2[0].contains(&ChangeKey::Variable(1, 77)));
+            assert_eq!(map, deltas(view, kind, Value::Null));
+        }
     }
 
     #[test]

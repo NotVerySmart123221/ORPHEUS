@@ -349,9 +349,16 @@ pub struct State {
     buffered_press: Option<BufferedPress>,
     linked_variable: Option<VarKey>,
     ability_stack: Option<VarKey>,
+    untrusted_native: bool,
 }
 
 impl State {
+    /// Whether a watched evaluation for this state has ever read a native
+    /// outside the reference's client-agreed set.
+    pub fn reads_untrusted_native(&self) -> bool {
+        self.untrusted_native
+    }
+
     fn dormant(kind: StateKind) -> Self {
         Self {
             active: false,
@@ -368,6 +375,7 @@ impl State {
             buffered_press: None,
             linked_variable: None,
             ability_stack: None,
+            untrusted_native: false,
         }
     }
 }
@@ -652,6 +660,7 @@ impl Component {
             parameters: None,
             watcher: None,
             read_native: false,
+            untrusted_native: false,
         };
         script_expr::evaluate(config, &mut context)
     }
@@ -1918,17 +1927,6 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         else {
             return Ok(true);
         };
-        let mut parameters = Variables::new();
-        for parameter in array_field(&node.fields, "m_params")
-            .iter()
-            .filter(|value| value.is_object())
-        {
-            self.spend("game message parameter")?;
-            let Some(value) = self.evaluate(id, node, field(parameter, "m_value"), None) else {
-                return Ok(false);
-            };
-            parameters.insert(parameter_id(parameter), value);
-        }
         let site = self.site(id, node);
         let target = node
             .fields
@@ -1956,6 +1954,23 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 .collect(),
             _ => Vec::new(),
         };
+        // The reference evaluates the parameters before the recipients, but
+        // a message without recipients delivers none of them. Skipping them
+        // also skips any random draw they would make.
+        if entities.is_empty() {
+            return Ok(true);
+        }
+        let mut parameters = Variables::new();
+        for parameter in array_field(&node.fields, "m_params")
+            .iter()
+            .filter(|value| value.is_object())
+        {
+            self.spend("game message parameter")?;
+            let Some(value) = self.evaluate(id, node, field(parameter, "m_value"), None) else {
+                return Ok(false);
+            };
+            parameters.insert(parameter_id(parameter), value);
+        }
         for entity in entities {
             self.spend("game message routing")?;
             if entity == site.entity {
@@ -2006,10 +2021,17 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             parameters: self.parameters.as_deref(),
             watcher,
             read_native: false,
+            untrusted_native: false,
         };
         let result = script_expr::evaluate(config, &mut context);
         let reads = context.reads;
         let read_native = context.read_native;
+        if context.untrusted_native {
+            // Like the reference, the record outlives the activation.
+            if let Some(state) = watcher.and_then(|key| self.state_mut(key)) {
+                state.untrusted_native = true;
+            }
+        }
         if let Some(watcher) = watcher.filter(|&key| {
             self.state(key)
                 .is_some_and(|state| state.active && !state.ending)
@@ -2239,6 +2261,26 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 if !self.send_game_message(id, node)? {
                     return Ok(false);
                 }
+                self.follow(id, node, "m_outPlug", None, depth)?;
+                Ok(true)
+            }
+            // Python's no_op. Networked effects are remote-synced nodes; like
+            // Python, the server never flags their remote slot. The role of a
+            // dynamic m_37B02425 is unknown, so those effects stay unsupported.
+            "STUStatescriptActionEffect" if field(&node.fields, "m_37B02425").is_null() => {
+                self.follow(id, node, "m_outPlug", None, depth)?;
+                Ok(true)
+            }
+            // Python's no_op for stat criteria.
+            "STUStatescriptActionCriteria" => {
+                self.follow(id, node, "m_outPlug", None, depth)?;
+                Ok(true)
+            }
+            // The reference has no model for this action: its fallback only
+            // follows m_outPlug and reports the path as taken. The native
+            // effect, if any, is unverified, so only the payload-free shape
+            // every build 104319 instance has is accepted.
+            "STU_E9694EFD" if is_bare_header_action(node) => {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
@@ -2515,6 +2557,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let previous = self.state(key);
         let activation = previous.map_or(1, |state| state.activation.wrapping_add(1));
         let buffered_press = previous.and_then(|state| state.buffered_press);
+        let untrusted_native = previous.is_some_and(|state| state.untrusted_native);
         for raw in raw_indices(array_field(&node.fields, "m_exclusiveStateIndices")) {
             self.end(StateKey { instance: id, raw }, false, depth + 1)?;
             self.drop_begin(id, raw);
@@ -2526,6 +2569,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 activation,
                 start_ms: self.machine.now_ms,
                 buffered_press,
+                untrusted_native,
                 ..State::dormant(kind)
             },
         );
@@ -3600,10 +3644,23 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let id = key.instance;
         let duration = field(&node.fields, "m_86701C3E");
         if duration.is_null() {
-            self.report(
-                self.site(id, node),
-                Issue::UnsupportedField("animation asset duration"),
-            );
+            // Without m_playOverDuration the length is the animation asset's,
+            // which the reference does not know either: it arms no timer and
+            // no finish, so the state stays on until a transition or its
+            // parent ends it. The asset-length finish, with its follows of
+            // m_onFinishedPlug and m_onEndPlug, is lost. Only the shape seen
+            // on a reached graph (02C5's idle fidget) takes that path: no
+            // client removal flag and no consumer of m_A3B86BB0 or of
+            // m_onFinishedPlug, which no other path could reach.
+            if !field(&node.fields, "m_154DBA91").is_null()
+                || !is_unlinked_plug(&node.fields, "m_A3B86BB0", "STUStatescriptOutputPlug")
+                || !is_unlinked_plug(&node.fields, "m_onFinishedPlug", "STUStatescriptOutputPlug")
+            {
+                self.report(
+                    self.site(id, node),
+                    Issue::UnsupportedField("animation asset duration"),
+                );
+            }
             return Ok(());
         }
         let Some(seconds) = self.evaluate(id, node, duration, None) else {
@@ -4372,6 +4429,49 @@ fn is_message_entry(node: &Node) -> bool {
     node.class == "STUStatescriptEntryGameMessage"
 }
 
+/// Whether the field is a plug of the given class with an empty link list.
+fn is_unlinked_plug(fields: &Json, name: &str, class: &str) -> bool {
+    field(fields, name).as_object().is_some_and(|plug| {
+        plug.len() == 2
+            && plug.get("$").and_then(Json::as_str) == Some(class)
+            && plug
+                .get("links")
+                .and_then(Json::as_array)
+                .is_some_and(Vec::is_empty)
+    })
+}
+
+/// The authored build 104319 shape of an action without a payload: the node
+/// header with no remote sync variables and two unlinked plugs. Every
+/// `STU_E9694EFD` node in the target build has exactly this shape.
+fn is_bare_header_action(node: &Node) -> bool {
+    const FIELDS: [&str; 8] = [
+        "m_2BBEEAB8",
+        "m_8BF03679",
+        "m_A2287776",
+        "m_ADEB6E05",
+        "m_AED90719",
+        "m_BF5B22B7",
+        "m_inPlug",
+        "m_outPlug",
+    ];
+    let header = |name, value| field(&node.fields, name).as_u64() == Some(value);
+    node.state.is_none()
+        && node.remote < 0
+        && !node.server_only
+        && node.fields.as_object().is_some_and(|fields| {
+            fields.len() == FIELDS.len() && FIELDS.iter().all(|name| fields.contains_key(*name))
+        })
+        && header("m_2BBEEAB8", 0)
+        && header("m_ADEB6E05", 1)
+        && header("m_A2287776", 0)
+        && header("m_AED90719", 0)
+        && field(&node.fields, "m_8BF03679").is_null()
+        && field(&node.fields, "m_BF5B22B7").is_null()
+        && is_unlinked_plug(&node.fields, "m_inPlug", "STUStatescriptInputPlug")
+        && is_unlinked_plug(&node.fields, "m_outPlug", "STUStatescriptOutputPlug")
+}
+
 fn is_client_subgraph_controller(graph: &Graph, node: &Node) -> bool {
     // The controller is replicated, but its specialized branch starts on the client.
     const BRANCH: &str = "m_5B10D01F";
@@ -4612,7 +4712,23 @@ struct InstanceContext<'a, W> {
     parameters: Option<&'a Variables>,
     watcher: Option<StateKey>,
     read_native: bool,
+    untrusted_native: bool,
 }
+
+/// The reference's TRUSTED_NATIVES (driver.py): config classes whose server
+/// answer is the owner client's own for a human player's body. A polled
+/// switch that reads any other native is kept off the owner stream.
+const CLIENT_AGREED_NATIVES: [&str; 9] = [
+    "STU_1FF67CA6",
+    "STU_310D6529",
+    "STU_37F20D24",
+    "STU_4A101787",
+    "STU_A77AC2AC",
+    "STU_A3DEF368",
+    "STU_DB742151",
+    "STU_295D117D",
+    "STU_D3EB8D87",
+];
 
 impl<W: World> InstanceContext<'_, W> {
     fn read(&mut self, key: VarKey) -> Value {
@@ -4717,6 +4833,16 @@ impl<W: World> Context for InstanceContext<'_, W> {
     fn native(&mut self, config: &Json) -> Option<Value> {
         self.read_native = true;
         self.world.native(self.site, config)
+    }
+
+    fn watches_natives(&self) -> bool {
+        self.watcher.is_some()
+    }
+
+    fn reference_native(&mut self, class: &str) {
+        if !CLIENT_AGREED_NATIVES.contains(&class) {
+            self.untrusted_native = true;
+        }
     }
 
     fn has_target_tag(&mut self, entity: u32, tag: u64) -> Option<bool> {
@@ -5897,6 +6023,366 @@ mod tests {
     }
 
     #[test]
+    fn effect_action_continues_its_output_without_server_state() {
+        let run = |dynamic: Json| {
+            let fixture = graph(
+                42,
+                vec![
+                    node(
+                        0,
+                        "STUStatescriptEntry",
+                        None,
+                        json!({"m_outPlug":plug(&[(1,"m_inPlug")], &[])}),
+                    ),
+                    node(
+                        1,
+                        "STUStatescriptActionEffect",
+                        None,
+                        json!({
+                            "m_effect":{"$":"STUConfigVarEffect","m_effect":"0x0300000000000001"},
+                            "m_dataFlow":[{"$":"STU_13D35171","m_answer":var(7, false)}],
+                            "m_37B02425":dynamic,
+                            "m_outPlug":plug(&[(2,"m_inPlug")], &[]),
+                        }),
+                    ),
+                    node(
+                        2,
+                        "STUStatescriptActionSetVar",
+                        None,
+                        json!({"m_out_Var":var(100, true), "m_value":true}),
+                    ),
+                ],
+                json!([]),
+                json!([0]),
+            );
+            initialize(
+                &store(vec![fixture]),
+                42,
+                Variables::new(),
+                vec![Root::new(1, 42)],
+                &mut EmptyWorld,
+                MAX_INIT_WORK,
+            )
+            .unwrap()
+        };
+        let snapshot = run(Json::Null);
+        assert!(snapshot.initialization_complete());
+        assert_eq!(
+            snapshot.variables,
+            Variables::from([(100, Value::Bool(true))])
+        );
+        assert!(snapshot.instances[&1].variables.is_empty());
+        assert!(snapshot.instances[&1].states.is_empty());
+
+        let snapshot = run(var(9, true));
+        assert!(snapshot.variables.is_empty());
+        assert_eq!(snapshot.diagnostics.len(), 1);
+        assert_eq!(snapshot.diagnostics[0].site.node, Some(1));
+        assert_eq!(
+            snapshot.diagnostics[0].issue,
+            Issue::UnsupportedAction("STUStatescriptActionEffect".into())
+        );
+    }
+
+    #[test]
+    fn criteria_actions_continue_their_output() {
+        let fixture = graph(
+            42,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({"m_outPlug":plug(&[(1,"m_inPlug")], &[])}),
+                ),
+                node(
+                    1,
+                    "STUStatescriptActionCriteria",
+                    None,
+                    json!({
+                        "m_identifier":{"$":"STUConfigVarIdentifier","m_identifier":"0x0D80000000000001"},
+                        "m_targets":{"$":"test-unanswered"},
+                        "m_outPlug":plug(&[(2,"m_inPlug")], &[]),
+                    }),
+                ),
+                node(
+                    2,
+                    "STUStatescriptActionSetVar",
+                    None,
+                    json!({"m_out_Var":var(100, true), "m_value":true}),
+                ),
+            ],
+            json!([]),
+            json!([0]),
+        );
+        let snapshot = initialize(
+            &store(vec![fixture]),
+            42,
+            Variables::new(),
+            vec![Root::new(1, 42)],
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        assert!(
+            snapshot.initialization_complete(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        assert_eq!(
+            snapshot.variables,
+            Variables::from([(100, Value::Bool(true))])
+        );
+        assert!(snapshot.instances[&1].states.is_empty());
+    }
+
+    #[test]
+    fn payload_free_header_action_passes_through_like_the_reference_fallback() {
+        let authored = json!({
+            "m_2BBEEAB8":0, "m_8BF03679":null, "m_A2287776":0, "m_ADEB6E05":1,
+            "m_AED90719":0, "m_BF5B22B7":null,
+            "m_inPlug":{"$":"STUStatescriptInputPlug","links":[]},
+            "m_outPlug":{"$":"STUStatescriptOutputPlug","links":[]},
+        });
+        let run = |fields: &Json, state: Json, remote: i32| {
+            // The helper sets the header flags; the authored values replace them.
+            let mut action = node(1, "STU_E9694EFD", None, json!({}));
+            action["fields"] = fields.clone();
+            action["state"] = state;
+            action["remote"] = json!(remote);
+            let fixture = graph(
+                42,
+                vec![
+                    node(
+                        0,
+                        "STUStatescriptEntry",
+                        None,
+                        json!({"m_outPlug":plug(&[(1,"m_inPlug"),(2,"m_inPlug")], &[])}),
+                    ),
+                    action,
+                    node(
+                        2,
+                        "STUStatescriptActionSetVar",
+                        None,
+                        json!({"m_out_Var":var(100, true), "m_value":true}),
+                    ),
+                ],
+                json!([]),
+                json!([0]),
+            );
+            initialize(
+                &store(vec![fixture]),
+                42,
+                Variables::new(),
+                vec![Root::new(1, 42)],
+                &mut EmptyWorld,
+                MAX_INIT_WORK,
+            )
+            .unwrap()
+        };
+        let snapshot = run(&authored, Json::Null, -1);
+        assert!(
+            snapshot.initialization_complete(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        assert_eq!(
+            snapshot.variables,
+            Variables::from([(100, Value::Bool(true))])
+        );
+
+        let mut linked = authored.clone();
+        linked["m_outPlug"]["links"] = json!([[2, "m_inPlug"]]);
+        let mut operand = authored.clone();
+        operand["m_value"] = json!({"$":"STUConfigVarBool","m_value":true});
+        let mut synced = authored.clone();
+        synced["m_8BF03679"] = json!([]);
+        for (fields, state, remote) in [
+            (&linked, Json::Null, -1),
+            (&operand, Json::Null, -1),
+            (&synced, Json::Null, -1),
+            (&authored, json!(0), -1),
+            (&authored, Json::Null, 0),
+        ] {
+            let snapshot = run(fields, state.clone(), remote);
+            assert_eq!(
+                snapshot.diagnostics.len(),
+                1,
+                "{fields} state {state} remote {remote}"
+            );
+            assert_eq!(snapshot.diagnostics[0].site.node, Some(1));
+            assert_eq!(
+                snapshot.diagnostics[0].issue,
+                Issue::UnsupportedAction("STU_E9694EFD".into())
+            );
+        }
+    }
+
+    #[test]
+    fn animation_without_an_authored_duration_stays_on_without_a_timer() {
+        let run = |overrides: Json| {
+            let mut fields = json!({
+                "m_86701C3E":null,
+                "m_154DBA91":null,
+                "m_A3B86BB0":{"$":"STUStatescriptOutputPlug","links":[]},
+                "m_onFinishedPlug":{"$":"STUStatescriptOutputPlug","links":[]},
+                "m_onEndPlug":plug(&[(2,"m_inPlug")], &[]),
+            });
+            for (name, value) in overrides.as_object().unwrap() {
+                fields[name] = value.clone();
+            }
+            let fixture = graph(
+                42,
+                vec![
+                    node(
+                        0,
+                        "STUStatescriptEntry",
+                        None,
+                        json!({"m_outPlug":plug(&[(1,"m_beginPlug")], &[])}),
+                    ),
+                    node(1, "STUStatescriptStateAnim", Some(0), fields),
+                    node(
+                        2,
+                        "STUStatescriptActionSetVar",
+                        None,
+                        json!({"m_out_Var":var(100, true), "m_value":true}),
+                    ),
+                ],
+                json!([1]),
+                json!([0]),
+            );
+            Component::start(
+                Arc::new(store(vec![fixture])),
+                42,
+                Variables::new(),
+                vec![Root::new(1, 42)],
+                100,
+                &mut EmptyWorld,
+                MAX_INIT_WORK,
+            )
+            .unwrap()
+        };
+        let mut component = run(json!({}));
+        for frame in 101..=1000 {
+            component.advance_frame(frame, &mut EmptyWorld).unwrap();
+        }
+        let snapshot = component.snapshot().unwrap();
+        assert!(
+            snapshot.initialization_complete(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        assert_eq!(snapshot.instances[&1].states[&0].kind, StateKind::Anim);
+        assert_eq!(active(snapshot, 1), [0]);
+        assert!(snapshot.pending_timers.is_empty());
+        assert!(snapshot.variables.is_empty());
+
+        // A consumer of the animation's end or a client removal flag would
+        // need the asset's length.
+        for rejected in [
+            json!({"m_154DBA91":{"$":"STUConfigVarBool","m_value":true}}),
+            json!({"m_A3B86BB0":{"$":"STUStatescriptOutputPlug","links":[[2,"m_inPlug"]]}}),
+            json!({"m_A3B86BB0":null}),
+            json!({"m_onFinishedPlug":{"$":"STUStatescriptOutputPlug","links":[[2,"m_inPlug"]]}}),
+            json!({"m_onFinishedPlug":null}),
+        ] {
+            let component = run(rejected.clone());
+            let snapshot = component.snapshot().unwrap();
+            assert_eq!(snapshot.diagnostics.len(), 1, "{rejected}");
+            assert_eq!(snapshot.diagnostics[0].site.node, Some(1));
+            assert_eq!(
+                snapshot.diagnostics[0].issue,
+                Issue::UnsupportedField("animation asset duration")
+            );
+        }
+    }
+
+    #[test]
+    fn game_message_without_recipients_leaves_its_parameters_unevaluated() {
+        struct Recipients(Value);
+
+        impl World for Recipients {
+            fn native(&mut self, _site: Site, config: &Json) -> Option<Value> {
+                (config["$"] == "test-recipients").then(|| self.0.clone())
+            }
+        }
+
+        let message = json!({"$":"STUConfigVarGameMessage","m_gameMessage":"0x0240000000000001"});
+        let fixture = graph(
+            42,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({"m_outPlug":plug(&[(1,"m_inPlug")], &[])}),
+                ),
+                node(
+                    1,
+                    "STUStatescriptActionSendGameMessage",
+                    None,
+                    json!({
+                        "m_gameMessage":message,
+                        "m_targets":{"$":"test-recipients"},
+                        "m_params":[{"m_B5051BCE":"0x0A40000000000123",
+                            "m_value":{"$":"test-unanswered"}}],
+                        "m_outPlug":plug(&[(2,"m_inPlug")], &[]),
+                    }),
+                ),
+                node(
+                    2,
+                    "STUStatescriptActionSetVar",
+                    None,
+                    json!({"m_out_Var":var(100, true), "m_value":true}),
+                ),
+            ],
+            json!([]),
+            json!([0]),
+        );
+        let graphs = store(vec![fixture]);
+        let run = |targets| {
+            initialize(
+                &graphs,
+                42,
+                Variables::new(),
+                vec![Root::new(1, 42)],
+                &mut Recipients(targets),
+                MAX_INIT_WORK,
+            )
+            .unwrap()
+        };
+        for targets in [
+            Value::Null,
+            Value::Entity(0),
+            Value::Array(vec![
+                Value::Null,
+                Value::Entity(0),
+                Value::Entity(0x1fff_ffff),
+            ]),
+        ] {
+            let snapshot = run(targets);
+            assert!(
+                snapshot.initialization_complete(),
+                "{:?}",
+                snapshot.diagnostics
+            );
+            assert_eq!(
+                snapshot.variables,
+                Variables::from([(100, Value::Bool(true))])
+            );
+        }
+        // A routed message still needs its unanswered parameter.
+        let snapshot = run(Value::Entity(42));
+        assert!(snapshot.variables.is_empty());
+        assert_eq!(snapshot.diagnostics.len(), 1);
+        assert_eq!(snapshot.diagnostics[0].site.node, Some(1));
+        assert_eq!(
+            snapshot.diagnostics[0].issue,
+            Issue::Expression(EvalError::UnsupportedConfig("test-unanswered".into()))
+        );
+    }
+
+    #[test]
     fn queued_messages_abort_and_rearm_waits_without_crossing_instance_scope() {
         let message_node = |position, message, input| {
             node(
@@ -6586,9 +7072,14 @@ mod tests {
                     "frame {frame}, state {raw}"
                 );
             }
-            let projected = Vm::new(&component.graphs, &mut world, &mut component.machine)
-                .collect_movement_modifiers()
-                .unwrap();
+            // The activation passes the payload-free STU_E9694EFD action as
+            // the reference's fallback does, so the body stays complete.
+            assert!(
+                snapshot.initialization_complete(),
+                "frame {frame}: {:?}",
+                snapshot.diagnostics
+            );
+            let projected = component.movement_modifiers(&mut world).unwrap().unwrap();
             let modifiers: Vec<_> = projected
                 .iter()
                 .map(|(key, modifier)| {
@@ -6613,8 +7104,6 @@ mod tests {
                 );
             }
         }
-        assert!(!component.snapshot().unwrap().initialization_complete());
-        assert!(component.movement_modifiers(&mut world).unwrap().is_none());
     }
 
     fn active(snapshot: &Snapshot, id: u16) -> Vec<u16> {
