@@ -75,6 +75,15 @@ given the same local files passed 635 and skipped 5.
 - 5 tests compare the weapon tables with a local damage snapshot written by `tools/research/hitdef_shadow.py`
   and are skipped without it.
 
+## Before committing here
+
+```powershell
+python offline/leak_audit.py
+```
+
+It checks every file git tracks or would add under `offline/` against the local key files, and for data files
+and machine paths. It exits with code 1 when it finds something.
+
 ## Seen in the client
 
 2026-11-10, launched from this folder: retail main menu at 32:9, Training, Practice Range, hero select and spawn as
