@@ -26,6 +26,15 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Rust stock Soldier idle fidget, Sprint and owner switch polling
+
+- Left an animation without an authored duration on until a transition or its parent ends it, as the reference does, which knows the asset's length no better. Only the shape seen on the reached `02C5` idle fidget, node 51, is accepted: no client removal flag and no consumer of the animation-finished or finished plug. Any other shape still stops the body with the missing duration. Like the reference, the server does not end the state at the asset's length, so its finished and end follows wait for that transition.
+- Passed the payload-free `STU_E9694EFD` action through its output, as the reference's unmodeled fallback does. Only the exact authored build 104319 form is accepted: the node header, no sync variables or state slot, and two unlinked plugs. Every instance in both packs has that form.
+- Left switches polled on a native outside the reference's client-agreed set out of owner frames, and kept sending their live subgraphs, as the reference does. The record persists across activations, like the reference's. Observer frames are unchanged. Natives are classified only for watched evaluations.
+- The tagged stock Soldier owner VM now runs idle, held fire, reload, a second burst, the idle fidget, fire during the fidget and Sprint over 900 frames without diagnostics in the prepared session test. Its owner frames match the frozen reference's ammo, reload and Sprint HUD transitions. The withheld switches at spawn match the reference's for every instance the two trees share.
+- Passed 348 public Rust tests and 62 tagged base-runtime checks. The enriched-runtime firing placement check needs a bot-graph pack that was unavailable. The untagged bundle also passed the stock owner and Sprint regressions. Cargo formatting, Clippy and Git diff checks passed.
+- Original-client check on the native server: the body stayed attached through 16 seconds of idle, firing, reload and Sprint, and the worker logged no script stop. Firing lowered the ammo display, reload refilled it to 30, and Sprint showed its active icon while the body ran forward. The view rendered normally after spawn without opening the in-game menu. A scripted held button fired two rounds and then stopped on both the native and the reference server, so continuous fire still needs a check with a physical mouse. Original-client acceptance remains pending.
+
 #### Rust body script stop diagnostics
 
 - Logged the reason when the live worker stops an owner body script, with each initialization diagnostic as graph, node and issue. Previously the worker cancelled the script silently. This exposed the `02C5`, node 51 animation duration stop during held fire in the original client.

@@ -169,6 +169,18 @@ pub trait Context {
     fn native(&mut self, _config: &Json) -> Option<Value> {
         None
     }
+
+    /// Whether the evaluation records the natives it reads for a watcher, as
+    /// the reference does only for a watched evaluation.
+    fn watches_natives(&self) -> bool {
+        false
+    }
+
+    /// A watched evaluation reached a config class the reference answers
+    /// through its world's native hook. Nested operands of that config are
+    /// not reported, because the reference world never evaluates them with
+    /// the caller's watcher.
+    fn reference_native(&mut self, _class: &str) {}
 }
 
 #[derive(Default)]
@@ -234,6 +246,8 @@ pub fn evaluate_with_budget(
     Evaluator {
         limit: max_steps,
         steps: 0,
+        // An unwatched evaluation has no use for the record.
+        in_native: !context.watches_natives(),
     }
     .config(config, context, 0)
 }
@@ -635,13 +649,71 @@ fn resource_field(class: &str) -> Option<&'static str> {
     }
 }
 
+/// The class of a config object the reference evaluates through its world's
+/// native hook: expr.py `evaluate` falls through to `ctx.native` for every
+/// class it does not compute itself.
+fn reference_native_class(config: &Json) -> Option<&str> {
+    let fields = config.as_object()?;
+    let class = class(config).unwrap_or("?");
+    let native = match class {
+        "STUConfigVarDynamic"
+        | "STUConfigVarBool"
+        | "STUConfigVarInt"
+        | "STUConfigVarFloat"
+        | "STUConfigVarLogicalButton"
+        | "STU_919FD47C"
+        | "STUConfigVarExpression"
+        | "STU_B5A0CAF0"
+        | "STU_3832D36C"
+        | "STU_91EFD5B1"
+        | "STU_3ACE35FB"
+        | "STU_7197C080"
+        | "STU_BE0BD267"
+        | "STUConfigVarVec3" => false,
+        "STU_45EDF12D" if child(config, "m_key").is_null() => false,
+        _ if resource_field(class).is_some() => false,
+        // Any other resource config names its first nonzero GUID text.
+        _ if fields.contains_key("m_resourceKey") => !fields.iter().any(|(key, value)| {
+            key != "m_resourceKey"
+                && value
+                    .as_str()
+                    .filter(|text| text.starts_with("0x"))
+                    .and_then(parse_guid)
+                    .is_some_and(|guid| guid != 0)
+        }),
+        _ => true,
+    };
+    native.then_some(class)
+}
+
 struct Evaluator {
     limit: usize,
     steps: usize,
+    /// Inside a native's operands, which the reference does not watch.
+    in_native: bool,
 }
 
 impl Evaluator {
     fn config(
+        &mut self,
+        config: &Json,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<Value, EvalError> {
+        let Some(class) = (!self.in_native)
+            .then(|| reference_native_class(config))
+            .flatten()
+        else {
+            return self.config_value(config, context, depth);
+        };
+        context.reference_native(class);
+        self.in_native = true;
+        let result = self.config_value(config, context, depth);
+        self.in_native = false;
+        result
+    }
+
+    fn config_value(
         &mut self,
         config: &Json,
         context: &mut impl Context,
@@ -1509,6 +1581,75 @@ mod tests {
                 "m_D99EF254": floats,
             },
         })
+    }
+
+    #[derive(Default)]
+    struct Natives {
+        reported: Vec<String>,
+    }
+
+    impl Context for Natives {
+        fn owner(&mut self) -> Value {
+            Value::Entity(0xa000_0101)
+        }
+
+        fn related_entity(&mut self, relation: EntityRelation, entity: u32) -> Option<u32> {
+            (relation == EntityRelation::AiControlEntity && entity == 0xa000_0101).then_some(0)
+        }
+
+        fn watches_natives(&self) -> bool {
+            true
+        }
+
+        fn reference_native(&mut self, class: &str) {
+            self.reported.push(class.to_owned());
+        }
+    }
+
+    #[test]
+    fn reference_natives_are_reported_by_their_outermost_class() {
+        let report = |config: Json| {
+            let mut context = Natives::default();
+            let value = evaluate(&config, &mut context).unwrap();
+            (value, context.reported)
+        };
+        // The reference computes value-or-default itself and answers the
+        // operand through its world.
+        assert_eq!(
+            report(json!({
+                "$":"STU_91EFD5B1",
+                "m_value":{"$":"STU_E95A9C77","m_EE729DCB":0},
+                "m_default":{"$":"STUConfigVarBool","m_value":true},
+            })),
+            (Value::Bool(false), vec!["STU_E95A9C77".to_owned()])
+        );
+        // Its world never watches a native's operands.
+        assert_eq!(
+            report(json!({
+                "$":"STU_D3EB8D87", "m_EE729DCB":0,
+                "m_00903303":{
+                    "$":"STU_DB742151", "m_EE729DCB":0,
+                    "m_entity":{"$":"STU_B5A0CAF0","m_EE729DCB":0},
+                },
+            })),
+            (Value::Bool(false), vec!["STU_D3EB8D87".to_owned()])
+        );
+        // Resource configs with a GUID are computed; a fieldless one is not.
+        assert_eq!(
+            report(json!({
+                "$":"STUConfigVarIdentifier", "m_identifier":"0x0D80000000000015",
+                "m_resourceKey":null,
+            })),
+            (Value::Asset(0x0d80_0000_0000_0015), Vec::new())
+        );
+        assert_eq!(
+            report(json!({"$":"STU_ABB6C23E","m_EE729DCB":0,"m_resourceKey":null})),
+            (Value::Asset(0), vec!["STU_ABB6C23E".to_owned()])
+        );
+        assert_eq!(
+            report(variable(7, Scope::Entity)),
+            (Value::Null, Vec::new())
+        );
     }
 
     #[test]

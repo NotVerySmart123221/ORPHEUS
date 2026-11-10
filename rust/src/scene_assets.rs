@@ -573,12 +573,14 @@ mod tests {
 
     #[test]
     #[ignore = "requires a prepared 104319 Practice Range pack without bot VM graphs"]
-    fn stock_soldier_owner_session_fires_and_reloads_then_stops_at_sprint() {
+    fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
         use crate::commands::Command;
         use crate::game_replication::BodyStep;
-        use crate::script_snapshot_wire::View;
+        use crate::script_init::{Snapshot, StateKind};
+        use crate::script_snapshot_wire::{View, uncertain_polled_switch};
         use crate::script_stream::{BodyStream, DeltaKind};
         use crate::script_wire::Value;
+        use std::collections::BTreeSet;
 
         let runtime = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
         let assets = SceneAssets::load(runtime).unwrap();
@@ -624,8 +626,9 @@ mod tests {
                 streams.push((stream, projected));
             }
             // A live session: idle for about 3 s, hold fire for 1.5 s, reload,
-            // fire briefly, then hold forward and Sprint. Both streams project
-            // and encode every frame, as the worker sends them.
+            // fire briefly, stand until the idle fidget plays, fire through it,
+            // then hold forward and Sprint. Both streams project and encode
+            // every frame, as the worker sends them.
             let int = |value: Option<&Value>| match value {
                 None => None,
                 Some(Value::Integer(value)) => Some(*value),
@@ -636,15 +639,57 @@ mod tests {
                 Some(Value::Bool(value)) => Some(*value),
                 Some(value) => panic!("unexpected flag {value:?}"),
             };
+            // A switch polled on a native the owner client may answer
+            // differently stays off the owner stream.
+            let uncertain = |snapshot: &Snapshot| {
+                let mut found = BTreeSet::new();
+                for (&id, instance) in &snapshot.instances {
+                    let graph = assets.graphs.graph(instance.graph).unwrap();
+                    for (&raw, state) in &instance.states {
+                        let node = graph.state(usize::from(raw)).unwrap();
+                        if state.active && uncertain_polled_switch(node, state) {
+                            found.insert((id, raw));
+                        }
+                    }
+                }
+                found
+            };
+            // The reference withholds these switches too, and two more in
+            // instance 9, which this tree retires at startup. Instance 18 is
+            // one of the tagged weapon-manager subgraphs the reference lacks.
+            let withheld = BTreeSet::from([
+                (1, 10),
+                (1, 15),
+                (1, 20),
+                (1, 21),
+                (1, 22),
+                (1, 23),
+                (2, 12),
+                (2, 13),
+                (2, 14),
+                (12, 25),
+                (12, 28),
+                (12, 30),
+                (12, 48),
+                (13, 17),
+                (18, 0),
+            ]);
+            assert_eq!(uncertain(snapshot), withheld);
+            for (_, projected) in &streams {
+                for &(id, raw) in &withheld {
+                    assert!(!projected.instance_states(id).unwrap().contains(&raw));
+                }
+            }
             let mut mover = scene.player_spawn_mover(hero.body, 0).unwrap();
-            let mut stopped = None;
             let mut owner = Vec::new();
-            for t in 1..=560 {
+            let mut owner_hud = Vec::new();
+            for t in 1..=900 {
                 let frame = FIRST_TICK + t;
                 let (forward, buttons) = match t {
-                    188..=281 | 520..=540 => (0, 1),
+                    188..=281 | 520..=540 | 600..=640 => (0, 1),
                     300 => (0, 0x400),
-                    560 => (127, 8),
+                    700 => (127, 8),
+                    701..=760 => (127, 0),
                     _ => (0, 0),
                 };
                 let command = Command {
@@ -663,13 +708,46 @@ mod tests {
                 runtime.take_shots(Some(command), &mover);
                 let snapshot = runtime.snapshot().unwrap();
                 // The worker cancels the body script at the first diagnostic.
-                if let Some(item) = snapshot.diagnostics.first() {
-                    stopped = Some(format!(
-                        "{t}: {:04X}:{:?} {:?}",
-                        item.site.graph, item.site.node, item.issue
-                    ));
-                    break;
+                assert!(
+                    snapshot.diagnostics.is_empty(),
+                    "{t}: {:?}",
+                    snapshot.diagnostics
+                );
+                // The idle fidget animation has no authored duration. Like
+                // the reference, it stays on without a timer until held fire
+                // ends it.
+                let idle = &snapshot.instances[&14];
+                assert_eq!(idle.graph, 0x02c5);
+                let playing = idle.states.get(&19).is_some_and(|state| state.active);
+                if playing {
+                    assert_eq!(idle.states[&19].kind, StateKind::Anim);
+                    assert!(
+                        snapshot
+                            .pending_timers
+                            .get(&14)
+                            .into_iter()
+                            .flatten()
+                            .all(|timer| timer.raw_state != 19)
+                    );
                 }
+                assert_eq!(playing, (586..600).contains(&t), "{t}");
+                // Sprint starts on the press with forward held, runs while
+                // forward stays held and drives its HUD flag, as in the
+                // reference.
+                let sprint = &snapshot.instances[&5];
+                assert_eq!(sprint.graph, 0x0255);
+                let (flags, hud) = match t {
+                    700 => (5, Some(1)),
+                    701..=760 => (1, Some(1)),
+                    761.. => (0, Some(0)),
+                    _ => (0, None),
+                };
+                assert_eq!(
+                    (sprint.states[&1].kind, int(sprint.variables.get(&699))),
+                    (StateKind::Ability { flags }, hud),
+                    "{t}"
+                );
+                let excluded = uncertain(snapshot);
                 let encoder = runtime.encoder();
                 for (stream, initial) in &mut streams {
                     let next = encoder.project_next(snapshot, initial).unwrap();
@@ -686,24 +764,27 @@ mod tests {
                     if next.view() != View::Owner {
                         continue;
                     }
+                    for &(id, raw) in &excluded {
+                        assert!(!next.instance_states(id).unwrap().contains(&raw), "{t}");
+                    }
                     let rifle = next.instance_variables(11).unwrap();
                     let fact = (int(rifle.get(&53)), flag(rifle.get(&51)));
                     if owner.last().is_none_or(|&(_, last)| last != fact) {
                         owner.push((t, fact));
                     }
+                    let hud = int(next.instance_variables(5).unwrap().get(&699));
+                    if owner_hud.last().is_none_or(|&(_, last)| last != hud) {
+                        owner_hud.push((t, hud));
+                    }
                 }
             }
-            // Sprint activation reaches an action the reference only passes
-            // through its unmodeled fallback.
-            assert_eq!(
-                stopped.as_deref(),
-                Some("560: 0255:Some(40) UnsupportedAction(\"STU_E9694EFD\")")
-            );
-            assert_eq!(streams[0].0.command_frame(), FIRST_TICK + 559);
+            assert_eq!(streams[0].0.command_frame(), FIRST_TICK + 900);
+            // The owner frames carry the Sprint HUD flag the client shows.
+            assert_eq!(owner_hud, [(1, None), (700, Some(1)), (761, Some(0))]);
             // The frozen reference produces the same rifle ammo and reload
             // transitions from these inputs: 14 rounds in 1.5 s, the magazine
-            // refilled 47 frames after the reload press and the reload ended
-            // 46 frames later.
+            // refilled 47 frames after the reload press, the reload ended 46
+            // frames later, and six rounds through the idle fidget.
             let mut expected = vec![(1, (Some(30), None))];
             for (t, ammo) in [
                 188, 195, 201, 208, 215, 222, 229, 236, 243, 250, 257, 264, 271, 278,
@@ -721,6 +802,12 @@ mod tests {
                 (527, (Some(28), Some(false))),
                 (533, (Some(27), Some(false))),
                 (540, (Some(26), Some(false))),
+                (600, (Some(25), Some(false))),
+                (607, (Some(24), Some(false))),
+                (613, (Some(23), Some(false))),
+                (620, (Some(22), Some(false))),
+                (627, (Some(21), Some(false))),
+                (634, (Some(20), Some(false))),
             ]);
             assert_eq!(owner, expected);
         } else {

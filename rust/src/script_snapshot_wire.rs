@@ -63,6 +63,19 @@ impl ProjectedSnapshot {
     pub(crate) fn instance_variables(&self, instance: u16) -> Option<&Variables> {
         Some(&self.instances.get(&instance)?.variables.values)
     }
+
+    /// The raw indices of the states this frame lists for the instance.
+    #[cfg(test)]
+    pub(crate) fn instance_states(&self, instance: u16) -> Option<BTreeSet<u16>> {
+        Some(
+            self.instances
+                .get(&instance)?
+                .states
+                .keys()
+                .copied()
+                .collect(),
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -358,6 +371,9 @@ impl<'a> SnapshotEncoder<'a> {
                 }
                 let codec = self.codecs.codec(&node.class);
                 if !state.active && !(state.activation != 0 && codec.is_some_and(Codec::stec)) {
+                    continue;
+                }
+                if view == View::Owner && uncertain_polled_switch(node, state) {
                     continue;
                 }
                 let payload = codec
@@ -1167,6 +1183,18 @@ fn presenter(node: &Node) -> bool {
     node.class == "STUStatescriptStateUXPresenter" || node.fields.get("m_45216F79").is_some()
 }
 
+/// A polled switch whose condition read a native the owner client may answer
+/// differently. The client re-checks such a switch every update with its own
+/// answer, so the reference leaves it out of owner frames and keeps sending
+/// its live subgraph (driver.py `_add_state`).
+pub(crate) fn uncertain_polled_switch(node: &Node, state: &State) -> bool {
+    state.reads_untrusted_native()
+        && matches!(
+            node.class.as_str(),
+            "STUStatescriptStateBooleanSwitch" | "STU_DEBD057B"
+        )
+}
+
 fn state_payload(state: &State, codec: &Codec) -> Option<StatePayload> {
     Some(match (state.kind, codec.codec.as_deref()) {
         (
@@ -1510,6 +1538,209 @@ mod tests {
         assert_eq!(base.view(), View::Owner);
         assert!(base.instances.values().all(|item| item.states.is_empty()));
         assert!(!owner.instances[&1].states.is_empty());
+    }
+
+    #[test]
+    fn owner_frames_withhold_switches_polled_on_natives_the_client_may_answer_differently() {
+        let untrusted = json!({"$":"STU_E95A9C77","m_EE729DCB":0});
+        let fixture = graph(
+            42,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({
+                        "m_outPlug":{"$":"Plug","links":[[1,"m_beginPlug"],[2,"m_beginPlug"],
+                            [3,"m_beginPlug"],[4,"m_beginPlug"]],"m_FF3DAF1E":[]}
+                    }),
+                ),
+                node(
+                    1,
+                    "STUStatescriptStateBooleanSwitch",
+                    Some(0),
+                    json!({
+                        "m_condition":untrusted,
+                        "m_falseSubgraphPlug":{"$":"Plug","links":[[5,"m_beginPlug"]],
+                            "m_FF3DAF1E":[4]}
+                    }),
+                ),
+                node(
+                    2,
+                    "STUStatescriptStateBooleanSwitch",
+                    Some(1),
+                    json!({"m_condition":{"$":"STU_4A101787","m_EE729DCB":0}}),
+                ),
+                node(
+                    3,
+                    "STUStatescriptStateBooleanSwitch",
+                    Some(2),
+                    json!({
+                        "m_condition":{"$":"STUConfigVarDynamic","m_identifier":100,
+                            "m_60DB8F99":false}
+                    }),
+                ),
+                node(4, "STU_DEBD057B", Some(3), json!({"m_262AE982":untrusted})),
+                node(5, "STUStatescriptState", Some(4), json!({})),
+            ],
+            json!([1, 2, 3, 4, 5]),
+            json!([0]),
+            json!([1]),
+            json!([]),
+        );
+        let graphs = GraphStore::from_json(
+            &serde_json::to_vec(&json!({
+                "version":1, "graphs":[fixture], "bodies":{}, "missing":[]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let snapshot = initialize(
+            &graphs,
+            ENTITY,
+            Variables::new(),
+            vec![Root::new(1, 42)],
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        assert!(
+            snapshot.initialization_complete(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        let states = &snapshot.instances[&1].states;
+        assert!(states.values().all(|state| state.active));
+        let flagged: Vec<_> = (0..5)
+            .map(|raw| states[&raw].reads_untrusted_native())
+            .collect();
+        assert_eq!(flagged, [true, false, false, true, false]);
+        let mut raw: Json = serde_json::from_str(CODECS).unwrap();
+        raw["classes"]["DEBD057B"] = json!({
+            "name":"STU_DEBD057B","codec":"none","stec":false,"status":"VERIFIED","layout":[]
+        });
+        let codecs = CodecTable::from_json(&raw.to_string()).unwrap();
+        let encoder = SnapshotEncoder::new(&graphs, &codecs);
+        // The live subgraph of a withheld switch is still sent.
+        let owner = encoder.project(&snapshot, View::Owner).unwrap();
+        assert_eq!(owner.instance_states(1), Some(BTreeSet::from([1, 2, 4])));
+        // Observer frames carry every remote state that is on.
+        let observer = encoder.project(&snapshot, View::Observer).unwrap();
+        assert_eq!(observer.instance_states(1), Some(BTreeSet::from([0])));
+    }
+
+    #[test]
+    fn a_switch_withheld_once_stays_off_owner_frames_after_it_begins_again() {
+        use crate::script_init::Component;
+        use std::sync::Arc;
+
+        let variable = json!({"$":"STUConfigVarDynamic","m_identifier":100,"m_60DB8F99":false});
+        let message = |position, message: &str, input, params: Json| {
+            node(
+                position,
+                "STUStatescriptEntryGameMessage",
+                None,
+                json!({
+                    "m_gameMessage":{"m_gameMessage":message},
+                    "m_params":params,
+                    "m_outPlug":{"$":"Plug","links":[[1,input]],"m_FF3DAF1E":[]}
+                }),
+            )
+        };
+        // The native answers only while the variable is unset.
+        let fixture = graph(
+            42,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({"m_outPlug":{"$":"Plug","links":[[1,"m_beginPlug"]],"m_FF3DAF1E":[]}}),
+                ),
+                node(
+                    1,
+                    "STUStatescriptStateBooleanSwitch",
+                    Some(0),
+                    json!({
+                        "m_condition":{
+                            "$":"STU_91EFD5B1",
+                            "m_value":variable,
+                            "m_default":{"$":"STU_E95A9C77","m_EE729DCB":0},
+                        }
+                    }),
+                ),
+                message(2, "0x0240000000000001", "m_F198FD3A", json!([])),
+                message(
+                    3,
+                    "0x0240000000000002",
+                    "m_beginPlug",
+                    json!([{"m_B5051BCE":"0x0A40000000000004","m_out_Var":variable}]),
+                ),
+            ],
+            json!([1]),
+            json!([0, 2, 3]),
+            json!([1]),
+            json!([]),
+        );
+        let graphs = Arc::new(
+            GraphStore::from_json(
+                &serde_json::to_vec(&json!({
+                    "version":1, "graphs":[fixture], "bodies":{}, "missing":[]
+                }))
+                .unwrap(),
+            )
+            .unwrap(),
+        );
+        let mut component = Component::start(
+            Arc::clone(&graphs),
+            ENTITY,
+            Variables::new(),
+            vec![Root::new(1, 42)],
+            0,
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        let codecs = CodecTable::from_json(CODECS).unwrap();
+        let encoder = SnapshotEncoder::new(&graphs, &codecs);
+        let switch = |component: &Component| {
+            let snapshot = component.snapshot().unwrap();
+            assert!(
+                snapshot.initialization_complete(),
+                "{:?}",
+                snapshot.diagnostics
+            );
+            let state = &snapshot.instances[&1].states[&0];
+            let owner = encoder.project(snapshot, View::Owner).unwrap();
+            (
+                state.active,
+                state.activation,
+                state.kind,
+                state.reads_untrusted_native(),
+                owner.instance_states(1).unwrap().contains(&0),
+            )
+        };
+        assert_eq!(
+            switch(&component),
+            (true, 1, StateKind::BooleanSwitch(false), true, false)
+        );
+        for (guid, expected) in [
+            (
+                0x0240_0000_0000_0001,
+                (false, 1, StateKind::BooleanSwitch(false), true, false),
+            ),
+            // Like the reference's per-instance record, the flag survives
+            // the end, although this activation reads only the variable.
+            (
+                0x0240_0000_0000_0002,
+                (true, 2, StateKind::BooleanSwitch(true), true, false),
+            ),
+        ] {
+            let parameter = Variables::from([(4, Value::Bool(true))]);
+            assert_eq!(component.queue_message(1, guid, parameter).unwrap(), 1);
+            component.run_now(&mut EmptyWorld).unwrap();
+            assert_eq!(switch(&component), expected);
+        }
     }
 
     #[test]
