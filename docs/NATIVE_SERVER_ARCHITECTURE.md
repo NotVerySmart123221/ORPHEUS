@@ -45,6 +45,12 @@ Use the dashboard to locate a discrepancy, then turn it into a headless test usi
 
 Give players and bots the same character collision policy. Verify live enemies block movement and allies can pass, subject to the authored character-collision setting. Cover player versus player, player versus bot, and bot versus bot in both directions, including free-for-all, crouching, simultaneous movement, and death or body replacement. Keep character relationships separate from static map team barriers. Verify movement, hitscan, projectile sweeps, and penetration separately where their authored filters differ. Reuse geometry and query primitives where the behavior agrees. [World interactions and combat criteria](ROADMAP.md#project-wide-checklist)
 
+## Worker timing
+
+With the loopback inspector enabled, the state endpoint includes a cumulative `timing` sample. Tick duration covers the match worker's simulation and frame delivery call. Schedule lateness measures how far the event loop has passed its scheduled tick deadline when it checks the clock. It can include wake-up delay and work done before the tick. Samples are taken when a peer has started its prepared world and the clock is not draining at the start of the tick. Missed ticks count the scheduler's skipped ticks during those sampled turns.
+
+The upper bound of each microsecond bin is exclusive. One extra bin covers durations at or beyond the last bound. The viewer shows the p95 and p99 bin bounds and input counters since worker startup. Subtract bin counts and sample counts between two snapshots from the same worker to find a percentile interval for that window. The reported maximum covers all samples since worker startup. Input budget counters report charged work, full peer and turn budgets, and turns that leave work queued. Timing runs on the server clock. Client round-trip time, packet arrival gaps and presentation latency need separate observations.
+
 ## Migration gates
 
 | Slice | Evidence required to proceed |

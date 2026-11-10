@@ -336,6 +336,7 @@ mod tests {
                 tick: 42,
                 rooms: Vec::new(),
                 truncated: false,
+                timing: None,
             })
         })
         .unwrap();

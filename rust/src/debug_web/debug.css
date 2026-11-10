@@ -89,6 +89,7 @@ canvas { display: block; background: #0e141b; width: 100%; height: clamp(14rem, 
 .sample.dead { color: var(--dead); background: transparent; border: 1px solid currentColor; }
 
 .entity-panel { margin-top: 1rem; }
+.entity-panel .notes { padding: 0 .75rem .65rem; }
 .table-scroll { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; white-space: nowrap; text-align: left; }
 th, td { border-top: 1px solid var(--edge); padding: .45rem .75rem; }

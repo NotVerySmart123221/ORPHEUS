@@ -6,6 +6,11 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Worker timing in the Rust inspector
+
+- Added opt-in tick duration and schedule lateness histograms, skipped tick counts and input budget counters. The inspector displays server-side p95 and p99 bucket bounds. Capture starts with an active prepared world. The normal worker adds no timing reads with the inspector disabled.
+- Passed 337 public Rust tests, three prepared checks for encrypted startup, active-room timing and the five-peer input budget, plus formatting and Clippy. Headless Chrome verified the idle panel and percentile rendering. Comparative sustained-load performance and original-client acceptance remain pending.
+
 #### One ECS entity per live bot body
 
 - Moved the bot transform, collider and patrol state onto the same Bevy entity as vitals, rewind history and respawn. One ordered wire-ID index preserves spawner order and lets movement, hits, replication and the inspector address the same body.

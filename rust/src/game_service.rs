@@ -33,6 +33,7 @@ use crate::{
     game_link::{ACK, KIND_FRAME, Packet},
     game_messages::{Message, encode, locate},
     game_replication::{Record, WorldDelivery},
+    game_timing::WorkerTiming,
     jam_codec::{Fields, Schemas, Value},
     match_handoff::Handoff,
     match_scene::{PlayerAppearance, PlayerCard},
@@ -113,6 +114,14 @@ struct WorldStart {
 
 impl GameService {
     pub fn bind(address: SocketAddr, schemas: Arc<Schemas>) -> io::Result<Self> {
+        Self::bind_with_timing(address, schemas, false)
+    }
+
+    pub(crate) fn bind_with_timing(
+        address: SocketAddr,
+        schemas: Arc<Schemas>,
+        collect_timing: bool,
+    ) -> io::Result<Self> {
         for id in [20300, 20301, 20302, 20304, 20306, 21601, 21602, 21610] {
             let (_, crc, _) = locate(id).map_err(invalid)?;
             schemas.fields(crc, id).map_err(invalid)?;
@@ -130,7 +139,17 @@ impl GameService {
         let worker_stopping = Arc::clone(&stopping);
         let worker = thread::Builder::new()
             .name("orpheus-game".into())
-            .spawn(move || run(socket, poll, receiver, worker_stopping, schemas, ready))?;
+            .spawn(move || {
+                run(
+                    socket,
+                    poll,
+                    receiver,
+                    worker_stopping,
+                    schemas,
+                    ready,
+                    collect_timing,
+                )
+            })?;
         initialized.recv().map_err(|_| stopped())??;
         Ok(Self {
             address,
@@ -540,6 +559,7 @@ struct State {
     schemas: Arc<Schemas>,
     patrol: PatrolScript,
     clock: GameClock,
+    timing: Option<WorkerTiming>,
     links: GameConnections,
     rooms: HashMap<MatchId, Room>,
     seats: HashMap<u32, (MatchId, usize)>,
@@ -554,6 +574,7 @@ impl State {
             schemas,
             patrol,
             clock: GameClock::default(),
+            timing: None,
             links: GameConnections::default(),
             rooms: HashMap::new(),
             seats: HashMap::new(),
@@ -740,6 +761,7 @@ impl State {
             tick: self.clock.frame(),
             rooms: rooms.into_values().collect(),
             truncated,
+            timing: self.timing.clone(),
         }
     }
 
@@ -833,6 +855,7 @@ impl State {
         let start = self.next_input_peer % count;
         let tick = self.clock.frame();
         let mut remaining = INPUT_PER_TURN;
+        let mut peer_limit_hits = 0;
         for offset in 0..count {
             let index = (start + offset) % count;
             let (&connection, peer) = self.peers.get_index_mut(index).expect("active peer index");
@@ -855,6 +878,9 @@ impl State {
                 .advance_input(&world.scene, &viewer, context.quanta, budget)
                 .unwrap_or((budget, true));
             remaining -= used;
+            if self.timing.is_some() && used == INPUT_PER_PEER {
+                peer_limit_hits += 1;
+            }
             self.next_input_peer = (index + 1) % count;
             let shots = peer.world.take_hitscan();
             if (!leave && peer.world.combat_body_active()) || !shots.is_empty() {
@@ -880,7 +906,16 @@ impl State {
                 break;
             }
         }
-        self.peers.values().any(|peer| peer.world.has_input_work())
+        let backlog = self.peers.values().any(|peer| peer.world.has_input_work());
+        if let Some(timing) = &mut self.timing {
+            timing.record_input(
+                INPUT_PER_TURN - remaining,
+                peer_limit_hits,
+                remaining == 0,
+                backlog,
+            );
+        }
+        backlog
     }
 
     fn send_home(&mut self, connection: u32, now: Duration) {
@@ -1047,6 +1082,7 @@ fn run(
     stopping: Arc<AtomicBool>,
     schemas: Arc<Schemas>,
     ready: mpsc::SyncSender<io::Result<()>>,
+    collect_timing: bool,
 ) -> io::Result<()> {
     let patrol = match PatrolScript::load() {
         Ok(patrol) => patrol,
@@ -1056,6 +1092,7 @@ fn run(
         }
     };
     let mut state = State::new(schemas, patrol);
+    state.timing = collect_timing.then(WorkerTiming::new);
     if ready.send(Ok(())).is_err() {
         return Ok(());
     }
@@ -1098,10 +1135,18 @@ fn run(
         let input_ready = state.advance_input(start.elapsed());
         let now = start.elapsed();
         if now >= due {
-            let (next, missed) = next_tick_after(due, now)
+            let scheduled = due;
+            let (next, missed) = next_tick_after(scheduled, now)
                 .ok_or_else(|| io::Error::other("game tick clock exhausted"))?;
             due = next;
+            let sample = state.timing.is_some()
+                && !state.clock.draining()
+                && state.peers.values().any(|peer| peer.world.world_started());
+            let began = sample.then(Instant::now);
             state.tick(&socket, now, missed);
+            if let (Some(timing), Some(began)) = (&mut state.timing, began) {
+                timing.record_tick(began.elapsed(), now - scheduled, missed);
+            }
         }
         let timeout = if socket_ready || input_ready || handled == RECEIVE_BATCH {
             Duration::ZERO
@@ -1341,6 +1386,7 @@ mod tests {
         let idle = server.debug_snapshot().unwrap();
         assert!(idle.rooms.is_empty());
         assert!(!idle.truncated);
+        assert!(idle.timing.is_none());
         server
             .open_match(MATCH, GameMap::practice_range(), player())
             .unwrap();
@@ -1350,6 +1396,25 @@ mod tests {
             server.debug_snapshot().err().unwrap().kind(),
             io::ErrorKind::BrokenPipe
         );
+    }
+
+    #[test]
+    fn timing_opt_in_reports_empty_histograms_while_no_world_is_running() {
+        let mut server = GameService::bind_with_timing(local(), Arc::new(fixture()), true).unwrap();
+        let idle = server.debug_snapshot().unwrap();
+        let timing = idle.timing.unwrap();
+        assert_eq!(timing.tick_duration_us.samples, 0);
+        assert_eq!(timing.schedule_lateness_us.samples, 0);
+        server
+            .open_match(MATCH, GameMap::practice_range(), player())
+            .unwrap();
+        let ready = server.debug_snapshot().unwrap();
+        assert!(ready.rooms.is_empty());
+        let timing = ready.timing.unwrap();
+        assert_eq!(timing.tick_duration_us.samples, 0);
+        assert_eq!(timing.schedule_lateness_us.samples, 0);
+        assert_eq!(timing.input_budget.turns, 0);
+        server.stop().unwrap();
     }
 
     #[test]
@@ -1569,6 +1634,7 @@ mod tests {
         let assets = SceneAssets::load(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap()).unwrap();
         let scene = assets.prepare(GameMap::practice_range()).unwrap();
         let mut state = State::new(Arc::new(fixture()), PatrolScript::load().unwrap());
+        state.timing = Some(WorkerTiming::new());
         // Five synthetic peers share a prepared fixture solely to test the
         // worker scheduler. The actual admission route remains solo.
         let players: Vec<_> = (0..5)
@@ -1628,6 +1694,12 @@ mod tests {
         );
         assert!(!state.advance_input(Duration::ZERO));
         assert_eq!(acks(&state), [first + 31; 5]);
+        let timing = state.debug_snapshot().timing.unwrap();
+        assert_eq!(timing.input_budget.turns, 3);
+        assert_eq!(timing.input_budget.used, 160);
+        assert_eq!(timing.input_budget.peer_limit_hits, 10);
+        assert_eq!(timing.input_budget.turn_limit_hits, 2);
+        assert_eq!(timing.input_budget.turns_with_backlog, 2);
     }
 
     #[test]
@@ -1708,7 +1780,12 @@ mod tests {
             .decode(GAME_REQUEST, CREATE_GAME, b"\x02\x00\x04\x00\x00\x00", true)
             .unwrap();
         let request = (GAME_REQUEST, CREATE_GAME, fields);
-        let mut server = GameService::bind(local(), Arc::clone(&schemas)).unwrap();
+        let mut server = GameService::bind_with_timing(
+            local(),
+            Arc::clone(&schemas),
+            matches!(fixture, PreparedFixture::Stock),
+        )
+        .unwrap();
         let channel = |id: MatchId, kind| {
             Fields::from([
                 (0, Value::Struct(id16(id[0], id[1]))),
@@ -1910,6 +1987,16 @@ mod tests {
             PreparedFixture::Stock => {
                 exercise_hero_selection(&mut client, &schemas, &assets, &server, &ticket);
                 let snapshot = server.debug_snapshot().unwrap();
+                let timing = snapshot.timing.as_ref().unwrap();
+                assert!(timing.tick_duration_us.samples > 0);
+                assert_eq!(
+                    timing.schedule_lateness_us.samples,
+                    timing.tick_duration_us.samples
+                );
+                assert_eq!(
+                    timing.tick_duration_us.counts.iter().sum::<u64>(),
+                    timing.tick_duration_us.samples
+                );
                 let [room] = snapshot.rooms.as_slice() else {
                     panic!("expected one prepared room");
                 };

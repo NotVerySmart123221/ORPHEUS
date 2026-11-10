@@ -2,11 +2,15 @@
 
 use serde::Serialize;
 
+use crate::game_timing::WorkerTiming;
+
 #[derive(Serialize)]
 pub(crate) struct Snapshot {
     pub tick: u32,
     pub rooms: Vec<Room>,
     pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timing: Option<WorkerTiming>,
 }
 
 #[derive(Serialize)]

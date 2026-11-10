@@ -129,9 +129,10 @@ impl Server {
         let SocketAddr::V4(lobby_addr) = listener.local_addr()? else {
             unreachable!("IPv4 lobby bind")
         };
-        let game = Arc::new(GameService::bind(
+        let game = Arc::new(GameService::bind_with_timing(
             addr(config.game_port).into(),
             game_schemas,
+            config.debug_port.is_some(),
         )?);
         let game_addr = game.local_addr();
         let debug = if let Some(port) = config.debug_port {

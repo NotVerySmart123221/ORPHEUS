@@ -51,6 +51,7 @@ pub mod game_projectiles;
 mod game_replication;
 pub mod game_service;
 pub mod game_stats;
+mod game_timing;
 pub mod jam_cipher;
 pub mod jam_codec;
 pub mod jam_framing;

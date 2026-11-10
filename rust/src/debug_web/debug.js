@@ -76,6 +76,40 @@ function renderGeometryControls(actors) {
   setText(byId("geometry-status"), geometryMessage);
 }
 
+function durationPercentile(histogram, bounds, percentile) {
+  let remaining = Math.ceil(histogram.samples * percentile);
+  for (const [index, count] of histogram.counts.entries()) {
+    remaining -= count;
+    if (remaining <= 0) {
+      return index === bounds.length
+        ? "≥" + bounds[index - 1] / 1000 + " ms"
+        : "<" + bounds[index] / 1000 + " ms";
+    }
+  }
+  return "—";
+}
+
+function renderTiming(timing) {
+  const panel = byId("timing-panel");
+  panel.hidden = !timing;
+  if (!timing) return;
+
+  const tick = timing.tick_duration_us;
+  const lateness = timing.schedule_lateness_us;
+  const bounds = timing.bin_upper_exclusive_us;
+  const input = timing.input_budget;
+  const percentiles = (histogram) => "p95 " + durationPercentile(histogram, bounds, .95)
+    + " / p99 " + durationPercentile(histogram, bounds, .99);
+  const stats = tick.samples
+    ? "Tick " + percentiles(tick) + " · scheduling lateness " + percentiles(lateness)
+      + " · " + tick.samples + " samples · " + timing.missed_ticks + " skipped ticks"
+    : "Waiting for an active match.";
+  setText(byId("timing-stats"), stats);
+  setText(byId("timing-input"), input.used + " input work units · " + input.peer_limit_hits
+    + " full peer budgets · " + input.turn_limit_hits + " full turn budgets · "
+    + input.turns_with_backlog + " turns with queued work");
+}
+
 function render() {
   const rooms = snapshot?.rooms ?? [];
   const options = JSON.stringify(rooms.map(({ id, name }) => [id, name]));
@@ -125,6 +159,7 @@ function render() {
   }
 
   renderGeometryControls(geometry && !sample ? [] : actors);
+  renderTiming(snapshot?.timing);
   renderActors(actors);
   for (const view of views) {
     renderView(view, sample, actors);
