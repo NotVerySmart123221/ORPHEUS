@@ -2,7 +2,7 @@
 
 ORPHEUS targets Overwatch retail build **1.74.0.0.104319**. This decision defines the Rust server's simulation boundaries and the order of migration. The [restoration roadmap](ROADMAP.md) tracks gameplay acceptance, and the [Rust migration guide](RUST_MIGRATION.md) tracks replacement of the frozen Python server.
 
-**Status.** The Rust worker runs the authored StateScript interpreter and a read-only debug dashboard. The first ECS slice owns active bot combat state by identity. Movement, player bodies and projectiles still need migration. Completing any slice requires separate evidence for automated behavior, network parity and original-client behavior.
+**Status.** The Rust worker runs the authored StateScript interpreter, an event-driven Lua patrol pilot and a read-only debug dashboard. The first ECS slice owns active bot combat state by identity. Movement, player bodies and projectiles still need migration. Completing any slice requires separate evidence for automated behavior, network parity and original-client behavior.
 
 ## Where the current architecture breaks down
 
@@ -31,7 +31,9 @@ Stock Soldier: 76 body attachment can proceed alongside the room refactor. Keep 
 
 Introduce a versioned script host ABI once the room boundary has a tested consumer. Host v1 should give handlers a read view of the current simulation stage, stable entity handles, the simulation frame, and seeded randomness. Deliver typed events such as spawn, damage, death, and timer expiry at documented stage boundaries. An AI think event runs when due. Handlers return typed commands such as movement intent or scheduling a timer. Rust validates handles, types, and authority before applying commands through the same simulation mechanisms as native handlers. Commands and events need stable ordering, bounded queues, and a defined policy for events raised during a handler.
 
-Pilot Lua or Luau with one small event-driven AI or mode behavior after establishing replay parity for that behavior. [`mlua`](https://docs.rs/mlua/latest/mlua/struct.Lua.html) is a candidate. Evaluate the selected VM's instruction or interrupt controls and memory limits on the supported toolchain. Expose only registered capabilities and disable filesystem, sockets, dynamic libraries, unapproved module loading, wall-clock time, and unseeded random sources. Bound execution, allocations, scheduled work, and command counts. Buffer each handler's commands until it succeeds, and isolate and report failures. Test stale handles, budget exhaustion, deterministic results, and compatibility with the retained authored VM before widening script coverage.
+The live pilot runs the checked-in [patrol policy](../rust/scripts/patrol.lua) in vendored Lua 5.4 through [`mlua` 0.11.6](https://docs.rs/mlua/0.11.6/mlua/struct.Lua.html). Rust sends a spawn, think or movement-release event at its existing simulation frame. The handler returns one wait duration or route slot, which Rust validates before use. The authoritative clock, authored route, collision, movement and packets stay with the Rust worker. The policy loads from text with an empty environment and bounded instructions and memory. A failed decision stops that patrol until the body is replaced. The current policy is stateless and the worker shares its VM across patrols. Define room isolation and explicit state ownership before exposing stateful handlers or writable capabilities.
+
+Expand scripting only after verifying handle lifetimes, event order, deterministic replay and failure isolation through the same host path. Expose only registered capabilities and disable filesystem, sockets, dynamic libraries, unapproved module loading, wall-clock time and unseeded random sources. Bound execution, allocations, scheduled work and command counts. Buffer each handler's commands until it succeeds, and isolate and report failures.
 
 ## Collision and live inspection
 

@@ -31,6 +31,7 @@ use crate::{
     mover::Mover,
     mover_ground::NOT_GROUND,
     mover_settings::MoverCatalog,
+    patrol_script::PatrolScript,
     script_codecs::CodecTable,
     script_graph::GraphStore,
     script_player::{OwnerBodySpawn, PlayerBodyFactory},
@@ -355,13 +356,19 @@ impl PreparedScene {
             .map(|hit| hit.map(|hit| hit.distance))
     }
 
-    pub fn step_bots(&mut self, tick: u32) {
+    pub(crate) fn step_bots(&mut self, tick: u32, patrol: &PatrolScript) {
         let floor = self.ground.triangles();
         for bot in &mut self.bots {
-            bot.step(
+            if let Err(error) = bot.step(
                 tick,
+                patrol,
                 ground_height(floor, mover_category(&self.map, bot.spawn.team)),
-            );
+            ) {
+                eprintln!(
+                    "Patrol for bot {:08x} stopped at frame {tick}: {error}",
+                    bot.entity
+                );
+            }
         }
     }
 
@@ -485,8 +492,9 @@ mod tests {
         });
         let goals = [[3, 4], [0, 1]];
         let mut visited = [0; 2];
+        let patrol = PatrolScript::load().unwrap();
         for tick in 1001..=2900 {
-            scene.step_bots(tick);
+            scene.step_bots(tick, &patrol);
             for (slot, entity) in bots.into_iter().enumerate() {
                 let bot = scene
                     .bots()

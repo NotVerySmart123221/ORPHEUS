@@ -20,6 +20,7 @@ use crate::contact_world::ContactWorld;
 use crate::game_clock::TICK_PERIOD;
 use crate::mover_ground::{pogo, standing_body, standing_origin};
 use crate::mover_settings::MoverSettings;
+use crate::patrol_script::{PatrolScript, WaitEvent};
 use crate::world::{Movement, NO_INPUT};
 
 pub const BOT_ENTITY: u32 = 0xc000_1000;
@@ -30,8 +31,6 @@ pub const BOT_RECORD_DELAY: u32 = 8;
 
 const PATROL: u64 = 0x0580_0000_0000_0b8e;
 const FIRING: u64 = 0x0580_0000_0000_0b92;
-const FIRST_WAIT: f64 = 3.0;
-const WALK_GAP: f64 = 1.2;
 const ARRIVED: f64 = 0.05;
 const MAX_DETOUR_SAMPLES: usize = 64;
 const STEP_UP: f64 = 0.6;
@@ -325,6 +324,7 @@ pub struct Bot {
     moved_tick: Option<u32>,
     last_tick: Option<u32>,
     records_from: Option<u32>,
+    patrol_failed: bool,
 }
 
 impl Bot {
@@ -344,7 +344,7 @@ impl Bot {
             pace: 0.0,
             direction: [0.0, 1.0],
             index,
-            wait: FIRST_WAIT,
+            wait: 0.0,
             target: None,
             waypoints: VecDeque::new(),
             collision: None,
@@ -358,6 +358,7 @@ impl Bot {
             moved_tick: None,
             last_tick: None,
             records_from: None,
+            patrol_failed: false,
             spawn,
         }
     }
@@ -446,6 +447,10 @@ impl Bot {
         let Some(plans) = &self.plans else {
             return [None; 2];
         };
+        if self.index != (previous + 1) % self.spawn.route.len() {
+            // The cached leg belongs to the authored cyclic edge only.
+            return [None; 2];
+        }
         if self.index == plans.first_index && self.position == self.spawn.position {
             return plans.first;
         }
@@ -461,37 +466,71 @@ impl Bot {
 
     /// The floor provider can give a surface Y within the top and bottom
     /// probe bounds. A missing surface uses the authored hint heights.
-    pub fn step(&mut self, tick: u32, mut ground: impl FnMut(f64, f64, f64, f64) -> Option<f64>) {
-        if self.spawn.route.is_empty() || self.dead {
-            return;
+    pub(crate) fn step(
+        &mut self,
+        tick: u32,
+        script: &PatrolScript,
+        mut ground: impl FnMut(f64, f64, f64, f64) -> Option<f64>,
+    ) -> io::Result<()> {
+        if !self.patrol_active() {
+            return Ok(());
         }
         let ticks = self
             .last_tick
             .map_or(1, |last| tick.saturating_sub(last))
             .min(CATCH_UP);
         if ticks == 0 {
-            return;
+            return Ok(());
         }
+        let first_step = self.last_tick.is_none();
         self.last_tick = Some(tick);
-        let seconds = TICK_PERIOD.as_secs_f64();
-        for at in tick - (ticks - 1)..=tick {
-            self.tick(at, seconds, &mut ground);
+        let result = self.step_patrol(tick, ticks, first_step, script, &mut ground);
+        if result.is_err() {
+            self.patrol_failed = true;
+            self.keys = false;
+            self.held = [0; 2];
+            self.stand();
+            self.moved_tick = Some(tick);
         }
+        result
+    }
+
+    pub(crate) fn patrol_active(&self) -> bool {
+        !self.spawn.route.is_empty() && !self.dead && !self.patrol_failed
+    }
+
+    fn step_patrol(
+        &mut self,
+        tick: u32,
+        ticks: u32,
+        first_step: bool,
+        script: &PatrolScript,
+        ground: &mut impl FnMut(f64, f64, f64, f64) -> Option<f64>,
+    ) -> io::Result<()> {
+        if first_step {
+            self.wait = script.wait(WaitEvent::Spawn, tick)?;
+        }
+        let dt = TICK_PERIOD.as_secs_f64();
+        for at in tick - (ticks - 1)..=tick {
+            self.tick(at, dt, script, ground)?;
+        }
+        Ok(())
     }
 
     fn tick(
         &mut self,
         tick: u32,
         dt: f64,
+        script: &PatrolScript,
         ground: &mut impl FnMut(f64, f64, f64, f64) -> Option<f64>,
-    ) {
+    ) -> io::Result<()> {
         let before = (self.position, self.yaw.round_ties_even());
         self.held = [0; 2];
         if !self.keys {
             self.wait -= dt;
             if self.target.is_none() && self.wait <= EPSILON {
                 let previous = self.index;
-                self.index = (self.index + 1) % self.spawn.route.len();
+                self.index = script.think(tick, previous, self.spawn.route.len())?;
                 let goal = self.spawn.route[self.index];
                 let detour = self.planned_detour(previous);
                 self.waypoints.extend(detour.into_iter().flatten());
@@ -505,7 +544,7 @@ impl Bot {
             }
         }
         if self.keys {
-            self.walk(tick, dt, ground);
+            self.walk(tick, dt, script, ground)?;
         } else {
             if self.target.is_some() {
                 self.slide(dt, ground);
@@ -518,14 +557,16 @@ impl Bot {
         if (self.position, self.yaw.round_ties_even()) != before {
             self.moved_tick = Some(tick);
         }
+        Ok(())
     }
 
     fn walk(
         &mut self,
         tick: u32,
         dt: f64,
+        script: &PatrolScript,
         ground: &mut impl FnMut(f64, f64, f64, f64) -> Option<f64>,
-    ) {
+    ) -> io::Result<()> {
         let mut offset = self.to_target();
         let mut distance = offset[0].hypot(offset[1]);
         if distance <= ARRIVED {
@@ -537,28 +578,33 @@ impl Bot {
             }
         }
         if distance <= ARRIVED {
+            self.wait = script.wait(WaitEvent::Release, tick)?;
             self.keys = false;
-            self.wait = WALK_GAP;
             self.stand();
-            return;
+            return Ok(());
+        }
+        let pace = self.walk.speed.min(self.pace + self.walk.acceleration * dt);
+        let mut stride = pace * dt;
+        let stop = self
+            .waypoints
+            .is_empty()
+            .then(|| self.slide_length(pace, dt))
+            .filter(|&slide| distance - stride <= slide);
+        if let Some(slide) = stop {
+            // Resolve the decision before publishing this tick's steering.
+            self.wait = script.wait(WaitEvent::Release, tick)?;
+            stride = (distance - slide).max(0.0);
+            self.keys = false;
+            self.turning = TURN_AFTER;
         }
         self.direction = offset.map(|axis| axis / distance);
         self.turn(dt);
-        self.pace = self.walk.speed.min(self.pace + self.walk.acceleration * dt);
+        self.pace = pace;
         self.held = throttles(self.yaw, self.direction);
         self.last_held = self.held;
         self.input_tick = Some(tick);
-        let mut stride = self.pace * dt;
-        if self.waypoints.is_empty() {
-            let slide = self.slide_length(dt);
-            if distance - stride <= slide {
-                stride = (distance - slide).max(0.0);
-                self.keys = false;
-                self.wait = WALK_GAP;
-                self.turning = TURN_AFTER;
-            }
-        }
         self.advance(stride, distance, dt, ground);
+        Ok(())
     }
 
     fn slide(&mut self, dt: f64, ground: &mut impl FnMut(f64, f64, f64, f64) -> Option<f64>) {
@@ -586,9 +632,9 @@ impl Bot {
         [tx - self.position[0], tz - self.position[2]]
     }
 
-    fn slide_length(&self, dt: f64) -> f64 {
+    fn slide_length(&self, pace: f64, dt: f64) -> f64 {
         let slow = self.walk.brake * dt;
-        let mut pace = self.pace - slow;
+        let mut pace = pace - slow;
         let mut length = 0.0;
         if slow <= 0.0 && pace > 0.0 {
             return f64::INFINITY;
@@ -770,9 +816,10 @@ mod tests {
 
     fn route_vector(bots: &mut [Bot], ticks: impl IntoIterator<Item = u32>) -> String {
         let mut digest = Sha256::new();
+        let patrol = PatrolScript::load().unwrap();
         for tick in ticks {
             for bot in &mut *bots {
-                bot.step(tick, |_, _, _, _| None);
+                bot.step(tick, &patrol, |_, _, _, _| None).unwrap();
                 let bits = movement_record(&bot.movement(tick), Some(tick)).unwrap();
                 digest.update(tick.to_le_bytes());
                 digest.update(u32::try_from(bits.bit_len()).unwrap().to_le_bytes());
@@ -853,35 +900,40 @@ mod tests {
 
     #[test]
     fn skipped_ticks_catch_up_without_replaying_a_duplicate_tick() {
+        let patrol = PatrolScript::load().unwrap();
         let mut contiguous = walker([0.0, 0.0, 10.0]);
         for tick in 1..=251 {
-            contiguous.step(tick, |_, _, _, _| None);
+            contiguous.step(tick, &patrol, |_, _, _, _| None).unwrap();
         }
         let mut skipped = walker([0.0, 0.0, 10.0]);
         for tick in [1, 201, 251, 251, 100] {
-            skipped.step(tick, |_, _, _, _| None);
+            skipped.step(tick, &patrol, |_, _, _, _| None).unwrap();
         }
         assert_eq!(contiguous.movement(251), skipped.movement(251));
 
         let mut late = walker([0.0, 0.0, 10.0]);
         let mut bounded = walker([0.0, 0.0, 10.0]);
-        late.step(1, |_, _, _, _| None);
-        late.step(10_000, |_, _, _, _| None);
-        bounded.step(10_000 - CATCH_UP, |_, _, _, _| None);
-        bounded.step(10_000, |_, _, _, _| None);
+        late.step(1, &patrol, |_, _, _, _| None).unwrap();
+        late.step(10_000, &patrol, |_, _, _, _| None).unwrap();
+        bounded
+            .step(10_000 - CATCH_UP, &patrol, |_, _, _, _| None)
+            .unwrap();
+        bounded.step(10_000, &patrol, |_, _, _, _| None).unwrap();
         assert_eq!(late.movement(10_000), bounded.movement(10_000));
     }
 
     #[test]
     fn terrain_probe_uses_ramp_speed_and_falls_back_to_hint_height() {
+        let patrol = PatrolScript::load().unwrap();
         let mut ramp = walker([0.0, 10.0, 20.0]);
         let mut fallback = walker([0.0, 10.0, 20.0]);
         for tick in 1..=344 {
-            ramp.step(tick, |_, z, top, bottom| {
+            ramp.step(tick, &patrol, |_, z, top, bottom| {
                 let height = 0.5 * z;
                 (bottom..=top).contains(&height).then_some(height)
-            });
-            fallback.step(tick, |_, _, _, _| None);
+            })
+            .unwrap();
+            fallback.step(tick, &patrol, |_, _, _, _| None).unwrap();
         }
         let [_, y, z] = ramp.position;
         assert!((y - 0.5 * z).abs() < 1.0e-12);
@@ -925,13 +977,14 @@ mod tests {
         let wall = StaticShape::new(StaticGeometry::Mesh(Arc::new(mesh)), None).unwrap();
         let world = Arc::new(ContactWorld::new(vec![wall]).unwrap());
         let settings = MoverSettings::default();
+        let patrol = PatrolScript::load().unwrap();
         let mut blocked = walker([0.0, 0.0, 4.0]);
         let mut allowed = walker([0.0, 0.0, 4.0]);
         blocked.attach_collision(&settings, Arc::clone(&world), 0x08, |_, _, _, _| Some(0.0));
         allowed.attach_collision(&settings, world, 0x10, |_, _, _, _| Some(0.0));
         for tick in 1..=295 {
             for bot in [&mut blocked, &mut allowed] {
-                bot.step(tick, |_, _, _, _| Some(0.0));
+                bot.step(tick, &patrol, |_, _, _, _| Some(0.0)).unwrap();
             }
         }
         assert!(blocked.position[2] < 2.0);
@@ -941,13 +994,14 @@ mod tests {
 
     #[test]
     fn death_stops_the_bot_and_respawn_restarts_the_route_after_create() {
+        let patrol = PatrolScript::load().unwrap();
         let mut bot = walker([0.0, 0.0, 10.0]);
-        bot.step(1, |_, _, _, _| None);
-        bot.step(250, |_, _, _, _| None);
+        bot.step(1, &patrol, |_, _, _, _| None).unwrap();
+        bot.step(250, &patrol, |_, _, _, _| None).unwrap();
         assert!(bot.walking());
         let death_position = bot.position;
         bot.died(250);
-        bot.step(400, |_, _, _, _| unreachable!());
+        bot.step(400, &patrol, |_, _, _, _| unreachable!()).unwrap();
         assert!(!bot.walking());
         assert_eq!(bot.position, death_position);
         let state = bot.movement(250);
@@ -979,11 +1033,80 @@ mod tests {
             .unwrap();
         assert!(!fresh.record_due(before, 1));
         assert!(fresh.record_due(after, 1));
-        fresh.step(tick, |_, _, _, _| None);
-        fresh.step(tick + 186, |_, _, _, _| None);
+        fresh.step(tick, &patrol, |_, _, _, _| None).unwrap();
+        fresh.step(tick + 186, &patrol, |_, _, _, _| None).unwrap();
         assert!(!fresh.walking());
-        fresh.step(tick + 187, |_, _, _, _| None);
+        fresh.step(tick + 187, &patrol, |_, _, _, _| None).unwrap();
         assert!(fresh.walking());
+    }
+
+    #[test]
+    fn failed_patrol_decision_leaves_the_route_unmodified_and_only_stops_that_body() {
+        let patrol = PatrolScript::from_source(
+            r#"
+            return 1, function(event, frame)
+                if event == "think" then
+                    if frame == 188 then return 99 end
+                    return 1
+                end
+                return 3
+            end
+            "#,
+        )
+        .unwrap();
+        let mut failed = walker([0.0, 0.0, 10.0]);
+        let mut other = walker([0.0, 0.0, 10.0]);
+        failed.step(1, &patrol, |_, _, _, _| None).unwrap();
+        assert!(
+            failed
+                .step(188, &patrol, |_, _, _, _| unreachable!())
+                .is_err()
+        );
+        assert_eq!(failed.index, 0);
+        assert_eq!(failed.position, [0.0; 3]);
+        assert!(!failed.walking());
+        failed
+            .step(250, &patrol, |_, _, _, _| unreachable!())
+            .unwrap();
+
+        other.step(2, &patrol, |_, _, _, _| None).unwrap();
+        other.step(189, &patrol, |_, _, _, _| None).unwrap();
+        assert!(other.walking());
+        let mut fresh = failed.respawned(BOT_ENTITY + 15, 300);
+        fresh.step(300, &patrol, |_, _, _, _| None).unwrap();
+        fresh.step(487, &patrol, |_, _, _, _| None).unwrap();
+        assert!(fresh.walking());
+    }
+
+    #[test]
+    fn failed_release_does_not_publish_an_unapplied_input() {
+        let patrol = PatrolScript::from_source(
+            r#"
+            return 1, function(event)
+                if event == "spawn" then return 0.016 end
+                if event == "think" then return 1 end
+            end
+            "#,
+        )
+        .unwrap();
+        let target = [1.2, 0.0, 0.0];
+        let mut bot = walker(target);
+        for tick in 1..=188 {
+            let previous = (bot.position, bot.yaw, bot.input_tick, bot.last_held);
+            if let Err(error) = bot.step(tick, &patrol, |_, _, _, _| None) {
+                assert!(error.to_string().contains("patrol wait must be a number"));
+                assert!(planar_distance(bot.position, target) > ARRIVED);
+                assert_eq!(
+                    previous,
+                    (bot.position, bot.yaw, bot.input_tick, bot.last_held)
+                );
+                assert_eq!(bot.input_tick, Some(tick - 1));
+                assert_eq!(bot.held, [0; 2]);
+                assert!(!bot.patrol_active());
+                return;
+            }
+        }
+        panic!("expected the release policy to reject its command");
     }
 
     #[test]

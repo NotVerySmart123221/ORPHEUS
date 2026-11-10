@@ -6,6 +6,12 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Event-driven Lua patrol pilot
+
+- Moved the existing patrol waits and next-waypoint decision into an embedded Lua policy. The worker validates the policy at startup and validates each event result before applying it. Collision, movement, timing and packet delivery stay in Rust.
+- Limited the Lua environment, instructions and memory. A failed patrol command stops that bot until replacement and preserves its last executed input. The inspector reports which bots have a running patrol policy.
+- Passed 333 public Rust tests, 61 prepared base-pack tests and one enriched timer test. The prepared checks cover the existing patrol movement bytes, elevated routes and encrypted match delivery. Formatting, Clippy, the Rust 1.85.1 build check and native startup with the inspector both enabled and disabled passed. Original-client acceptance and tick-tail measurement are pending.
+
 #### Bot combat authority in Bevy ECS
 
 - Moved active bot vitals, rewind poses and respawn deadlines into a room-local Bevy world. Wire IDs resolve to generational handles, and the inspector reads health through the same identity lookup.

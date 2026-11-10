@@ -42,6 +42,7 @@ This repository builds on existing Overwatch preservation work. Its lobby improv
 ## Rust migration and behavior references
 
 - **[Bevy ECS](https://github.com/bevyengine/bevy/tree/v0.16.1/crates/bevy_ecs)** provides the standalone entity and component storage used by the Rust match worker. Its default features are disabled.
+- **[mlua](https://github.com/mlua-rs/mlua/tree/v0.11.6)** and **[Lua](https://www.lua.org/)** provide the runtime for the event-driven patrol pilot. Its behavior comes from the existing ORPHEUS patrol reconstruction and build 104319's authored route data.
 
 - **Boi-027, Arlecchino and the upstream 1.74 server contributors** supplied the existing lobby handshake,
   JAM cipher and framing that serve as the Rust port's protocol reference. The original MIT notice is retained.

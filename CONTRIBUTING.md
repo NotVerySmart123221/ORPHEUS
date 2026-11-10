@@ -4,7 +4,7 @@ You can contribute code, research, documentation or a gameplay report. The publi
 
 ## Development setup
 
-Use Rust for new implementation work. Install Git, stable Rust, `rustfmt` and `clippy`.
+Use Rust for new implementation work. Install Git, stable Rust, `rustfmt` and `clippy`. On Windows, install the x64 MSVC C++ Build Tools and Windows SDK. Cargo uses the C toolchain to build the vendored Lua runtime.
 
 ```powershell
 git clone --branch rust https://github.com/leafall903/ORPHEUS.git

@@ -28,6 +28,7 @@ httparse = "1"
 indexmap = { version = "2", features = ["serde"] }
 lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "xz"] }
 mio = { version = "1.1.1", features = ["net", "os-poll"] }
+mlua = { version = "=0.11.6", default-features = false, features = ["lua54", "vendored"] }
 prost = "0.14"
 prost-reflect = "0.16"
 roxmltree = "0.20"

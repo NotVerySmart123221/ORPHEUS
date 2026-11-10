@@ -35,6 +35,8 @@ The experimental `orpheus_server` binary runs the local Battle.net, lobby and UD
 
 Rust runs the authored Soldier rifle, reload and Helix cooldown timelines in reference tests. A separate fixture weapon runs through the encrypted Practice Range worker and verifies hit delivery, packet loss recovery and bot respawn. Projectile flight and prediction records have separate tests. In the original-client Rust playtest, the user could enter Practice Range but reported missing weapons and unusable abilities. The stock Soldier body still needs more graph support. Gallery equip and in-match skin replacement now pass encrypted loopback checks and await a client retest.
 
+Bot health, rewind and respawn state live in the room's Bevy ECS storage. The Lua patrol pilot handles spawn waits, route choices and movement-release waits. Rust still runs collision, movement and network delivery. [Architecture and migration gates](docs/NATIVE_SERVER_ARCHITECTURE.md).
+
 The documented environment is Windows with Python 3.12. Node.js 24 is used for the dashboard test. The public source checks can run without the game or any prepared runtime.
 
 ```powershell

@@ -79,6 +79,7 @@ pub mod mover_kinematics;
 pub mod mover_modifiers;
 mod mover_posture;
 pub mod mover_settings;
+mod patrol_script;
 pub mod projectile_flight;
 pub mod projectile_wire;
 pub mod retail_templates;

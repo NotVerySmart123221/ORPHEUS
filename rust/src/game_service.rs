@@ -36,6 +36,7 @@ use crate::{
     jam_codec::{Fields, Schemas, Value},
     match_handoff::Handoff,
     match_scene::{PlayerAppearance, PlayerCard},
+    patrol_script::PatrolScript,
     scene_assets::PreparedScene,
     script_wire::chunk,
     world::{EntityUpdate, GAME_MODE_ENTITY, MAX_PAYLOAD, SkinTheme, frame},
@@ -125,11 +126,13 @@ impl GameService {
             .register(&mut socket, GAME_SOCKET, Interest::READABLE)?;
         let wake = Waker::new(poll.registry(), REQUESTS)?;
         let (requests, receiver) = mpsc::sync_channel(RECEIVE_BATCH);
+        let (ready, initialized) = mpsc::sync_channel(1);
         let stopping = Arc::new(AtomicBool::new(false));
         let worker_stopping = Arc::clone(&stopping);
         let worker = thread::Builder::new()
             .name("orpheus-game".into())
-            .spawn(move || run(socket, poll, receiver, worker_stopping, schemas))?;
+            .spawn(move || run(socket, poll, receiver, worker_stopping, schemas, ready))?;
+        initialized.recv().map_err(|_| stopped())??;
         Ok(Self {
             address,
             requests,
@@ -537,6 +540,7 @@ impl Peer {
 
 struct State {
     schemas: Arc<Schemas>,
+    patrol: PatrolScript,
     clock: GameClock,
     links: GameConnections,
     rooms: HashMap<MatchId, Room>,
@@ -547,9 +551,10 @@ struct State {
 }
 
 impl State {
-    fn new(schemas: Arc<Schemas>) -> Self {
+    fn new(schemas: Arc<Schemas>, patrol: PatrolScript) -> Self {
         Self {
             schemas,
+            patrol,
             clock: GameClock::default(),
             links: GameConnections::default(),
             rooms: HashMap::new(),
@@ -718,7 +723,7 @@ impl State {
                         || Some(bot.spawn.health),
                         |combat| combat.debug_health(bot.entity),
                     ),
-                    script_active: false,
+                    script_active: bot.patrol_active(),
                 })
                 .collect();
             rooms.insert(
@@ -935,7 +940,7 @@ impl State {
         if !drain {
             for room in self.rooms.values_mut() {
                 if let Some(world) = &mut room.world {
-                    world.scene.step_bots(tick);
+                    world.scene.step_bots(tick, &self.patrol);
                 }
             }
             for (&connection, peer) in &mut self.peers {
@@ -1068,8 +1073,19 @@ fn run(
     requests: mpsc::Receiver<Request>,
     stopping: Arc<AtomicBool>,
     schemas: Arc<Schemas>,
+    ready: mpsc::SyncSender<io::Result<()>>,
 ) -> io::Result<()> {
-    let mut state = State::new(schemas);
+    let patrol = match PatrolScript::load() {
+        Ok(patrol) => patrol,
+        Err(error) => {
+            let _ = ready.send(Err(error));
+            return Ok(());
+        }
+    };
+    let mut state = State::new(schemas, patrol);
+    if ready.send(Ok(())).is_err() {
+        return Ok(());
+    }
     let start = Instant::now();
     let mut due = Duration::ZERO;
     let mut events = Events::with_capacity(2);
@@ -1579,7 +1595,7 @@ mod tests {
 
         let assets = SceneAssets::load(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap()).unwrap();
         let scene = assets.prepare(GameMap::practice_range()).unwrap();
-        let mut state = State::new(Arc::new(fixture()));
+        let mut state = State::new(Arc::new(fixture()), PatrolScript::load().unwrap());
         // Five synthetic peers share a prepared fixture solely to test the
         // worker scheduler. The actual admission route remains solo.
         let players: Vec<_> = (0..5)
