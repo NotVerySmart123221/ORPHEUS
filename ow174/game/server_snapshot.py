@@ -134,7 +134,11 @@ FIELDS = {
         "physics_world waypoints"
     ),
 }
-OPTIONAL_FIELDS = {Client: _names("_entity_lifecycles _entity_record_generations _frame_budget_warning")}
+OPTIONAL_FIELDS = {
+    Client: _names("_entity_lifecycles _entity_record_generations _frame_budget_warning"),
+    # Set on the first charge step: the logged passive state and the stall timer in script time.
+    driver.BodyScript: _names("_ult_passive_blocked _ult_stall"),
+}
 DATACLASSES = (
     GameMap, Hero, Spawn, Handoff, LoadState, correction.SendToken, MoverData,
     heroselect.Controller, notices.Switch, combat.HitDef, combat.Target, combat.Rocket,

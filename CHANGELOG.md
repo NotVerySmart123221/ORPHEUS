@@ -6,6 +6,19 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Stored-state registry for the ultimate charge log state
+
+- Registered the body script's `_ult_passive_blocked` and `_ult_stall` attributes as optional
+  stored fields. The ultimate charge logging sets them on a body's first charge step, and the
+  stored-state export rejected every body that had run one as holding unregistered fields.
+  Both values derive from script time and stay in the stored-state hash.
+- With a prepared build 104319 pack, `test_server_snapshot.py` (14 tests) and
+  `test_game_move_to_replay.py` (1 test) pass again; both had failed on the export.
+  `test_server_journal.py` (18 tests) and `test_game_ult_charge.py` (7 tests) pass. The public
+  source checks passed with 159 Python tests, 6 fixture skips and 2 dashboard tests. The two
+  repaired suites run outside the public workflow because they need prepared data. No client
+  behavior changes, so no original-client check applies.
+
 #### Local generation during runtime packing
 
 - Documented the source and preparation route for every required Python runtime input.
