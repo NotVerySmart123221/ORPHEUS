@@ -131,12 +131,37 @@ local player's own; a second death of one of those bodies added one line. A Reap
   once, since 22203 then stores the client's defaults.
 - Changed since: when `+0x120` was never saved, 20802 now carries the client's Options defaults
   for it, bytes `+0x4` and `+0x7` set (`GAMEPLAY_DEFAULTS`). A saved block is sent as saved.
-  Covered by `tests/runtime/test_player_settings.py`. Not yet seen in the client against
-  ORPHEUS.
+  Covered by `tests/runtime/test_player_settings.py`.
+
+## Seen live against ORPHEUS
+
+2026-11-10, original client, with the option default above in the server and a profile that had
+no saved settings. Practice Range, Soldier: 76, driven by a virtual gamepad through an input
+automation tool.
+
+- The enemy training bot was killed 12 times. The server logged each kill: five or six 25001
+  hits, one 25005, then the respawn three seconds later. On screen the bot fell apart and
+  came back.
+- **No kill feed line drew.** Sixteen frames were saved about three seconds apart. Eight show
+  the bot down, one of them with the elimination notice on screen, and none has anything in
+  the kill feed corner.
+- The elimination notice read "ELIMINATED" with no name after it.
+
+So the option default is not enough for a bot kill on ORPHEUS. What this run does not show:
+
+- Whether the client took the option. The settings system's byte `+700` was not read, because
+  the tracer is not ported.
+- Whether the bot's fresh pulser went out. `combat.kill_feed_allowed` holds it back until the
+  mode script is delivered and the client has both the bot's and the killer's identity.
+- Whether the client's own conditions passed. The first one in `0C18` is `STU_CD7F3617()`, the
+  body's name. The notice had no name for this bot, so a nameless body is a candidate for
+  both symptoms. That is a hypothesis.
+- A player's death, which runs through `01CF` instead, was not tried.
 
 ## Open
 
-- An original-client check of the feed against ORPHEUS with a new profile.
+- Where the chain stops for a bot kill on ORPHEUS: the option byte, the pulser, or the client's
+  name test. A statescript tracer on the client would tell.
 - The meaning of `STU_0D179CAF` and `STU_CEFF290A`.
 - A line's critical-hit mark, ability icon and assists (the other `003E.025` parameters) were
   not exercised.

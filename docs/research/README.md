@@ -18,6 +18,8 @@ client, not acceptance of ORPHEUS.
   claims name the function.
 - **Compared with ORPHEUS** sections were written by reading the source at `main` `d52e72f`.
   Nothing in them was tested against ORPHEUS in the client.
+- **Seen live against ORPHEUS** sections record runs of the original client against this
+  server.
 - A graph is named by the low 16 bits of its GUID in hex, as elsewhere in this repository
   (`01CF`). `#392` is a statescript variable, `st108` a state index, `0765.025` a game message.
 
@@ -31,7 +33,7 @@ base `0x7FF788F10000`, so offset `0xA0D4F0` here is `0x7FF78991D4F0` there.
 
 | Note | What it settles | What ORPHEUS can take from it |
 | --- | --- | --- |
-| [Kill feed](kill-feed.md) | The client-side gates between a body's death message and a drawn kill feed line. | The login settings left the gating option at zero for a new profile. They now default it on; the client check is pending. |
+| [Kill feed](kill-feed.md) | The client-side gates between a body's death message and a drawn kill feed line. | The login settings left the gating option at zero for a new profile. They now default it on, but a first client check still drew no line for a bot kill. |
 | [Bot nameplates and hit feedback](bot-nameplates-and-hit-feedback.md) | What the overhead name and health widget, the hit marker and the elimination notice each need from the server. | A checklist for the pending client check of the `0D24` presenter, and a confirmation of the hit flag. |
 | [Tab board](tab-board.md) | Why the scoreboard key does nothing, and the layout of the board's numbers. | Two changes: one mode-graph state to open the board, and the id encoding of the stat GUID fields. |
 | [Shot origin and client position](shot-origin-and-client-position.md) | Per-hero eye heights, the click aim and view delay, and how to read the client's own position. | Eye heights for the other heroes, and a way to measure drift between server and client. |

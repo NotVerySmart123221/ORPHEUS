@@ -109,6 +109,16 @@ For any hit test that uses the model's own volumes:
   IsVisible result (point 1), the three entity inputs (point 2), and whether the body's create
   is acknowledged before the chunk goes out (point 4).
 
+## Seen live against ORPHEUS
+
+2026-11-10, original client, Practice Range, Soldier: 76, the enemy training bot killed 12 times
+(the [kill feed note](kill-feed.md) describes the run).
+
+- The elimination notice drew on a kill and read "ELIMINATED" with no name after it.
+- No name and no health bar drew over the bot, before it was hit or after.
+- The server sent 25001 for each hit. The hit marker itself was not caught: the frames were
+  saved about three seconds apart.
+
 ## Open
 
 - Whether the client starts `0D24` state 35 by itself in the authored flow.

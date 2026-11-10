@@ -18,8 +18,13 @@ This log records tested changes and their acceptance status. Entries are grouped
 - With a prepared build 104319 pack, the runtime suite ran 1199 tests with 1 skip; its only
   errors are the two dashboard picture tests that need local images. Ruff and the public
   source checks passed with 170 Python tests and 2 dashboard tests.
-- Original-client acceptance is open: kill a training bot with a new profile and check that
-  the line draws.
+- Original-client check, 2026-11-10: with a profile that had no saved options, the Practice
+  Range's enemy training bot was killed 12 times as Soldier: 76. The server logged every hit
+  and kill, the bot fell apart and respawned, and the elimination notice drew without a name.
+  **No kill feed line drew**, so this default alone does not restore the feed for a bot kill.
+  Whether the client took the option byte, whether the bot's pulser went out and whether the
+  client's name test passed were not observed; the [note](docs/research/kill-feed.md) lists
+  them. No name or health bar drew over the bot either.
 
 #### Client research notes
 
