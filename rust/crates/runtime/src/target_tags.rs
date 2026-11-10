@@ -12,10 +12,7 @@ use roxmltree::{Document, Node};
 use serde_json::Value;
 
 use super::{RuntimeError, at};
-use crate::{
-    accounts::parse_guid,
-    script_graph::{MAX_GRAPH_BYTES, TARGET_TAG_TYPE},
-};
+use crate::format::{MAX_GRAPH_BYTES, TARGET_TAG_TYPE, parse_guid};
 
 const DRAGONML: &str = "https://yretenai.com/dragonml/v1";
 const ENTITY_TYPE: u64 = 0x400;

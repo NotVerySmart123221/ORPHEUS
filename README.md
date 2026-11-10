@@ -61,8 +61,9 @@ Append `--debug-port 3726` to enable the read-only inspector at [127.0.0.1:3726]
 
 | Path | Role |
 | --- | --- |
-| `rust/src`, `rust/scripts` | Native server, runtime preparation, tests and the Lua patrol policy |
+| `rust/src`, `rust/scripts` | Native server, unit tests and the Lua patrol policy |
 | `rust/crates/collision` | Collision cache decoding, static queries and contact solver |
+| `rust/crates/runtime` | External runtime inventory, preflight and independent preparation tool |
 | `rust/tests` | Native CLI integration tests |
 | `ow174`, `tests`, `relay` | Python behavioral reference and Windows launcher sources |
 | `docs`, `tools` | Architecture, acceptance criteria and research tools |

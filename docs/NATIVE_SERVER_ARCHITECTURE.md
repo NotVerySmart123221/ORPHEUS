@@ -17,6 +17,10 @@ ORPHEUS targets Overwatch retail build **1.74.0.0.104319**. This decision define
 
 The root `orpheus` package owns the native server. The `orpheus-collision` member owns collision cache decoding, static queries and the contact solver. It builds without the server, ECS, Lua or network stack. The root library re-exports the existing collision module paths for callers. Run the isolated kernel suite with `cargo test --locked -p orpheus-collision`. Use `--workspace` in the full validation lane to include its tests.
 
+The `orpheus-runtime` member owns external pack preparation, the required-input inventory and preflight. It has no dependency on the server, ECS, Lua or networking. Its graph format helpers are shared with the server loader. A server-side integration test checks that the loader accepts a synthetic tag-enriched pack from the independent tool. Run it with `cargo run --locked -p orpheus-runtime --bin prepare_server_runtime -- --help`.
+
+Cross-module public protocol and native CLI tests live in `rust/tests`. The independent runtime CLI has its own integration test under its member. Module-local tests stay next to the implementation, including match-worker tests that exercise private state and injected room fixtures.
+
 | Current server module | Responsibility |
 | --- | --- |
 | `world` | Retail entity update encoding and packet-budget selection. The room ECS is owned by the simulation layer. |

@@ -2,6 +2,8 @@
 //!
 //! Ports `tools/prepare_server_runtime.py` and the file inventory in `ow174/paths.py`.
 
+#![forbid(unsafe_code)]
+
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -9,6 +11,7 @@ use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
+pub mod format;
 mod target_tags;
 
 pub const LOBBY_RUNTIME_DATA: &[&str] = &[
@@ -586,8 +589,6 @@ mod tests {
             manifest["sha256"][GRAPH_BUNDLE],
             format!("{:x}", Sha256::digest(&gzip))
         );
-        crate::script_graph::GraphStore::load(output.join(GRAPH_BUNDLE)).unwrap();
-
         fixture.write("003/000000000001.003.xml", b"<STUEntityDefinition>");
         let failed = fixture.root.join("bad-pack");
         let error =

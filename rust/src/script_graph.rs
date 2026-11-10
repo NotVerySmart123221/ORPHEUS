@@ -8,14 +8,13 @@ use std::{
 };
 
 use flate2::bufread::MultiGzDecoder;
+use orpheus_runtime::format::{MAX_GRAPH_BYTES, TARGET_TAG_TYPE};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::accounts::parse_guid;
 
-pub(crate) const MAX_GRAPH_BYTES: u64 = 128 * 1024 * 1024;
 const GRAPH_TYPE: u64 = 0x0580;
-pub(crate) const TARGET_TAG_TYPE: u64 = 0x0d60;
 
 #[derive(Debug, Deserialize)]
 pub struct Header {

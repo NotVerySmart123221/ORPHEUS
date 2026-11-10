@@ -899,9 +899,9 @@ dependencies = [
  "mio",
  "mlua",
  "orpheus-collision",
+ "orpheus-runtime",
  "prost",
  "prost-reflect",
- "roxmltree",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -915,6 +915,16 @@ version = "0.0.0"
 dependencies = [
  "lzma-rust2",
  "serde",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "orpheus-runtime"
+version = "0.0.0"
+dependencies = [
+ "flate2",
+ "roxmltree",
  "serde_json",
  "sha2 0.10.9",
 ]

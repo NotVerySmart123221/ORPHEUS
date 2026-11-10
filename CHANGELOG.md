@@ -6,6 +6,12 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-11
 
+#### Separate runtime preparation and integration tests
+
+- Moved the runtime packer, input inventory and preflight to `orpheus-runtime`. It builds independently of the game server. The CLI and existing server runtime API remain available, and the packer and graph reader share their catalog format helpers.
+- Moved the encrypted protocol fixture to `rust/tests` and verified that the server reads a synthetic graph bundle enriched by the separate packer. Added a CLI contract check to the runtime member.
+- Passed 343 public workspace tests, workspace Clippy and the locked Rust 1.85.1 library and binary check. Original-client acceptance remains open.
+
 #### Extract the collision workspace member
 
 - Moved collision cache decoding, scene queries and the contact solver into `orpheus-collision`. The member has no dependency on the server, ECS, Lua or networking. Existing server import paths remain available through re-exports.

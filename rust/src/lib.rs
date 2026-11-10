@@ -75,7 +75,7 @@ mod patrol_script;
 pub mod projectile_flight;
 pub mod projectile_wire;
 pub mod retail_templates;
-pub mod runtime;
+pub use orpheus_runtime as runtime;
 pub mod scene_assets;
 pub mod script_codecs;
 pub mod script_expr;
@@ -90,6 +90,3 @@ pub mod server;
 mod service_tcp;
 pub mod vitals;
 pub mod world;
-
-#[cfg(test)]
-mod protocol_tests;

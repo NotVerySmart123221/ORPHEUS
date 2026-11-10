@@ -1,8 +1,8 @@
-use crate::bits::BitReader;
-use crate::commands::{CommandQueue, read_commands};
-use crate::game_link::{LinkCipher, ReceiveWindow};
-use crate::game_messages::read_channel;
-use crate::jam_codec::{Schemas, Value};
+use orpheus::bits::BitReader;
+use orpheus::commands::{CommandQueue, read_commands};
+use orpheus::game_link::{LinkCipher, ReceiveWindow};
+use orpheus::game_messages::read_channel;
+use orpheus::jam_codec::{Schemas, Value};
 
 #[test]
 fn opens_a_python_game_datagram_and_dispatches_its_command_prefix_once() {

@@ -21,7 +21,7 @@ The check inventories 22 required paths, including `collision/0688.col`. It repo
 The Rust `prepare_server_runtime` command assembles existing authorized inputs. Its output is a separate directory with a SHA-256 manifest. The generation tools have their own local prerequisites.
 
 ```powershell
-cargo run --locked --bin prepare_server_runtime -- --source 'C:\path\to\prepared-source' --destination 'C:\path\to\orpheus-runtime' --map 0688
+cargo run --locked -p orpheus-runtime --bin prepare_server_runtime -- --source 'C:\path\to\prepared-source' --destination 'C:\path\to\orpheus-runtime' --map 0688
 ```
 
 ## Bring prepared research data

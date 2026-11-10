@@ -1,4 +1,4 @@
-use orpheus::runtime;
+use orpheus_runtime as runtime;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
