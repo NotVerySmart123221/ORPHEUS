@@ -6,6 +6,19 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Selected map and bot data generation
+
+- Generate a missing `game_maps_174.json` from the built-in scene when the requested pack
+  contains only Practice Range. Preserve the full prepared map table when supplied.
+- Reuse the pinned local manifest exporter to prepare core collision indexes for selected
+  maps. Reuse the bot spawner and queue extractors during packing. The prepared prop
+  index and retail templates remain inputs for those extractors.
+- Verified a reassembled 104319 pack using the generated Practice Range map table in
+  the headless lobby and match probe. Its collision loaded and 15 bots initialized.
+  Synthetic regressions cover the index, spawner and queue generation handoffs.
+  Source checks passed with 154 Python tests, 6 fixture skips and 2 dashboard tests.
+  Fresh game extraction and original-client acceptance remain open.
+
 #### Local generation during runtime packing
 
 - Documented the source and preparation route for every required Python runtime input.

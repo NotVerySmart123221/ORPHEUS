@@ -14,9 +14,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ow174.game.casc import CascError, game_root
+from ow174.game.content import PRACTICE_RANGE
 from ow174.paths import CLIENT_CATALOGS, LOBBY_RUNTIME_DATA, MATCH_RUNTIME_DATA, ROOT, ULT_CHARGE_OVERRIDE
 from tools.prepare_client_catalogs import prepare_catalogs, require_target_build
 from tools.prepare_client_gameplay import XML_TYPES, export_xml, prepare_gameplay
+from tools.prepare_map_data import write_collision_index, write_practice_map
 
 
 def prepare(
@@ -62,6 +64,7 @@ def prepare(
         caches = [cache / f"{index:04X}.col" for index in dict.fromkeys(int(value, 16) for value in maps)]
     else:
         caches = sorted(path for path in cache.glob("*.col") if re.fullmatch("[0-9a-fA-F]{4,8}", path.stem))
+    selected_maps = {0x0800000000000000 | int(path.stem, 16) for path in caches}
     inputs.update({f"collision/{path.name}": path for path in caches})
     for path in caches:
         rays = path.with_suffix(".rays.col")
@@ -74,11 +77,18 @@ def prepare(
     missing_gameplay = {
         name for name in XML_TYPES if (owlib is not None or client_xml is not None)
         and (name != "game_graphs_174.json.gz" or (owlib is not None and game_graphs is None))
+        and (name != "ai_spawners_174.json" or game is not None)
         and not inputs[f"data/{name}"].is_file()
     }
     missing_caches = [path for path in caches if game is not None and not path.is_file()]
     generated = {f"data/{name}" for name in missing_catalogs | missing_gameplay}
     generated.update(f"collision/{path.name}" for path in missing_caches)
+    map_data = "data/game_maps_174.json"
+    index_data = "data/collision_keys_174.json"
+    if maps and selected_maps == {PRACTICE_RANGE.map_guid} and not inputs[map_data].is_file():
+        generated.add(map_data)
+    if game is not None and data_tool is not None and selected_maps and not inputs[index_data].is_file():
+        generated.add(index_data)
     missing = [name for name, path in inputs.items() if name not in generated and not path.is_file()]
     if missing:
         raise ValueError("Missing runtime inputs: " + ", ".join(missing))
@@ -87,6 +97,13 @@ def prepare(
 
     with tempfile.TemporaryDirectory(prefix="orpheus-client-data-") as folder:
         staging = Path(folder)
+        if map_data in generated:
+            inputs[map_data] = staging / Path(map_data).name
+            write_practice_map(inputs[map_data])
+        if index_data in generated:
+            assert game is not None and data_tool is not None
+            inputs[index_data] = staging / Path(index_data).name
+            write_collision_index(game, data_tool, selected_maps, inputs[index_data])
         if missing_catalogs:
             assert game is not None and data_tool is not None
             local_catalogs = staging / "catalogs"
@@ -100,7 +117,10 @@ def prepare(
             data_paths = {
                 Path(name).name: path for name, path in inputs.items() if name.startswith("data/")
             }
-            gameplay = prepare_gameplay(client_xml, owlib, staging / "gameplay", data_paths, missing_gameplay)
+            gameplay = prepare_gameplay(
+                client_xml, owlib, staging / "gameplay", data_paths, missing_gameplay,
+                game=game, maps=selected_maps,
+            )
             inputs.update({f"data/{name}": path for name, path in gameplay.items()})
         if missing_caches:
             assert game is not None
