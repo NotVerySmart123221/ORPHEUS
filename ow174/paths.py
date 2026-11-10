@@ -22,10 +22,12 @@ PLAYER_NAME_FILE = ROOT / "player_name.txt"  # the name used to join last time
 PUBLIC_ADDRESS_FILE = ROOT / "public_address.txt"  # the host's public address, asked when hosting
 REQUIREMENTS = ROOT / "requirements.txt"
 
+CLIENT_CATALOGS = (
+    "extracted_items.json", "extracted_general_unlocks.json", "extracted_heroes.json", "extracted_maps.json",
+)
 LOBBY_RUNTIME_DATA = (
-    "schemas_174.json", "retail_templates.json", "extracted_items.json", "extracted_general_unlocks.json",
-    "extracted_heroes.json", "extracted_maps.json", "resource_keys_174.json", "arcade_cards_174.json",
-    "game_queues_174.json", "lobby_state_blob.key",
+    "schemas_174.json", "retail_templates.json", *CLIENT_CATALOGS,
+    "resource_keys_174.json", "arcade_cards_174.json", "game_queues_174.json", "lobby_state_blob.key",
 )
 MATCH_RUNTIME_DATA = (
     "ai_spawners_174.json", "collision_keys_174.json", "collision_props_174.json", "game_graphs_174.json.gz",

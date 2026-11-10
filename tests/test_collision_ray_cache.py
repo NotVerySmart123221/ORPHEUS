@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ow174.game import collision, props
-from ow174.paths import LOBBY_RUNTIME_DATA, MATCH_RUNTIME_DATA, ULT_CHARGE_OVERRIDE
+from ow174.paths import CLIENT_CATALOGS, LOBBY_RUNTIME_DATA, MATCH_RUNTIME_DATA, ULT_CHARGE_OVERRIDE
 from tools.prepare_server_runtime import prepare
 
 MAP = 0x0800000000000688
@@ -183,8 +183,16 @@ class RuntimePreparationTests(unittest.TestCase):
 
             override = b'{"defaults":{"damage_to_full":410}}'
             (source / charge_path).write_bytes(override)
+            catalogs = Path(folder) / "catalogs"
+            catalogs.mkdir()
+            for name in CLIENT_CATALOGS:
+                (data / name).unlink()
+                (catalogs / name).write_text('{"generated":true}', encoding="utf-8")
             override_pack = Path(folder) / "runtime-with-charge"
-            prepare(source, override_pack, ["0688"])
+            prepare(source, override_pack, ["0688"], catalogs=catalogs)
+            for name in CLIENT_CATALOGS:
+                output = (override_pack / "data" / name).read_text(encoding="utf-8")
+                self.assertEqual(output, '{"generated":true}')
             self.assertEqual((override_pack / charge_path).read_bytes(), override)
             override_manifest = json.loads((override_pack / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(override_manifest["sha256"][charge_path], hashlib.sha256(override).hexdigest())

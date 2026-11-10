@@ -282,19 +282,30 @@ class JoinTests(unittest.TestCase):
         self.assertEqual(self.ask(""), "1.2.3.4:12357")
 
     def test_a_tournament_join_starts_only_the_game_on_that_server(self):
-        args = SimpleNamespace(server="1.2.3.4:12357", game_exe=None, locale="auto")
-        with (
-            patch.object(cli.socket, "create_connection"),
-            patch.object(cli, "find_game", return_value=Path("Overwatch.exe")),
-            patch.object(cli, "close_running_copy"),
-            patch.object(cli, "start_game") as start_game,
-            patch.object(cli, "LobbyServer") as lobby,
-        ):
-            cli.join_tournament(args)
+        game = Path("Overwatch")
+        with ExitStack() as stack:
+            listener = stack.enter_context(cli.socket.socket())
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            listener.settimeout(1.0)
+            address = f"127.0.0.1:{listener.getsockname()[1]}"
+            stack.enter_context(patch.object(cli, "setup_logging"))
+            find = stack.enter_context(patch.object(cli, "find_game", return_value=game / "Overwatch.exe"))
+            stack.enter_context(patch.object(cli, "close_running_copy"))
+            start_game = stack.enter_context(patch.object(cli, "start_game"))
+            skipped = [
+                stack.enter_context(patch.object(cli, name))
+                for name in ("_require_runtime", "LobbyServer", "ensure_requirements", "ensure_relay_dll")
+            ]
+            result = cli.main(["--mode", "join-tournament", "--server", address, "--game-exe", str(game)])
+            listener.accept()[0].close()
+        self.assertEqual(result, 0)
+        find.assert_called_once_with(game)
         start_game.assert_called_once_with(
-            Path("Overwatch.exe"), ["--tank_TournamentMode", "--lobbyServer=1.2.3.4:12357"], "auto"
+            game / "Overwatch.exe", ["--tank_TournamentMode", f"--lobbyServer={address}"], "auto"
         )
-        lobby.assert_not_called()
+        for operation in skipped:
+            operation.assert_not_called()
 
     def test_a_bad_address_on_the_command_line_is_refused(self):
         args = SimpleNamespace(server="1.2.3.4", name="Jinxzi", game_exe=None, locale="auto")

@@ -10,10 +10,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ow174.paths import LOBBY_RUNTIME_DATA, MATCH_RUNTIME_DATA, ULT_CHARGE_OVERRIDE
+from ow174.paths import CLIENT_CATALOGS, LOBBY_RUNTIME_DATA, MATCH_RUNTIME_DATA, ULT_CHARGE_OVERRIDE
 
 
-def prepare(source: Path, destination: Path, maps: list[str], *, game_graphs: Path | None = None) -> None:
+def prepare(
+    source: Path,
+    destination: Path,
+    maps: list[str],
+    *,
+    game_graphs: Path | None = None,
+    catalogs: Path | None = None,
+) -> None:
     source, destination = source.resolve(), destination.resolve()
     if not source.is_dir():
         raise ValueError("The prepared checkout does not exist")
@@ -21,6 +28,8 @@ def prepare(source: Path, destination: Path, maps: list[str], *, game_graphs: Pa
         raise ValueError("Choose a new destination outside the source checkout")
 
     inputs = {f"data/{name}": source / "data" / name for name in LOBBY_RUNTIME_DATA + MATCH_RUNTIME_DATA}
+    if catalogs is not None:
+        inputs.update({f"data/{name}": catalogs / name for name in CLIENT_CATALOGS})
     charge_override = source / "data" / ULT_CHARGE_OVERRIDE
     if charge_override.is_file():
         inputs[f"data/{ULT_CHARGE_OVERRIDE}"] = charge_override
@@ -65,9 +74,12 @@ def main() -> None:
     parser.add_argument("--destination", type=Path, required=True, help="new directory outside the checkout")
     parser.add_argument("--map", dest="maps", action="append", default=[], help="map index such as 0688")
     parser.add_argument("--game-graphs", type=Path, help="local graph bundle for the new pack")
+    parser.add_argument("--catalogs", type=Path, help="local directory from prepare_client_catalogs.py")
     args = parser.parse_args()
     try:
-        prepare(args.source, args.destination, args.maps, game_graphs=args.game_graphs)
+        prepare(
+            args.source, args.destination, args.maps, game_graphs=args.game_graphs, catalogs=args.catalogs,
+        )
     except (OSError, ValueError) as error:
         parser.error(str(error))
     print(f"Prepared runtime data at {args.destination.resolve()}")

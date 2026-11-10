@@ -1,4 +1,5 @@
 @echo off
+setlocal
 rem Starts the lobby server and the game. Options: START.bat --help
 title Overwatch 1.74 lobby server
 cd /d "%~dp0"
@@ -9,4 +10,6 @@ where py >nul 2>nul || (
   exit /b 1
 )
 py -3 -B -m ow174 %*
-if errorlevel 1 pause
+set "ORPHEUS_EXIT=%ERRORLEVEL%"
+if not "%ORPHEUS_EXIT%"=="0" pause
+exit /b %ORPHEUS_EXIT%

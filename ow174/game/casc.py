@@ -114,10 +114,10 @@ class RecordCatalog:
         return cls(records, hashlib.sha256(raw).hexdigest())
 
 
-def game_root(executable: str | Path) -> Path:
-    """The install folder of an Overwatch.exe (it sits in _retail_)."""
-    path = Path(executable)
-    for folder in (path.parent, *path.parents):
+def game_root(location: str | Path) -> Path:
+    """Find the installation containing the supplied folder or Overwatch.exe."""
+    path = Path(location)
+    for folder in (path, *path.parents):
         if (folder / "data" / "casc" / "data").is_dir():
             return folder
     raise CascError(f"no game data next to {path}")

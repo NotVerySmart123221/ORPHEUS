@@ -2,6 +2,30 @@
 
 The Python server targets Overwatch retail **1.74.0.0.104319**. A clean checkout supports the public source checks. Serving the original client requires a local runtime assembled from authorized inputs. See [separate deployment data](../README.md#separate-deployment-data).
 
+Players joining a compatible running server through [JOIN_SERVER.cmd](../JOIN_SERVER.cmd) use the game installation and the host address. The server operator prepares the runtime.
+
+## Generate client catalogs
+
+The four catalog files can be generated from your authorized 104319 installation. Use the [pinned OWLib source](https://github.com/overtools/OWLib/tree/7afe5f52706e7002ed8c2717299cd60846f3fa3a) with its submodules and the x64 .NET 6 SDK.
+
+```powershell
+git clone --branch overwatch/1.74 https://github.com/overtools/OWLib.git owlib-174
+git -C owlib-174 switch --detach 7afe5f52706e7002ed8c2717299cd60846f3fa3a
+git -C owlib-174 submodule update --init --recursive
+dotnet build .\owlib-174\DataTool\DataTool.csproj -c Release
+```
+
+From the ORPHEUS checkout, pass the built executable, the game folder and a new catalog directory outside both checkouts. The game folder must contain the active `1.74.0.0.104319` retail entry in `.build.info`.
+
+```powershell
+$game = 'C:\path\to\Overwatch'
+$dataTool = 'C:\path\to\owlib-174\DataTool\bin\Release\net6.0\DataTool.exe'
+$catalogs = 'C:\path\to\local\orpheus-catalogs'
+py -3.12 -B tools\prepare_client_catalogs.py --game $game --data-tool $dataTool --destination $catalogs
+```
+
+The command runs OWLib's hero, map and unlock list modes and writes `extracted_heroes.json`, `extracted_maps.json`, `extracted_items.json` and `extracted_general_unlocks.json`. It checks the four JSON outputs before making the catalog directory available. The other runtime inputs still come from the prepared source described below.
+
 ## Check or prepare a local runtime
 
 With Python 3.12 installed, run this from the repository root. Set `ORPHEUS_RUNTIME_DIR` to check a specific pack. Leave it unset to check the legacy checkout layout.
@@ -19,9 +43,20 @@ If you already have a prepared local research checkout, assemble a new pack with
 py -3.12 -B tools\prepare_server_runtime.py --source 'C:\path\to\prepared-checkout' --destination 'C:\path\to\orpheus-runtime' --map 0688
 ```
 
+Add `--catalogs $catalogs` to use the four locally generated catalogs in place of the source checkout's copies.
+
 ## Input provenance and current limits
 
-Some inputs can be produced from authorized local game data with the pinned [OWLib toolchain](../CREDITS.md) and the extractors in [tools](../tools). The map collision builder also needs prepared collision indexes. The retail templates are derived from a reference server session. The public checkout lacks a complete generation path for the lobby signing input, Battle.net descriptors, resource key table and all required protocol and collision indexes. The packer needs these inputs in the prepared checkout. Fully setting up the server from the game folder alone is an open task.
+| Inputs | Current preparation route |
+| --- | --- |
+| Four hero, map and unlock catalogs | Run the [catalog generator](#generate-client-catalogs) against the target installation. |
+| Arcade cards and hero body mapping | Use local DataTool XML for types `0C7` and `075` respectively. Hero body mapping also uses the generated hero catalog. [Arcade extractor](../tools/extract_arcade_cards.py) · [Hero extractor](../tools/extract_game_heroes.py) |
+| Mover parameters, state graphs and statistics | Use local DataTool XML for `003`, `003` and `01B`, or `054`, `075` and `062` respectively. Mover and statistics extraction use the hero body mapping. [Mover extractor](../tools/extract_game_movers.py) · [Graph extractor](../tools/extract_game_graphs.py) · [Statistics extractor](../tools/extract_game_stats.py) |
+| Queue rules, gameplay map records and bot routes | The current extractors also rely on prepared reference templates, map placement exports or collision indexes. [Queue extractor](../tools/extract_game_queues.py) · [Map extractor](../tools/extract_game_maps.py) · [Spawner extractor](../tools/extract_ai_spawners.py) |
+| Map collision cache | Run `tools/build_collision.py 0688 --game <game-folder>` from a checkout with the matching collision indexes, or with `ORPHEUS_RUNTIME_DIR` pointing to a local pack that has those indexes. |
+| Retail templates, Battle.net descriptors, lobby signing input, resource keys, and required protocol and collision indexes | The current Python server needs these prepared inputs. The public repository has no complete generation or distribution path for them. |
+
+The retail templates originate in a reference server session. Fully setting up a local host from the game folder alone remains an open task.
 
 Keep game files, dumps, raw captures, signing input and generated runtime files in local storage. Share missing file names or a redacted error when reporting a setup failure.
 

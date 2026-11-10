@@ -6,6 +6,21 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Player join and client catalog preparation
+
+- Added `JOIN_SERVER.cmd` for joining a compatible running server in tournament mode with the target
+  client. The player uses a host address and game folder. The host keeps the server runtime.
+- Added a local generator for the hero, map and unlock catalogs using the pinned OWLib DataTool.
+  It writes outside the checkout. The Python packer accepts the generated files through `--catalogs`.
+  Corrected collision tooling's game folder resolution.
+- Documented the player and host paths in both READMEs and listed the remaining host prerequisites.
+  Self-hosting from the game folder alone still needs additional runtime sources.
+- Passed 148 Python source tests, 2 dashboard tests and Ruff, with 6 fixture skips. A loopback
+  test verified the join path without a local runtime or relay. A pack assembled with the catalog
+  input option passed the server-only Practice Range startup probe. Catalog generation used
+  simulated DataTool output in tests. Original-client join and extraction remain to be verified
+  against a local 104319 installation.
+
 #### Python maintenance branch and startup checks
 
 - Made `main` the community-maintained Python branch. Preserved the native server, Cargo checks,
