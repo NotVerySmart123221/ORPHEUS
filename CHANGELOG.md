@@ -6,6 +6,21 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Kill feed option default at login
+
+- A profile that never saved its Gameplay options now gets the client's own defaults for block
+  `+0x120` of message 20802: Kill Feed Display (`+0x4`) and Tips Display (`+0x7`) on. The
+  block went out as zeros before. The client's kill feed presenter shows only while byte
+  `+0x4` is set, as [the kill feed note](docs/research/kill-feed.md) records from another
+  service. A saved block is still sent as saved.
+- Added `tests/runtime/test_player_settings.py` for the default and for a saved block, and
+  regenerated the five `settings` digests of the message snapshot; no other digest changed.
+- With a prepared build 104319 pack, the runtime suite ran 1199 tests with 1 skip; its only
+  errors are the two dashboard picture tests that need local images. Ruff and the public
+  source checks passed with 170 Python tests and 2 dashboard tests.
+- Original-client acceptance is open: kill a training bot with a new profile and check that
+  the line draws.
+
 #### Client research notes
 
 - Added `docs/research/` with an index and five notes on the 104319 client, rewritten from a

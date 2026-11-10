@@ -79,6 +79,10 @@ Read from code, in the Options screen:
 So retail's default has the feed on, but the settings system holds only what the lobby sent.
 `+700` is `+0x2B8 + 4`: **byte `+0x4` of 20802's block `+0x120`**.
 
+The block is the Gameplay page of Options: `+0x4` is Kill Feed Display, `+0x5` Always Skip Kill
+Cam and `+0x7` Tips Display. Seen live: Always Skip Kill Cam set to On and saved through 22203
+came back On at the next launch.
+
 Seen live, with the settings system's bytes logged on change:
 
 | Sent at login | Settings system | Result |
@@ -120,17 +124,19 @@ local player's own; a second death of one of those bodies added one line. A Reap
   keeps `0CB6` on the mode entity. Instance variables are filtered by each graph's own
   server-only list (`replicated_vars`), so `01CF`'s `#392` is not held back by another graph's
   list.
-- `content/player.py` builds 20802 from the schema's empty value. It sets `+0x10D` bytes `+0x0`
-  and `+0x5` and `+0x108` flag `+0x4`, and copies `+0x120` only when the profile has saved it.
-  A new profile has no saved settings, so **block `+0x120` goes out as zeros**. By this note
-  that hides the feed's presenter. It would also explain a feed that appears only after a
-  player has opened and saved Options once, since 22203 then stores the client's defaults.
-- Proposed change: when `+0x120` was never saved, send the client's Options defaults for it,
-  bytes `+0x4` and `+0x7` set.
+- `content/player.py` builds 20802 from the schema's empty value and copies `+0x120` only when
+  the profile has saved it. Before `GAMEPLAY_DEFAULTS` was added there, a new profile's
+  **block `+0x120` went out as zeros**. By this note that hides the feed's presenter.
+  It would also explain a feed that appears only after a player has opened and saved Options
+  once, since 22203 then stores the client's defaults.
+- Changed since: when `+0x120` was never saved, 20802 now carries the client's Options defaults
+  for it, bytes `+0x4` and `+0x7` set (`GAMEPLAY_DEFAULTS`). A saved block is sent as saved.
+  Covered by `tests/runtime/test_player_settings.py`. Not yet seen in the client against
+  ORPHEUS.
 
 ## Open
 
-- Whether byte `+0x7` matters to anything shown in a match.
+- An original-client check of the feed against ORPHEUS with a new profile.
 - The meaning of `STU_0D179CAF` and `STU_CEFF290A`.
 - A line's critical-hit mark, ability icon and assists (the other `003E.025` parameters) were
   not exercised.
