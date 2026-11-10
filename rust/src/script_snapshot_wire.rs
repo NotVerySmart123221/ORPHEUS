@@ -124,10 +124,13 @@ pub struct StateSite {
 pub enum SnapshotError {
     Incomplete {
         entity: u32,
-        diagnostics: usize,
-        first: String,
+        diagnostics: Vec<String>,
     },
     MissingBoundValue {
+        owner: u16,
+        variable: u32,
+    },
+    UnsupportedMap {
         owner: u16,
         variable: u32,
     },
@@ -172,17 +175,24 @@ impl fmt::Display for SnapshotError {
             Self::Incomplete {
                 entity,
                 diagnostics,
-                first,
             } => {
                 write!(
                     f,
-                    "body {entity:08X} has {diagnostics} initialization diagnostics, first {first}"
+                    "body {entity:08X} has {} initialization diagnostics: {}",
+                    diagnostics.len(),
+                    diagnostics.join(", ")
                 )
             }
             Self::MissingBoundValue { owner, variable } => {
                 write!(
                     f,
                     "missing resolved value for bound variable {owner}:{variable}"
+                )
+            }
+            Self::UnsupportedMap { owner, variable } => {
+                write!(
+                    f,
+                    "variable {owner}:{variable} holds a map without a verified wire form"
                 )
             }
             Self::InvalidBinding {
@@ -298,8 +308,19 @@ impl<'a> SnapshotEncoder<'a> {
         if !snapshot.initialization_complete() {
             return Err(SnapshotError::Incomplete {
                 entity: snapshot.entity,
-                diagnostics: snapshot.diagnostics.len(),
-                first: format!("{:?}", snapshot.diagnostics.first()),
+                diagnostics: snapshot
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| {
+                        let site = diagnostic.site;
+                        match site.node {
+                            Some(node) => {
+                                format!("{:04X}:{node}:{:?}", site.graph, diagnostic.issue)
+                            }
+                            None => format!("{:04X}:-:{:?}", site.graph, diagnostic.issue),
+                        }
+                    })
+                    .collect(),
             });
         }
         let mut entity_exclusions = frozen
@@ -407,6 +428,9 @@ impl<'a> SnapshotEncoder<'a> {
                 }
                 None => base,
             };
+            if matches!(value, Value::Map(_)) {
+                return Err(SnapshotError::UnsupportedMap { owner, variable });
+            }
             if let Some(bindings) = bindings.filter(|_| view == View::Owner) {
                 let links = self.project_bindings(snapshot, owner, variable, bindings)?;
                 if !links.is_empty() {
@@ -1504,11 +1528,23 @@ mod tests {
             },
             issue: Issue::UnsupportedAction("fixture".into()),
         });
-        assert!(matches!(
-            encoder.project(&snapshot, View::Observer),
-            Err(SnapshotError::Incomplete { entity: ENTITY, diagnostics: 1, first })
-                if first.contains("fixture")
-        ));
+        snapshot.diagnostics.push(Diagnostic {
+            site: Site {
+                entity: ENTITY,
+                instance: 1,
+                graph: 42,
+                node: Some(7),
+            },
+            issue: Issue::UnsupportedState("later".into()),
+        });
+        let error = encoder.project(&snapshot, View::Observer).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "body {ENTITY:08X} has 2 initialization diagnostics: \
+                 002A:-:UnsupportedAction(\"fixture\"), 002A:7:UnsupportedState(\"later\")"
+            )
+        );
     }
 
     #[test]
@@ -1549,6 +1585,30 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn projection_names_a_map_variable_instead_of_encoding_it() {
+        let (graphs, mut snapshot) = fixture();
+        let codecs = CodecTable::from_json(CODECS).unwrap();
+        let encoder = SnapshotEncoder::new(&graphs, &codecs);
+        snapshot.instances[&1]
+            .variables
+            .insert(77, Value::Map(vec![(Value::Asset(1), Value::Integer(2))]));
+        for view in [View::Owner, View::Observer] {
+            let error = encoder.project(&snapshot, view).unwrap_err();
+            assert!(matches!(
+                error,
+                SnapshotError::UnsupportedMap {
+                    owner: 1,
+                    variable: 77,
+                }
+            ));
+            assert_eq!(
+                error.to_string(),
+                "variable 1:77 holds a map without a verified wire form"
+            );
+        }
     }
 
     #[test]

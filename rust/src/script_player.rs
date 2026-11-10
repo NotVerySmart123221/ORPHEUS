@@ -1560,6 +1560,11 @@ mod tests {
             .iter()
             .any(|diagnostic| diagnostic.site.graph == 0x004b && diagnostic.site.node == Some(21));
         assert_eq!(filter_diagnostic, world.target_tags.is_none());
+        // With tags, startup continues past the effect action at 01C7 node 74.
+        assert_eq!(
+            snapshot.initialization_complete(),
+            world.target_tags.is_some()
+        );
         for raw in [12, 13] {
             let filter = &snapshot.instances[&2].states[&raw];
             assert!(filter.active);

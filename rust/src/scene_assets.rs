@@ -573,7 +573,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires a prepared 104319 Practice Range pack without bot VM graphs"]
-    fn stock_soldier_requires_more_vm_support_before_prepared_attach() {
+    fn stock_soldier_requires_map_wire_support_before_prepared_attach() {
         let runtime = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
         let assets = SceneAssets::load(runtime).unwrap();
         let scene = assets.prepare(GameMap::practice_range()).unwrap();
@@ -589,11 +589,12 @@ mod tests {
             quanta: RETAIL_QUANTA,
         };
         let Err(blocked) = scene.owner_body_runtime(hero, spawn) else {
-            panic!("the stock owner VM was expected to require more graph support");
+            panic!("the stock owner body was expected to stop before attach");
         };
         assert_eq!(blocked.kind(), io::ErrorKind::Unsupported);
+        // The tagged startup completes, then stops at its authored message table.
         let first_blocker = if assets.graphs.bodies()[&hero.body].target_tags.is_some() {
-            "UnsupportedAction(\"STUStatescriptActionEffect\")"
+            "variable 24:29859 holds a map without a verified wire form"
         } else {
             "UnsupportedConfig(\"STU_AC829876\")"
         };

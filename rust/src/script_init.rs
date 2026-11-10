@@ -2242,6 +2242,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
+            // Python's no_op. Networked effects are remote-synced nodes; like
+            // Python, the server never flags their remote slot. The role of a
+            // dynamic m_37B02425 is unknown, so those effects stay unsupported.
+            "STUStatescriptActionEffect" if field(&node.fields, "m_37B02425").is_null() => {
+                self.follow(id, node, "m_outPlug", None, depth)?;
+                Ok(true)
+            }
             "STU_22926252"
                 if field(&node.fields, "m_67B81D25").is_null()
                     && field(&node.fields, "m_EB35D2F1").is_null() =>
@@ -5894,6 +5901,68 @@ mod tests {
             Err(InitFault::WorkBudget { limit: 9, .. })
         ));
         assert!(matches!(run(43, MAX_INIT_WORK), Err(InitFault::PlugDepth)));
+    }
+
+    #[test]
+    fn effect_action_continues_its_output_without_server_state() {
+        let run = |dynamic: Json| {
+            let fixture = graph(
+                42,
+                vec![
+                    node(
+                        0,
+                        "STUStatescriptEntry",
+                        None,
+                        json!({"m_outPlug":plug(&[(1,"m_inPlug")], &[])}),
+                    ),
+                    node(
+                        1,
+                        "STUStatescriptActionEffect",
+                        None,
+                        json!({
+                            "m_effect":{"$":"STUConfigVarEffect","m_effect":"0x0300000000000001"},
+                            "m_dataFlow":[{"$":"STU_13D35171","m_answer":var(7, false)}],
+                            "m_37B02425":dynamic,
+                            "m_outPlug":plug(&[(2,"m_inPlug")], &[]),
+                        }),
+                    ),
+                    node(
+                        2,
+                        "STUStatescriptActionSetVar",
+                        None,
+                        json!({"m_out_Var":var(100, true), "m_value":true}),
+                    ),
+                ],
+                json!([]),
+                json!([0]),
+            );
+            initialize(
+                &store(vec![fixture]),
+                42,
+                Variables::new(),
+                vec![Root::new(1, 42)],
+                &mut EmptyWorld,
+                MAX_INIT_WORK,
+            )
+            .unwrap()
+        };
+        let snapshot = run(Json::Null);
+        assert!(snapshot.initialization_complete());
+        assert_eq!(
+            snapshot.variables,
+            Variables::from([(100, Value::Bool(true))])
+        );
+        assert!(snapshot.instances[&1].variables.is_empty());
+        assert!(snapshot.instances[&1].states.is_empty());
+
+        let snapshot = run(var(9, true));
+        assert!(snapshot.variables.is_empty());
+        assert_eq!(snapshot.diagnostics.len(), 1);
+        assert_eq!(snapshot.diagnostics[0].site.node, Some(1));
+        assert_eq!(
+            snapshot.diagnostics[0].issue,
+            Issue::UnsupportedAction("STUStatescriptActionEffect".into())
+        );
     }
 
     #[test]

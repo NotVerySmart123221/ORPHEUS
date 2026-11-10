@@ -26,6 +26,14 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Rust Soldier startup effects and snapshot diagnostics
+
+- Continued the authored one-shot effect action through its output without server state, following the reference server. Like the reference, the server never flags the remote slot of a networked effect. Effects that bind a dynamic `m_37B02425` remain unsupported because that field's role is unverified in build 104319.
+- Listed every initialization diagnostic as graph, node and issue when the snapshot preflight refuses a body. A script map variable now names its owner and variable instead of failing later without a location. Network serialization of maps remains unverified.
+- The tagged Soldier startup now completes without diagnostics at `01C7`, node `74`. The preflight stops at the authored message table in instance 24, variable 29859. Stock weapon attachment needs the 104319 map wire form, or evidence that the original server omits such variables.
+- Passed 322 public Rust tests and 60 tagged base-runtime checks. The enriched-runtime firing placement check needs a bot-graph pack that was unavailable. Cargo formatting and Clippy passed.
+- Original-client check on the native server before this change: login, the menus and the Practice Range load, and Soldier: 76 spawns without the rifle or HUD. The preflight still refuses the stock body, so that result is unchanged. Original-client acceptance remains pending.
+
 #### Rust developer preview and runtime preflight
 
 - Replaced the inherited status table with separate Python, Rust and original-client evidence. The bilingual README separates public Rust checks, prepared deployment and client acceptance. Added the cutover parity checklist.
