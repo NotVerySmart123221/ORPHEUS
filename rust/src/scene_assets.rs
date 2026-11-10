@@ -5,7 +5,7 @@ use std::{
     fs::{self, File},
     io::{self, BufReader},
     path::{Path, PathBuf},
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 use serde::Deserialize;
@@ -70,8 +70,23 @@ fn ground_height(
 type OwnerBodyFactory =
     dyn Fn(&Hero, OwnerBodySpawn) -> io::Result<Option<Box<dyn OwnerBodyRuntime>>> + Send + Sync;
 
+#[derive(Clone)]
+struct MapCollision {
+    movement_cache: String,
+    ground: Arc<CollisionScene>,
+    contacts: Option<Arc<ContactWorld>>,
+}
+
+#[derive(PartialEq, Eq)]
+struct CollisionKey {
+    map: u64,
+    mode: u64,
+    contacts: bool,
+}
+
 pub struct SceneAssets {
     collision: PathBuf,
+    last_collision: Mutex<Option<(CollisionKey, MapCollision)>>,
     mode_props: BTreeMap<u64, BTreeSet<u64>>,
     graphs: Arc<GraphStore>,
     codecs: Option<Arc<CodecTable>>,
@@ -112,6 +127,7 @@ impl SceneAssets {
         let pools = Arc::new(PoolCatalog::from_graphs(&graphs)?);
         Ok(Self {
             collision: runtime.join("collision"),
+            last_collision: Mutex::new(None),
             mode_props: read_mode_props(&data.join("collision_props_174.json"))?,
             graphs,
             codecs,
@@ -135,19 +151,6 @@ impl SceneAssets {
     /// Load the map before handing it to the worker. The render layouts and
     /// graph requirements are checked without blocking a game tick.
     pub fn prepare(&self, map: GameMap) -> io::Result<PreparedScene> {
-        let movement_cache = format!("{:04X}.col", map.map_guid as u32);
-        let path = self.collision.join(&movement_cache);
-        let cache = read_movement_cache(BufReader::new(File::open(path)?)).map_err(invalid)?;
-        for (field, expected) in [("map", map.map_guid), ("chunk", chunk_guid(map.map_guid))] {
-            if let Some(value) = cache.header.source.get(field) {
-                if value.as_str().and_then(parse_guid) != Some(expected) {
-                    return Err(invalid("movement cache identifies a different map"));
-                }
-            }
-        }
-        let empty = BTreeSet::new();
-        let identifiers = self.mode_props.get(&map.mode_guid).unwrap_or(&empty);
-        let ground = CollisionScene::movement_probe(&cache, identifiers).map_err(invalid)?;
         let mut bots = self.bots.make(map.map_guid, |body| {
             let settings = self.movers.for_body(Some(body));
             BotWalk::from_mover(
@@ -160,11 +163,14 @@ impl SceneAssets {
             .iter()
             .filter(|bot| self.graphs.entity_body(bot.spawn.body).is_some())
             .count();
-        let contacts = (is_practice_range(&map)
-            || bots.iter().any(|bot| !bot.spawn.route.is_empty()))
-        .then(|| ContactWorld::from_movement_cache(cache, identifiers).map(Arc::new))
-        .transpose()
-        .map_err(invalid)?;
+        let MapCollision {
+            movement_cache,
+            ground,
+            contacts,
+        } = self.map_collision(
+            &map,
+            is_practice_range(&map) || bots.iter().any(|bot| !bot.spawn.route.is_empty()),
+        )?;
         if let Some(world) = &contacts {
             for bot in bots.iter_mut().filter(|bot| !bot.spawn.route.is_empty()) {
                 let category = mover_category(&map, bot.spawn.team);
@@ -184,7 +190,7 @@ impl SceneAssets {
         let mut scene = PreparedScene {
             map,
             movement_cache,
-            ground: Arc::new(ground),
+            ground,
             contacts,
             controller,
             mode_ui,
@@ -203,6 +209,50 @@ impl SceneAssets {
                 .clone();
         }
         Ok(scene)
+    }
+
+    fn map_collision(&self, map: &GameMap, contacts: bool) -> io::Result<MapCollision> {
+        let key = CollisionKey {
+            map: map.map_guid,
+            mode: map.mode_guid,
+            contacts,
+        };
+        let mut last = self
+            .last_collision
+            .lock()
+            .map_err(|_| io::Error::other("movement scene cache lock poisoned"))?;
+        if let Some((cached, collision)) = last.as_ref() {
+            if cached == &key {
+                return Ok(collision.clone());
+            }
+        }
+
+        let movement_cache = format!("{:04X}.col", map.map_guid as u32);
+        let path = self.collision.join(&movement_cache);
+        let cache = read_movement_cache(BufReader::new(File::open(path)?)).map_err(invalid)?;
+        for (field, expected) in [("map", map.map_guid), ("chunk", chunk_guid(map.map_guid))] {
+            if let Some(value) = cache.header.source.get(field) {
+                if value.as_str().and_then(parse_guid) != Some(expected) {
+                    return Err(invalid("movement cache identifies a different map"));
+                }
+            }
+        }
+        let empty = BTreeSet::new();
+        let identifiers = self.mode_props.get(&map.mode_guid).unwrap_or(&empty);
+        let ground =
+            Arc::new(CollisionScene::movement_probe(&cache, identifiers).map_err(invalid)?);
+        let contacts = contacts
+            .then(|| ContactWorld::from_movement_cache(cache, identifiers).map(Arc::new))
+            .transpose()
+            .map_err(invalid)?;
+        let collision = MapCollision {
+            movement_cache,
+            ground,
+            contacts,
+        };
+        // Retain one prepared key. Active rooms hold their own immutable handles.
+        *last = Some((key, collision.clone()));
+        Ok(collision)
     }
 
     fn prepare_owner_body(&self, scene: &PreparedScene) -> Option<Arc<OwnerBodyFactory>> {
@@ -440,6 +490,25 @@ fn invalid(error: impl std::fmt::Display) -> io::Error {
 mod tests {
     use super::*;
     use crate::game_bots::BOT_ENTITY;
+
+    #[test]
+    #[ignore = "requires a prepared 104319 Practice Range pack"]
+    fn repeated_rooms_share_collision_indexes_and_keep_independent_bodies() {
+        let runtime = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+        let assets = SceneAssets::load(runtime).unwrap();
+        let first = assets.prepare(GameMap::practice_range()).unwrap();
+        let mut second = assets.prepare(GameMap::practice_range()).unwrap();
+        assert!(Arc::ptr_eq(&first.ground, &second.ground));
+        assert!(Arc::ptr_eq(
+            first.contacts.as_ref().unwrap(),
+            second.contacts.as_ref().unwrap()
+        ));
+        let before = first.bots().next().unwrap().position;
+        let after = [before[0] + 1.0, before[1], before[2]];
+        second.bots.body_mut(BOT_ENTITY).unwrap().position = after;
+        assert_eq!(first.bots().next().unwrap().position, before);
+        assert_eq!(second.bots().next().unwrap().position, after);
+    }
 
     #[test]
     #[ignore = "requires a prepared 104319 Practice Range pack"]

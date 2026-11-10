@@ -6,6 +6,11 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Reuse prepared map collision across rooms
+
+- Reused the immutable ground and contact indexes across preparations with the same map, mode and contact requirements. Room bodies and movement state stay independent. The cache retains one key and runs outside the simulation worker.
+- Passed 337 public Rust tests, formatting, Clippy and five prepared checks. The new 104319 regression confirmed that two rooms share the same collision indexes and can move their bots independently. Prepared geometry, elevated patrol and encrypted startup checks also passed. Original-client acceptance is pending.
+
 #### Worker timing in the Rust inspector
 
 - Added opt-in tick duration and schedule lateness histograms, skipped tick counts and input budget counters. The inspector displays server-side p95 and p99 bucket bounds. Capture starts with an active prepared world. The normal worker adds no timing reads with the inspector disabled.
