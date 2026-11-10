@@ -27,7 +27,7 @@ pub struct BodyMove<'a> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct SweepClip {
+pub struct SweepClip {
     pub proxy_id: u32,
     pub category: u16,
     pub fraction: f32,
@@ -76,7 +76,7 @@ impl CharacterBody {
         self.pose.position
     }
 
-    pub(crate) fn radius(&self) -> f32 {
+    pub fn radius(&self) -> f32 {
         self.pose.radius
     }
 
@@ -84,7 +84,8 @@ impl CharacterBody {
         &self.world
     }
 
-    pub(crate) fn fresh_at(&self, position: Vec3) -> Self {
+    /// Create the same capsule at a new origin with fresh contact state.
+    pub fn fresh_at(&self, position: Vec3) -> Self {
         Self::new(
             Arc::clone(&self.world),
             CapsulePose {
@@ -96,7 +97,7 @@ impl CharacterBody {
     }
 
     /// Query the same upright capsule and mask without changing its contact state.
-    pub(crate) fn sweep(&self, start: Vec3, end: Vec3) -> Result<Option<WorldHit>, PointSetSize> {
+    pub fn sweep(&self, start: Vec3, end: Vec3) -> Result<Option<WorldHit>, PointSetSize> {
         self.world.scene_sweep(MeshProbe {
             points: &[[0.0, self.pose.radius, 0.0], [0.0, self.pose.top, 0.0]],
             radius: self.pose.radius,
@@ -162,7 +163,7 @@ impl CharacterBody {
     }
 
     /// Observe the first clipped solver sweep of this move.
-    pub(crate) fn move_capsule_traced(
+    pub fn move_capsule_traced(
         &mut self,
         displacement: Vec3,
         dt: f32,

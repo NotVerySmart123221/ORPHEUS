@@ -191,7 +191,7 @@ pub fn capsule_entry_distance(
     round_surface(origin, direction, length, [a, b], radius, 0.0).map(|hit| hit.distance)
 }
 
-pub(crate) fn segment_distance(point: Vec3, a: Vec3, b: Vec3) -> f64 {
+pub fn segment_distance(point: Vec3, a: Vec3, b: Vec3) -> f64 {
     norm(segment_separation(point, a, b))
 }
 

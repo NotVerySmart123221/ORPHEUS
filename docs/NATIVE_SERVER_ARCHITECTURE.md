@@ -8,10 +8,25 @@ ORPHEUS targets Overwatch retail build **1.74.0.0.104319**. This decision define
 
 | Code today | Consequence |
 | --- | --- |
-| `WorldStart` owns a prepared scene whose `RoomSimulation` contains a Bevy world. Each bot entity holds its body, collider, vitals, rewind history and respawn state. Physical projectile entities belong to a connection and body generation. [Match worker](../rust/src/game_service.rs), [room simulation](../rust/src/game_combat.rs) | Bot movement, hits, replacement and projectile flight use the room's current entities. Player bodies still live outside this authority. |
+| `RoomWorld` owns a prepared scene and the room's Lua policy instance. Its `RoomSimulation` contains a Bevy world. Each bot entity holds its body, collider, vitals, rewind history and respawn state. Physical projectile entities belong to a connection and body generation. [Match worker](../rust/src/game_service.rs), [room simulation](../rust/src/game_combat.rs) | Bot movement, hits, replacement and projectile flight use the room's current entities. Player bodies still live outside this authority. |
 | `WorldDelivery` owns player movement and body state alongside per-viewer baselines, create acknowledgements and projectile prediction leases. [World delivery](../rust/src/game_replication.rs) | Player simulation lifetime and connection delivery remain coupled. Hitscan eligibility checks a viewer's create acknowledgement, while projectile collision uses a different path. Keep that distinction observable until replay establishes the intended historical target eligibility. |
-| Player and bot character movement use the contact solver when its cache is present. The combat wall query uses the legacy ground scene with `MOVER_CATEGORY`. Expanded rays have an independent cache identity and validation path. [Scene loading](../rust/src/scene_assets.rs), [collision scenes](../rust/src/collision_scene.rs), [cache validation](../rust/src/collision_cache.rs) | Different shape sets or masks can produce different results at the same location. This is a testable hypothesis for route and hit discrepancies. It does not identify the reported upstairs wall as faulty without a matching trace. |
+| Player and bot character movement use the contact solver when its cache is present. The combat wall query uses the legacy ground scene with `MOVER_CATEGORY`. Expanded rays have an independent cache identity and validation path. [Scene loading](../rust/src/scene_assets.rs), [collision scenes](../rust/crates/collision/src/collision_scene.rs), [cache validation](../rust/crates/collision/src/collision_cache.rs) | Different shape sets or masks can produce different results at the same location. This is a testable hypothesis for route and hit discrepancies. It does not identify the reported upstairs wall as faulty without a matching trace. |
 | The authored StateScript interpreter has a world interface, and the owner body supplies a local adapter. The adapter can return an origin for an unknown foreign entity and includes a Practice Range and Soldier ruleset fallback. [Interpreter](../rust/src/script_init.rs), [body adapter](../rust/src/script_player.rs) | A script can confuse an absent entity with a real position, and the body adapter cannot answer general room queries from its own state. |
+
+## Cargo boundaries
+
+The root `orpheus` package owns the native server. The `orpheus-collision` member owns collision cache decoding, static queries and the contact solver. It builds without the server, ECS, Lua or network stack. The root library re-exports the existing collision module paths for callers. Run the isolated kernel suite with `cargo test --locked -p orpheus-collision`. Use `--workspace` in the full validation lane to include its tests.
+
+| Current server module | Responsibility |
+| --- | --- |
+| `world` | Retail entity update encoding and packet-budget selection. The room ECS is owned by the simulation layer. |
+| `match_scene` | Player, bot and mode baselines and their initial wire records. |
+| `scene_assets` | Prepared scene construction from catalogs and immutable collision indexes. Its scene query and owner-runtime interfaces currently cross the combat and replication boundaries. |
+| `game_instance` | Roster and entry messages using the map model and match codecs. |
+| `match_handoff` | Shared lobby-to-match ticket alongside lobby message construction. Separate the ticket and its wire adapter before moving the whole module. |
+| `game_content`, `game_parameters` | Map catalog and spawn data in the former. Retail parameter envelopes and hero selection parsing in the latter. The latter consumes protocol types. |
+
+Keep pure geometry tests and frozen arithmetic fingerprints with the collision crate. Prepared 104319 collision and movement regressions remain in the server validation lane. The kernel fixtures exercise synthetic inputs and reference behavior. Original-client parity needs separate evidence.
 
 ## Room authority and transport
 

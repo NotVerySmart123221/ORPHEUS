@@ -4,6 +4,14 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ## Unreleased
 
+### 2026-11-11
+
+#### Extract the collision workspace member
+
+- Moved collision cache decoding, scene queries and the contact solver into `orpheus-collision`. The member has no dependency on the server, ECS, Lua or networking. Existing server import paths remain available through re-exports.
+- Added the Cargo workspace and shared package metadata. Public CI and contributor commands now run `--workspace` so the extracted kernel tests remain part of the validation lane. Documented current scene, wire and room responsibilities and the remaining coupled interfaces.
+- Passed 286 server unit tests, 53 collision unit tests, two runtime CLI integration tests, formatting and workspace Clippy. Three authorized prepared-runtime regressions passed for the upstairs patrol, collision sampling and encrypted native login and Practice Range delivery. Original-client acceptance and build-time measurements remain open.
+
 ### 2026-11-10
 
 #### Rust developer preview and runtime preflight

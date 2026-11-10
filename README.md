@@ -29,7 +29,7 @@ Use Git and stable Rust. The Windows build also needs the x64 MSVC C++ Build Too
 ```powershell
 git clone --branch rust https://github.com/leafall903/ORPHEUS.git
 cd ORPHEUS
-cargo test --locked --all-targets
+cargo test --locked --workspace --all-targets
 ```
 
 Python reference checks have their own setup and selected test list. Review that list before running Python test discovery. [Contribution guide](CONTRIBUTING.md#public-source-checks)
@@ -62,6 +62,8 @@ Append `--debug-port 3726` to enable the read-only inspector at [127.0.0.1:3726]
 | Path | Role |
 | --- | --- |
 | `rust/src`, `rust/scripts` | Native server, runtime preparation, tests and the Lua patrol policy |
+| `rust/crates/collision` | Collision cache decoding, static queries and contact solver |
+| `rust/tests` | Native CLI integration tests |
 | `ow174`, `tests`, `relay` | Python behavioral reference and Windows launcher sources |
 | `docs`, `tools` | Architecture, acceptance criteria and research tools |
 

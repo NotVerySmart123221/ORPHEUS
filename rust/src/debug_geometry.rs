@@ -125,7 +125,7 @@ impl DebugGeometry {
                 proxies: proxies.len(),
             },
             totals: DebugLayers {
-                triangles: ground.len(),
+                triangles: ground.triangle_count(),
                 proxies: self
                     .contacts
                     .as_ref()

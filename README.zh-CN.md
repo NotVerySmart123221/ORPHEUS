@@ -29,7 +29,7 @@ ORPHEUS 是面向 **《守望先锋 1》正式服 1.74.0.0.104319** 的独立开
 ```powershell
 git clone --branch rust https://github.com/leafall903/ORPHEUS.git
 cd ORPHEUS
-cargo test --locked --all-targets
+cargo test --locked --workspace --all-targets
 ```
 
 Python 参考测试有单独的环境和指定的测试列表。运行 Python 测试发现前请先查看[贡献指南](CONTRIBUTING.md#public-source-checks)。
@@ -62,6 +62,8 @@ cargo run --locked --bin orpheus_server -- --data-dir 'C:\path\to\local-state'
 | 路径 | 职责 |
 | --- | --- |
 | `rust/src`、`rust/scripts` | 原生服务端、运行数据打包、测试和 Lua 巡逻策略 |
+| `rust/crates/collision` | 碰撞缓存解码、静态查询和接触求解器 |
+| `rust/tests` | 原生 CLI 集成测试 |
 | `ow174`、`tests`、`relay` | Python 行为参考和 Windows 启动器相关源码 |
 | `docs`、`tools` | 架构、验收条件和研究工具 |
 

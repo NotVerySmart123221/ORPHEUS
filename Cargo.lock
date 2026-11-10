@@ -896,9 +896,9 @@ dependencies = [
  "hmac",
  "httparse",
  "indexmap",
- "lzma-rust2",
  "mio",
  "mlua",
+ "orpheus-collision",
  "prost",
  "prost-reflect",
  "roxmltree",
@@ -907,6 +907,16 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "tungstenite",
+]
+
+[[package]]
+name = "orpheus-collision"
+version = "0.0.0"
+dependencies = [
+ "lzma-rust2",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]

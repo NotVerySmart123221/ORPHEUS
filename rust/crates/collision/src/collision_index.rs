@@ -164,7 +164,7 @@ impl TriangleIndex {
         self.lowest.unwrap_or(0.0)
     }
 
-    pub(crate) fn len(&self) -> usize {
+    pub fn triangle_count(&self) -> usize {
         self.triangles.len()
     }
 
@@ -173,7 +173,8 @@ impl TriangleIndex {
         self.nearby_limited(min, max, category, usize::MAX)
     }
 
-    pub(crate) fn nearby_limited(
+    /// Return at most `limit` overlapping triangles in first-column order.
+    pub fn nearby_limited(
         &self,
         min: Vec3,
         max: Vec3,

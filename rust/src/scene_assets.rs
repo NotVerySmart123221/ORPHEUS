@@ -556,7 +556,10 @@ mod tests {
         );
         assert!(view["counts"]["triangles"].as_u64().unwrap() > 100);
         assert!(view["counts"]["proxies"].as_u64().unwrap() > 10);
-        assert_eq!(view["totals"]["triangles"], scene.movement_index().len());
+        assert_eq!(
+            view["totals"]["triangles"],
+            scene.movement_index().triangle_count()
+        );
         assert_eq!(
             view["totals"]["proxies"],
             scene.contacts.as_ref().unwrap().shapes().len()

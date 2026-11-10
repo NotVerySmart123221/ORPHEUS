@@ -21,8 +21,8 @@ Run the native source checks from the repository root with stable Rust, `rustfmt
 
 ```powershell
 cargo fmt --all -- --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked --all-targets
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace --all-targets
 ```
 
 ### Python reference and dashboard

@@ -23,9 +23,9 @@ jobs:
       - name: Check Rust formatting and lint
         run: |
           cargo +stable fmt --all -- --check
-          cargo +stable clippy --locked --all-targets -- -D warnings
+          cargo +stable clippy --locked --workspace --all-targets -- -D warnings
       - name: Run Rust protocol regressions
-        run: cargo +stable test --locked --all-targets
+        run: cargo +stable test --locked --workspace --all-targets
 
   source-tests:
     runs-on: windows-latest

@@ -55,9 +55,9 @@ Use a separate state directory or the existing server directory to reuse its pro
 Public Rust tests use synthetic protocol vectors and local loopback connections. They need neither a client nor prepared deployment data. The Rust `prepare_server_runtime` command assembles an external runtime pack from authorized inputs. The Practice Range pack was checked against the Python tool by comparing the manifest and every copied file.
 
 ```powershell
-cargo test --locked --all-targets
+cargo test --locked --workspace --all-targets
 cargo fmt --all -- --check
-cargo clippy --locked --all-targets -- -D warnings
+cargo clippy --locked --workspace --all-targets -- -D warnings
 ```
 
 Keep data formats and existing verification scenarios stable during replacement. Reuse shared codecs and keep each subsystem as small as the observed behavior allows. Use the same clock, input, collision data and packet-loss schedule for both implementations. Check bytes where the format is fixed, and compare decoded event order and registered state when runs contain nondeterministic values. Measure tick latency and snapshot gaps before claiming a performance improvement. The target client remains the final check for presentation and feel.
