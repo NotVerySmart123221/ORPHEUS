@@ -6,6 +6,29 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Offline service imported
+
+- Added `offline/`: a separate single-player lobby and game service for the same build, built
+  before this branch existed, with its launcher, client plugins, asset and research tools, test
+  suite, notes, status and per-hero logs. It is not part of the server in `src/`; nothing there
+  imports it, and Ruff leaves the folder out. [offline/README.md](offline/README.md) explains how
+  the two differ and how to run it.
+- Kept game data, keys and logs out of the repository. The lobby's state-blob signing input, the
+  manifest key table and nine TACT keys were embedded in its source and now load from local
+  files; a content key asserted in a test is asserted by name. Machine paths became the
+  `OW174_GAME` variable or placeholders. Every added file was checked against the local key
+  files and for personal details. Run logs, screenshots and generated data stay ignored;
+  59 mover recordings that the tests replay are tracked.
+- From this checkout the offline suite passed with 640 tests and 524 subtests, with the local
+  inputs and the installation in place. Without the local inputs it stops with a message naming
+  the missing files. Ruff and the public source checks still pass with 170 Python tests and
+  2 dashboard tests.
+- Original-client check, 2026-11-10, launched from `offline/`: retail main menu at 32:9,
+  Training, Practice Range, hero select and spawn as Soldier: 76. Against a still training bot:
+  its name and health bar, hits logged down to zero health, the kill feed line, and the Tab
+  board with 2 eliminations, a gold medal and weapon accuracy. The elimination notice was not
+  caught in a frame.
+
 #### Kill feed option default at login
 
 - A profile that never saved its Gameplay options now gets the client's own defaults for block

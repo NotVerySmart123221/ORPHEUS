@@ -89,6 +89,11 @@ This repository builds on existing Overwatch preservation work. Its lobby improv
 - **The Claudewatch contributors** supplied the Beta 1.0.0.3 research lead for attacker-side hit-confirm effects
   and separate entity and announcer voice messages. ORPHEUS checks these leads against 104319 client data before
   implementing them. The reference is a locally reviewed binary distribution.
+- **The offline service in `offline/`** was built separately on the same build and imported whole. It keeps its
+  own copies of the Boi-027 and LizRollin game-server code it grew from (`offline/tools/lobby/vendor`, with their
+  MIT notice), Arlecchino's Panama cipher code (`offline/tools/lobby/LICENSE.panama`) and a manifest reader that
+  follows TACTLib (`offline/tools/assets/LICENSE.TACTLib`). Its hero weapon numbers were checked against the
+  Overwatch Wiki's pages as they stood before 2022-10-01; the wiki text itself is not in the repository.
 
 Thank you as well to everyone who shared captures, tools, notes, testing, corrections and encouragement, including contributors whose names were not recorded in the materials available to us. If a credit is missing or needs correcting, please open an issue so it can be fixed.
 

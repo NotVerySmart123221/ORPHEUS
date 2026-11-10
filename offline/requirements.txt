@@ -1,0 +1,6 @@
+# The offline service and its tools, on top of the repository's own pins (pyproject.toml).
+# Blender's bpy and IDA's modules come with those programs and are only needed by tools/blender and tools/research/ida_dump.py.
+capstone==5.0.9
+pillow==12.2.0
+pytest==9.2.0
+unicorn==2.1.4

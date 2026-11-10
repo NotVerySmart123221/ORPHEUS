@@ -1,0 +1,25 @@
+.scratchpad/
+__pycache__/
+.pytest_cache/
+# Game crash dumps hold process memory.
+*.dmp
+
+# Local inputs prepared from an authorized installation and prepared data (tools/lobby/vendor/data/README.md).
+tools/lobby/vendor/data/*
+!tools/lobby/vendor/data/README.md
+tools/lobby/oracle_graphs_174.json
+# Generated from OWLib sources by tools/assets/stu_names.py.
+tools/assets/stu_names.json
+# Collision meshes, navigation grids, catalogs and player profiles made at run time.
+tools/lobby/data/
+# The player mover's map collision caches, built from the local game install by run.py.
+tools/lobby/vendor/cache/
+# Plugin build output.
+tools/asi/build/
+
+# research/ tracks notes and the mover recordings the tests replay. Run logs, captures, screen
+# recordings and exports stay local.
+research/**
+!research/**/
+!research/**/*.md
+!research/**/*.rec.gz
