@@ -1184,6 +1184,8 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod benchmark;
     use crate::{
         bits::{BitReader, BitWriter},
         game_content::PRACTICE_RANGE_MAP,

@@ -6,6 +6,12 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Repeatable two-room timing workload
+
+- Added an opt-in workload with two encrypted UDP clients in independent solo rooms. Both clients must advance input and receive fixture hits. The report separates worker timing and scheduling from packet and world-frame arrivals, and records both scene preparation times.
+- Two sequential ten-second debug comparisons used the same runtime and reversed the test order. Second scene preparation fell from 1.01–1.07 s to 78–84 ms. Each run delivered 70 distinct hits and 209 world-bearing frames per client. The worker p95 stayed in the 2–4 ms bucket and p99 moved from 2–4 ms to 4–6 ms in both comparisons. Optimized-build timing and original-client behavior remain open.
+- Passed 339 public Rust tests, 63 prepared base-pack regressions, the enriched timer fixture, formatting, Clippy and the Rust 1.85.1 build check.
+
 #### Inspect live patrol collision clips
 
 - Added the last successful clipped patrol move to the opt-in inspector. It reports the first limiting sweep's proxy, category, fraction and simulation frame, plus the before, intended and final feet positions. The trace uses the existing solver and resets on bot replacement.

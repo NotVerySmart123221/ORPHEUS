@@ -37,10 +37,10 @@ pub(crate) struct InputBudget {
 
 #[derive(Clone, Serialize)]
 pub(crate) struct WorkerTiming {
-    bin_upper_exclusive_us: &'static [u64],
+    pub bin_upper_exclusive_us: &'static [u64],
     pub tick_duration_us: DurationBins,
     pub schedule_lateness_us: DurationBins,
-    missed_ticks: u64,
+    pub missed_ticks: u64,
     pub input_budget: InputBudget,
 }
 

@@ -55,6 +55,18 @@ With the loopback inspector enabled, the state endpoint includes a cumulative `t
 
 The upper bound of each microsecond bin is exclusive. One extra bin covers durations at or beyond the last bound. The viewer shows the p95 and p99 bin bounds and input counters since worker startup. Subtract bin counts and sample counts between two snapshots from the same worker to find a percentile interval for that window. The reported maximum covers all samples since worker startup. Input budget counters report charged work, full peer and turn budgets, and turns that leave work queued. Timing runs on the server clock. Client round-trip time, packet arrival gaps and presentation latency need separate observations.
 
+### Two-room headless workload
+
+```powershell
+$env:ORPHEUS_TIMING_BENCH_RUNTIME = 'C:\path\to\authorized-base-runtime'
+$env:ORPHEUS_TIMING_BENCH_SECONDS = '60'
+cargo test --locked --release --lib prepared_worker_timing_two_solo_rooms -- --ignored --nocapture
+```
+
+Two encrypted UDP clients load independent solo rooms on one worker. After a two-second warm-up, each client drives a fixed logical firing cadence with a synthetic low-damage hitscan fixture. Both rooms must acknowledge input and report hits. The workload enables timing on the worker directly. HTTP and per-bot contact tracing stay disabled. The test uses local delivery without injected packet loss. Use a one-second duration for a smoke check.
+
+The report includes a runtime manifest digest, worker timing and input budget deltas, and each peer's observed local packet gaps and logical frame gaps. It separates world-bearing frames from all packets. The `prepare_scene_us` pair times the first and second scene preparations before installing the weapon fixture. The first call can include one-time owner preflight. For comparisons, use the same build profile, runtime, duration and host load.
+
 ## Migration gates
 
 | Slice | Evidence required to proceed |
