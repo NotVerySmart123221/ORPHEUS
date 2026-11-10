@@ -335,7 +335,7 @@ class NativeReplayTests(unittest.TestCase):
 
     def test_state_hash_matches_in_fresh_processes_with_different_hash_seeds(self):
         code = (
-            "import sys;sys.path.insert(0,'tests');"
+            f"import sys;sys.path.insert(0,{str(Path(__file__).resolve().parent)!r});"
             "from test_native_replay import trace;"
             "from ow174.game.native_replay import replay_document;"
             "print(replay_document(trace())['state_hash'])"

@@ -6,6 +6,16 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Native replay hash-seed test after the test layout change
+
+- The fresh-process state hash test in `tests/runtime/test_native_replay.py` imported its trace
+  helper from a `tests` path relative to the working directory. The module moved to
+  `tests/runtime`, so both child processes failed on the import. The child now gets the test
+  module's own directory, as the rest of the suite resolves paths.
+- With a prepared build 104319 pack, `test_native_replay.py` passes with 17 tests; one errored
+  before. The public source checks passed with 170 Python tests and 2 dashboard tests.
+  Test-only change, so no original-client check applies.
+
 #### Stored-state registry for the ultimate charge log state
 
 - Registered the body script's `_ult_passive_blocked` and `_ult_stall` attributes as optional
