@@ -26,6 +26,15 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Rust stock Soldier owner session
+
+- Skipped the parameters of a game message that has no recipients. The reference evaluates them first but delivers none, so the only difference is any random draw they would make. A routed message still refuses an unsupported parameter.
+- Followed the output plug of stat criteria actions, as the reference's no-op does.
+- Answered the `STU_ED45C5E8` entity selector with the reference's unmodeled null default, at the player site in the Practice Range only, and only when every operand is the owner or a zero literal. The resolved current possessor sends the idle body into a periodic branch in graph `01CA` that the reference never takes, because it leaves that query unanswered. That graph handles the message it sends to the selection, so null probably drops a local delivery. The relay form with a set flag and dynamic subjects stay unsupported. The original server's selection remains unverified.
+- The tagged stock Soldier owner VM now runs idle, held fire, reload and a second burst without diagnostics in the prepared session test. Its owner frames match the frozen reference's ammo and reload transitions frame by frame. Sprint activation stops at the `STU_E9694EFD` action at `0255`, which the reference only passes through its unmodeled fallback. The untagged bundle still stops at `STU_AC829876` during startup.
+- Passed 326 public Rust tests and 60 tagged base-runtime checks. The enriched-runtime firing placement check needs a bot-graph pack that was unavailable. The untagged bundle also passed the stock owner and loopback regressions. Cargo formatting, Clippy and Git diff checks passed.
+- Original-client check on the native server: the body no longer stops one second after spawn. Holding fire in the live worker stops the owner VM at an animation duration query in graph `02C5`, node 51, so the ammo display still empties at once and reload does not start. After spawn the view stays black until the in-game menu is opened and closed. Original-client acceptance remains pending.
+
 #### Rust stock Soldier owner attach
 
 - Omitted an unbound script map from owner and observer snapshots, as the reference omits the None it evaluates for an authored `STU_7757D403` message table. The map stays in the VM for message lookups. A bound map is still refused, and the wire form of maps remains unverified.

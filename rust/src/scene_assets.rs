@@ -573,7 +573,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires a prepared 104319 Practice Range pack without bot VM graphs"]
-    fn stock_soldier_attaches_then_stops_at_an_idle_recipient_selector() {
+    fn stock_soldier_owner_session_fires_and_reloads_then_stops_at_sprint() {
         use crate::commands::Command;
         use crate::game_replication::BodyStep;
         use crate::script_snapshot_wire::View;
@@ -623,29 +623,56 @@ mod tests {
                 }
                 streams.push((stream, projected));
             }
-            // Idle frames keep projecting and encoding in both streams until
-            // the next unsupported authored config.
+            // A live session: idle for about 3 s, hold fire for 1.5 s, reload,
+            // fire briefly, then hold forward and Sprint. Both streams project
+            // and encode every frame, as the worker sends them.
+            let int = |value: Option<&Value>| match value {
+                None => None,
+                Some(Value::Integer(value)) => Some(*value),
+                Some(value) => panic!("unexpected integer {value:?}"),
+            };
+            let flag = |value: Option<&Value>| match value {
+                None => None,
+                Some(Value::Bool(value)) => Some(*value),
+                Some(value) => panic!("unexpected flag {value:?}"),
+            };
             let mut mover = scene.player_spawn_mover(hero.body, 0).unwrap();
             let mut stopped = None;
-            'frames: for frame in FIRST_TICK + 1..=FIRST_TICK + 120 {
+            let mut owner = Vec::new();
+            for t in 1..=560 {
+                let frame = FIRST_TICK + t;
+                let (forward, buttons) = match t {
+                    188..=281 | 520..=540 => (0, 1),
+                    300 => (0, 0x400),
+                    560 => (127, 8),
+                    _ => (0, 0),
+                };
                 let command = Command {
                     frame,
+                    forward,
+                    buttons,
                     ..Command::default()
                 };
                 mover
                     .step(scene.movement_index(), command, 0.016, |_, _| {})
                     .unwrap();
                 runtime.advance(command, &mover, BodyStep::Posed).unwrap();
+                if let Some(modifiers) = runtime.movement_modifiers() {
+                    mover.track_modifiers(frame, modifiers);
+                }
+                runtime.take_shots(Some(command), &mover);
                 let snapshot = runtime.snapshot().unwrap();
+                // The worker cancels the body script at the first diagnostic.
+                if let Some(item) = snapshot.diagnostics.first() {
+                    stopped = Some(format!(
+                        "{t}: {:04X}:{:?} {:?}",
+                        item.site.graph, item.site.node, item.issue
+                    ));
+                    break;
+                }
                 let encoder = runtime.encoder();
                 for (stream, initial) in &mut streams {
-                    let next = match encoder.project_next(snapshot, initial) {
-                        Ok(next) => next,
-                        Err(error) => {
-                            stopped = Some(error.to_string());
-                            break 'frames;
-                        }
-                    };
+                    let next = encoder.project_next(snapshot, initial).unwrap();
                     let kind = match initial.view() {
                         View::Owner => stream.owner_kind(frame, false, false).unwrap(),
                         View::Observer => Some(DeltaKind::Observer { resend: false }),
@@ -656,16 +683,46 @@ mod tests {
                         stream.sent(chunk.last);
                         stream.arrived(chunk.last);
                     }
+                    if next.view() != View::Owner {
+                        continue;
+                    }
+                    let rifle = next.instance_variables(11).unwrap();
+                    let fact = (int(rifle.get(&53)), flag(rifle.get(&51)));
+                    if owner.last().is_none_or(|&(_, last)| last != fact) {
+                        owner.push((t, fact));
+                    }
                 }
             }
-            assert!(streams[0].0.command_frame() > FIRST_TICK + 1);
-            // Python evaluates this recipient selector to None.
-            let stopped = stopped.expect("the idle stock body was expected to stop");
-            assert!(
-                stopped.contains("01CA:")
-                    && stopped.contains("Expression(UnsupportedConfig(\"STU_ED45C5E8\"))"),
-                "{stopped}"
+            // Sprint activation reaches an action the reference only passes
+            // through its unmodeled fallback.
+            assert_eq!(
+                stopped.as_deref(),
+                Some("560: 0255:Some(40) UnsupportedAction(\"STU_E9694EFD\")")
             );
+            assert_eq!(streams[0].0.command_frame(), FIRST_TICK + 559);
+            // The frozen reference produces the same rifle ammo and reload
+            // transitions from these inputs: 14 rounds in 1.5 s, the magazine
+            // refilled 47 frames after the reload press and the reload ended
+            // 46 frames later.
+            let mut expected = vec![(1, (Some(30), None))];
+            for (t, ammo) in [
+                188, 195, 201, 208, 215, 222, 229, 236, 243, 250, 257, 264, 271, 278,
+            ]
+            .into_iter()
+            .zip((16..30).rev())
+            {
+                expected.push((t, (Some(ammo), None)));
+            }
+            expected.extend([
+                (300, (Some(16), Some(true))),
+                (347, (Some(30), Some(true))),
+                (393, (Some(30), Some(false))),
+                (520, (Some(29), Some(false))),
+                (527, (Some(28), Some(false))),
+                (533, (Some(27), Some(false))),
+                (540, (Some(26), Some(false))),
+            ]);
+            assert_eq!(owner, expected);
         } else {
             let Err(blocked) = scene.owner_body_runtime(hero, spawn) else {
                 panic!("the untagged stock owner body was expected to stop before attach");

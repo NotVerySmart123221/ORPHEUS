@@ -526,9 +526,44 @@ impl World for BodyWorld {
             {
                 Some(Value::Null)
             }
+            // The reference has no model for this entity selector and
+            // defaults it to None. It never reaches the 01CA site where the
+            // owner VM meets it, and that graph handles the message it sends
+            // to the selection, so None probably drops a local delivery. Only
+            // the all-false form around the owner is answered; the original
+            // selection is unverified.
+            "STU_ED45C5E8"
+                if self.is_player_site(site)
+                    && self.mode == PRACTICE_RANGE_MODE
+                    && is_owner_selector(config) =>
+            {
+                Some(Value::Null)
+            }
             _ => None,
         }
     }
+}
+
+/// Whether every operand of an entity selector is the owner or a zero
+/// literal, with exactly one owner operand.
+fn is_owner_selector(config: &Json) -> bool {
+    let mut owners = 0;
+    config.as_object().is_some_and(|fields| {
+        fields.iter().all(|(key, value)| match key.as_str() {
+            "$" => true,
+            "m_EE729DCB" => value.as_u64() == Some(0),
+            _ if native_shape(value, "STU_B5A0CAF0", None) => {
+                owners += 1;
+                true
+            }
+            _ => {
+                ["STUConfigVarBool", "STUConfigVarFloat"]
+                    .into_iter()
+                    .any(|class| native_shape(value, class, Some("m_value")))
+                    && value["m_value"].as_f64() == Some(0.0)
+            }
+        })
+    }) && owners == 1
 }
 
 impl BodyWorld {
@@ -730,11 +765,34 @@ mod tests {
         );
         let branch = json!({"$":"STU_A77AC2AC","m_EE729DCB":0});
         assert_eq!(evaluate(&mut runtime, &branch), Ok(Value::Null));
+        let flag = |value| json!({"$":"STUConfigVarBool","m_EE729DCB":0,"m_value":value});
+        let selector = json!({
+            "$":"STU_ED45C5E8","m_EE729DCB":0,"m_range":{"$":"STUConfigVarFloat","m_value":0},
+            "m_first":flag(0),"m_second":flag(0),"m_subject":owner
+        });
+        assert_eq!(evaluate(&mut runtime, &selector), Ok(Value::Null));
+        let unsupported_selector = Err(EvalError::UnsupportedConfig("STU_ED45C5E8".into()));
+        for (field, value) in [
+            ("m_second", flag(1)),
+            ("m_range", json!({"$":"STUConfigVarFloat","m_value":2.5})),
+            ("m_subject", dynamic.clone()),
+            ("m_other", owner.clone()),
+            ("m_filter", Json::Null),
+        ] {
+            let mut variant = selector.clone();
+            variant[field] = value;
+            assert_eq!(
+                evaluate(&mut runtime, &variant),
+                unsupported_selector,
+                "{field}"
+            );
+        }
         runtime.world.mode = 0;
         assert_eq!(
             evaluate(&mut runtime, &branch),
             Err(EvalError::UnsupportedConfig("STU_A77AC2AC".into()))
         );
+        assert_eq!(evaluate(&mut runtime, &selector), unsupported_selector);
     }
 
     #[test]

@@ -1918,17 +1918,6 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         else {
             return Ok(true);
         };
-        let mut parameters = Variables::new();
-        for parameter in array_field(&node.fields, "m_params")
-            .iter()
-            .filter(|value| value.is_object())
-        {
-            self.spend("game message parameter")?;
-            let Some(value) = self.evaluate(id, node, field(parameter, "m_value"), None) else {
-                return Ok(false);
-            };
-            parameters.insert(parameter_id(parameter), value);
-        }
         let site = self.site(id, node);
         let target = node
             .fields
@@ -1956,6 +1945,23 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 .collect(),
             _ => Vec::new(),
         };
+        // The reference evaluates the parameters before the recipients, but
+        // a message without recipients delivers none of them. Skipping them
+        // also skips any random draw they would make.
+        if entities.is_empty() {
+            return Ok(true);
+        }
+        let mut parameters = Variables::new();
+        for parameter in array_field(&node.fields, "m_params")
+            .iter()
+            .filter(|value| value.is_object())
+        {
+            self.spend("game message parameter")?;
+            let Some(value) = self.evaluate(id, node, field(parameter, "m_value"), None) else {
+                return Ok(false);
+            };
+            parameters.insert(parameter_id(parameter), value);
+        }
         for entity in entities {
             self.spend("game message routing")?;
             if entity == site.entity {
@@ -2246,6 +2252,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             // Python, the server never flags their remote slot. The role of a
             // dynamic m_37B02425 is unknown, so those effects stay unsupported.
             "STUStatescriptActionEffect" if field(&node.fields, "m_37B02425").is_null() => {
+                self.follow(id, node, "m_outPlug", None, depth)?;
+                Ok(true)
+            }
+            // Python's no_op for stat criteria.
+            "STUStatescriptActionCriteria" => {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
@@ -5962,6 +5973,143 @@ mod tests {
         assert_eq!(
             snapshot.diagnostics[0].issue,
             Issue::UnsupportedAction("STUStatescriptActionEffect".into())
+        );
+    }
+
+    #[test]
+    fn criteria_actions_continue_their_output() {
+        let fixture = graph(
+            42,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({"m_outPlug":plug(&[(1,"m_inPlug")], &[])}),
+                ),
+                node(
+                    1,
+                    "STUStatescriptActionCriteria",
+                    None,
+                    json!({
+                        "m_identifier":{"$":"STUConfigVarIdentifier","m_identifier":"0x0D80000000000001"},
+                        "m_targets":{"$":"test-unanswered"},
+                        "m_outPlug":plug(&[(2,"m_inPlug")], &[]),
+                    }),
+                ),
+                node(
+                    2,
+                    "STUStatescriptActionSetVar",
+                    None,
+                    json!({"m_out_Var":var(100, true), "m_value":true}),
+                ),
+            ],
+            json!([]),
+            json!([0]),
+        );
+        let snapshot = initialize(
+            &store(vec![fixture]),
+            42,
+            Variables::new(),
+            vec![Root::new(1, 42)],
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        assert!(
+            snapshot.initialization_complete(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        assert_eq!(
+            snapshot.variables,
+            Variables::from([(100, Value::Bool(true))])
+        );
+        assert!(snapshot.instances[&1].states.is_empty());
+    }
+
+    #[test]
+    fn game_message_without_recipients_leaves_its_parameters_unevaluated() {
+        struct Recipients(Value);
+
+        impl World for Recipients {
+            fn native(&mut self, _site: Site, config: &Json) -> Option<Value> {
+                (config["$"] == "test-recipients").then(|| self.0.clone())
+            }
+        }
+
+        let message = json!({"$":"STUConfigVarGameMessage","m_gameMessage":"0x0240000000000001"});
+        let fixture = graph(
+            42,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({"m_outPlug":plug(&[(1,"m_inPlug")], &[])}),
+                ),
+                node(
+                    1,
+                    "STUStatescriptActionSendGameMessage",
+                    None,
+                    json!({
+                        "m_gameMessage":message,
+                        "m_targets":{"$":"test-recipients"},
+                        "m_params":[{"m_B5051BCE":"0x0A40000000000123",
+                            "m_value":{"$":"test-unanswered"}}],
+                        "m_outPlug":plug(&[(2,"m_inPlug")], &[]),
+                    }),
+                ),
+                node(
+                    2,
+                    "STUStatescriptActionSetVar",
+                    None,
+                    json!({"m_out_Var":var(100, true), "m_value":true}),
+                ),
+            ],
+            json!([]),
+            json!([0]),
+        );
+        let graphs = store(vec![fixture]);
+        let run = |targets| {
+            initialize(
+                &graphs,
+                42,
+                Variables::new(),
+                vec![Root::new(1, 42)],
+                &mut Recipients(targets),
+                MAX_INIT_WORK,
+            )
+            .unwrap()
+        };
+        for targets in [
+            Value::Null,
+            Value::Entity(0),
+            Value::Array(vec![
+                Value::Null,
+                Value::Entity(0),
+                Value::Entity(0x1fff_ffff),
+            ]),
+        ] {
+            let snapshot = run(targets);
+            assert!(
+                snapshot.initialization_complete(),
+                "{:?}",
+                snapshot.diagnostics
+            );
+            assert_eq!(
+                snapshot.variables,
+                Variables::from([(100, Value::Bool(true))])
+            );
+        }
+        // A routed message still needs its unanswered parameter.
+        let snapshot = run(Value::Entity(42));
+        assert!(snapshot.variables.is_empty());
+        assert_eq!(snapshot.diagnostics.len(), 1);
+        assert_eq!(snapshot.diagnostics[0].site.node, Some(1));
+        assert_eq!(
+            snapshot.diagnostics[0].issue,
+            Issue::Expression(EvalError::UnsupportedConfig("test-unanswered".into()))
         );
     }
 
