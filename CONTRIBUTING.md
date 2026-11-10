@@ -11,18 +11,13 @@ git clone --branch rust https://github.com/leafall903/ORPHEUS.git
 cd ORPHEUS
 ```
 
-The Python code on this branch is a behavioral reference. Python development and its launcher live on the [default branch](https://github.com/leafall903/ORPHEUS/tree/main). To run the reference checks here, install 64-bit Python 3.12 on Windows and Node.js 24 for the dashboard test.
-
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt "ruff==0.17.3"
-```
-
 Use a fork and a short topic branch for a pull request. Test with your own Git author identity. Keep code, research and evidence scoped to the change.
 
 ## Public source checks
 
-The Rust protocol crate uses synthetic inputs by default. Run the following from the repository root with stable Rust, `rustfmt` and `clippy`.
+### Rust
+
+Run the native source checks from the repository root with stable Rust, `rustfmt` and `clippy`. They use public synthetic fixtures.
 
 ```powershell
 cargo fmt --all -- --check
@@ -30,12 +25,14 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
 ```
 
-To run the additional Rust checks with an authorized 104319 runtime, set `ORPHEUS_RUNTIME_DIR` to that runtime and `ORPHEUS_BNET_DESCRIPTORS` to its `bnet/descriptors.pb`, then run `cargo test --locked --lib -- --ignored`.
+### Python reference and dashboard
 
-Run the following Python and JavaScript checks from the repository root with `ORPHEUS_RUNTIME_DIR` unset to match CI. They use public source and synthetic fixtures.
+These checks are optional for Rust work that leaves the reference code alone. The Python implementation and Windows launcher are maintained on the [default branch](https://github.com/leafall903/ORPHEUS/tree/main). Use 64-bit Python 3.12 and Node.js 24 for the dashboard test. Run the selected checks with `ORPHEUS_RUNTIME_DIR` unset. Broad Python test discovery can require private fixtures.
 
 ```powershell
 Remove-Item Env:ORPHEUS_RUNTIME_DIR -ErrorAction SilentlyContinue
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt "ruff==0.17.3"
 $python = '.\.venv\Scripts\python.exe'
 & $python -m ruff check .
 foreach ($module in @(
@@ -57,25 +54,22 @@ The [public workflow](.github/workflows/public-checks.yml) runs the source-only 
 
 ## Prepared runtime checks
 
-Gameplay regressions can use an in-memory encrypted peer and real map collision without launching Overwatch. These checks need the correct local runtime and any named map or graph fixture. See [runtime data provenance](data/README.md) and [server setup](README.md#separate-deployment-data).
+Native gameplay regressions can use encrypted loopback and real map collision without launching Overwatch. They need the correct local runtime and the named graph fixture. See [runtime requirements](data/README.md) and [server setup](README.md#separate-deployment-data).
 
-For example, run the projectile suite against a prepared build 104319 pack.
+Run the focused native Practice Range checks with an authorized base pack.
 
 ```powershell
 $env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\orpheus-runtime'
-.\.venv\Scripts\python.exe -B -m unittest discover -s tests -p test_game_projectiles.py
+$env:ORPHEUS_BNET_DESCRIPTORS = Join-Path $env:ORPHEUS_RUNTIME_DIR 'bnet/descriptors.pb'
+cargo run --locked --bin orpheus_server -- --check-runtime
+cargo test --locked -p orpheus --lib prepared_worker_delivers -- --ignored
 ```
 
-Full discovery also depends on research fixtures kept outside the public export. Some tests read fixtures from the research checkout's own `data` directory. A prepared server pack by itself is insufficient for the full suite. Record any missing prerequisites, the data lane used, and the checks that were actually run.
+Choose ignored tests by name and read their prerequisites. The base and enriched graph lanes differ. The [two-room benchmark](docs/NATIVE_SERVER_ARCHITECTURE.md#two-room-headless-workload) has separate opt-in settings. Some Python reference checks read research fixtures outside the public export. Report the exact test and runtime lane you used.
 
 ## Original-client verification
 
-Use your own authorized Overwatch 1 retail **1.74.0.0.104319** installation and a prepared local runtime. The following manual launcher starts the Python reference server and original client through the Windows relay. For a Rust test, identify the native server build and record the connection method separately.
-
-```powershell
-$env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\orpheus-runtime'
-.\START_LOCAL.cmd --game-exe 'C:\path\to\_retail_\Overwatch.exe'
-```
+Use your own authorized Overwatch 1 retail **1.74.0.0.104319** installation and an already configured local connection. The Rust developer preview provides a server-only entry. Original-client authentication requires separately supplied local inputs. The Python launcher is documented on [`main`](https://github.com/leafall903/ORPHEUS/tree/main#local-practice-range).
 
 For the first acceptance group, enter the Practice Range, pick Soldier: 76, and record one behavior at a time. Include the ORPHEUS commit, client build and locale, hero, map, exact inputs, expected and observed behavior, and how many runs agreed. Distinguish server or wire results from what you actually saw or heard. Use the [gameplay verification form](https://github.com/leafall903/ORPHEUS/issues/new?template=gameplay-verification.yml). Reports with clear steps are useful even when logs or video are unavailable.
 

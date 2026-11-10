@@ -1,6 +1,52 @@
 # Runtime data
 
-The server and its tests use the following data sets. The public source checkout uses separately prepared runtime data. See [separate deployment data](../README.md#separate-deployment-data).
+The Rust developer preview needs a separate, authorized **base 104319 Practice Range** runtime. Public source tests use synthetic data. For native startup, run the same preflight used by the server before it opens listeners.
+
+```powershell
+$env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\authorized-base-runtime'
+cargo run --locked --bin orpheus_server -- --check-runtime
+```
+
+The check inventories 22 required paths, including `collision/0688.col`. It reports file presence and the signing input length. The server parses the prepared data at startup. A complete original-client connection requires separately authorized local prerequisites. See [native startup](../README.md#separate-deployment-data).
+
+## Tool outputs from authorized local inputs
+
+| Prepared pack paths | Prerequisites |
+| --- | --- |
+| `data/extracted_items.json`, `data/extracted_general_unlocks.json`, `data/extracted_heroes.json`, `data/extracted_maps.json` | Catalogs built with local build 104319 exports. |
+| `data/arcade_cards_174.json`, `data/game_queues_174.json` | Local game exports and prepared retail templates for queues. |
+| `data/ai_spawners_174.json`, `data/game_heroes_174.json`, `data/game_maps_174.json`, `data/game_movers_174.json`, `data/game_stats_174.json`, `data/game_graphs_174.json.gz` | Local gameplay exports. Some tools also need pinned types or prepared map indexes. Use the base graph bundle for native Practice Range. |
+| `data/collision_keys_174.json`, `collision/0688.col` | Local map storage indexes and a movement cache built for Practice Range with the prepared placement index. |
+
+The Rust `prepare_server_runtime` command assembles existing authorized inputs. Its output is a separate directory with a SHA-256 manifest. The generation tools have their own local prerequisites.
+
+```powershell
+cargo run --locked --bin prepare_server_runtime -- --source 'C:\path\to\prepared-source' --destination 'C:\path\to\orpheus-runtime' --map 0688
+```
+
+## Bring prepared research data
+
+Provide the remaining protocol and scene research files in the pack.
+
+| Prepared pack paths | Purpose |
+| --- | --- |
+| `data/schemas_174.json`, `data/game_schemas_174.json`, `data/statescript_codecs_174.json` | Prepared lobby, match and StateScript layouts. |
+| `data/retail_templates.json` | Prepared retail lobby response templates. |
+| `data/collision_props_174.json` | Prepared placement and mode filters. |
+| `bnet/descriptors.pb` | Prepared protobuf descriptors for the local service. |
+
+## Blocked without restricted local inputs
+
+| Prepared pack path | Format |
+| --- | --- |
+| `data/resource_keys_174.json` | JSON content-key table. |
+| `data/lobby_state_blob.key` | Exactly 64 raw bytes. |
+
+Keep both files and their source locations private. The packer records per-file SHA-256 checksums in the local manifest. Public issues, releases and community channels may record format and validation requirements. Keep raw data, access instructions and locations out of public materials.
+
+## Reference inventory and research notes
+
+The following records document the research tools and Python reference behavior.
 
 | File | Purpose |
 | --- | --- |
@@ -10,8 +56,6 @@ The server and its tests use the following data sets. The public source checkout
 | `extracted_heroes.json` | Hero identifiers and names. |
 | `extracted_maps.json` | Map metadata and seasonal variants. |
 | `ai_spawners_174.json` | The training bots: each map's AI spawners (hero, team, place, route) and hint points, and the bot heroes' bodies, health and speed (`tools/extract_ai_spawners.py`). |
-| `resource_keys_174.json` | Game content keys used by event resources. These are not account credentials. |
-| `lobby_state_blob.key` | Local 64-byte signing input for the target build's lobby handshake. |
 | `extracted_events_174.json` | Verified scene mappings used by regression tests. |
 | `announced_crcs_174.json` | Protocol identifiers used by the schema-extraction tool. |
 | `arcade_cards_174.json` | The Arcade's cards (`tools/extract_arcade_cards.py`). |

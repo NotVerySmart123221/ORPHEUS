@@ -6,6 +6,12 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Rust developer preview and runtime preflight
+
+- Replaced the inherited status table with separate Python, Rust and original-client evidence. The bilingual README separates public Rust checks, prepared deployment and client acceptance. Added the cutover parity checklist.
+- Added `orpheus_server --check-runtime` and shared the check with native startup. It reports all missing Practice Range pack paths across generation, prepared research and restricted input groups. It checks the local signing input length without printing its contents.
+- Passed 339 public Rust unit tests and two CLI integration tests, formatting, Clippy, relative documentation links, and authorized native preflight and encrypted startup. A publicly reproducible original-client authentication setup remains open.
+
 #### Isolate Lua policy state by room
 
 - Gave each prepared room a private Lua patrol VM on the match worker. The server validates the bundled policy at startup and uses that instance for the first prepared room. Later rooms initialize independent instances. Room retirement drops their policy state with the room.

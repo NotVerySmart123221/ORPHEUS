@@ -1,6 +1,6 @@
 # Rust migration
 
-The migration target is a Rust implementation of ORPHEUS for retail build 1.74.0.0.104319. Native development takes place on the `rust` branch. The Python code here is a read-only behavioral reference and the community-maintained Python server is on `main`. Gameplay fidelity remains tracked in the [restoration roadmap](ROADMAP.md). The [native server architecture](NATIVE_SERVER_ARCHITECTURE.md) sets the room ownership, script host and inspection boundaries.
+The migration target is a Rust implementation of ORPHEUS for retail build 1.74.0.0.104319. Native development takes place on the `rust` branch. The Python code here is a read-only behavioral reference and the community-maintained Python server is on `main`. Track replacement workflows in the [parity checklist](RUST_PARITY.md) and broader gameplay fidelity in the [restoration roadmap](ROADMAP.md). The [native server architecture](NATIVE_SERVER_ARCHITECTURE.md) sets the room ownership, script host and inspection boundaries.
 
 | Stage | Scope | Exit criteria |
 | --- | --- | --- |

@@ -17,6 +17,10 @@ path = "rust/src/bin/prepare_server_runtime.rs"
 name = "orpheus_server"
 path = "rust/src/bin/orpheus_server.rs"
 
+[[test]]
+name = "runtime_preflight"
+path = "rust/tests/runtime_preflight.rs"
+
 [dependencies]
 aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "alloc"] }
 bevy_ecs = { version = "0.16.1", default-features = false, features = ["std"] }

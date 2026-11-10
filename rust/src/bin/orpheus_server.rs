@@ -1,14 +1,19 @@
 use std::{env, ffi::OsString, io, path::PathBuf, process::ExitCode};
 
-use orpheus::server::{Server, ServerConfig};
+use orpheus::{
+    runtime::check_practice_runtime,
+    server::{Server, ServerConfig},
+};
 
 const USAGE: &str = "Usage: orpheus_server --data-dir <directory> [--runtime <directory>]
        [--account <name>] [--lobby-port <port>] [--game-port <port>]
        [--stall-port <port>] [--rpc-port <port>] [--debug-port <port>]
+       orpheus_server --check-runtime [--runtime <directory>]
 
 The native 1.74 server listens on loopback. Use an authorized base runtime
-directory or set ORPHEUS_RUNTIME_DIR. --debug-port enables the read-only
-simulation inspector. Press Enter in the terminal to stop.";
+directory or set ORPHEUS_RUNTIME_DIR. --check-runtime lists missing inputs
+without starting listeners. --debug-port enables the read-only inspector.
+Press Enter in the terminal to stop.";
 
 fn main() -> ExitCode {
     match run() {
@@ -22,6 +27,7 @@ fn main() -> ExitCode {
 
 fn run() -> io::Result<()> {
     let mut args = env::args_os().skip(1);
+    let mut check_runtime = false;
     let mut config = ServerConfig::new(
         env::var_os("ORPHEUS_RUNTIME_DIR").map_or_else(PathBuf::new, PathBuf::from),
         PathBuf::new(),
@@ -30,6 +36,10 @@ fn run() -> io::Result<()> {
         if arg == "--help" || arg == "-h" {
             println!("{USAGE}");
             return Ok(());
+        }
+        if arg == "--check-runtime" {
+            check_runtime = true;
+            continue;
         }
         let value = args
             .next()
@@ -52,9 +62,17 @@ fn run() -> io::Result<()> {
             _ => return Err(usage_error("unknown option")),
         }
     }
-    if config.runtime.as_os_str().is_empty() || config.data.as_os_str().is_empty() {
+    if config.runtime.as_os_str().is_empty() {
+        return Err(usage_error("use --runtime or set ORPHEUS_RUNTIME_DIR"));
+    }
+    if check_runtime {
+        check_practice_runtime(&config.runtime)?;
+        println!("Runtime file presence and signing input length checks passed.");
+        return Ok(());
+    }
+    if config.data.as_os_str().is_empty() {
         return Err(usage_error(
-            "both runtime and data directories are required",
+            "--data-dir is required when starting the server",
         ));
     }
     let mut server = Server::start(config)?;

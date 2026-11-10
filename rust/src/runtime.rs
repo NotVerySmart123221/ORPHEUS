@@ -36,6 +36,9 @@ pub const MATCH_RUNTIME_DATA: &[&str] = &[
     "statescript_codecs_174.json",
 ];
 pub const BNET_DESCRIPTORS: &str = "bnet/descriptors.pb";
+const PRACTICE_COLLISION: &str = "collision/0688.col";
+const SIGNING_INPUT: &str = "data/lobby_state_blob.key";
+const CONTENT_KEY_TABLE: &str = "data/resource_keys_174.json";
 const MANIFEST_SCHEMA: &str = "orpheus-runtime-copy-v1";
 const GRAPH_BUNDLE: &str = "data/game_graphs_174.json.gz";
 
@@ -49,6 +52,65 @@ pub fn missing_runtime_files(root: &Path, matches: bool, bnet: bool) -> Vec<Stri
         .chain(bnet.then(|| BNET_DESCRIPTORS.to_owned()))
         .filter(|name| !root.join(name).is_file())
         .collect()
+}
+
+/// Check the files needed before opening the native Practice Range listeners.
+pub fn check_practice_runtime(root: &Path) -> io::Result<()> {
+    let mut missing = missing_runtime_files(root, true, true);
+    if !root.join(PRACTICE_COLLISION).is_file() {
+        missing.push(PRACTICE_COLLISION.into());
+    }
+    let signing = root.join(SIGNING_INPUT);
+    let invalid_signing = signing.is_file() && fs::metadata(signing)?.len() != 64;
+    if missing.is_empty() && !invalid_signing {
+        return Ok(());
+    }
+
+    let mut generated = Vec::new();
+    let mut prepared = Vec::new();
+    let mut restricted = Vec::new();
+    for path in &missing {
+        let group = match path.as_str() {
+            SIGNING_INPUT | CONTENT_KEY_TABLE => &mut restricted,
+            PRACTICE_COLLISION
+            | "data/extracted_items.json"
+            | "data/extracted_general_unlocks.json"
+            | "data/extracted_heroes.json"
+            | "data/extracted_maps.json"
+            | "data/arcade_cards_174.json"
+            | "data/game_queues_174.json"
+            | "data/ai_spawners_174.json"
+            | "data/collision_keys_174.json"
+            | "data/game_graphs_174.json.gz"
+            | "data/game_heroes_174.json"
+            | "data/game_maps_174.json"
+            | "data/game_movers_174.json"
+            | "data/game_stats_174.json" => &mut generated,
+            _ => &mut prepared,
+        };
+        group.push(path.as_str());
+    }
+
+    let mut report = String::from("Practice Range runtime preflight failed.");
+    for (heading, files) in [
+        ("Tool outputs from authorized local inputs", generated),
+        ("Bring prepared research data", prepared),
+        ("Blocked without restricted local inputs", restricted),
+    ] {
+        if !files.is_empty() {
+            report.push_str(&format!("\n{heading}\n  {}", files.join("\n  ")));
+        }
+    }
+    if invalid_signing {
+        report.push_str("\nInvalid local signing input length. Expected exactly 64 bytes.");
+    }
+    report.push_str("\nSee data/README.md in the Rust checkout for the input checklist.");
+    let kind = if missing.is_empty() {
+        io::ErrorKind::InvalidData
+    } else {
+        io::ErrorKind::NotFound
+    };
+    Err(io::Error::new(kind, report))
 }
 
 #[derive(Debug)]

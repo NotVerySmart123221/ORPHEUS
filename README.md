@@ -1,74 +1,68 @@
 # ORPHEUS
 
-[简体中文](README.zh-CN.md)
+[简体中文](README.zh-CN.md) · [Discord](https://discord.gg/tqukqjAk7)
 
-[Discord](https://discord.gg/tqukqjAk7)
+ORPHEUS is an independent, open-source server reimplementation for **Overwatch 1 retail 1.74.0.0.104319**. It aims to preserve the server behavior and client-facing events for this build. The first end-to-end target is Soldier: 76 in the Practice Range.
 
-ORPHEUS is an open-source server reimplementation for **Overwatch 1 retail 1.74.0.0.104319**. It is an independent, unofficial research and game preservation project. The long-term goal is to reproduce the server behavior and client-facing events for this build across its heroes, maps and modes. The server is still in development, with Soldier: 76 in the Practice Range as the first end-to-end target.
+> **Rust developer preview.** You can build and run synthetic tests from the public source. Native startup needs an authorized, prepared 104319 runtime. A publicly reproducible original-client authentication setup and a Rust one-click client launcher are still open.
 
-This branch contains the Rust server. The [default branch](https://github.com/leafall903/ORPHEUS/tree/main) contains the community-maintained Python server.
+This is the Rust branch. The [default branch](https://github.com/leafall903/ORPHEUS/tree/main) contains the community-maintained Python server and its Windows launcher.
 
-[Contribute](CONTRIBUTING.md) · [Roadmap](docs/ROADMAP.md) · [Native server architecture](docs/NATIVE_SERVER_ARCHITECTURE.md) · [Rust migration](docs/RUST_MIGRATION.md) · [Verification record](docs/STATE.md) · [Changelog](CHANGELOG.md) · [Open issues](https://github.com/leafall903/ORPHEUS/issues)
+[Contribute](CONTRIBUTING.md) · [Python/Rust parity](docs/RUST_PARITY.md) · [Architecture](docs/NATIVE_SERVER_ARCHITECTURE.md) · [Roadmap](docs/ROADMAP.md) · [Changelog](CHANGELOG.md) · [Open issues](https://github.com/leafall903/ORPHEUS/issues)
 
 ## Current status
 
-| Area | Implemented and tested on the server | Evidence from the original client and remaining work |
-| --- | --- | --- |
-| Local login and lobby | Local authentication emulation, lobby, hero selection and match handoff. Automated checks cover handshake and server startup with prepared data. | Login, Practice Range loading and hero selection or switching have been observed. Broader lobby flows and match rules need verification. |
-| Soldier: 76 | Body and weapon state, movement and Sprint, rifle fire and reload, Helix Rockets and Biotic Field. Automated tests cover selected scenarios including repeated switching and rejoining, lost packets, and ammunition state. | The tester has fired on and killed training bots. Stable weapon presentation, ammunition HUD, input response and ability behavior still need a complete client pass. |
-| Practice Range combat | Hit and damage resolution, bot health, death and respawn, and replication of the original overhead health display graph for stock bots. Automated tests use controlled fixtures and prepared collision from the target map. | The tester has reported missing overhead health bars, unnamed eliminations, missing kill feed and missing headshot audio. The display graph change has wire evidence. Its rendering still needs a documented client result. |
-| Networking and research | Encrypted UDP, player input, entity lifecycles, server snapshots, replay and selected loss/reorder checks. | Client prediction, combat feedback, two-client agreement, longer sessions and broader map behavior remain open. |
-| Heroes, modes and audio | Shared systems and partial coverage exist. | Full hero abilities, objectives, match flow, hit and multikill feedback, and contextual voice playback are still in development. |
+| Area | Python on `main` | Rust on `rust` | Original-client evidence |
+| --- | --- | --- | --- |
+| Login and solo Practice Range | Windows launcher and local login, lobby and match handoff with prepared data. | Native loopback login, lobby, world creation and encrypted UDP pass headless regressions with prepared data. | A previous Rust playtest entered Practice Range. The latest Rust build awaits a client retest. |
+| Soldier: 76 body and weapon | The reference runs stock-body paths with partial weapon, Sprint and ability behavior. | Authored rifle, reload, Sprint and Helix timing have isolated regressions. The native stock body still stops at an unsupported effect action. Match tests use fixture weapons. | The Rust playtest reported a missing weapon and unusable abilities. |
+| Bot combat and projectiles | Practice Range hits, damage and respawn have reference checks. | Encrypted fixture matches verify bot hits, lost-packet recovery, death, respawn and Helix damage. Bots and physical flight live in the room's Bevy ECS. Lua handles patrol decisions. | Stock-client damage presentation and the reported upstairs patrol discrepancy still need verification. |
+| HUD, audio and ultimate charge | Partial HUD wire evidence and community-estimated ultimate charge. | Combat messages and prediction records have focused tests. Full HUD, audio and ultimate-charge parity remain open. | Historical tests reported missing overhead health, named eliminations, kill feed and headshot audio. |
+| Diagnostics and scale | Local dashboard and Python reference replays. | The optional inspector shows room actors, collision samples, patrol clips and tick timing. A two-room loopback workload exercises one worker. | The workload uses two independent solo rooms. Multiplayer in a shared original-client room remains open. |
 
-An automated result covers the fixture or replay named in its evidence. A manual observation covers the build, commit and steps that were actually tried. No complete original-client acceptance pass has been recorded for the first target scenario. See the [verification record](docs/STATE.md) and [changelog](CHANGELOG.md).
+Fixture, wire and original-client results cover different scopes. See the [parity checklist](docs/RUST_PARITY.md), [verification record](docs/STATE.md) and [migration guide](docs/RUST_MIGRATION.md) for the evidence and cutover gates.
 
-## Get involved
+## Start with the public Rust checks
 
-- **Developers and AI-assisted contributors** can start with the public source tests. The guide covers Codex, Claude Code and the same review requirements for all submissions. [Contribution guide](CONTRIBUTING.md)
-- **Reverse engineers** can help pin a single field, state transition, event or timing rule to build 104319. Start with the relevant evidence and report uncertainty explicitly. [Research evidence](docs/RESEARCH_EVIDENCE.txt)
-- **Players** with the target client and authorized runtime can report a short, repeatable gameplay result. Reports of working behavior are welcome alongside bugs. [Gameplay verification](https://github.com/leafall903/ORPHEUS/issues/new?template=gameplay-verification.yml)
-- **New contributors** can look for tasks that use the public checkout and synthetic data. [Good first issues](https://github.com/leafall903/ORPHEUS/labels/good%20first%20issue)
-
-## Run locally
-
-The experimental `orpheus_server` binary runs the local Battle.net, lobby and UDP services together. Headless tests cover encrypted login with a saved profile, solo Practice Range loading, world creation, bot movement, hero selection and body replacement with the base graph bundle. The worker simulates ordinary player movement on prepared collision and bounds input catch-up across peers. Separate reference checks cover lobby content, logical button input, timed script events and the isolated Soldier: 76 Sprint graph. Live hero-script movement, owner corrections, full bot behavior and combat are still being ported. Run `cargo test --locked --all-targets` with stable Rust to verify the public fixtures. New work goes into Rust. The frozen Python server remains the regular entry point until cutover.
-
-Rust runs the authored Soldier rifle, reload and Helix cooldown timelines in reference tests. A separate fixture weapon runs through the encrypted Practice Range worker and verifies hit delivery, packet loss recovery and bot respawn. Projectile flight and prediction records have separate tests. In the original-client Rust playtest, the user could enter Practice Range but reported missing weapons and unusable abilities. The stock Soldier body still needs more graph support. Gallery equip and in-match skin replacement now pass encrypted loopback checks and await a client retest.
-
-Bot bodies and physical projectile flight live in the room's Bevy ECS storage. The Lua patrol pilot handles spawn waits, route choices and movement-release waits. Rust runs collision, movement and network delivery. [Architecture and migration gates](docs/NATIVE_SERVER_ARCHITECTURE.md).
-
-The documented environment is Windows with Python 3.12. Node.js 24 is used for the dashboard test. The public source checks can run without the game or any prepared runtime.
+Use Git and stable Rust. The Windows build also needs the x64 MSVC C++ Build Tools and Windows SDK for the vendored Lua runtime. Public Rust tests use synthetic fixtures and run without game files or a runtime pack.
 
 ```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt "ruff==0.17.3"
-.\.venv\Scripts\python.exe -B -m unittest discover -s tests -p test_game_commands.py
+git clone --branch rust https://github.com/leafall903/ORPHEUS.git
+cd ORPHEUS
+cargo test --locked --all-targets
 ```
 
-See the [full list of public checks](CONTRIBUTING.md#public-source-checks) before running broader test discovery.
+Python reference checks have their own setup and selected test list. Review that list before running Python test discovery. [Contribution guide](CONTRIBUTING.md#public-source-checks)
+
+## Run the native server
 
 ### Separate deployment data
 
-To run the local server, set `ORPHEUS_RUNTIME_DIR` to a prepared, authorized runtime for build 104319. The runtime includes protocol data, graphs, lobby signing input and collision caches. A copy of the game client alone cannot supply all inputs to the preparation tool.
+Use a prepared, authorized **base** 104319 Practice Range runtime. The public source and client installation alone leave required research data and restricted local inputs outstanding. The Rust packer copies prepared inputs and writes a SHA-256 manifest. See the [three-part input checklist](data/README.md).
 
 ```powershell
-cargo run --locked --bin prepare_server_runtime -- --source 'C:\path\to\local-research' --destination 'C:\path\to\orpheus-runtime' --map 0688
-$env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\orpheus-runtime'
+$env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\authorized-base-runtime'
+cargo run --locked --bin orpheus_server -- --check-runtime
 cargo run --locked --bin orpheus_server -- --data-dir 'C:\path\to\local-state'
 ```
 
-The preparation command copies files from an already prepared checkout and writes a manifest. Omit `--map` to copy all available prepared caches. The native server listens on loopback and can run without a game installation or relay DLL. It reads `profiles/`, `profile.json` and `default_account.txt` from the local state directory. To reuse saved profiles, point it at the existing state directory and use one server at a time. See [Rust migration](docs/RUST_MIGRATION.md) and [runtime data provenance](data/README.md).
+The preflight reports missing inputs by category and checks the signing input length. The native server parses the runtime before opening its loopback listeners. It can start independently of a game installation or relay DLL. The local state directory holds profiles and server state. Use a separate directory for each running server.
 
-Append `--debug-port 3726` to enable the read-only inspector, then visit [the local dashboard](http://127.0.0.1:3726/). It shows active actors, Practice Range collision layers and server tick timing. Use a room actor or enter XYZ coordinates to inspect a smaller region. The spawn sample is available while the server is idle. [Inspector details](docs/NATIVE_SERVER_ARCHITECTURE.md#collision-and-live-inspection).
+Append `--debug-port 3726` to enable the read-only inspector at [127.0.0.1:3726](http://127.0.0.1:3726/). The [architecture guide](docs/NATIVE_SERVER_ARCHITECTURE.md#collision-and-live-inspection) describes its sampling limits. Original-client verification uses a separately configured local connection and the exact 104319 client. [Verification procedure](CONTRIBUTING.md#original-client-verification)
+
+## Get involved
+
+- **Developers and AI-assisted contributors** can start with the public Rust tests. The contribution guide covers validation and review for Codex, Claude Code and manual contributions. [Contribution guide](CONTRIBUTING.md)
+- **Reverse engineers** can document a field, event or timing rule against build 104319. [Research evidence](docs/RESEARCH_EVIDENCE.txt)
+- **Players with a working local setup** can report repeatable original-client observations. Include the branch, commit, client build and exact steps. [Gameplay verification form](https://github.com/leafall903/ORPHEUS/issues/new?template=gameplay-verification.yml)
+- **New contributors** can pick tasks that use only public source and synthetic fixtures. [Good first issues](https://github.com/leafall903/ORPHEUS/labels/good%20first%20issue)
 
 ## Project layout
 
 | Path | Role |
 | --- | --- |
-| `rust/src` | Rust ports, automated regression tests and runtime preparation |
-| `ow174/bnet`, `ow174/lobby` | Local login, accounts, social and lobby services, matchmaking and handoff |
-| `ow174/game`, `ow174/game/script` | Encrypted game transport, inputs, simulation, combat and statescript replication |
-| `ow174/dashboard`, `relay` | Local administration and the Windows client relay source |
-| `tests`, `tools`, `docs` | Verification, extraction and replay tools, and research records |
+| `rust/src`, `rust/scripts` | Native server, runtime preparation, tests and the Lua patrol policy |
+| `ow174`, `tests`, `relay` | Python behavioral reference and Windows launcher sources |
+| `docs`, `tools` | Architecture, acceptance criteria and research tools |
 
-The [roadmap](docs/ROADMAP.md) tracks the full build scope. [CREDITS.md](CREDITS.md) records the original 1.74 lobby project, research sources and upstream authors. The public source retains the original [MIT license notice](LICENSE). Overwatch and its assets belong to their respective rights holders. Keep game clients, commercial assets, keys, private logs, raw captures and dumps out of public submissions.
+ORPHEUS is an unofficial preservation project. The public source retains the upstream [MIT notice](LICENSE) and [credits](CREDITS.md). Keep game clients, commercial assets, signing material, content keys, private logs, captures and dumps out of the repository and public discussion.

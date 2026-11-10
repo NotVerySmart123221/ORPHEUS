@@ -36,7 +36,7 @@ use crate::{
     lobby_session::{LobbySession, LoginContent, LoginRequest, SoloLoginParty},
     match_handoff::{LobbySeat, general_channel, join_chat_channel},
     retail_templates::RetailTemplates,
-    runtime::{BNET_DESCRIPTORS, missing_runtime_files},
+    runtime::{BNET_DESCRIPTORS, check_practice_runtime},
     scene_assets::{PreparedScene, SceneAssets},
     service_tcp::{PeerStream, PeerWorkers, accept},
 };
@@ -84,13 +84,7 @@ impl Server {
     /// Validate the data before starting the loopback listeners. This entry
     /// point serves the base graph bundle and contains no client launcher.
     pub fn start(config: ServerConfig) -> io::Result<Self> {
-        let missing = missing_runtime_files(&config.runtime, true, true);
-        if !missing.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("missing runtime files: {}", missing.join(", ")),
-            ));
-        }
+        check_practice_runtime(&config.runtime)?;
         let data = config.runtime.join("data");
         let signing_key = fs::read(data.join("lobby_state_blob.key"))?
             .try_into()
