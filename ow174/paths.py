@@ -30,20 +30,20 @@ LOBBY_RUNTIME_DATA = (
 MATCH_RUNTIME_DATA = (
     "ai_spawners_174.json", "collision_keys_174.json", "collision_props_174.json", "game_graphs_174.json.gz",
     "game_heroes_174.json", "game_maps_174.json", "game_movers_174.json", "game_schemas_174.json",
-    "game_stats_174.json", "game_ult_charge_174.json", "statescript_codecs_174.json",
+    "game_stats_174.json", "statescript_codecs_174.json",
 )
+ULT_CHARGE_OVERRIDE = "game_ult_charge_174.json"
 
 
 def missing_runtime_files(*, matches: bool, bnet: bool) -> list[str]:
-    """Report missing external pack members before the service binds its ports."""
-    if RUNTIME_DIR is None:
-        return []
+    """Report missing inputs before the service binds its ports."""
     files = [DATA_DIR / name for name in LOBBY_RUNTIME_DATA]
     if matches:
         files.extend(DATA_DIR / name for name in MATCH_RUNTIME_DATA)
     if bnet:
         files.append(BNET_DESCRIPTORS)
-    return [path.relative_to(RUNTIME_DIR).as_posix() for path in files if not path.is_file()]
+    root = RUNTIME_DIR or ROOT
+    return [path.relative_to(root).as_posix() for path in files if not path.is_file()]
 
 
 @dataclass(frozen=True)

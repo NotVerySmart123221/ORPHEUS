@@ -12,6 +12,7 @@ Modes:
 
 --no-launch runs the selected host services without locating, closing or starting a game.
 In retail/host it keeps the local Battle.net emulator, with no dashboard client-launch manager.
+--check-runtime checks the host data files and exits before starting services or finding a game.
 """
 
 import argparse
@@ -83,6 +84,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--no-launch", action="store_true",
         help="run host services only; no game lookup, relay or client launch (not for join modes)",
+    )
+    parser.add_argument(
+        "--check-runtime", action="store_true",
+        help="check the runtime files for a host mode and exit",
     )
     parser.add_argument("--server", help="address of the server to join, such as 1.2.3.4:3724")
     parser.add_argument("--name", help="your name on the server you join with the full menu")
@@ -214,10 +219,11 @@ def is_player_name(text: str) -> bool:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if args.mode is None:
-        args.mode = ask_mode() if sys.stdin.isatty() and not args.no_launch else "retail"
+        interactive = sys.stdin.isatty() and not (args.no_launch or args.check_runtime)
+        args.mode = ask_mode() if interactive else "retail"
         if args.mode in HOSTING and not args.game_host:
             args.game_host = ask_public_address()
-    setup_logging(_paths(args).log_file)
+    setup_logging(None if args.check_runtime else _paths(args).log_file)
     try:
         run(args)
     except LaunchError as error:
@@ -244,7 +250,28 @@ def _paths(args: argparse.Namespace) -> Paths:
     )
 
 
+def _require_runtime(args: argparse.Namespace) -> None:
+    missing = missing_runtime_files(matches=args.game_port > 0, bnet=args.mode in ("retail", "host"))
+    if missing:
+        source = "ORPHEUS_RUNTIME_DIR" if RUNTIME_DIR is not None else "the source checkout"
+        raise LaunchError(
+            f"Missing runtime files in {source}: {', '.join(missing)}. "
+            "See data/README.md for supported inputs and preparation. "
+            "Selecting the game directory alone cannot supply these files."
+        )
+    try:
+        lobby_state_blob_key()
+    except (OSError, ValueError) as error:
+        raise LaunchError(f"Lobby state blob key is unavailable: {error}") from error
+
+
 def run(args: argparse.Namespace) -> None:
+    if args.check_runtime:
+        if args.mode in ("join", "join-tournament"):
+            raise LaunchError("--check-runtime checks host modes. Select retail, host, tournament or server.")
+        _require_runtime(args)
+        log.info("Required host files are present and the signing input has the expected length.")
+        return
     if args.no_launch and args.mode in ("join", "join-tournament"):
         raise LaunchError("--no-launch runs host services and cannot be used with a join mode.")
     if args.no_launch and args.game_exe is not None:
@@ -256,14 +283,7 @@ def run(args: argparse.Namespace) -> None:
         join_tournament(args)
         return
     retail = args.mode in ("retail", "host")
-    if RUNTIME_DIR is not None:
-        missing = missing_runtime_files(matches=args.game_port > 0, bnet=retail)
-        if missing:
-            raise LaunchError(f"Missing files in ORPHEUS_RUNTIME_DIR: {', '.join(missing)}")
-    try:
-        lobby_state_blob_key()
-    except (OSError, ValueError) as error:
-        raise LaunchError(f"Lobby state blob key is unavailable: {error}") from error
+    _require_runtime(args)
     launches_game = args.mode != "server" and not args.no_launch
     settings = Settings(
         host=listen_host(args),
@@ -278,11 +298,12 @@ def run(args: argparse.Namespace) -> None:
     game = relay = None
     if launches_game:
         game = find_game(args.game_exe)
-        close_running_copy(game)
     if retail or settings.game_port > 0:
         ensure_requirements()
     if retail and not args.no_launch:
         relay = ensure_relay_dll()
+    if launches_game:
+        close_running_copy(game)
 
     load_or_create_profile(settings.paths.template)
     server = LobbyServer(settings)
@@ -322,9 +343,9 @@ def join(args: argparse.Namespace) -> None:
     lobby = _ipv4_address(address)
     tag = _battle_tag_on(lobby, address, name)
     game = find_game(args.game_exe)
-    close_running_copy(game)
     ensure_requirements()
     relay = ensure_relay_dll()
+    close_running_copy(game)
     # These need the packages ensure_requirements installs.
     from ow174.bnet.rpc_server import Player
     from ow174.bnet.service import RPC_PORT, start_bnet

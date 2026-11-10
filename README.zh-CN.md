@@ -4,7 +4,7 @@
 
 ORPHEUS 是面向 **《守望先锋 1》正式服 1.74.0.0.104319** 的开源服务端复刻项目，独立开展非官方研究与游戏保存工作。长期目标是还原该版本各英雄、地图和模式的服务端行为，以及服务端向客户端发送的事件。服务端仍在开发中，首个端到端验证场景是士兵 76 与训练靶场。
 
-[参与贡献](CONTRIBUTING.md) · [路线图](docs/ROADMAP.md) · [Rust 迁移](docs/RUST_MIGRATION.md) · [验证记录](docs/STATE.md) · [更新日志](CHANGELOG.md) · [待处理问题](https://github.com/leafall903/ORPHEUS/issues)
+[参与贡献](CONTRIBUTING.md) · [路线图](docs/ROADMAP.md) · [Rust 分支](https://github.com/leafall903/ORPHEUS/tree/rust) · [验证记录](docs/STATE.md) · [更新日志](CHANGELOG.md) · [待处理问题](https://github.com/leafall903/ORPHEUS/issues)
 
 ## 当前进度
 
@@ -27,11 +27,11 @@ ORPHEUS 是面向 **《守望先锋 1》正式服 1.74.0.0.104319** 的开源服
 
 ## 在本地运行
 
-实验性原生入口 `orpheus_server` 会一起启动本地 Battle.net、大厅和 UDP 对局服务。使用基础状态图包的无客户端回环已覆盖读取存档后的加密登录、单人靶场加载、世界创建、机器人移动、选人和更换身体。对局线程会在准备好的碰撞数据上模拟玩家的基础移动，并按轮次限制补帧工作量。大厅内容、逻辑按键、脚本计时和士兵 76 的独立冲刺图已有对照回归。对局中的英雄脚本移动、玩家自身纠正、完整机器人行为和战斗仍在移植。安装稳定版 Rust 后，运行 `cargo test --locked --all-targets` 可执行公开测试。新功能和修复只进入 Rust。冻结后的 Python 服务端保留常规启动入口，直到完成切换。
+`main` 是由社区维护的 Python 服务端与 Windows 启动器分支。Rust 原生服务端在独立的 `rust` 分支继续开发。
 
-Rust 已对照验证士兵 76 的步枪连发、装弹和螺旋飞弹冷却时序。加密靶场回环使用测试武器验证了命中通知、丢包恢复和机器人重生。投射物飞行和预测封包已有独立测试。Rust 的原版客户端试玩已进入靶场，用户报告武器缺失、技能无法使用。原版士兵 76 仍需补齐角色脚本。展厅换装和局内更换皮肤已通过加密回环测试，等待实机复测。
+### 公开源码检查
 
-文档以 Windows 和 Python 3.12 为运行环境。管理面板测试使用 Node.js 24。执行公开源码检查无需安装游戏或准备运行数据。
+文档以 Windows 和 64 位 Python 3.12 为运行环境。以下源码测试使用合成数据。单独的管理面板测试使用 Node.js 24。
 
 ```powershell
 py -3.12 -m venv .venv
@@ -39,27 +39,47 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -B -m unittest discover -s tests -p test_game_commands.py
 ```
 
-扩大测试发现范围之前，请先查看[完整的公开源码检查清单](CONTRIBUTING.md#public-source-checks)。
+扩大测试范围之前，请查看[完整的公开源码检查清单](CONTRIBUTING.md#public-source-checks)。
 
 ### 独立的部署数据
 
-要运行本地服务端，请将 `ORPHEUS_RUNTIME_DIR` 指向已准备好的 104319 版本授权运行数据目录。其中包括协议数据、状态脚本图、大厅签名所需数据和碰撞缓存。准备工具需要游戏客户端之外的输入。
+本地游玩需要 **1.74.0.0.104319** 游戏安装目录，以及已获授权并准备好的服务端运行数据。Python 服务端使用其中的协议数据、签名所需数据、玩法状态脚本图和地图碰撞缓存。仅凭游戏目录即可完成安装是后续交付目标。所需文件及现有准备步骤见[运行数据指南](data/README.md)。
+
+将 `ORPHEUS_RUNTIME_DIR` 指向准备好的数据包。启动预检会列出缺失的启动输入并检查签名输入的长度，可以在安装 Python 依赖前运行。地图碰撞缓存会在加载场景时另行检查。
 
 ```powershell
-cargo run --locked --bin prepare_server_runtime -- --source 'C:\path\to\local-research' --destination 'C:\path\to\orpheus-runtime' --map 0688
 $env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\orpheus-runtime'
-.\START_SERVER_LOCAL.cmd
+py -3.12 -B -m ow174 --check-runtime
 ```
 
-准备命令会从已准备好的检出目录复制文件并写入清单。省略 `--map` 会复制所有已经准备好的缓存。纯服务端入口使用本地回环地址，可独立于游戏安装和中继 DLL 运行。默认管理面板地址为 `127.0.0.1:3725`。使用原版客户端测试时，请参阅[手动验证步骤](CONTRIBUTING.md#original-client-verification)和[运行数据来源](data/README.md)。
+如果本地研究目录已有所需输入，可用 Python 打包工具将文件复制到新的目录并写入清单。靶场使用 `--map 0688`，省略该参数可复制所有已准备好的地图缓存。
 
-若要试用原生服务端，请把 `ORPHEUS_RUNTIME_DIR` 指向已获授权的基础靶场运行数据包，然后运行 `cargo run --locked --bin orpheus_server -- --data-dir 'C:\path\to\local-state'`。原生入口使用本地回环地址，从状态目录读取 `profiles/`、`profile.json` 和 `default_account.txt`。将状态目录设为原服务端检出目录即可复用现有存档。该入口已进行无客户端测试，仍待原版客户端验收。已覆盖的范围见 [Rust 迁移](docs/RUST_MIGRATION.md)。
+```powershell
+py -3.12 -B tools/prepare_server_runtime.py --source 'C:\path\to\local-research' --destination 'C:\path\to\orpheus-runtime' --map 0688
+```
+
+### 启动纯服务端或本地游玩
+
+运行纯服务端前先设置 `ORPHEUS_RUNTIME_DIR`，然后执行 `START_SERVER_LOCAL.cmd`。它会启动本地回环服务，管理面板地址是 `http://127.0.0.1:3725`。这一入口只需要已准备好的运行数据和 Python 环境。
+
+本地游玩需要 Windows 中继。已有可信的本地编译产物 `relay/owwfd_relay.dll` 时可以复用。首次编译请安装 x64 MSVC Build Tools，打开 x64 Native Tools 命令提示符，在仓库根目录执行。
+
+```bat
+.\relay\build.bat
+```
+
+配置运行数据并编译中继后，把游戏安装目录或其中的 `_retail_\Overwatch.exe` 传给本地启动器。省略路径参数时，启动器会使用已保存的客户端路径或打开文件选择框。
+
+```powershell
+.\START_LOCAL.cmd --game-exe 'C:\path\to\Overwatch'
+```
+
+启动器会在需要时创建 Python 环境。测试记录应包含的信息见[原版客户端验证步骤](CONTRIBUTING.md#original-client-verification)。
 
 ## 项目结构
 
 | 路径 | 职责 |
 | --- | --- |
-| `rust/src` | Rust 移植代码、自动化回归测试及运行数据准备 |
 | `ow174/bnet`、`ow174/lobby` | 本地登录、账号、社交和大厅服务、匹配与对局交接 |
 | `ow174/game`、`ow174/game/script` | 游戏加密通信、输入、模拟、战斗及状态脚本同步 |
 | `ow174/dashboard`、`relay` | 本地管理和 Windows 客户端中继源码 |

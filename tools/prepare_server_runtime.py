@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ow174.paths import LOBBY_RUNTIME_DATA, MATCH_RUNTIME_DATA
+from ow174.paths import LOBBY_RUNTIME_DATA, MATCH_RUNTIME_DATA, ULT_CHARGE_OVERRIDE
 
 
 def prepare(source: Path, destination: Path, maps: list[str], *, game_graphs: Path | None = None) -> None:
@@ -21,6 +21,9 @@ def prepare(source: Path, destination: Path, maps: list[str], *, game_graphs: Pa
         raise ValueError("Choose a new destination outside the source checkout")
 
     inputs = {f"data/{name}": source / "data" / name for name in LOBBY_RUNTIME_DATA + MATCH_RUNTIME_DATA}
+    charge_override = source / "data" / ULT_CHARGE_OVERRIDE
+    if charge_override.is_file():
+        inputs[f"data/{ULT_CHARGE_OVERRIDE}"] = charge_override
     if game_graphs is not None:
         inputs["data/game_graphs_174.json.gz"] = game_graphs
     inputs["bnet/descriptors.pb"] = source / "ow174" / "bnet" / "descriptors.pb"

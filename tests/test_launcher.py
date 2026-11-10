@@ -1,7 +1,5 @@
 """The launcher: finding the game, its language, closing a leftover copy, the relay DLL and packages."""
 
-import hashlib
-import io
 import subprocess
 import sys
 import tempfile
@@ -236,43 +234,20 @@ class InjectRelayTests(unittest.TestCase):
 
 
 class RelayDllTests(TempDirTest):
-    OFFICIAL = b"official relay build"
-
     def setUp(self):
         super().setUp()
         self.dll = self.root / "relay" / "owwfd_relay.dll"
-        official_sha = hashlib.sha256(self.OFFICIAL).hexdigest()
-        patcher = patch.object(relay, "RELEASE_SHA256", official_sha)
-        patcher.start()
-        self.addCleanup(patcher.stop)
 
-    def test_a_self_built_dll_is_kept_and_nothing_is_downloaded(self):
+    def test_a_local_dll_is_kept(self):
         self.dll.parent.mkdir()
         self.dll.write_bytes(b"built from source")
-        with patch.object(relay.urllib.request, "urlopen") as urlopen:
-            self.assertEqual(relay.ensure_relay_dll(self.dll), self.dll)
-        urlopen.assert_not_called()
+        self.assertEqual(relay.ensure_relay_dll(self.dll), self.dll)
         self.assertEqual(self.dll.read_bytes(), b"built from source")
 
-    def test_a_missing_dll_is_downloaded(self):
-        with patch.object(relay.urllib.request, "urlopen", return_value=io.BytesIO(self.OFFICIAL)):
+    def test_a_missing_dll_reports_the_local_build_command(self):
+        with self.assertRaisesRegex(LaunchError, r"relay\\build\.bat"):
             relay.ensure_relay_dll(self.dll)
-        self.assertEqual(self.dll.read_bytes(), self.OFFICIAL)
-
-    def test_a_download_that_is_not_the_official_build_is_not_saved(self):
-        with (
-            patch.object(relay.urllib.request, "urlopen", return_value=io.BytesIO(b"tampered")),
-            self.assertRaisesRegex(LaunchError, "not the official build"),
-        ):
-            relay.ensure_relay_dll(self.dll)
-        self.assertFalse(self.dll.exists())
-
-    def test_a_failed_download_says_where_to_put_the_dll(self):
-        with (
-            patch.object(relay.urllib.request, "urlopen", side_effect=OSError("offline")),
-            self.assertRaisesRegex(LaunchError, "Releases page"),
-        ):
-            relay.ensure_relay_dll(self.dll)
+        self.assertFalse(self.dll.parent.exists())
 
 
 class RequirementsTests(TempDirTest):

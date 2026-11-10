@@ -4,6 +4,24 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ## Unreleased
 
+### 2026-11-10
+
+#### Python maintenance branch and startup checks
+
+- Made `main` the community-maintained Python branch. Preserved the native server, Cargo checks,
+  migration guide and existing history on the separate `rust` branch.
+- Added `--check-runtime` to list missing host inputs in both checkout and runtime-pack layouts.
+  The check runs before the launcher touches the game and works without third-party Python packages.
+- Built the existing placeholder ultimate charge estimates into Python so older packs can still boot.
+  The Python packer copies and hashes a local charge table when one is supplied.
+- Removed the unavailable Windows relay download. Retail play uses a locally built relay, and
+  startup reports the build command when it is missing. Server-only startup skips the relay.
+- Updated the English and Simplified Chinese setup instructions and documented the remaining
+  game-folder-only setup gap.
+- Source checks passed with 145 Python tests, 6 fixture skips, 2 dashboard tests and Ruff.
+  An authorized Practice Range pack passed 102 focused Python tests and the server-only startup probe.
+  The x64 relay built from source. Original-client startup and gameplay remain to be verified.
+
 ### 2026-11-06
 
 #### Ultimate charge from combat

@@ -9,14 +9,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ow174.game import ult_charge
-from ow174.paths import ROOT
 
 SOLDIER = 0x02E000000000006E
 OTHER = 0x02E0000000000061
 
 
 def table(contents: dict):
-    """Point the loader at a table of the test's own (the shipped path belongs to the runtime pack)."""
+    """Point the loader at a table of the test's own."""
     directory = tempfile.TemporaryDirectory()
     path = Path(directory.name) / "game_ult_charge_174.json"
     path.write_text(json.dumps(contents), encoding="utf-8")
@@ -69,27 +68,16 @@ class RuleTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ult_charge.points("experience", SOLDIER, 100.0, 1000.0)
 
-    def test_no_table_at_all_leaves_only_the_passive_rule_and_says_so(self):
-        self.addCleanup(self._restore)
-        ult_charge.TABLE_PATH = Path(tempfile.gettempdir()) / "absent-charge-table.json"
+    def test_an_older_pack_uses_the_builtin_estimates(self):
+        ult_charge.TABLE_PATH.unlink()
         ult_charge._table.cache_clear()
-        self.assertEqual(ult_charge.points("damage", SOLDIER, 380.0, 1000.0), 1000.0)  # the fallback
-        self.assertEqual(ult_charge.rule(SOLDIER).known, False)
-
-    @staticmethod
-    def _restore():
-        import ow174.paths
-
-        ult_charge.TABLE_PATH = ow174.paths.DATA_DIR / "game_ult_charge_174.json"
-        ult_charge._table.cache_clear()
+        self.assertEqual(ult_charge.points("damage", SOLDIER, 380.0, 1000.0), 1000.0)
+        self.assertEqual(ult_charge.rule(SOLDIER), ult_charge.Rule(380.0, None, 20.0, known=True))
 
 
-class ShippedTableTests(unittest.TestCase):
-    def test_the_shipped_table_is_placeholder_data_of_the_stated_shape(self):
-        path = ROOT / "data" / "game_ult_charge_174.json"
-        if not path.is_file():
-            self.skipTest("the table is pack data (tools/extract_game_ult_charge.py)")
-        table = json.loads(path.read_text(encoding="utf-8"))
+class BuiltinTableTests(unittest.TestCase):
+    def test_the_builtin_table_is_placeholder_data_of_the_stated_shape(self):
+        table = ult_charge.BUILTIN_TABLE
         self.assertEqual(table["status"], "placeholder")  # replace the numbers with the server's own
         for line in [table["defaults"], *table["heroes"].values()]:
             for field in ("damage_to_full", "heal_to_full", "kill_bonus_percent"):

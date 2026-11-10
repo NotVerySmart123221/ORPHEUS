@@ -2,7 +2,7 @@
 
 The target is Overwatch 1 retail **1.74.0.0.104319**. Soldier: 76 and the Practice Range training bots form the first acceptance group. Doomfist is the next hero after this group passes the shared gameplay and original-client checks. Record the source version and the smallest repeatable test for each claim. A milestone stays open until its stated exit criteria have been verified. The [verification record](STATE.md) and [changelog](../CHANGELOG.md) describe completed work and remaining limits. The [issue tracker](https://github.com/leafall903/ORPHEUS/issues) holds individual tasks.
 
-The [Rust migration](RUST_MIGRATION.md) tracks implementation replacement and parity separately from gameplay fidelity.
+This roadmap tracks gameplay restoration on the community-maintained Python `main` branch. Native server architecture and parity are tracked on the separate [Rust branch](https://github.com/leafall903/ORPHEUS/tree/rust).
 
 | Milestone | Exit criteria | Current evidence |
 | --- | --- | --- |
@@ -11,7 +11,7 @@ The [Rust migration](RUST_MIGRATION.md) tracks implementation replacement and pa
 | M2 · Rifle and prediction | Hold and release fire, empty the magazine and reload repeatedly. Client ammo and effects agree with the server, including with lost and repeated input. | Selected shot, ammo, reload and loss scenarios have automated evidence. Original-client prediction and recovery still need verification. |
 | M3 · Single-player combat | Repeatedly hit, miss, kill and reset a training target. Its visible health, identity and combat feedback agree with the server. | Headless Practice Range scenarios cover damage, health, death and respawn. Encrypted replay verifies per-viewer nameplate ordering. Original-client HUD, names, kill feed and sound remain pending. |
 | M4 · Movement and two-client combat | Two clients agree on movement, line of sight, combat and respawn. Loss, delay and reordering recover without extra damage. | Collision-backed movement and selected two-peer protocol checks exist. Two-original-client agreement is pending. |
-| M5 · Match rules and heroes | Complete a full match in one mode on one map and return to the lobby. Verify the declared abilities for each supported hero. | Shared hero mechanisms and partial match flow exist. A fixed world-target movement control covers two authored ability graphs. Native selection, timing and client acceptance remain open. |
+| M5 · Match rules and heroes | Complete a full match in one mode on one map and return to the lobby. Verify the declared abilities for each supported hero. | Shared hero mechanisms and partial match flow exist. A fixed world-target movement control covers two authored ability graphs. Full ability target and speed resolution, timing and client acceptance remain open. |
 | M6 · Fidelity and reliability | Compare timing and behavior against versioned references. Verify long sessions, recovery, performance and repeatable deployment. | Server-only deployment with prepared data and selected replay and loss checks exist. Wider comparisons and end-to-end acceptance remain open. |
 
 ## Project-wide checklist
@@ -38,5 +38,6 @@ A checked item records evidence for that specific scope. Its parent remains open
 - [ ] **Audio and dialogue.** Verify weapon, hit, critical-hit and death sounds, multikill and match announcements, ambient audio, music, contextual and randomized dialogue, and Easter eggs. Check listeners, timing and supported languages.
 - [ ] **Stability and delivery.** Verify tick and packet budgets, long-running matches, recovery, reproducible deployment, and final acceptance with the original client.
   - [x] Verify server-only startup of the audited public source checkout using separate runtime data.
+  - [ ] Validate the local play setup on a clean Windows machine. Document how each authorized runtime input is prepared and track the inputs that still require separate preparation before game-folder-only setup is possible.
   - [ ] Measure server tick tail latency, world packet gaps, delivered owner corrections, and original-client frame time during sustained fire. Repeat with two clients before widening the playtest scope.
   - [ ] Compare first and repeated hero selections on the same map. Separate pick processing, body creation and binding, initial script delivery, and the original client's first playable frame.

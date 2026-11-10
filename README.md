@@ -6,7 +6,7 @@
 
 ORPHEUS is an open-source server reimplementation for **Overwatch 1 retail 1.74.0.0.104319**. It is an independent, unofficial research and game preservation project. The long-term goal is to reproduce the server behavior and client-facing events for this build across its heroes, maps and modes. The server is still in development, with Soldier: 76 in the Practice Range as the first end-to-end target.
 
-[Contribute](CONTRIBUTING.md) · [Roadmap](docs/ROADMAP.md) · [Rust migration](docs/RUST_MIGRATION.md) · [Verification record](docs/STATE.md) · [Changelog](CHANGELOG.md) · [Open issues](https://github.com/leafall903/ORPHEUS/issues)
+[Contribute](CONTRIBUTING.md) · [Roadmap](docs/ROADMAP.md) · [Rust branch](https://github.com/leafall903/ORPHEUS/tree/rust) · [Verification record](docs/STATE.md) · [Changelog](CHANGELOG.md) · [Open issues](https://github.com/leafall903/ORPHEUS/issues)
 
 ## Current status
 
@@ -29,11 +29,11 @@ An automated result covers the fixture or replay named in its evidence. A manual
 
 ## Run locally
 
-The experimental `orpheus_server` binary runs the local Battle.net, lobby and UDP services together. Headless tests cover encrypted login with a saved profile, solo Practice Range loading, world creation, bot movement, hero selection and body replacement with the base graph bundle. The worker simulates ordinary player movement on prepared collision and bounds input catch-up across peers. Separate reference checks cover lobby content, logical button input, timed script events and the isolated Soldier: 76 Sprint graph. Live hero-script movement, owner corrections, full bot behavior and combat are still being ported. Run `cargo test --locked --all-targets` with stable Rust to verify the public fixtures. New work goes into Rust. The frozen Python server remains the regular entry point until cutover.
+The `main` branch contains the community-maintained Python server and Windows launcher. Native server development continues on the separate `rust` branch.
 
-Rust runs the authored Soldier rifle, reload and Helix cooldown timelines in reference tests. A separate fixture weapon runs through the encrypted Practice Range worker and verifies hit delivery, packet loss recovery and bot respawn. Projectile flight and prediction records have separate tests. In the original-client Rust playtest, the user could enter Practice Range but reported missing weapons and unusable abilities. The stock Soldier body still needs more graph support. Gallery equip and in-match skin replacement now pass encrypted loopback checks and await a client retest.
+### Source-only checks
 
-The documented environment is Windows with Python 3.12. Node.js 24 is used for the dashboard test. The public source checks can run without the game or any prepared runtime.
+Use Windows with 64-bit Python 3.12. The source tests below use synthetic fixtures. Node.js 24 is used for the separate dashboard test.
 
 ```powershell
 py -3.12 -m venv .venv
@@ -41,27 +41,47 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -B -m unittest discover -s tests -p test_game_commands.py
 ```
 
-See the [full list of public checks](CONTRIBUTING.md#public-source-checks) before running broader test discovery.
+See the [full public checks](CONTRIBUTING.md#public-source-checks) before running broader test discovery.
 
 ### Separate deployment data
 
-To run the local server, set `ORPHEUS_RUNTIME_DIR` to a prepared, authorized runtime for build 104319. The runtime includes protocol data, graphs, lobby signing input and collision caches. A copy of the game client alone cannot supply all inputs to the preparation tool.
+A local play session requires both the **1.74.0.0.104319** game installation and an authorized, prepared server runtime. The runtime provides the protocol data, signing input, gameplay graphs and map collision caches used by the Python server. Game-folder-only setup is still a delivery goal. See the [runtime guide](data/README.md) for required files and available preparation steps.
+
+Set `ORPHEUS_RUNTIME_DIR` to your prepared pack. The preflight lists missing startup inputs and checks the signing input length. Run it before installing Python dependencies if needed. Map collision is checked separately when a scene loads.
 
 ```powershell
-cargo run --locked --bin prepare_server_runtime -- --source 'C:\path\to\local-research' --destination 'C:\path\to\orpheus-runtime' --map 0688
 $env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\orpheus-runtime'
-.\START_SERVER_LOCAL.cmd
+py -3.12 -B -m ow174 --check-runtime
 ```
 
-The preparation command copies files from an already prepared checkout and writes a manifest. Omit `--map` to copy all available prepared caches. The server-only entry uses loopback and requires neither an installed game nor a relay DLL. Its default dashboard is at `127.0.0.1:3725`. For original-client testing, see [the manual procedure](CONTRIBUTING.md#original-client-verification) and [runtime data provenance](data/README.md).
+If you already have the required inputs in a local research checkout, the Python packer copies them into a new directory and writes a manifest. Use `--map 0688` for the Practice Range or omit it to copy all prepared map caches.
 
-To try the native server with an authorized base Practice Range runtime, use `cargo run --locked --bin orpheus_server -- --data-dir 'C:\path\to\local-state'` with `ORPHEUS_RUNTIME_DIR` set. It uses loopback and reads `profiles/`, `profile.json` and `default_account.txt` from the local state directory. Use the existing server checkout as that directory to reuse its saved profiles. The native entry has headless coverage and awaits original-client acceptance. See [Rust migration](docs/RUST_MIGRATION.md) for its current scope.
+```powershell
+py -3.12 -B tools/prepare_server_runtime.py --source 'C:\path\to\local-research' --destination 'C:\path\to\orpheus-runtime' --map 0688
+```
+
+### Start the server or play locally
+
+For server-only checks, run `START_SERVER_LOCAL.cmd` with `ORPHEUS_RUNTIME_DIR` set. It starts the local loopback services and dashboard at `http://127.0.0.1:3725` using the prepared runtime. This entry needs only the runtime and Python environment.
+
+To play locally, first build the Windows relay if you do not already have a trusted local `relay/owwfd_relay.dll` build. Install the x64 MSVC Build Tools, open the x64 Native Tools Command Prompt, and run this from the repository root.
+
+```bat
+.\relay\build.bat
+```
+
+With the runtime configured and relay built, pass the installation directory or its `_retail_\Overwatch.exe` to the local launcher. With no path argument, the launcher uses its saved client path or opens a file picker.
+
+```powershell
+.\START_LOCAL.cmd --game-exe 'C:\path\to\Overwatch'
+```
+
+The launcher creates a Python environment if needed. See [original-client verification](CONTRIBUTING.md#original-client-verification) for what to record during a playtest.
 
 ## Project layout
 
 | Path | Role |
 | --- | --- |
-| `rust/src` | Rust ports, automated regression tests and runtime preparation |
 | `ow174/bnet`, `ow174/lobby` | Local login, accounts, social and lobby services, matchmaking and handoff |
 | `ow174/game`, `ow174/game/script` | Encrypted game transport, inputs, simulation, combat and statescript replication |
 | `ow174/dashboard`, `relay` | Local administration and the Windows client relay source |

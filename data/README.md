@@ -1,6 +1,29 @@
 # Runtime data
 
-The server and its tests use the following data sets. The public source checkout uses separately prepared runtime data. See [separate deployment data](../README.md#separate-deployment-data).
+The Python server targets Overwatch retail **1.74.0.0.104319**. A clean checkout supports the public source checks. Serving the original client requires a local runtime assembled from authorized inputs. See [separate deployment data](../README.md#separate-deployment-data).
+
+## Check or prepare a local runtime
+
+With Python 3.12 installed, run this from the repository root. Set `ORPHEUS_RUNTIME_DIR` to check a specific pack. Leave it unset to check the legacy checkout layout.
+
+```powershell
+$env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\orpheus-runtime'
+py -3.12 -B -m ow174 --check-runtime
+```
+
+The default check covers the retail lobby, Battle.net descriptor set and match data. It reports missing paths and validates the signing input's length. Practice Range also needs build 104319 collision data. For a server-only session, supply `collision/0688.col` in the pack. An enabled local client launch can build the cache using the installation and the prepared collision indexes.
+
+If you already have a prepared local research checkout, assemble a new pack with the Python tool. It copies the required files and selected map cache into a new directory and writes a SHA-256 inventory.
+
+```powershell
+py -3.12 -B tools\prepare_server_runtime.py --source 'C:\path\to\prepared-checkout' --destination 'C:\path\to\orpheus-runtime' --map 0688
+```
+
+## Input provenance and current limits
+
+Some inputs can be produced from authorized local game data with the pinned [OWLib toolchain](../CREDITS.md) and the extractors in [tools](../tools). The map collision builder also needs prepared collision indexes. The retail templates are derived from a reference server session. The public checkout lacks a complete generation path for the lobby signing input, Battle.net descriptors, resource key table and all required protocol and collision indexes. The packer needs these inputs in the prepared checkout. Fully setting up the server from the game folder alone is an open task.
+
+Keep game files, dumps, raw captures, signing input and generated runtime files in local storage. Share missing file names or a redacted error when reporting a setup failure.
 
 | File | Purpose |
 | --- | --- |
@@ -21,6 +44,8 @@ The server and its tests use the following data sets. The public source checkout
 | `game_queues_174.json` | The queue cards: modes, maps and team sizes (`tools/extract_game_queues.py`). |
 | `game_graphs_174.json.gz` | The statescript graphs the game server runs (`tools/extract_game_graphs.py`). |
 | `game_stats_174.json` | The stats the Tab board lists for each hero and mode (`tools/extract_game_stats.py`). |
+| `game_ult_charge_174.json` | Optional local override for the community estimates built into the Python server. |
+| `bnet/descriptors.pb` | Protocol descriptors for the local Battle.net service. In the legacy layout this is `ow174/bnet/descriptors.pb`. |
 | `game_movers_174.json` | Each hero body's character mover values (speeds, jump, gravity, capsule), from `tools/extract_game_movers.py`. |
 | `collision_keys_174.json` | Storage keys of each map's collision chunk in build 104319, so the server can read the collision from your own game (`tools/build_collision.py`, cache in `cache/collision`). |
 | `collision_props_174.json` | Storage keys of each map's props (fences, crates) and of their models, and which game modes keep which props; added to the same collision cache. |

@@ -3,12 +3,10 @@
 OW1 computed these rates inside its own server code: no client artifact carries them. On 1.74 data
 the hero's entity definition has no charge component (its components are health, weapon, mover,
 model, first-person, statescript, target tags and voice) and the generic settings have no charge
-keys, so the numbers below are the table's, and the table says how far they can be trusted.
+keys, so the built-in rates are estimates. A local runtime can override them.
 
-The table is data: game_ult_charge_174.json, generated like the other game files. A rate is stated
-as the amount of damage (or healing) that fills the meter, never as points: cost #338e differs per
-hero, so points are computed against the cost the hero's own Entries carry (see driver.py), and a
-meter fills identically whatever scale its graphs use.
+A rate is the amount of damage or healing that fills the meter. Cost #338e differs per hero, so
+points are computed against the cost the hero's own Entries carry (see driver.py).
 """
 
 import json
@@ -17,16 +15,19 @@ from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 
-from ow174.paths import DATA_DIR
+from ow174.paths import DATA_DIR, ULT_CHARGE_OVERRIDE
 
 log = logging.getLogger("ow174")
 
-TABLE_PATH = DATA_DIR / "game_ult_charge_174.json"
+TABLE_PATH = DATA_DIR / ULT_CHARGE_OVERRIDE
 
-# The fallback for a hero the table has no entry for, so one missing line cannot make a hero
-# unplayable; it is the community's Soldier rate (see the file's status). Without the file at all
-# nothing but the passive rule (driver.ULT_SECONDS) charges, and that is announced, not silent.
 FALLBACK = {"damage_to_full": 380.0, "heal_to_full": None, "kill_bonus_percent": 20.0}
+BUILTIN_TABLE = {
+    "status": "placeholder",
+    "note": "Community estimates for Soldier: 76. Original server charge rates remain unverified.",
+    "defaults": FALLBACK,
+    "heroes": {"02E000000000006E": {"damage_to_full": FALLBACK["damage_to_full"]}},
+}
 
 DAMAGE, HEALING, KILL = "damage", "healing", "kill"
 
@@ -41,17 +42,15 @@ class Rule:
 
 @cache
 def _table() -> dict:
-    if not Path(TABLE_PATH).is_file():
-        log.warning("[game] %s is missing: only the passive rule charges ultimates", TABLE_PATH.name)
-        return {}
-    table = json.loads(Path(TABLE_PATH).read_text(encoding="utf-8"))
+    path = Path(TABLE_PATH)
+    table = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else BUILTIN_TABLE
     if table.get("status") == "placeholder":
         log.info("[game] ultimate charge rates are placeholder data: %s", table.get("note", "unverified"))
     return table
 
 
 def rule(hero: int) -> Rule:
-    """The hero's line with the table's defaults under it, or the fallback with no file."""
+    """Use the selected table's hero line and defaults."""
     table = _table()
     base = {**table.get("defaults", FALLBACK), **(table.get("heroes") or {}).get(f"{hero:016X}", {})}
     for field in ("damage_to_full", "heal_to_full", "kill_bonus_percent"):
