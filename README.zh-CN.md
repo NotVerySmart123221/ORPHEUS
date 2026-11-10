@@ -74,7 +74,7 @@ py -3.12 -B tools/prepare_server_runtime.py --source 'C:\path\to\local-research'
 .\START_LOCAL.cmd --game-exe 'C:\path\to\Overwatch'
 ```
 
-启动器会在需要时创建 Python 环境。测试记录应包含的信息见[原版客户端验证步骤](CONTRIBUTING.md#original-client-verification)。
+启动器会在需要时创建 Python 环境，并保存所选安装目录，供下次启动和准备碰撞数据使用。测试记录应包含的信息见[原版客户端验证步骤](CONTRIBUTING.md#original-client-verification)。
 
 ## 项目结构
 

@@ -18,8 +18,10 @@ This log records tested changes and their acceptance status. Entries are grouped
   startup reports the build command when it is missing. Server-only startup skips the relay.
 - Updated the English and Simplified Chinese setup instructions and documented the remaining
   game-folder-only setup gap.
+- Remembered the resolved game installation for both the launcher and collision cache preparation.
+  Added coverage for explicit folder selection, auto-detection and older UTF-8 BOM path files.
 - Source checks passed with 145 Python tests, 6 fixture skips, 2 dashboard tests and Ruff.
-  An authorized Practice Range pack passed 102 focused Python tests and the server-only startup probe.
+  An authorized Practice Range pack passed 112 focused Python tests and the server-only startup probe.
   The x64 relay built from source. Original-client startup and gameplay remain to be verified.
 
 ### 2026-11-06

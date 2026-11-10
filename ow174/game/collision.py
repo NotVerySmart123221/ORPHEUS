@@ -839,7 +839,7 @@ def installed_game() -> Path | None:
     if not GAME_PATH_FILE.is_file():
         return None
     try:
-        return game_root(GAME_PATH_FILE.read_text(encoding="utf-8").strip())
+        return game_root(GAME_PATH_FILE.read_text(encoding="utf-8-sig").strip())
     except CascError:
         return None
 

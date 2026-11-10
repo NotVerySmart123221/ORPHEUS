@@ -76,7 +76,7 @@ With the runtime configured and relay built, pass the installation directory or 
 .\START_LOCAL.cmd --game-exe 'C:\path\to\Overwatch'
 ```
 
-The launcher creates a Python environment if needed. See [original-client verification](CONTRIBUTING.md#original-client-verification) for what to record during a playtest.
+The launcher creates a Python environment if needed and remembers the selected installation for future launches and collision preparation. See [original-client verification](CONTRIBUTING.md#original-client-verification) for what to record during a playtest.
 
 ## Project layout
 

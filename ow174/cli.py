@@ -93,7 +93,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--name", help="your name on the server you join with the full menu")
     parser.add_argument(
         "--game-exe", type=Path,
-        help="Overwatch.exe to start (default: the one picked before; incompatible with --no-launch)",
+        help="Overwatch.exe or its installation directory (defaults to the saved selection; "
+        "incompatible with --no-launch)",
     )
     parser.add_argument(
         "--locale",
