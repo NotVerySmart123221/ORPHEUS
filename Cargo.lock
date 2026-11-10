@@ -407,6 +407,7 @@ dependencies = [
  "flate2",
  "getrandom",
  "hmac",
+ "httparse",
  "indexmap",
  "lzma-rust2",
  "mio",

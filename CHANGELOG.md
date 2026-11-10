@@ -4,6 +4,15 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ## Unreleased
 
+### 2026-11-10
+
+#### Native server architecture and scene inspector
+
+- Documented the room authority, replication, event-driven scripting, collision and cutover boundaries. Rust development and public CI now target `rust`. The default branch continues to serve the Python implementation.
+- Added an opt-in Rust scene inspector on loopback. It shows tick-stamped actors and separate probe-triangle and character contact-bound layers sampled from the loaded Practice Range collision. The inspector reports limits and leaves the match worker in control of simulation state.
+- Removed the public projectile fixture's build-time dependency on a private codec table. The test now shares the checked-in protocol fixture.
+- Verified 326 public Rust tests, 61 prepared base-pack tests, one enriched-pack timer test, Rust formatting and Clippy. The encrypted Practice Range check observed the player's active body and 15 bots through the inspector snapshot. The original client was not started. The reported upstairs wall crossing still needs a matching trace.
+
 ### 2026-11-06
 
 #### Ultimate charge from combat

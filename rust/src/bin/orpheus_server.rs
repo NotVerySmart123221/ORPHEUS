@@ -4,10 +4,11 @@ use orpheus::server::{Server, ServerConfig};
 
 const USAGE: &str = "Usage: orpheus_server --data-dir <directory> [--runtime <directory>]
        [--account <name>] [--lobby-port <port>] [--game-port <port>]
-       [--stall-port <port>] [--rpc-port <port>]
+       [--stall-port <port>] [--rpc-port <port>] [--debug-port <port>]
 
 The native 1.74 server listens on loopback. Use an authorized base runtime
-directory or set ORPHEUS_RUNTIME_DIR. Press Enter in the terminal to stop.";
+directory or set ORPHEUS_RUNTIME_DIR. --debug-port enables the read-only
+simulation inspector. Press Enter in the terminal to stop.";
 
 fn main() -> ExitCode {
     match run() {
@@ -47,6 +48,7 @@ fn run() -> io::Result<()> {
             Some("--game-port") => config.game_port = port(value)?,
             Some("--stall-port") => config.stall_port = port(value)?,
             Some("--rpc-port") => config.rpc_port = port(value)?,
+            Some("--debug-port") => config.debug_port = Some(port(value)?),
             _ => return Err(usage_error("unknown option")),
         }
     }
@@ -63,6 +65,9 @@ fn run() -> io::Result<()> {
         server.stall_addr(),
         server.rpc_addr(),
     );
+    if let Some(address) = server.debug_addr() {
+        println!("Read-only inspector http://{address}/");
+    }
     println!("Press Enter to stop.");
     io::stdin().read_line(&mut String::new())?;
     server.stop()

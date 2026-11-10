@@ -4,7 +4,9 @@
 
 ORPHEUS 是面向 **《守望先锋 1》正式服 1.74.0.0.104319** 的开源服务端复刻项目，独立开展非官方研究与游戏保存工作。长期目标是还原该版本各英雄、地图和模式的服务端行为，以及服务端向客户端发送的事件。服务端仍在开发中，首个端到端验证场景是士兵 76 与训练靶场。
 
-[参与贡献](CONTRIBUTING.md) · [路线图](docs/ROADMAP.md) · [Rust 迁移](docs/RUST_MIGRATION.md) · [验证记录](docs/STATE.md) · [更新日志](CHANGELOG.md) · [待处理问题](https://github.com/leafall903/ORPHEUS/issues)
+本分支包含 Rust 服务端。[默认分支](https://github.com/leafall903/ORPHEUS/tree/main)包含社区维护的 Python 服务端。
+
+[参与贡献](CONTRIBUTING.md) · [路线图](docs/ROADMAP.md) · [原生服务端架构](docs/NATIVE_SERVER_ARCHITECTURE.md) · [Rust 迁移](docs/RUST_MIGRATION.md) · [验证记录](docs/STATE.md) · [更新日志](CHANGELOG.md) · [待处理问题](https://github.com/leafall903/ORPHEUS/issues)
 
 ## 当前进度
 
@@ -48,12 +50,12 @@ py -3.12 -m venv .venv
 ```powershell
 cargo run --locked --bin prepare_server_runtime -- --source 'C:\path\to\local-research' --destination 'C:\path\to\orpheus-runtime' --map 0688
 $env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\orpheus-runtime'
-.\START_SERVER_LOCAL.cmd
+cargo run --locked --bin orpheus_server -- --data-dir 'C:\path\to\local-state'
 ```
 
-准备命令会从已准备好的检出目录复制文件并写入清单。省略 `--map` 会复制所有已经准备好的缓存。纯服务端入口使用本地回环地址，可独立于游戏安装和中继 DLL 运行。默认管理面板地址为 `127.0.0.1:3725`。使用原版客户端测试时，请参阅[手动验证步骤](CONTRIBUTING.md#original-client-verification)和[运行数据来源](data/README.md)。
+准备命令会从已准备好的检出目录复制文件并写入清单。省略 `--map` 会复制所有已经准备好的缓存。原生服务端使用本地回环地址，可独立于游戏安装和中继 DLL 运行。它从状态目录读取 `profiles/`、`profile.json` 和 `default_account.txt`。复用现有存档时请指向已有状态目录，同一时间只运行一个服务端。详见 [Rust 迁移](docs/RUST_MIGRATION.md)和[运行数据来源](data/README.md)。
 
-若要试用原生服务端，请把 `ORPHEUS_RUNTIME_DIR` 指向已获授权的基础靶场运行数据包，然后运行 `cargo run --locked --bin orpheus_server -- --data-dir 'C:\path\to\local-state'`。原生入口使用本地回环地址，从状态目录读取 `profiles/`、`profile.json` 和 `default_account.txt`。将状态目录设为原服务端检出目录即可复用现有存档。该入口已进行无客户端测试，仍待原版客户端验收。已覆盖的范围见 [Rust 迁移](docs/RUST_MIGRATION.md)。
+在命令末尾添加 `--debug-port 3726` 可启用只读调试面板，然后打开[本地面板](http://127.0.0.1:3726/)。面板显示活跃对局的实体状态和靶场碰撞分层采样。空闲时也能查看地图采样。[面板细节](docs/NATIVE_SERVER_ARCHITECTURE.md#collision-and-live-inspection)。
 
 ## 项目结构
 

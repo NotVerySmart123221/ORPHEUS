@@ -21,6 +21,7 @@ use crate::{
     bnet_service::{self, BnetService},
     catalog::ItemDb,
     collection::Collection,
+    debug_http::DebugHttp,
     game_content::GameMap,
     game_service::GameService,
     jam_codec::Schemas,
@@ -51,6 +52,7 @@ pub struct ServerConfig {
     pub game_port: u16,
     pub stall_port: u16,
     pub rpc_port: u16,
+    pub debug_port: Option<u16>,
 }
 
 impl ServerConfig {
@@ -63,6 +65,7 @@ impl ServerConfig {
             game_port: 3730,
             stall_port: bnet_service::STALL_PORT,
             rpc_port: bnet_service::RPC_PORT,
+            debug_port: None,
         }
     }
 }
@@ -74,6 +77,7 @@ pub struct Server {
     lobby: Option<JoinHandle<io::Result<()>>>,
     bnet: BnetService,
     game: Option<Arc<GameService>>,
+    debug: Option<DebugHttp>,
 }
 
 impl Server {
@@ -130,6 +134,15 @@ impl Server {
             game_schemas,
         )?);
         let game_addr = game.local_addr();
+        let debug = if let Some(port) = config.debug_port {
+            let geometry = serde_json::to_vec(&scene.debug_geometry().view()).map_err(invalid)?;
+            let worker = Arc::clone(&game);
+            Some(DebugHttp::bind(port, geometry, move || {
+                worker.debug_snapshot()
+            })?)
+        } else {
+            None
+        };
         let bnet_account = Arc::clone(&local);
         let bnet = BnetService::start(
             addr(config.stall_port),
@@ -174,6 +187,7 @@ impl Server {
             lobby: Some(lobby),
             bnet,
             game: Some(game),
+            debug,
         })
     }
 
@@ -190,7 +204,12 @@ impl Server {
         self.bnet.rpc_addr()
     }
 
+    pub fn debug_addr(&self) -> Option<SocketAddr> {
+        self.debug.as_ref().map(DebugHttp::addr)
+    }
+
     pub fn stop(&mut self) -> io::Result<()> {
+        let debug = self.debug.take().map_or(Ok(()), |mut debug| debug.stop());
         let bnet = self.bnet.stop();
         let lobby = if let Some(worker) = self.lobby.take() {
             let _ = self.stop_lobby.send(());
@@ -206,7 +225,7 @@ impl Server {
                 .map_err(|_| io::Error::other("game worker still in use"))?
                 .stop()
         });
-        bnet.and(lobby).and(game)
+        debug.and(bnet).and(lobby).and(game)
     }
 }
 

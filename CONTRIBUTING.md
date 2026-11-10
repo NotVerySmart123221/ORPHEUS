@@ -7,11 +7,11 @@ You can contribute code, research, documentation or a gameplay report. The publi
 Use Rust for new implementation work. Install Git, stable Rust, `rustfmt` and `clippy`.
 
 ```powershell
-git clone https://github.com/leafall903/ORPHEUS.git
+git clone --branch rust https://github.com/leafall903/ORPHEUS.git
 cd ORPHEUS
 ```
 
-The frozen Python server remains available as a transition entry point and reference. To run its checks, install 64-bit Python 3.12 on Windows and Node.js 24 for the dashboard test.
+The Python code on this branch is a behavioral reference. Python development and its launcher live on the [default branch](https://github.com/leafall903/ORPHEUS/tree/main). To run the reference checks here, install 64-bit Python 3.12 on Windows and Node.js 24 for the dashboard test.
 
 ```powershell
 py -3.12 -m venv .venv
@@ -53,7 +53,7 @@ node --test tests/test_dashboard_client.mjs
 git diff --check
 ```
 
-The [public workflow](.github/workflows/public-checks.yml) runs this source-only test selection for pushes and pull requests. Add the closest focused test for the code you changed. Report the exact commands, pass or fail results, and any skips in your pull request.
+The [public workflow](.github/workflows/public-checks.yml) runs the source-only checks for pushes and pull requests to `rust`. Add the closest focused test for the code you changed. Report the exact commands, pass or fail results, and any skips in your pull request.
 
 ## Prepared runtime checks
 
@@ -70,7 +70,7 @@ Full discovery also depends on research fixtures kept outside the public export.
 
 ## Original-client verification
 
-Use your own authorized Overwatch 1 retail **1.74.0.0.104319** installation and a prepared local runtime. The manual launcher starts the local server and original client through the Windows relay.
+Use your own authorized Overwatch 1 retail **1.74.0.0.104319** installation and a prepared local runtime. The following manual launcher starts the Python reference server and original client through the Windows relay. For a Rust test, identify the native server build and record the connection method separately.
 
 ```powershell
 $env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\orpheus-runtime'
@@ -85,6 +85,6 @@ For the first acceptance group, enter the Practice Range, pick Soldier: 76, and 
 - For protocol or graph research, identify the target build and cite the exact field, node, event or reproducible comparison. Separate observations, inferences and open questions. Describe how another contributor can repeat the check.
 - Keep a pull request focused. Link the issue, describe expected behavior and report what changed and how you tested it. Include a short [changelog](CHANGELOG.md) entry for a user-visible or verification change. Use clear English [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 - Codex, Claude Code and other AI coding tools are welcome. If a tool materially contributed, disclose it in the pull request or an `Assisted-by` commit trailer. Read and understand the diff, run the relevant checks, and be ready to explain the change. Maintainer review applies to every pull request.
-- The maintainer reviews pull requests on GitHub and applies accepted patches to the development history with contributor authorship intact. The audited source is then published to `main`. That workflow may close a pull request with a link to the published commit instead of using GitHub's merge button.
+- Open Rust pull requests against `rust` and Python pull requests against `main`. The maintainer preserves contributor authorship and checks the audited publication commit.
 
 Share only small, redacted log excerpts or a video you are authorized to share. Remove personal account and machine information, credentials, authentication or session data, and private paths. Keep clients, game data dumps, captures, signing input, resource keys and crash dumps local. A description and timestamps are enough to start a discussion if an artifact cannot be shared.

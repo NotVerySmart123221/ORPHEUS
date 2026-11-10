@@ -6,7 +6,9 @@
 
 ORPHEUS is an open-source server reimplementation for **Overwatch 1 retail 1.74.0.0.104319**. It is an independent, unofficial research and game preservation project. The long-term goal is to reproduce the server behavior and client-facing events for this build across its heroes, maps and modes. The server is still in development, with Soldier: 76 in the Practice Range as the first end-to-end target.
 
-[Contribute](CONTRIBUTING.md) · [Roadmap](docs/ROADMAP.md) · [Rust migration](docs/RUST_MIGRATION.md) · [Verification record](docs/STATE.md) · [Changelog](CHANGELOG.md) · [Open issues](https://github.com/leafall903/ORPHEUS/issues)
+This branch contains the Rust server. The [default branch](https://github.com/leafall903/ORPHEUS/tree/main) contains the community-maintained Python server.
+
+[Contribute](CONTRIBUTING.md) · [Roadmap](docs/ROADMAP.md) · [Native server architecture](docs/NATIVE_SERVER_ARCHITECTURE.md) · [Rust migration](docs/RUST_MIGRATION.md) · [Verification record](docs/STATE.md) · [Changelog](CHANGELOG.md) · [Open issues](https://github.com/leafall903/ORPHEUS/issues)
 
 ## Current status
 
@@ -50,12 +52,12 @@ To run the local server, set `ORPHEUS_RUNTIME_DIR` to a prepared, authorized run
 ```powershell
 cargo run --locked --bin prepare_server_runtime -- --source 'C:\path\to\local-research' --destination 'C:\path\to\orpheus-runtime' --map 0688
 $env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\orpheus-runtime'
-.\START_SERVER_LOCAL.cmd
+cargo run --locked --bin orpheus_server -- --data-dir 'C:\path\to\local-state'
 ```
 
-The preparation command copies files from an already prepared checkout and writes a manifest. Omit `--map` to copy all available prepared caches. The server-only entry uses loopback and requires neither an installed game nor a relay DLL. Its default dashboard is at `127.0.0.1:3725`. For original-client testing, see [the manual procedure](CONTRIBUTING.md#original-client-verification) and [runtime data provenance](data/README.md).
+The preparation command copies files from an already prepared checkout and writes a manifest. Omit `--map` to copy all available prepared caches. The native server listens on loopback and can run without a game installation or relay DLL. It reads `profiles/`, `profile.json` and `default_account.txt` from the local state directory. To reuse saved profiles, point it at the existing state directory and use one server at a time. See [Rust migration](docs/RUST_MIGRATION.md) and [runtime data provenance](data/README.md).
 
-To try the native server with an authorized base Practice Range runtime, use `cargo run --locked --bin orpheus_server -- --data-dir 'C:\path\to\local-state'` with `ORPHEUS_RUNTIME_DIR` set. It uses loopback and reads `profiles/`, `profile.json` and `default_account.txt` from the local state directory. Use the existing server checkout as that directory to reuse its saved profiles. The native entry has headless coverage and awaits original-client acceptance. See [Rust migration](docs/RUST_MIGRATION.md) for its current scope.
+Append `--debug-port 3726` to enable the read-only inspector, then visit [the local dashboard](http://127.0.0.1:3726/). It shows active actor state and a sample of the prepared Practice Range collision layers. The map sample is visible while the server is idle. [Inspector details](docs/NATIVE_SERVER_ARCHITECTURE.md#collision-and-live-inspection).
 
 ## Project layout
 

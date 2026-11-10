@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ORPHEUS · Server Debug</title>
+  <link rel="stylesheet" href="/debug.css">
+  <script src="/debug.js" defer></script>
+</head>
+<body>
+  <header>
+    <div>
+      <p class="eyebrow">ORPHEUS / NATIVE SERVER</p>
+      <h1>Scene inspector</h1>
+      <p>Live actor positions and a sample of the prepared map's collision data.</p>
+    </div>
+    <div id="connection" class="status" role="status">Connecting</div>
+  </header>
+
+  <main>
+    <section class="toolbar" aria-label="Scene controls">
+      <label>Room <select id="room" disabled></select></label>
+      <label class="toggle"><input id="triangles" type="checkbox" checked> Probe triangles</label>
+      <label class="toggle"><input id="proxies" type="checkbox"> Contact bounds</label>
+      <label class="toggle"><input id="actors" type="checkbox" checked> Actors</label>
+      <span id="tick" class="code"></span>
+    </section>
+
+    <p id="scene" class="scene" aria-live="polite">Waiting for server data.</p>
+    <div class="views">
+      <section class="view" aria-label="Top view">
+        <h2>Top <span class="code">X / Z</span></h2>
+        <canvas id="top" role="img" aria-label="Top-down projection of the current scene"></canvas>
+      </section>
+      <section class="view" aria-label="Side view">
+        <h2>Elevation <span class="code">X / Y</span></h2>
+        <canvas id="side" role="img" aria-label="Elevation projection of the current scene"></canvas>
+      </section>
+    </div>
+
+    <div class="legend" aria-label="Scene legend">
+      <span><i class="sample triangle"></i> Probe triangle</span>
+      <span><i class="sample proxy"></i> Broad-phase contact bound</span>
+      <span><i class="sample player"></i> Player</span>
+      <span><i class="sample bot"></i> Bot</span>
+      <span><i class="sample dead"></i> Dead actor</span>
+    </div>
+    <p id="geometry-info" class="notes"></p>
+
+    <section class="entity-panel" aria-labelledby="actor-heading">
+      <h2 id="actor-heading">Actors <span id="actor-count" class="code"></span></h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th scope="col">Entity / generation</th><th scope="col">Kind</th><th scope="col">Team</th><th scope="col">State</th><th scope="col">Health</th><th scope="col">Script</th><th scope="col">Position (X, Y, Z)</th><th scope="col">Velocity (X, Y, Z)</th></tr>
+          </thead>
+          <tbody id="actor-rows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

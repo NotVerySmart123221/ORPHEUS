@@ -17,6 +17,7 @@ use crate::{
     collision_index::TriangleIndex,
     collision_scene::CollisionScene,
     contact_world::ContactWorld,
+    debug_geometry::DebugGeometry,
     game_bots::{Bot, BotCatalog, BotWalk},
     game_clock::FIRST_TICK,
     game_content::{GameMap, PRACTICE_RANGE_MAP, PRACTICE_RANGE_MODE},
@@ -81,7 +82,8 @@ pub struct SceneAssets {
 
 pub struct PreparedScene {
     map: GameMap,
-    ground: CollisionScene,
+    movement_cache: String,
+    ground: Arc<CollisionScene>,
     contacts: Option<Arc<ContactWorld>>,
     controller: Controller,
     mode_ui: BitWriter,
@@ -130,9 +132,8 @@ impl SceneAssets {
     /// Load the map before handing it to the worker. The render layouts and
     /// graph requirements are checked without blocking a game tick.
     pub fn prepare(&self, map: GameMap) -> io::Result<PreparedScene> {
-        let path = self
-            .collision
-            .join(format!("{:04X}.col", map.map_guid as u32));
+        let movement_cache = format!("{:04X}.col", map.map_guid as u32);
+        let path = self.collision.join(&movement_cache);
         let cache = read_movement_cache(BufReader::new(File::open(path)?)).map_err(invalid)?;
         for (field, expected) in [("map", map.map_guid), ("chunk", chunk_guid(map.map_guid))] {
             if let Some(value) = cache.header.source.get(field) {
@@ -179,7 +180,8 @@ impl SceneAssets {
                 .component(&PlayerStats::default(), map.mode_guid, None, None);
         let mut scene = PreparedScene {
             map,
-            ground,
+            movement_cache,
+            ground: Arc::new(ground),
             contacts,
             controller,
             mode_ui,
@@ -264,6 +266,16 @@ impl PreparedScene {
 
     pub(crate) fn movement_index(&self) -> &TriangleIndex {
         self.ground.triangles()
+    }
+
+    pub(crate) fn debug_geometry(&self) -> DebugGeometry {
+        DebugGeometry::new(
+            &self.map,
+            self.movement_cache.clone(),
+            MOVER_CATEGORY,
+            Arc::clone(&self.ground),
+            self.contacts.clone(),
+        )
     }
 
     pub(crate) fn player_spawn_mover(&self, body: u64, team: u8) -> io::Result<Mover> {
@@ -394,6 +406,29 @@ fn invalid(error: impl std::fmt::Display) -> io::Error {
 mod tests {
     use super::*;
     use crate::game_bots::BOT_ENTITY;
+
+    #[test]
+    #[ignore = "requires a prepared 104319 Practice Range pack"]
+    fn prepared_practice_debug_view_contains_real_collision_layers() {
+        let runtime = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+        let assets = SceneAssets::load(runtime).unwrap();
+        let scene = assets.prepare(GameMap::practice_range()).unwrap();
+        let view = serde_json::to_value(scene.debug_geometry().view()).unwrap();
+
+        assert_eq!(view["map"], "0800000000000688");
+        assert_eq!(view["sources"]["movement_cache"], "0688.col");
+        assert_eq!(
+            view["origin"],
+            serde_json::to_value(scene.map().spawn_point(0, 0).unwrap().0).unwrap()
+        );
+        assert!(view["counts"]["triangles"].as_u64().unwrap() > 100);
+        assert!(view["counts"]["proxies"].as_u64().unwrap() > 10);
+        assert_eq!(view["totals"]["triangles"], scene.movement_index().len());
+        assert_eq!(
+            view["totals"]["proxies"],
+            scene.contacts.as_ref().unwrap().shapes().len()
+        );
+    }
 
     #[test]
     #[ignore = "requires a prepared 104319 Practice Range pack without bot VM graphs"]

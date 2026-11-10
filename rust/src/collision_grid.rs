@@ -1,6 +1,7 @@
 //! XZ columns shared by triangle indexes and static contact proxies.
 
 use std::collections::HashMap;
+use std::ops::ControlFlow;
 
 pub(crate) const CELL_WIDTH: f64 = 2.0;
 const LARGE_COLUMNS: u64 = 4096;
@@ -132,7 +133,18 @@ impl ColumnGrid {
     /// Visit candidates in first-column order, with oversized geometry at the
     /// end of the first column. Regular IDs may recur in later columns.
     pub(crate) fn visit(&self, range: ColumnRange, mut consider: impl FnMut(u32)) {
-        self.column(range.first).for_each(&mut consider);
+        let _ = self.try_visit(range, |id| {
+            consider(id);
+            ControlFlow::Continue(())
+        });
+    }
+
+    pub(crate) fn try_visit(
+        &self,
+        range: ColumnRange,
+        mut consider: impl FnMut(u32) -> ControlFlow<()>,
+    ) -> ControlFlow<()> {
+        self.column(range.first).try_for_each(&mut consider)?;
         let count = range.count();
         if count > self.large_limit && count > self.grid.len() as u64 {
             let mut occupied: Vec<_> = self
@@ -143,16 +155,17 @@ impl ColumnGrid {
                 .collect();
             occupied.sort_unstable();
             for column in occupied {
-                self.regular_column(column).for_each(&mut consider);
+                self.regular_column(column).try_for_each(&mut consider)?;
             }
         } else {
             for x in range.first.0..=range.last.0 {
                 for z in range.first.1..=range.last.1 {
                     if (x, z) != range.first {
-                        self.regular_column((x, z)).for_each(&mut consider);
+                        self.regular_column((x, z)).try_for_each(&mut consider)?;
                     }
                 }
             }
         }
+        ControlFlow::Continue(())
     }
 }

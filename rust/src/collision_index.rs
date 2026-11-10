@@ -8,6 +8,7 @@
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
+use std::ops::ControlFlow;
 
 use crate::collision_grid::{CELL_WIDTH, ColumnGrid, ColumnRange, cell};
 use crate::static_ray::{Vec3, inside_xz, triangle_distance};
@@ -163,25 +164,43 @@ impl TriangleIndex {
         self.lowest.unwrap_or(0.0)
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.triangles.len()
+    }
+
     /// Return triangles whose bounds overlap the box, in first-column order.
     pub fn nearby(&self, min: Vec3, max: Vec3, category: u16) -> Vec<&SceneTriangle> {
+        self.nearby_limited(min, max, category, usize::MAX)
+    }
+
+    pub(crate) fn nearby_limited(
+        &self,
+        min: Vec3,
+        max: Vec3,
+        category: u16,
+        limit: usize,
+    ) -> Vec<&SceneTriangle> {
         let bounds = Bounds { min, max };
         let mut found = Vec::new();
-        if category == 0 || !(0..3).all(|axis| min[axis] <= max[axis]) {
+        if limit == 0 || category == 0 || !(0..3).all(|axis| min[axis] <= max[axis]) {
             return found;
         }
         let Some(range) = bounds.columns() else {
             return found;
         };
         let mut seen = HashSet::new();
-        self.grid.visit(range, |number| {
+        let _ = self.grid.try_visit(range, |number| {
             let candidate = &self.triangles[number as usize];
             if candidate.triangle.mask & category != 0
                 && candidate.bounds.overlaps(bounds)
                 && seen.insert(number)
             {
                 found.push(&candidate.triangle);
+                if found.len() == limit {
+                    return ControlFlow::Break(());
+                }
             }
+            ControlFlow::Continue(())
         });
         found
     }

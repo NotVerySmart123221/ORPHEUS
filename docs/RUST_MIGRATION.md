@@ -1,13 +1,13 @@
 # Rust migration
 
-The migration target is a Rust implementation of ORPHEUS for retail build 1.74.0.0.104319. All server functionality and fixes go into Rust. The frozen Python server is a read-only behavioral reference and transition entry point. Retire it as soon as Rust exceeds its verified coverage and passes the cutover checks below. Gameplay fidelity remains tracked in the [restoration roadmap](ROADMAP.md).
+The migration target is a Rust implementation of ORPHEUS for retail build 1.74.0.0.104319. Native development takes place on the `rust` branch. The Python code here is a read-only behavioral reference and the community-maintained Python server is on `main`. Gameplay fidelity remains tracked in the [restoration roadmap](ROADMAP.md). The [native server architecture](NATIVE_SERVER_ARCHITECTURE.md) sets the room ownership, script host and inspection boundaries.
 
 | Stage | Scope | Exit criteria |
 | --- | --- | --- |
 | Transport and serialization | JAM lobby handshake and framing, lobby and game message codecs, game UDP encryption and ACKs, bit streams and command records | Rust reproduces the reference bytes and fragmented streams, rejects malformed records, and handles loss, duplicates and rollover. |
 | Login and lobby | Battle.net login, accounts, profiles, lobby, chat, parties, catalog, queues and match handoff | Match the reference service requests and replies. Load existing profile and external runtime formats. Verify a lobby client can acquire a valid match seat. |
 | Match simulation | Tick scheduling, collision, movement, statescript, combat, bots, heroes, maps and modes | Match the registered state and packet order from encrypted Practice Range and two-peer replays. Check sustained-fire tick time and snapshot gaps with the same inputs. |
-| Server tools and dashboard | Data preparation and extraction tools, replay and diagnostics, administration API and browser UI | Reproduce output formats and acceptance checks with Rust tooling and the Rust dashboard backend. Migrate browser behavior to Rust compiled to WebAssembly. |
+| Server tools and dashboard | Data preparation and extraction tools, replay and diagnostics, administration API and browser UI | Reproduce output formats and acceptance checks with Rust tooling. Expose bounded simulation state and collision views through the Rust dashboard backend. |
 | Windows deployment | Launcher, retail relay and server-only distribution | Build the Windows tools and relay, and boot the audited checkout from the separate runtime. Verify supported connection paths with the original client. |
 | Cutover | Switch the normal entry points to Rust and retire the Python server | Demonstrate broader verified coverage in Rust, verify the supported replacement workflows with the original client, and complete a server-only smoke test of the audited public checkout. |
 
@@ -43,7 +43,7 @@ The operand-free instance exit uses the shared event queue and removes pending w
 
 The owner movement sampler reads the same mover pose used by the match worker. It applies changed Boolean outputs before its startup subgraph and during ticks, and uses the existing owner flags codec. The preflight and live body use the same spawn mover. A freshly constructed body starts with the embedded standing record, following the later client's constructor evidence. Its exact 104319 startup context and scripted movement modes still need verification. The tagged Soldier preflight now reaches the crouch branch's effect action at `01C7`, node `74`.
 
-The frozen Python server serves the regular entry points until cutover. The native server currently serves the solo base Practice Range on loopback. Other matchmaking modes, social actions, the dashboard and original-client acceptance are pending.
+The native server currently serves the solo base Practice Range on loopback. Use `--debug-port 3726` for the optional local read-only simulation inspector. It projects active room state and sampled collision geometry. Other matchmaking modes, social actions, administration features and original-client acceptance remain pending.
 
 ```powershell
 $env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\authorized-base-runtime'

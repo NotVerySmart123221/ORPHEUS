@@ -1242,6 +1242,9 @@ fn state_payload(state: &State, codec: &Codec) -> Option<StatePayload> {
 }
 
 #[cfg(test)]
+pub(crate) use tests::CODECS as FIXTURE_CODECS;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::script_init::{
@@ -1250,7 +1253,7 @@ mod tests {
     use serde_json::{Value as Json, json};
 
     const ENTITY: u32 = 0xa000_0101;
-    const CODECS: &str = r#"{"classes":{
+    pub(crate) const CODECS: &str = r#"{"classes":{
         "12340001":{"name":"STUStatescriptState","codec":"none","stec":false,"status":"VERIFIED","layout":[]},
         "12340002":{"name":"STUStatescriptStateBooleanSwitch","codec":"switch","stec":false,"status":"VERIFIED",
             "layout":[{"op":"bits","f":"current","n":1}]},

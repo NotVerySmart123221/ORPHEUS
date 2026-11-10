@@ -16,6 +16,7 @@ use crate::{
     game_clock::{MAX_LEASE_FRAME, SEND_EVERY, TICK_PERIOD},
     game_combat::{BotReplacement, PosedHitscan, PosedProjectile, PosedShot},
     game_controller::ControllerFrame,
+    game_debug::{Actor, ActorKind},
     game_egress::{DeliveryReport, FrameRecords, GameEgress, RecordSource, SendError, SentFrame},
     game_heroes::{Hero, SOLDIER},
     game_messages::Message,
@@ -583,6 +584,26 @@ impl WorldDelivery {
 
     pub(crate) fn world_started(&self) -> bool {
         self.started.is_some()
+    }
+
+    pub(crate) fn debug_actor(&self, team: u8) -> Option<Actor> {
+        let (body, mover) = self.body.zip(self.mover.as_ref())?;
+        let pose = mover.pose();
+        let vitals = self
+            .body_script
+            .as_ref()
+            .and_then(|script| script.runtime.vitals());
+        Some(Actor {
+            entity: body.id.entity,
+            generation: Some(body.id.generation),
+            kind: ActorKind::Player,
+            team,
+            position: pose.position,
+            velocity: pose.velocity,
+            alive: vitals.is_none_or(|vitals| vitals.death().is_none()),
+            health: vitals.map(Vitals::total),
+            script_active: self.body_script.is_some(),
+        })
     }
 
     pub(crate) fn identity_ready(&self, entity: u32) -> bool {

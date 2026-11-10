@@ -111,6 +111,10 @@ impl Combat {
         }
     }
 
+    pub(crate) fn debug_health(&self, slot: usize) -> Option<f64> {
+        self.targets.get(slot).map(|target| target.vitals.total())
+    }
+
     pub(crate) fn hitscan(
         &mut self,
         scene: &mut PreparedScene,

@@ -656,9 +656,8 @@ fn fixture_volley_factory(button: u8, networked: bool, mut volley: Json) -> Play
     factory.graphs =
         Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
     if networked {
-        factory.codecs = Arc::new(
-            CodecTable::from_json(include_str!("../../data/statescript_codecs_174.json")).unwrap(),
-        );
+        factory.codecs =
+            Arc::new(CodecTable::from_json(crate::script_snapshot_wire::FIXTURE_CODECS).unwrap());
     }
     factory.roots = vec![Root::new(1, 42)];
     factory

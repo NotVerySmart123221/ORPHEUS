@@ -4,7 +4,7 @@
 //! initial world. Maps that need the unported bot VM retain that requirement.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     io,
     net::SocketAddr,
     sync::{
@@ -26,6 +26,7 @@ use crate::{
     game_connection::{GameConnections, MAX_CONNECTION_ID, Outgoing, SILENCE_TIME},
     game_content::{GameMap, PRACTICE_RANGE_MODE},
     game_controller::ControllerFrame,
+    game_debug,
     game_egress::GameEgress,
     game_ingress::{GameIngress, MapReadiness, MapReadyStep, MessageKind, WorldReadiness, pong},
     game_instance::{Instance, Member, RETAIL_QUANTA, TOURNAMENT_QUANTA, ownership},
@@ -46,6 +47,9 @@ const RECEIVE_BATCH: usize = 64;
 const INPUT_PER_PEER: usize = 16;
 const INPUT_PER_TURN: usize = 64;
 const MAX_PENDING_COMBAT_NOTICES: usize = 256;
+const DEBUG_WAIT: Duration = Duration::from_millis(250);
+const MAX_DEBUG_ROOMS: usize = 16;
+const MAX_DEBUG_ACTORS: usize = 64;
 
 #[derive(Debug)]
 pub struct MatchPlayer {
@@ -87,6 +91,9 @@ enum Request {
         hero: u64,
         skin: SkinTheme,
         reply: mpsc::SyncSender<()>,
+    },
+    Debug {
+        reply: mpsc::SyncSender<game_debug::Snapshot>,
     },
 }
 
@@ -247,8 +254,27 @@ impl GameService {
 
     fn request<T>(&self, request: impl FnOnce(mpsc::SyncSender<T>) -> Request) -> io::Result<T> {
         let (reply, receive) = mpsc::sync_channel(1);
+        self.enqueue(request(reply))?;
+        receive.recv().map_err(|_| stopped())
+    }
+
+    pub(crate) fn debug_snapshot(&self) -> io::Result<game_debug::Snapshot> {
+        let (reply, receive) = mpsc::sync_channel(1);
+        self.enqueue(Request::Debug { reply })?;
+        receive
+            .recv_timeout(DEBUG_WAIT)
+            .map_err(|error| match error {
+                mpsc::RecvTimeoutError::Timeout => io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "game worker did not return a debug snapshot",
+                ),
+                mpsc::RecvTimeoutError::Disconnected => stopped(),
+            })
+    }
+
+    fn enqueue(&self, request: Request) -> io::Result<()> {
         self.requests
-            .try_send(request(reply))
+            .try_send(request)
             .map_err(|error| match error {
                 mpsc::TrySendError::Full(_) => io::Error::new(
                     io::ErrorKind::WouldBlock,
@@ -256,8 +282,7 @@ impl GameService {
                 ),
                 mpsc::TrySendError::Disconnected(_) => stopped(),
             })?;
-        self.wake.wake()?;
-        receive.recv().map_err(|_| stopped())
+        self.wake.wake()
     }
 
     pub fn stop(&mut self) -> io::Result<()> {
@@ -659,6 +684,77 @@ impl State {
                 }
                 let _ = reply.send(());
             }
+            Request::Debug { reply } => {
+                let _ = reply.try_send(self.debug_snapshot());
+            }
+        }
+    }
+
+    fn debug_snapshot(&self) -> game_debug::Snapshot {
+        let mut rooms = BTreeMap::new();
+        let mut truncated = false;
+        for (&id, room) in &self.rooms {
+            let Some(world) = &room.world else {
+                continue;
+            };
+            if rooms.len() == MAX_DEBUG_ROOMS {
+                truncated = true;
+                break;
+            }
+            let bots = world.scene.bots();
+            truncated |= bots.len() > MAX_DEBUG_ACTORS;
+            let actors = bots
+                .iter()
+                .enumerate()
+                .take(MAX_DEBUG_ACTORS)
+                .map(|(slot, bot)| game_debug::Actor {
+                    entity: bot.entity,
+                    generation: None,
+                    kind: game_debug::ActorKind::Bot,
+                    team: bot.spawn.team,
+                    position: bot.position,
+                    velocity: bot.velocity,
+                    alive: !bot.dead,
+                    health: world.combat.as_ref().map_or_else(
+                        || Some(bot.spawn.health),
+                        |combat| combat.debug_health(slot),
+                    ),
+                    script_active: false,
+                })
+                .collect();
+            rooms.insert(
+                id,
+                game_debug::Room {
+                    id: format!("{:016X}{:016X}", id[0], id[1]),
+                    map: format!("{:016X}", room.map.map_guid),
+                    name: room.map.name.clone(),
+                    actors,
+                },
+            );
+        }
+        for (&connection, peer) in &self.peers {
+            let (id, slot) = self.seats[&connection];
+            let Some(room) = rooms.get_mut(&id) else {
+                continue;
+            };
+            if let Some(actor) = peer
+                .world
+                .debug_actor(self.rooms[&id].players[slot].info.team)
+            {
+                if room.actors.len() == MAX_DEBUG_ACTORS {
+                    truncated = true;
+                } else {
+                    room.actors.push(actor);
+                }
+            }
+        }
+        for room in rooms.values_mut() {
+            room.actors.sort_unstable_by_key(|actor| actor.entity);
+        }
+        game_debug::Snapshot {
+            tick: self.clock.frame(),
+            rooms: rooms.into_values().collect(),
+            truncated,
         }
     }
 
@@ -1252,6 +1348,23 @@ mod tests {
     }
 
     #[test]
+    fn debug_snapshot_excludes_unprepared_rooms_and_stops_with_the_worker() {
+        let mut server = GameService::bind(local(), Arc::new(fixture())).unwrap();
+        let idle = server.debug_snapshot().unwrap();
+        assert!(idle.rooms.is_empty());
+        assert!(!idle.truncated);
+        server
+            .open_match(MATCH, GameMap::practice_range(), player())
+            .unwrap();
+        assert!(server.debug_snapshot().unwrap().rooms.is_empty());
+        server.stop().unwrap();
+        assert_eq!(
+            server.debug_snapshot().err().unwrap().kind(),
+            io::ErrorKind::BrokenPipe
+        );
+    }
+
+    #[test]
     #[ignore = "requires the separately prepared 104319 game schemas"]
     fn worker_serves_loading_using_the_retail_schemas() {
         let root = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
@@ -1812,7 +1925,32 @@ mod tests {
             }
             PreparedFixture::Projectile => exercise_projectile(&mut client, &schemas),
             PreparedFixture::Stock => {
-                exercise_hero_selection(&mut client, &schemas, &assets, &server, &ticket)
+                exercise_hero_selection(&mut client, &schemas, &assets, &server, &ticket);
+                let snapshot = server.debug_snapshot().unwrap();
+                let [room] = snapshot.rooms.as_slice() else {
+                    panic!("expected one prepared room");
+                };
+                assert!(!snapshot.truncated);
+                assert_eq!(
+                    room.map,
+                    format!("{:016X}", GameMap::practice_range().map_guid)
+                );
+                assert_eq!(room.actors.len(), 16);
+                let actor = room
+                    .actors
+                    .iter()
+                    .find(|actor| actor.entity == CONTROLLER | 3)
+                    .unwrap();
+                assert!(matches!(actor.kind, game_debug::ActorKind::Player));
+                assert_eq!(actor.generation, Some(3));
+                assert!(actor.position.into_iter().all(f64::is_finite));
+                let bot = room
+                    .actors
+                    .iter()
+                    .find(|actor| actor.entity == BOT_ENTITY)
+                    .unwrap();
+                assert!(matches!(bot.kind, game_debug::ActorKind::Bot));
+                assert!(bot.alive && bot.health.is_some_and(|health| health > 0.0));
             }
         }
         server.stop().unwrap();

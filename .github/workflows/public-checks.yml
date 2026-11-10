@@ -2,8 +2,9 @@ name: Public source checks
 
 on:
   push:
-    branches: [main]
+    branches: [rust]
   pull_request:
+    branches: [rust]
   workflow_dispatch:
 
 permissions:
