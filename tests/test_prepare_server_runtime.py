@@ -12,6 +12,7 @@ from ow174.game.collision import chunk_guid
 from ow174.game.content import PRACTICE_RANGE
 from ow174.paths import CLIENT_CATALOGS, LOBBY_RUNTIME_DATA, MATCH_RUNTIME_DATA
 from tools.extract_arcade_cards import ASSET_FLAGS
+from tools.prepare_map_data import write_practice_props
 from tools.prepare_server_runtime import prepare
 
 
@@ -79,7 +80,7 @@ class RuntimeGenerationTests(unittest.TestCase):
                 (folder / "0000000003CF.003.xml").write_text("<Asset/>", encoding="utf-8")
 
         def run(command, **options):
-            if "-CollisionChunks" in command:
+            if "-MapChunks" in command:
                 self.assertEqual(command[-1], chunk_key)
                 data = {"schema": RECORD_CATALOG_SCHEMA, "build": RECORD_CATALOG_BUILD}
                 data["records"] = {chunk_key: record}
@@ -155,3 +156,62 @@ class RuntimeGenerationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"Missing runtime inputs: data/game_maps_174\.json"):
             prepare(self.source, self.destination, ["0688", "0CD3"], game=self.game)
         self.assertFalse(self.destination.exists())
+
+    def test_new_prop_index_rebuilds_the_base_cache_and_leaves_old_rays_out(self):
+        (self.data / "collision_props_174.json").unlink()
+        cache = self.source / "cache" / "collision"
+        cache.mkdir(parents=True)
+        (cache / "0688.col").write_bytes(b"old geometry")
+        (cache / "0688.rays.col").write_bytes(b"old ray geometry")
+
+        def props(game, tool, output):
+            self.assertEqual((game, tool), (self.game, self.tool))
+            output.write_text('{"generated":true}', encoding="utf-8")
+
+        def collision(staging, game, maps, inputs):
+            self.assertEqual([path.name for path in maps], ["0688.col"])
+            self.assertEqual(inputs["data/collision_props_174.json"].read_text(encoding="utf-8"),
+                             '{"generated":true}')
+            staging.mkdir()
+            (staging / "0688.col").write_bytes(b"new geometry")
+            return staging
+
+        with (
+            patch("tools.prepare_server_runtime.write_practice_props", side_effect=props),
+            patch("tools.prepare_server_runtime._build_collision", side_effect=collision),
+        ):
+            prepare(self.source, self.destination, ["0688"], game=self.game, data_tool=self.tool)
+        self.assertEqual((self.destination / "collision" / "0688.col").read_bytes(), b"new geometry")
+        self.assertFalse((self.destination / "collision" / "0688.rays.col").exists())
+        self.assertEqual((cache / "0688.col").read_bytes(), b"old geometry")
+
+    def test_practice_props_keep_only_non_client_blocking_root_models(self):
+        entities = 0x0DD0000B00000688
+        definition = 0x0400000000000100
+        blocking = 0x0D00000000000200
+        decoration = blocking + 1
+        client_only = blocking + 2
+        placement_record = {"fixture": "placement"}
+        assets = {
+            definition: {"fixture": "definition"},
+            blocking: {"fixture": "blocking"},
+            decoration: {"fixture": "decoration"},
+        }
+        output = self.folder / "props.json"
+        with (
+            patch(
+                "tools.prepare_map_data._local_records", side_effect=[{entities: placement_record}, assets],
+            ),
+            patch("tools.prepare_map_data.Storage") as storage,
+            patch("tools.prepare_map_data.props.placements", return_value=[(definition, 0)]),
+            patch("tools.prepare_map_data.props.entity_model_refs",
+                  return_value=([(blocking, False), (decoration, False), (client_only, True)], [])),
+            patch("tools.prepare_map_data.props.model_shapes", side_effect=[[object()], []]),
+        ):
+            write_practice_props(self.game, self.tool, output)
+        self.assertEqual(storage.return_value.read_record.call_count, 4)
+        data = json.loads(output.read_text(encoding="utf-8"))
+        model = f"0x{blocking:016X}"
+        self.assertEqual(data["maps"], {f"0x{PRACTICE_RANGE.map_guid:016X}": placement_record})
+        self.assertEqual(data["defs"], {f"0x{definition:016X}": model})
+        self.assertEqual(data["models"], {model: assets[blocking]})

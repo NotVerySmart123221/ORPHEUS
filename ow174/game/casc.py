@@ -93,8 +93,8 @@ class RecordCatalog:
         ):
             raise CascError("record catalog must describe build 1.74.0.0.104319")
         records = {}
-        pattern = r"0x0DD00011[0-9A-F]{8}" if collision_chunks else r"0x(?:0400|0D00)[0-9A-F]{12}"
-        kind = "collision chunk" if collision_chunks else "definition or model"
+        pattern = r"0x0DD000(?:0B|11)[0-9A-F]{8}" if collision_chunks else r"0x(?:0400|0D00)[0-9A-F]{12}"
+        kind = "map chunk" if collision_chunks else "definition or model"
         for text, record in data["records"].items():
             if not re.fullmatch(pattern, text):
                 raise CascError(f"invalid {kind} GUID {text}")

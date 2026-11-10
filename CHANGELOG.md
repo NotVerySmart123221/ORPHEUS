@@ -6,6 +6,18 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Local Practice Range prop index
+
+- Generate a missing `collision_props_174.json` for Practice Range from the target client's
+  map placements and root model collision records. Rebuild the base collision cache
+  with the generated index and omit any earlier optional ray cache.
+- A retained 104319 placement chunk and model XML confirmed 508 placements and all 33
+  reference definition-to-model mappings. A hybrid check reproduced the reference
+  index using those exports and the reference movement-model classification.
+- Passed 156 Python source tests, 2 dashboard tests and Ruff, with 6 fixture skips.
+  Fresh 104319 extraction and original-client play remain open. The seven remaining
+  prepared inputs have no verified public distribution route.
+
 #### Selected map and bot data generation
 
 - Generate a missing `game_maps_174.json` from the built-in scene when the requested pack
