@@ -18,7 +18,7 @@ This log records tested changes and their acceptance status. Entries are grouped
   files; a content key asserted in a test is asserted by name. Machine paths became the
   `OW174_GAME` variable or placeholders. Every added file was checked against the local key
   files and for personal details; `offline/leak_audit.py` repeats that check and reported no
-  problem in 405 files, and one when a key was planted in a scratch file. Run logs, screenshots and generated data stay ignored;
+  problem in 404 files, and one when a key was planted in a scratch file. Run logs, screenshots and generated data stay ignored;
   59 mover recordings that the tests replay are tracked.
 - From this checkout the offline suite passed with 640 tests and 524 subtests, with the local
   inputs and the installation in place. A fresh clone of the pushed branch, given the same local
