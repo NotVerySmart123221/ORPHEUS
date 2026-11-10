@@ -48,7 +48,13 @@ cargo run --locked --bin orpheus_server -- --data-dir 'C:\path\to\local-state'
 
 The preflight reports missing inputs by category and checks the signing input length. The native server parses the runtime before opening its loopback listeners. It can start independently of a game installation or relay DLL. The local state directory holds profiles and server state. Use a separate directory for each running server.
 
-Append `--debug-port 3726` to enable the read-only inspector at [127.0.0.1:3726](http://127.0.0.1:3726/). The [architecture guide](docs/NATIVE_SERVER_ARCHITECTURE.md#collision-and-live-inspection) describes its sampling limits. Original-client verification uses a separately configured local connection and the exact 104319 client. [Verification procedure](CONTRIBUTING.md#original-client-verification)
+The read-only inspector is disabled in default builds. Enable its Cargo feature and choose a loopback port when running it.
+
+```powershell
+cargo run --locked --features inspector --bin orpheus_server -- --data-dir 'C:\path\to\local-state' --debug-port 3726
+```
+
+Open [127.0.0.1:3726](http://127.0.0.1:3726/) after startup. The [architecture guide](docs/NATIVE_SERVER_ARCHITECTURE.md#collision-and-live-inspection) describes its sampling limits. Original-client verification uses a separately configured local connection and the exact 104319 client. [Verification procedure](CONTRIBUTING.md#original-client-verification)
 
 ## Get involved
 

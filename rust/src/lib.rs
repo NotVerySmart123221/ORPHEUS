@@ -18,7 +18,9 @@ pub mod bnet_session_key;
 pub mod catalog;
 pub mod collection;
 pub mod commands;
+#[cfg(any(test, feature = "inspector"))]
 mod debug_geometry;
+#[cfg(feature = "inspector")]
 mod debug_http;
 pub mod game_body;
 pub mod game_bots;

@@ -25,6 +25,15 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace --all-targets
 ```
 
+The inspector's HTTP listener and web assets are opt-in. Also check this configuration when changing diagnostics, server startup or the inspector assets.
+
+```powershell
+cargo clippy --locked --workspace --all-targets --features inspector -- -D warnings
+cargo test --locked --workspace --all-targets --features inspector
+```
+
+Public CI covers both configurations. The default test build covers snapshots, collision projection and worker timing. HTTP endpoint tests run with `inspector` enabled.
+
 ### Python reference and dashboard
 
 These checks are optional for Rust work that leaves the reference code alone. The Python implementation and Windows launcher are maintained on the [default branch](https://github.com/leafall903/ORPHEUS/tree/main). Use 64-bit Python 3.12 and Node.js 24 for the dashboard test. Run the selected checks with `ORPHEUS_RUNTIME_DIR` unset. Broad Python test discovery can require private fixtures.

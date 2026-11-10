@@ -18,7 +18,6 @@ use crate::{
         AdmittedFlight, BotReplacement, FlightOutcome, PosedHitscan, PosedProjectile, PosedShot,
     },
     game_controller::ControllerFrame,
-    game_debug::{Actor, ActorKind},
     game_egress::{DeliveryReport, FrameRecords, GameEgress, RecordSource, SendError, SentFrame},
     game_heroes::{Hero, SOLDIER},
     game_messages::Message,
@@ -41,6 +40,9 @@ use crate::{
         SkinTheme, frame,
     },
 };
+
+#[cfg(any(test, feature = "inspector"))]
+use crate::game_debug::{Actor, ActorKind};
 
 const BODY_REUSE_DELAY: Duration = Duration::from_secs(30);
 // Resource bound for this worker. The reference keeps 64 predicted states and
@@ -588,6 +590,7 @@ impl WorldDelivery {
         self.started.is_some()
     }
 
+    #[cfg(any(test, feature = "inspector"))]
     pub(crate) fn debug_actor(&self, team: u8) -> Option<Actor> {
         let (body, mover) = self.body.zip(self.mover.as_ref())?;
         let pose = mover.pose();

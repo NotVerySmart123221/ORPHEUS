@@ -4,7 +4,7 @@
 //! initial world. Maps that need the unported bot VM retain that requirement.
 
 use std::{
-    collections::{BTreeMap, HashMap, VecDeque},
+    collections::{HashMap, VecDeque},
     io,
     net::SocketAddr,
     sync::{
@@ -26,7 +26,6 @@ use crate::{
     game_connection::{GameConnections, MAX_CONNECTION_ID, Outgoing, SILENCE_TIME},
     game_content::{GameMap, PRACTICE_RANGE_MODE},
     game_controller::ControllerFrame,
-    game_debug,
     game_egress::GameEgress,
     game_ingress::{GameIngress, MapReadiness, MapReadyStep, MessageKind, WorldReadiness, pong},
     game_instance::{Instance, Member, RETAIL_QUANTA, TOURNAMENT_QUANTA, ownership},
@@ -43,14 +42,23 @@ use crate::{
     world::{EntityUpdate, GAME_MODE_ENTITY, MAX_PAYLOAD, SkinTheme, frame},
 };
 
+#[cfg(any(test, feature = "inspector"))]
+use std::collections::BTreeMap;
+
+#[cfg(any(test, feature = "inspector"))]
+use crate::game_debug;
+
 const GAME_SOCKET: Token = Token(0);
 const REQUESTS: Token = Token(1);
 const RECEIVE_BATCH: usize = 64;
 const INPUT_PER_PEER: usize = 16;
 const INPUT_PER_TURN: usize = 64;
 const MAX_PENDING_COMBAT_NOTICES: usize = 256;
+#[cfg(any(test, feature = "inspector"))]
 const DEBUG_WAIT: Duration = Duration::from_millis(250);
+#[cfg(any(test, feature = "inspector"))]
 const MAX_DEBUG_ROOMS: usize = 16;
+#[cfg(any(test, feature = "inspector"))]
 const MAX_DEBUG_ACTORS: usize = 64;
 
 #[derive(Debug)]
@@ -94,6 +102,7 @@ enum Request {
         skin: SkinTheme,
         reply: mpsc::SyncSender<()>,
     },
+    #[cfg(any(test, feature = "inspector"))]
     Debug {
         reply: mpsc::SyncSender<game_debug::Snapshot>,
     },
@@ -284,6 +293,7 @@ impl GameService {
         receive.recv().map_err(|_| stopped())
     }
 
+    #[cfg(any(test, feature = "inspector"))]
     pub(crate) fn debug_snapshot(&self) -> io::Result<game_debug::Snapshot> {
         let (reply, receive) = mpsc::sync_channel(1);
         self.enqueue(Request::Debug { reply })?;
@@ -725,12 +735,14 @@ impl State {
                 }
                 let _ = reply.send(());
             }
+            #[cfg(any(test, feature = "inspector"))]
             Request::Debug { reply } => {
                 let _ = reply.try_send(self.debug_snapshot());
             }
         }
     }
 
+    #[cfg(any(test, feature = "inspector"))]
     fn debug_snapshot(&self) -> game_debug::Snapshot {
         let mut rooms = BTreeMap::new();
         let mut truncated = false;

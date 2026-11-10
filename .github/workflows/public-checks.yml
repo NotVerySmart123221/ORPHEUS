@@ -14,6 +14,9 @@ jobs:
   rust-protocol-tests:
     runs-on: windows-latest
     timeout-minutes: 10
+    strategy:
+      matrix:
+        features: [default, inspector]
     steps:
       - uses: actions/checkout@v6.0.2
         with:
@@ -23,9 +26,9 @@ jobs:
       - name: Check Rust formatting and lint
         run: |
           cargo +stable fmt --all -- --check
-          cargo +stable clippy --locked --workspace --all-targets -- -D warnings
+          cargo +stable clippy --locked --workspace --all-targets --features "${{ matrix.features }}" -- -D warnings
       - name: Run Rust protocol regressions
-        run: cargo +stable test --locked --workspace --all-targets
+        run: cargo +stable test --locked --workspace --all-targets --features "${{ matrix.features }}"
 
   source-tests:
     runs-on: windows-latest

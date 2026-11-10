@@ -19,9 +19,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_PEERS: usize = 8;
 const MAX_REQUEST_BYTES: usize = 8192;
 const MAX_REGION_QUERY_BYTES: usize = 128;
-const HTML: &str = include_str!("debug_web/index.html");
-const CSS: &str = include_str!("debug_web/debug.css");
-const SCRIPT: &str = include_str!("debug_web/debug.js");
+const HTML: &str = include_str!("../assets/inspector/index.html");
+const CSS: &str = include_str!("../assets/inspector/debug.css");
+const SCRIPT: &str = include_str!("../assets/inspector/debug.js");
 
 pub(crate) struct DebugHttp {
     addr: SocketAddr,

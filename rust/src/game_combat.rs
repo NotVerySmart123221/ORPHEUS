@@ -13,7 +13,6 @@ use crate::{
     commands::Command,
     game_bots::{BOT_ENTITY, BOT_RECORD_DELAY, BOT_RESPAWN_TIME, Bot},
     game_combat_messages::CombatNotice,
-    game_debug::{Actor, ActorKind},
     game_heroes::SOLDIER,
     game_hitscan::{HitDefinition, HitscanShot, Impact, TargetHistory, ViewFrame},
     game_projectiles::ProjectileToken,
@@ -25,6 +24,9 @@ use crate::{
     vitals::{Death, Vitals},
     world::{EntityUpdate, Operation},
 };
+
+#[cfg(any(test, feature = "inspector"))]
+use crate::game_debug::{Actor, ActorKind};
 
 pub(crate) fn eye_height(hero: u64, crouched: bool) -> f64 {
     match (crouched, hero) {
@@ -171,6 +173,7 @@ impl RoomSimulation {
         Some(&mut self.state_mut(wire_id)?.bot)
     }
 
+    #[cfg(any(test, feature = "inspector"))]
     pub(crate) fn debug_actors(&self) -> impl ExactSizeIterator<Item = Actor> {
         self.states().map(|state| {
             let bot = &state.bot;

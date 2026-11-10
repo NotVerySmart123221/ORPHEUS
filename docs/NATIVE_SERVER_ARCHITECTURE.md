@@ -32,6 +32,8 @@ Cross-module public protocol and native CLI tests live in `rust/tests`. The inde
 
 Keep pure geometry tests and frozen arithmetic fingerprints with the collision crate. Prepared 104319 collision and movement regressions remain in the server validation lane. The kernel fixtures exercise synthetic inputs and reference behavior. Original-client parity needs separate evidence.
 
+See the [structure review](RUST_STRUCTURE_REVIEW.md) for the dependency graph findings and remaining migration decisions.
+
 ## Room authority and transport
 
 Give each active room one authoritative ECS world. Store body identity, transform and collider, vitals, rewind poses, and lifetime on the same entity. A stable spawner slot identifies the authored spawn across respawns. A body handle includes a generation, so a delayed event cannot affect the replacement body. Keep retail wire IDs in a separate mapping with the existing lifetime and reuse rules. Keep controller identity separate from the body it possesses.
@@ -56,7 +58,9 @@ Expand scripting only after verifying handle lifetimes, event order, determinist
 
 ## Collision and live inspection
 
-The first dashboard slice is opt-in and loopback-only. It projects read-only, tick-stamped map and actor state from the same worker that runs the match. Show a top-down view of loaded collision geometry, actual actor positions, and available collider information. Label geometry source, query layer, masks, and height so vertically separated surfaces are distinguishable. Report missing inputs and any truncation. Cap the snapshot and wait time, keep HTTP and serialization outside the tick, and expose no credentials, session keys, captures, profiles, or local paths. The visualization consumes a projection of current authority and can switch its source to ECS as entities migrate.
+The first dashboard slice is opt-in and loopback-only. Default builds exclude the HTTP listener and embedded assets. Build with `--features inspector` and run with `--debug-port <port>` to enable it. The HTML, JavaScript and CSS live in [rust/assets/inspector](../rust/assets/inspector). Direct snapshot, collision projection and worker timing tests also run without this feature. HTTP endpoint tests run in the feature-enabled configuration.
+
+It projects read-only, tick-stamped map and actor state from the same worker that runs the match. Show a top-down view of loaded collision geometry, actual actor positions, and available collider information. Label geometry source, query layer, masks, and height so vertically separated surfaces are distinguishable. Report missing inputs and any truncation. Cap the snapshot and wait time, keep HTTP and serialization outside the tick, and expose no credentials, session keys, captures, profiles, or local paths. The visualization consumes a projection of current authority and can switch its source to ECS as entities migrate.
 
 The viewer opens with a 48 × 32 × 48 meter region around the first player spawn. Sample a room actor's current position or specify XYZ and a half extent from 1 to 16 meters. The HTTP worker reads the same immutable indexes and caps each response at 4,096 triangles and 256 contact bounds. The triangle layer shows the ground probe and hitscan surface sample. The contact layer shows character broad-phase bounds. A bound can include empty space and is useful for locating a shape. It cannot establish that the narrow-phase solver reported a hit. The endpoints report source, masks, totals and sampling caps.
 

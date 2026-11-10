@@ -48,7 +48,13 @@ cargo run --locked --bin orpheus_server -- --data-dir 'C:\path\to\local-state'
 
 自检按类别列出缺项，并检查签名输入长度。服务端会在开启本地回环监听前解析运行数据，可以独立于游戏安装和中继 DLL 启动。本地状态目录保存账号和服务端状态，每个运行中的实例应使用独立目录。
 
-在启动命令末尾添加 `--debug-port 3726`，可在 [127.0.0.1:3726](http://127.0.0.1:3726/) 打开只读调试面板。[架构文档](docs/NATIVE_SERVER_ARCHITECTURE.md#collision-and-live-inspection)列出了采样限制。实机验收需要已独立配置的本地连接和准确的 104319 客户端。[验收流程](CONTRIBUTING.md#original-client-verification)
+默认构建关闭只读调试面板。需要使用时，启用 Cargo 的 `inspector` 功能，并指定本地端口。
+
+```powershell
+cargo run --locked --features inspector --bin orpheus_server -- --data-dir 'C:\path\to\local-state' --debug-port 3726
+```
+
+启动后可在 [127.0.0.1:3726](http://127.0.0.1:3726/) 打开面板。[架构文档](docs/NATIVE_SERVER_ARCHITECTURE.md#collision-and-live-inspection)列出了采样限制。实机验收需要已独立配置的本地连接和准确的 104319 客户端。[验收流程](CONTRIBUTING.md#original-client-verification)
 
 ## 如何参与
 

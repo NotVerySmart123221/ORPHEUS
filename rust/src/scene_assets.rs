@@ -17,13 +17,11 @@ use crate::{
     collision_index::TriangleIndex,
     collision_scene::CollisionScene,
     contact_world::ContactWorld,
-    debug_geometry::DebugGeometry,
     game_bots::{Bot, BotCatalog, BotWalk},
     game_clock::FIRST_TICK,
     game_combat::RoomSimulation,
     game_content::{GameMap, PRACTICE_RANGE_MAP, PRACTICE_RANGE_MODE},
     game_controller::Controller,
-    game_debug::Actor,
     game_heroes::{Hero, HeroCatalog, SOLDIER},
     game_instance::RETAIL_QUANTA,
     game_pools::PoolCatalog,
@@ -40,6 +38,9 @@ use crate::{
     script_wire::Variables,
     world::{Component, EntityUpdate},
 };
+
+#[cfg(any(test, feature = "inspector"))]
+use crate::{debug_geometry::DebugGeometry, game_debug::Actor};
 
 const MOVER_CATEGORY: u16 = 0x18;
 
@@ -101,6 +102,7 @@ pub struct SceneAssets {
 
 pub struct PreparedScene {
     map: GameMap,
+    #[cfg(any(test, feature = "inspector"))]
     movement_cache: String,
     ground: Arc<CollisionScene>,
     contacts: Option<Arc<ContactWorld>>,
@@ -170,7 +172,7 @@ impl SceneAssets {
             .filter(|bot| self.graphs.entity_body(bot.spawn.body).is_some())
             .count();
         let MapCollision {
-            movement_cache,
+            movement_cache: _movement_cache,
             ground,
             contacts,
         } = self.map_collision(
@@ -198,7 +200,8 @@ impl SceneAssets {
                 .component(&PlayerStats::default(), map.mode_guid, None, None);
         let mut scene = PreparedScene {
             map,
-            movement_cache,
+            #[cfg(any(test, feature = "inspector"))]
+            movement_cache: _movement_cache,
             ground,
             contacts,
             controller,
@@ -330,6 +333,7 @@ impl PreparedScene {
         self.ground.triangles()
     }
 
+    #[cfg(any(test, feature = "inspector"))]
     pub(crate) fn debug_geometry(&self) -> DebugGeometry {
         DebugGeometry::new(
             &self.map,
@@ -392,6 +396,7 @@ impl PreparedScene {
         self.simulation.bodies()
     }
 
+    #[cfg(any(test, feature = "inspector"))]
     pub(crate) fn bot_actors(&self) -> impl ExactSizeIterator<Item = Actor> {
         self.simulation.debug_actors()
     }

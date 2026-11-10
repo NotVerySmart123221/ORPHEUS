@@ -12,7 +12,8 @@ const USAGE: &str = "Usage: orpheus_server --data-dir <directory> [--runtime <di
 
 The native 1.74 server listens on loopback. Use an authorized base runtime
 directory or set ORPHEUS_RUNTIME_DIR. --check-runtime lists missing inputs
-without starting listeners. --debug-port enables the read-only inspector.
+without starting listeners. --debug-port enables the read-only inspector
+in a binary built with --features inspector (disabled by default).
 Press Enter in the terminal to stop.";
 
 fn main() -> ExitCode {
@@ -61,6 +62,11 @@ fn run() -> io::Result<()> {
             Some("--debug-port") => config.debug_port = Some(port(value)?),
             _ => return Err(usage_error("unknown option")),
         }
+    }
+    if !check_runtime && config.debug_port.is_some() && !cfg!(feature = "inspector") {
+        return Err(usage_error(
+            "--debug-port requires a build with --features inspector",
+        ));
     }
     if config.runtime.as_os_str().is_empty() {
         return Err(usage_error("use --runtime or set ORPHEUS_RUNTIME_DIR"));

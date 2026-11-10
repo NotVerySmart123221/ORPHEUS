@@ -21,7 +21,6 @@ use crate::{
     bnet_service::{self, BnetService},
     catalog::ItemDb,
     collection::Collection,
-    debug_http::DebugHttp,
     game_content::GameMap,
     game_service::GameService,
     jam_codec::Schemas,
@@ -40,6 +39,9 @@ use crate::{
     scene_assets::{PreparedScene, SceneAssets},
     service_tcp::{PeerStream, PeerWorkers, accept},
 };
+
+#[cfg(feature = "inspector")]
+use crate::debug_http::DebugHttp;
 
 const MAX_LOBBY_PEERS: usize = 32;
 const ACCEPT_POLL: Duration = Duration::from_millis(10);
@@ -77,6 +79,7 @@ pub struct Server {
     lobby: Option<JoinHandle<io::Result<()>>>,
     bnet: BnetService,
     game: Option<Arc<GameService>>,
+    #[cfg(feature = "inspector")]
     debug: Option<DebugHttp>,
 }
 
@@ -84,6 +87,12 @@ impl Server {
     /// Validate the data before starting the loopback listeners. This entry
     /// point serves the base graph bundle and contains no client launcher.
     pub fn start(config: ServerConfig) -> io::Result<Self> {
+        if config.debug_port.is_some() && !cfg!(feature = "inspector") {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "--debug-port requires a build with --features inspector",
+            ));
+        }
         check_practice_runtime(&config.runtime)?;
         let data = config.runtime.join("data");
         let signing_key = fs::read(data.join("lobby_state_blob.key"))?
@@ -132,6 +141,7 @@ impl Server {
             config.debug_port.is_some(),
         )?);
         let game_addr = game.local_addr();
+        #[cfg(feature = "inspector")]
         let debug = if let Some(port) = config.debug_port {
             let geometry = scene.debug_geometry();
             let worker = Arc::clone(&game);
@@ -185,6 +195,7 @@ impl Server {
             lobby: Some(lobby),
             bnet,
             game: Some(game),
+            #[cfg(feature = "inspector")]
             debug,
         })
     }
@@ -203,11 +214,21 @@ impl Server {
     }
 
     pub fn debug_addr(&self) -> Option<SocketAddr> {
-        self.debug.as_ref().map(DebugHttp::addr)
+        #[cfg(feature = "inspector")]
+        {
+            self.debug.as_ref().map(DebugHttp::addr)
+        }
+        #[cfg(not(feature = "inspector"))]
+        {
+            None
+        }
     }
 
     pub fn stop(&mut self) -> io::Result<()> {
+        #[cfg(feature = "inspector")]
         let debug = self.debug.take().map_or(Ok(()), |mut debug| debug.stop());
+        #[cfg(not(feature = "inspector"))]
+        let debug = Ok(());
         let bnet = self.bnet.stop();
         let lobby = if let Some(worker) = self.lobby.take() {
             let _ = self.stop_lobby.send(());

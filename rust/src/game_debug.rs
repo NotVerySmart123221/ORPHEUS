@@ -2,8 +2,10 @@
 
 use serde::Serialize;
 
+#[cfg(any(test, feature = "inspector"))]
 use crate::game_timing::WorkerTiming;
 
+#[cfg(any(test, feature = "inspector"))]
 #[derive(Serialize)]
 pub(crate) struct Snapshot {
     pub tick: u32,
@@ -13,6 +15,7 @@ pub(crate) struct Snapshot {
     pub timing: Option<WorkerTiming>,
 }
 
+#[cfg(any(test, feature = "inspector"))]
 #[derive(Serialize)]
 pub(crate) struct Room {
     pub id: String,
@@ -21,6 +24,7 @@ pub(crate) struct Room {
     pub actors: Vec<Actor>,
 }
 
+#[cfg(any(test, feature = "inspector"))]
 #[derive(Serialize)]
 pub(crate) struct Actor {
     pub entity: u32,
@@ -47,6 +51,7 @@ pub(crate) struct ContactClip {
     pub after: [f64; 3],
 }
 
+#[cfg(any(test, feature = "inspector"))]
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ActorKind {

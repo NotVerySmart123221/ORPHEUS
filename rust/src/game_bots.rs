@@ -422,6 +422,7 @@ impl Bot {
         }
     }
 
+    #[cfg(any(test, feature = "inspector"))]
     pub(crate) fn last_contact_clip(&self) -> Option<ContactClip> {
         self.collision.as_ref()?.trace.as_ref()?.last_clip
     }

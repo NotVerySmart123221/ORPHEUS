@@ -43,7 +43,7 @@ The operand-free instance exit uses the shared event queue and removes pending w
 
 The owner movement sampler reads the same mover pose used by the match worker. It applies changed Boolean outputs before its startup subgraph and during ticks, and uses the existing owner flags codec. The preflight and live body use the same spawn mover. A freshly constructed body starts with the embedded standing record, following the later client's constructor evidence. Its exact 104319 startup context and scripted movement modes still need verification. The tagged Soldier preflight now reaches the crouch branch's effect action at `01C7`, node `74`.
 
-The native server currently serves the solo base Practice Range on loopback. Use `--debug-port 3726` for the optional local read-only simulation inspector. It projects active room state and sampled collision geometry. Other matchmaking modes, social actions, administration features and original-client acceptance remain pending.
+The native server currently serves the solo base Practice Range on loopback. Build with `--features inspector` and use `--debug-port 3726` for the optional local read-only simulation inspector. Default builds exclude its HTTP listener and web assets. It projects active room state and sampled collision geometry. Other matchmaking modes, social actions, administration features and original-client acceptance remain pending.
 
 ```powershell
 $env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\authorized-base-runtime'

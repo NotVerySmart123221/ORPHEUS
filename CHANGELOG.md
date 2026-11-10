@@ -6,6 +6,12 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-11
 
+#### Make the native inspector opt-in
+
+- Made the loopback HTTP inspector a default-off Cargo feature. Moved its web assets to `rust/assets/inspector`. The CLI explains how to enable the feature when `--debug-port` is requested.
+- Added default and inspector lanes to public CI and documented the module graph findings, retained entry points and remaining crate boundaries in the structure review.
+- Passed 343 default and 346 inspector workspace tests, both Clippy configurations, formatting, 67 relative documentation link checks and the Rust 1.85.1 library and binary check with the inspector enabled. The prepared-runtime encrypted login and Practice Range delivery regression passed with the inspector feature enabled.
+
 #### Separate runtime preparation and integration tests
 
 - Moved the runtime packer, input inventory and preflight to `orpheus-runtime`. It builds independently of the game server. The CLI and existing server runtime API remain available, and the packer and graph reader share their catalog format helpers.

@@ -2,6 +2,9 @@ use std::{fs, path::Path, process::Command};
 
 use orpheus::runtime::{BNET_DESCRIPTORS, LOBBY_RUNTIME_DATA, MATCH_RUNTIME_DATA};
 
+#[cfg(not(feature = "inspector"))]
+use orpheus::server::{Server, ServerConfig};
+
 fn check(root: &Path) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_orpheus_server"))
         .arg("--check-runtime")
@@ -127,4 +130,93 @@ fn server_loads_the_graph_bundle_enriched_by_the_runtime_packer() {
         graphs.bodies()[&0x0400_0000_0000_0001].target_tags,
         Some(BTreeSet::from([0x0d60_0000_0000_0001]))
     );
+}
+
+#[test]
+fn help_describes_the_inspector_feature_without_runtime_inputs() {
+    let output = Command::new(env!("CARGO_BIN_EXE_orpheus_server"))
+        .env_remove("ORPHEUS_RUNTIME_DIR")
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let help = String::from_utf8(output.stdout).unwrap();
+    assert!(help.contains("--features inspector"));
+    assert!(help.contains("disabled by default"));
+}
+
+#[test]
+fn normal_server_options_reach_runtime_validation_before_writing_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("local-state");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_orpheus_server"));
+    command
+        .arg("--runtime")
+        .arg(dir.path())
+        .arg("--data-dir")
+        .arg(&state)
+        .args([
+            "--account",
+            "rust",
+            "--lobby-port",
+            "0",
+            "--game-port",
+            "0",
+            "--stall-port",
+            "0",
+            "--rpc-port",
+            "0",
+        ]);
+    if cfg!(feature = "inspector") {
+        command.args(["--debug-port", "0"]);
+    }
+    let output = command.output().unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        error.contains("Tool outputs from authorized local inputs"),
+        "{error}"
+    );
+    assert!(!state.exists());
+}
+
+#[test]
+fn runtime_preflight_uses_the_environment_without_enabling_the_inspector() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_orpheus_server"))
+        .env("ORPHEUS_RUNTIME_DIR", dir.path())
+        .args(["--check-runtime", "--debug-port", "0"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains("collision/0688.col"), "{error}");
+    assert!(!error.contains("requires a build"), "{error}");
+}
+
+#[test]
+#[cfg(not(feature = "inspector"))]
+fn debug_port_requires_the_inspector_feature_before_startup() {
+    let output = Command::new(env!("CARGO_BIN_EXE_orpheus_server"))
+        .env_remove("ORPHEUS_RUNTIME_DIR")
+        .args(["--debug-port", "0"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("--debug-port requires a build with --features inspector")
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("local-state");
+    let mut config = ServerConfig::new(dir.path().to_owned(), state.clone());
+    config.debug_port = Some(0);
+    let error = Server::start(config).err().expect("feature disabled");
+    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+    assert!(error.to_string().contains("--features inspector"));
+    assert!(!state.exists());
 }

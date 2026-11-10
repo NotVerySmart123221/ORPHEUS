@@ -32,6 +32,10 @@ path = "rust/tests/runtime_preflight.rs"
 name = "protocol"
 path = "rust/tests/protocol.rs"
 
+[features]
+default = []
+inspector = ["dep:httparse"]
+
 [dependencies]
 aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "alloc"] }
 bevy_ecs = { version = "0.16.1", default-features = false, features = ["std"] }
@@ -39,7 +43,7 @@ crc32fast = "1"
 flate2 = "1.1"
 getrandom = "0.3"
 hmac = "0.12"
-httparse = "1"
+httparse = { version = "1", optional = true }
 indexmap = { version = "2", features = ["serde"] }
 mio = { version = "1.1.1", features = ["net", "os-poll"] }
 mlua = { version = "=0.11.6", default-features = false, features = ["lua54", "vendored"] }
