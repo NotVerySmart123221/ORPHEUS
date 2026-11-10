@@ -20,8 +20,9 @@ This log records tested changes and their acceptance status. Entries are grouped
   files and for personal details. Run logs, screenshots and generated data stay ignored;
   59 mover recordings that the tests replay are tracked.
 - From this checkout the offline suite passed with 640 tests and 524 subtests, with the local
-  inputs and the installation in place. Without the local inputs it stops with a message naming
-  the missing files. Ruff and the public source checks still pass with 170 Python tests and
+  inputs and the installation in place. A fresh clone of the pushed branch, given the same local
+  files and the map data the launcher builds, passed 635 and skipped 5. Without the local inputs
+  the suite stops with a message naming the missing files. Ruff and the public source checks still pass with 170 Python tests and
   2 dashboard tests.
 - Original-client check, 2026-11-10, launched from `offline/`: retail main menu at 32:9,
   Training, Practice Range, hero select and spawn as Soldier: 76. Against a still training bot:

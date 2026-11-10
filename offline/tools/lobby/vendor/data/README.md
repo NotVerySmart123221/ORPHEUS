@@ -22,7 +22,7 @@ Three more local files live beside the code that reads them:
 
 - `tools/lobby/oracle_graphs_174.json`: graphs the pinned catalog lacks, written by `tools/assets/graph_record.py`.
 - `tools/assets/stu_names.json`: STU names, written by `tools/assets/stu_names.py` from an OWLib checkout.
-- `tools/lobby/data/`: collision meshes, navigation grids, catalogs and player profiles. `tools/lobby/run.py` makes
-  them from the installation when it starts.
+- `tools/lobby/data/` and `tools/lobby/vendor/cache/`: collision meshes, navigation grids, catalogs, the mover's map
+  caches and player profiles. `tools/lobby/run.py` makes them from the installation when it starts.
 
 Without the files in the table the test suite stops with a message that names the missing ones.

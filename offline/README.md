@@ -66,7 +66,14 @@ From `offline/`:
 python -B -m pytest tools/lobby tools/assets tools/research tools/blender -q
 ```
 
-640 tests passed on 2026-11-10 with the local inputs and the installation in place.
+640 tests passed on 2026-11-10 with the local inputs and the installation in place. A fresh clone of the branch
+given the same local files passed 635 and skipped 5.
+
+- 14 tests replay recordings through the map collision and read the mission markers. They need
+  `tools/lobby/data/` and `tools/lobby/vendor/cache/`, which `run.py` builds from the installation the first time
+  it starts. Without them those tests fail.
+- 5 tests compare the weapon tables with a local damage snapshot written by `tools/research/hitdef_shadow.py`
+  and are skipped without it.
 
 ## Seen in the client
 
