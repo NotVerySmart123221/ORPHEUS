@@ -146,11 +146,15 @@ automation tool.
   the bot down, one of them with the elimination notice on screen, and none has anything in
   the kill feed corner.
 - The elimination notice read "ELIMINATED" with no name after it.
+- **The client took the option.** In the same session its Options screen, Gameplay page,
+  showed Kill Feed Display On, Always Skip Kill Cam Off and Tips Display On: the three values
+  the server sent. The client saved no option block in that session (no 22203), so the screen
+  showed what login gave it. The byte itself was not read from memory, and the screen was not
+  compared with a login that sends zeros.
 
-So the option default is not enough for a bot kill on ORPHEUS. What this run does not show:
+So the option arrives and is still not enough for a bot kill on ORPHEUS. What this run does not
+show:
 
-- Whether the client took the option. The settings system's byte `+700` was not read, because
-  the tracer is not ported.
 - Whether the bot's fresh pulser went out. `combat.kill_feed_allowed` holds it back until the
   mode script is delivered and the client has both the bot's and the killer's identity.
 - Whether the client's own conditions passed. The first one in `0C18` is `STU_CD7F3617()`, the
@@ -160,8 +164,8 @@ So the option default is not enough for a bot kill on ORPHEUS. What this run doe
 
 ## Open
 
-- Where the chain stops for a bot kill on ORPHEUS: the option byte, the pulser, or the client's
-  name test. A statescript tracer on the client would tell.
+- Where the chain stops for a bot kill on ORPHEUS: the bot's pulser or the client's name test.
+  A statescript tracer on the client would tell.
 - The meaning of `STU_0D179CAF` and `STU_CEFF290A`.
 - A line's critical-hit mark, ability icon and assists (the other `003E.025` parameters) were
   not exercised.

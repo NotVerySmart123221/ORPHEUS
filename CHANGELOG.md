@@ -22,9 +22,10 @@ This log records tested changes and their acceptance status. Entries are grouped
   Range's enemy training bot was killed 12 times as Soldier: 76. The server logged every hit
   and kill, the bot fell apart and respawned, and the elimination notice drew without a name.
   **No kill feed line drew**, so this default alone does not restore the feed for a bot kill.
-  Whether the client took the option byte, whether the bot's pulser went out and whether the
-  client's name test passed were not observed; the [note](docs/research/kill-feed.md) lists
-  them. No name or health bar drew over the bot either.
+  The client's Options screen showed Kill Feed Display on in that session, so the option
+  arrived. Whether the bot's pulser went out and whether the client's name test passed were
+  not observed; the [note](docs/research/kill-feed.md) lists them. No name or health bar drew
+  over the bot either.
 
 #### Client research notes
 
