@@ -10,8 +10,10 @@ The community-maintained `main` branch accepts Python server and tooling contrib
 git clone https://github.com/leafall903/ORPHEUS.git
 cd ORPHEUS
 py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt "ruff==0.17.3"
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
+
+The editable install provides `orpheus` and `python -m orpheus`. Runtime dependencies and development extras are declared in `pyproject.toml`.
 
 Submit changes from a topic branch on your fork to `main`. Use your own Git author identity. Keep code, research and evidence scoped to the change.
 
@@ -23,35 +25,12 @@ Run these Python and JavaScript checks from a clean checkout without a local `ru
 Remove-Item Env:ORPHEUS_RUNTIME_DIR -ErrorAction SilentlyContinue
 $python = '.\.venv\Scripts\python.exe'
 & $python -B -m ruff check . --no-cache
-foreach ($module in @(
-    'test_cli.py',
-    'test_launcher.py',
-    'test_game_commands.py',
-    'test_game_link.py',
-    'test_game_ult_charge.py',
-    'test_collision_ray.py',
-    'test_collision_ray_cache.py',
-    'test_static_ray_round.py',
-    'test_collision_prop_catalog.py',
-    'test_prop_entity_model_refs.py',
-    'test_replay_values.py',
-    'test_casc_bundle.py',
-    'test_prepare_client_catalogs.py',
-    'test_prepare_server_runtime.py',
-    'test_script_expr_budget.py',
-    'test_script_membership.py',
-    'test_script_raycast.py',
-    'test_extract_game_graphs.py',
-    'test_extract_raycast_metadata.py'
-)) {
-    & $python -B -m unittest discover -s tests -p $module
-    if ($LASTEXITCODE) { throw "Failed: $module" }
-}
-node --test tests/test_dashboard_client.mjs
+& $python -B -m unittest discover
+node --test tests/public/test_dashboard_client.mjs
 git diff --check
 ```
 
-The [public workflow](.github/workflows/public-checks.yml) defines the current checks for pushes and pull requests. The CLI suite skips tests that need prepared retail data or protocol descriptors when those inputs are absent. Add the closest focused test for the code you changed. Report the exact commands, pass or fail results, and any skips in your pull request.
+The [public workflow](.github/workflows/public-checks.yml) defines the current checks for pushes and pull requests. Discovery runs `tests/public`. Keep tests requiring local data or descriptors in `tests/runtime`. Add the closest focused test for the code you changed. Report the exact commands, pass or fail results, and any skips in your pull request.
 
 ## Prepared runtime checks
 
@@ -61,11 +40,11 @@ For example, check the inputs and run the projectile suite against a prepared bu
 
 ```powershell
 $env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\orpheus-runtime'
-py -3.12 -B -m ow174 --check-runtime
-.\.venv\Scripts\python.exe -B -m unittest discover -s tests -p test_game_projectiles.py
+.\scripts\START.bat --check-runtime
+.\.venv\Scripts\python.exe -B -m unittest discover -s tests/runtime -p test_game_projectiles.py
 ```
 
-Full discovery also depends on research fixtures kept outside the public export. Some tests read fixtures from the research checkout's own `data` directory. A prepared server pack by itself is insufficient for the full suite. Record any missing prerequisites, the data lane used, and the checks that were actually run.
+Select the relevant module under `tests/runtime`. Some modules also need separate research fixtures in the checkout's `data` directory. Record any missing prerequisites, the data lane used, and the checks that were actually run.
 
 ## Original-client verification
 
@@ -79,8 +58,8 @@ Run the preflight before launching to identify missing server inputs. The launch
 
 ```powershell
 $env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\orpheus-runtime'
-py -3.12 -B -m ow174 --check-runtime
-.\START_LOCAL.cmd --game-exe 'C:\path\to\Overwatch'
+.\scripts\START.bat --check-runtime
+.\scripts\START_LOCAL.cmd --game-exe 'C:\path\to\Overwatch'
 ```
 
 For the first acceptance group, enter the Practice Range, pick Soldier: 76, and record one behavior at a time. Include the ORPHEUS commit, client build and locale, hero, map, exact inputs, expected and observed behavior, and how many runs agreed. Distinguish server or wire results from what you actually saw or heard. Use the [gameplay verification form](https://github.com/leafall903/ORPHEUS/issues/new?template=gameplay-verification.yml). Reports with clear steps are useful even when logs or video are unavailable.

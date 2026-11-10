@@ -34,7 +34,7 @@ discovers `runtime-data/` when it contains `manifest.json` or `data/`. An explic
 Run the preflight from the repository root.
 
 ```powershell
-py -3.12 -B -m ow174 --check-runtime
+.\scripts\START.bat --check-runtime
 ```
 
 The default check covers the retail lobby, Battle.net descriptor set and match data. It reports missing paths and validates the signing input's length. Practice Range also needs build 104319 collision data. For a server-only session, supply `collision/0688.col` in the pack. An enabled local client launch can build the cache using the installation and the prepared collision indexes.
@@ -66,7 +66,7 @@ To reuse local 104319 XML exports, supply their parent directory with `--client-
 
 ## Input provenance and current limits
 
-The pinned upstream runtime inventory and the extraction tools identify the sources of these files. The upstream MIT notice applies to its software and documentation. Separate redistribution permission for the game exports, capture contents and signing material remains unverified. Runtime preparation uses local inputs. The repository publishes the tools and the project-authored ultimate charge estimates. [Upstream inventory](https://github.com/LizRollin/overwatch-1.74-lobby-server/blob/9f8f3bcb5eccab6fb7738bee3c2371fcf0623f29/data/README.md) · [Ultimate charge estimates](../ow174/game/ult_charge.py)
+The pinned upstream runtime inventory and the extraction tools identify the sources of these files. The upstream MIT notice applies to its software and documentation. Separate redistribution permission for the game exports, capture contents and signing material remains unverified. Runtime preparation uses local inputs. The repository publishes the tools and the project-authored ultimate charge estimates. [Upstream inventory](https://github.com/LizRollin/overwatch-1.74-lobby-server/blob/9f8f3bcb5eccab6fb7738bee3c2371fcf0623f29/data/README.md) · [Ultimate charge estimates](../src/ow174/game/ult_charge.py)
 
 | Runtime input | Source and current preparation route |
 | --- | --- |

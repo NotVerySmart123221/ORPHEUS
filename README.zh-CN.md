@@ -32,7 +32,7 @@ ORPHEUS/
 ORPHEUS 会在该目录含有 `manifest.json` 或 `data/` 时自动识别数据包。显式设置的 `ORPHEUS_RUNTIME_DIR` 优先，其次是自动识别，最后使用旧版目录结构。在 ORPHEUS 目录执行启动预检，查看缺失的启动输入和签名输入长度检查结果。地图碰撞会在加载场景时检查。
 
 ```powershell
-py -3.12 -B -m ow174 --check-runtime
+.\scripts\START.bat --check-runtime
 ```
 
 #### 首次编译 Windows 中继
@@ -48,7 +48,7 @@ py -3.12 -B -m ow174 --check-runtime
 把游戏安装目录或其中的 `_retail_\Overwatch.exe` 传给启动器。省略路径时，启动器会使用已保存的客户端路径或打开文件选择框。
 
 ```powershell
-.\START_LOCAL.cmd --game-exe 'C:\path\to\Overwatch'
+.\scripts\START_LOCAL.cmd --game-exe 'C:\path\to\Overwatch'
 ```
 
 启动器会在需要时创建 Python 环境，并保存所选安装目录，供下次启动和准备碰撞数据使用。进入训练靶场，选定要测试的英雄，每次记录一个技能的准确操作和实际结果。[原版客户端验证步骤](CONTRIBUTING.md#original-client-verification)
@@ -68,16 +68,16 @@ py -3.12 -B tools/prepare_server_runtime.py --source 'C:\path\to\prepared-checko
 
 ### 纯服务端检查
 
-放置运行数据后，可执行 `START_SERVER_LOCAL.cmd` 启动本地回环服务。管理面板地址为 `http://127.0.0.1:3725`。此入口需要 Python 环境和准备好的运行数据。
+放置运行数据后，可执行 `scripts/START_SERVER_LOCAL.cmd` 启动本地回环服务。管理面板地址为 `http://127.0.0.1:3725`。此入口需要 Python 环境和准备好的运行数据。
 
 ### 加入现有服务器
 
 在 Windows 上准备 **1.74.0.0.104319** 客户端和 64 位 Python 3.12，向服主获取正在运行的兼容 ORPHEUS 服务器地址。授权的服务端运行数据由服主准备。玩家端使用游戏目录和服务器地址，无需准备本地服务端运行数据或 Windows 中继。
 
-在同一个 ORPHEUS 目录下打开 `JOIN_SERVER.cmd`，输入 `主机:端口`，并在提示时选择游戏客户端。也可以在 PowerShell 直接传入服务器地址和游戏目录。
+在同一个 ORPHEUS 目录下打开 `scripts/JOIN_SERVER.cmd`，输入 `主机:端口`，并在提示时选择游戏客户端。也可以在 PowerShell 直接传入服务器地址和游戏目录。
 
 ```powershell
-.\JOIN_SERVER.cmd --server 'HOST:3724' --game-exe 'C:\path\to\Overwatch'
+.\scripts\JOIN_SERVER.cmd --server 'HOST:3724' --game-exe 'C:\path\to\Overwatch'
 ```
 
 启动器以简化的锦标赛模式运行客户端，仍待原版客户端验证。
@@ -88,11 +88,11 @@ py -3.12 -B tools/prepare_server_runtime.py --source 'C:\path\to\prepared-checko
 
 ```powershell
 py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt "ruff==0.17.3"
-.\.venv\Scripts\python.exe -B -m unittest discover -s tests -p test_game_commands.py
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -B -m unittest discover
 ```
 
-扩大测试范围之前，请查看[完整的公开源码检查清单](CONTRIBUTING.md#public-source-checks)。
+Python 的默认测试发现只运行公开测试。管理面板测试和本地运行时回归见[贡献者测试说明](CONTRIBUTING.md#public-source-checks)。
 
 ## 当前进度
 
@@ -117,9 +117,11 @@ py -3.12 -m venv .venv
 
 | 路径 | 职责 |
 | --- | --- |
-| `ow174/bnet`、`ow174/lobby` | 本地登录、账号、社交和大厅服务、匹配与对局交接 |
-| `ow174/game`、`ow174/game/script` | 游戏加密通信、输入、模拟、战斗及状态脚本同步 |
-| `ow174/dashboard`、`relay` | 本地管理和 Windows 客户端中继源码 |
-| `tests`、`tools`、`docs` | 验证、提取、回放工具及研究记录 |
+| `src/ow174/bnet`、`src/ow174/lobby` | 本地登录、账号、社交和大厅服务、匹配与对局交接 |
+| `src/ow174/game`、`src/ow174/game/script` | 游戏加密通信、输入、模拟、战斗及状态脚本同步 |
+| `src/ow174/dashboard`、`relay` | 本地管理和 Windows 客户端中继源码 |
+| `scripts`、`src/orpheus` | Windows 启动脚本和安装后的 ORPHEUS 入口 |
+| `tests/public`、`tests/runtime` | 公开测试和本地运行时回归 |
+| `tools`、`docs` | 提取、回放工具、研究记录及致谢 |
 
-[路线图](docs/ROADMAP.md)跟踪整个目标版本的还原范围。[致谢](CREDITS.md)记录了原始 1.74 大厅项目、研究来源和上游作者。公开源码保留原有的 [MIT 许可证声明](LICENSE)。《守望先锋》及其资源归各自权利人所有。请将游戏客户端、商业游戏资源、密钥、私有日志、原始抓包和转储留在本地。
+[路线图](docs/ROADMAP.md)跟踪整个目标版本的还原范围。[致谢](docs/CREDITS.md)记录了原始 1.74 大厅项目、研究来源和上游作者。公开源码保留原有的 [MIT 许可证声明](LICENSE)。《守望先锋》及其资源归各自权利人所有。请将游戏客户端、商业游戏资源、密钥、私有日志、原始抓包和转储留在本地。

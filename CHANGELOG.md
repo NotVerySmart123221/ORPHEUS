@@ -6,6 +6,22 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Python project layout and verification
+
+- Moved Windows launchers to `scripts/` and the upstream work log, credits and
+  contributor list to `docs/`. Updated both READMEs and the runtime and contribution guides.
+- Added the installable `orpheus` entry point and moved Python packages under `src/`.
+  The build-specific `ow174` module remains available, including the original
+  `python -m ow174` command. The Windows launchers use Python 3.12.
+- Made `pyproject.toml` the source of runtime and development dependency pins.
+  Updated the dashboard asset paths and the source inventory for replay and collision
+  fingerprints. Replay fingerprints from the previous layout remain tied to their source revisions.
+- Separated the public and prepared-runtime tests. Default unittest discovery passed
+  170 public tests with no runtime and no skips. The dashboard suite, Ruff and documentation
+  links passed. A fresh editable install exposed both CLI entry points. A prepared
+  104319 pack passed 63 selected runtime tests and the launcher preflight. Original-client
+  acceptance was not run.
+
 #### Local Practice Range prop index
 
 - Generate a missing `collision_props_174.json` for Practice Range from the target client's
