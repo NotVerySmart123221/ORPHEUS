@@ -4,7 +4,9 @@
 //! the command and pose at consumption, and owns identity-gated delivery.
 //! Hit selection, damage, and respawn order follow ow174/game/combat.py.
 
-use std::{io, time::Duration};
+use std::{collections::HashMap, io, time::Duration};
+
+use bevy_ecs::{change_detection::Mut, component::Component, entity::Entity, world::World};
 
 use crate::{
     commands::Command,
@@ -69,6 +71,7 @@ pub(crate) struct BotReplacement {
     pub created: EntityUpdate,
 }
 
+#[derive(Component)]
 struct Target {
     vitals: Vitals,
     history: TargetHistory,
@@ -85,34 +88,52 @@ impl Target {
     }
 }
 
-/// One slot per map spawner, independent of the network ID of the current bot.
+/// Combat state belongs to a body generation in this room.
 pub(crate) struct Combat {
-    targets: Vec<Target>,
+    world: World,
+    by_wire: HashMap<u32, Entity>,
     next_bot: u32,
 }
 
 impl Combat {
     pub(crate) fn new(scene: &PreparedScene) -> Self {
+        Self::for_bots(scene.bots())
+    }
+
+    fn for_bots(bots: &[Bot]) -> Self {
+        let mut world = World::new();
+        let by_wire = bots
+            .iter()
+            .map(|bot| {
+                let entity = world.spawn(Target::new(bot.spawn.health, None)).id();
+                (bot.entity, entity)
+            })
+            .collect();
         Self {
-            targets: scene
-                .bots()
-                .iter()
-                .map(|bot| Target::new(bot.spawn.health, None))
-                .collect(),
-            next_bot: BOT_ENTITY + scene.bots().len() as u32,
+            world,
+            by_wire,
+            next_bot: BOT_ENTITY + bots.len() as u32,
         }
+    }
+
+    fn target(&self, wire_id: u32) -> Option<&Target> {
+        self.world.get(*self.by_wire.get(&wire_id)?)
+    }
+
+    fn target_mut(&mut self, wire_id: u32) -> Option<Mut<'_, Target>> {
+        self.world.get_mut(*self.by_wire.get(&wire_id)?)
+    }
+
+    pub(crate) fn debug_health(&self, wire_id: u32) -> Option<f64> {
+        self.target(wire_id).map(|target| target.vitals.total())
     }
 
     pub(crate) fn record_poses(&mut self, scene: &PreparedScene, tick: u32) {
-        for (target, bot) in self.targets.iter_mut().zip(scene.bots()) {
-            if !bot.dead {
+        for bot in scene.bots().iter().filter(|bot| !bot.dead) {
+            if let Some(mut target) = self.target_mut(bot.entity) {
                 target.history.record(tick, scene.bot_target(bot));
             }
         }
-    }
-
-    pub(crate) fn debug_health(&self, slot: usize) -> Option<f64> {
-        self.targets.get(slot).map(|target| target.vitals.total())
     }
 
     pub(crate) fn hitscan(
@@ -125,21 +146,16 @@ impl Combat {
         let view = ViewFrame::from_command(&shot.command, context.quanta);
         let ray = HitscanShot::from_command(shot.origin, &shot.command, shot.reach, shot.hit);
         let free_for_all = scene.map().free_for_all;
-        let candidates = scene
-            .bots()
-            .iter()
-            .zip(&self.targets)
-            .filter_map(|(bot, target)| {
-                if !eligible_bot(bot, shot.source, context.team, free_for_all)
-                    || !visible(bot.entity)
-                {
-                    return None;
-                }
-                target
-                    .history
-                    .at(view, scene.bot_target(bot))
-                    .map(|pose| (bot.entity, pose))
-            });
+        // Scene order breaks exact ray ties.
+        let candidates = scene.bots().iter().filter_map(|bot| {
+            if !eligible_bot(bot, shot.source, context.team, free_for_all) || !visible(bot.entity) {
+                return None;
+            }
+            self.target(bot.entity)?
+                .history
+                .at(view, scene.bot_target(bot))
+                .map(|pose| (bot.entity, pose))
+        });
         let Some(impact) = ray
             .resolve(candidates, |origin, direction, reach| {
                 scene.hitscan_wall(origin, direction, reach)
@@ -148,7 +164,13 @@ impl Combat {
         else {
             return Ok(None);
         };
-        Ok(self.apply_bot_impact(scene, shot.source, shot.shot_frame, context, &impact))
+        Ok(self.apply_bot_impact(
+            scene.bots_mut(),
+            shot.source,
+            shot.shot_frame,
+            context,
+            &impact,
+        ))
     }
 
     pub(crate) fn step_projectile(
@@ -173,7 +195,7 @@ impl Combat {
             .map_err(io::Error::other)?;
         if let Some(end) = &end {
             hits.extend(end.impacts.iter().filter_map(|impact| {
-                self.apply_bot_impact(scene, source, context.tick, context, impact)
+                self.apply_bot_impact(scene.bots_mut(), source, context.tick, context, impact)
             }));
         }
         Ok(end)
@@ -181,17 +203,16 @@ impl Combat {
 
     fn apply_bot_impact(
         &mut self,
-        scene: &mut PreparedScene,
+        bots: &mut [Bot],
         source: u32,
         shot_frame: u32,
         context: ShotContext,
         impact: &Impact,
     ) -> Option<BotHit> {
-        let (bot, target) = scene
-            .bots_mut()
+        let bot = bots
             .iter_mut()
-            .zip(&mut self.targets)
-            .find(|(bot, _)| !bot.dead && bot.entity == impact.entity)?;
+            .find(|bot| !bot.dead && bot.entity == impact.entity)?;
+        let mut target = self.target_mut(bot.entity)?;
         let result = target.vitals.damage(
             impact.damage,
             Death {
@@ -237,10 +258,27 @@ impl Combat {
         tick: u32,
         now: Duration,
     ) -> io::Result<Vec<BotReplacement>> {
+        self.respawn_bots(scene.bots_mut(), tick, now)
+    }
+
+    fn respawn_bots(
+        &mut self,
+        bots: &mut [Bot],
+        tick: u32,
+        now: Duration,
+    ) -> io::Result<Vec<BotReplacement>> {
+        // Validate the entire batch before retiring any entity handles.
         let mut prepared = Vec::new();
         let mut next_bot = self.next_bot;
-        for (slot, (bot, target)) in scene.bots().iter().zip(&self.targets).enumerate() {
-            if !target.respawn_at.is_some_and(|deadline| deadline <= now) {
+        for (slot, bot) in bots.iter().enumerate() {
+            let Some(&previous) = self.by_wire.get(&bot.entity) else {
+                continue;
+            };
+            let deadline = self
+                .world
+                .get::<Target>(previous)
+                .and_then(|target| target.respawn_at);
+            if !deadline.is_some_and(|deadline| deadline <= now) {
                 continue;
             }
             let fresh = bot.respawned(next_bot, tick.saturating_add(BOT_RECORD_DELAY));
@@ -250,6 +288,7 @@ impl Combat {
             let created = bot_create(&fresh, None)?;
             prepared.push((
                 slot,
+                previous,
                 fresh,
                 BotReplacement {
                     retired: bot.entity,
@@ -260,9 +299,16 @@ impl Combat {
         self.next_bot = next_bot;
         Ok(prepared
             .into_iter()
-            .map(|(slot, fresh, replacement)| {
-                self.targets[slot] = Target::new(fresh.spawn.health, Some(tick));
-                scene.bots_mut()[slot] = fresh;
+            .map(|(slot, previous, fresh, replacement)| {
+                self.by_wire.remove(&replacement.retired);
+                let removed = self.world.despawn(previous);
+                debug_assert!(removed);
+                let entity = self
+                    .world
+                    .spawn(Target::new(fresh.spawn.health, Some(tick)))
+                    .id();
+                self.by_wire.insert(fresh.entity, entity);
+                bots[slot] = fresh;
                 replacement
             })
             .collect())
@@ -277,6 +323,178 @@ fn eligible_bot(bot: &Bot, source: u32, team: u8, free_for_all: bool) -> bool {
 mod tests {
     use super::*;
     use crate::{game_content::GameMap, game_instance::RETAIL_QUANTA, scene_assets::SceneAssets};
+
+    fn fixture_bots() -> Vec<Bot> {
+        crate::game_bots::BotCatalog::from_json(
+            r#"{
+            "heroes":{"0x01":{"name":"Test bot","body":"0x02","health":100}},
+            "maps":{"0x03":{"hints":{},"spawners":[
+                {"hero":"0x01","team":1,"position":[1,0,0],"rotation":[0,0,0,1],"graphs":[]},
+                {"hero":"0x01","team":1,"position":[2,0,0],"rotation":[0,0,0,1],"graphs":[]}
+            ]}}
+        }"#,
+        )
+        .unwrap()
+        .make(3, |_| crate::game_bots::BotWalk::default())
+    }
+
+    fn fixture_impact(entity: u32, damage: f64) -> Impact {
+        Impact {
+            entity,
+            distance: 1.0,
+            damage,
+            critical: false,
+            loadout: None,
+        }
+    }
+
+    const FIXTURE_CONTEXT: ShotContext = ShotContext {
+        team: 0,
+        quanta: RETAIL_QUANTA,
+        tick: 1000,
+        now: Duration::from_secs(4),
+    };
+
+    #[test]
+    fn bot_damage_history_and_respawn_follow_identity_after_scene_reorder() {
+        use crate::game_hitscan::TargetPose;
+
+        let mut bots = fixture_bots();
+        let mut combat = Combat::for_bots(&bots);
+        let first = bots[0].entity;
+        let second = bots[1].entity;
+        let first_handle = combat.by_wire[&first];
+        let second_handle = combat.by_wire[&second];
+        let context = FIXTURE_CONTEXT;
+        let pose = TargetPose {
+            feet: bots[0].position,
+            height: 1.8,
+            radius: 0.5,
+            eye: 1.6,
+        };
+        let second_pose = TargetPose {
+            feet: bots[1].position,
+            ..pose
+        };
+        combat
+            .target_mut(first)
+            .unwrap()
+            .history
+            .record(context.tick, pose);
+        combat
+            .target_mut(second)
+            .unwrap()
+            .history
+            .record(context.tick, second_pose);
+
+        bots.swap(0, 1);
+        let result = combat
+            .apply_bot_impact(
+                &mut bots,
+                7,
+                context.tick,
+                context,
+                &fixture_impact(first, 100.0),
+            )
+            .unwrap();
+        let due = context.now + BOT_RESPAWN_TIME;
+        let view = ViewFrame::from_command(
+            &Command {
+                frame: context.tick,
+                ..Command::default()
+            },
+            context.quanta,
+        );
+        assert_eq!(result.health.entity, first);
+        assert_eq!(
+            result.notices[1],
+            Some(CombatNotice::Elimination {
+                killer: 7,
+                victim: first
+            })
+        );
+        assert!(bots[1].dead);
+        assert!(!bots[0].dead);
+        let target = combat.target(first).unwrap();
+        assert_eq!(target.vitals.total(), 0.0);
+        assert_eq!(target.respawn_at, Some(due));
+        assert_eq!(target.history.at(view, second_pose), Some(pose));
+        let other = combat.target(second).unwrap();
+        assert_eq!(other.vitals.total(), 100.0);
+        assert_eq!(other.respawn_at, None);
+        assert_eq!(other.history.at(view, pose), Some(second_pose));
+
+        let replacements = combat
+            .respawn_bots(&mut bots, context.tick + 1, due)
+            .unwrap();
+        let [replacement] = replacements.as_slice() else {
+            panic!("expected one due replacement");
+        };
+        let fresh = replacement.created.entity;
+        assert_eq!(replacement.retired, first);
+        assert_eq!(fresh, BOT_ENTITY + 2);
+        assert_eq!(bots[1].entity, fresh);
+        assert_eq!(bots[0].entity, second);
+        assert!(!bots[1].dead);
+        assert!(combat.target(first).is_none());
+        assert!(combat.world.get::<Target>(first_handle).is_none());
+        assert_eq!(combat.by_wire[&second], second_handle);
+        let target = combat.target(fresh).unwrap();
+        assert_eq!(target.vitals.total(), 100.0);
+        assert_eq!(target.respawn_at, None);
+        assert_eq!(target.history.at(view, pose), None);
+        assert_eq!(
+            combat.target(second).unwrap().history.at(view, pose),
+            Some(second_pose)
+        );
+        assert!(
+            combat
+                .apply_bot_impact(
+                    &mut bots,
+                    7,
+                    context.tick,
+                    context,
+                    &fixture_impact(first, 100.0)
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn failed_respawn_batch_preserves_all_due_bodies() {
+        let mut bots = fixture_bots();
+        let mut combat = Combat::for_bots(&bots);
+        let identities = [bots[0].entity, bots[1].entity];
+        let context = FIXTURE_CONTEXT;
+        for identity in identities {
+            combat
+                .apply_bot_impact(
+                    &mut bots,
+                    7,
+                    context.tick,
+                    context,
+                    &fixture_impact(identity, 100.0),
+                )
+                .unwrap();
+        }
+        let due = context.now + BOT_RESPAWN_TIME;
+        let first_free = u32::MAX - 1;
+        combat.next_bot = first_free;
+
+        assert!(
+            combat
+                .respawn_bots(&mut bots, context.tick + 1, due)
+                .is_err()
+        );
+        assert_eq!(combat.next_bot, first_free);
+        for (identity, bot) in identities.into_iter().zip(&bots) {
+            assert_eq!(bot.entity, identity);
+            assert!(bot.dead);
+            let target = combat.target(identity).unwrap();
+            assert_eq!(target.vitals.total(), 0.0);
+            assert_eq!(target.respawn_at, Some(due));
+        }
+    }
 
     #[test]
     #[ignore = "requires a prepared 104319 Practice Range scene"]
@@ -359,7 +577,7 @@ mod tests {
                 })
             );
             assert_eq!(
-                combat.targets[slot].vitals.total(),
+                combat.target(entity).unwrap().vitals.total(),
                 160.0 - f64::from(index) * 40.0
             );
             assert_eq!(scene.bots()[slot].dead, terminal);
@@ -391,7 +609,7 @@ mod tests {
             Some(Operation::Create(_))
         ));
         assert!(!scene.bots()[slot].dead);
-        assert_eq!(combat.targets[slot].vitals.total(), 200.0);
+        assert_eq!(combat.target(next).unwrap().vitals.total(), 200.0);
         context.tick = 1188;
         context.now = due;
         combat.record_poses(&scene, context.tick);
@@ -408,6 +626,6 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
-        assert_eq!(combat.targets[slot].vitals.total(), 160.0);
+        assert_eq!(combat.target(next).unwrap().vitals.total(), 160.0);
     }
 }

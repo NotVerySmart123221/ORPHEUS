@@ -6,6 +6,12 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Bot combat authority in Bevy ECS
+
+- Moved active bot vitals, rewind poses and respawn deadlines into a room-local Bevy world. Wire IDs resolve to generational handles, and the inspector reads health through the same identity lookup.
+- Validate all due replacements before retiring any body. Keep the scene's existing order for hit ties and replacement IDs.
+- Passed 328 public Rust tests, formatting, Clippy and four prepared Practice Range regressions covering rifle hits, bot replacement, encrypted volley and Helix delivery, and live actor inspection. The new public regressions cover scene reordering, stale handles and a failed respawn batch. Bot movement and player authority are still separate from the ECS combat component. Original-client acceptance is pending.
+
 #### Native server architecture and scene inspector
 
 - Documented the room authority, replication, event-driven scripting, collision and cutover boundaries. Rust development and public CI now target `rust`. The default branch continues to serve the Python implementation.

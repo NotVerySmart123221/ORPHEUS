@@ -705,9 +705,8 @@ impl State {
             truncated |= bots.len() > MAX_DEBUG_ACTORS;
             let actors = bots
                 .iter()
-                .enumerate()
                 .take(MAX_DEBUG_ACTORS)
-                .map(|(slot, bot)| game_debug::Actor {
+                .map(|bot| game_debug::Actor {
                     entity: bot.entity,
                     generation: None,
                     kind: game_debug::ActorKind::Bot,
@@ -717,7 +716,7 @@ impl State {
                     alive: !bot.dead,
                     health: world.combat.as_ref().map_or_else(
                         || Some(bot.spawn.health),
-                        |combat| combat.debug_health(slot),
+                        |combat| combat.debug_health(bot.entity),
                     ),
                     script_active: false,
                 })

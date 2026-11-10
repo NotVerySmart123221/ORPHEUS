@@ -19,6 +19,7 @@ path = "rust/src/bin/orpheus_server.rs"
 
 [dependencies]
 aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "alloc"] }
+bevy_ecs = { version = "0.16.1", default-features = false, features = ["std"] }
 crc32fast = "1"
 flate2 = "1.1"
 getrandom = "0.3"
