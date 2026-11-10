@@ -573,7 +573,13 @@ mod tests {
 
     #[test]
     #[ignore = "requires a prepared 104319 Practice Range pack without bot VM graphs"]
-    fn stock_soldier_requires_map_wire_support_before_prepared_attach() {
+    fn stock_soldier_attaches_then_stops_at_an_idle_recipient_selector() {
+        use crate::commands::Command;
+        use crate::game_replication::BodyStep;
+        use crate::script_snapshot_wire::View;
+        use crate::script_stream::{BodyStream, DeltaKind};
+        use crate::script_wire::Value;
+
         let runtime = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
         let assets = SceneAssets::load(runtime).unwrap();
         let scene = assets.prepare(GameMap::practice_range()).unwrap();
@@ -588,17 +594,90 @@ mod tests {
             pose: scene.player_spawn_mover(hero.body, 0).unwrap().pose(),
             quanta: RETAIL_QUANTA,
         };
-        let Err(blocked) = scene.owner_body_runtime(hero, spawn) else {
-            panic!("the stock owner body was expected to stop before attach");
-        };
-        assert_eq!(blocked.kind(), io::ErrorKind::Unsupported);
-        // The tagged startup completes, then stops at its authored message table.
-        let first_blocker = if assets.graphs.bodies()[&hero.body].target_tags.is_some() {
-            "variable 24:29859 holds a map without a verified wire form"
+        if assets.graphs.bodies()[&hero.body].target_tags.is_some() {
+            let mut runtime = scene.owner_body_runtime(hero, spawn).unwrap().unwrap();
+            let snapshot = runtime.snapshot().unwrap();
+            let encoder = runtime.encoder();
+            // The authored message table stays in the VM for lookups.
+            let table = &snapshot.instances[&24];
+            assert_eq!(table.graph, 0x05ad);
+            assert!(matches!(&table.variables[&29859], Value::Map(entries) if entries.len() == 20));
+            let mut streams = Vec::new();
+            for view in [View::Owner, View::Observer] {
+                let projected = encoder.project(snapshot, view).unwrap();
+                let mut stream = BodyStream::new(spawn.entity);
+                let baseline = encoder.queue_full(&mut stream, &projected).unwrap();
+                stream.create_arrived();
+                stream.arrived(baseline.last);
+                // Only the unbound table is omitted, as Python omits its None.
+                let sent = projected.instance_variables(24).unwrap();
+                assert!(!sent.contains_key(&29859));
+                for (&variable, value) in &table.variables {
+                    let value = snapshot
+                        .resolved_bindings
+                        .get(&(24, variable))
+                        .unwrap_or(value);
+                    if variable != 29859 && !matches!(value, Value::Null) {
+                        assert_eq!(sent.get(&variable), Some(value), "{variable}");
+                    }
+                }
+                streams.push((stream, projected));
+            }
+            // Idle frames keep projecting and encoding in both streams until
+            // the next unsupported authored config.
+            let mut mover = scene.player_spawn_mover(hero.body, 0).unwrap();
+            let mut stopped = None;
+            'frames: for frame in FIRST_TICK + 1..=FIRST_TICK + 120 {
+                let command = Command {
+                    frame,
+                    ..Command::default()
+                };
+                mover
+                    .step(scene.movement_index(), command, 0.016, |_, _| {})
+                    .unwrap();
+                runtime.advance(command, &mover, BodyStep::Posed).unwrap();
+                let snapshot = runtime.snapshot().unwrap();
+                let encoder = runtime.encoder();
+                for (stream, initial) in &mut streams {
+                    let next = match encoder.project_next(snapshot, initial) {
+                        Ok(next) => next,
+                        Err(error) => {
+                            stopped = Some(error.to_string());
+                            break 'frames;
+                        }
+                    };
+                    let kind = match initial.view() {
+                        View::Owner => stream.owner_kind(frame, false, false).unwrap(),
+                        View::Observer => Some(DeltaKind::Observer { resend: false }),
+                    };
+                    let Some(kind) = kind else { continue };
+                    let delta = encoder.queue_delta(stream, &next, kind, runtime.frame_ms());
+                    if let Some(chunk) = delta.unwrap() {
+                        stream.sent(chunk.last);
+                        stream.arrived(chunk.last);
+                    }
+                }
+            }
+            assert!(streams[0].0.command_frame() > FIRST_TICK + 1);
+            // Python evaluates this recipient selector to None.
+            let stopped = stopped.expect("the idle stock body was expected to stop");
+            assert!(
+                stopped.contains("01CA:")
+                    && stopped.contains("Expression(UnsupportedConfig(\"STU_ED45C5E8\"))"),
+                "{stopped}"
+            );
         } else {
-            "UnsupportedConfig(\"STU_AC829876\")"
-        };
-        assert!(blocked.to_string().contains(first_blocker), "{blocked}");
+            let Err(blocked) = scene.owner_body_runtime(hero, spawn) else {
+                panic!("the untagged stock owner body was expected to stop before attach");
+            };
+            assert_eq!(blocked.kind(), io::ErrorKind::Unsupported);
+            assert!(
+                blocked
+                    .to_string()
+                    .contains("UnsupportedConfig(\"STU_AC829876\")"),
+                "{blocked}"
+            );
+        }
         let tracer = scene.heroes().find_hero("Tracer").unwrap();
         assert!(scene.owner_body_runtime(tracer, spawn).unwrap().is_none());
     }

@@ -58,6 +58,11 @@ impl ProjectedSnapshot {
             .volley
             .map(|volley| volley.identity)
     }
+
+    #[cfg(test)]
+    pub(crate) fn instance_variables(&self, instance: u16) -> Option<&Variables> {
+        Some(&self.instances.get(&instance)?.variables.values)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -428,8 +433,15 @@ impl<'a> SnapshotEncoder<'a> {
                 }
                 None => base,
             };
+            // Python evaluates an authored `STU_7757D403` message table to None
+            // and never sends an unbound None (`script.driver` `_add_var`,
+            // `observers._add_vars`), so an unbound map is omitted like null.
+            // A bound map has no reference form and stays refused.
             if matches!(value, Value::Map(_)) {
-                return Err(SnapshotError::UnsupportedMap { owner, variable });
+                if bindings.is_some() {
+                    return Err(SnapshotError::UnsupportedMap { owner, variable });
+                }
+                continue;
             }
             if let Some(bindings) = bindings.filter(|_| view == View::Owner) {
                 let links = self.project_bindings(snapshot, owner, variable, bindings)?;
@@ -1553,18 +1565,7 @@ mod tests {
         let codecs = CodecTable::from_json(CODECS).unwrap();
         let encoder = SnapshotEncoder::new(&graphs, &codecs);
         let baseline = encoder.project(&snapshot, View::Owner).unwrap();
-        snapshot.bindings.insert(
-            (0, 55),
-            vec![crate::script_init::StackBinding {
-                instance: 1,
-                raw_state: 2,
-                slot: 0,
-                priority: crate::script_expr::StackPriority {
-                    level: 0,
-                    above_equals: true,
-                },
-            }],
-        );
+        snapshot.bindings.insert((0, 55), vec![invalid_binding()]);
         for view in [View::Owner, View::Observer] {
             assert!(matches!(
                 encoder.project(&snapshot, view),
@@ -1587,14 +1588,67 @@ mod tests {
         ));
     }
 
+    /// Raw state 2 is not a stack, so projecting this binding fails.
+    fn invalid_binding() -> StackBinding {
+        StackBinding {
+            instance: 1,
+            raw_state: 2,
+            slot: 0,
+            priority: crate::script_expr::StackPriority {
+                level: 0,
+                above_equals: true,
+            },
+        }
+    }
+
+    fn table() -> Value {
+        Value::Map(vec![(Value::Asset(1), Value::Integer(2))])
+    }
+
+    fn set_variable(snapshot: &mut Snapshot, owner: u16, variable: u32, value: Option<Value>) {
+        let values = match owner {
+            0 => &mut snapshot.variables,
+            id => &mut snapshot.instances.get_mut(&id).unwrap().variables,
+        };
+        match value {
+            Some(value) => values.insert(variable, value),
+            None => values.shift_remove(&variable),
+        };
+    }
+
     #[test]
-    fn projection_names_a_map_variable_instead_of_encoding_it() {
+    fn unbound_maps_are_omitted_like_null_in_both_scopes_and_views() {
         let (graphs, mut snapshot) = fixture();
         let codecs = CodecTable::from_json(CODECS).unwrap();
         let encoder = SnapshotEncoder::new(&graphs, &codecs);
-        snapshot.instances[&1]
-            .variables
-            .insert(77, Value::Map(vec![(Value::Asset(1), Value::Integer(2))]));
+        for owner in [0, 1] {
+            for view in [View::Owner, View::Observer] {
+                let mut full = |value| {
+                    set_variable(&mut snapshot, owner, 77, value);
+                    let projected = encoder.project(&snapshot, view).unwrap();
+                    let values = match owner {
+                        0 => &projected.variables.values,
+                        id => &projected.instances[&id].variables.values,
+                    };
+                    assert!(!values.contains_key(&77));
+                    let bits = encoder.full(&projected).unwrap();
+                    (bits.bit_len(), bits.as_bytes().to_vec())
+                };
+                let omitted = full(None);
+                assert_eq!(full(Some(table())), omitted);
+                assert_eq!(full(Some(Value::Null)), omitted);
+            }
+        }
+    }
+
+    #[test]
+    fn bound_maps_are_refused_before_their_bindings_are_checked() {
+        let (graphs, mut snapshot) = fixture();
+        let codecs = CodecTable::from_json(CODECS).unwrap();
+        let encoder = SnapshotEncoder::new(&graphs, &codecs);
+        snapshot.bindings.insert((1, 77), vec![invalid_binding()]);
+        set_variable(&mut snapshot, 1, 77, Some(Value::Null));
+        snapshot.resolved_bindings.insert((1, 77), table());
         for view in [View::Owner, View::Observer] {
             let error = encoder.project(&snapshot, view).unwrap_err();
             assert!(matches!(
@@ -1608,6 +1662,39 @@ mod tests {
                 error.to_string(),
                 "variable 1:77 holds a map without a verified wire form"
             );
+        }
+    }
+
+    #[test]
+    fn a_variable_becoming_a_map_deltas_like_it_becoming_null() {
+        let (graphs, mut snapshot) = fixture();
+        let codecs = CodecTable::from_json(CODECS).unwrap();
+        let encoder = SnapshotEncoder::new(&graphs, &codecs);
+        let mut deltas = |view, kind, value| {
+            set_variable(&mut snapshot, 1, 77, Some(Value::Integer(5)));
+            let mut stream = BodyStream::new(ENTITY);
+            let baseline = encoder
+                .queue_full(&mut stream, &encoder.project(&snapshot, view).unwrap())
+                .unwrap();
+            stream.create_arrived();
+            stream.arrived(baseline.last);
+            set_variable(&mut snapshot, 1, 77, Some(value));
+            let next = encoder.project(&snapshot, view).unwrap();
+            let chunk = encoder
+                .queue_delta(&mut stream, &next, kind, 16)
+                .unwrap()
+                .unwrap();
+            let keys: Vec<_> = stream.pending().map(|(_, _, keys)| keys.clone()).collect();
+            let bits = chunk.update.chunk.unwrap();
+            (bits.bit_len(), bits.as_bytes().to_vec(), keys)
+        };
+        for (view, kind) in [
+            (View::Owner, DeltaKind::InitialOwner(1000)),
+            (View::Observer, DeltaKind::Observer { resend: false }),
+        ] {
+            let map = deltas(view, kind, table());
+            assert!(map.2[0].contains(&ChangeKey::Variable(1, 77)));
+            assert_eq!(map, deltas(view, kind, Value::Null));
         }
     }
 

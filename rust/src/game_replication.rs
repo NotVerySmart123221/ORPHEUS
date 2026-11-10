@@ -1783,7 +1783,9 @@ mod tests {
     fn native_world_resumes_a_gap_before_switching_the_body_and_acknowledging_input() {
         let runtime = std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap();
         let assets = SceneAssets::load(runtime).unwrap();
-        let scene = assets.prepare(GameMap::practice_range()).unwrap();
+        let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
+        // The poses below are checked against a mover without VM modifiers.
+        scene.owner_body_factory = None;
         let owner = 0xa000_0100;
         let viewer = PlayerAppearance {
             entity: owner,

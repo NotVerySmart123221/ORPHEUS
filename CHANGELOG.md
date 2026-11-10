@@ -26,6 +26,14 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Rust stock Soldier owner attach
+
+- Omitted an unbound script map from owner and observer snapshots, as the reference omits the None it evaluates for an authored `STU_7757D403` message table. The map stays in the VM for message lookups. A bound map is still refused, and the wire form of maps remains unverified.
+- The tagged stock Soldier body now attaches. Its preflight encodes the 24-instance tree in both views without the message table in instance 24, variable 29859. About one second after spawn, the idle owner VM stops at the `STU_ED45C5E8` recipient selector in graph `01CA`, which the reference also evaluates to None. The untagged bundle still stops at `STU_AC829876` during startup.
+- The encrypted stock loopback now expects owner corrections exactly when the tagged body attaches. The native gap regression runs without an owner VM, because it checks poses from the plain mover.
+- Passed 324 public Rust tests and 60 tagged base-runtime checks. The enriched-runtime firing placement check needs a bot-graph pack that was unavailable. The untagged bundle also passed the stock owner and loopback regressions. Cargo formatting and Clippy passed.
+- Original-client check on the native server with the tagged pack: Soldier: 76 now spawns in the Practice Range with the rifle, 200 health, 30 rounds, the three ability icons, the ultimate meter and the crosshair, and walks normally. Holding fire empties the ammo display at once and reload does not start, consistent with the owner VM stopping after spawn. Original-client acceptance remains pending.
+
 #### Rust Soldier startup effects and snapshot diagnostics
 
 - Continued the authored one-shot effect action through its output without server state, following the reference server. Like the reference, the server never flags the remote slot of a networked effect. Effects that bind a dynamic `m_37B02425` remain unsupported because that field's role is unverified in build 104319.

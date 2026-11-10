@@ -2551,17 +2551,18 @@ mod tests {
         let tick = BitReader::new(&retry.payload).var_a().unwrap();
         let first_input = tick + 32;
         let mut newest = first_input + 4;
-        let await_input = |client: &mut Client, expected| {
+        // The acknowledged stock body has an owner VM, so its own movement
+        // records are owner corrections, as from Python's correction.own_record.
+        let mut corrected = false;
+        let mut await_input = |client: &mut Client, expected| {
             let deadline = Instant::now() + Duration::from_secs(2);
             loop {
                 let packet = client.receive();
                 assert!(client.window.accept(packet.seq));
+                corrected |= world_records(schemas, &packet)
+                    .iter()
+                    .any(|record| record.entity == FIRST && record.movement);
                 if input_ack(schemas, &packet) == expected {
-                    assert!(
-                        world_records(schemas, &packet)
-                            .iter()
-                            .all(|record| record.entity != FIRST || !record.movement)
-                    );
                     return;
                 }
                 client.send(ACK, Vec::new());
@@ -2586,6 +2587,12 @@ mod tests {
             client.send(ACK, recoverable.clone());
         }
         await_input(client, newest);
+        // Only the tagged stock pack completes owner VM startup.
+        let soldier = assets.heroes().get(SOLDIER).unwrap();
+        let attached = assets.graphs().bodies()[&soldier.body]
+            .target_tags
+            .is_some();
+        assert_eq!(corrected, attached);
 
         let mut open = vec![1, 1];
         open.extend(OWNER.to_le_bytes());
