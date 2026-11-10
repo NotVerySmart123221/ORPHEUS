@@ -6,6 +6,11 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Inspect live patrol collision clips
+
+- Added the last successful clipped patrol move to the opt-in inspector. It reports the first limiting sweep's proxy, category, fraction and simulation frame, plus the before, intended and final feet positions. The trace uses the existing solver and resets on bot replacement.
+- Passed 339 public Rust tests, formatting, Clippy and two prepared checks. The synthetic wall test identifies the expected proxy and mask. Two elevated patrol routes produced identical movement records with tracing on and off over 1,900 frames. The original-client wall report remains open.
+
 #### Room ECS projectile flight
 
 - Transferred admitted flights to generational room entities. The room owns physics, collision and damage, and the connection applies terminal outcomes to the matching prediction lease. Body replacement, leave and room drain retire the relevant flights.

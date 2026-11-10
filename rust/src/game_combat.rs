@@ -188,6 +188,7 @@ impl RoomSimulation {
                     bot.spawn.health
                 }),
                 script_active: bot.patrol_active(),
+                last_contact_clip: bot.last_contact_clip(),
             }
         })
     }

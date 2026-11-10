@@ -106,7 +106,10 @@ impl Server {
         let arcade = Arcade::load(data.join("arcade_cards_174.json"), &templates)?;
         let celebrations = Celebrations::load(&data, &templates)?;
         let extra_skins = extra_preload_themes(&items).collect();
-        let assets = SceneAssets::load(&config.runtime)?;
+        let mut assets = SceneAssets::load(&config.runtime)?;
+        if config.debug_port.is_some() {
+            assets.enable_contact_trace();
+        }
         let scene = assets.prepare(GameMap::practice_range())?;
         if !scene.movement_ready() {
             return Err(io::Error::new(

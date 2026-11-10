@@ -26,6 +26,13 @@ pub struct BodyMove<'a> {
     pub touching: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SweepClip {
+    pub proxy_id: u32,
+    pub category: u16,
+    pub fraction: f32,
+}
+
 pub struct CharacterBody {
     world: Arc<ContactWorld>,
     pose: CapsulePose,
@@ -151,6 +158,26 @@ impl CharacterBody {
         displacement: Vec3,
         dt: f32,
     ) -> Result<BodyMove<'_>, HullContactError> {
+        self.move_capsule_inner::<false>(displacement, dt, &mut None)
+    }
+
+    /// Observe the first clipped solver sweep of this move.
+    pub(crate) fn move_capsule_traced(
+        &mut self,
+        displacement: Vec3,
+        dt: f32,
+        clip: &mut Option<SweepClip>,
+    ) -> Result<BodyMove<'_>, HullContactError> {
+        *clip = None;
+        self.move_capsule_inner::<true>(displacement, dt, clip)
+    }
+
+    fn move_capsule_inner<const TRACE: bool>(
+        &mut self,
+        displacement: Vec3,
+        dt: f32,
+        clip: &mut Option<SweepClip>,
+    ) -> Result<BodyMove<'_>, HullContactError> {
         let rounds = self.budget;
         let mut current = self.pose.position;
         let target = add(add(scale([0.0; 3], dt), current), displacement);
@@ -179,7 +206,7 @@ impl CharacterBody {
             }
             let (projected, passes) = project_target(target, &mut self.constraints);
             passes_total += passes;
-            let moved = self.set_position(projected)?;
+            let moved = self.set_position::<TRACE>(projected, clip)?;
             let step = sub(moved, current);
             current = moved;
             if dot(step, step) < TOUCH * TOUCH {
@@ -235,7 +262,11 @@ impl CharacterBody {
         }
     }
 
-    fn set_position(&mut self, target: Vec3) -> Result<Vec3, HullContactError> {
+    fn set_position<const TRACE: bool>(
+        &mut self,
+        target: Vec3,
+        clip: &mut Option<SweepClip>,
+    ) -> Result<Vec3, HullContactError> {
         let swept = self.pose.swept_bounds(target);
         self.move_proxy(swept);
         self.update_pairs();
@@ -251,12 +282,23 @@ impl CharacterBody {
             keep
         });
         let mut fraction = 1.0;
+        let mut proxy_id = None;
         if translation != [0.0; 3] {
-            for (_, contact) in &mut self.contacts {
+            for (id, contact) in &mut self.contacts {
                 if let Some(candidate) = contact.cast(self.pose, swept, translation)? {
                     fraction = minps(fraction, candidate);
+                    if TRACE && candidate == fraction {
+                        proxy_id = Some(*id);
+                    }
                 }
             }
+        }
+        if TRACE && clip.is_none() && fraction < 1.0 {
+            *clip = proxy_id.map(|proxy_id| SweepClip {
+                proxy_id,
+                category: self.category,
+                fraction,
+            });
         }
         let moved = add(scale(translation, fraction), self.pose.position);
         if moved.into_iter().all(f32::is_finite) {

@@ -605,6 +605,7 @@ impl WorldDelivery {
             alive: vitals.is_none_or(|vitals| vitals.death().is_none()),
             health: vitals.map(Vitals::total),
             script_active: self.body_script.is_some(),
+            last_contact_clip: None,
         })
     }
 

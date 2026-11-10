@@ -32,6 +32,19 @@ pub(crate) struct Actor {
     pub alive: bool,
     pub health: Option<f64>,
     pub script_active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_contact_clip: Option<ContactClip>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub(crate) struct ContactClip {
+    pub tick: u32,
+    pub proxy_id: u32,
+    pub category: u16,
+    pub fraction: f32,
+    pub before: [f64; 3],
+    pub intended: [f64; 3],
+    pub after: [f64; 3],
 }
 
 #[derive(Serialize)]

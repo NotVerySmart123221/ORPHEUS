@@ -172,16 +172,19 @@ function renderActors(actors) {
   byId("actor-count").textContent = String(actors.length);
   if (actors.length === 0) {
     const cell = rows.appendChild(document.createElement("tr")).insertCell();
-    cell.colSpan = 8;
+    cell.colSpan = 9;
     cell.className = "empty";
     cell.textContent = "No actors in this room.";
   }
   for (const actor of actors) {
     const row = rows.appendChild(document.createElement("tr"));
     const entity = actor.generation == null ? String(actor.entity) : actor.entity + " / " + actor.generation;
+    const clip = actor.last_contact_clip;
     const fields = [
       entity, actor.kind, actor.team, actor.alive ? "Alive" : "Dead", number(actor.health),
       actor.script_active ? "Active" : "—", vector(actor.position), vector(actor.velocity),
+      clip ? "Tick " + clip.tick + " · proxy " + clip.proxy_id + " · mask 0x"
+        + clip.category.toString(16) + " · fraction " + clip.fraction.toFixed(3) : "—",
     ];
     for (const value of fields) {
       const cell = row.insertCell();
@@ -189,6 +192,10 @@ function renderActors(actors) {
       if (row.cells.length >= 7) {
         cell.className = "coordinates";
       }
+    }
+    if (clip) {
+      row.cells[8].title = "Feet before (" + vector(clip.before) + ") · intended ("
+        + vector(clip.intended) + ") · after (" + vector(clip.after) + ")";
     }
   }
   body.replaceChildren(rows);

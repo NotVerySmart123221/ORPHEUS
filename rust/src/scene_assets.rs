@@ -87,6 +87,7 @@ struct CollisionKey {
 pub struct SceneAssets {
     collision: PathBuf,
     last_collision: Mutex<Option<(CollisionKey, MapCollision)>>,
+    trace_contacts: bool,
     mode_props: BTreeMap<u64, BTreeSet<u64>>,
     graphs: Arc<GraphStore>,
     codecs: Option<Arc<CodecTable>>,
@@ -128,6 +129,7 @@ impl SceneAssets {
         Ok(Self {
             collision: runtime.join("collision"),
             last_collision: Mutex::new(None),
+            trace_contacts: false,
             mode_props: read_mode_props(&data.join("collision_props_174.json"))?,
             graphs,
             codecs,
@@ -138,6 +140,10 @@ impl SceneAssets {
             heroes: Arc::new(HeroCatalog::load(data.join("game_heroes_174.json"))?),
             pools,
         })
+    }
+
+    pub(crate) fn enable_contact_trace(&mut self) {
+        self.trace_contacts = true;
     }
 
     pub fn graphs(&self) -> &GraphStore {
@@ -180,6 +186,9 @@ impl SceneAssets {
                     category,
                     ground_height(ground.triangles(), category),
                 );
+                if self.trace_contacts {
+                    bot.enable_contact_trace();
+                }
             }
         }
         let controller = Controller::load(&self.graphs, map.mode_guid)?;
@@ -589,8 +598,10 @@ mod tests {
     #[ignore = "requires a prepared 104319 Practice Range pack"]
     fn elevated_practice_patrols_reach_their_hints_without_crossing_walls() {
         let runtime = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
-        let assets = SceneAssets::load(runtime).unwrap();
+        let mut assets = SceneAssets::load(runtime).unwrap();
         let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
+        assets.enable_contact_trace();
+        let mut traced = assets.prepare(GameMap::practice_range()).unwrap();
         assert_eq!(scene.bots().len(), 15);
         let scripted = if assets.graphs.graph_indexes().count() == 373 {
             0
@@ -611,8 +622,15 @@ mod tests {
         let patrol = PatrolScript::load().unwrap();
         for tick in 1001..=2900 {
             scene.step_bots(tick, &patrol);
+            traced.step_bots(tick, &patrol);
             for (slot, entity) in bots.into_iter().enumerate() {
                 let bot = scene.bots().find(|bot| bot.entity == entity).unwrap();
+                let traced_bot = traced.bots().find(|bot| bot.entity == entity).unwrap();
+                assert_eq!(
+                    traced_bot.movement(tick),
+                    bot.movement(tick),
+                    "contact trace changed bot {entity:x} at {tick}"
+                );
                 let before = previous[slot];
                 previous[slot] = bot.position;
                 let delta =

@@ -18,6 +18,7 @@ use crate::contact_body::CharacterBody;
 use crate::contact_math::{add, sub};
 use crate::contact_world::ContactWorld;
 use crate::game_clock::TICK_PERIOD;
+use crate::game_debug::ContactClip;
 use crate::mover_ground::{pogo, standing_body, standing_origin};
 use crate::mover_settings::MoverSettings;
 use crate::patrol_script::{PatrolScript, WaitEvent};
@@ -252,6 +253,12 @@ struct PatrolPlans {
 struct PatrolCollision {
     body: CharacterBody,
     lift: f32,
+    trace: Option<Box<PatrolTrace>>,
+}
+
+#[derive(Debug, Default)]
+struct PatrolTrace {
+    last_clip: Option<ContactClip>,
 }
 
 impl PatrolCollision {
@@ -283,18 +290,36 @@ impl PatrolCollision {
         })
     }
 
-    fn advance(&mut self, from: [f64; 3], to: [f64; 3], dt: f64) -> [f64; 3] {
+    fn advance(&mut self, tick: u32, from: [f64; 3], to: [f64; 3], dt: f64) -> [f64; 3] {
         let start = standing_origin(from, self.lift);
         self.body.teleport(start);
         let delta = sub(standing_origin(to, self.lift), start);
-        match self.body.move_capsule(delta, dt as f32) {
+        let mut clip = None;
+        let movement = if self.trace.is_some() {
+            self.body.move_capsule_traced(delta, dt as f32, &mut clip)
+        } else {
+            self.body.move_capsule(delta, dt as f32)
+        };
+        let after = match movement {
             Ok(moved) if moved.position == add(start, delta) => to,
             Ok(moved) => {
                 let [x, y, z] = moved.position.map(f64::from);
                 [x, y - f64::from(self.lift), z]
             }
-            Err(_) => from,
+            Err(_) => return from,
+        };
+        if let (Some(trace), Some(clip)) = (&mut self.trace, clip) {
+            trace.last_clip = Some(ContactClip {
+                tick,
+                proxy_id: clip.proxy_id,
+                category: clip.category,
+                fraction: clip.fraction,
+                before: from,
+                intended: to,
+                after,
+            });
         }
+        after
     }
 }
 
@@ -373,6 +398,7 @@ impl Bot {
         self.collision = Some(PatrolCollision {
             body: standing_body(settings, world, self.position, category),
             lift: pogo(settings, false) as f32,
+            trace: None,
         });
         let count = self.spawn.route.len();
         if count != 0 {
@@ -388,6 +414,16 @@ impl Bot {
                     .collect(),
             }));
         }
+    }
+
+    pub(crate) fn enable_contact_trace(&mut self) {
+        if let Some(collision) = &mut self.collision {
+            collision.trace.get_or_insert_with(Box::default);
+        }
+    }
+
+    pub(crate) fn last_contact_clip(&self) -> Option<ContactClip> {
+        self.collision.as_ref()?.trace.as_ref()?.last_clip
     }
 
     fn detour(
@@ -547,7 +583,7 @@ impl Bot {
             self.walk(tick, dt, script, ground)?;
         } else {
             if self.target.is_some() {
-                self.slide(dt, ground);
+                self.slide(tick, dt, ground);
             }
             if self.turning > EPSILON {
                 self.turning -= dt;
@@ -603,17 +639,22 @@ impl Bot {
         self.held = throttles(self.yaw, self.direction);
         self.last_held = self.held;
         self.input_tick = Some(tick);
-        self.advance(stride, distance, dt, ground);
+        self.advance(tick, stride, distance, dt, ground);
         Ok(())
     }
 
-    fn slide(&mut self, dt: f64, ground: &mut impl FnMut(f64, f64, f64, f64) -> Option<f64>) {
+    fn slide(
+        &mut self,
+        tick: u32,
+        dt: f64,
+        ground: &mut impl FnMut(f64, f64, f64, f64) -> Option<f64>,
+    ) {
         self.pace = (self.pace - self.walk.brake * dt).max(0.0);
         let [dx, dz] = self.to_target();
         let distance = dx.hypot(dz);
         if self.pace > 0.0
             && distance > EPSILON
-            && self.advance(self.pace * dt, distance, dt, ground) < distance - EPSILON
+            && self.advance(tick, self.pace * dt, distance, dt, ground) < distance - EPSILON
         {
             return;
         }
@@ -658,6 +699,7 @@ impl Bot {
 
     fn advance(
         &mut self,
+        tick: u32,
         mut stride: f64,
         distance: f64,
         dt: f64,
@@ -686,7 +728,7 @@ impl Bot {
         };
         let intended = [nx, ny, nz];
         let [nx, ny, nz] = self.collision.as_mut().map_or(intended, |collision| {
-            collision.advance(self.position, intended, dt)
+            collision.advance(tick, self.position, intended, dt)
         });
         self.position = [nx, ny, nz];
         self.velocity = [(nx - x) / dt, (ny - y) / dt, (nz - z) / dt];
@@ -737,6 +779,7 @@ impl Bot {
                 .body
                 .fresh_at(standing_origin(fresh.position, collision.lift)),
             lift: collision.lift,
+            trace: collision.trace.as_ref().map(|_| Box::default()),
         });
         fresh.plans = self.plans.clone();
         fresh.records_from = Some(records_from);
@@ -979,14 +1022,38 @@ mod tests {
         let settings = MoverSettings::default();
         let patrol = PatrolScript::load().unwrap();
         let mut blocked = walker([0.0, 0.0, 4.0]);
+        let mut traced = walker([0.0, 0.0, 4.0]);
         let mut allowed = walker([0.0, 0.0, 4.0]);
         blocked.attach_collision(&settings, Arc::clone(&world), 0x08, |_, _, _, _| Some(0.0));
+        traced.attach_collision(&settings, Arc::clone(&world), 0x08, |_, _, _, _| Some(0.0));
         allowed.attach_collision(&settings, world, 0x10, |_, _, _, _| Some(0.0));
+        traced.enable_contact_trace();
+        allowed.enable_contact_trace();
+        let mut observed_block = false;
         for tick in 1..=295 {
-            for bot in [&mut blocked, &mut allowed] {
+            let before = traced.position;
+            for bot in [&mut blocked, &mut traced, &mut allowed] {
                 bot.step(tick, &patrol, |_, _, _, _| Some(0.0)).unwrap();
             }
+            assert_eq!(traced.movement(tick), blocked.movement(tick));
+            if let Some(clip) = traced.last_contact_clip().filter(|clip| clip.tick == tick) {
+                assert_eq!(clip.proxy_id, 0);
+                assert_eq!(clip.category, 0x08);
+                assert!((0.0..1.0).contains(&clip.fraction));
+                assert_eq!(clip.before, before);
+                assert_eq!(clip.after, traced.position);
+                observed_block |= clip.after[2] < clip.intended[2];
+            }
         }
+        assert!(observed_block, "no clipped approach to the synthetic wall");
+        assert!(blocked.last_contact_clip().is_none());
+        assert!(allowed.last_contact_clip().is_none());
+        assert!(
+            traced
+                .respawned(BOT_ENTITY + 1, 296)
+                .last_contact_clip()
+                .is_none()
+        );
         assert!(blocked.position[2] < 2.0);
         assert!(allowed.position[2] > 3.0);
         assert!(blocked.velocity[2].abs() < 0.05);
