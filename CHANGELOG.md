@@ -26,6 +26,11 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Rust body script stop diagnostics
+
+- Logged the reason when the live worker stops an owner body script, with each initialization diagnostic as graph, node and issue. Previously the worker cancelled the script silently. This exposed the `02C5`, node 51 animation duration stop during held fire in the original client.
+- Passed 326 public Rust tests and 60 tagged base-runtime checks. Cargo formatting and Clippy passed.
+
 #### Rust stock Soldier owner session
 
 - Skipped the parameters of a game message that has no recipients. The reference evaluates them first but delivers none, so the only difference is any random draw they would make. A routed message still refuses an unsupported parameter.
