@@ -6,6 +6,21 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Client research notes
+
+- Added `docs/research/` with an index and five notes on the 104319 client, rewritten from a
+  separate offline restoration effort: the kill feed's client-side gates, bot nameplates and
+  hit feedback, the Tab board, shot origin and the client's own position, and remote weapon
+  fire. Each note marks what was seen live in the original client, read from client data or
+  read from client code, and cites code as image-relative offsets.
+- Each note compares its result with the source at `main` `d52e72f` by reading only. The
+  comparisons propose five changes and test none of them: default the saved option block
+  `+0x120` of message 20802, carry the mode graph's `06DF.025` state for the scoreboard, send
+  component 64's stat GUID fields as ids, write a binding in a plain statescript frame as a
+  remote slot, and use each hero's own eye heights.
+- Documentation only. Ruff and the public source checks passed with 170 Python tests and
+  2 dashboard tests. Screenshots, logs and captures behind the live results stay local.
+
 #### Native replay hash-seed test after the test layout change
 
 - The fresh-process state hash test in `tests/runtime/test_native_replay.py` imported its trace
