@@ -6,6 +6,20 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Kill feed note: runs with the bot bodies in the pack
+
+- Recorded client runs against a pack whose graph bundle holds the six Practice Range bot
+  bodies (`docs/research/kill-feed.md`). The overhead name and health bar now draw over enemy
+  bots, and the kill feed line was seen for the first time: "RESEARCHER" to "TRAINING BOT".
+- The line is not reliable. With the unchanged server it drew at 0 of 19 kills. With the death
+  sent as one full frame it drew at 1 of 14, and with that frame repeated for about a second at
+  4 of 4. A client trace shows the client applying none of a bot's death frames at the kills
+  without a line. The reason is open, and no server change was kept.
+- Also recorded: what the client's pulser does with the fresh bit and the count, read from its
+  code, and that `tools/extract_game_graphs.py` reads the hero table from the checkout's `data`
+  folder, which a runtime-pack layout does not have.
+- No code changed.
+
 #### Kill feed note: why a bot kill drew no line
 
 - Recorded a fourth client run in `docs/research/kill-feed.md`. A statescript tracer in the

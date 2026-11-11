@@ -196,10 +196,70 @@ bundle that adds the six Practice Range bot bodies (`1403`, `143E`, `146E`, `14A
 overhead name and health widget hangs from the same graphs
 ([nameplate note](bot-nameplates-and-hit-feedback.md)), so the same pack explains its absence.
 
+## With a pack that holds the bot bodies
+
+2026-11-10, original client, Practice Range, Soldier: 76. A graph bundle was made with the six
+bot bodies and a new pack assembled around it, as [data/README.md](../../data/README.md)
+describes. The bundle holds 6 entity bodies and 383 graphs: the hero bundle's 373, unchanged,
+and `0A5B`, `0B4E`, `0BA3`, `0BA8`, `0BE2`, `0C16`, `0C17`, `0C18`, `0E8C` and `174F`. The
+extractor's command line reads the hero table from the checkout's `data` folder, which a
+runtime-pack layout does not have; calling its `collect` with the pack's table worked.
+
+What the unchanged server then sends for a dying Range bot, read back with its own decoder:
+
+1. At the death, a delta: `0C17` gets `#392`; `0C18` gets `#392`, `#9296` and `#1821`, and its
+   state 8 goes on with the pulser's fresh bit and count 1.
+2. Four ticks later, a delta: `0C17`'s pulser, state 16, fresh at count 1.
+3. About a second later, a delta: both pulsers with the fresh bit off.
+
+**The line draws when the client starts the pulser.** It read "RESEARCHER", the hero's icon, an
+arrow, the bot's icon and "TRAINING BOT", killer in blue and bot in red.
+
+**The client mostly did not start it.** Kills and lines by what the server sent at the death:
+
+| Sent at the death | Kills | Lines |
+| --- | --- | --- |
+| The delta above (the unchanged server). | 19 | 0 |
+| The same content as one full frame. | 14 | 1 |
+| That full frame again after each acknowledgement, for about a second. | 4 | 4 |
+
+The second and third rows were temporary changes for these runs. No server change was kept.
+
+Seen with the statescript tracer in the client, in a run of the second row:
+
+- At the one kill that drew a line, `0C18` state 8 began and read fresh 1, count 1 from the full
+  frame. 47 ms later `0C17` state 16 began from the delta that followed, so a delta can start a
+  pulser.
+- At the kills without a line, the same body's `0D24` reacted to the death, and neither
+  pulser began. The client applied none of that body's death frames.
+- The server's datagram log shows each death frame sent in one datagram with the bot's health
+  update and a movement record, and acknowledged.
+
+Ruled out as the reason:
+
+- The other variables in the delta. Two kills with only `#392` and the pulser drew no line.
+- The health update sharing the frame's datagram. Two kills with the update one datagram later
+  drew no line.
+
+The repeated full frames drew one line a kill, never more. That fits the client's pulser, read
+from code:
+
+- Its reader (image offset `0x9FD760`) takes the fresh bit and the 8-bit count. On its first
+  read it arms one pulse when the fresh bit is set, and otherwise takes the count as already
+  done. Later reads only move the target count.
+- Its update (image offset `0x9FD870`) fires the out plug once for each count between done and
+  target. A count it has fired does not fire again.
+
+One traced session ended at its first kill. The cause was not established.
+
 ## Open
 
-- A bot kill on ORPHEUS with a pack that holds the bot bodies: whether the line then draws.
-  Every run above used a pack without them.
+- Why the client applies so few of a bot's death frames. It applied 1 of 14 single full
+  frames, and at least one of the repeated ones at each of 4 kills. The intake of a statescript
+  chunk on the client is the place to read next.
+- Whether to repeat the fresh pulse while it is fresh. It drew the line 4 times out of 4, and
+  the reason it helps is not known.
+- A player's death, which runs through `01CF` and the same kind of frames, was not tried.
 - The meaning of `STU_0D179CAF` and `STU_CEFF290A`.
 - A line's critical-hit mark, ability icon and assists (the other `003E.025` parameters) were
   not exercised.
