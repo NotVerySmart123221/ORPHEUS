@@ -34,6 +34,7 @@ static const u16 RELAY_PORT=21119;            // always pipe the stripped plaint
 static u64 g_base=0,g_imgHi=0; static FILE* g_log=nullptr; static CRITICAL_SECTION g_cs, g_mapCs;
 static u64 g_bsVA=0, g_sockVtOrig=0; static u64* g_sockVtHeap=nullptr; static u64* g_bsVtHeap=nullptr;
 static volatile LONG g_swaps=0,g_send=0,g_recv=0,g_stateCalls=0,g_wsaInit=0,g_relayErr=0;
+static volatile ULONGLONG g_lastSwapTick=0;
 
 // client-sock -> relay TCP socket (routed to the byte-stream's OWN target port)
 struct Relay{ u64 cs; u16 port; SOCKET s; };
@@ -200,6 +201,7 @@ static void scan(){
                     if (g_sockVtHeap && svt == (u64)g_sockVtHeap) continue;   // sock already swapped
                     if (g_sockVtOrig && svt != g_sockVtOrig) { continue; }     // different sock class - skip
                     LONG sn = InterlockedIncrement(&g_swaps);
+                    g_lastSwapTick = GetTickCount64();
                     u16 port = (u16)(rd32((void*)(bs + 0xa8)) & 0xFFFF);
                     char host[80] = {0}; u64 hp = rd64((void*)(bs + 0x80), 0), hl = rd64((void*)(bs + 0x88), 0);
                     if (hl >= sizeof(host)) hl = sizeof(host) - 1;
@@ -264,7 +266,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI worker(LPVOID){
         }
         scan();
         if((loop%80)==0)L("[poll] loop=%d swaps=%ld send=%ld recv=%ld stateCalls=%ld relays=%d err=%ld",loop,g_swaps,g_send,g_recv,g_stateCalls,g_nRelays,g_relayErr);
-        Sleep(8);
+        ULONGLONG now = GetTickCount64();
+        bool recent = (g_swaps > 0) && (now - g_lastSwapTick < 4000);
+        Sleep((g_swaps > 0 && !recent) ? 50 : 8);
     }
     return 0;
 }
