@@ -43,7 +43,7 @@ static void L(const char* f,...){char b[1600];va_list a;va_start(a,f);_vsnprintf
 static u64 rd64(void* a,u64 dv=0){u64 r;__try{r=*(volatile u64*)a;}__except(EXCEPTION_EXECUTE_HANDLER){return dv;}return r;}
 static u32 rd32(void* a,u32 dv=0){u32 r;__try{r=*(volatile u32*)a;}__except(EXCEPTION_EXECUTE_HANDLER){return dv;}return r;}
 static inline bool inImage(u64 p){return g_base<=p&&p<g_imgHi;}
-static inline bool inHeap(u64 p){return p>=0x0000010000000000ULL&&p<0x00007FF000000000ULL&&(p&7)==0;}
+static inline bool inHeap(u64 p){return p>=0x0000000000010000ULL&&p<0x00007FF000000000ULL&&(p&7)==0;}
 static void hexlog(const char* tag,const u8* p,u64 n){ if(n>48)n=48; char h[200]; u64 m=0; for(u64 i=0;i<n;i++){int r=snprintf(h+m,sizeof h-m,"%02X ",p[i]); if(r<=0||m>sizeof h-4)break; m+=r;} L("  %s[%llu]: %s",tag,(unsigned long long)n,h); }
 
 typedef int(*SockFn)(void* self, void* buf, u64 len, u64* out);
