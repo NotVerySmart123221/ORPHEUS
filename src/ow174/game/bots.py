@@ -142,6 +142,7 @@ class Bot:
         self.body_script = None  # optional statescript from the match's prepared graph bundle
         self.navigation = None  # explicit manual pursuit state, allocated on first movement
         self.records_from: int | None = None  # a respawned bot's first record tick (after its create)
+        self.slot: int | None = None  # its seat among the match's participants (Match._seat_bots)
         self.hero = int(spawner["hero"], 16)
         self.name = hero["name"]
         self.body = int(hero["body"], 16)
@@ -180,6 +181,12 @@ class Bot:
         self.input_tick: int | None = None  # the last tick it held the keys in
         self.moved_tick: int | None = None  # the last tick it moved or turned in
         self.last_tick: int | None = None
+
+    @property
+    def controller(self) -> int | None:
+        """The seated bot's controller entity, in a block of ids above the players' own. It stays
+        through the bot's respawns; the client names the bot's body through it (Match._show_bots)."""
+        return None if self.slot is None else 0xA0000000 | (0x80 + self.slot) << 8
 
     def step(self, tick: int, seconds: float, collision=None, *, paused_until: int = 0) -> None:
         """Walk the route up to `tick`, a tick being `seconds` long, on the map's collision if loaded."""
@@ -520,6 +527,7 @@ def respawned(bot: Bot, entity: int, records_from: int) -> Bot:
     """The bot made again at its spawner under a new entity id, its records from `records_from` on."""
     fresh = Bot(entity, bot.spawner, bot.hero_data, bot.hints, free_for_all=bot.free_for_all)
     fresh.records_from = records_from
+    fresh.slot = bot.slot
     return fresh
 
 

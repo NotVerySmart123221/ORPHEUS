@@ -111,6 +111,7 @@ TEAM_BIT = 0x800000
 # free-for-all one, whose members are all enemies (0x7FF789B2C690). Bit 28 is the spectator.
 FREE_FOR_ALL_TEAM = 4
 PLAYER_FILTER = 0x00040001
+PARTICIPANTS = 16  # the game struct's participant seats (its +0x274): the players', then the bots'
 # The body statescript's health (its HUD number): None = the hero's own pools added up (pools.py).
 HEALTH: float | None = None
 # The heroes whose body statescript the server runs (ow174/game/script): their weapons and
@@ -541,6 +542,11 @@ class Match:
         quanta = TOURNAMENT_QUANTA if tournament else RETAIL_QUANTA
         player = Player(self, len(self.players), account_lo, name, hero, team, quanta, card)
         self.players.append(player)
+        for bot in self.bots:
+            if bot.slot == player.slot:
+                # shortcut: a client that already has this bot's controller keeps it, named by the
+                # player's record. Destroy it there if matches ever take players past their team sizes.
+                bot.slot = None
         return player
 
     def _advance_scene(self, now: float, tick: int) -> bool:
@@ -607,9 +613,17 @@ class Match:
         """The 1064-byte game struct of 20300 and 20301: the mode, the players and their teams. A team's
         +0x60 is its number and +0x61 its size, from which the hero select screen's team list takes its
         empty slots (0x7FF789CADB40; size minus the players it lists). Players who left are not in it:
-        a player who joins later takes their place."""
+        a player who joins later takes their place. A seated bot follows at its own seat, which its
+        controller's 74 names, and its controller is in its team's list (_show_bots)."""
         playing = [player for player in self.players if not player.gone]
         records = [{"+0x50": player.name} for player in playing]
+        if all(bot.slot is None for bot in self.bots):
+            self._seat_bots()  # the players who start the match have their seats by now
+        seated = sorted((bot for bot in self.bots if bot.slot is not None), key=lambda bot: bot.slot)
+        seated = [bot for bot in seated if bot.slot >= len(records)]
+        for bot in seated:
+            records.extend({} for _ in range(bot.slot - len(records)))
+            records.append({"+0x50": bot.name})
         sizes = self.game_map.team_sizes
         teams = []
         if self.game_map.free_for_all:  # the mode's one team, "FFA", holds everyone
@@ -617,6 +631,7 @@ class Match:
             teams.append({"+0x18": slots, "+0x60": FREE_FOR_ALL_TEAM, "+0x61": sizes[0]})
         for team in () if self.game_map.free_for_all else (0, 1):
             slots = [{"+0x0": player.entity} for player in playing if player.team == team]
+            slots += [{"+0x0": bot.controller} for bot in seated if bot.team == team]
             size = sizes[team] if team < len(sizes) else 0
             teams.append({"+0x18": slots, "+0x60": team, "+0x61": size})
         return {
@@ -630,6 +645,15 @@ class Match:
                 "+0x274": 16,
             }
         }
+
+    def _seat_bots(self) -> None:
+        """Seat the bots after the players' seats while the game struct has room. A seated bot has a
+        participant record and a controller entity, through which the client names its body. Not in a
+        free-for-all, whose one team lists the players alone."""
+        first = max(sum(self.game_map.team_sizes), len(self.players))
+        for number, bot in enumerate(self.bots):
+            seat = first + number
+            bot.slot = seat if seat < PARTICIPANTS and not self.game_map.free_for_all else None
 
     @property
     def ranked(self) -> bool:
@@ -1006,6 +1030,51 @@ class Match:
         update = EntityUpdate(other.entity, OP_UPDATE, lambda origin: world.update(origin, components))
         viewer.client.queue_possession(update, other.body)
 
+    @staticmethod
+    def _bot_controller_create(origin: int, bot: bots.Bot) -> world.RecordWriter:
+        """A seated bot's controller: a player entity with the bot's team (26) and its seat (74)."""
+        components = {
+            26: [PLAYER_FILTER | TEAM_BIT << bot.team],
+            74: [None, None, bot.slot, None, None, None, 1, 1, None],
+        }
+        return world.create(origin, PLAYER_DEFINITION, components, flags=PLAYER_FLAGS & ~PLAYER_PATH)
+
+    def _show_bots(self, viewer: Player) -> None:
+        """Each seated bot's controller on the viewer's client, and once that client has both it and the
+        bot's body, 44 and 75 naming the body and its hero. That makes the controller the body's
+        possessor, by which the client names a body (_show_possession), so a notice about the bot can
+        carry its name. A respawned bot keeps its controller, which then possesses the new body.
+        Seen in the client (docs/research/bot-nameplates-and-hit-feedback.md)."""
+        client = viewer.client
+        if self.bots_shown.get(viewer.slot) is None:
+            return
+        for bot in self.bots:
+            if bot.controller is None:
+                continue
+            shown = viewer.shown.get(bot.controller)
+            if shown is None:
+                shown = viewer.shown[bot.controller] = ShownController(bot.controller, self.tick)
+                shown.card_again = None  # a bot has no card
+                create = EntityUpdate(
+                    bot.controller, OP_CREATE,
+                    lambda origin, bot=bot: self._bot_controller_create(origin, bot),
+                )
+                create.stream = shown
+                client.queue_entities([create])
+                continue
+            possession = (bot.entity, bot.hero, 0)
+            if not shown.create_acked or possession == shown.possession:
+                continue
+            if not client.bot_create_acked(bot.entity):
+                continue
+            shown.possession = possession
+            components = {44: [bot.entity] * 3, 75: [bot.hero, None, None, bot.hero]}
+            update = EntityUpdate(
+                bot.controller, OP_UPDATE,
+                lambda origin, components=components: world.update(origin, components),
+            )
+            client.queue_possession(update, bot.entity)
+
     # --- lifetime ------------------------------------------------------------------------------
 
     def update(self, now: float, tick: int, *, frames: bool | None = None) -> None:
@@ -1064,6 +1133,7 @@ class Match:
             if not viewer.spawned or viewer.client is None:
                 continue
             self._show_players(viewer)
+            self._show_bots(viewer)
             for other in self.players:
                 self.ensure_remote_body(viewer, other)
 

@@ -195,6 +195,7 @@ class Client:
         self._combat_notice_tail: dict[int, int] = {}  # last promoted reliable ordinal per body
         self._last_hit_notice_frame: int
         self._bot_scripts: dict[int, _BotScriptDelivery] = {}
+        self._bot_chunk_waited = False  # a bot's chunk gave way to reliable messages in the last datagram
         self._npc_idle: dict[int, world.EntityUpdate] = {}  # last sent idle pose, pending or ACKed
         self._body_destroy_wait: dict[int, tuple[world.EntityUpdate, int]] = {}
         self._player_body_reuse_after: dict[int, float | None] = {}  # None until destroy ACK
@@ -356,7 +357,10 @@ class Client:
         if controller == self.player.entity:
             return self.player.body == body
         if not any(player.entity == controller for player in self.player.match.players):
-            return True  # NPC names have a separate native path
+            bot = next((bot for bot in self.player.match.bots if bot.entity == body), None)
+            if bot is None or bot.controller is None:
+                return True  # an unseated NPC has no controller to name it
+            controller = bot.controller
         return self._confirmed_possessions.get(controller) == body
 
     def _flush_combat_ui(self) -> None:
@@ -873,6 +877,19 @@ class Client:
                 own = movements[-1]
             entities = (queued + movements)[:MAX_ENTITY_RECORDS]
         reliable = self.reliable[: messages.MAX_PER_KIND]
+        # The original client lost a bot's statescript chunk that came with reliable messages, and an
+        # acknowledged datagram is never sent again, so that body's stream stalled: no kill feed line
+        # (docs/research/kill-feed.md). The two take turns, the messages first.
+        waiting = reliable and any(
+            item.chunk is not None and item.entity in self._bot_scripts for item in entities
+        )
+        if waiting and self._bot_chunk_waited:
+            reliable = []
+        elif waiting:
+            entities = [
+                item for item in entities if item.chunk is None or item.entity not in self._bot_scripts
+            ]
+        self._bot_chunk_waited = bool(waiting) and not self._bot_chunk_waited
         try:
             payload = self._payload(tick, reliable, unreliable, entities)
             if len(payload) > MAX_PAYLOAD:

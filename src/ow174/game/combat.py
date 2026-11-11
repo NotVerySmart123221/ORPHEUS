@@ -79,6 +79,10 @@ DEAD = 0x2000  # movement-state flag: dead (the 3P anim's dead pose)
 # 003E.025's parameters, by the low 16 bits of their 026 identifiers (01CF rid4).
 KILLER, CRIT, LOADOUT, ASSISTS = 0x0012, 0x0095, 0x03E6, 0x03E7
 MODE_UI = 0x0CB6  # the mode's client UI graph: the kill feed 0DEA and the notices 1FC0 (client-only)
+# A mode's own graph, where the server carries it on the game mode entity: (the graph, the remote slot
+# of its state that posts 06DF.025, the state the mode UI hangs from). The client holds its scoreboard
+# shut until that message is posted (docs/research/tab-board.md).
+MODE_GRAPHS = {0x0230000000000018: (0x13C0, 4, 21)}  # the Practice Range
 
 EYE = 1.55  # m: STUFirstPersonComponent m_E29993A5, its default (OWLib) and Soldier's (DATA; unverified: eye)
 #104319 STUFirstPersonComponent: m_E29993A5 standing, m_816B830F crouched.
@@ -1985,12 +1989,26 @@ def respawn_seconds(match) -> float:
 def mode_frame(entity_vars: dict, mode_guid: int | None = None, map_guid: int | None = None) -> BitWriter:
     """A plain full frame of the game mode entity: the mode's client UI graph 0CB6 as instance 1 (its
     client-only Entries make the kill feed 0DEA and the notices 1FC0) and the entity variables given (the
-    PvP countdown). Every full frame of this entity has to list 0CB6, or it would destroy it."""
+    PvP countdown). Every full frame of this entity has to list 0CB6, or it would destroy it.
+
+    A mode in MODE_GRAPHS gets its own graph as instance 1 with the state on that lets the scoreboard
+    open, and 0CB6 as that graph's child, as the game data nests them. 0CB6's own remote state stays off
+    there: these are the frames seen working in the client."""
     ui = graph.graph(MODE_UI)
+    values = {var: (value, ()) for var, value in entity_vars.items()}
+    own = MODE_GRAPHS.get(mode_guid)
+    if own is not None:
+        index, slot, host = own
+        script = graph.graph(index)
+        board = list(script.remote_states())[slot].state
+        instances = [
+            InstanceWire(1, script, states={board: StateWire(script.state(board).cls, True)}),
+            InstanceWire(2, ui, parent=(1, host)),
+        ]
+        return remote_full_frame(instances, values, {1: script, 2: ui})
     # EntryClientOnlySharedVars starts the mode UI's sole remote state, st21.
     shared = ui.state(21)
     instance = InstanceWire(1, ui, states={21: StateWire(shared.cls, True)})
-    values = {var: (value, ()) for var, value in entity_vars.items()}
     from ow174.game import pve
 
     entrance = pve.entrance(mode_guid, map_guid) if mode_guid is not None else None

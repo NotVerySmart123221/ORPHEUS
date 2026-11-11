@@ -6,6 +6,23 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-11
 
+#### Graph extraction from the pinned DataTool's UUID fields
+
+- `tools/extract_game_graphs.py` now reads a `teUUID` field as its text, or as none when the dump
+  holds no value. The pinned DataTool prints a UUID's `Guid` as an object that holds only a
+  reference to itself, and the extractor stopped on it with a reference cycle. Mode graph `100B`
+  has such a field, so a bundle with `--mode-xml` could not be built from a pinned dump.
+- Added a public test. Ruff and the 919 public tests passed.
+- Local check: the command line then built a bundle from a pinned dump of `003`, `01B` and `0C5`
+  with 665 graphs, 32 hero bodies and 38 further entity definitions; one referenced graph,
+  `0F9C`, is not in the dump. With a pack assembled around it the runtime suite ran 1646 tests
+  with 26 failing and 1 skip, against 50 with a hero-only bundle. 25 of the 26 are among those
+  50. The other, `test_healthy_ownership_keeps_world_timing_and_soldier_input`, fails only when
+  the pack holds the Practice Range bot bodies: their frames put the controller's first frame one
+  send later than the test allows.
+- Original-client check: on that pack, Practice Range kills still drew the kill feed line.
+- Limit: the UUID values are not in a pinned dump at all, so an entity reference reads as none.
+
 #### Wrecking Ball reticle and Piledriver movement
 
 - Notify linked graph variables as Quad Cannons spread grows during sustained fire.
@@ -121,6 +138,151 @@ This log records tested changes and their acceptance status. Entries are grouped
   projectile and statescript tests.
 
 ### 2026-11-10
+
+#### Kill feed line for training bot kills
+
+- A bot's statescript chunk and reliable messages now take turns in a client's datagrams, the
+  messages first. The original client lost a bot's chunk that came with reliable messages. The
+  datagram was acknowledged, so the chunk was never sent again, and every later delta of that
+  body waited for it: no kill feed line, and no later state of the dying bot.
+- Found with a read-only sampler of the client's memory: at a bot's death the client held
+  chunks 4 and 5 as waiting and never saw chunk 3, the one sent with the hit and elimination
+  notices (`docs/research/kill-feed.md`).
+- Added a test for the turn-taking and adapted five bot statescript tests, which had the chunk
+  in the notices' datagram. With a prepared build 104319 pack the runtime suite ran 1206 tests
+  with 1 skip; its only errors are the two dashboard picture tests that need local images. Ruff
+  and the 170 public Python tests passed.
+- Original-client check, 2026-11-10, as Soldier: 76, with a pack that holds the Practice Range
+  bot bodies: 2 kills drew 2 lines, "RESEARCHER" to "TRAINING BOT", and no bot's stream ended
+  with a chunk waiting. The same rule as a temporary change drew lines through a run of 15
+  kills. With the default pack, which has no bot body statescript, bots still send no death
+  frame and no line draws.
+- Limits: only bot bodies are covered. Other players' bodies use the same kind of stream and
+  were not tested. Where the client loses the chunk is not established.
+
+#### Kill feed note: runs with the bot bodies in the pack
+
+- Recorded client runs against a pack whose graph bundle holds the six Practice Range bot
+  bodies (`docs/research/kill-feed.md`). The overhead name and health bar now draw over enemy
+  bots, and the kill feed line was seen for the first time: "RESEARCHER" to "TRAINING BOT".
+- The line is not reliable. With the unchanged server it drew at 0 of 19 kills. With the death
+  sent as one full frame it drew at 1 of 14, and with that frame repeated for about a second at
+  4 of 4. A client trace shows the client applying none of a bot's death frames at the kills
+  without a line. The reason is open, and no server change was kept.
+- Also recorded: what the client's pulser does with the fresh bit and the count, read from its
+  code, and that `tools/extract_game_graphs.py` reads the hero table from the checkout's `data`
+  folder, which a runtime-pack layout does not have.
+- No code changed.
+
+#### Kill feed note: why a bot kill drew no line
+
+- Recorded a fourth client run in `docs/research/kill-feed.md`. A statescript tracer in the
+  original client showed the kill feed's two gates open and no `0C18` graph on any bot. The
+  server had made no body script for the bots: the runtime pack's graph bundle had no `entities`
+  table, so `graph.entity_body` found no bot body. The pack was made from the standard hero
+  bundle.
+- No code changed. The bundle that adds the six Practice Range bot bodies is described in
+  `data/README.md`. A client run with such a pack is still pending, for the kill feed line and
+  for the overhead name and health widget.
+
+#### Tab board in the Practice Range
+
+- The game mode entity of a Practice Range match now carries the mode's own graph `13C0` with
+  the state on that posts `06DF.025`, and the mode UI graph `0CB6` as that graph's child. The
+  client holds its scoreboard shut until that message is posted. The frame is bit for bit the
+  one another service sent when the board was seen to open. Other modes keep their frame.
+- Component 64's 14 stat GUID fields go as ids, a mask of the non-zero bytes and those bytes.
+  Sent as raw u64 the board names no stat.
+- Added a test for the frame's bytes and what the client's reader makes of them, and updated
+  the component 64 size test to the id encoding. With a prepared build 104319 pack the runtime
+  suite ran 1205 tests with 1 skip; its only errors are the two dashboard picture tests that
+  need local images. Ruff and the public source checks passed with 170 Python tests and
+  2 dashboard tests.
+- Original-client check, 2026-11-10, as Soldier: 76: the board opens while Tab is held. It
+  shows 11 Training Bot tiles against the player and 4 Friendly Bot tiles, names every stat,
+  and after four kills reads "4 ELIMINATIONS" and "840 HERO DAMAGE DONE" with gold medals. The
+  player's tile shows the ultimate charge. The elimination notice still names the bot. Still
+  open: the board's time reads 0:00, the hero's own stats are not counted, other modes have no
+  board, and no kill feed line draws.
+
+#### Training bot names in notices
+
+- Gave each training bot a seat among the match's participants and a controller entity. The
+  game struct of 20300 and 20301 names the bot at its seat and lists its controller in its
+  team. Each client gets the controller with the bot's team and seat and, once it has
+  acknowledged both the controller and the bot's body, components 44 and 75 naming the body and
+  the bot's hero. A respawned bot keeps its seat, and its controller possesses the new body.
+  The client names a body through its possessor, so a notice about a bot can carry its name.
+- An elimination notice about a seated bot now waits for that possession, as it already does
+  for another player's body. Bots are seated after the players who start the match while the
+  struct's 16 seats last; an unseated bot behaves as before. Free-for-all matches seat none.
+- Added five tests for the seats, the game struct, the controller and its possession, the
+  notice gate and a respawn. With a prepared build 104319 pack the runtime suite ran 1204 tests
+  with 1 skip; its only errors are the two dashboard picture tests that need local images.
+  Ruff and the public source checks passed with 170 Python tests and 2 dashboard tests.
+- Original-client check, 2026-11-10, Practice Range as Soldier: 76: the notice read
+  "ELIMINATED TRAINING BOT". The same bot was killed six times and the three notices caught in
+  frames all carried the name. The hero select screen listed no bots. Still open: no name or
+  health bar over the bot, and no kill feed line.
+
+#### Kill feed option default at login
+
+- A profile that never saved its Gameplay options now gets the client's own defaults for block
+  `+0x120` of message 20802: Kill Feed Display (`+0x4`) and Tips Display (`+0x7`) on. The
+  block went out as zeros before. The client's kill feed presenter shows only while byte
+  `+0x4` is set, as [the kill feed note](docs/research/kill-feed.md) records from another
+  service. A saved block is still sent as saved.
+- Added `tests/runtime/test_player_settings.py` for the default and for a saved block, and
+  regenerated the five `settings` digests of the message snapshot; no other digest changed.
+- With a prepared build 104319 pack, the runtime suite ran 1199 tests with 1 skip; its only
+  errors are the two dashboard picture tests that need local images. Ruff and the public
+  source checks passed with 170 Python tests and 2 dashboard tests.
+- Original-client check, 2026-11-10: with a profile that had no saved options, the Practice
+  Range's enemy training bot was killed 12 times as Soldier: 76. The server logged every hit
+  and kill, the bot fell apart and respawned, and the elimination notice drew without a name.
+  **No kill feed line drew**, so this default alone does not restore the feed for a bot kill.
+  The client's Options screen showed Kill Feed Display on in that session, so the option
+  arrived. Whether the bot's pulser went out and whether the client's name test passed were
+  not observed; the [note](docs/research/kill-feed.md) lists them. No name or health bar drew
+  over the bot either.
+
+#### Client research notes
+
+- Added `docs/research/` with an index and five notes on the 104319 client, rewritten from a
+  separate offline restoration effort: the kill feed's client-side gates, bot nameplates and
+  hit feedback, the Tab board, shot origin and the client's own position, and remote weapon
+  fire. Each note marks what was seen live in the original client, read from client data or
+  read from client code, and cites code as image-relative offsets.
+- Each note compares its result with the source at `main` `d52e72f` by reading only. The
+  comparisons propose five changes and test none of them: default the saved option block
+  `+0x120` of message 20802, carry the mode graph's `06DF.025` state for the scoreboard, send
+  component 64's stat GUID fields as ids, write a binding in a plain statescript frame as a
+  remote slot, and use each hero's own eye heights.
+- Documentation only. Ruff and the public source checks passed with 170 Python tests and
+  2 dashboard tests. Screenshots, logs and captures behind the live results stay local.
+
+#### Native replay hash-seed test after the test layout change
+
+- The fresh-process state hash test in `tests/runtime/test_native_replay.py` imported its trace
+  helper from a `tests` path relative to the working directory. The module moved to
+  `tests/runtime`, so both child processes failed on the import. The child now gets the test
+  module's own directory, as the rest of the suite resolves paths.
+- With a prepared build 104319 pack, `test_native_replay.py` passes with 17 tests; one errored
+  before. The public source checks passed with 170 Python tests and 2 dashboard tests.
+  Test-only change, so no original-client check applies.
+
+#### Stored-state registry for the ultimate charge log state
+
+- Registered the body script's `_ult_passive_blocked` and `_ult_stall` attributes as optional
+  stored fields. The ultimate charge logging sets them on a body's first charge step, and the
+  stored-state export rejected every body that had run one as holding unregistered fields.
+  Both values derive from script time and stay in the stored-state hash.
+- With a prepared build 104319 pack, `test_server_snapshot.py` (14 tests) and
+  `test_game_move_to_replay.py` (1 test) pass again; both had failed on the export.
+  `test_server_journal.py` (18 tests) and `test_game_ult_charge.py` (7 tests) pass. The public
+  source checks passed with 159 Python tests, 6 fixture skips and 2 dashboard tests. The two
+  repaired suites run outside the public workflow because they need prepared data. No client
+  behavior changes, so no original-client check applies.
 
 #### Python project layout and verification
 

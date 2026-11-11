@@ -79,7 +79,8 @@ FIELDS = {
     Client: _names("server address conn cipher player window seq open closed heard next_reliable "
                    "_ownership_ordinal reliable "
                    "unreliable entities in_flight _npc_idle _combat_notices _body_health _combat_notice_tail "
-                   "_body_destroy_wait _player_body_reuse_after _bot_scripts expected_in parked_in "
+                   "_body_destroy_wait _player_body_reuse_after _bot_scripts _bot_chunk_waited expected_in "
+                   "parked_in "
                    "leaving_since _own_controller_acked _mode_create_acked _pending_mode_frame "
                    "_mode_fragments _display_notices _pending_possessions _confirmed_possessions"),
     _BotScriptDelivery: _names(
@@ -149,7 +150,7 @@ FIELDS = {
         "entity spawner hero_data hints dead body_script records_from hero name body team health speed accel "
         "brake pace direction position yaw velocity firing route index wait target start keys turning held "
         "last_held input_tick moved_tick last_tick free_for_all category radius capsule_top pogo physics "
-        "physics_world waypoints retain_corpse attack_target attack_input pitch navigation"
+        "physics_world waypoints retain_corpse attack_target attack_input pitch navigation slot"
     ),
     npc_navigation.Search: _names(
         "start target queue points parents costs visited done path blocked_by_teammate"
