@@ -434,10 +434,8 @@ class Combat:
         self.history.pop(player.body, None)
         self.replacement_ticks.pop(player.body, None)
         self.melee_seen.pop(player.body, None)
-        # The owner's leased projectiles and their observer copies retire with the old body.
-        self.rockets[:] = [
-            rocket for rocket in self.rockets if rocket.shooter is not player or rocket.shot is None
-        ]
+        # Flight belongs to the retiring body, including projectiles synchronized without leases.
+        self.rockets[:] = [rocket for rocket in self.rockets if rocket.shooter is not player]
         self.respawns[:] = [(when, who) for when, who in self.respawns if who is not player]
 
     def record_replacement(self, body: int) -> None:

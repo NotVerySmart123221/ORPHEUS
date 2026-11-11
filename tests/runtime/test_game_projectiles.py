@@ -218,6 +218,67 @@ class ProjectileRangeTests(unittest.TestCase):
         self.assertFalse(fight.rockets)
         self.assertAlmostEqual(before - vitals.total, 66.0)
 
+    def test_hand_cannon_flight_retires_on_hero_switch_or_leave(self):
+        for retirement in ("switch", "leave"):
+            with self.subTest(retirement=retirement):
+                run = Run(KANEZAKA_DM, ("Shooter", "Target"))
+                shooter, victim = run.players
+                match, fight = run.match, run.match.combat
+                bot = match.bots[0]
+                match.bots.clear()
+                match._pending_bot_scripts.clear()
+                self.assertTrue(match.switch_hero(shooter, find_hero("Doomfist")))
+                self.assertTrue(match.switch_hero(victim, find_hero("Doomfist")))
+                y = match.game_map.spawns[0].position[1]
+                shooter.mover.position[:] = (0.0, y, 0.0)
+                victim.mover.position[:] = (0.0, y, 8.0)
+                target = next(target for target in fight._targets() if target.owner is victim)
+                vitals = fight.vitals_of(target)
+                run.step({shooter: (0, 0, FIRE), victim: (0, 0, FIRE)})
+                self.assertEqual(sum(rocket.shooter is shooter for rocket in fight.rockets), 11)
+                other_rockets = [rocket for rocket in fight.rockets if rocket.shooter is victim]
+                self.assertEqual(len(other_rockets), 11)
+                npc_rocket = combat.Rocket(
+                    bot, bot.team, (0.0, y, 20.0), (0.0, 0.0, 1.0), 80.0, 1.0, None, None,
+                )
+                fight.rockets.append(npc_rocket)
+
+                if retirement == "switch":
+                    self.assertTrue(match.switch_hero(shooter, find_hero("Reaper")))
+                else:
+                    match.leave(shooter)
+
+                self.assertFalse(any(rocket.shooter is shooter for rocket in fight.rockets))
+                self.assertEqual(fight.rockets, [*other_rockets, npc_rocket])
+                before = vitals.total
+                for step in range(1, 9):
+                    fight.update((run.frame + step) * combat.TICK, run.frame + step, frames=False)
+                self.assertEqual(vitals.total, before)
+
+    def test_hand_cannon_flight_survives_death_until_body_retirement(self):
+        run = Run(KANEZAKA_DM, ("Shooter", "Target"))
+        shooter, victim = run.players
+        match, fight = run.match, run.match.combat
+        match.bots.clear()
+        match._pending_bot_scripts.clear()
+        self.assertTrue(match.switch_hero(shooter, find_hero("Doomfist")))
+        y = match.game_map.spawns[0].position[1]
+        shooter.mover.position[:] = (0.0, y, 0.0)
+        victim.mover.position[:] = (0.0, y, 8.0)
+        target = next(target for target in fight._targets() if target.owner is victim)
+        vitals = fight.vitals_of(target)
+        run.step({shooter: (0, 0, FIRE)})
+        body = shooter.body
+        shooter_target = next(target for target in fight._targets() if target.owner is shooter)
+        fight._damage(victim, shooter_target, 300.0, False, None, run.frame)
+        self.assertTrue(fight.is_dead(shooter))
+        self.assertEqual(sum(rocket.shooter is shooter for rocket in fight.rockets), 11)
+        before = vitals.total
+        for _ in range(8):
+            run.step({})
+        self.assertEqual(shooter.body, body)
+        self.assertAlmostEqual(before - vitals.total, 66.0)
+
     def test_replacing_the_shooter_retires_the_projectiles_damage(self):
         for replace_body, expected_health in ((False, 80.0), (True, 200.0)):
             with self.subTest(replace_body=replace_body):

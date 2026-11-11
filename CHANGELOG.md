@@ -6,6 +6,16 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-11
 
+#### Hand Cannon projectile retirement
+
+- Retire all of a player's projectile flight when its body is replaced or leaves the
+  match. Hand Cannon pellets can no longer damage targets through a replacement hero.
+- Preserve other shooters' projectiles and the existing flight of a dead body until
+  it retires. The prepared-runtime regressions cover hero switching, leaving and
+  posthumous damage.
+- Passed Ruff, 170 public Python tests, two dashboard tests and 41 prepared-runtime
+  projectile tests. Original-client verification remains open.
+
 #### Owner movement in Doomfist's ability graph
 
 - Sample the live owner's regular movement pose and publish the authored flags and
