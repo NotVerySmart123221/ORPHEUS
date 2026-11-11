@@ -180,6 +180,7 @@ class Client:
         self._body_health: dict[int, world.EntityUpdate] = {}  # latest snapshot awaiting delivery per body
         self._combat_notice_tail: dict[int, int] = {}  # last promoted reliable ordinal per body
         self._bot_scripts: dict[int, _BotScriptDelivery] = {}
+        self._bot_chunk_waited = False  # a bot's chunk gave way to reliable messages in the last datagram
         self._body_destroy_wait: dict[int, tuple[world.EntityUpdate, int]] = {}
         self._player_body_reuse_after: dict[int, float | None] = {}  # None until destroy ACK
         self._pending_possessions: dict[int, tuple[int, world.EntityUpdate]] = {}
@@ -785,6 +786,19 @@ class Client:
                 own = movements[-1]
             entities = (queued + movements)[:MAX_ENTITY_RECORDS]
         reliable = self.reliable[: messages.MAX_PER_KIND]
+        # The original client lost a bot's statescript chunk that came with reliable messages, and an
+        # acknowledged datagram is never sent again, so that body's stream stalled: no kill feed line
+        # (docs/research/kill-feed.md). The two take turns, the messages first.
+        waiting = reliable and any(
+            item.chunk is not None and item.entity in self._bot_scripts for item in entities
+        )
+        if waiting and self._bot_chunk_waited:
+            reliable = []
+        elif waiting:
+            entities = [
+                item for item in entities if item.chunk is None or item.entity not in self._bot_scripts
+            ]
+        self._bot_chunk_waited = bool(waiting) and not self._bot_chunk_waited
         try:
             payload = self._payload(tick, reliable, unreliable, entities)
             if len(payload) > MAX_PAYLOAD:

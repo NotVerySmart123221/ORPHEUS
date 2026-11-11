@@ -6,6 +6,27 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Kill feed line for training bot kills
+
+- A bot's statescript chunk and reliable messages now take turns in a client's datagrams, the
+  messages first. The original client lost a bot's chunk that came with reliable messages. The
+  datagram was acknowledged, so the chunk was never sent again, and every later delta of that
+  body waited for it: no kill feed line, and no later state of the dying bot.
+- Found with a read-only sampler of the client's memory: at a bot's death the client held
+  chunks 4 and 5 as waiting and never saw chunk 3, the one sent with the hit and elimination
+  notices (`docs/research/kill-feed.md`).
+- Added a test for the turn-taking and adapted five bot statescript tests, which had the chunk
+  in the notices' datagram. With a prepared build 104319 pack the runtime suite ran 1206 tests
+  with 1 skip; its only errors are the two dashboard picture tests that need local images. Ruff
+  and the 170 public Python tests passed.
+- Original-client check, 2026-11-10, as Soldier: 76, with a pack that holds the Practice Range
+  bot bodies: 2 kills drew 2 lines, "RESEARCHER" to "TRAINING BOT", and no bot's stream ended
+  with a chunk waiting. The same rule as a temporary change drew lines through a run of 15
+  kills. With the default pack, which has no bot body statescript, bots still send no death
+  frame and no line draws.
+- Limits: only bot bodies are covered. Other players' bodies use the same kind of stream and
+  were not tested. Where the client loses the chunk is not established.
+
 #### Kill feed note: runs with the bot bodies in the pack
 
 - Recorded client runs against a pack whose graph bundle holds the six Practice Range bot

@@ -250,15 +250,56 @@ from code:
 - Its update (image offset `0x9FD870`) fires the out plug once for each count between done and
   target. A count it has fired does not fire again.
 
-One traced session ended at its first kill. The cause was not established.
+Two traced sessions ended at their first kill. The cause was not established, and the later
+runs went without the tracer.
+
+## Why the client lost the death frames
+
+A read-only sampler read each entity's statescript network part from the client's memory. The
+part is found by its class vtable (image offset `0x263C160`). It holds the number of the last
+frame applied (`+2312`), the list of chunks waiting (`+1864`, count `+1872`, each with its first
+and last frame) and the instance records (`+88`).
+
+Seen with the unchanged server, at a bot's death:
+
+- Before the death the bot's stream had applied frame 2.
+- After it the client held chunk 4, then chunks 4 and 5, as waiting, until the body was
+  destroyed. **Chunk 3, the death delta, never showed in the list and was never applied.**
+- The server's log shows chunk 3 sent in the datagram with the kill's reliable messages, the hit
+  and the elimination notice, and chunks 4 and 5 in datagrams with none. All three datagrams
+  were acknowledged.
+
+Why one lost chunk is fatal, read from the client's code:
+
+- The intake (image offset `0xA0A3E0`) keeps a chunk whose last frame is above the last one
+  applied, and drops the rest.
+- The pump (image offset `0xA0E630`) runs each tick. It applies a waiting chunk only when its
+  first frame is at most one above the last applied, and a refused chunk waits for the next
+  tick. A full frame has first frame 0, so it always qualifies.
+- So after a lost delta every later delta waits for ever. The server sends nothing again,
+  because the datagram was acknowledged. That is also why the repeated full frames above drew
+  the line: the first one came with the notices and was lost, and a later one applied.
+
+The test: a bot's chunk kept out of every datagram that carries reliable messages, the server
+otherwise unchanged. Chunk 3 then showed in the list and applied, and 4 and 5 after it. In one
+run of 15 kills, frames taken about 5.5 s apart showed a line in 13 of 18. With the kept change
+below, 2 kills drew 2 lines and no bot's stream ended with a chunk waiting.
+
+Not established:
+
+- Where the client's datagram reader loses the chunk.
+- Whether any reliable message does it, or only one that names that entity. The player's own
+  stream kept advancing in datagrams that carried hit notices about other entities.
+
+**Changed:** in `Client.send_frame`, a bot's statescript chunk and reliable messages take turns.
+The messages go first. A chunk that waited goes in the next datagram, and that one carries no
+reliable messages. Other players' bodies use the same kind of stream and are probably affected
+the same way. That needs two clients and was not tried, so the change covers bot bodies only.
 
 ## Open
 
-- Why the client applies so few of a bot's death frames. It applied 1 of 14 single full
-  frames, and at least one of the repeated ones at each of 4 kills. The intake of a statescript
-  chunk on the client is the place to read next.
-- Whether to repeat the fresh pulse while it is fresh. It drew the line 4 times out of 4, and
-  the reason it helps is not known.
+- Where the client loses a chunk that comes with reliable messages, and for which messages.
+- Other players' bodies: whether their chunks are lost the same way. Needs two clients.
 - A player's death, which runs through `01CF` and the same kind of frames, was not tried.
 - The meaning of `STU_0D179CAF` and `STU_CEFF290A`.
 - A line's critical-hit mark, ability icon and assists (the other `003E.025` parameters) were
