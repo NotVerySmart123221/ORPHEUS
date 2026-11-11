@@ -995,16 +995,26 @@ class Match:
 
     # --- the body's statescript (ow174/game/script) ------------------------------------------------
 
-    def script_body_position(self, entity: int, owner: int) -> expr.Vec3 | None:
-        """The current match pose of a body, including the owner during its own create."""
+    def _script_body_mover(self, entity: int, owner: int) -> Mover | None:
+        """Resolve a live player body, including the owner during its own create."""
         for player in self.players:
             if (player.body == entity and player.has_body and player.client is not None
                     and (player.spawned or entity == owner)):
-                return expr.Vec3(*player.mover.position)
+                return player.mover
+        return None
+
+    def script_body_position(self, entity: int, owner: int) -> expr.Vec3 | None:
+        mover = self._script_body_mover(entity, owner)
+        if mover is not None:
+            return expr.Vec3(*mover.position)
         for bot in self.bots:
             if bot.entity == entity:
                 return expr.Vec3(*bot.position)
         return None
+
+    def script_owner_movement_sample(self, owner: int) -> int | None:
+        mover = self._script_body_mover(owner, owner)
+        return mover.movement_sample() if mover is not None else None
 
     def _message_player(self, entity: int) -> Player | None:
         shown = (player for player in self.players if player.body == entity and self._shown(player))

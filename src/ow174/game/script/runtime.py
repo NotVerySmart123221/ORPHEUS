@@ -301,6 +301,10 @@ class World:
     def position(self, entity: int):
         return expr.Vec3(0.0, 0.0, 0.0)
 
+    def movement_sample(self) -> int | None:
+        """The owner's current movement sample, if this world supplies a pose."""
+        return None
+
     def nearby_enemy_count(self, owner: int, radius: float) -> int:
         return 0
 

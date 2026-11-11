@@ -59,6 +59,7 @@ _STATE_LAYOUTS = {
         ("offset", "volleys", "per_shot", "ammo0", "rate", "spread0", "links", "reported"),
         ("max_shots", "min_shots"),
     ),
+    nodes.OwnerMovementSample: (("sample", "outputs"), ()),
     nodes.MoveTo: (("movement",), ()),
     nodes.Anim: ((), ()),
     nodes.Ability: (("flags", "presses", "cur", "cooldown_rate", "last", "var", "stack_var"), ()),

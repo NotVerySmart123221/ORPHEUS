@@ -623,6 +623,31 @@ class Mover:
     def airborne(self) -> bool:
         return bool(self.flags_word & IN_AIR)
 
+    def movement_sample(self) -> int | None:
+        """Project a regular movement pose into the statescript's 13-bit sample."""
+        flags = self.flags_word
+        # These modes need movement records the current mover does not simulate.
+        if flags & (0x20 | 0x80):
+            return None
+        x, y, z = map(f32, self.velocity)
+        if not all(map(math.isfinite, (x, y, z))):
+            return None
+        airborne = bool(flags & IN_AIR)
+        float_epsilon = 2 ** -23
+        vertical_threshold = 100.0 * float_epsilon
+        speed_squared = f32(f32(f32(x * x) + f32(y * y)) + f32(z * z))
+        return (
+            airborne
+            | (not airborne) << 1
+            | (y > vertical_threshold) << 2
+            | (y < -vertical_threshold) << 3
+            | (speed_squared > 10.0 * float_epsilon) << 4
+            | (self.throttles != (0, 0)) << 5
+            | bool(flags & CROUCHED) << 6
+            | bool(flags & NOT_GROUND_UNDER) << 9
+            | bool(flags & JUMPED) << 11
+        )
+
     @property
     def gravity_scale(self) -> float:
         """The gravity scale of the last tick (state +24, written every tick: 0x7FF789B4D869)."""

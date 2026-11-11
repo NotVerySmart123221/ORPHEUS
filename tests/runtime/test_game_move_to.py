@@ -1,4 +1,4 @@
-"""Run two authored fixed-target MoveTo states through the player's command and collision path."""
+"""Run authored movement states through the player's command and collision path."""
 
 import math
 import unittest
@@ -8,13 +8,14 @@ from unittest.mock import patch
 from test_game_mover import FLOOR, wall
 from test_game_notices import into_world
 
-from ow174.game import bodytrace, movelog
+from ow174.game import bodytrace, movelog, replay_values
+from ow174.game.body_vm_snapshot import export_body_vm
 from ow174.game.collision import StaticCollisionProvider, World, flat_world
-from ow174.game.commands import Command
+from ow174.game.commands import JUMP, Command
 from ow174.game.content import PRACTICE_RANGE, Spawn, heroes
 from ow174.game.match import Match
 from ow174.game.mover import STEP
-from ow174.game.script import runtime
+from ow174.game.script import nodes, runtime
 from ow174.game.script.expr import INSTANCE, Entity, Vec3
 
 START = 100
@@ -121,6 +122,43 @@ class FixedTargetMoveToTests(unittest.TestCase):
                     player.match.tick = START + 1
                     player.take_commands([Command(START + 1, buttons=0x08)])
                 self.assertEqual(instance.state(state_index).move_request(), (expected, speed))
+
+    def test_doomfist_slam_selector_follows_the_owner_airborne_sample(self):
+        for jump in (False, True):
+            with self.subTest(jump=jump):
+                player, slam = self.spawn(0x02E000000000012F, 0x0B27, flat_world(1.0))
+                component = slam.component
+                movement = next(inst for inst in component.instances.values() if inst.graph.index == 0x01C7)
+                ability = slam.state(0)
+                selector = slam.state(6)
+                self.assertFalse(ability.flags & nodes.Ability.RUNNING)
+                self.assertFalse(selector.active)
+
+                player.match.tick = START + 1
+                player.take_commands([Command(START + 1, buttons=JUMP if jump else 0)])
+                player.match.tick = START + 2
+                player.take_commands([Command(START + 2, buttons=0x10)])  # E / Ability 2
+
+                self.assertTrue(ability.flags & nodes.Ability.RUNNING)
+                self.assertEqual(player.mover.airborne, jump)
+                airborne = component.entity_var(417, create=False)
+                self.assertIs(airborne.value() if airborne else None, True if jump else None)
+                self.assertEqual(selector.active, jump)
+                sample = (1 << 11) | (1 << 4) | (1 << 2) | 1 if jump else 1 << 1
+                self.assertEqual(
+                    player.body_script.snapshot().states[(movement.id, 4)],
+                    ("STU_96F1DBCF", True, (("value", sample),)),
+                )
+                vm = replay_values.decode(export_body_vm(player.body_script)["value"])
+                saved = next(item for item in vm["objects"] if item["ref"] == ["state", movement.id, 4])
+                self.assertEqual(dict(saved["fields"])["sample"], sample)
+
+                if jump:
+                    self.commands(player, range(START + 3, START + 60))
+                    self.assertFalse(player.mover.airborne)
+                    self.assertIs(airborne.value(), False)
+                    self.assertFalse(selector.active)
+                    self.assertEqual(movement.state(4).payload(), {"value": 1 << 1})
 
     def test_entity_position_tracks_the_current_body_and_clears_on_retirement(self):
         hero_guid, graph_id, *_ = AUTHORED_STATES[0]

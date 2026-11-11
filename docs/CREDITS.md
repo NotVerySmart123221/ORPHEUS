@@ -102,6 +102,13 @@ a value of five for Torbjörn's secondary spread in the 104319 data, consistent 
 description in degrees. The native azimuth and per-pellet angle variation still need a client
 comparison. [February 2018 notes](https://us.forums.blizzard.com/en/overwatch/t/all-overwatch-patch-notes-february-8-2018/20/3) · [October 2018 notes](https://overwatch.blizzard.com/en-gb/news/patch-notes/live/2018/10/) · [September 2020 notes](https://overwatch.blizzard.com/en-us/news/patch-notes/live/2020/09/) · [July 2023 notes](https://overwatch.blizzard.com/en-us/news/patch-notes/live/2023/07/)
 
+## Doomfist movement sampling
+
+The 104319 owner graph `01C7` writes the airborne variable read by Seismic Slam graph
+`0B27`. Python uses the regular owner-pose sampling and output order already implemented
+on ORPHEUS's Rust branch. [Movement sampler](https://github.com/leafall903/ORPHEUS/blob/13acf152e866bbea181074326551422ce9c86671/rust/src/mover.rs) ·
+[Statescript runtime](https://github.com/leafall903/ORPHEUS/blob/13acf152e866bbea181074326551422ce9c86671/rust/src/script_init.rs)
+
 ## Wrecking Ball
 
 The local 104319 statescript export supplies the authored Quad Cannons (`1514`),

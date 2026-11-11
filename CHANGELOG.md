@@ -6,6 +6,17 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-11
 
+#### Owner movement in Doomfist's ability graph
+
+- Sample the live owner's regular movement pose and publish the authored flags and
+  changed boolean outputs. A grounded or jumping Doomfist now takes the corresponding
+  Seismic Slam path, and landing clears the airborne selector.
+- Store the movement sample in the body VM for replay verification. The selector's
+  target, Slam travel, damage and original-client acceptance remain open.
+- Passed Ruff, 170 public Python tests, two dashboard tests, 71 prepared-runtime
+  movement, projectile, Wrecking Ball and statescript tests, and two encrypted
+  movement replay tests with stored-state verification.
+
 #### Wrecking Ball movement and Adaptive Shield
 
 - Apply the authored Roll movement component on the next command frame. The flat-ground

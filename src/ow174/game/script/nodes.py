@@ -683,6 +683,70 @@ class WeaponVolley(State):
         return {"start": self.start, "offset": self.offset, "volleys": self.volleys, "counter": self.counter}
 
 
+@state_class("STU_96F1DBCF")
+class OwnerMovementSample(State):
+    """Publish changed booleans and the 13-bit payload from the current owner pose."""
+
+    # The native sample's output order. Regular poses never set bits 7, 8, 10 or 12.
+    OUTPUTS = (
+        "m_105DF1D6", "m_49F4B33C", "m_56AC7B36", "m_16BC4759",
+        "m_F620FC2A", "m_6306AA29", "m_103A8581", "m_958FF5C0",
+        "m_4C55BB03", "m_2EB48682", "m_45EB431F", "m_BF152E27",
+    )
+
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
+        self.sample = 0
+        self.outputs = self._authored_outputs()
+
+    def _authored_outputs(self) -> tuple[tuple[int, tuple[int, int]], ...] | None:
+        unsupported = (
+            "m_entity", "m_A10CC74B", "m_0B1AA8CA", "m_4F8F2F3F", "m_8BF03679", "m_BF5B22B7",
+        )
+        if (
+            not self.networked
+            or self.node.remote != -1
+            or any(_field(self, name) is not None for name in unsupported)
+            or any(self.node.links(path) for path in ("m_E37BC6C2", "m_2102C541"))
+        ):
+            return None
+        outputs = []
+        for bit, name in enumerate(self.OUTPUTS):
+            cfg = _field(self, name)
+            if cfg is not None:
+                target = lvalue(cfg)
+                if target is None:
+                    return None
+                outputs.append((1 << bit, target))
+        return tuple(outputs)
+
+    def on_begin(self) -> None:
+        if self.outputs is not None:
+            self._sample_owner()
+            self.ticks()
+
+    def tick(self) -> None:
+        self._sample_owner()
+
+    def on_end(self, finished: bool) -> None:
+        self._sample_owner()
+
+    def _sample_owner(self) -> None:
+        if self.outputs is None:
+            return
+        sample = self.instance.component.world.movement_sample()
+        if sample is None or sample == self.sample:
+            return
+        changed = self.sample ^ sample
+        self.sample = sample
+        for bit, target in self.outputs:
+            if changed & bit:
+                self.instance.write(target, bool(sample & bit))
+
+    def payload(self) -> dict:
+        return {"value": self.sample}
+
+
 @state_class("STUStatescriptStateMoveTo")
 class MoveTo(State):
     """Expose a resolved fixed world target and speed for one state activation."""
