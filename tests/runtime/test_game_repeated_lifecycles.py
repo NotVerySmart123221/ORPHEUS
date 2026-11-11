@@ -16,9 +16,6 @@ from unittest.mock import patch
 
 import test_game_server as server_tests
 import test_game_to_game as transition_tests
-from test_game_projectiles import read_shot
-from test_game_world import read_movement
-from test_script_driver import ClientModel, server_on
 
 from ow174.game import heroselect, messages, world
 from ow174.game.bits import BitReader, BitWriter
@@ -29,6 +26,9 @@ from ow174.game.match import SEND_CONTROLLER, SEND_EVERY, SEND_WORLD
 from ow174.game.script import decode, expr
 from ow174.game.server import PING, GameServer
 from ow174.game.world import OP_CREATE, OP_DESTROY, EntityUpdate
+from tests.runtime.test_game_projectiles import read_shot
+from tests.runtime.test_game_world import read_movement
+from tests.runtime.test_script_driver import ClientModel, server_on
 
 REAPER = server_tests.REAPER
 
@@ -118,7 +118,9 @@ def wire_frame(packet):
             start = reader.pos
             decode.w_u32(reader)
             decode.w_var(reader)
-            assert not reader.bit()  # no fragments
+            if reader.bit():
+                decode.w_u16(reader)  # fragment index
+                reader.bit()  # final part
             size = decode.w_var(reader)
             reader.bits(size)
             chunk = BitWriter()

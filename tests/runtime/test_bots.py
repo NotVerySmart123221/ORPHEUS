@@ -12,9 +12,6 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[0]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from test_game_repeated_lifecycles import wire_frame
-from test_game_world import read_record
-
 from ow174.game import bots, props, world
 from ow174.game.collision import MOVER, TEAM1, StaticCollisionProvider, World, cache_path, flat_world
 from ow174.game.combat import Vitals
@@ -22,6 +19,8 @@ from ow174.game.content import PRACTICE_RANGE, SOLDIER
 from ow174.game.link import KIND_FRAME, Packet
 from ow174.game.match import BOT_RECORD_DELAY, Match, _rotation
 from ow174.game.world import NO_INPUT, OP_CREATE
+from tests.runtime.test_game_repeated_lifecycles import wire_frame
+from tests.runtime.test_game_world import read_record
 
 TRAINING, FRIENDLY = "Training Bot", "Friendly Bot"
 TICK = 0.016

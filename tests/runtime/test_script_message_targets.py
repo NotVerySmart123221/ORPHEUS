@@ -8,13 +8,12 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from test_game_combat import Run
-from test_game_graph_analysis import make_graph, node, output
-from test_script_abilities import Q
-
 from ow174.game import bodytrace, movelog
 from ow174.game.script import expr, graph, nodes, runtime
 from ow174.game.script.driver import ULT_COST
+from tests.runtime.test_game_combat import Run
+from tests.runtime.test_game_graph_analysis import make_graph, node, output
+from tests.runtime.test_script_abilities import Q
 
 OWNER = 0xA0000101
 FIRST = 0xA0000201

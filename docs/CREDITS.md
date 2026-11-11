@@ -98,3 +98,52 @@ This repository builds on existing Overwatch preservation work. Its lobby improv
 Thank you as well to everyone who shared captures, tools, notes, testing, corrections and encouragement, including contributors whose names were not recorded in the materials available to us. If a credit is missing or needs correcting, please open an issue so it can be fixed.
 
 Original copyright and attribution notices are retained. References to related projects acknowledge their work; their code and materials retain their respective licenses.
+
+## Doomfist Hand Cannon
+
+The 104319 volley graph defines eleven projectiles in three rings. Blizzard's patch notes
+confirm eleven pellets at six damage and a 15-metre falloff start. The same launch class uses
+a value of five for Torbjörn's secondary spread in the 104319 data, consistent with Blizzard's
+description in degrees. The native azimuth and per-pellet angle variation still need a client
+comparison. [February 2018 notes](https://us.forums.blizzard.com/en/overwatch/t/all-overwatch-patch-notes-february-8-2018/20/3) · [October 2018 notes](https://overwatch.blizzard.com/en-gb/news/patch-notes/live/2018/10/) · [September 2020 notes](https://overwatch.blizzard.com/en-us/news/patch-notes/live/2020/09/) · [July 2023 notes](https://overwatch.blizzard.com/en-us/news/patch-notes/live/2023/07/)
+
+## Doomfist movement sampling
+
+The 104319 owner graph `01C7` writes the airborne variable read by Seismic Slam graph
+`0B27`. Python uses the regular owner-pose sampling and output order already implemented
+on ORPHEUS's Rust branch. [Movement sampler](https://github.com/leafall903/ORPHEUS/blob/13acf152e866bbea181074326551422ce9c86671/rust/src/mover.rs) ·
+[Statescript runtime](https://github.com/leafall903/ORPHEUS/blob/13acf152e866bbea181074326551422ce9c86671/rust/src/script_init.rs)
+
+## Rising Uppercut movement
+
+The local 104319 graph export supplies the three velocity actions in graph `0DD8`.
+The original client identifies their modifier dispatch at RVA `D2B643` and movement
+phase at `C31870`. The ordinary body direction queries use the mover pose through
+`C5E040` and `C62760`, and the direction limit evaluator is at `CEB820`.
+
+## Rising Uppercut targets and damage
+
+The local 104319 export supplies graph `0DD8`'s target filter, cast profile,
+damage amount and loadout. The original client supplies the target query and
+array update at RVA `CAE3B0`, capsule overlap at `C8E660` and sight query at
+`CA3570`. The server reuses the sight query from the integrated communication
+wheel work and the existing ORPHEUS combat pipeline.
+
+## Wrecking Ball
+
+The local 104319 statescript export supplies the authored Quad Cannons (`1514`),
+Roll (`1203`) and Adaptive Shield (`1566`) settings. Blizzard's retail notes
+describe the Roll speed increase, 100 base Adaptive Shield, 75 shield per nearby
+enemy and nine-second duration.
+[July 2018 notes](https://overwatch.blizzard.com/en-us/news/patch-notes/live/2018/07/) ·
+[January 2021 notes](https://overwatch.blizzard.com/en-us/news/patch-notes/live/2021/01/) ·
+[August 2021 notes](https://overwatch.blizzard.com/en-us/news/patch-notes/live/2021/08/)
+
+## Python hero and PvE integration
+
+[zichao-zhou](https://github.com/zichao-zhou) submitted the Rialto PvE and McCree
+foundation together with scoped Ana, Mei, Winston, Pharah and shared Genji work.
+The contribution was imported from [PR #16](https://github.com/leafall903/ORPHEUS/pull/16)
+at `0b262c33844fd3263fa63dd81f0251b4a579f2be`. The import credits the PR contributor.
+The [candidate verification record](HERO_SERVER_ACCEPTANCE.md) documents the original
+coverage and the work still pending.

@@ -9,11 +9,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from test_game_notices import FakeClient, into_world, show_everyone
-from test_game_packet_budget import connection, decoded
-from test_game_repeated_lifecycles import wire_frame
-from test_game_team_list import read_create
-
 from ow174.game import combat, heroselect, stats, world
 from ow174.game.bits import BitReader
 from ow174.game.collision import StaticCollisionProvider, flat_world
@@ -25,6 +20,10 @@ from ow174.game.script.decode import read_chunk
 from ow174.game.server import Client
 from ow174.game.statescript import chunk
 from ow174.game.world import OP_UPDATE
+from tests.runtime.test_game_notices import FakeClient, into_world, show_everyone
+from tests.runtime.test_game_packet_budget import connection, decoded
+from tests.runtime.test_game_repeated_lifecycles import wire_frame
+from tests.runtime.test_game_team_list import read_create
 
 REAPER = 0x02E0000000000002
 TRACER = 0x02E0000000000003

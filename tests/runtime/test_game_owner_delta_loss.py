@@ -4,9 +4,6 @@ import unittest
 from unittest.mock import patch
 
 import test_server_journal as journal_tests
-from test_game_packet_budget import connection, prepare_corrections
-from test_game_repeated_lifecycles import wire_frame
-from test_script_driver import ClientModel
 
 from ow174.game import bodytrace, movelog
 from ow174.game.bits import BitWriter
@@ -15,6 +12,9 @@ from ow174.game.content import SOLDIER
 from ow174.game.link import KIND_FRAME, SYN
 from ow174.game.match import SEND_EVERY
 from ow174.game.script.driver import SETTLE_FRAMES, BodyStream, Snapshot
+from tests.runtime.test_game_packet_budget import connection, prepare_corrections
+from tests.runtime.test_game_repeated_lifecycles import wire_frame
+from tests.runtime.test_script_driver import ClientModel
 
 
 class OwnerDeltaLossTests(unittest.TestCase):
@@ -195,6 +195,26 @@ class OwnerDeltaLossTests(unittest.TestCase):
         stream.lost(new.chunk_last)
         self.assertEqual(stream.base.k, 104)
         self.assertEqual(stream.touched(), set())
+
+    def test_acknowledged_state_off_is_not_carried_by_redundant_pending_corrections(self):
+        stream = BodyStream(0xA0000101)
+        state = (11, 10)
+        key = ("state", *state)
+        on = ("STUStatescriptStateAnim", True, (("counter", 1),))
+        full = stream.full(BitWriter(), Snapshot(100, states={state: on}))
+        stream.arrived(full.chunk_last)
+        off = stream.delta(BitWriter(), Snapshot(101), {key}, 101)
+        repeated = stream.delta(BitWriter(), Snapshot(102), {key}, 102)
+        self.assertEqual(stream.touched(), {key})
+
+        stream.arrived(off.chunk_last)
+        self.assertIn(repeated.chunk_last, stream.pending)
+        self.assertEqual(stream.touched(), set())
+
+        resumed = stream.delta(BitWriter(), Snapshot(103, states={state: on}), {key}, 103)
+        self.assertEqual(stream.touched(), {key})
+        stream.lost(resumed.chunk_last)
+        self.assertEqual(stream.touched(), {key})
 
 
 if __name__ == "__main__":

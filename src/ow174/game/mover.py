@@ -30,6 +30,7 @@ command frame (dt = 16 ms), main tick 0x7FF789B4B1D0:
  7. velocity: friction (0x7FF789B43090; in the air with the air values, 0x7FF789B416A0, plus a quadratic
     drag toward terminal_velocity while falling), acceleration toward the throttles' wish (0x7FF789B434A0),
     the speed cap of the direction (0x7FF789B44090), gravity -10 * gravity_scale in the air (0x7FF789B42100).
+    Velocity actions then modify speed and apply queued world-velocity deltas (RVA C31870).
  8. the move (0x7FF789B4D9C0): on the ground the velocity follows the ground plane at its horizontal
     speed; the physics engine moves the capsule by (velocity + spring speed) * dt (contacts.py: its
     contacts with the map's shapes, rounds of Gauss-Seidel over their planes and sweeps, all float32);
@@ -40,9 +41,8 @@ command frame (dt = 16 ms), main tick 0x7FF789B4B1D0:
 The hero's values are its body's STUCharacterMoverComponent (data/game_movers_174.json), changed each tick
 by the movement mods the body's statescript has on (0x7FF789B4CBA0, see `modded`): Soldier: 76's Sprint
 adds 0.5 to the speed scalar (run speeds x 1.5) and sets the crouch intent to 0. Not modelled: mods of
-heroes whose statescript the server does not run, the throttle mods (17-19), velocity mods (STU_FF3471E9
-states) and knockback, abilities that take over the move (the tick's phase hooks), moving platforms,
-other bodies.
+heroes whose statescript the server does not run, other velocity modes and knockback, abilities that
+take over the move (the tick's phase hooks), moving platforms, and other bodies.
 The capsule rests 5 mm out of a wall (the engine's contact skin), not touching it.
 
 Besides the pose it keeps what other clients animate the body from, as the client's own mover writes it
@@ -58,11 +58,12 @@ import threading
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, fields, replace
-from functools import cache
+from functools import cache, cmp_to_key
 
 from ow174.game import contacts
-from ow174.game.collision import MOVER, NOT_GROUND, Ground, World, flat_world
+from ow174.game.collision import MOVER, NOT_GROUND, TEAM0, TEAM1, Ground, World, flat_world
 from ow174.game.commands import CROUCH, JUMP, SUBFRAME, Command
+from ow174.game.world import MAX_MOVEMENT_AXIS
 from ow174.paths import DATA_DIR
 
 MOVERS_PATH = DATA_DIR / "game_movers_174.json"  # tools/extract_game_movers.py
@@ -168,7 +169,11 @@ ADD, MULTIPLY, SET, MINIMUM, MAXIMUM, CLAMP = range(6)
 SPEED, ACCEL_GROUND, ACCEL_AIR, ACCEL_TOUCHING, DECEL_GROUND, DECEL_GROUND_BASE, DECEL_GROUND_SPEED = range(7)
 DECEL_AIR, DECEL_AIR_BASE, DECEL_AIR_SPEED, JUMP_SPEED_MOD, GRAVITY_MOD = range(7, 12)
 TERMINAL, TERMINAL_UP, GROUND_ACCEL, GROUND_DECEL = 13, 14, 15, 16
+THROTTLE_FORWARD, THROTTLE_BACKWARD, THROTTLE_LATERAL = 17, 18, 19
 JUMP_INTENT, CROUCH_INTENT, COLLISION_MOD, LAND_LIMIT_MOD, STEP_DOWN_MOD = 20, 21, 22, 36, 38
+VELOCITY_MAGNITUDE, VELOCITY_HORIZONTAL, VELOCITY_Y, VELOCITY_JUMP_RATIO = range(32, 36)
+VELOCITY_WORLD_DELTA = -1  # internal index for an authored mode 1 vector
+VelocityChange = tuple[int, int, int, float | tuple[float, float, float], float]
 FLT_MAX, FLT_MIN = 3.4028234663852886e38, 1.1754943508222875e-38
 # The statescript's MovementMod state (STU_316CFEF2) and its mod classes (STU_6810506D: m_A9561CA0 index,
 # m_9B7A63EA value): class -> (op, value of an empty config var) (0x7FF789C4C1E0, by their type objects).
@@ -210,6 +215,46 @@ ABYSS = 100.0  # m below the map's lowest surface where a falling body stops (po
 REPEAT = 32  # missing command frames run with the last command; as many again without its keys
 
 
+def movement_sample_flags(
+    flags: int, velocity: tuple[float, float, float], throttles: tuple[int, int],
+) -> int | None:
+    """Project a regular movement pose into the statescript 13-bit sample."""
+    # These modes need movement records the current mover does not simulate.
+    if flags & (0x20 | 0x80):
+        return None
+    x, y, z = map(f32, velocity)
+    if not all(map(math.isfinite, (x, y, z))):
+        return None
+    airborne = bool(flags & IN_AIR)
+    float_epsilon = 2 ** -23
+    vertical_threshold = 100.0 * float_epsilon
+    speed_squared = f32(f32(f32(x * x) + f32(y * y)) + f32(z * z))
+    return (
+        airborne
+        | (not airborne) << 1
+        | (y > vertical_threshold) << 2
+        | (y < -vertical_threshold) << 3
+        | (speed_squared > 10.0 * float_epsilon) << 4
+        | any(throttles) << 5
+        | bool(flags & CROUCHED) << 6
+        | bool(flags & NOT_GROUND_UNDER) << 9
+        | bool(flags & JUMPED) << 11
+    )
+
+
+def encode_spring(offsets: tuple[float, float], low: float, high: float) -> tuple[int, int]:
+    """Encode two offsets on the client's 1/32768 spring grid."""
+    span = f32(high - low)
+    if span <= TINY:
+        return 0, 0
+    inverse = f32(1.0 / span)
+    steps = []
+    for value in offsets:
+        fraction = min(1.0, max(0.0, f32(f32(value - low) * inverse)))
+        steps.append(math.floor(f32(fraction * SPRING_STEPS + 0.5)) & 0xFFFF)
+    return steps[0], steps[1]
+
+
 @dataclass(frozen=True)
 class MoverData:
     """A body's STUCharacterMoverComponent (the client keeps it at mover +0x418 + the field's offset)."""
@@ -248,6 +293,72 @@ class MoverData:
     ground_gravity_accel: float = 0.0
     ground_gravity_decel: float = 0.0
     character_collision: int = 1
+
+    def spring_range(self) -> tuple[float, float]:
+        """The client's spring offset range at mover +0x4F8 and +0x4FC."""
+        lowest = max(self._stance_height(False) + self.stand_pogo,
+                     self._stance_height(True) + self.crouch_pogo)
+        return f32(-lowest), f32(2.0 * self.step_down)
+
+    def _stance_height(self, crouched: bool) -> float:
+        height = f32(self.crouch_height if crouched else self.stand_height)
+        pogo = f32(self.crouch_pogo if crouched else self.stand_pogo)
+        radius = max(SHAPE_SMALLEST, f32(self.crouch_radius if crouched else self.stand_radius))
+        minimum = f32(f32(pogo + f32(radius + radius)) + f32(radius * SEGMENT_PART))
+        return max(height, minimum)
+
+    def capsule(self, crouched: bool = False, *, limit_ai_size: bool = False) -> tuple[float, float]:
+        """Return radius and segment length using the client's float32 shape setup."""
+        radius = f32(self.crouch_radius if crouched else self.stand_radius)
+        height = f32(self.crouch_height if crouched else self.stand_height)
+        pogo = f32(self.crouch_pogo if crouched else self.stand_pogo)
+        if limit_ai_size:
+            # The 104319 component-86 branch caps the already normalized stance.
+            radius = min(radius, 0.5)
+            height = min(self._stance_height(crouched), 2.0)
+        r = SHAPE_SMALLEST if radius < SHAPE_SMALLEST else radius
+        rest = f32(height - f32(pogo + f32(radius + radius)))
+        part = f32(r * SEGMENT_PART)
+        return r, (part if part > rest else rest)
+
+
+# Field hash -> name, in the component's order (STU offset 0x18 = mover +0x430 ... 0xB1 = +0x4C9).
+STU_MOVER_FIELDS = {
+    "1972C687": "stand_height",
+    "7A70E3E3": "stand_radius",
+    "4A576BC2": "stand_pogo",
+    "03E04168": "crouch_height",
+    "915FF368": "crouch_radius",
+    "D97B3735": "crouch_pogo",
+    "D4AE9D05": "ground_circle_radius",
+    "5C6B4602": "ground_circle_rays",
+    "6B7FDB90": "pogo_frequency",
+    "E54438F7": "pogo_damping",
+    "AEBAD1B0": "max_slope",
+    "08FFAA0A": "step_down",
+    "CFD3E635": "run_forward",
+    "61D6B4E9": "run_backward",
+    "19452F15": "run_strafe",
+    "B470B8DA": "crouch_forward",
+    "AA6F4CE1": "crouch_backward",
+    "0DDD18C3": "crouch_strafe",
+    "DAA0618B": "accel_ground",
+    "E631BA84": "accel_air",
+    "D24BF4E6": "accel_air_touching",
+    "E0A0FE25": "decel_ground_base",
+    "6F25AA23": "decel_ground_base_speed",
+    "4E03E892": "decel_ground_per_speed",
+    "142DA8D4": "decel_air_base",
+    "031FE7EE": "decel_air_base_speed",
+    "8895A9C8": "decel_air_per_speed",
+    "EC289987": "jump_speed",
+    "C2C40969": "gravity_scale",
+    "B74245E8": "terminal_velocity",
+    "975F21A5": "terminal_velocity_up",
+    "B99EC983": "ground_gravity_accel",
+    "CEF4898C": "ground_gravity_decel",
+    "D4A3C694": "character_collision",
+}
 
 
 _mover_table: dict[int, MoverData] | None = None
@@ -304,7 +415,7 @@ class Mod:
 
     index: int
     op: int
-    value: float
+    value: float | tuple[float, float, float]
     start: int
     end: int | None = None
     priority: float = 0.0
@@ -315,6 +426,26 @@ class Mod:
 
     def order(self) -> tuple:
         return self.priority, self.start, self.key
+
+
+def _compare_velocity_mods(left: Mod, right: Mod) -> int:
+    """The velocity lists compare priorities within float32 0.004 as ties (RVAs C2FAA0 and C2FCC0)."""
+    difference = abs(left.priority - right.priority)
+    if difference > FLT_MAX or f32(difference) > f32(LAND_LIMIT):
+        return -1 if left.priority < right.priority else 1
+    left_key = left.start, left.key
+    right_key = right.start, right.key
+    return (left_key > right_key) - (left_key < right_key)
+
+
+def _velocity_speed(velocity: tuple[float, float, float]) -> float:
+    """The scalar velocity consumer's refined reciprocal-square-root length (RVA C31870)."""
+    squared = contacts.dot(velocity, velocity)
+    if squared <= EPSILON:
+        return 0.0
+    estimate = contacts.rsqrt_estimate(squared)
+    refined = f32(f32(3.0 - f32(squared * f32(estimate * estimate))) * f32(estimate * 0.5))
+    return f32(squared * refined)
 
 
 def apply_op(op: int, value: float, operand: float) -> float:
@@ -386,11 +517,66 @@ def intent(mods: list[Mod], index: int, value: float) -> float:
     return value
 
 
+def modified_throttles(mods: list[Mod], right: float, forward: float) -> tuple[float, float]:
+    """C33960..C33A85: split forward/back, unsigned lateral, restore sign, clamp."""
+    if not any(mod.index in (THROTTLE_FORWARD, THROTTLE_BACKWARD, THROTTLE_LATERAL) for mod in mods):
+        return right, forward
+    ahead = intent(mods, THROTTLE_FORWARD, max(0.0, forward))
+    back = intent(mods, THROTTLE_BACKWARD, -min(0.0, forward))
+    lateral = intent(mods, THROTTLE_LATERAL, abs(right))
+    if right < 0:
+        lateral = -lateral
+    return max(-1.0, min(1.0, lateral)), max(-1.0, min(1.0, f32(ahead - back)))
+
+
 def _number(instance, cfg, default: float) -> float:
     if cfg is None:
         return default
     value = instance.evaluate(cfg)
     return f32(float(value)) if isinstance(value, (bool, int, float)) else default
+
+
+def _mover_override(node) -> MoverData | None:
+    """Read a complete inline STUCharacterMoverComponent from an authored movement mod."""
+    selected = None
+    for mod in node.field("m_BC5E91CF") or ():
+        if not isinstance(mod, dict) or mod.get("$") != "STU_ED2B22BD":
+            continue
+        record = mod.get("m_9B7A63EA")
+        if not isinstance(record, dict) or record.get("$") != "STUCharacterMoverComponent" or selected:
+            return None
+        values = {name: record.get(f"m_{key}") for key, name in STU_MOVER_FIELDS.items()}
+        if any(type(value) not in (int, float) or not math.isfinite(value) for value in values.values()):
+            return None
+        for name in ("ground_circle_rays", "character_collision"):
+            if type(values[name]) is not int:
+                return None
+        selected = MoverData(**values)
+    return selected
+
+
+@cache
+def _graph_mover_overrides(definition) -> tuple[tuple[int, MoverData], ...]:
+    found = []
+    for node in definition.states:
+        if node is not None and node.cls == MOVEMENT_MOD:
+            override = _mover_override(node)
+            if override is not None:
+                found.append((node.state, override))
+    return tuple(found)
+
+
+def statescript_mover_data(component) -> MoverData | None:
+    """Use the complete mover override of the current form while its movement mod is active."""
+    selected = None
+    for instance in component.instances.values():
+        for index, override in _graph_mover_overrides(instance.graph):
+            state = instance.states.get(index)
+            if state is not None and state.active:
+                if selected is not None:
+                    return None  # precedence between overlapping mover overrides is unresolved
+                selected = override
+    return selected
 
 
 def statescript_mods(component) -> dict:
@@ -438,17 +624,13 @@ HISTORY = 64  # command frames of snapshots kept (the client keeps 64 predicted 
 
 
 def capsule_dimensions(data: MoverData, crouched: bool) -> tuple[float, float]:
-    """The stance capsule's radius and distance between sphere centres, in float32."""
-    radius = f32(data.crouch_radius if crouched else data.stand_radius)
-    height = f32(data.crouch_height if crouched else data.stand_height)
-    pogo = f32(data.crouch_pogo if crouched else data.stand_pogo)
-    radius_clamped = SHAPE_SMALLEST if radius < SHAPE_SMALLEST else radius
-    rest = f32(height - f32(pogo + f32(radius + radius)))
-    part = f32(radius_clamped * SEGMENT_PART)
-    return radius_clamped, (part if part > rest else rest)
+    """The stance capsule radius and distance between sphere centres."""
+    return data.capsule(crouched)
 
 
 class Mover:
+    peer_mask = MOVER
+
     def __init__(
         self,
         position,
@@ -481,7 +663,7 @@ class Mover:
         self.input_tick: int | None = None  # the tick that command was applied in; None: never
         self.input_frame: int | None = None  # its command frame
         self.last_command: Command | None = None
-        self.mods: dict = {}  # the statescript's movement mods by (instance, state, slot)
+        self.mods: dict[tuple[int, ...], Mod] = {}
         self.history: deque[Snapshot] = deque(maxlen=HISTORY)
         self.corrected: int | None = None  # the newest frame whose state went to the owner (correction.py)
         self.body: contacts.CharacterBody | None = None  # the physics engine's body, made when first needed
@@ -495,9 +677,7 @@ class Mover:
         # The probe's own float32 cosine (0x7FF789ACEE40, cosf): the disc's ground test.
         self.slope_cos32 = f32(math.cos(max(min(f32(data.max_slope * DEGREE), SLOPE_LIMIT), 0.0)))
         # The spring offset's range (mover +0x4F8 / +0x4FC, set at 0x7FF789AD0BD1).
-        lowest = max(data.stand_height + data.stand_pogo, data.crouch_height + data.crouch_pogo)
-        self.spring_low = f32(-lowest)
-        self.spring_high = f32(2.0 * data.step_down)
+        self.spring_low, self.spring_high = data.spring_range()
 
     def use(self, data: MoverData | None = None, world: World | None = None) -> None:
         """Take another hero's values (a hero switch), or the map's collision once it is loaded."""
@@ -527,6 +707,45 @@ class Mover:
             elif mod.end is not None and mod.end <= frame:
                 del self.mods[key]  # the mover's next tick is frame + 1
 
+    def set_same_team_contact(self, team: int, enabled: bool) -> None:
+        team_bit = (TEAM0, TEAM1)[team] if team in (0, 1) else 0
+        if enabled or not team_bit:
+            self.__dict__.pop("peer_mask", None)
+        else:
+            self.peer_mask = MOVER & ~team_bit
+        if self.body is not None:
+            self.body.set_peer_mask(self.peer_mask)
+
+    def queue_velocity_changes(
+        self, frame: int, source: tuple[int, int], changes: tuple[VelocityChange, ...],
+    ) -> None:
+        """Schedule an action's authored slots for the next movement frame (RVA D2B6BC)."""
+        start = frame + 1
+        pending = {}
+        try:
+            for slot, channel, op, operand, priority in changes:
+                if not math.isfinite(priority):
+                    return
+                # A reevaluated action replaces its slot in this frame. State modifiers use three key fields.
+                key = (*source, start & 0xFFFF, slot)
+                if channel == VELOCITY_WORLD_DELTA and isinstance(operand, tuple):
+                    # Mode 1 stores the difference against the world velocity at enqueue time (RVA C32D22).
+                    changed = tuple(
+                        apply_op(op, old, value) for old, value in zip(self.velocity, operand, strict=True)
+                    )
+                    delta = contacts.sub(changed, self.velocity)
+                    if not all(map(math.isfinite, delta)):
+                        return
+                    pending[key] = Mod(channel, ADD, delta, start, start + 1, f32(priority), key)
+                elif 0 <= channel <= 3 and not isinstance(operand, tuple):
+                    index = VELOCITY_MAGNITUDE + channel
+                    if not math.isfinite(operand):
+                        return
+                    pending[key] = Mod(index, op, f32(operand), start, start + 1, f32(priority), key)
+        except OverflowError:
+            return  # keep the previous records if the action cannot form a float32 delta
+        self.mods.update(pending)
+
     # ---- what the movement records and the match read
 
     @property
@@ -540,6 +759,9 @@ class Mover:
     @property
     def airborne(self) -> bool:
         return bool(self.flags_word & IN_AIR)
+
+    def movement_sample(self) -> int | None:
+        return movement_sample_flags(self.flags_word, self.velocity, self.throttles)
 
     @property
     def gravity_scale(self) -> float:
@@ -576,7 +798,7 @@ class Mover:
         (0x7FF789B4C3D0, 0x7FF789B45822; body scale 1): r = max(0.02, radius), segment = max(0.1 r,
         height - (pogo + 2 radius))."""
         crouched = self.crouched if crouched is None else crouched
-        return capsule_dimensions(self.data, crouched)
+        return self.data.capsule(crouched)
 
     def _lift(self) -> float:
         """The capsule's lowest point above the feet: pogo * min(scale, 1) + the spring offset (float32)."""
@@ -587,7 +809,7 @@ class Mover:
         if self.body is None:
             radius, segment = self._capsule()
             body = contacts.CharacterBody(radius, f32(segment + radius), world=self.world.engine,
-                                          category=self.category)  # fmt: skip
+                                          category=self.category, peer_mask=self.peer_mask)  # fmt: skip
             x, y, z = self.position
             body.teleport((x, f32(y + self._lift()), z))
             self.body = body
@@ -667,6 +889,7 @@ class Mover:
             self.input_tick = tick
             self.input_frame = frame
 
+        right, forward = modified_throttles(active, right, forward)
         outcome = None
         if move_to is None:
             normal = ground.normal if grounded and ground is not None else (0.0, 1.0, 0.0)
@@ -681,12 +904,62 @@ class Mover:
                 vx, vy, vz = self.velocity
                 self.velocity = (vx, vy - WORLD_GRAVITY * data.gravity_scale * dt, vz)
                 self.fall = f32(self.fall + f32(f32(-WORLD_GRAVITY * data.gravity_scale) * f32(dt)))
+            self._apply_velocity_mods(active, normal)
             self._fall_after(self._move(dt, normal))
         else:
             target, speed = move_to
             outcome = self._move_to(dt, target, speed)
         self.history.append(self.snapshot(frame))
         return outcome
+
+    def _apply_velocity_mods(self, active: list[Mod], normal) -> None:
+        """Apply the scalar channels before the world-space deltas, before collision."""
+        velocity_mods = [
+            mod for mod in active
+            if mod.index == VELOCITY_WORLD_DELTA or VELOCITY_MAGNITUDE <= mod.index <= VELOCITY_JUMP_RATIO
+        ]
+        if not velocity_mods:
+            return
+        velocity_mods.sort(key=cmp_to_key(_compare_velocity_mods))
+        before = contacts.v3(*self.velocity)
+        try:
+            velocity = self._modified_velocity(velocity_mods, before)
+        except OverflowError:
+            return
+        if any(
+            not math.isfinite(axis) or not -(MAX_MOVEMENT_AXIS + STEP) <= quantise(axis) <= MAX_MOVEMENT_AXIS
+            for axis in velocity
+        ):
+            return
+        self.velocity = velocity
+        lift = f32(contacts.dot(normal, velocity) - contacts.dot(normal, before))
+        if lift > f32(LAND_LIMIT) and not self.flags_word & (JUMPED | FELL):
+            self.flags_word |= FELL  # velocity can release ground contact before this frame's sweep
+            self.air_ticks = 0
+
+    def _modified_velocity(
+        self, velocity_mods: list[Mod], velocity: tuple[float, float, float],
+    ) -> tuple[float, float, float]:
+        speed = _velocity_speed(velocity)
+        if speed > CAP_TINY:
+            adjusted = intent(velocity_mods, VELOCITY_MAGNITUDE, speed)
+            velocity = contacts.scale(velocity, f32(adjusted / speed))
+        x, y, z = velocity
+        horizontal = _velocity_speed((x, 0.0, z))
+        if horizontal > CAP_TINY:
+            adjusted = intent(velocity_mods, VELOCITY_HORIZONTAL, horizontal)
+            scale = f32(adjusted / horizontal)
+            x, z = f32(x * scale), f32(z * scale)
+        y = intent(velocity_mods, VELOCITY_Y, y)
+        jump_speed = self.data.jump_speed
+        if jump_speed > CAP_TINY and any(mod.index == VELOCITY_JUMP_RATIO for mod in velocity_mods):
+            ratio = intent(velocity_mods, VELOCITY_JUMP_RATIO, f32(y / jump_speed))
+            y = f32(ratio * jump_speed)
+        velocity = x, y, z
+        for mod in velocity_mods:
+            if mod.index == VELOCITY_WORLD_DELTA:
+                velocity = contacts.add(velocity, mod.value)
+        return velocity
 
     def _fall_after(self, vertical: float) -> None:
         """The state's +832 after the move (0x7FF789B4F530): gravity's part of the velocity, added up in the
@@ -922,13 +1195,14 @@ class Mover:
             self.spring = self.spring2 = 0.0
             self.spring_steps = (0, 0)
             return
-        inverse = f32(1.0 / span)
-        steps = []
-        for value in (self.spring, self.spring2):
-            fraction = min(1.0, max(0.0, f32(f32(value - low) * inverse)))
-            steps.append(math.floor(f32(fraction * SPRING_STEPS + 0.5)) & 0xFFFF)
-        self.spring_steps = (steps[0], steps[1])
-        self.spring, self.spring2 = (f32(f32(span * (step / SPRING_STEPS)) + low) for step in steps)
+        self.spring_steps = self.movement_spring()
+        self.spring, self.spring2 = (
+            f32(f32(span * (step / SPRING_STEPS)) + low) for step in self.spring_steps
+        )
+
+    def movement_spring(self) -> tuple[int, int]:
+        """Encode the current offsets, including before the first posed move."""
+        return encode_spring((self.spring, self.spring2), self.spring_low, self.spring_high)
 
     # ---- 7. velocity
 
