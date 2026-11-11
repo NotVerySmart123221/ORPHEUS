@@ -8,7 +8,7 @@ ORPHEUS 是面向 **《守望先锋 1》正式服 1.74.0.0.104319** 的独立开
 
 本分支是 Rust 版，只包含原生服务端及贡献者所需的源码。[默认分支](https://github.com/leafall903/ORPHEUS/tree/main)包含社区维护的 Python 服务端（同时作为行为参考）及其 Windows 启动器、测试和数据工具。
 
-[参与贡献](CONTRIBUTING.md) · [Python/Rust 对等清单](docs/RUST_PARITY.md) · [架构](docs/NATIVE_SERVER_ARCHITECTURE.md) · [路线图](docs/ROADMAP.md) · [更新日志](CHANGELOG.md) · [待处理问题](https://github.com/leafall903/ORPHEUS/issues)
+[参与贡献](CONTRIBUTING.md) · [Python/Rust 对等清单](docs/RUST_PARITY.md) · [架构](docs/NATIVE_SERVER_ARCHITECTURE.md) · [Rust 开发规则（英文）](docs/NATIVE_SERVER_ARCHITECTURE.md#rust-contribution-rules) · [路线图](docs/ROADMAP.md) · [更新日志](CHANGELOG.md) · [待处理问题](https://github.com/leafall903/ORPHEUS/issues)
 
 ## 当前进度
 

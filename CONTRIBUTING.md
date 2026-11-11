@@ -13,6 +13,10 @@ cd ORPHEUS
 
 Use a fork and a short topic branch for a pull request. Test with your own Git author identity. Keep code, research and evidence scoped to the change.
 
+## Rust design and review
+
+Read the [Rust contribution rules](docs/NATIVE_SERVER_ARCHITECTURE.md#rust-contribution-rules) before changing the server. In your pull request, identify the simulation, transport, script or data boundary you changed. For behavior changes, include the reference or reproduction and the closest headless check. For collision changes, include the loaded geometry source, filter and contact evidence. Record original-client results separately when available.
+
 ## Public source checks
 
 Run the native source checks from the repository root with stable Rust, `rustfmt` and `clippy`. They use public synthetic fixtures and match the two lanes of the [public workflow](.github/workflows/public-checks.yml).

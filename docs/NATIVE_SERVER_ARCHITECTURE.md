@@ -4,6 +4,15 @@ ORPHEUS targets Overwatch retail build **1.74.0.0.104319**. This decision define
 
 **Status.** The Rust worker runs the authored StateScript interpreter, an event-driven Lua patrol pilot and a read-only debug dashboard. Live bots and physical projectile flight reside in the room ECS. Player bodies still need migration. Completing any slice requires separate evidence for automated behavior, network parity and original-client behavior.
 
+## Rust contribution rules
+
+1. **Keep a dedicated server boundary.** Build and validate the server headlessly with a separate runtime pack. Rust owns I/O, networking, protocol codecs, tick scheduling, entity and controller lifetimes, collision and command validation. Keep client setup outside the server and measure tick and delivery costs when moving work onto the match worker.
+2. **Use one room authority.** Build on the existing standalone Bevy ECS. Move state into room-owned components in tested slices. Keep per-connection replication and acknowledgements at the transport boundary. Use generation-aware entity handles and shared systems across heroes and maps. Prefer extending established libraries and the current workspace boundaries before adding another engine, scheduler or simulation path.
+3. **Put gameplay policy in authored data and event-driven scripts.** Prefer the target build's authored graphs and catalogs for hero, mode and map behavior. Extend the existing StateScript interpreter for those graphs. Use the existing Lua host for custom policies and AI decisions, with typed lifecycle events and scheduled think events driven by the simulation clock. Rust validates commands and applies them through the shared simulation. Keep handlers bounded, ordered and replayable. Put tunable values and rules in data or scripts when their format and behavior are understood.
+4. **Diagnose collision with the live query inputs.** Use the optional read-only inspector to compare actual actor positions, geometry source, shape, height, filter and first contact. Capture a repeatable fixture before changing a mesh, route or mask. Share query primitives where semantics agree and check movement, hitscan and projectile behavior against their own authored filters.
+5. **Keep diagnostics separate from gameplay authority.** Extend the existing loopback inspector with bounded, tick-stamped views of actors, geometry and events. Keep HTTP and visualization off the simulation tick. The inspector is read-only today. A future write-capable admin backend needs explicit authorization and validated commands applied at the simulation boundary.
+6. **Prove each change against a reference.** Record the 104319 evidence and pin the reference revision or fixture. Use the Python reference on `main` where relevant and credit borrowed work in [CREDITS.md](../CREDITS.md). Compare state, event order or decoded wire output using the same inputs and timing. Report headless and original-client results separately. Keep uncertain behavior explicit and add a shared regression when closing a gap.
+
 ## Where the current architecture breaks down
 
 | Code today | Consequence |

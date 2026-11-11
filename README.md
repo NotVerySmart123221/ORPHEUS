@@ -8,7 +8,7 @@ ORPHEUS is an independent, open-source server reimplementation for **Overwatch 1
 
 This is the Rust branch. It contains only the native server and the sources its contributors need. The [default branch](https://github.com/leafall903/ORPHEUS/tree/main) contains the community-maintained Python server, which is also the behavioral reference, with its Windows launcher, tests and data tools.
 
-[Contribute](CONTRIBUTING.md) · [Python/Rust parity](docs/RUST_PARITY.md) · [Architecture](docs/NATIVE_SERVER_ARCHITECTURE.md) · [Roadmap](docs/ROADMAP.md) · [Changelog](CHANGELOG.md) · [Open issues](https://github.com/leafall903/ORPHEUS/issues)
+[Contribute](CONTRIBUTING.md) · [Python/Rust parity](docs/RUST_PARITY.md) · [Architecture](docs/NATIVE_SERVER_ARCHITECTURE.md) · [Rust contribution rules](docs/NATIVE_SERVER_ARCHITECTURE.md#rust-contribution-rules) · [Roadmap](docs/ROADMAP.md) · [Changelog](CHANGELOG.md) · [Open issues](https://github.com/leafall903/ORPHEUS/issues)
 
 ## Current status
 

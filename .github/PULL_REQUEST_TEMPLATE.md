@@ -15,5 +15,6 @@
 ## Review
 
 - [ ] I reviewed the diff and kept it scoped to this change.
+- [ ] For Rust server changes, I followed the [architecture rules](https://github.com/leafall903/ORPHEUS/blob/rust/docs/NATIVE_SERVER_ARCHITECTURE.md#rust-contribution-rules) and documented any behavior changes with reference evidence.
 - [ ] I updated `CHANGELOG.md` and the relevant verification record when applicable.
 - [ ] I removed credentials, keys, account identifiers, IP addresses, and personal paths from any shared evidence. Game files, runtime data, and complete captures stay in local storage.

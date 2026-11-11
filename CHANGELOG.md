@@ -6,6 +6,11 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-11
 
+#### Rust contribution rules
+
+- Documented the Rust dedicated server and Bevy ECS boundaries, authored and event-driven gameplay policy, collision investigation and loopback inspection. Linked the rules from both READMEs, the contribution guide, agent instructions and the pull request checklist.
+- Verified six added links and anchors, runtime preflight, native startup and three encrypted loopback checks covering login, Practice Range loading, volley hits, bot replacement and Helix flight. Documentation only. No original-client test was run for this entry.
+
 #### Rust-only branch tree
 
 - Removed the Python server (`ow174/`), its tests and golden fixtures, the dashboard JavaScript test, the Python and PowerShell data tools, the synthetic command replay fixture, the Python launchers, `requirements.txt`, `pyproject.toml`, `WIP.md`, the Python CI job and the Python editor, attribute and packaging ignore entries. Kept ignore patterns for `__pycache__/`, `*.py[cod]` and `.venv/`, which a clone switched from `main` leaves behind. No Rust build, test or tool uses the removed files.
