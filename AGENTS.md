@@ -1,7 +1,7 @@
 # ORPHEUS development workflow
 
-- Target build is Overwatch 1.74.0.0.104319. On `leafall`, follow the Doomfist acceptance checklist in `docs/ROADMAP.md`. Reuse the same mechanisms and acceptance checks across heroes and maps. Prefer evidence from the target build and small changes to shared mechanisms.
-- The default branch `main` is the community-maintained Python implementation. Use the Python `main` history as the base for `leafall`. Commit and publish this Doomfist work on `leafall`. The separate `rust` branch and worktree hold the Rust implementation.
+- Target build is Overwatch 1.74.0.0.104319. On `leafall`, follow the Doomfist and Wrecking Ball acceptance checklists in `docs/ROADMAP.md`. Reuse the same mechanisms and acceptance checks across heroes and maps. Prefer evidence from the target build and small changes to shared mechanisms.
+- The default branch `main` is the community-maintained Python implementation. Use the Python `main` history as the base for `leafall`. Commit and publish this hero work on `leafall`. The separate `rust` branch and worktree hold the Rust implementation.
 - Unattended tasks work on server code, data tools, tests, and documentation. Leave game startup, game controls, and client acceptance to the user unless the user explicitly authorizes a separate session.
 - Keep each completed change focused. Inspect the working tree, run the relevant tests and checks, and review the staged diff. Update `CHANGELOG.md` in the same commit with the change, test results, client acceptance, and remaining issues. Use an English Conventional Commit such as `fix: retire obsolete body respawn timers` and add the trailer `Assisted-by: Codex` for Codex-assisted commits.
 - Follow the [contribution guide](CONTRIBUTING.md) for Python and dashboard checks. Compare affected behavior with a reference replay or fixture when available. Record external research and upstream code sources in `docs/CREDITS.md`.

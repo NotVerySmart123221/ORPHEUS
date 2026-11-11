@@ -6,6 +6,19 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-11
 
+#### Wrecking Ball movement and Adaptive Shield
+
+- Apply the authored Roll movement component on the next command frame. The flat-ground
+  regression reaches 10 m/s with the 0.5 m ball capsule and restores the 5.5 m/s gun profile
+  and 0.7 m capsule when Roll ends.
+- Grant Adaptive Shield from its 104319 graph. The temporary pool starts with 100 shields
+  and adds 75 per eligible nearby enemy. Damage consumes it before the base pools, healing
+  leaves it alone, and expiry or body retirement clears the pool. Casting preserves Roll.
+- Cover held fire, release, damage, manual reload and falloff for Quad Cannons. Allow the
+  existing ultimate meter diagnostic fields in body and server replay snapshots.
+- Passed source, dashboard and prepared-runtime regressions. Original-client acceptance,
+  Quad Cannons spread and critical hits, Grappling Claw, Piledriver and Minefield remain open.
+
 #### Doomfist Hand Cannon pellet groups
 
 - Resolve supported authored projectile rings for volleys that synchronize shots

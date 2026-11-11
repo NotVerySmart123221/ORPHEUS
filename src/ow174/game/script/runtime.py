@@ -301,6 +301,12 @@ class World:
     def position(self, entity: int):
         return expr.Vec3(0.0, 0.0, 0.0)
 
+    def nearby_enemy_count(self, owner: int, radius: float) -> int:
+        return 0
+
+    def set_temporary_shield(self, owner: int, pool_id: int, amount: float) -> None:
+        pass
+
     def ai_weapon_button(self, slot: int) -> int | None:
         return None
 

@@ -177,6 +177,7 @@ class Vitals:
         self.entity = entity
         self.most = {HEALTH_POOL: float(health), ARMOUR_POOL: float(armour), SHIELDS_POOL: float(shields)}
         self.now = dict(self.most)
+        self.temporary_shields: dict[int, tuple[int, float, float]] = {}
         self.ids = {}
         pool_id = 1
         for kind in (SHIELDS_POOL, ARMOUR_POOL):  # world.health numbers them so
@@ -195,13 +196,46 @@ class Vitals:
 
     @property
     def total(self) -> float:
-        return sum(self.now.values())
+        return sum(self.now.values()) + sum(now for _, _, now in self.temporary_shields.values())
+
+    @property
+    def capacity(self) -> float:
+        return sum(self.most.values()) + sum(most for _, most, _ in self.temporary_shields.values())
+
+    def set_temporary_shield(self, pool_id: int, amount: float) -> None:
+        for slot, (existing, _, _) in self.temporary_shields.items():
+            if existing == pool_id:
+                if amount <= 0.0:
+                    self.temporary_shields[slot] = (0, 0.0, 0.0)
+                    self.changed.add(SHIELDS_POOL)
+                return
+        if amount <= 0.0 or self.dead:
+            return
+        # Slot zero of this kind is reserved for the body's permanent shield.
+        for slot in range(1, POOLS):
+            if not self.temporary_shields.get(slot, (0, 0.0, 0.0))[0]:
+                self.temporary_shields[slot] = (pool_id, amount, amount)
+                self.changed.add(SHIELDS_POOL)
+                return
+
+    def clear_temporary_shields(self) -> None:
+        for slot, (pool_id, _, _) in self.temporary_shields.items():
+            if pool_id:
+                self.temporary_shields[slot] = (0, 0.0, 0.0)
+                self.changed.add(SHIELDS_POOL)
 
     def damage(self, amount: float) -> float:
-        """Take a hit from shields, then armour, then health (unverified, as OW1 did: what reaches armour
-        while it has some is ARMOUR_BLOCK less, at most halved). Returns what the pools lost."""
+        """Take a hit from temporary shields, shields, armour, then health. What reaches armour
+        while it has some is ARMOUR_BLOCK less, at most halved (unverified). Return what the pools lost."""
         left = max(0.0, amount)
         taken = 0.0
+        for slot, (pool_id, most, current) in self.temporary_shields.items():
+            take = min(left, current)
+            if take > 0.0:
+                self.temporary_shields[slot] = (pool_id, most, current - take)
+                self.changed.add(SHIELDS_POOL)
+                left -= take
+                taken += take
         for kind in (SHIELDS_POOL, ARMOUR_POOL, HEALTH_POOL):
             if left <= 0.0:
                 break
@@ -232,6 +266,8 @@ class Vitals:
         for kind in kinds:
             if kind in self.ids:
                 parts[kind * POOLS] = world.pool(self.ids[kind], kind, self.most[kind], self.now[kind])
+        for slot, (pool_id, most, current) in self.temporary_shields.items():
+            parts[SHIELDS_POOL * POOLS + slot] = world.pool(pool_id, SHIELDS_POOL, most, current)
         return {51: parts}
 
 
@@ -517,7 +553,7 @@ class Combat:
         for player in self.match.players:
             if not (player.has_body and player.spawned and player.client is not None):
                 continue
-            data = mover_data(player.hero.body)
+            data = player.mover.data
             crouched = player.mover.crouched
             height = data.crouch_height if crouched else data.stand_height
             eye = EYE_CROUCHED.get(player.hero.body, EYE_CROUCHED_DEFAULT) if crouched else EYE
@@ -543,6 +579,33 @@ class Combat:
                 found = Vitals(target.entity, *pools.body_pools(target.owner.hero.guid))
             self.vitals[target.entity] = found
         return found
+
+    def nearby_enemy_count(self, owner: int, radius: float) -> int:
+        targets = self._targets()
+        source = next((target for target in targets if target.entity == owner), None)
+        if source is None:
+            return 0
+        free_for_all = self.match.game_map.free_for_all
+        return sum(
+            target.entity != owner
+            and (free_for_all or target.team != source.team)
+            and not (target.entity in self.vitals and self.vitals[target.entity].dead)
+            and math.dist(source.feet, target.feet) <= radius
+            for target in targets
+        )
+
+    def set_temporary_shield(self, owner: int, pool_id: int, amount: float) -> None:
+        target = next((target for target in self._targets() if target.entity == owner), None)
+        if target is None:
+            return
+        vitals = self.vitals_of(target)
+        vitals.set_temporary_shield(pool_id, amount)
+        self._sync_body_health(target.owner, vitals)
+
+    def clear_temporary_shields(self, owner: int) -> None:
+        vitals = self.vitals.get(owner)
+        if vitals is not None:
+            vitals.clear_temporary_shields()
 
     def _enemies(self, shooter) -> list[Target]:
         free_for_all = self.match.game_map.free_for_all
@@ -770,7 +833,7 @@ class Combat:
     def _sync_body_health(owner, vitals: Vitals) -> None:
         script = getattr(owner, "body_script", None)
         if script is not None:
-            script.set_health(vitals.total, sum(vitals.most.values()))
+            script.set_health(vitals.total, vitals.capacity)
 
     @staticmethod
     def _credit_ult(actor, kind: str, amount: float) -> None:
@@ -803,6 +866,7 @@ class Combat:
         killed = vitals.now[HEALTH_POOL] <= EPSILON
         if killed:
             vitals.now[HEALTH_POOL] = 0.0
+            vitals.clear_temporary_shields()
             vitals.died_at = self.now
             vitals.death_tick = self.match.tick if world_tick is None else world_tick
             vitals.killer = _source_entity(shooter)

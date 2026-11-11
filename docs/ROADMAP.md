@@ -2,7 +2,7 @@
 
 The target is Overwatch 1 retail **1.74.0.0.104319**. Soldier: 76 and the Practice Range training bots form the first acceptance group. Record the source version and the smallest repeatable test for each claim. A milestone stays open until its stated exit criteria have been verified. The [verification record](STATE.md) and [changelog](../CHANGELOG.md) describe completed work and remaining limits. The [issue tracker](https://github.com/leafall903/ORPHEUS/issues) holds individual tasks.
 
-This branch starts from the community-maintained Python `main` and tracks Doomfist restoration on `leafall`. The project-wide milestones below retain the shared requirements. Native server architecture and parity are tracked on the separate [Rust branch](https://github.com/leafall903/ORPHEUS/tree/rust).
+This branch starts from the community-maintained Python `main` and tracks Doomfist and Wrecking Ball restoration on `leafall`. The project-wide milestones below retain the shared requirements. Native server architecture and parity are tracked on the separate [Rust branch](https://github.com/leafall903/ORPHEUS/tree/rust).
 
 ## Doomfist acceptance
 
@@ -11,6 +11,16 @@ This branch starts from the community-maintained Python `main` and tracks Doomfi
 - [ ] Rising Uppercut and Seismic Slam. Verify activation, cooldown, grounded and airborne behavior, movement through shared collision, and target damage and displacement.
 - [ ] The Best Defense and Meteor Strike. Verify shield grants, limits and decay, ultimate targeting and landing, damage and interruption.
 - [ ] Presentation and lifecycle. Verify models, HUD, hit feedback, animations, sounds, death, respawn and hero switching. Confirm the listed behaviors with the original 104319 client in Practice Range and against a second player where applicable.
+
+## Wrecking Ball acceptance
+
+- [ ] Quad Cannons. Verify firing, spread, critical hits, falloff, magazine depletion, manual and automatic reload, and ammo while switching forms. Server regressions cover held fire, torso damage, release, manual reload and authored falloff. Spread and critical hits remain open.
+- [ ] Roll. Verify transformation in both directions, form speed, collision, weapon lockout, movement over ground and in air, and the owner and observer models. The server applies the authored ground movement profile on entry and restores the gun profile on exit.
+- [ ] Grappling Claw. Verify valid and invalid anchors, attachment, swing, release, cooldown, high-speed impacts, damage and knockback. An unattached cast can currently remain active after release.
+- [ ] Piledriver. Verify altitude and ground checks, airborne activation, descent, landing, radial damage and displacement.
+- [ ] Adaptive Shield. Verify the base grant and the contribution from nearby opponents, damage absorption, expiry, cooldown and shield HUD. Server regressions cover 100 base shield, 75 per nearby opponent, absorption, expiry and body retirement. Filter edge cases and original-client presentation remain open.
+- [ ] Minefield. Verify deployment, mine positions, arming, proximity triggers, damage, destructibility and expiry. The authored ultimate spends charge and emits three volleys, but their mine bodies are not spawned.
+- [ ] Lifecycle and presentation. Verify death, respawn, hero switching, repeated matches, HUD, animation, audio, and owner and observer updates in the original 104319 client.
 
 | Milestone | Exit criteria | Current evidence |
 | --- | --- | --- |

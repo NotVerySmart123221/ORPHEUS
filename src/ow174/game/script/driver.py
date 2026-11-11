@@ -162,6 +162,15 @@ class BodyWorld(runtime.World):
             return False
         return super().native(cfg, instance)
 
+    def nearby_enemy_count(self, owner: int, radius: float) -> int:
+        if self.match is None or owner != self.body:
+            return 0
+        return self.match.combat.nearby_enemy_count(owner, radius)
+
+    def set_temporary_shield(self, owner: int, pool_id: int, amount: float) -> None:
+        if self.match is not None and owner == self.body:
+            self.match.combat.set_temporary_shield(owner, pool_id, amount)
+
     def send_message(self, target: int, message: int, params: dict, sender: int) -> None:
         match = self.match
         if (match is not None and sender == self.body
@@ -580,6 +589,8 @@ class BodyScript(ReplicatedBody):
         """The body is gone (a hero switch, the player left): no more frames, and a lost full frame is not
         sent again."""
         self.retired = True
+        if self.world.match is not None:
+            self.world.match.combat.clear_temporary_shields(self.entity)
         self.world.match = None
         if self.stream.full_update is not None:
             self.stream.full_update.resend = False

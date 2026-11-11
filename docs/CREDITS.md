@@ -101,3 +101,13 @@ confirm eleven pellets at six damage and a 15-metre falloff start. The same laun
 a value of five for Torbjörn's secondary spread in the 104319 data, consistent with Blizzard's
 description in degrees. The native azimuth and per-pellet angle variation still need a client
 comparison. [February 2018 notes](https://us.forums.blizzard.com/en/overwatch/t/all-overwatch-patch-notes-february-8-2018/20/3) · [October 2018 notes](https://overwatch.blizzard.com/en-gb/news/patch-notes/live/2018/10/) · [September 2020 notes](https://overwatch.blizzard.com/en-us/news/patch-notes/live/2020/09/) · [July 2023 notes](https://overwatch.blizzard.com/en-us/news/patch-notes/live/2023/07/)
+
+## Wrecking Ball
+
+The local 104319 statescript export supplies the authored Quad Cannons (`1514`),
+Roll (`1203`) and Adaptive Shield (`1566`) settings. Blizzard's retail notes
+describe the Roll speed increase, 100 base Adaptive Shield, 75 shield per nearby
+enemy and nine-second duration.
+[July 2018 notes](https://overwatch.blizzard.com/en-us/news/patch-notes/live/2018/07/) ·
+[January 2021 notes](https://overwatch.blizzard.com/en-us/news/patch-notes/live/2021/01/) ·
+[August 2021 notes](https://overwatch.blizzard.com/en-us/news/patch-notes/live/2021/08/)

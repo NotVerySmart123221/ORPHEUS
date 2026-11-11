@@ -250,6 +250,45 @@ class MoverData:
     character_collision: int = 1
 
 
+# Field hash -> name, in the component's order (STU offset 0x18 = mover +0x430 ... 0xB1 = +0x4C9).
+STU_MOVER_FIELDS = {
+    "1972C687": "stand_height",
+    "7A70E3E3": "stand_radius",
+    "4A576BC2": "stand_pogo",
+    "03E04168": "crouch_height",
+    "915FF368": "crouch_radius",
+    "D97B3735": "crouch_pogo",
+    "D4AE9D05": "ground_circle_radius",
+    "5C6B4602": "ground_circle_rays",
+    "6B7FDB90": "pogo_frequency",
+    "E54438F7": "pogo_damping",
+    "AEBAD1B0": "max_slope",
+    "08FFAA0A": "step_down",
+    "CFD3E635": "run_forward",
+    "61D6B4E9": "run_backward",
+    "19452F15": "run_strafe",
+    "B470B8DA": "crouch_forward",
+    "AA6F4CE1": "crouch_backward",
+    "0DDD18C3": "crouch_strafe",
+    "DAA0618B": "accel_ground",
+    "E631BA84": "accel_air",
+    "D24BF4E6": "accel_air_touching",
+    "E0A0FE25": "decel_ground_base",
+    "6F25AA23": "decel_ground_base_speed",
+    "4E03E892": "decel_ground_per_speed",
+    "142DA8D4": "decel_air_base",
+    "031FE7EE": "decel_air_base_speed",
+    "8895A9C8": "decel_air_per_speed",
+    "EC289987": "jump_speed",
+    "C2C40969": "gravity_scale",
+    "B74245E8": "terminal_velocity",
+    "975F21A5": "terminal_velocity_up",
+    "B99EC983": "ground_gravity_accel",
+    "CEF4898C": "ground_gravity_decel",
+    "D4A3C694": "character_collision",
+}
+
+
 _mover_table: dict[int, MoverData] | None = None
 _mover_table_lock = threading.Lock()
 
@@ -391,6 +430,49 @@ def _number(instance, cfg, default: float) -> float:
         return default
     value = instance.evaluate(cfg)
     return f32(float(value)) if isinstance(value, (bool, int, float)) else default
+
+
+def _mover_override(node) -> MoverData | None:
+    """Read a complete inline STUCharacterMoverComponent from an authored movement mod."""
+    selected = None
+    for mod in node.field("m_BC5E91CF") or ():
+        if not isinstance(mod, dict) or mod.get("$") != "STU_ED2B22BD":
+            continue
+        record = mod.get("m_9B7A63EA")
+        if not isinstance(record, dict) or record.get("$") != "STUCharacterMoverComponent" or selected:
+            return None
+        values = {name: record.get(f"m_{key}") for key, name in STU_MOVER_FIELDS.items()}
+        if any(type(value) not in (int, float) or not math.isfinite(value) for value in values.values()):
+            return None
+        for name in ("ground_circle_rays", "character_collision"):
+            if type(values[name]) is not int:
+                return None
+        selected = MoverData(**values)
+    return selected
+
+
+@cache
+def _graph_mover_overrides(definition) -> tuple[tuple[int, MoverData], ...]:
+    found = []
+    for node in definition.states:
+        if node is not None and node.cls == MOVEMENT_MOD:
+            override = _mover_override(node)
+            if override is not None:
+                found.append((node.state, override))
+    return tuple(found)
+
+
+def statescript_mover_data(component) -> MoverData | None:
+    """Use the complete mover override of the current form while its movement mod is active."""
+    selected = None
+    for instance in component.instances.values():
+        for index, override in _graph_mover_overrides(instance.graph):
+            state = instance.states.get(index)
+            if state is not None and state.active:
+                if selected is not None:
+                    return None  # precedence between overlapping mover overrides is unresolved
+                selected = override
+    return selected
 
 
 def statescript_mods(component) -> dict:

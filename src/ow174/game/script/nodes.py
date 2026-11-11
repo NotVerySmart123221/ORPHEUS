@@ -1175,11 +1175,68 @@ class GamePadVibration(State):
         self.request_finish()
 
 
+@state_class("STUStatescriptStateHealthPool")
+class HealthPool(State):
+    """Begin and end the authored owner-only temporary shield pool."""
+
+    def _shield_id(self) -> int | None:
+        fields = self.node.fields
+        temporary = fields.get("m_0E8A5C8E") or {}
+        owner = fields.get("m_FA3ECC43") or {}
+        identifier = fields.get("m_7BE02F89") or {}
+        if (fields.get("m_7E8B666C") != 2 or temporary.get("m_value") != 1
+                or owner.get("$") != "STU_B5A0CAF0" or identifier.get("$") != "STUConfigVarIdentifier"):
+            return None
+        key = guid(identifier.get("m_identifier"))
+        return key & 0xFFFFFFFF if key is not None else None
+
+    def on_enter(self) -> None:
+        pool_id = self._shield_id()
+        if pool_id is not None:
+            amount = to_float(self.evaluate(_field(self, "m_amount"), watch=False))
+            if math.isfinite(amount) and amount > 0.0:
+                component = self.instance.component
+                component.world.set_temporary_shield(component.entity, pool_id, amount)
+
+    def on_end(self, finished: bool) -> None:
+        pool_id = self._shield_id()
+        if pool_id is not None:
+            component = self.instance.component
+            component.world.set_temporary_shield(component.entity, pool_id, 0.0)
+
+
 @state_class("STUStatescriptStateTrackTargets")
 class TrackTargets(State):
-    """A target search the server cannot run: it finds nothing."""
+    """The owner-centred enemy count used by Adaptive Shield's authored tracker."""
 
     family = "targets"
+
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
+        self.count_var: Var | None = None
+
+    def on_enter(self) -> None:
+        fields = self.node.fields
+        centre = fields.get("m_05BE62DD") or {}
+        owner = centre.get("m_entity") or {}
+        target_filter = fields.get("m_filter") or {}
+        target = lvalue(fields.get("m_1B89EA79"))
+        if (target is not None and centre.get("$") == "STU_21A13145" and owner.get("$") == "STU_B5A0CAF0"
+                and target_filter.get("m_4EA686DB") == 16 and target_filter.get("m_84065FD1") == 1
+                and target_filter.get("m_89831602") == 1):
+            self.count_var = self.link(target)
+
+    def on_end(self, finished: bool) -> None:
+        if self.count_var is not None:
+            self.unlink(self.count_var)
+            self.count_var = None
+
+    def output(self, slot: int):
+        radius = to_float(self.evaluate(_field(self, "m_radius"), watch=False))
+        if not math.isfinite(radius) or radius <= 0.0:
+            return 0
+        component = self.instance.component
+        return component.world.nearby_enemy_count(component.entity, radius)
 
     def payload(self) -> dict:
         return {"targets": ()}

@@ -31,6 +31,7 @@ import logging
 import math
 from collections import deque
 from copy import deepcopy
+from functools import partial
 
 from ow174.game import bodytrace, bots, combat, correction, heroselect, movelog, notices, pools, stats, world
 from ow174.game.collision import (
@@ -43,7 +44,15 @@ from ow174.game.collision import (
 from ow174.game.commands import Command, CommandQueue
 from ow174.game.content import PRACTICE_RANGE, SOLDIER, GameMap, Hero, heroes, spawn_point
 from ow174.game.environment import ExecutionEnvironment, SystemEnvironment
-from ow174.game.mover import CROUCHED, GRAVITY_SCALE, Mover, mover_data, statescript_mods
+from ow174.game.mover import (
+    CROUCHED,
+    GRAVITY_SCALE,
+    Mover,
+    MoverData,
+    mover_data,
+    statescript_mods,
+    statescript_mover_data,
+)
 from ow174.game.projectiles import MAX_LEASE_FRAME
 from ow174.game.script import expr, graph, nodes, runtime
 from ow174.game.script.bot import BotScript
@@ -287,7 +296,9 @@ class Player:
             commands, MAX_LEASE_FRAME, anchor=script.frame if script is not None else None
         )
         if fresh:
-            self.mover.use(mover_data(self.hero.body), collision)
+            base_data = mover_data(self.hero.body)
+            self.mover.use(base_data if script is None else None, collision)
+            simulate_pose = partial(self._step_body_pose, base_data=base_data)
         if movelog.ENABLED:
             movelog.commands(self, fresh, received=commands)
         for command in fresh:
@@ -298,10 +309,11 @@ class Player:
                 if not dead and self.body_script is not None:
                     self.mover.step(
                         command, seconds, self.match.tick,
-                        simulate_pose=self._step_body_pose,
+                        simulate_pose=simulate_pose,
                     )
                 else:
                     if not dead:  # a dead body lies where it fell
+                        self.mover.use(base_data)
                         self.mover.step(command, seconds, self.match.tick)
                     self._advance_body_frame(command)
         if movelog.ENABLED:
@@ -318,8 +330,10 @@ class Player:
         if first_missing < first_pose - 1:
             self._advance_body_frame(Command(first_pose - 1), posed=False)
 
-    def _step_body_pose(self, command: Command, seconds: float, tick: int) -> None:
+    def _step_body_pose(self, command: Command, seconds: float, tick: int, *, base_data: MoverData) -> None:
         script = self.body_script
+        profile = statescript_mover_data(script.component) if script is not None else None
+        self.mover.use(profile or base_data)
         requests = []
         if script is not None:
             requests = [
