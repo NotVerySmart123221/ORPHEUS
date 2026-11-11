@@ -28,11 +28,15 @@ import logging
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from ow174.game.script import expr
 from ow174.game.script.expr import ENTITY, INSTANCE, Context, Entity
 from ow174.game.script.graph import Graph, Node, is_plug, mode_variables
 from ow174.game.world import GAME_MODE_ENTITY
+
+if TYPE_CHECKING:
+    from ow174.game.mover import VelocityChange
 
 log = logging.getLogger("ow174.script")
 
@@ -304,6 +308,12 @@ class World:
     def movement_sample(self) -> int | None:
         """The owner's current movement sample, if this world supplies a pose."""
         return None
+
+    def queue_velocity_changes(
+        self, frame: int, source: tuple[int, int], changes: tuple["VelocityChange", ...],
+    ) -> None:
+        """Schedule authored velocity changes for the owner's next movement frame."""
+        pass
 
     def nearby_enemy_count(self, owner: int, radius: float) -> int:
         return 0

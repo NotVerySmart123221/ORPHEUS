@@ -109,6 +109,13 @@ The 104319 owner graph `01C7` writes the airborne variable read by Seismic Slam 
 on ORPHEUS's Rust branch. [Movement sampler](https://github.com/leafall903/ORPHEUS/blob/13acf152e866bbea181074326551422ce9c86671/rust/src/mover.rs) ·
 [Statescript runtime](https://github.com/leafall903/ORPHEUS/blob/13acf152e866bbea181074326551422ce9c86671/rust/src/script_init.rs)
 
+## Rising Uppercut movement
+
+The local 104319 graph export supplies the three velocity actions in graph `0DD8`.
+The original client identifies their modifier dispatch at RVA `D2B643` and movement
+phase at `C31870`. The ordinary body direction queries use the mover pose through
+`C5E040` and `C62760`, and the direction limit evaluator is at `CEB820`.
+
 ## Wrecking Ball
 
 The local 104319 statescript export supplies the authored Quad Cannons (`1514`),

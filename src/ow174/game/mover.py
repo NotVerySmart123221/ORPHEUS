@@ -30,6 +30,7 @@ command frame (dt = 16 ms), main tick 0x7FF789B4B1D0:
  7. velocity: friction (0x7FF789B43090; in the air with the air values, 0x7FF789B416A0, plus a quadratic
     drag toward terminal_velocity while falling), acceleration toward the throttles' wish (0x7FF789B434A0),
     the speed cap of the direction (0x7FF789B44090), gravity -10 * gravity_scale in the air (0x7FF789B42100).
+    Velocity actions then modify speed and apply queued world-velocity deltas (RVA C31870).
  8. the move (0x7FF789B4D9C0): on the ground the velocity follows the ground plane at its horizontal
     speed; the physics engine moves the capsule by (velocity + spring speed) * dt (contacts.py: its
     contacts with the map's shapes, rounds of Gauss-Seidel over their planes and sweeps, all float32);
@@ -40,9 +41,8 @@ command frame (dt = 16 ms), main tick 0x7FF789B4B1D0:
 The hero's values are its body's STUCharacterMoverComponent (data/game_movers_174.json), changed each tick
 by the movement mods the body's statescript has on (0x7FF789B4CBA0, see `modded`): Soldier: 76's Sprint
 adds 0.5 to the speed scalar (run speeds x 1.5) and sets the crouch intent to 0. Not modelled: mods of
-heroes whose statescript the server does not run, the throttle mods (17-19), velocity mods (STU_FF3471E9
-states) and knockback, abilities that take over the move (the tick's phase hooks), moving platforms,
-other bodies.
+heroes whose statescript the server does not run, the throttle mods (17-19), other velocity modes and
+knockback, abilities that take over the move (the tick's phase hooks), moving platforms, other bodies.
 The capsule rests 5 mm out of a wall (the engine's contact skin), not touching it.
 
 Besides the pose it keeps what other clients animate the body from, as the client's own mover writes it
@@ -58,11 +58,12 @@ import threading
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, fields, replace
-from functools import cache
+from functools import cache, cmp_to_key
 
 from ow174.game import contacts
 from ow174.game.collision import MOVER, NOT_GROUND, Ground, World, flat_world
 from ow174.game.commands import CROUCH, JUMP, SUBFRAME, Command
+from ow174.game.world import MAX_MOVEMENT_AXIS
 from ow174.paths import DATA_DIR
 
 MOVERS_PATH = DATA_DIR / "game_movers_174.json"  # tools/extract_game_movers.py
@@ -169,6 +170,9 @@ SPEED, ACCEL_GROUND, ACCEL_AIR, ACCEL_TOUCHING, DECEL_GROUND, DECEL_GROUND_BASE,
 DECEL_AIR, DECEL_AIR_BASE, DECEL_AIR_SPEED, JUMP_SPEED_MOD, GRAVITY_MOD = range(7, 12)
 TERMINAL, TERMINAL_UP, GROUND_ACCEL, GROUND_DECEL = 13, 14, 15, 16
 JUMP_INTENT, CROUCH_INTENT, COLLISION_MOD, LAND_LIMIT_MOD, STEP_DOWN_MOD = 20, 21, 22, 36, 38
+VELOCITY_MAGNITUDE, VELOCITY_HORIZONTAL, VELOCITY_Y, VELOCITY_JUMP_RATIO = range(32, 36)
+VELOCITY_WORLD_DELTA = -1  # internal index for an authored mode 1 vector
+VelocityChange = tuple[int, int, int, float | tuple[float, float, float], float]
 FLT_MAX, FLT_MIN = 3.4028234663852886e38, 1.1754943508222875e-38
 # The statescript's MovementMod state (STU_316CFEF2) and its mod classes (STU_6810506D: m_A9561CA0 index,
 # m_9B7A63EA value): class -> (op, value of an empty config var) (0x7FF789C4C1E0, by their type objects).
@@ -343,7 +347,7 @@ class Mod:
 
     index: int
     op: int
-    value: float
+    value: float | tuple[float, float, float]
     start: int
     end: int | None = None
     priority: float = 0.0
@@ -354,6 +358,26 @@ class Mod:
 
     def order(self) -> tuple:
         return self.priority, self.start, self.key
+
+
+def _compare_velocity_mods(left: Mod, right: Mod) -> int:
+    """The velocity lists compare priorities within float32 0.004 as ties (RVAs C2FAA0 and C2FCC0)."""
+    difference = abs(left.priority - right.priority)
+    if difference > FLT_MAX or f32(difference) > f32(LAND_LIMIT):
+        return -1 if left.priority < right.priority else 1
+    left_key = left.start, left.key
+    right_key = right.start, right.key
+    return (left_key > right_key) - (left_key < right_key)
+
+
+def _velocity_speed(velocity: tuple[float, float, float]) -> float:
+    """The scalar velocity consumer's refined reciprocal-square-root length (RVA C31870)."""
+    squared = contacts.dot(velocity, velocity)
+    if squared <= EPSILON:
+        return 0.0
+    estimate = contacts.rsqrt_estimate(squared)
+    refined = f32(f32(3.0 - f32(squared * f32(estimate * estimate))) * f32(estimate * 0.5))
+    return f32(squared * refined)
 
 
 def apply_op(op: int, value: float, operand: float) -> float:
@@ -563,7 +587,7 @@ class Mover:
         self.input_tick: int | None = None  # the tick that command was applied in; None: never
         self.input_frame: int | None = None  # its command frame
         self.last_command: Command | None = None
-        self.mods: dict = {}  # the statescript's movement mods by (instance, state, slot)
+        self.mods: dict[tuple[int, ...], Mod] = {}
         self.history: deque[Snapshot] = deque(maxlen=HISTORY)
         self.corrected: int | None = None  # the newest frame whose state went to the owner (correction.py)
         self.body: contacts.CharacterBody | None = None  # the physics engine's body, made when first needed
@@ -608,6 +632,36 @@ class Mover:
                 mod.end = frame + 1
             elif mod.end is not None and mod.end <= frame:
                 del self.mods[key]  # the mover's next tick is frame + 1
+
+    def queue_velocity_changes(
+        self, frame: int, source: tuple[int, int], changes: tuple[VelocityChange, ...],
+    ) -> None:
+        """Schedule an action's authored slots for the next movement frame (RVA D2B6BC)."""
+        start = frame + 1
+        pending = {}
+        try:
+            for slot, channel, op, operand, priority in changes:
+                if not math.isfinite(priority):
+                    return
+                # A reevaluated action replaces its slot in this frame. State modifiers use three key fields.
+                key = (*source, start & 0xFFFF, slot)
+                if channel == VELOCITY_WORLD_DELTA and isinstance(operand, tuple):
+                    # Mode 1 stores the difference against the world velocity at enqueue time (RVA C32D22).
+                    changed = tuple(
+                        apply_op(op, old, value) for old, value in zip(self.velocity, operand, strict=True)
+                    )
+                    delta = contacts.sub(changed, self.velocity)
+                    if not all(map(math.isfinite, delta)):
+                        return
+                    pending[key] = Mod(channel, ADD, delta, start, start + 1, f32(priority), key)
+                elif 0 <= channel <= 3 and not isinstance(operand, tuple):
+                    index = VELOCITY_MAGNITUDE + channel
+                    if not math.isfinite(operand):
+                        return
+                    pending[key] = Mod(index, op, f32(operand), start, start + 1, f32(priority), key)
+        except OverflowError:
+            return  # keep the previous records if the action cannot form a float32 delta
+        self.mods.update(pending)
 
     # ---- what the movement records and the match read
 
@@ -788,12 +842,62 @@ class Mover:
                 vx, vy, vz = self.velocity
                 self.velocity = (vx, vy - WORLD_GRAVITY * data.gravity_scale * dt, vz)
                 self.fall = f32(self.fall + f32(f32(-WORLD_GRAVITY * data.gravity_scale) * f32(dt)))
+            self._apply_velocity_mods(active, normal)
             self._fall_after(self._move(dt, normal))
         else:
             target, speed = move_to
             outcome = self._move_to(dt, target, speed)
         self.history.append(self.snapshot(frame))
         return outcome
+
+    def _apply_velocity_mods(self, active: list[Mod], normal) -> None:
+        """Apply the scalar channels before the world-space deltas, before collision."""
+        velocity_mods = [
+            mod for mod in active
+            if mod.index == VELOCITY_WORLD_DELTA or VELOCITY_MAGNITUDE <= mod.index <= VELOCITY_JUMP_RATIO
+        ]
+        if not velocity_mods:
+            return
+        velocity_mods.sort(key=cmp_to_key(_compare_velocity_mods))
+        before = contacts.v3(*self.velocity)
+        try:
+            velocity = self._modified_velocity(velocity_mods, before)
+        except OverflowError:
+            return
+        if any(
+            not math.isfinite(axis) or not -(MAX_MOVEMENT_AXIS + STEP) <= quantise(axis) <= MAX_MOVEMENT_AXIS
+            for axis in velocity
+        ):
+            return
+        self.velocity = velocity
+        lift = f32(contacts.dot(normal, velocity) - contacts.dot(normal, before))
+        if lift > f32(LAND_LIMIT) and not self.flags_word & (JUMPED | FELL):
+            self.flags_word |= FELL  # velocity can release ground contact before this frame's sweep
+            self.air_ticks = 0
+
+    def _modified_velocity(
+        self, velocity_mods: list[Mod], velocity: tuple[float, float, float],
+    ) -> tuple[float, float, float]:
+        speed = _velocity_speed(velocity)
+        if speed > CAP_TINY:
+            adjusted = intent(velocity_mods, VELOCITY_MAGNITUDE, speed)
+            velocity = contacts.scale(velocity, f32(adjusted / speed))
+        x, y, z = velocity
+        horizontal = _velocity_speed((x, 0.0, z))
+        if horizontal > CAP_TINY:
+            adjusted = intent(velocity_mods, VELOCITY_HORIZONTAL, horizontal)
+            scale = f32(adjusted / horizontal)
+            x, z = f32(x * scale), f32(z * scale)
+        y = intent(velocity_mods, VELOCITY_Y, y)
+        jump_speed = self.data.jump_speed
+        if jump_speed > CAP_TINY and any(mod.index == VELOCITY_JUMP_RATIO for mod in velocity_mods):
+            ratio = intent(velocity_mods, VELOCITY_JUMP_RATIO, f32(y / jump_speed))
+            y = f32(ratio * jump_speed)
+        velocity = x, y, z
+        for mod in velocity_mods:
+            if mod.index == VELOCITY_WORLD_DELTA:
+                velocity = contacts.add(velocity, mod.value)
+        return velocity
 
     def _fall_after(self, vertical: float) -> None:
         """The state's +832 after the move (0x7FF789B4F530): gravity's part of the velocity, added up in the

@@ -11,7 +11,9 @@ DataFlowMapping, Effect, ...) do on a server.
 
 import math
 from types import NotImplementedType
+from typing import TYPE_CHECKING
 
+from ow174.game.mover import ADD, FLT_MAX, MAXIMUM, MINIMUM, MULTIPLY, SET, VELOCITY_WORLD_DELTA
 from ow174.game.script import expr
 from ow174.game.script.expr import (
     EPSILON,
@@ -43,6 +45,9 @@ from ow174.game.script.runtime import (
     would_stack_to_top,
 )
 from ow174.game.world import MAX_MOVEMENT_AXIS
+
+if TYPE_CHECKING:
+    from ow174.game.mover import VelocityChange
 
 MS = f32(0.001)  # 0.0010000000475, the client's float constant
 REEVALUATE = 1  # BooleanSwitch / Switch / Watch timer param
@@ -1379,6 +1384,54 @@ def _finite_number(value) -> bool:
 
 def _finite_vector(value) -> bool:
     return isinstance(value, Vec3) and all(_finite_number(axis) for axis in value)
+
+
+_SCALAR_VELOCITY_OPS = {
+    "STU_7104FC1F": ADD,
+    "STU_1308AA6A": MULTIPLY,
+    "STU_9AF0FA80": SET,
+    "STU_748FC65A": MINIMUM,
+    "STU_EC4841E7": MAXIMUM,
+}
+_VECTOR_VELOCITY_OPS = {"STU_4635C5E2": ADD, "STU_D93B3F5E": MULTIPLY, "STU_95A10547": SET}
+
+
+@handler("STU_FF3471E9")
+def velocity_action(instance: Instance, node, caller) -> bool | NotImplementedType:
+    """Resolve a velocity action's scalar channels and world-space vector edits."""
+    modifiers = node.field("m_BC5E91CF")
+    if not isinstance(modifiers, list):
+        return NotImplemented
+    changes: list[VelocityChange] = []
+    for slot, modifier in enumerate(modifiers):
+        if not isinstance(modifier, dict):
+            return NotImplemented
+        kind = modifier.get("$")
+        if not isinstance(kind, str):
+            return NotImplemented
+        priority_config = modifier.get("m_priority")
+        priority = 0.0 if priority_config is None else instance.evaluate(priority_config)
+        if not _finite_number(priority) or abs(priority) > FLT_MAX:
+            return NotImplemented
+        value = instance.evaluate(modifier.get("m_9B7A63EA"))
+        if kind in _SCALAR_VELOCITY_OPS:
+            channel = modifier.get("m_A9561CA0")
+            if type(channel) is not int or not 0 <= channel <= 3:
+                return NotImplemented
+            if not _finite_number(value) or abs(value) > FLT_MAX:
+                return NotImplemented
+            changes.append((slot, channel, _SCALAR_VELOCITY_OPS[kind], f32(value), f32(priority)))
+        elif kind in _VECTOR_VELOCITY_OPS and modifier.get("m_CFEC5F76") == 1:
+            if not _finite_vector(value) or any(abs(axis) > FLT_MAX for axis in value):
+                return NotImplemented
+            operation = _VECTOR_VELOCITY_OPS[kind]
+            changes.append((slot, VELOCITY_WORLD_DELTA, operation, tuple(value), f32(priority)))
+        else:
+            return NotImplemented
+    component = instance.component
+    component.world.queue_velocity_changes(component.frame, (instance.id, node.rid), tuple(changes))
+    instance.follow(node, "m_outPlug", None)
+    return True
 
 
 def _ray_entity(value) -> bool:

@@ -5,7 +5,7 @@ import unittest
 from dataclasses import replace
 from unittest.mock import patch
 
-from test_game_mover import FLOOR, wall
+from test_game_mover import FLOOR, box, wall
 from test_game_notices import into_world
 
 from ow174.game import bodytrace, movelog, replay_values
@@ -14,11 +14,15 @@ from ow174.game.collision import StaticCollisionProvider, World, flat_world
 from ow174.game.commands import JUMP, Command
 from ow174.game.content import PRACTICE_RANGE, Spawn, heroes
 from ow174.game.match import Match
-from ow174.game.mover import STEP
+from ow174.game.mover import STEP, WORLD_GRAVITY
+from ow174.game.physics_snapshot import snapshot_mover
 from ow174.game.script import nodes, runtime
 from ow174.game.script.expr import INSTANCE, Entity, Vec3
 
 START = 100
+DOOMFIST = 0x02E000000000012F
+UPPERCUT = 0x0DD8
+SHIFT = 0x08
 DESTINATION = Vec3(0.0, 1.0, 3.0)
 SCENE = replace(PRACTICE_RANGE, spawns=(Spawn(None, (0.0, 1.0, 0.0), 0.0),))
 AUTHORED_STATES = (
@@ -61,10 +65,14 @@ class FixedTargetMoveToTests(unittest.TestCase):
         return player, state, ended
 
     @staticmethod
-    def commands(player, frames):
+    def command(player, frame, **inputs):
+        player.match.tick = frame
+        player.take_commands([Command(frame, **inputs)])
+        return player.mover.history[-1]
+
+    def commands(self, player, frames):
         for frame in frames:
-            player.match.tick = frame
-            player.take_commands([Command(frame)])
+            self.command(player, frame)
         return list(player.mover.history)
 
     def test_genji_first_shift_reads_unit_scaled_cast_length(self):
@@ -87,7 +95,7 @@ class FixedTargetMoveToTests(unittest.TestCase):
         state = instance.state(state_index)
         self.assertTrue(state.active)
         self.assertEqual(state.evaluate(state.node.field("m_speed")), speed)
-        self.assertIsNone(state.move_request())
+        self.assertEqual(state.move_request(), (Vec3(0.0, 1.0, 15.0), speed))
 
     def test_genji_authored_miss_uses_the_world_body_position(self):
         hero_guid, graph_id, state_index, _, speed = AUTHORED_STATES[0]
@@ -100,12 +108,9 @@ class FixedTargetMoveToTests(unittest.TestCase):
                 world_class = type(instance.component.world)
                 native = world_class.native
 
-                def resolve_direction(world, cfg, reader, *, source=instance, original=native):
-                    if reader is source:
-                        if cfg.get("$") == "STU_21A13145":
-                            return origin
-                        if cfg.get("$") == "STU_2200A66D":
-                            return direction
+                def resolve_origin(world, cfg, reader, *, source=instance, original=native):
+                    if reader is source and cfg.get("$") == "STU_21A13145":
+                        return origin
                     return original(world, cfg, reader)
 
                 def complete_ray(world, request, *, point=point):
@@ -116,7 +121,7 @@ class FixedTargetMoveToTests(unittest.TestCase):
                     return runtime.RaycastResult(point is not None, None, point, None)
 
                 with (
-                    patch.object(world_class, "native", resolve_direction),
+                    patch.object(world_class, "native", resolve_origin),
                     patch.object(world_class, "raycast", complete_ray),
                 ):
                     player.match.tick = START + 1
@@ -126,7 +131,7 @@ class FixedTargetMoveToTests(unittest.TestCase):
     def test_doomfist_slam_selector_follows_the_owner_airborne_sample(self):
         for jump in (False, True):
             with self.subTest(jump=jump):
-                player, slam = self.spawn(0x02E000000000012F, 0x0B27, flat_world(1.0))
+                player, slam = self.spawn(DOOMFIST, 0x0B27, flat_world(1.0))
                 component = slam.component
                 movement = next(inst for inst in component.instances.values() if inst.graph.index == 0x01C7)
                 ability = slam.state(0)
@@ -159,6 +164,82 @@ class FixedTargetMoveToTests(unittest.TestCase):
                     self.assertIs(airborne.value(), False)
                     self.assertFalse(selector.active)
                     self.assertEqual(movement.state(4).payload(), {"value": 1 << 1})
+
+    def test_doomfist_uppercut_applies_lift_and_attenuation_on_the_authored_frames(self):
+        for jump in (False, True):
+            with self.subTest(jump=jump):
+                player, uppercut = self.spawn(DOOMFIST, UPPERCUT, flat_world(1.0))
+                ability = uppercut.state(0)
+                self.command(player, START + 1, buttons=JUMP if jump else 0)
+                self.assertEqual(player.mover.airborne, jump)
+                self.assertFalse(ability.flags & nodes.Ability.RUNNING)
+
+                cast = START + 2
+                started = self.command(player, cast, pitch=4096, buttons=SHIFT)
+                self.assertTrue(ability.flags & nodes.Ability.RUNNING)
+                self.assertLess(started.velocity[1], 10.0)
+                self.assertEqual(started.velocity[2], 0.0)
+                # The pitched aim supplies yaw. The body-facing vector plus 0.3 up supplies pitch.
+                basis_length = math.hypot(1.0, 0.3)
+                vertical, forward = 3.0 / basis_length, 10.0 / basis_length
+                physics = replay_values.decode(snapshot_mover(player.mover)["state"])
+                modifiers = [dict(node["fields"]) for node in physics["nodes"] if node["class"] == "Mod"]
+                queued = [mod for mod in modifiers if (mod["start"], mod["end"]) == (cast + 1, cast + 2)]
+                self.assertEqual(len(queued), 3)
+                delta_ref = next(mod["value"]["node"] for mod in queued if isinstance(mod["value"], dict))
+                delta = physics["nodes"][delta_ref]["items"]
+                self.assertAlmostEqual(delta[1], vertical, delta=STEP)
+                self.assertAlmostEqual(delta[2], forward, delta=STEP)
+
+                lunge = self.command(player, cast + 1)
+                self.assertAlmostEqual(lunge.velocity[1], vertical, delta=STEP)
+                self.assertAlmostEqual(lunge.velocity[2], forward, delta=STEP)
+                self.commands(player, range(cast + 2, cast + 9))
+                before_lift = self.command(player, cast + 9, yaw=16384)
+                self.assertLess(before_lift.velocity[1], 10.0)
+                # The 150 ms action reads +X at frame 9. The next pose faces +Z.
+                lift = self.command(player, cast + 10)
+                self.assertTrue(player.mover.airborne)
+                self.assertAlmostEqual(lift.velocity[0], 1.0, delta=STEP)
+                self.assertAlmostEqual(lift.velocity[1], 40.0, delta=STEP)
+                self.assertGreater(lift.position[1], before_lift.position[1])
+
+                history = tuple(player.mover.history)
+                player.take_commands([Command(cast + 9, yaw=16384), Command(cast + 10)])
+                self.assertEqual(tuple(player.mover.history), history)
+                self.assertEqual(player.body_script.frame, cast + 10)
+
+                after_lift = self.command(player, cast + 11)
+                gravity_per_frame = WORLD_GRAVITY * player.mover.values.gravity_scale * player.quanta / 1e6
+                self.assertAlmostEqual(
+                    after_lift.velocity[1], lift.velocity[1] - gravity_per_frame, delta=STEP,
+                )
+                self.commands(player, range(cast + 12, cast + 16))
+                before_slowdown = player.mover.history[-1]
+                self.assertGreater(before_slowdown.velocity[1], 35.0)
+                slowed = self.command(player, cast + 16)
+                expected = (before_slowdown.velocity[1] - gravity_per_frame) * 0.2
+                self.assertAlmostEqual(slowed.velocity[1], expected, delta=STEP)
+                next_pose = self.command(player, cast + 17)
+                self.assertAlmostEqual(
+                    next_pose.velocity[1], slowed.velocity[1] - gravity_per_frame, delta=STEP,
+                )
+
+    def test_doomfist_uppercut_hits_a_ceiling_and_lands_on_the_floor(self):
+        ceiling = 4.4
+        geometry = World(FLOOR + box(-30.0, 30.0, ceiling, 5.0, -30.0, 30.0))
+        player, _ = self.spawn(DOOMFIST, UPPERCUT, geometry)
+        cast = START + 1
+        self.command(player, cast, buttons=SHIFT)
+        peak = 0.0
+        for frame in range(cast + 1, cast + 121):
+            self.command(player, frame)
+            body = player.mover.body
+            peak = max(peak, body.position[1] + body.top + body.radius)
+        self.assertLessEqual(peak, ceiling + STEP)
+        self.assertGreaterEqual(peak, ceiling - 0.01)
+        self.assertAlmostEqual(player.mover.position[1], 1.0, delta=STEP)
+        self.assertFalse(player.mover.airborne)
 
     def test_entity_position_tracks_the_current_body_and_clears_on_retirement(self):
         hero_guid, graph_id, *_ = AUTHORED_STATES[0]

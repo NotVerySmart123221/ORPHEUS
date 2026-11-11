@@ -20,6 +20,7 @@ chunks sent after it carried (the client may have applied them), so it needs no 
 """
 
 import logging
+import math
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
@@ -46,6 +47,7 @@ from ow174.game.world import UNIT_ENTITY_SCALE
 
 if TYPE_CHECKING:
     from ow174.game.match import Match
+    from ow174.game.mover import VelocityChange
     from ow174.game.world import EntityUpdate
 
 log = logging.getLogger("ow174.script")
@@ -140,6 +142,12 @@ class BodyWorld(runtime.World):
             return self.match.script_owner_movement_sample(self.body)
         return None
 
+    def queue_velocity_changes(
+        self, frame: int, source: tuple[int, int], changes: tuple["VelocityChange", ...],
+    ) -> None:
+        if self.match is not None:
+            self.match.queue_body_velocity_changes(self.body, frame, source, changes)
+
     def native(self, cfg: dict, instance):
         cls = cfg.get("$")
         if cls == "STU_1FF67CA6":  # GetLocalPlayerPossessedView: the owner's client views its body
@@ -149,6 +157,14 @@ class BodyWorld(runtime.World):
             return Vec3(f32(right * THROTTLE_UNIT), f32(forward * THROTTLE_UNIT), 0.0)
         if cls == "STU_37F20D24":  # GetGameMode: the match's mode (what component 114 announces)
             return Asset(self.mode)
+        if cls in {"STU_2200A66D", "STU_021D01CD", "STU_C8C4C20D"} and self.match is not None:
+            entity = expr.to_entity(instance.evaluate(cfg.get("m_entity")))
+            if expr.valid_entity(entity):
+                facing = self.match.script_body_facing(entity, self.body, pitched=cls == "STU_2200A66D")
+                if facing is not None:
+                    if cls == "STU_C8C4C20D":
+                        return f32(f32(math.atan2(facing.x, facing.z)) * 57.295780181884766)
+                    return facing
         if cls == "STU_FDBB0B67":  # entity size used by the authored movement and effect graphs
             target = cfg.get("m_entity")
             component = instance.component

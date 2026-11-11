@@ -6,6 +6,20 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-11
 
+#### Rising Uppercut movement
+
+- Apply authored scalar velocity edits and world-space vector changes on the next
+  command frame, after gravity and before the capsule sweep.
+- Resolve regular player facing and the authored direction limits. The 104319
+  Uppercut graph now drives Doomfist's approach, lift and vertical slowdown
+  through shared collision. The same facing query resolves Genji's miss endpoint.
+- Regressions cover ground and air activation, queued physics state, duplicate
+  input, ceiling contact and landing. Target damage, knockback and original-client
+  acceptance remain open.
+- Passed Ruff, 170 public Python tests, two dashboard tests and 169 prepared-runtime
+  tests. One mover test skipped for a missing map fixture. A headless run on the
+  Practice Range collision data reached 40 m/s at lift and 7.66 m/s after slowdown.
+
 #### Hand Cannon projectile retirement
 
 - Retire all of a player's projectile flight when its body is replaced or leaves the

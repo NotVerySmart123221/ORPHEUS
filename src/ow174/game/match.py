@@ -32,6 +32,7 @@ import math
 from collections import deque
 from copy import deepcopy
 from functools import partial
+from typing import TYPE_CHECKING
 
 from ow174.game import bodytrace, bots, combat, correction, heroselect, movelog, notices, pools, stats, world
 from ow174.game.collision import (
@@ -73,6 +74,9 @@ from ow174.game.world import (
     Movement,
 )
 from ow174.jam.values import id16
+
+if TYPE_CHECKING:
+    from ow174.game.mover import VelocityChange
 
 log = logging.getLogger("ow174.game")
 
@@ -1015,6 +1019,19 @@ class Match:
     def script_owner_movement_sample(self, owner: int) -> int | None:
         mover = self._script_body_mover(owner, owner)
         return mover.movement_sample() if mover is not None else None
+
+    def script_body_facing(self, entity: int, owner: int, *, pitched: bool) -> expr.Vec3 | None:
+        mover = self._script_body_mover(entity, owner)
+        if mover is None:
+            return None
+        return expr.Vec3(*(expr.f32(axis) for axis in combat.aim(mover.yaw, mover.pitch if pitched else 0)))
+
+    def queue_body_velocity_changes(
+        self, owner: int, frame: int, source: tuple[int, int], changes: tuple["VelocityChange", ...],
+    ) -> None:
+        mover = self._script_body_mover(owner, owner)
+        if mover is not None:
+            mover.queue_velocity_changes(frame, source, changes)
 
     def _message_player(self, entity: int) -> Player | None:
         shown = (player for player in self.players if player.body == entity and self._shown(player))

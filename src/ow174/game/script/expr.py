@@ -393,6 +393,8 @@ def evaluate(cfg, ctx: Context):
         return CONSTANTS[cls](cfg)
     if cls in EXPRESSIONS:
         return run(cfg, ctx)
+    if cls == "STU_0762B33A":
+        return _clamp_direction(cfg, ctx)
     if cls == "STU_45EDF12D" and cfg.get("m_key") is None:
         container = evaluate(cfg.get("m_814F8EC3"), ctx)
         value = evaluate(cfg.get("m_value"), ctx)
@@ -426,6 +428,32 @@ def evaluate(cfg, ctx: Context):
             if key != "m_resourceKey" and guid_of(value):
                 return Asset(guid_of(value))
     return ctx.native(cfg)
+
+
+def _clamp_direction(cfg: dict, ctx: Context) -> Vec3 | None:
+    """Limit the first direction's yaw and pitch around the second direction (104319 RVA CEB820)."""
+    angles = []
+    for field in ("m_32B00625", "m_3661BC45"):
+        vector = evaluate(cfg.get(field), ctx)
+        if not isinstance(vector, Vec3) or not all(math.isfinite(axis) for axis in vector):
+            return None
+        squared = vector.x * vector.x + vector.y * vector.y + vector.z * vector.z
+        if squared <= 1.1754943508222875e-36:
+            return None
+        y = f32(vector.y / math.sqrt(squared)) if abs(squared - 1.0) > 0.008 else vector.y
+        angles.append((f32(math.atan2(vector.x, vector.z)), f32(math.asin(max(-1.0, min(1.0, -y))))))
+
+    limits = [evaluate(cfg.get(field), ctx) for field in ("m_5023B9B0", "m_E26E5E09")]
+    if any(type(limit) not in (int, float) or not math.isfinite(limit) or limit < 0 for limit in limits):
+        return None
+    result = []
+    for angle, reference, degrees in zip(*angles, limits, strict=True):
+        delta = math.remainder(angle - reference, math.tau)
+        limit = math.radians(degrees)
+        result.append(f32(reference + math.copysign(limit, delta)) if abs(delta) > limit else angle)
+    yaw, pitch = result
+    horizontal = math.cos(pitch)
+    return Vec3(f32(math.sin(yaw) * horizontal), f32(-math.sin(pitch)), f32(math.cos(yaw) * horizontal))
 
 
 def cooldown_duration(cfg: dict, ctx: Context) -> float:
