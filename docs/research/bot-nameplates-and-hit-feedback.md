@@ -99,9 +99,10 @@ For any hit test that uses the model's own volumes:
   unverified. This note saw it live. ORPHEUS stamps it with the shot's frame; only the packet
   clock's frame was tried here.
 - **25005.** `combat._kill_notice` names the bot's own entity as the victim and sends score 0.
-  An ORPHEUS bot is one entity, the body with its health and component 26
-  (`Match._bot_create`); it has no controller entity. By this note that is a candidate cause of
-  the missing elimination names listed in the [verification record](../STATE.md). Not tested.
+  An ORPHEUS bot was one entity, the body with its health and component 26
+  (`Match._bot_create`), with no controller entity. That was the cause of the missing
+  elimination names: bots now get a seat and a controller (`Match._seat_bots`,
+  `Match._show_bots`), and the notice names them. See the second run below.
 - **Widget.** ORPHEUS runs the bot body's own graphs in its script runtime, keeps `0D24` as the
   child of `0C18` on the body, and sends that child as a separate chunk once the mode script is
   delivered (`server._flush_bot_nameplates`). That covers point 3 above and avoids the body
@@ -118,6 +119,17 @@ For any hit test that uses the model's own volumes:
 - No name and no health bar drew over the bot, before it was hit or after.
 - The server sent 25001 for each hit. The hit marker itself was not caught: the frames were
   saved about three seconds apart.
+
+A second run the same day, after the bots were given controllers:
+
+- Each seated bot has a participant record with its name, a controller entity with its team
+  (26) and seat (74) in its team's list, and after the client acknowledged both the controller
+  and the body, 44 and 75 naming the body and the bot's hero. A respawned bot keeps its
+  controller, which then possesses the new body.
+- **The notice read "ELIMINATED TRAINING BOT"**, the name in red. The same bot was killed six
+  times; the three notices caught in frames all carried the name, so it holds across respawns.
+- The hero select screen was unchanged: it listed no bots.
+- Still no name and no health bar over the bot, and still no kill feed line.
 
 ## Open
 

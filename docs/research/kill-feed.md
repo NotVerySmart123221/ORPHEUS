@@ -158,14 +158,21 @@ show:
 - Whether the bot's fresh pulser went out. `combat.kill_feed_allowed` holds it back until the
   mode script is delivered and the client has both the bot's and the killer's identity.
 - Whether the client's own conditions passed. The first one in `0C18` is `STU_CD7F3617()`, the
-  body's name. The notice had no name for this bot, so a nameless body is a candidate for
-  both symptoms. That is a hypothesis.
+  body's name. The notice had no name for this bot, so a nameless body was a candidate for
+  both symptoms.
 - A player's death, which runs through `01CF` instead, was not tried.
+
+A second run the same day tested the name. With each bot given a controller entity, the
+notice read "ELIMINATED TRAINING BOT"
+([nameplate note](bot-nameplates-and-hit-feedback.md#seen-live-against-orpheus)). Six kills,
+three of them caught with the notice on screen: **still no kill feed line**. So a missing name
+was not what kept the line away, or not alone.
 
 ## Open
 
-- Where the chain stops for a bot kill on ORPHEUS: the bot's pulser or the client's name test.
-  A statescript tracer on the client would tell.
+- Where the chain stops for a bot kill on ORPHEUS now that the option arrives and the body has
+  a name: whether the bot's fresh pulser goes out, and what the client's `0C18` and `0DEA` do
+  with it. A statescript tracer on the client would tell.
 - The meaning of `STU_0D179CAF` and `STU_CEFF290A`.
 - A line's critical-hit mark, ability icon and assists (the other `003E.025` parameters) were
   not exercised.

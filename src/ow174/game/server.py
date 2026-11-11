@@ -297,7 +297,10 @@ class Client:
         if controller == self.player.entity:
             return self.player.body == body
         if not any(player.entity == controller for player in self.player.match.players):
-            return True  # NPC names have a separate native path
+            bot = next((bot for bot in self.player.match.bots if bot.entity == body), None)
+            if bot is None or bot.controller is None:
+                return True  # an unseated NPC has no controller to name it
+            controller = bot.controller
         return self._confirmed_possessions.get(controller) == body
 
     def _flush_combat_ui(self) -> None:

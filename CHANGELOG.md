@@ -6,6 +6,26 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Training bot names in notices
+
+- Gave each training bot a seat among the match's participants and a controller entity. The
+  game struct of 20300 and 20301 names the bot at its seat and lists its controller in its
+  team. Each client gets the controller with the bot's team and seat and, once it has
+  acknowledged both the controller and the bot's body, components 44 and 75 naming the body and
+  the bot's hero. A respawned bot keeps its seat, and its controller possesses the new body.
+  The client names a body through its possessor, so a notice about a bot can carry its name.
+- An elimination notice about a seated bot now waits for that possession, as it already does
+  for another player's body. Bots are seated after the players who start the match while the
+  struct's 16 seats last; an unseated bot behaves as before. Free-for-all matches seat none.
+- Added five tests for the seats, the game struct, the controller and its possession, the
+  notice gate and a respawn. With a prepared build 104319 pack the runtime suite ran 1204 tests
+  with 1 skip; its only errors are the two dashboard picture tests that need local images.
+  Ruff and the public source checks passed with 170 Python tests and 2 dashboard tests.
+- Original-client check, 2026-11-10, Practice Range as Soldier: 76: the notice read
+  "ELIMINATED TRAINING BOT". The same bot was killed six times and the three notices caught in
+  frames all carried the name. The hero select screen listed no bots. Still open: no name or
+  health bar over the bot, and no kill feed line.
+
 #### Offline service imported
 
 - Added `offline/`: a separate single-player lobby and game service for the same build, built

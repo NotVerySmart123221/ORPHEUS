@@ -128,10 +128,10 @@ FIELDS = {
     world.Movement: _names("position yaw pitch velocity flags throttles input_frame input_throttles "
                            "air_ticks gravity frame crouch_frame spring spring_speed fall"),
     bots.Bot: _names(
-        "entity spawner hero_data hints dead body_script records_from hero name body team health speed accel "
-        "brake pace direction position yaw velocity firing route index wait target start keys turning held "
-        "last_held input_tick moved_tick last_tick free_for_all category radius capsule_top pogo physics "
-        "physics_world waypoints"
+        "entity spawner hero_data hints dead body_script records_from slot hero name body team health "
+        "speed accel brake pace direction position yaw velocity firing route index wait target start keys "
+        "turning held last_held input_tick moved_tick last_tick free_for_all category radius capsule_top "
+        "pogo physics physics_world waypoints"
     ),
 }
 OPTIONAL_FIELDS = {
