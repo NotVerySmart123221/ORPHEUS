@@ -173,6 +173,34 @@ class HelixTests(unittest.TestCase):
 
 
 class ProjectileRangeTests(unittest.TestCase):
+    def test_hand_cannon_direct_damage_uses_the_authored_falloff(self):
+        for distance, damage in ((5.0, 6.0), (23.0, 3.9), (35.0, 1.8)):
+            with self.subTest(distance=distance):
+                run = Run(KANEZAKA_DM, ("Shooter", "Target"))
+                shooter, victim = run.players
+                match = run.match
+                fight = match.combat
+                match.bots.clear()
+                self.assertTrue(match.switch_hero(shooter, find_hero("Doomfist")))
+                y = match.game_map.spawns[0].position[1]
+                shooter.mover.position[:] = (0.0, y, 0.0)
+                victim.mover.position[:] = (0.0, y, distance)
+                target = next(target for target in fight._targets() if target.owner is victim)
+                vitals = fight.vitals_of(target)
+                before = vitals.total
+
+                frame = shooter.body_script.frame + 1
+                shooter.body_script.command(frame, FIRE)
+                fight.command(shooter, Command(frame, buttons=FIRE))
+                # Isolate the centre pellet so this test covers its damage independently of spread.
+                centre = next(rocket for rocket in fight.rockets if rocket.direction == (0.0, 0.0, 1.0))
+                fight.rockets[:] = [centre]
+                for tick in range(30):
+                    fight.update(20.0 + tick * combat.TICK, frame + tick, frames=False)
+
+                self.assertFalse(fight.rockets)
+                self.assertAlmostEqual(before - vitals.total, damage, delta=0.02)
+
     def test_replacing_the_shooter_retires_the_projectiles_damage(self):
         for replace_body, expected_health in ((False, 80.0), (True, 200.0)):
             with self.subTest(replace_body=replace_body):

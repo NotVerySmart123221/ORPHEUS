@@ -1,8 +1,16 @@
 # Restoration roadmap
 
-The target is Overwatch 1 retail **1.74.0.0.104319**. Soldier: 76 and the Practice Range training bots form the first acceptance group. Doomfist is the next hero after this group passes the shared gameplay and original-client checks. Record the source version and the smallest repeatable test for each claim. A milestone stays open until its stated exit criteria have been verified. The [verification record](STATE.md) and [changelog](../CHANGELOG.md) describe completed work and remaining limits. The [issue tracker](https://github.com/leafall903/ORPHEUS/issues) holds individual tasks.
+The target is Overwatch 1 retail **1.74.0.0.104319**. Soldier: 76 and the Practice Range training bots form the first acceptance group. Record the source version and the smallest repeatable test for each claim. A milestone stays open until its stated exit criteria have been verified. The [verification record](STATE.md) and [changelog](../CHANGELOG.md) describe completed work and remaining limits. The [issue tracker](https://github.com/leafall903/ORPHEUS/issues) holds individual tasks.
 
-This roadmap tracks gameplay restoration on the community-maintained Python `main` branch. Native server architecture and parity are tracked on the separate [Rust branch](https://github.com/leafall903/ORPHEUS/tree/rust).
+This branch starts from the community-maintained Python `main` and tracks Doomfist restoration on `leafall`. The project-wide milestones below retain the shared requirements. Native server architecture and parity are tracked on the separate [Rust branch](https://github.com/leafall903/ORPHEUS/tree/rust).
+
+## Doomfist acceptance
+
+- [ ] Hand Cannon. Verify pellet count and spread, direct hits and critical hits, distance falloff, ammo recovery, and owner and observer feedback. The authored centre pellet now loses damage over distance in the server test.
+- [ ] Rocket Punch. Verify charge, cancellation, release, movement, target and wall impacts, knockback, damage, and recovery. The underlying statescript stack already has a regression for the previous charge fault.
+- [ ] Rising Uppercut and Seismic Slam. Verify activation, cooldown, grounded and airborne behavior, movement through shared collision, and target damage and displacement.
+- [ ] The Best Defense and Meteor Strike. Verify shield grants, limits and decay, ultimate targeting and landing, damage and interruption.
+- [ ] Presentation and lifecycle. Verify models, HUD, hit feedback, animations, sounds, death, respawn and hero switching. Confirm the listed behaviors with the original 104319 client in Practice Range and against a second player where applicable.
 
 | Milestone | Exit criteria | Current evidence |
 | --- | --- | --- |

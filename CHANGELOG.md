@@ -4,6 +4,18 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ## Unreleased
 
+### 2026-11-11
+
+#### Doomfist projectile damage
+
+- Apply authored distance falloff to direct projectile hits using distance travelled to
+  the collision point. The Hand Cannon centre pellet now deals about 6.0, 3.9 and 1.8
+  damage against targets placed at 5, 23 and 35 metres in the server regression.
+- Record the Doomfist acceptance checklist and enable the public workflow on `leafall`.
+  Pellet pattern, critical hits and original-client acceptance remain open.
+- Passed Ruff, 170 public Python tests, two dashboard tests, and 51 prepared-runtime
+  projectile and statescript tests.
+
 ### 2026-11-10
 
 #### Python project layout and verification

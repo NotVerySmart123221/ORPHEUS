@@ -721,10 +721,11 @@ class Combat:
         rocket.flown += t / rocket.speed
         self._landed(rocket)
         point = _along(rocket.position, rocket.direction, t)
-        if struck is not None and rocket.direct is not None and rocket.direct.amount > 0.0:
+        direct = rocket.direct
+        if struck is not None and direct is not None and direct.amount > 0.0:
+            amount = direct.amount * direct.scale(rocket.flown * rocket.speed)
             self._damage(
-                rocket.shooter, struck, rocket.direct.amount, False, rocket.direct.loadout, self.tick,
-                world_tick=self.tick,
+                rocket.shooter, struck, amount, False, direct.loadout, self.tick, world_tick=self.tick,
             )
         blast = rocket.blast
         if blast is None or blast.amount <= 0.0:
