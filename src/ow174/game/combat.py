@@ -572,7 +572,8 @@ class Target:
     def segment(self, feet=None):
         """The capsule's segment (from the feet to the top, a radius in from both ends)."""
         x, y, z = feet or self.feet
-        return (x, y + self.radius, z), (x, y + max(self.radius, self.height - self.radius), z)
+        middle = self.height * 0.5
+        return (x, y + min(self.radius, middle), z), (x, y + max(self.height - self.radius, middle), z)
 
 
 @dataclass(frozen=True)
@@ -778,10 +779,18 @@ class Combat:
         script = player.body_script
         if script is None:
             return
-        shots, script.component.shots[:] = list(script.component.shots), []
+        component = script.component
+        shots, component.shots[:] = list(component.shots), []
+        damage = tuple(component.damage_reports)
+        component.damage_reports.clear()
         if self.is_dead(player) or self.is_stunned(player):
             return
         if command is not None:
+            if damage:
+                try:
+                    self._apply_tracked_damage(player, command.frame, damage)
+                except Exception:
+                    log.exception("[game] %s: %s's tracked damage failed", self.match.label(), player.name)
             for state, number, time, activation in shots:
                 try:
                     self._shoot(player, command, state, number, time, activation=activation)
@@ -796,6 +805,19 @@ class Combat:
                 self._tesla(player, command, script)
             except Exception:
                 log.exception("[game] %s: %s's Tesla Cannon failed", self.match.label(), player.name)
+
+    def _apply_tracked_damage(self, player, frame: int, reports) -> None:
+        """Apply active state reports after the body VM has finished its frame."""
+        enemies = {target.entity: target for target in self._enemies(player)}
+        for state, activation, entities, amount, loadout, tags in reports:
+            if not state.active or state.counter != activation:
+                continue
+            for entity in entities:
+                target = enemies.get(entity)
+                if target is None or entity in state.hit_entities or self.vitals_of(target).dead:
+                    continue
+                state.hit_entities.add(entity)
+                self._damage(player, target, amount, False, loadout, frame, hit_tags=tags)
 
     def _tesla(self, player, command, script) -> None:
         """Reconstruct 00FE's continuous ModifyHealth using the actual active states.
@@ -1000,6 +1022,27 @@ class Combat:
         vitals = self.vitals.get(owner)
         if vitals is not None:
             vitals.clear_temporary_shields()
+
+    def track_hostile_bodies(
+        self, owner: int, centre, radius: float, origin, category: int, tracked: tuple[int, ...],
+    ) -> tuple[int, ...]:
+        """Resolve the supported authored filter against ordinary player and NPC capsules."""
+        collision = self.match.collision_world
+        source = self.match._message_player(owner)
+        if collision is None or source is None:
+            return ()
+        rays = collision.ray_geometry or collision
+        found = []
+        # The modeled player and bot bodies stand in for the native category and tag checks.
+        # CA7C4C/C8E660 compare the query sphere with the candidate's stance capsule.
+        for target in self._enemies(source):
+            if (target.entity in tracked
+                    or segment_distance(centre, *target.segment()) > radius + target.radius):
+                continue
+            pose = self.model_pose_for(target.entity)
+            if _communication_visible(rays, origin, target, category, pose):
+                found.append(target.entity)
+        return tuple(found)
 
     def _wheel_model_pose(self, entity: int) -> ModelPose | None:
         player = self.match._message_player(entity)

@@ -3222,9 +3222,11 @@ class ModifyHealth(State):
     def __init__(self, *args):
         super().__init__(*args)
         self.last_applied = 0
+        self.hit_entities: set[int] = set()
 
     def on_enter(self):
         self.last_applied = self.now
+        self.hit_entities.clear()
         value = self.instance.component.world.modify_health(self, 0)
         if value is not NotImplemented:
             self.ticks()
@@ -3239,6 +3241,7 @@ class ModifyHealth(State):
 
     def on_end(self, finished):
         self.instance.component.world.end_health(self)
+        self.hit_entities.clear()
 
 
 @state_class("STUStatescriptStateCombatModFilter", strict_only=True)
@@ -3290,6 +3293,61 @@ class TrackTargets(State):
     def tick(self) -> None:
         self.refresh()
 
+    def hostile_body_profile(self) -> int | None:
+        """Recognize the authored hostile capsule query with line-of-sight profile 002C."""
+        fields = self.node.fields
+        primary = fields.get("m_filter")
+        secondary = fields.get("m_3D667CE3")
+        if not (
+            isinstance(primary, dict) and primary.get("$") == "STUConfigVarFilter"
+            and isinstance(secondary, dict) and secondary.get("$") == "STUConfigVarFilter"
+        ):
+            return None
+        tag = primary.get("m_8B2A4DF3")
+        cast = secondary.get("m_C1903771")
+        if not (
+            isinstance(tag, dict) and tag.get("$") == "STU_357DABBB"
+            and guid(tag.get("m_7D7C86A1")) == 0x0D6000000000003A
+            and isinstance(cast, dict) and cast.get("$") == "STU_20DB8AB5"
+        ):
+            return None
+        profile = guid(cast.get("m_C1903771"))
+        if (
+            profile != 0x069000000000002C
+            or (primary.get("m_4EA686DB"), primary.get("m_84065FD1"),
+                primary.get("m_89831602")) != (20, 64, 1)
+            or any(value for key, value in primary.items() if key not in (
+                "$", "m_4EA686DB", "m_84065FD1", "m_89831602", "m_8B2A4DF3",
+            ))
+            or any(value for key, value in tag.items() if key not in ("$", "m_7D7C86A1"))
+            or any(value for key, value in secondary.items() if key not in ("$", "m_C1903771"))
+            or any(value for key, value in cast.items() if key not in ("$", "m_C1903771"))
+        ):
+            return None
+        option = fields.get("m_8CBE558B")
+        if option is not None and (
+            not isinstance(option, dict) or option.get("$") != "STUConfigVarBool"
+            or option.get("m_value") != 0
+        ):
+            return None
+        unsupported = (
+            "m_E46A19A3", "m_A30B383E", "m_3119AD61", "m_B9BEAC7F", "m_D45E22FA",
+            "m_2F88C5F2", "m_544C3E6F", "m_8DCA77B6", "m_762A56C0", "m_B3A77CD0",
+            "m_16BDE607", "m_8862A75D", "m_E474FFD6", "m_48837057", "m_294660A6",
+            "m_229DD034", "m_BA6C9F75", "m_9E1426F6", "m_E8474EE8", "m_C1B724B2",
+            "m_93AB8C13", "m_C39691D9", "m_CEE20F6F", "m_1B89EA79",
+        )
+        unsupported_flags = ("m_08285CD6", "m_0297060F", "m_8D13DD07", "m_2F5FAF65", "m_32AFE9AA")
+        if (
+            fields.get("m_DD792FF0") != 1 or fields.get("m_43478CAD", 0) != 0
+            or fields.get("m_95FFC3C5") != 1
+            or any(fields.get(name, 0) != 0 for name in unsupported_flags)
+            or any(fields.get(name) is not None for name in unsupported)
+            or lvalue(fields.get("m_8A2905A0")) is None
+        ):
+            return None
+        return profile
+
     def on_end(self, finished: bool) -> None:
         if self.count_var is not None:
             self.unlink(self.count_var)
@@ -3306,6 +3364,9 @@ class TrackTargets(State):
         return component.world.nearby_enemy_count(component.entity, radius)
 
     def payload(self) -> dict:
+        if self.hostile_body_profile() is not None:
+            # The wire list retains rejected targets when the node authors a retention interval.
+            return {"targets": ()}
         return {"targets": tuple((entity, 0) for entity in self.targets)}  # age policy unverified
 
 

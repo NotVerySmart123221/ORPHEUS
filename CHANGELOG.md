@@ -6,6 +6,21 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-11
 
+#### Rising Uppercut target damage
+
+- Resolve the authored Uppercut sphere against live opposing player and NPC
+  capsules. Reuse the shared sight query with the cast profile's static mask.
+  Retain selected target IDs for the activation.
+- Apply the authored damage and loadout through shared combat after the body VM
+  finishes its command. Each eligible body takes damage once per cast. Combat
+  emits its regular hit notice and updates health and damage credit.
+- Passed Ruff, 916 source tests, six dashboard tests, 44 communication-wheel
+  checks and both focused Uppercut regressions. The Uppercut checks cover target
+  retention, a second cast after cooldown and ally, range and wall rejection.
+  Three Deadeye test errors also reproduce on baseline commit `c239a84`.
+- Native sampling cadence, dynamic ray receivers, the secondary target output,
+  target displacement and original-client acceptance remain open.
+
 #### Python hero and PvE integration
 
 - Import the partial hero and PvE contribution from [PR #16](https://github.com/leafall903/ORPHEUS/pull/16)

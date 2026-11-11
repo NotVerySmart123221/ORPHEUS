@@ -5,16 +5,17 @@ import unittest
 from dataclasses import replace
 from unittest.mock import patch
 
-from ow174.game import bodytrace, movelog, replay_values
+from ow174.game import bodytrace, bots, combat, movelog, replay_values, stats
 from ow174.game.body_vm_snapshot import export_body_vm
 from ow174.game.collision import StaticCollisionProvider, World, flat_world
 from ow174.game.commands import JUMP, Command
-from ow174.game.content import PRACTICE_RANGE, Spawn, heroes
+from ow174.game.content import PRACTICE_RANGE, SOLDIER, Spawn, heroes
 from ow174.game.match import Match
 from ow174.game.mover import STEP, WORLD_GRAVITY
 from ow174.game.physics_snapshot import snapshot_mover
 from ow174.game.script import nodes, runtime
 from ow174.game.script.expr import INSTANCE, Entity, Vec3
+from tests.runtime.test_game_combat import in_world
 from tests.runtime.test_game_mover import FLOOR, box, wall
 from tests.runtime.test_game_notices import into_world
 
@@ -239,6 +240,81 @@ class FixedTargetMoveToTests(unittest.TestCase):
         self.assertGreaterEqual(peak, ceiling - 0.01)
         self.assertAlmostEqual(player.mover.position[1], 1.0, delta=STEP)
         self.assertFalse(player.mover.airborne)
+
+    def uppercut_duel(self, geometry, team, position):
+        with patch.object(bots, "make", return_value=[]):
+            player, uppercut = self.spawn(DOOMFIST, UPPERCUT, geometry)
+        match = player.match
+        in_world(match, player)
+        opponent = match.add_player(2, "Soldier", SOLDIER, team, False)
+        in_world(match, opponent)
+        self.assertTrue(match.switch_hero(opponent, opponent.hero))
+        opponent.mover.position[:] = position
+        target = next(target for target in match.combat._targets() if target.owner is opponent)
+        return player, uppercut, target, match.combat.vitals_of(target)
+
+    def uppercut_frame(self, player, frame, buttons=0):
+        self.command(player, frame, buttons=buttons)
+        player.match.update(frame * player.quanta / 1_000_000, frame, frames=False)
+
+    def test_doomfist_uppercut_damages_a_tracked_enemy_once_per_cast(self):
+        feet = (0.0, 1.0, 2.5)
+        player, uppercut, target, vitals = self.uppercut_duel(flat_world(1.0), 1, feet)
+        ability, tracker, modify_health = (uppercut.state(index) for index in (0, 9, 10))
+        cast = START + 1
+        self.uppercut_frame(player, cast, SHIFT)
+        self.assertTrue(tracker.active and modify_health.active)
+        target.owner.mover.position[:] = (0.0, 1.0, 12.0)
+        self.uppercut_frame(player, cast + 1)
+        self.assertEqual(uppercut.vars[375].value(), (Entity(target.entity),))
+        self.assertEqual(tracker.payload(), {"targets": ()})
+        target.owner.mover.position[:] = feet
+        vm = replay_values.decode(export_body_vm(player.body_script)["value"])
+        self.assertIn(["state", uppercut.id, 9], [obj["ref"] for obj in vm["objects"]])
+        settled = cast + 24
+        for frame in range(cast + 2, settled):
+            self.uppercut_frame(player, frame)
+        self.assertFalse(tracker.active or modify_health.active)
+        self.assertEqual(vitals.total, 150.0)
+        self.assertEqual(player.stats.value(stats.HERO_DAMAGE), 50.0)
+        hit = {"+0x0": {"+0x0": target.entity}, "+0x4": 50, "+0x8": 0}
+        self.assertEqual([notice["+0x78"] for notice in player.client.messages(combat.HIT)], [hit])
+
+        for frame in range(settled, cast + 480):
+            self.uppercut_frame(player, frame)
+            if not (ability.flags & nodes.Ability.RUNNING) and ability.remaining() == 0.0:
+                break
+        else:
+            self.fail("Uppercut did not finish its cooldown")
+        self.assertFalse(player.mover.airborne)
+        x, y, z = player.mover.position
+        target.owner.mover.position[:] = (x, y, z + feet[2])
+        ready = frame + 1
+        self.uppercut_frame(player, ready, SHIFT)
+        self.assertTrue(tracker.active and modify_health.active)
+        for frame in range(ready + 1, ready + 24):
+            self.uppercut_frame(player, frame)
+        self.assertEqual(vitals.total, 100.0)
+        self.assertEqual(player.stats.value(stats.HERO_DAMAGE), 100.0)
+        self.assertEqual([notice["+0x78"] for notice in player.client.messages(combat.HIT)], [hit, hit])
+
+    def test_doomfist_uppercut_ignores_friendly_distant_and_blocked_bodies(self):
+        geometry = flat_world(1.0)
+        blocked = World(FLOOR + wall(-4.0, 1.4, 4.0, 1.4))
+        cases = (
+            ("friendly", geometry, 0, (0.0, 1.0, 2.5)),
+            ("distant", geometry, 1, (8.0, 1.0, 2.5)),
+            ("blocked", blocked, 1, (0.0, 1.0, 2.5)),
+        )
+        for name, world, team, position in cases:
+            with self.subTest(target=name):
+                player, uppercut, _, vitals = self.uppercut_duel(world, team, position)
+                self.uppercut_frame(player, START + 1, SHIFT)
+                self.assertTrue(uppercut.state(9).active)
+                for frame in range(START + 2, START + 25):
+                    self.uppercut_frame(player, frame)
+                self.assertEqual(vitals.total, 200.0)
+                self.assertEqual(player.client.messages(combat.HIT), [])
 
     def test_entity_position_tracks_the_current_body_and_clears_on_retirement(self):
         hero_guid, graph_id, *_ = AUTHORED_STATES[0]

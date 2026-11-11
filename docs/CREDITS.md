@@ -116,6 +116,14 @@ The original client identifies their modifier dispatch at RVA `D2B643` and movem
 phase at `C31870`. The ordinary body direction queries use the mover pose through
 `C5E040` and `C62760`, and the direction limit evaluator is at `CEB820`.
 
+## Rising Uppercut targets and damage
+
+The local 104319 export supplies graph `0DD8`'s target filter, cast profile,
+damage amount and loadout. The original client supplies the target query and
+array update at RVA `CAE3B0`, capsule overlap at `C8E660` and sight query at
+`CA3570`. The server reuses the sight query from the integrated communication
+wheel work and the existing ORPHEUS combat pipeline.
+
 ## Wrecking Ball
 
 The local 104319 statescript export supplies the authored Quad Cannons (`1514`),

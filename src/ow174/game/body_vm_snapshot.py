@@ -23,7 +23,7 @@ _COMPONENT = frozenset((
     "entity", "frame_ms", "world", "rng", "frame", "now", "instances", "vars", "held", "button",
     "disabled", "seq", "next_id", "destroyed", "shots", "owner_dead", "fault", "_operation_depth",
     "_follow_depth", "_work_left", "strict", "code_states", "code_pending", "code_observers",
-    "state_registries", "parameter_scopes", "startup_entity_values",
+    "state_registries", "parameter_scopes", "startup_entity_values", "damage_reports",
 ))
 _INSTANCE = frozenset((
     "component", "id", "graph", "parent", "parent_state", "vars", "states", "queue", "ticking",
@@ -97,7 +97,7 @@ _STATE_LAYOUTS = {
     nodes.CosmeticEntity: ((), ("var",)),
     nodes.GamePadVibration: ((), ()), nodes.TrackTargets: (("count_var", "targets", "managed"), ()),
     nodes.TargetEffects: (("children",), ()), nodes.Effect: ((), ()),
-    nodes.ModifyHealth: (("last_applied",), ()),
+    nodes.ModifyHealth: (("last_applied", "hit_entities"), ()),
     nodes.SprayPlacement: (("placement",), ()),
     nodes.HealthPool: ((), ()),
     nodes.ClientOnlyPulser: (("pulses", "pulsed_at"), ()), nodes.ActiveQuery: ((), ()),
@@ -158,6 +158,7 @@ class _Export:
         _containers(fields, ("held", "destroyed", "shots", "code_states", "code_pending", "code_observers"),
                     list, "component")
         _containers(fields, ("parameter_scopes", "startup_entity_values"), list, "component")
+        _containers(fields, ("damage_reports",), list, "component")
         _integer(fields["entity"], "component")
         self.component = component
         self.instances = {}

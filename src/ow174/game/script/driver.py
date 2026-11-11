@@ -665,9 +665,54 @@ class BodyWorld(runtime.World):
             )
             return (target,) if target is not None else ()
 
+        if self.match is not None and state.hostile_body_profile() is not None:
+            centre = state.evaluate(state.node.field("m_05BE62DD"), watch=False)
+            origin = state.evaluate(state.node.field("m_D59188D5"), watch=False)
+            radius = state.evaluate(state.node.field("m_radius"), watch=False)
+            if not (nodes._finite_vector(centre) and nodes._finite_vector(origin)
+                    and nodes._finite_number(radius) and radius > 0):
+                return ()
+            # 002C.097 admits static category 1FDF. This tracker retains prior hits for the cast.
+            new_targets = self.match.combat.track_hostile_bodies(
+                self.body, tuple(centre), radius, tuple(origin), 0x1FDF, state.targets,
+            )
+            return state.targets + new_targets
+
         from ow174.game import mccree
 
         return mccree.targets(self, state)
+
+    def modify_health(self, state, elapsed_ms):
+        """Queue one hit per body for the supported tracked damage configuration."""
+        config = state.node.field("m_modifyHealth") or {}
+        if (self.match is None or state.node.field("m_DD792FF0") != 3
+                or config.get("m_93CDFD2F") != 1):
+            return NotImplemented
+        target = expr.lvalue(state.node.field("m_FA3ECC43"))
+        paired = expr.lvalue(state.node.field("m_B12BFE8B"))
+        if target is None or paired is None:
+            return NotImplemented
+        instance = state.instance
+        tracker = next((
+            tracker for tracker in instance.ticking
+            if isinstance(tracker, nodes.TrackTargets) and tracker.active and tracker.managed
+            and tracker.hostile_body_profile() is not None
+            and expr.lvalue(tracker.node.field("m_8A2905A0")) == target
+            and expr.lvalue(tracker.node.field("m_24A4AB8A")) == paired
+        ), None)
+        if tracker is None or state.evaluate(config.get("m_instigator"), watch=False) != Entity(self.body):
+            return NotImplemented
+        targets = tuple(entity for entity in tracker.targets if entity not in state.hit_entities)
+        if targets:
+            from ow174.game.combat import hit_def
+
+            hit = hit_def(state, {"m_modifyHealth": config})
+            if (hit is not None and math.isfinite(hit.amount) and hit.amount > 0
+                    and hit.loadout is not None and hit.loadout >> 52 == 0x0B9):
+                instance.component.damage_reports.append(
+                    (state, state.counter, targets, hit.amount, hit.loadout, hit.tags),
+                )
+        return True
 
     def target_effects(self, state):
         from ow174.game import mccree
