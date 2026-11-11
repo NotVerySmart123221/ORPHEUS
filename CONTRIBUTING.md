@@ -15,51 +15,20 @@ Use a fork and a short topic branch for a pull request. Test with your own Git a
 
 ## Public source checks
 
-### Rust
-
-Run the native source checks from the repository root with stable Rust, `rustfmt` and `clippy`. They use public synthetic fixtures.
+Run the native source checks from the repository root with stable Rust, `rustfmt` and `clippy`. They use public synthetic fixtures and match the two lanes of the [public workflow](.github/workflows/public-checks.yml).
 
 ```powershell
 cargo fmt --all -- --check
-cargo clippy --locked --workspace --all-targets -- -D warnings
-cargo test --locked --workspace --all-targets
-```
-
-The inspector's HTTP listener and web assets are opt-in. Also check this configuration when changing diagnostics, server startup or the inspector assets.
-
-```powershell
+cargo clippy --locked --workspace --all-targets --features default -- -D warnings
+cargo test --locked --workspace --all-targets --features default
 cargo clippy --locked --workspace --all-targets --features inspector -- -D warnings
 cargo test --locked --workspace --all-targets --features inspector
-```
-
-Public CI covers both configurations. The default test build covers snapshots, collision projection and worker timing. HTTP endpoint tests run with `inspector` enabled.
-
-### Python reference and dashboard
-
-These checks are optional for Rust work that leaves the reference code alone. The Python implementation and Windows launcher are maintained on the [default branch](https://github.com/leafall903/ORPHEUS/tree/main). Use 64-bit Python 3.12 and Node.js 24 for the dashboard test. Run the selected checks with `ORPHEUS_RUNTIME_DIR` unset. Broad Python test discovery can require private fixtures.
-
-```powershell
-Remove-Item Env:ORPHEUS_RUNTIME_DIR -ErrorAction SilentlyContinue
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt "ruff==0.17.3"
-$python = '.\.venv\Scripts\python.exe'
-& $python -m ruff check .
-foreach ($module in @(
-    'test_game_commands.py',
-    'test_game_link.py',
-    'test_replay_values.py',
-    'test_casc_bundle.py',
-    'test_script_expr_budget.py',
-    'test_extract_game_graphs.py'
-)) {
-    & $python -B -m unittest discover -s tests -p $module
-    if ($LASTEXITCODE) { throw "Failed: $module" }
-}
-node --test tests/test_dashboard_client.mjs
 git diff --check
 ```
 
-The [public workflow](.github/workflows/public-checks.yml) runs the source-only checks for pushes and pull requests to `rust`. Add the closest focused test for the code you changed. Report the exact commands, pass or fail results, and any skips in your pull request.
+The inspector's HTTP listener and web assets are opt-in. The default test build covers snapshots, collision projection and worker timing. HTTP endpoint tests run with `inspector` enabled. Public CI runs both lanes for pushes and pull requests to `rust`. Add the closest focused test for the code you changed. Report the exact commands, pass or fail results, and any skips in your pull request.
+
+The Python reference implementation, its tests and the data extraction tools live on [`main`](https://github.com/leafall903/ORPHEUS/tree/main). Use a separate `main` checkout when a change needs a behavioral comparison.
 
 ## Prepared runtime checks
 
@@ -74,7 +43,7 @@ cargo run --locked --bin orpheus_server -- --check-runtime
 cargo test --locked -p orpheus --lib prepared_worker_delivers -- --ignored
 ```
 
-Choose ignored tests by name and read their prerequisites. The base and enriched graph lanes differ. The [two-room benchmark](docs/NATIVE_SERVER_ARCHITECTURE.md#two-room-headless-workload) has separate opt-in settings. Some Python reference checks read research fixtures outside the public export. Report the exact test and runtime lane you used.
+Choose ignored tests by name and read their prerequisites. The base and enriched graph lanes differ. The [two-room benchmark](docs/NATIVE_SERVER_ARCHITECTURE.md#two-room-headless-workload) has separate opt-in settings. Report the exact test and runtime lane you used.
 
 ## Original-client verification
 

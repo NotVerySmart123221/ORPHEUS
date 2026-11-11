@@ -6,7 +6,7 @@ ORPHEUS 是面向 **《守望先锋 1》正式服 1.74.0.0.104319** 的独立开
 
 > **Rust 开发者预览。** 公开源码可以编译并运行合成测试。启动原生服务端需要已准备好的、获授权的 104319 基础运行数据。可公开复现的原版客户端认证流程和 Rust 一键启动器仍待完成。
 
-本分支是 Rust 版。[默认分支](https://github.com/leafall903/ORPHEUS/tree/main)包含社区维护的 Python 服务端和 Windows 启动器。
+本分支是 Rust 版，只包含原生服务端及贡献者所需的源码。[默认分支](https://github.com/leafall903/ORPHEUS/tree/main)包含社区维护的 Python 服务端（同时作为行为参考）及其 Windows 启动器、测试和数据工具。
 
 [参与贡献](CONTRIBUTING.md) · [Python/Rust 对等清单](docs/RUST_PARITY.md) · [架构](docs/NATIVE_SERVER_ARCHITECTURE.md) · [路线图](docs/ROADMAP.md) · [更新日志](CHANGELOG.md) · [待处理问题](https://github.com/leafall903/ORPHEUS/issues)
 
@@ -32,7 +32,7 @@ cd ORPHEUS
 cargo test --locked --workspace --all-targets
 ```
 
-Python 参考测试有单独的环境和指定的测试列表。运行 Python 测试发现前请先查看[贡献指南](CONTRIBUTING.md#public-source-checks)。
+[贡献指南](CONTRIBUTING.md#public-source-checks)列出了公开 CI 运行的默认和 `inspector` 两组检查。
 
 ## 启动原生服务端
 
@@ -71,7 +71,7 @@ cargo run --locked --features inspector --bin orpheus_server -- --data-dir 'C:\p
 | `rust/crates/collision` | 碰撞缓存解码、静态查询和接触求解器 |
 | `rust/crates/runtime` | 外部运行数据清单、自检和独立打包工具 |
 | `rust/tests` | 原生 CLI 集成测试 |
-| `ow174`、`tests`、`relay` | Python 行为参考和 Windows 启动器相关源码 |
-| `docs`、`tools` | 架构、验收条件和研究工具 |
+| `relay` | 连接原版客户端所需的 C++ 中继源码 |
+| `docs` | 架构、验收条件和研究记录 |
 
 ORPHEUS 是独立的非官方保存项目。公开源码保留上游 [MIT 声明](LICENSE)和[署名](CREDITS.md)。请将游戏客户端、商业资源、签名输入、内容密钥、私有日志、抓包和转储留在本地。

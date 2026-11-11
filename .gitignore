@@ -1,19 +1,10 @@
-# Python
+# Rust build output
+/target/
+
+# Python leftovers when a clone switches from main
 __pycache__/
 *.py[cod]
 .venv/
-venv/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.coverage
-htmlcov/
-*.egg-info/
-build/
-dist/
-
-# Rust build output
-/target/
 
 # Editors
 .vs/
@@ -32,7 +23,7 @@ default_account.txt
 matchmaking.json
 /game/
 
-# Map collision built from the player's own game (tools/build_collision.py)
+# Map collision built from the player's own game (tools/build_collision.py on main)
 /cache/
 
 # Logs and research output
@@ -47,14 +38,13 @@ diagnostics.txt
 backups/
 work/
 
-# Relay build output (the release DLL is downloaded by START.bat)
+# Relay build output (relay/build.bat)
 *.dll
 *.exe
 *.obj
 *.lib
 *.exp
 *.pdb
-*.pyd
 
 # Captures, dumps and disassembler databases
 data/cli_dec.bin

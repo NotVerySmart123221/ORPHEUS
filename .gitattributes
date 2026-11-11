@@ -1,5 +1,4 @@
 * text=auto eol=lf
-*.py text eol=lf
 *.md text eol=lf
 *.json text eol=lf
 *.js text eol=lf
@@ -11,4 +10,3 @@
 *.bat text eol=crlf
 *.pb binary
 data/*.json linguist-generated=true
-ow174/bnet/descriptors.pb linguist-generated=true

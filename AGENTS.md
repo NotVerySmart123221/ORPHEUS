@@ -1,7 +1,7 @@
 # ORPHEUS development workflow
 
 - Target build is Overwatch 1.74.0.0.104319. Complete the Soldier: 76 and Practice Range training-bot acceptance group before starting Doomfist. Reuse the same mechanisms and acceptance checks across heroes and maps. Prefer evidence from the target build and small changes to shared mechanisms.
-- Develop the Rust server on `rust` in its own worktree. The default branch `main` is the community-maintained Python implementation. Keep Python code in this worktree as a read-only behavioral reference.
+- Develop the Rust server on `rust` in its own worktree. The default branch `main` is the community-maintained Python implementation. The Python reference lives on `main`; use a separate `main` worktree or checkout when a behavioral comparison is needed.
 - Unattended tasks work on server code, data tools, tests, and documentation. Leave game startup, game controls, and client acceptance to the user unless the user explicitly authorizes a separate session.
 - Keep each completed change focused. Inspect the working tree, run the relevant tests and checks, and review the staged diff. Update `CHANGELOG.md` in the same commit with the change, test results, client acceptance, and remaining issues. Use an English Conventional Commit such as `fix: retire obsolete body respawn timers` and add the trailer `Assisted-by: Codex` for Codex-assisted commits.
 - Follow `docs/RUST_MIGRATION.md` when replacing an implementation. Run the locked Cargo checks for Rust changes and compare the affected behavior with the reference replay or fixture. Record external research and upstream code sources in `CREDITS.md`.
