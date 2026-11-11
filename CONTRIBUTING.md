@@ -26,7 +26,7 @@ Remove-Item Env:ORPHEUS_RUNTIME_DIR -ErrorAction SilentlyContinue
 $python = '.\.venv\Scripts\python.exe'
 & $python -B -m ruff check . --no-cache
 & $python -B -m unittest discover
-node --test tests/public/test_dashboard_client.mjs
+node --test tests/public/test_dashboard_client.mjs tests/public/test_npc_console_client.mjs
 git diff --check
 ```
 

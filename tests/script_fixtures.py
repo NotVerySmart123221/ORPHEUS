@@ -1,5 +1,8 @@
 """Synthetic statescript graph fixtures shared by both test lanes."""
 
+from types import SimpleNamespace
+from unittest.mock import patch
+
 from ow174.game.script.graph import Graph
 
 
@@ -47,3 +50,12 @@ def graph(nodes=(), entries=()):
             "sync_vars": [],
         }
     )
+
+
+def export_synthetic_component_vm(component, *, extra_roots=()):
+    """Run the real exporter with a local source stamp for synthetic graphs."""
+    from ow174.game import body_vm_snapshot
+
+    source = SimpleNamespace(read_bytes=lambda: b"ORPHEUS synthetic statescript test graphs v1")
+    with patch.object(body_vm_snapshot.graph, "GRAPHS_PATH", source):
+        return body_vm_snapshot.export_component_vm(component, extra_roots=extra_roots)

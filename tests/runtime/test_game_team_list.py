@@ -10,8 +10,6 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from test_game_server import REAPER, PretendGame, pick
-
 from ow174.game import heroselect, messages, world
 from ow174.game.bits import BitReader, BitWriter
 from ow174.game.collision import StaticCollisionProvider, flat_world
@@ -21,6 +19,7 @@ from ow174.game.match import CARD_AGAIN_TICKS, CARD_RANK, CARD_ROLE, PLAYER_CARD
 from ow174.game.server import GameServer
 from ow174.game.statescript import chunk
 from ow174.game.world import OP_CREATE, OP_DESTROY, EntityUpdate, _write_entity
+from tests.runtime.test_game_server import REAPER, PretendGame, pick
 
 ID_HIGH = 0x0100000000000000  # the high half of every lobby account id (jam.values.id16)
 PVP = dataclasses.replace(
