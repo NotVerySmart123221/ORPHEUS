@@ -2,6 +2,7 @@
 the other clients get, and the Biotic Field's entity, frame and heal; the other bodies' statescript
 (observers.py)."""
 
+import math
 import struct
 import sys
 import unittest
@@ -163,8 +164,6 @@ class HelixTests(unittest.TestCase):
     def test_the_direction_reads_back(self):
         for direction in ((0.0, 0.0, 1.0), (0.6, 0.0, 0.8), (0.0, -1.0, 0.0), (-0.48, 0.6, -0.64)):
             yaw16, pitch16 = projectiles.direction16(direction)
-            import math
-
             a = (yaw16 - 32768) * math.pi / 32768
             b = (pitch16 - 32768) * math.pi / 65536
             back = (math.sin(a) * math.cos(b), math.sin(b), math.cos(a) * math.cos(b))
@@ -173,25 +172,29 @@ class HelixTests(unittest.TestCase):
 
 
 class ProjectileRangeTests(unittest.TestCase):
+    def fire_hand_cannon(self, distance):
+        run = Run(KANEZAKA_DM, ("Shooter", "Target"))
+        shooter, victim = run.players
+        match = run.match
+        fight = match.combat
+        match.bots.clear()
+        self.assertTrue(match.switch_hero(shooter, find_hero("Doomfist")))
+        y = match.game_map.spawns[0].position[1]
+        shooter.mover.position[:] = (0.0, y, 0.0)
+        victim.mover.position[:] = (0.0, y, distance)
+        target = next(target for target in fight._targets() if target.owner is victim)
+
+        frame = shooter.body_script.frame + 1
+        shooter.body_script.command(frame, FIRE)
+        self.assertEqual(len(shooter.body_script.component.shots), 1)
+        fight.command(shooter, Command(frame, buttons=FIRE))
+        return fight, fight.vitals_of(target), frame
+
     def test_hand_cannon_direct_damage_uses_the_authored_falloff(self):
         for distance, damage in ((5.0, 6.0), (23.0, 3.9), (35.0, 1.8)):
             with self.subTest(distance=distance):
-                run = Run(KANEZAKA_DM, ("Shooter", "Target"))
-                shooter, victim = run.players
-                match = run.match
-                fight = match.combat
-                match.bots.clear()
-                self.assertTrue(match.switch_hero(shooter, find_hero("Doomfist")))
-                y = match.game_map.spawns[0].position[1]
-                shooter.mover.position[:] = (0.0, y, 0.0)
-                victim.mover.position[:] = (0.0, y, distance)
-                target = next(target for target in fight._targets() if target.owner is victim)
-                vitals = fight.vitals_of(target)
+                fight, vitals, frame = self.fire_hand_cannon(distance)
                 before = vitals.total
-
-                frame = shooter.body_script.frame + 1
-                shooter.body_script.command(frame, FIRE)
-                fight.command(shooter, Command(frame, buttons=FIRE))
                 # Isolate the centre pellet so this test covers its damage independently of spread.
                 centre = next(rocket for rocket in fight.rockets if rocket.direction == (0.0, 0.0, 1.0))
                 fight.rockets[:] = [centre]
@@ -200,6 +203,20 @@ class ProjectileRangeTests(unittest.TestCase):
 
                 self.assertFalse(fight.rockets)
                 self.assertAlmostEqual(before - vitals.total, damage, delta=0.02)
+
+    def test_hand_cannon_sweeps_all_eleven_pellets_from_one_shot(self):
+        fight, vitals, frame = self.fire_hand_cannon(2.0)
+        directions = [rocket.direction for rocket in fight.rockets]
+        angles = sorted(round(math.degrees(math.atan2(math.hypot(x, y), z)), 4) for x, y, z in directions)
+        self.assertEqual(angles, [0.0] + [1.25] * 4 + [2.5] * 6)
+        self.assertEqual(len(set(directions)), 11)
+        self.assertTrue(all(math.isclose(math.hypot(*direction), 1.0) for direction in directions))
+        self.assertFalse(fight.projectiles.shots)  # the graph uses shot synchronization without leases
+        before = vitals.total
+        for tick in range(8):
+            fight.update(20.0 + tick * combat.TICK, frame + tick, frames=False)
+        self.assertFalse(fight.rockets)
+        self.assertAlmostEqual(before - vitals.total, 66.0)
 
     def test_replacing_the_shooter_retires_the_projectiles_damage(self):
         for replace_body, expected_health in ((False, 80.0), (True, 200.0)):

@@ -93,3 +93,11 @@ This repository builds on existing Overwatch preservation work. Its lobby improv
 Thank you as well to everyone who shared captures, tools, notes, testing, corrections and encouragement, including contributors whose names were not recorded in the materials available to us. If a credit is missing or needs correcting, please open an issue so it can be fixed.
 
 Original copyright and attribution notices are retained. References to related projects acknowledge their work; their code and materials retain their respective licenses.
+
+## Doomfist Hand Cannon
+
+The 104319 volley graph defines eleven projectiles in three rings. Blizzard's patch notes
+confirm eleven pellets at six damage and a 15-metre falloff start. The same launch class uses
+a value of five for Torbjörn's secondary spread in the 104319 data, consistent with Blizzard's
+description in degrees. The native azimuth and per-pellet angle variation still need a client
+comparison. [February 2018 notes](https://us.forums.blizzard.com/en/overwatch/t/all-overwatch-patch-notes-february-8-2018/20/3) · [October 2018 notes](https://overwatch.blizzard.com/en-gb/news/patch-notes/live/2018/10/) · [September 2020 notes](https://overwatch.blizzard.com/en-us/news/patch-notes/live/2020/09/) · [July 2023 notes](https://overwatch.blizzard.com/en-us/news/patch-notes/live/2023/07/)

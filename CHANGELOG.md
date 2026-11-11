@@ -6,6 +6,16 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-11
 
+#### Doomfist Hand Cannon pellet groups
+
+- Resolve supported authored projectile rings for volleys that synchronize shots
+  without projectile leases. One Hand Cannon shot creates eleven separate collision
+  sweeps in its 1/4/6 pattern and deals 66 damage if all pellets hit at close range.
+- The server uses fixed spacing within each ring. The original per-pellet variation,
+  exact azimuth, critical hits and client feedback still need verification.
+- Passed Ruff, 170 public Python tests, two dashboard tests and 63 prepared-runtime
+  projectile, statescript and movement tests.
+
 #### Doomfist projectile damage
 
 - Apply authored distance falloff to direct projectile hits using distance travelled to

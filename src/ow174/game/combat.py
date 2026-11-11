@@ -651,12 +651,11 @@ class Combat:
                 blast is not None and blast.amount > 0.0
             )
             if damaging or shot is not None:
-                self.rockets.append(
-                    Rocket(
-                        shooter, shooter.team, origin, direction, speed, lifetime, direct, blast, shot,
+                for launch in projectiles.launch_directions(state, direction):
+                    self.rockets.append(Rocket(
+                        shooter, shooter.team, origin, launch, speed, lifetime, direct, blast, shot,
                         last_tick=self.tick if npc else None,
-                    )
-                )
+                    ))
             return
         if direct is None or direct.amount <= 0.0:
             return

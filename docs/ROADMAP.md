@@ -6,7 +6,7 @@ This branch starts from the community-maintained Python `main` and tracks Doomfi
 
 ## Doomfist acceptance
 
-- [ ] Hand Cannon. Verify pellet count and spread, direct hits and critical hits, distance falloff, ammo recovery, and owner and observer feedback. The authored centre pellet now loses damage over distance in the server test.
+- [ ] Hand Cannon. Verify pellet count and spread, direct hits and critical hits, distance falloff, ammo recovery, and owner and observer feedback. The server fires eleven projectiles in the authored 1/4/6 groups and applies distance falloff to each direct impact. The exact launch angles, critical hits and client feedback still need verification.
 - [ ] Rocket Punch. Verify charge, cancellation, release, movement, target and wall impacts, knockback, damage, and recovery. The underlying statescript stack already has a regression for the previous charge fault.
 - [ ] Rising Uppercut and Seismic Slam. Verify activation, cooldown, grounded and airborne behavior, movement through shared collision, and target damage and displacement.
 - [ ] The Best Defense and Meteor Strike. Verify shield grants, limits and decay, ultimate targeting and landing, damage and interruption.
