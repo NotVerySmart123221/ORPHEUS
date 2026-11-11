@@ -298,6 +298,35 @@ class BodyWorld(runtime.World):
             return self.match.script_owner_movement_sample(self.body)
         return None
 
+    def static_ray(self, origin: Vec3, direction: Vec3, length: float) -> runtime.RaycastResult | None:
+        match = self.match
+        if match is None or match.collision_world is None:
+            return None
+        mover = match._script_body_mover(self.body, self.body)
+        norm = math.hypot(*direction)
+        if (mover is None or not math.isfinite(norm) or norm == 0 or not math.isfinite(length)
+                or length <= 0 or not all(math.isfinite(axis) for axis in origin)):
+            return None
+        hit = match.collision_world.cast_ray(tuple(origin), tuple(axis / norm for axis in direction),
+                                             length, mover.category)
+        if hit is None:
+            return runtime.RaycastResult(False, None, None, None)
+        return runtime.RaycastResult(True, None, Vec3(*hit.point), Vec3(*hit.normal))
+
+    def raycast(self, request: runtime.RaycastRequest) -> runtime.RaycastResult | None:
+        # The authored 002C ground query uses the static collision service.
+        config = request.filter_config or {}
+        resource = config.get("m_C1903771")
+        if (not isinstance(resource, dict) or resource.get("$") != "STU_20DB8AB5"
+                or expr.guid_of(resource.get("m_C1903771")) != 0x069000000000002C
+                or resource.get("m_resourceKey") is not None
+                or request.radius != 0 or request.ignored_entities):
+            return None
+        fields = {"$", "m_C1903771", "m_EE729DCB"}
+        if any(value not in (None, 0) for key, value in config.items() if key not in fields):
+            return None
+        return self.static_ray(request.origin, request.direction, request.length)
+
     def resolve_spray(self, length: float) -> dict | None:
         if self.communication_wheel and self.match is not None:
             return self.match.resolve_body_spray(self.body, length)
@@ -316,6 +345,9 @@ class BodyWorld(runtime.World):
         if result is not NotImplemented:
             return result
         cls = cfg.get("$")
+        if cls == "STU_8CBDD81C" and self.match is not None and instance is not None:
+            entity = expr.to_entity(instance.evaluate(cfg.get("m_entity")))
+            return self.match.script_body_position(entity, self.body)
         if (cls == "STU_9B7648C3" and instance is not None and instance.graph.index == 0x1177
                 and instance.component.entity == self.body
                 and instance.evaluate(cfg.get("m_entity")) == Entity(self.body)):

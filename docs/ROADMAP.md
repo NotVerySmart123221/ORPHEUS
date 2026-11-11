@@ -18,10 +18,10 @@ verification reported by the contributor in PR #16. The changelog records integr
 
 ## Wrecking Ball acceptance
 
-- [ ] Quad Cannons. Verify firing, spread, critical hits, falloff, magazine depletion, manual and automatic reload, and ammo while switching forms. Server regressions cover held fire, torso damage, release, manual reload and authored falloff. Spread and critical hits remain open.
+- [ ] Quad Cannons. Verify firing, spread, critical hits, falloff, magazine depletion, manual and automatic reload, and ammo while switching forms. Server regressions cover held fire, torso damage, release, manual reload and authored falloff. The owner reticle follows the authored spread ramp and decay. Projectile spread direction and critical hits remain open.
 - [ ] Roll. Verify transformation in both directions, form speed, collision, weapon lockout, movement over ground and in air, and the owner and observer models. The server applies the authored ground movement profile on entry and restores the gun profile on exit.
 - [ ] Grappling Claw. Verify valid and invalid anchors, attachment, swing, release, cooldown, high-speed impacts, damage and knockback. An unattached cast can currently remain active after release.
-- [ ] Piledriver. Verify altitude and ground checks, airborne activation, descent, landing, radial damage and displacement.
+- [ ] Piledriver. Verify altitude and ground checks, airborne activation, descent, landing, radial damage and displacement. Server tests cover near-ground rejection and a full windup, descent and landing on static collision. Impact damage, displacement and original-client acceptance remain open.
 - [ ] Adaptive Shield. Verify the base grant and the contribution from nearby opponents, damage absorption, expiry, cooldown and shield HUD. Server regressions cover 100 base shield, 75 per nearby opponent, absorption, expiry and body retirement. Filter edge cases and original-client presentation remain open.
 - [ ] Minefield. Verify deployment, mine positions, arming, proximity triggers, damage, destructibility and expiry. The authored ultimate spends charge and emits three volleys, but their mine bodies are not spawned.
 - [ ] Lifecycle and presentation. Verify death, respawn, hero switching, repeated matches, HUD, animation, audio, and owner and observer updates in the original 104319 client.

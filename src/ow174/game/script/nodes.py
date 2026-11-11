@@ -2179,6 +2179,7 @@ class WeaponVolley(State):
         self.rate = 1.0
         self.spread0 = 0.0
         self.spread_ramp: float | None = None
+        self.spread = 0.0
         self.links: list[Var] = []
         self.reported = 0  # shots of this activation already put on the component's shot list
 
@@ -2225,6 +2226,9 @@ class WeaponVolley(State):
                 and launch.get("m_23C72C36") is None):
             cfg = launch.get("m_AC20B1C1")
             self.spread_ramp = f32(to_float(self.evaluate(cfg, watch=False))) if cfg else 0.0
+        self.spread = self.spread_at(self.now - self.start - self.offset)
+        if spread is not None and self.spread_ramp is not None and self.spread < 1.0:
+            self.ticks()
         self.links = []
         for slot, (name, value) in enumerate(
             (("m_24E351A4", self.ammo0), ("m_17770E7E", self.rate), ("m_3FFC9EB9", self.spread0))
@@ -2275,7 +2279,20 @@ class WeaponVolley(State):
             return self.ammo_at(self.now - self.start - self.offset)
         if slot == 1:
             return self.rate
-        return self.spread_at(self.now - self.start - self.offset)
+        return self.spread
+
+    def tick(self) -> None:
+        spread = self.spread_at(self.now - self.start - self.offset)
+        if spread == self.spread:
+            return
+        # Expressions watching the linked variable need an ordinary change event.
+        var = self._out("m_3FFC9EB9")
+        if var is not None:
+            before = var.value()
+            self.spread = spread
+            self.instance.changed(var, before)
+        if spread >= 1.0:
+            self.instance.ticking.remove(self)
 
     def spread_at(self, elapsed: int) -> float:
         """239B571E normalized spread, captured PC104319 D80A50-D80A99.
@@ -2302,6 +2319,7 @@ class WeaponVolley(State):
                 var.base = values.get(link.slot)
                 self.unlink(var)
                 self.instance.changed(var, before)
+        self.spread = values[2]
         self.links = []
 
     def payload(self) -> dict:
@@ -3923,9 +3941,7 @@ def _raycast_request(instance: Instance, node) -> RaycastRequest | None:
     )
 
 
-@handler("STU_08D6BA6E")
-def raycast_action(instance: Instance, node, caller) -> bool | NotImplementedType:
-    """Run the authored type-0 cast when a provider can complete it."""
+def _raycast(instance: Instance, node) -> bool | NotImplementedType:
     provider = instance.component.world.raycast_provider(instance, node)
     if provider is None:
         return NotImplemented
@@ -3952,8 +3968,30 @@ def raycast_action(instance: Instance, node, caller) -> bool | NotImplementedTyp
     for target, value in zip(targets, (result.hit, result.entity, result.point, result.normal), strict=True):
         if target is not None:
             instance.write(target, value)
-    instance.follow(node, "m_outPlug", None)
     return True
+
+
+@handler("STU_08D6BA6E")
+def raycast_action(instance: Instance, node, caller) -> bool | NotImplementedType:
+    """Run the authored type-0 cast when a provider can complete it."""
+    result = _raycast(instance, node)
+    if result is True:
+        instance.follow(node, "m_outPlug", None)
+    return result
+
+
+@state_class("STUStatescriptStateRayCast")
+class RayCast(State):
+    """Refresh the authored query outputs while its subgraph is active."""
+
+    def on_enter(self) -> None:
+        self.tick()
+        self.ticks()
+
+    def tick(self) -> None:
+        component = self.instance.component
+        if _raycast(self.instance, self.node) is NotImplemented and component.strict:
+            component.unsupported(self.instance, "raycast options", self.node.cls, self.node)
 
 
 @handler("STUStatescriptActionSetVar")
@@ -3980,6 +4018,10 @@ def set_var(instance: Instance, node, caller) -> bool:
 
 def store(instance: Instance, out_cfg, value, index_cfg=None, key_cfg=None) -> None:
     target = lvalue(out_cfg)
+    if target is None and index_cfg is None and key_cfg is None:
+        indexed = expr.indexed_lvalue(out_cfg)
+        if indexed is not None:
+            target, index_cfg = indexed
     if target is None:
         return
     if key_cfg is not None:

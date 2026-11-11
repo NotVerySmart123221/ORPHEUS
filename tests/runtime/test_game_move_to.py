@@ -128,9 +128,9 @@ class FixedTargetMoveToTests(unittest.TestCase):
                     player.take_commands([Command(START + 1, buttons=0x08)])
                 self.assertEqual(instance.state(state_index).move_request(), (expected, speed))
 
-    def test_doomfist_slam_selector_follows_the_owner_airborne_sample(self):
-        for jump in (False, True):
-            with self.subTest(jump=jump):
+    def test_doomfist_slam_selector_requires_airborne_clearance(self):
+        for jump, clear_ground in ((False, False), (True, False), (True, True)):
+            with self.subTest(jump=jump, clear_ground=clear_ground):
                 player, slam = self.spawn(DOOMFIST, 0x0B27, flat_world(1.0))
                 component = slam.component
                 movement = next(inst for inst in component.instances.values() if inst.graph.index == 0x01C7)
@@ -141,6 +141,11 @@ class FixedTargetMoveToTests(unittest.TestCase):
 
                 player.match.tick = START + 1
                 player.take_commands([Command(START + 1, buttons=JUMP if jump else 0)])
+                if clear_ground:
+                    # The ledge ends under the airborne player. Preserve the jump sample.
+                    geometry = flat_world(-2.5)
+                    player.match.collision_world = geometry
+                    player.mover.use(world=geometry)
                 player.match.tick = START + 2
                 player.take_commands([Command(START + 2, buttons=0x10)])  # E / Ability 2
 
@@ -148,7 +153,9 @@ class FixedTargetMoveToTests(unittest.TestCase):
                 self.assertEqual(player.mover.airborne, jump)
                 airborne = component.entity_var(417, create=False)
                 self.assertIs(airborne.value() if airborne else None, True if jump else None)
-                self.assertEqual(selector.active, jump)
+                self.assertEqual(selector.active, clear_ground)
+                if jump:
+                    self.assertIs(slam.vars[2413].value(), not clear_ground)
                 sample = (1 << 11) | (1 << 4) | (1 << 2) | 1 if jump else 1 << 1
                 self.assertEqual(
                     player.body_script.snapshot().states[(movement.id, 4)],
@@ -159,7 +166,7 @@ class FixedTargetMoveToTests(unittest.TestCase):
                 self.assertEqual(dict(saved["fields"])["sample"], sample)
 
                 if jump:
-                    self.commands(player, range(START + 3, START + 60))
+                    self.commands(player, range(START + 3, START + 100))
                     self.assertFalse(player.mover.airborne)
                     self.assertIs(airborne.value(), False)
                     self.assertFalse(selector.active)

@@ -10,6 +10,8 @@ from tests.runtime.test_game_combat import KANEZAKA_DM, Run, aim
 WRECKING_BALL = 0x02E00000000001CA
 QUAD_CANNONS = 0x1514
 AMMO = 53
+SPREAD = 231
+HUD_SPREAD = 243
 RELOAD = 0x400
 
 
@@ -50,6 +52,39 @@ class WreckingBallCannonsTests(unittest.TestCase):
 
         self.advance(1, FIRE)
         self.assertEqual((self.weapon.vars[AMMO].value(), self.vitals.total), (79, 175.0))
+
+    def test_held_primary_updates_owner_spread_and_recovers_on_release(self):
+        body = self.ball.body_script
+        hud = body.component.entity_var(HUD_SPREAD)
+        spread = self.weapon.vars[SPREAD]
+        baseline = body.snapshot()
+        self.assertEqual(hud.value(), 0.0)
+
+        self.advance(9, FIRE)
+        self.assertEqual(self.weapon.vars[AMMO].value(), 76)
+        self.assertAlmostEqual(spread.value(), 0.2)
+        self.assertAlmostEqual(hud.value(), 0.4)
+        _, keys, sent = body.delta(baseline, set(), cmfd=1, correction=False)
+        self.assertIn(("var", 0, HUD_SPREAD), keys)
+        self.assertAlmostEqual(sent.vars[(0, HUD_SPREAD)][0], 0.4)
+
+        self.advance(41, FIRE)
+        self.assertEqual(self.weapon.vars[AMMO].value(), 60)
+        self.assertEqual((spread.value(), hud.value()), (1.0, 2.0))
+
+        self.advance(13)
+        self.assertTrue(self.weapon.state(5).active)
+        self.assertEqual(hud.value(), 2.0)
+        self.advance(4)
+        recovering = spread.value()
+        self.assertAlmostEqual(recovering, 1.0 - 4.0 * 0.064, places=3)
+        self.assertAlmostEqual(hud.value(), 2.0 * recovering)
+
+        self.advance(1, FIRE)
+        self.assertAlmostEqual(spread.value(), recovering + 0.05)
+        self.assertAlmostEqual(hud.value(), 2.0 * (recovering + 0.05))
+        self.advance(55)
+        self.assertEqual((spread.value(), hud.value()), (0.0, 0.0))
 
     def test_primary_uses_authored_damage_falloff(self):
         volley = self.weapon.state(9)

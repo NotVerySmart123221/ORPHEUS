@@ -6,6 +6,20 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-11
 
+#### Wrecking Ball reticle and Piledriver movement
+
+- Notify linked graph variables as Quad Cannons spread grows during sustained fire.
+  The owner receives 0.4 degrees at four shots and 2 degrees at twenty. Release
+  and renewed fire use the authored decay and the remaining spread.
+- Run the authored downward clearance query against static map collision.
+  Piledriver rejects activation near the floor and completes its windup, descent
+  and collision landing from sufficient height. Seismic Slam uses the same query
+  with its own authored distance.
+- Passed 918 public Python tests, six dashboard tests, Ruff and 66 targeted
+  checks covering 104319 movement, reticle spread and VM snapshots.
+- Original-client acceptance, projectile spread direction, Piledriver impact
+  damage and displacement remain open.
+
 #### Rising Uppercut target damage
 
 - Resolve the authored Uppercut sphere against live opposing player and NPC

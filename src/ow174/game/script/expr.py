@@ -586,6 +586,26 @@ def lvalue(cfg) -> tuple[int, int] | None:
     return None
 
 
+def indexed_lvalue(cfg) -> tuple[tuple[int, int], int] | None:
+    """Resolve an authored variable followed by a constant MEMBER_BY_INDEX."""
+    if not isinstance(cfg, dict) or cfg.get("$") not in EXPRESSIONS:
+        return None
+    code, dynamics, floats = _parts(cfg)
+    if len(code) != 6 or code[0] not in (8, 9) or code[2] != 6 or code[4:] != [17, 0]:
+        return None
+    slot, literal = code[1], code[3]
+    if type(slot) is not int or not 0 <= slot < len(dynamics):
+        return None
+    if type(literal) is not int or not 0 <= literal < len(floats):
+        return None
+    target = dynamic(dynamics[slot])
+    index = floats[literal]
+    if target is None or type(index) not in (int, float) or not math.isfinite(index):
+        return None
+    index = to_int(index)
+    return (target, index) if index >= 0 else None
+
+
 # --- the bytecode --------------------------------------------------------------------------------
 
 
