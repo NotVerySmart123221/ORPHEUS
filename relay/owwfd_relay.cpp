@@ -234,7 +234,9 @@ static void scan(){
         a = rb + rs;
     }
 }
-static DWORD WINAPI worker(LPVOID){
+extern "C" __declspec(dllexport) DWORD WINAPI worker(LPVOID){
+    static volatile LONG s_started = 0;
+    if (InterlockedCompareExchange(&s_started, 1, 0) != 0) return 0;
     InitializeCriticalSection(&g_cs);InitializeCriticalSection(&g_mapCs);
     wchar_t modulePath[32768] = {};
     DWORD pathLength = GetModuleFileNameW(g_module, modulePath, 32768);
