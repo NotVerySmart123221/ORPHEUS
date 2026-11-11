@@ -131,6 +131,11 @@ A second run the same day, after the bots were given controllers:
 - The hero select screen was unchanged: it listed no bots.
 - Still no name and no health bar over the bot, and still no kill feed line.
 
+A later run found one reason for both: the runtime pack held no statescript for the bot bodies,
+so the server ran none of their graphs and sent no `0C18` or `0D24`
+([kill feed note](kill-feed.md#seen-live-against-orpheus)). The checklist above still waits for
+a run with a pack that holds them.
+
 ## Open
 
 - Whether the client starts `0D24` state 35 by itself in the authored flow.

@@ -6,6 +6,17 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Kill feed note: why a bot kill drew no line
+
+- Recorded a fourth client run in `docs/research/kill-feed.md`. A statescript tracer in the
+  original client showed the kill feed's two gates open and no `0C18` graph on any bot. The
+  server had made no body script for the bots: the runtime pack's graph bundle had no `entities`
+  table, so `graph.entity_body` found no bot body. The pack was made from the standard hero
+  bundle.
+- No code changed. The bundle that adds the six Practice Range bot bodies is described in
+  `data/README.md`. A client run with such a pack is still pending, for the kill feed line and
+  for the overhead name and health widget.
+
 #### Tab board in the Practice Range
 
 - The game mode entity of a Practice Range match now carries the mode's own graph `13C0` with

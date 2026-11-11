@@ -173,13 +173,35 @@ as its child and `0CB6`'s remote state off, bit for bit the frame of the service
 draws ([Tab board note](tab-board.md#compared-with-orpheus)). Four kills, the notice named:
 still no kill feed line. So how `0CB6` sits on the mode entity is not the cause either.
 
+A fourth run found where the chain stops. The server logged its bot death path, and a
+statescript tracer plugin ran in the client (`offline/tools/asi/tracer.c`, loaded into the
+running game with `offline/tools/asi/load_asi.py`). Seven bot kills:
+
+- **The client's gates were open.** In `0DEA`, `STU_016D65A8` evaluated to 1, and
+  `STU_A77AC2AC`, `STU_0D179CAF` and `STU_33C5B1DE` to 0: the values of the service where the
+  feed draws.
+- **The client never held `0C18`.** The tracer logged no state of that graph in the whole
+  session.
+- **The server never queued a bot death frame.** `Combat._bot_died` returned at its first
+  check: the bot had no body script.
+- **The runtime pack held no definition for the bot bodies.** `graph.entity_body` reads the
+  graph bundle's optional `entities` table, and the pack's bundle had none. It also lacked
+  graphs `0BA3`, `0BA8`, `0BE2`, `0C18` and `174F`. `Match._prepare_bot_script` then makes no
+  script and says nothing.
+
+So the cause was the pack and not the code. The standard graph bundle covers the hero bodies
+only. [data/README.md](../../data/README.md#additional-statescript-definitions) describes the
+bundle that adds the six Practice Range bot bodies (`1403`, `143E`, `146E`, `14A9`, `14D2` and
+`14ED`). It is made from a DataTool XML dump of the client's `003` and `01B` assets. The
+overhead name and health widget hangs from the same graphs
+([nameplate note](bot-nameplates-and-hit-feedback.md)), so the same pack explains its absence.
+
 ## Open
 
-- Where the chain stops for a bot kill on ORPHEUS now that the option arrives and the body has
-  a name: whether the bot's fresh pulser goes out, and what the client's `0C18` and `0DEA` do
-  with it. A statescript tracer on the client would tell.
+- A bot kill on ORPHEUS with a pack that holds the bot bodies: whether the line then draws.
+  Every run above used a pack without them.
 - The meaning of `STU_0D179CAF` and `STU_CEFF290A`.
 - A line's critical-hit mark, ability icon and assists (the other `003E.025` parameters) were
   not exercised.
-- The tools used for the live reads, a statescript tracer plugin and a read-only memory reader,
-  are not in this repository.
+- The read-only memory reader used for the first live reads is not in this repository. The
+  tracer plugin's source is, under `offline/tools/asi`.

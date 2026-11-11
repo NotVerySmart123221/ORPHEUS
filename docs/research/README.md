@@ -33,7 +33,7 @@ base `0x7FF788F10000`, so offset `0xA0D4F0` here is `0x7FF78991D4F0` there.
 
 | Note | What it settles | What ORPHEUS can take from it |
 | --- | --- | --- |
-| [Kill feed](kill-feed.md) | The client-side gates between a body's death message and a drawn kill feed line. | The login settings left the gating option at zero for a new profile. They now default it on, but a first client check still drew no line for a bot kill. |
+| [Kill feed](kill-feed.md) | The client-side gates between a body's death message and a drawn kill feed line. | The login settings left the gating option at zero for a new profile. They now default it on. A bot kill drew no line because the runtime pack held no statescript for the bot bodies; a run with such a pack is pending. |
 | [Bot nameplates and hit feedback](bot-nameplates-and-hit-feedback.md) | What the overhead name and health widget, the hit marker and the elimination notice each need from the server. | Bots now have controllers and the elimination notice names them. A checklist for the pending client check of the `0D24` presenter, and a confirmation of the hit flag. |
 | [Tab board](tab-board.md) | Why the scoreboard key does nothing, and the layout of the board's numbers. | Done for the Practice Range: the board opens with names, numbers and medals. Other modes still lack their mode graph. |
 | [Shot origin and client position](shot-origin-and-client-position.md) | Per-hero eye heights, the click aim and view delay, and how to read the client's own position. | Eye heights for the other heroes, and a way to measure drift between server and client. |
