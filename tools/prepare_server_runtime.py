@@ -16,7 +16,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ow174.game.casc import CascError, game_root
 from ow174.game.content import PRACTICE_RANGE
 from ow174.game.props import PropError
-from ow174.paths import CLIENT_CATALOGS, LOBBY_RUNTIME_DATA, MATCH_RUNTIME_DATA, ROOT, ULT_CHARGE_OVERRIDE
+from ow174.paths import (
+    CLIENT_CATALOGS,
+    EMOTE_ALIAS_DATA,
+    EMOTE_BLEND_TREE_DATA,
+    EMOTE_CLIP_DATA,
+    EMOTE_DURATION_DATA,
+    EMOTE_SCALAR_DATA,
+    EMOTE_TAGGED_DATA,
+    GREETING_DURATION_DATA,
+    LOBBY_RUNTIME_DATA,
+    MATCH_RUNTIME_DATA,
+    ROOT,
+    ULT_CHARGE_OVERRIDE,
+    VOICE_EFFECT_DATA,
+    WHEEL_POSE_DATA,
+)
 from tools.prepare_client_catalogs import prepare_catalogs, require_target_build
 from tools.prepare_client_gameplay import XML_TYPES, export_xml, prepare_gameplay
 from tools.prepare_map_data import write_collision_index, write_practice_map, write_practice_props
@@ -55,6 +70,17 @@ def prepare(
     charge_override = source / "data" / ULT_CHARGE_OVERRIDE
     if charge_override.is_file():
         inputs[f"data/{ULT_CHARGE_OVERRIDE}"] = charge_override
+    for name in (EMOTE_ALIAS_DATA, EMOTE_BLEND_TREE_DATA, EMOTE_CLIP_DATA, EMOTE_DURATION_DATA,
+                 EMOTE_SCALAR_DATA, EMOTE_TAGGED_DATA, GREETING_DURATION_DATA, VOICE_EFFECT_DATA):
+        metadata = source / "data" / name
+        if metadata.is_file():
+            inputs[f"data/{name}"] = metadata
+    if f"data/{EMOTE_CLIP_DATA}" in inputs:
+        for group, extension in (("models", "00C"), ("clips", "006")):
+            folder = source / "data" / WHEEL_POSE_DATA / group
+            for asset in folder.glob(f"*.{extension}"):
+                if asset.is_file() and re.fullmatch(rf"[0-9A-F]{{12}}[.]{extension}", asset.name):
+                    inputs[f"data/{WHEEL_POSE_DATA}/{group}/{asset.name}"] = asset
     if game_graphs is not None:
         inputs["data/game_graphs_174.json.gz"] = game_graphs
     inputs["bnet/descriptors.pb"] = source / "ow174" / "bnet" / "descriptors.pb"

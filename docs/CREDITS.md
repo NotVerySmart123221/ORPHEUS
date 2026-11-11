@@ -125,3 +125,12 @@ enemy and nine-second duration.
 [July 2018 notes](https://overwatch.blizzard.com/en-us/news/patch-notes/live/2018/07/) ·
 [January 2021 notes](https://overwatch.blizzard.com/en-us/news/patch-notes/live/2021/01/) ·
 [August 2021 notes](https://overwatch.blizzard.com/en-us/news/patch-notes/live/2021/08/)
+
+## Python hero and PvE integration
+
+[zichao-zhou](https://github.com/zichao-zhou) submitted the Rialto PvE and McCree
+foundation together with scoped Ana, Mei, Winston, Pharah and shared Genji work.
+The contribution was imported from [PR #16](https://github.com/leafall903/ORPHEUS/pull/16)
+at `0b262c33844fd3263fa63dd81f0251b4a579f2be`. The import credits the PR contributor.
+The [candidate verification record](HERO_SERVER_ACCEPTANCE.md) documents the original
+coverage and the work still pending.

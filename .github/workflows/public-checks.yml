@@ -38,4 +38,4 @@ jobs:
         shell: pwsh
         run: python -B -m unittest discover
       - name: Run dashboard JavaScript tests
-        run: node --test tests/public/test_dashboard_client.mjs
+        run: node --test tests/public/test_dashboard_client.mjs tests/public/test_npc_console_client.mjs

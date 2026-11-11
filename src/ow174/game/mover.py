@@ -41,8 +41,8 @@ command frame (dt = 16 ms), main tick 0x7FF789B4B1D0:
 The hero's values are its body's STUCharacterMoverComponent (data/game_movers_174.json), changed each tick
 by the movement mods the body's statescript has on (0x7FF789B4CBA0, see `modded`): Soldier: 76's Sprint
 adds 0.5 to the speed scalar (run speeds x 1.5) and sets the crouch intent to 0. Not modelled: mods of
-heroes whose statescript the server does not run, the throttle mods (17-19), other velocity modes and
-knockback, abilities that take over the move (the tick's phase hooks), moving platforms, other bodies.
+heroes whose statescript the server does not run, other velocity modes and knockback, abilities that
+take over the move (the tick's phase hooks), moving platforms, and other bodies.
 The capsule rests 5 mm out of a wall (the engine's contact skin), not touching it.
 
 Besides the pose it keeps what other clients animate the body from, as the client's own mover writes it
@@ -61,7 +61,7 @@ from dataclasses import dataclass, fields, replace
 from functools import cache, cmp_to_key
 
 from ow174.game import contacts
-from ow174.game.collision import MOVER, NOT_GROUND, Ground, World, flat_world
+from ow174.game.collision import MOVER, NOT_GROUND, TEAM0, TEAM1, Ground, World, flat_world
 from ow174.game.commands import CROUCH, JUMP, SUBFRAME, Command
 from ow174.game.world import MAX_MOVEMENT_AXIS
 from ow174.paths import DATA_DIR
@@ -169,6 +169,7 @@ ADD, MULTIPLY, SET, MINIMUM, MAXIMUM, CLAMP = range(6)
 SPEED, ACCEL_GROUND, ACCEL_AIR, ACCEL_TOUCHING, DECEL_GROUND, DECEL_GROUND_BASE, DECEL_GROUND_SPEED = range(7)
 DECEL_AIR, DECEL_AIR_BASE, DECEL_AIR_SPEED, JUMP_SPEED_MOD, GRAVITY_MOD = range(7, 12)
 TERMINAL, TERMINAL_UP, GROUND_ACCEL, GROUND_DECEL = 13, 14, 15, 16
+THROTTLE_FORWARD, THROTTLE_BACKWARD, THROTTLE_LATERAL = 17, 18, 19
 JUMP_INTENT, CROUCH_INTENT, COLLISION_MOD, LAND_LIMIT_MOD, STEP_DOWN_MOD = 20, 21, 22, 36, 38
 VELOCITY_MAGNITUDE, VELOCITY_HORIZONTAL, VELOCITY_Y, VELOCITY_JUMP_RATIO = range(32, 36)
 VELOCITY_WORLD_DELTA = -1  # internal index for an authored mode 1 vector
@@ -214,6 +215,46 @@ ABYSS = 100.0  # m below the map's lowest surface where a falling body stops (po
 REPEAT = 32  # missing command frames run with the last command; as many again without its keys
 
 
+def movement_sample_flags(
+    flags: int, velocity: tuple[float, float, float], throttles: tuple[int, int],
+) -> int | None:
+    """Project a regular movement pose into the statescript 13-bit sample."""
+    # These modes need movement records the current mover does not simulate.
+    if flags & (0x20 | 0x80):
+        return None
+    x, y, z = map(f32, velocity)
+    if not all(map(math.isfinite, (x, y, z))):
+        return None
+    airborne = bool(flags & IN_AIR)
+    float_epsilon = 2 ** -23
+    vertical_threshold = 100.0 * float_epsilon
+    speed_squared = f32(f32(f32(x * x) + f32(y * y)) + f32(z * z))
+    return (
+        airborne
+        | (not airborne) << 1
+        | (y > vertical_threshold) << 2
+        | (y < -vertical_threshold) << 3
+        | (speed_squared > 10.0 * float_epsilon) << 4
+        | any(throttles) << 5
+        | bool(flags & CROUCHED) << 6
+        | bool(flags & NOT_GROUND_UNDER) << 9
+        | bool(flags & JUMPED) << 11
+    )
+
+
+def encode_spring(offsets: tuple[float, float], low: float, high: float) -> tuple[int, int]:
+    """Encode two offsets on the client's 1/32768 spring grid."""
+    span = f32(high - low)
+    if span <= TINY:
+        return 0, 0
+    inverse = f32(1.0 / span)
+    steps = []
+    for value in offsets:
+        fraction = min(1.0, max(0.0, f32(f32(value - low) * inverse)))
+        steps.append(math.floor(f32(fraction * SPRING_STEPS + 0.5)) & 0xFFFF)
+    return steps[0], steps[1]
+
+
 @dataclass(frozen=True)
 class MoverData:
     """A body's STUCharacterMoverComponent (the client keeps it at mover +0x418 + the field's offset)."""
@@ -252,6 +293,33 @@ class MoverData:
     ground_gravity_accel: float = 0.0
     ground_gravity_decel: float = 0.0
     character_collision: int = 1
+
+    def spring_range(self) -> tuple[float, float]:
+        """The client's spring offset range at mover +0x4F8 and +0x4FC."""
+        lowest = max(self._stance_height(False) + self.stand_pogo,
+                     self._stance_height(True) + self.crouch_pogo)
+        return f32(-lowest), f32(2.0 * self.step_down)
+
+    def _stance_height(self, crouched: bool) -> float:
+        height = f32(self.crouch_height if crouched else self.stand_height)
+        pogo = f32(self.crouch_pogo if crouched else self.stand_pogo)
+        radius = max(SHAPE_SMALLEST, f32(self.crouch_radius if crouched else self.stand_radius))
+        minimum = f32(f32(pogo + f32(radius + radius)) + f32(radius * SEGMENT_PART))
+        return max(height, minimum)
+
+    def capsule(self, crouched: bool = False, *, limit_ai_size: bool = False) -> tuple[float, float]:
+        """Return radius and segment length using the client's float32 shape setup."""
+        radius = f32(self.crouch_radius if crouched else self.stand_radius)
+        height = f32(self.crouch_height if crouched else self.stand_height)
+        pogo = f32(self.crouch_pogo if crouched else self.stand_pogo)
+        if limit_ai_size:
+            # The 104319 component-86 branch caps the already normalized stance.
+            radius = min(radius, 0.5)
+            height = min(self._stance_height(crouched), 2.0)
+        r = SHAPE_SMALLEST if radius < SHAPE_SMALLEST else radius
+        rest = f32(height - f32(pogo + f32(radius + radius)))
+        part = f32(r * SEGMENT_PART)
+        return r, (part if part > rest else rest)
 
 
 # Field hash -> name, in the component's order (STU offset 0x18 = mover +0x430 ... 0xB1 = +0x4C9).
@@ -449,6 +517,18 @@ def intent(mods: list[Mod], index: int, value: float) -> float:
     return value
 
 
+def modified_throttles(mods: list[Mod], right: float, forward: float) -> tuple[float, float]:
+    """C33960..C33A85: split forward/back, unsigned lateral, restore sign, clamp."""
+    if not any(mod.index in (THROTTLE_FORWARD, THROTTLE_BACKWARD, THROTTLE_LATERAL) for mod in mods):
+        return right, forward
+    ahead = intent(mods, THROTTLE_FORWARD, max(0.0, forward))
+    back = intent(mods, THROTTLE_BACKWARD, -min(0.0, forward))
+    lateral = intent(mods, THROTTLE_LATERAL, abs(right))
+    if right < 0:
+        lateral = -lateral
+    return max(-1.0, min(1.0, lateral)), max(-1.0, min(1.0, f32(ahead - back)))
+
+
 def _number(instance, cfg, default: float) -> float:
     if cfg is None:
         return default
@@ -544,17 +624,13 @@ HISTORY = 64  # command frames of snapshots kept (the client keeps 64 predicted 
 
 
 def capsule_dimensions(data: MoverData, crouched: bool) -> tuple[float, float]:
-    """The stance capsule's radius and distance between sphere centres, in float32."""
-    radius = f32(data.crouch_radius if crouched else data.stand_radius)
-    height = f32(data.crouch_height if crouched else data.stand_height)
-    pogo = f32(data.crouch_pogo if crouched else data.stand_pogo)
-    radius_clamped = SHAPE_SMALLEST if radius < SHAPE_SMALLEST else radius
-    rest = f32(height - f32(pogo + f32(radius + radius)))
-    part = f32(radius_clamped * SEGMENT_PART)
-    return radius_clamped, (part if part > rest else rest)
+    """The stance capsule radius and distance between sphere centres."""
+    return data.capsule(crouched)
 
 
 class Mover:
+    peer_mask = MOVER
+
     def __init__(
         self,
         position,
@@ -601,9 +677,7 @@ class Mover:
         # The probe's own float32 cosine (0x7FF789ACEE40, cosf): the disc's ground test.
         self.slope_cos32 = f32(math.cos(max(min(f32(data.max_slope * DEGREE), SLOPE_LIMIT), 0.0)))
         # The spring offset's range (mover +0x4F8 / +0x4FC, set at 0x7FF789AD0BD1).
-        lowest = max(data.stand_height + data.stand_pogo, data.crouch_height + data.crouch_pogo)
-        self.spring_low = f32(-lowest)
-        self.spring_high = f32(2.0 * data.step_down)
+        self.spring_low, self.spring_high = data.spring_range()
 
     def use(self, data: MoverData | None = None, world: World | None = None) -> None:
         """Take another hero's values (a hero switch), or the map's collision once it is loaded."""
@@ -632,6 +706,15 @@ class Mover:
                 mod.end = frame + 1
             elif mod.end is not None and mod.end <= frame:
                 del self.mods[key]  # the mover's next tick is frame + 1
+
+    def set_same_team_contact(self, team: int, enabled: bool) -> None:
+        team_bit = (TEAM0, TEAM1)[team] if team in (0, 1) else 0
+        if enabled or not team_bit:
+            self.__dict__.pop("peer_mask", None)
+        else:
+            self.peer_mask = MOVER & ~team_bit
+        if self.body is not None:
+            self.body.set_peer_mask(self.peer_mask)
 
     def queue_velocity_changes(
         self, frame: int, source: tuple[int, int], changes: tuple[VelocityChange, ...],
@@ -678,29 +761,7 @@ class Mover:
         return bool(self.flags_word & IN_AIR)
 
     def movement_sample(self) -> int | None:
-        """Project a regular movement pose into the statescript's 13-bit sample."""
-        flags = self.flags_word
-        # These modes need movement records the current mover does not simulate.
-        if flags & (0x20 | 0x80):
-            return None
-        x, y, z = map(f32, self.velocity)
-        if not all(map(math.isfinite, (x, y, z))):
-            return None
-        airborne = bool(flags & IN_AIR)
-        float_epsilon = 2 ** -23
-        vertical_threshold = 100.0 * float_epsilon
-        speed_squared = f32(f32(f32(x * x) + f32(y * y)) + f32(z * z))
-        return (
-            airborne
-            | (not airborne) << 1
-            | (y > vertical_threshold) << 2
-            | (y < -vertical_threshold) << 3
-            | (speed_squared > 10.0 * float_epsilon) << 4
-            | (self.throttles != (0, 0)) << 5
-            | bool(flags & CROUCHED) << 6
-            | bool(flags & NOT_GROUND_UNDER) << 9
-            | bool(flags & JUMPED) << 11
-        )
+        return movement_sample_flags(self.flags_word, self.velocity, self.throttles)
 
     @property
     def gravity_scale(self) -> float:
@@ -737,7 +798,7 @@ class Mover:
         (0x7FF789B4C3D0, 0x7FF789B45822; body scale 1): r = max(0.02, radius), segment = max(0.1 r,
         height - (pogo + 2 radius))."""
         crouched = self.crouched if crouched is None else crouched
-        return capsule_dimensions(self.data, crouched)
+        return self.data.capsule(crouched)
 
     def _lift(self) -> float:
         """The capsule's lowest point above the feet: pogo * min(scale, 1) + the spring offset (float32)."""
@@ -748,7 +809,7 @@ class Mover:
         if self.body is None:
             radius, segment = self._capsule()
             body = contacts.CharacterBody(radius, f32(segment + radius), world=self.world.engine,
-                                          category=self.category)  # fmt: skip
+                                          category=self.category, peer_mask=self.peer_mask)  # fmt: skip
             x, y, z = self.position
             body.teleport((x, f32(y + self._lift()), z))
             self.body = body
@@ -828,6 +889,7 @@ class Mover:
             self.input_tick = tick
             self.input_frame = frame
 
+        right, forward = modified_throttles(active, right, forward)
         outcome = None
         if move_to is None:
             normal = ground.normal if grounded and ground is not None else (0.0, 1.0, 0.0)
@@ -1133,13 +1195,14 @@ class Mover:
             self.spring = self.spring2 = 0.0
             self.spring_steps = (0, 0)
             return
-        inverse = f32(1.0 / span)
-        steps = []
-        for value in (self.spring, self.spring2):
-            fraction = min(1.0, max(0.0, f32(f32(value - low) * inverse)))
-            steps.append(math.floor(f32(fraction * SPRING_STEPS + 0.5)) & 0xFFFF)
-        self.spring_steps = (steps[0], steps[1])
-        self.spring, self.spring2 = (f32(f32(span * (step / SPRING_STEPS)) + low) for step in steps)
+        self.spring_steps = self.movement_spring()
+        self.spring, self.spring2 = (
+            f32(f32(span * (step / SPRING_STEPS)) + low) for step in self.spring_steps
+        )
+
+    def movement_spring(self) -> tuple[int, int]:
+        """Encode the current offsets, including before the first posed move."""
+        return encode_spring((self.spring, self.spring2), self.spring_low, self.spring_high)
 
     # ---- 7. velocity
 

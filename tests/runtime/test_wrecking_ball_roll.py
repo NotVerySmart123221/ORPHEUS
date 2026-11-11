@@ -3,12 +3,11 @@
 import math
 import unittest
 
-from test_game_combat import in_world
-
 from ow174.game.collision import StaticCollisionProvider, flat_world
 from ow174.game.commands import CROUCH, Command
 from ow174.game.content import PRACTICE_RANGE, heroes
 from ow174.game.match import Match
+from tests.runtime.test_game_combat import in_world
 
 WRECKING_BALL = 0x02E00000000001CA
 ABILITY_1 = 0x08

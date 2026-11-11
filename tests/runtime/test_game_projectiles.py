@@ -14,10 +14,6 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from test_game_combat import KANEZAKA_DM, Run
-from test_game_packet_budget import MemorySocket, decoded
-from test_game_world import read_movement
-
 from ow174.game import bodytrace, bots, combat, movelog, observers, projectiles, world
 from ow174.game.bits import BitReader
 from ow174.game.commands import FIRE, Command
@@ -28,6 +24,9 @@ from ow174.game.script.decode import ClientBody, read_chunk
 from ow174.game.script.driver import Snapshot
 from ow174.game.server import Client, GameServer
 from ow174.game.world import HEALTH_POOL, OP_CREATE, OP_DESTROY
+from tests.runtime.test_game_combat import KANEZAKA_DM, Run
+from tests.runtime.test_game_packet_budget import MemorySocket, decoded
+from tests.runtime.test_game_world import read_movement
 
 HELIX, HELIX_VISOR, CANISTER = 0x040000000000072C, 0x0400000000001C86, 0x040000000000072D
 SECONDARY, ABILITY_1, ABILITY_2, ULTIMATE = 0x02, 0x08, 0x10, 0x20
@@ -877,10 +876,10 @@ class ObserverProjectileDeliveryTests(unittest.TestCase):
         self.client.queue_entities([self.match._bot_create_update(bot)])
         return bot, state
 
-    def fire_npc(self, bot, state, *, snapshot=None):
+    def fire_npc(self, bot, state, *, snapshot=None, definition=HELIX):
         self.shot_frame = self.tick + 1
         return self.fight.projectiles.fired(
-            bot, state, self.shot_frame, HELIX, 2.0, (0.0, 0.0, 0.0), (0.0, 0.0, 1.0),
+            bot, state, self.shot_frame, definition, 2.0, (0.0, 0.0, 0.0), (0.0, 0.0, 1.0),
             activation=(state.counter, state.start), snapshot=snapshot,
         )
 
@@ -1004,6 +1003,63 @@ class ObserverProjectileDeliveryTests(unittest.TestCase):
         delta = read_chunk(chunk.getvalue(), chunk.count, self.known)
         self.assertEqual(delta.instances[state.instance.id].states[state.index][1]["counter"], 2)
         self.ack()  # reports loss of the canceled launch
+        self.assertFalse(any(item.ch2 is not None for item in self.send()))
+
+    def sniper_ack_after_natural_end(self):
+        bot, state = self.npc_source()
+        for _ in range(2):
+            self.send()
+            self.ack()
+        snapshot = self.npc_snapshot(state)
+        shot = self.fire_npc(bot, state, snapshot=snapshot, definition=0x0400000000001E80)
+        self.client.queue_bot_live(bot.entity, snapshot)
+        self.assertEqual(self.projectile_ops(self.send()), [OP_CREATE])
+        self.ack()
+        self.advance_delivery()
+        self.assertTrue(any(item.ch2 is not None for item in self.send()))
+        self.fight.projectiles.flown(shot, 0.08)
+        self.ack()
+        self.advance_delivery()
+        self.assertEqual(self.projectile_ops(self.send()), [])
+        self.ack()
+        return bot
+
+    def test_sniper_natural_end_allows_late_launch_to_finish_visual_flight(self):
+        self.sniper_ack_after_natural_end()
+        self.advance_delivery(4)
+        self.assertEqual(self.projectile_ops(self.send()), [])
+        self.ack()
+        self.advance_delivery()
+        self.assertEqual(self.projectile_ops(self.send()), [OP_DESTROY])
+        self.assertFalse(self.fight.projectiles.observed)
+
+    def test_sniper_stop_overrides_the_natural_visual_flight(self):
+        bot = self.sniper_ack_after_natural_end()
+        self.fight.cancel_npc_projectiles(bot)
+        self.assertEqual(self.projectile_ops(self.send()), [OP_DESTROY])
+        self.assertFalse(self.fight.projectiles.observed)
+
+    def test_cancel_npc_retires_a_draining_launch_without_retrying_it(self):
+        bot, state = self.npc_source()
+        for _ in range(2):
+            self.send()
+            self.ack()
+        snapshot = self.npc_snapshot(state)
+        shot = self.fire_npc(bot, state, snapshot=snapshot)
+        self.client.queue_bot_live(bot.entity, snapshot)
+        self.assertEqual(self.projectile_ops(self.send()), [OP_CREATE])
+        self.ack()
+        self.advance_delivery()
+        self.assertTrue(any(item.ch2 is not None for item in self.send(lose=True)))
+        self.fight.projectiles.flown(shot, 0.08)
+
+        self.fight.cancel_npc_projectiles(bot)
+        self.assertFalse(self.fight.projectiles.observed)
+        self.assertFalse(self.client._bot_scripts[bot.entity].volleys)
+        retired = self.send()
+        self.assertEqual(self.projectile_ops(retired), [OP_DESTROY])
+        self.assertFalse(any(item.ch2 is not None for item in retired))
+        self.ack()
         self.assertFalse(any(item.ch2 is not None for item in self.send()))
 
     def test_npc_launch_acks_order_volley_activations_through_backlog(self):

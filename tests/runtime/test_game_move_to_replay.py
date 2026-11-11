@@ -4,12 +4,12 @@ import unittest
 from unittest.mock import patch
 
 import test_server_journal as journal_tests
-from test_game_graph_analysis import make_graph, node, output
 
 from ow174.game.commands import JUMP
 from ow174.game.content import SOLDIER
 from ow174.game.script import graph, nodes
 from ow174.game.server_journal import _ReplaySession
+from tests.runtime.test_game_graph_analysis import make_graph, node, output
 
 
 class MoveToReplayTests(unittest.TestCase):

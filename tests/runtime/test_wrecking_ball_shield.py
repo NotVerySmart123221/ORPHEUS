@@ -4,12 +4,11 @@ import struct
 import unittest
 from unittest.mock import patch
 
-from test_game_combat import Run
-
 from ow174.game.body_vm_snapshot import export_body_vm
 from ow174.game.content import find_hero
 from ow174.game.script.driver import HUD_HEALTH, HUD_MAX_HEALTH
 from ow174.game.world import ARMOUR_POOL, HEALTH_POOL, POOLS, SHIELDS_POOL
+from tests.runtime.test_game_combat import Run
 
 ROLL_BUTTON = 0x08
 SHIELD_BUTTON = 0x10

@@ -2,11 +2,10 @@
 
 import unittest
 
-from test_game_combat import KANEZAKA_DM, Run, aim
-
 from ow174.game import combat
 from ow174.game.commands import FIRE
 from ow174.game.content import heroes
+from tests.runtime.test_game_combat import KANEZAKA_DM, Run, aim
 
 WRECKING_BALL = 0x02E00000000001CA
 QUAD_CANNONS = 0x1514

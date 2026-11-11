@@ -5,9 +5,6 @@ import unittest
 from dataclasses import replace
 from unittest.mock import patch
 
-from test_game_mover import FLOOR, box, wall
-from test_game_notices import into_world
-
 from ow174.game import bodytrace, movelog, replay_values
 from ow174.game.body_vm_snapshot import export_body_vm
 from ow174.game.collision import StaticCollisionProvider, World, flat_world
@@ -18,6 +15,8 @@ from ow174.game.mover import STEP, WORLD_GRAVITY
 from ow174.game.physics_snapshot import snapshot_mover
 from ow174.game.script import nodes, runtime
 from ow174.game.script.expr import INSTANCE, Entity, Vec3
+from tests.runtime.test_game_mover import FLOOR, box, wall
+from tests.runtime.test_game_notices import into_world
 
 START = 100
 DOOMFIST = 0x02E000000000012F
