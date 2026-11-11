@@ -168,6 +168,11 @@ notice read "ELIMINATED TRAINING BOT"
 three of them caught with the notice on screen: **still no kill feed line**. So a missing name
 was not what kept the line away, or not alone.
 
+A third run tested the frame. The Practice Range's mode entity then carried `13C0` with `0CB6`
+as its child and `0CB6`'s remote state off, bit for bit the frame of the service where the feed
+draws ([Tab board note](tab-board.md#compared-with-orpheus)). Four kills, the notice named:
+still no kill feed line. So how `0CB6` sits on the mode entity is not the cause either.
+
 ## Open
 
 - Where the chain stops for a bot kill on ORPHEUS now that the option arrives and the body has

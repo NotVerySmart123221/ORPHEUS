@@ -995,7 +995,8 @@ class Match:
         """The seconds left, as the game mode entity's v1303. The client shows them rounded up."""
         player.next_countdown = now + COUNTDOWN_EVERY
         seconds = max(0.0, self.assemble_ends - now)
-        frame = combat.mode_frame({COUNTDOWN: float(seconds)})  # with the mode's UI graph (combat.py)
+        # with the mode's UI graph (combat.py)
+        frame = combat.mode_frame({COUNTDOWN: float(seconds)}, self.game_map.mode_guid)
         player.client.queue_mode_frame(frame)
 
     def _end_assemble(self, now: float) -> None:

@@ -952,6 +952,19 @@ class ModeFrameTests(unittest.TestCase):
         self.assertEqual({key: item.graph for key, item in decoded.instances.items()}, {1: combat.MODE_UI})
         self.assertEqual(decoded.entity_vars[1303][0], 12.5)
 
+    def test_the_practice_range_lists_its_mode_graph_with_the_board_state_on(self):
+        # 13C0's remote slot 4 posts 06DF.025, without which the client holds its scoreboard shut
+        # (docs/research/tab-board.md). The bytes are those another service sent when the board opened.
+        frame = combat.mode_frame({}, PRACTICE_RANGE.mode_guid)
+        self.assertEqual(frame.getvalue().hex(), "08e00910b60c14a002003000")
+        decoded = read_chunk(_chunk(frame), _chunk_bits(frame), {})
+        self.assertEqual(
+            {key: (item.graph, item.parent) for key, item in decoded.instances.items()},
+            {1: (0x13C0, None), 2: (combat.MODE_UI, (1, 21))},
+        )
+        on = [state for state, (active, _) in decoded.instances[1].states.items() if active]
+        self.assertEqual(on, [6])  # STU_38EE1100, the 5th remote-synced state
+
     def test_mode_ui_shared_variables_start_in_both_initial_and_countdown_frames(self):
         ui = graph.graph(combat.MODE_UI)
         component = runtime.Component(0xA0000100)

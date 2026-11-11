@@ -6,6 +6,26 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-10
 
+#### Tab board in the Practice Range
+
+- The game mode entity of a Practice Range match now carries the mode's own graph `13C0` with
+  the state on that posts `06DF.025`, and the mode UI graph `0CB6` as that graph's child. The
+  client holds its scoreboard shut until that message is posted. The frame is bit for bit the
+  one another service sent when the board was seen to open. Other modes keep their frame.
+- Component 64's 14 stat GUID fields go as ids, a mask of the non-zero bytes and those bytes.
+  Sent as raw u64 the board names no stat.
+- Added a test for the frame's bytes and what the client's reader makes of them, and updated
+  the component 64 size test to the id encoding. With a prepared build 104319 pack the runtime
+  suite ran 1205 tests with 1 skip; its only errors are the two dashboard picture tests that
+  need local images. Ruff and the public source checks passed with 170 Python tests and
+  2 dashboard tests.
+- Original-client check, 2026-11-10, as Soldier: 76: the board opens while Tab is held. It
+  shows 11 Training Bot tiles against the player and 4 Friendly Bot tiles, names every stat,
+  and after four kills reads "4 ELIMINATIONS" and "840 HERO DAMAGE DONE" with gold medals. The
+  player's tile shows the ultimate charge. The elimination notice still names the bot. Still
+  open: the board's time reads 0:00, the hero's own stats are not counted, other modes have no
+  board, and no kill feed line draws.
+
 #### Training bot names in notices
 
 - Gave each training bot a seat among the match's participants and a controller entity. The

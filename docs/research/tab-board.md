@@ -111,21 +111,40 @@ also names the player's tile on the board and the label under the ultimate meter
 
 ## Compared with ORPHEUS
 
-- `combat.mode_frame` carries only the mode UI graph `0CB6` on the game mode entity, with its
-  state 21. No frame carries a mode graph such as `13C0`, so nothing posts `06DF.025` and the
-  board stays shut, as [WIP.md](../WIP.md) reports.
-- `game/onfire.py` declares fields 5 to 18 of component 64 as `u64`. `game/world.py` already
-  has the `id` kind those fields need.
-- Proposed changes: add the mode's graph to the mode entity's frames with the slot above on, and
-  declare the 14 stat GUID fields as `id`.
-- How the two graphs sat together in the offline service's Practice Range frame: `13C0` was
-  instance 1 with remote slot 4 on, and `0CB6` was instance 2, listed as the child of
-  instance 1's state 21. ORPHEUS lists `0CB6` alone as instance 1, so its frames would change
-  shape. That change is not worked out here.
+- `combat.mode_frame` carried only the mode UI graph `0CB6` on the game mode entity, with its
+  state 21. No frame carried a mode graph such as `13C0`, so nothing posted `06DF.025` and the
+  board stayed shut, as [WIP.md](../WIP.md) reports.
+- `game/onfire.py` declared fields 5 to 18 of component 64 as `u64`.
+- Changed since, for the Practice Range: `combat.MODE_GRAPHS` names the mode's graph, the remote
+  slot of its posting state and the state the mode UI hangs from, and `mode_frame` then lists
+  `13C0` as instance 1 with remote slot 4 (state 6) on and `0CB6` as instance 2, the child of
+  instance 1's state 21, with `0CB6`'s own remote state off. ORPHEUS's frame writer produces the
+  same 96 bits the offline service sent (`08e00910b60c14a002003000`). The 14 stat GUID fields
+  are declared `id`.
+- Other modes still carry `0CB6` alone, so their boards stay shut. Each needs its row of the
+  table above and a look in the client, since a mode graph also starts HUD states.
+
+## Seen live against ORPHEUS
+
+2026-11-10, original client, Practice Range, Soldier: 76, with the change above.
+
+- **The board opens** while Tab is held, at the spawn and after a fight.
+- Its tiles: 11 "TRAINING BOT" on the enemy side, and the player with 4 "FRIENDLY BOT" on the
+  other. The bots are there because each has a controller entity
+  ([nameplate note](bot-nameplates-and-hit-feedback.md#seen-live-against-orpheus)).
+- Every stat has its name: Eliminations, Objective Kills, Objective Time, Hero Damage Done,
+  Healing Done and Deaths, then Weapon Accuracy, Kill Streak - Best, Final Blows, Helix Rocket
+  Kills and Tactical Visor Kills. No "UNKNOWN STAT".
+- After four kills of one bot: "4 ELIMINATIONS" and "840 HERO DAMAGE DONE", each with a gold
+  medal. The hero's own stats stayed 0; ORPHEUS does not count them yet.
+- The player's tile showed the ultimate charge, 23% and later 95%, unlike the offline service's
+  tiles. The board's time still read 0:00.
+- The elimination notice still drew with the bot's name under the new frame.
 
 ## Open
 
-- The ultimate charge on the tiles and the board's time, above.
+- The board's time, above. The tiles' ultimate charge is open for the offline service only.
+- The other modes' graphs in ORPHEUS's frames.
 - Medals were gold for any counted stat above zero. Ranking among teammates was not tried.
 - The tools used for the live reads, a statescript tracer plugin and a script that lists every
   mode graph's posting slots, are not in this repository.
