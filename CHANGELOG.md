@@ -6,6 +6,23 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-11
 
+#### Graph extraction from the pinned DataTool's UUID fields
+
+- `tools/extract_game_graphs.py` now reads a `teUUID` field as its text, or as none when the dump
+  holds no value. The pinned DataTool prints a UUID's `Guid` as an object that holds only a
+  reference to itself, and the extractor stopped on it with a reference cycle. Mode graph `100B`
+  has such a field, so a bundle with `--mode-xml` could not be built from a pinned dump.
+- Added a public test. Ruff and the 919 public tests passed.
+- Local check: the command line then built a bundle from a pinned dump of `003`, `01B` and `0C5`
+  with 665 graphs, 32 hero bodies and 38 further entity definitions; one referenced graph,
+  `0F9C`, is not in the dump. With a pack assembled around it the runtime suite ran 1646 tests
+  with 26 failing and 1 skip, against 50 with a hero-only bundle. 25 of the 26 are among those
+  50. The other, `test_healthy_ownership_keeps_world_timing_and_soldier_input`, fails only when
+  the pack holds the Practice Range bot bodies: their frames put the controller's first frame one
+  send later than the test allows.
+- Original-client check: on that pack, Practice Range kills still drew the kill feed line.
+- Limit: the UUID values are not in a pinned dump at all, so an entity reference reads as none.
+
 #### Wrecking Ball reticle and Piledriver movement
 
 - Notify linked graph variables as Quad Cannons spread grows during sustained fire.
