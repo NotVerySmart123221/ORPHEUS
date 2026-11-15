@@ -185,6 +185,120 @@ impl Profile {
             })
             .collect()
     }
+
+    pub fn from_json(data: Value) -> io::Result<Self> {
+        let mut profile: Profile = serde_json::from_value(data).map_err(json_error)?;
+        profile.normalize_settings()?;
+        Ok(profile)
+    }
+
+    pub fn normalize_settings(&mut self) -> io::Result<()> {
+        if let Some(entries) = self.settings.get_mut("+0x130") {
+            if !entries.is_null() {
+                let normalized = normalize_setting_entries(entries)?;
+                *entries = Value::Array(normalized);
+            }
+        }
+        Ok(())
+    }
+}
+
+fn parse_i128_field(raw: &Value, field: &str, min: i128, max: i128) -> io::Result<i128> {
+    let parsed = match raw {
+        Value::Number(number) => number
+            .as_i64()
+            .map(i128::from)
+            .or_else(|| number.as_u64().map(i128::from)),
+        Value::String(text) => parse_numeric_str(text.trim()),
+        _ => None,
+    }
+    .ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{field} must be an integer or numeric string"),
+        )
+    })?;
+    if parsed < min || parsed > max {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{field} out of range [{min}, {max}]: {parsed}"),
+        ));
+    }
+    Ok(parsed)
+}
+
+fn parse_numeric_str(text: &str) -> Option<i128> {
+    if text.is_empty() {
+        return None;
+    }
+    let (neg, digits) = if let Some(rest) = text.strip_prefix('-') {
+        (true, rest)
+    } else if let Some(rest) = text.strip_prefix('+') {
+        (false, rest)
+    } else {
+        (false, text)
+    };
+    let mag = if let Some(hex) = digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
+        u128::from_str_radix(hex, 16).ok()?
+    } else {
+        digits.parse::<u128>().ok()?
+    };
+    if neg {
+        i128::try_from(mag).ok().and_then(i128::checked_neg)
+    } else {
+        i128::try_from(mag).ok()
+    }
+}
+
+pub fn normalize_setting_key(raw: &Value) -> io::Result<i32> {
+    let val = parse_i128_field(raw, "+0x8", i128::from(i32::MIN), i128::from(u32::MAX))?;
+    Ok(if val >= i128::from(1u32 << 31) {
+        (val as u32) as i32
+    } else {
+        val as i32
+    })
+}
+
+pub fn normalize_setting_value(raw: &Value) -> io::Result<Value> {
+    let val = parse_i128_field(raw, "+0x0", i128::from(i64::MIN), i128::from(u64::MAX))?;
+    let signed = if val >= i128::from(1u64 << 63) {
+        (val as u64) as i64
+    } else {
+        val as i64
+    };
+    Ok(Value::from(signed))
+}
+
+pub fn normalize_setting_entries(raw: &Value) -> io::Result<Vec<Value>> {
+    let Value::Array(items) = raw else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "settings['+0x130'] must be an array",
+        ));
+    };
+    let mut normalized = Vec::with_capacity(items.len());
+    for item in items {
+        let Value::Object(map) = item else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "each settings['+0x130'] entry must be an object",
+            ));
+        };
+        let v = map.get("+0x0").ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "missing '+0x0' in +0x130 entry")
+        })?;
+        let k = map.get("+0x8").ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "missing '+0x8' in +0x130 entry")
+        })?;
+        let mut out = Map::new();
+        out.insert("+0x0".into(), normalize_setting_value(v)?);
+        out.insert("+0x8".into(), Value::from(normalize_setting_key(k)?));
+        normalized.push(Value::Object(out));
+    }
+    Ok(normalized)
 }
 
 pub fn box_name(box_type: i32) -> String {
@@ -262,10 +376,30 @@ fn json_error(error: serde_json::Error) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, error)
 }
 
+fn sanitize_saved_settings(data: &mut Value) {
+    let Some(entries) = data
+        .get_mut("settings")
+        .and_then(|s| s.as_object_mut())
+        .and_then(|s| s.get_mut("+0x130"))
+        .and_then(|v| v.as_array_mut())
+    else {
+        return;
+    };
+    let mut kept = Vec::with_capacity(entries.len());
+    for entry in entries.drain(..) {
+        match normalize_setting_entries(&Value::Array(vec![entry])) {
+            Ok(mut valid) => kept.append(&mut valid),
+            Err(error) => eprintln!("[accounts] skipping invalid +0x130 setting entry: {error}"),
+        }
+    }
+    *entries = kept;
+}
+
 fn read_profile(path: &Path) -> io::Result<(Profile, bool)> {
-    let data: Value = serde_json::from_slice(&fs::read(path)?).map_err(json_error)?;
+    let mut data: Value = serde_json::from_slice(&fs::read(path)?).map_err(json_error)?;
     let migrate = data.get(UNLOCKS_RESET_MARKER) != Some(&Value::Bool(true));
-    let mut profile: Profile = serde_json::from_value(data).map_err(json_error)?;
+    sanitize_saved_settings(&mut data);
+    let mut profile = Profile::from_json(data)?;
     if migrate {
         profile.unlocked_items.clear();
     }
