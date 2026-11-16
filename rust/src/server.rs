@@ -21,7 +21,7 @@ use crate::{
     bnet_service::{self, BnetService},
     catalog::ItemDb,
     collection::Collection,
-    game_content::GameMap,
+    game_content::{GameMap, JUNKENSTEIN_MAP, MapCatalog},
     game_service::GameService,
     jam_codec::Schemas,
     lobby_arcade::Arcade,
@@ -56,6 +56,7 @@ pub struct ServerConfig {
     pub stall_port: u16,
     pub rpc_port: u16,
     pub debug_port: Option<u16>,
+    pub junkenstein_validation: Option<PathBuf>,
 }
 
 impl ServerConfig {
@@ -69,6 +70,7 @@ impl ServerConfig {
             stall_port: bnet_service::STALL_PORT,
             rpc_port: bnet_service::RPC_PORT,
             debug_port: None,
+            junkenstein_validation: None,
         }
     }
 }
@@ -111,9 +113,15 @@ impl Server {
         let celebrations = Celebrations::load(&data, &templates)?;
         let extra_skins = extra_preload_themes(&items).collect();
         let mut assets = SceneAssets::load(&config.runtime)?;
+        if let Some(path) = &config.junkenstein_validation {
+            assets.set_junkenstein_validation(
+                crate::junkenstein_validation::JunkensteinValidation::load(path)?,
+            );
+        }
         if config.debug_port.is_some() {
             assets.enable_contact_trace();
         }
+        let maps = MapCatalog::load(data.join("game_maps_174.json"))?;
         let scene = assets.prepare(GameMap::practice_range())?;
         if !scene.movement_ready() {
             return Err(io::Error::new(
@@ -179,6 +187,7 @@ impl Server {
             celebrations,
             extra_skins,
             assets,
+            maps,
             first_scene: Mutex::new(Some(scene)),
             accounts,
             local,
@@ -297,6 +306,7 @@ struct Lobby {
     celebrations: Celebrations,
     extra_skins: Vec<u64>,
     assets: SceneAssets,
+    maps: MapCatalog,
     first_scene: Mutex<Option<PreparedScene>>,
     accounts: Accounts,
     local: Arc<Account>,
@@ -438,7 +448,11 @@ impl Lobby {
                 }
                 continue;
             }
-            if !lobby_practice::is_request(&request) {
+            let arcade = lobby_practice::arcade_queue(&request).and_then(|(card, key)| {
+                Arcade::junkenstein_queue(card, &login.account.profile(), wall_time)
+                    .map(|rules| (rules, key))
+            });
+            if arcade.is_none() && !lobby_practice::is_request(&request) {
                 continue;
             }
             if let Some(old) = &lease.seat {
@@ -447,6 +461,39 @@ impl Lobby {
                 }
             }
             let input = SoloPracticeHandoff::new(match_id()?, "127.0.0.1");
+            if let Some((rules, key)) = arcade {
+                if let Some(map) = self.maps.game_map(
+                    JUNKENSTEIN_MAP,
+                    rules.mode,
+                    "Junkenstein's Revenge",
+                    false,
+                    &[rules.players, 0],
+                ) {
+                    let result = lobby_practice::dispatch_junkenstein(
+                        (map, rules, key.clone()),
+                        &login,
+                        &self.game,
+                        input,
+                        (&self.assets, &self.collection),
+                        |message| session.send(message),
+                    );
+                    match result {
+                        Ok(seat) => lease.seat = Some(seat),
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                io::ErrorKind::NotFound | io::ErrorKind::Unsupported
+                            ) =>
+                        {
+                            session.send(&lobby_practice::queue_unavailable(key.clone()))?;
+                        }
+                        Err(error) => return Err(error),
+                    }
+                } else {
+                    session.send(&lobby_practice::queue_unavailable(key.clone()))?;
+                }
+                continue;
+            }
             lease.seat = lobby_practice::dispatch_scene(
                 &request,
                 &login,
