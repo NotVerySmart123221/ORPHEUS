@@ -1,0 +1,217 @@
+//! Read-only map collision and navigation queries shared with bot simulation.
+
+use super::*;
+
+/// Map queries used by bot simulation without borrowing its entity storage.
+pub(crate) struct BotQueries<'a> {
+    free_for_all: bool,
+    movers: &'a MoverCatalog,
+    ground: &'a CollisionScene,
+    contacts: Option<&'a Arc<ContactWorld>>,
+}
+
+impl<'a> BotQueries<'a> {
+    pub(crate) fn new(
+        free_for_all: bool,
+        movers: &'a MoverCatalog,
+        ground: &'a CollisionScene,
+        contacts: Option<&'a Arc<ContactWorld>>,
+    ) -> Self {
+        Self {
+            free_for_all,
+            movers,
+            ground,
+            contacts,
+        }
+    }
+
+    pub(crate) fn free_for_all(&self) -> bool {
+        self.free_for_all
+    }
+
+    pub(crate) fn attach_objective_mover(&self, bot: &mut Bot) -> bool {
+        let Some(contacts) = self.contacts else {
+            return false;
+        };
+        bot.attach_collision(
+            self.movers.for_body(Some(bot.spawn.body)),
+            Arc::clone(contacts),
+            MOVER_CATEGORY,
+            ground_height(self.ground.triangles(), MOVER_CATEGORY),
+        );
+        true
+    }
+
+    pub(crate) fn step_gate_approach(
+        &self,
+        approach: &mut crate::junkenstein_navigation::GateApproach,
+        bot: &mut Bot,
+        tick: u32,
+        speed_scale: f64,
+    ) -> bool {
+        approach.step(
+            bot,
+            tick,
+            self.ground,
+            self.movers.for_body(Some(bot.spawn.body)),
+            speed_scale,
+        )
+    }
+
+    pub(crate) fn step_reaper_exit(
+        &self,
+        exit: &mut crate::junkenstein_navigation::ReaperExit,
+        bot: &mut Bot,
+        tick: u32,
+        can_walk: bool,
+    ) -> io::Result<bool> {
+        exit.step(bot, self.ground.triangles(), tick, can_walk, |bot| {
+            self.contacts
+                .map(|contacts| {
+                    Mover::new(
+                        *self.movers.for_body(Some(bot.spawn.body)),
+                        Arc::clone(contacts),
+                        bot.position,
+                        bot.movement(tick).yaw,
+                        MOVER_CATEGORY,
+                    )
+                    .map_err(invalid)
+                })
+                .transpose()
+        })
+    }
+
+    pub(crate) fn step_boss_pursuit(
+        &self,
+        pursuit: &mut crate::junkenstein_navigation::BossPursuit,
+        bot: &mut Bot,
+        tick: u32,
+        defenders: &[crate::script_enemy::EnemyTarget],
+        arc: Option<crate::junkenstein_navigation::GrenadeArc>,
+    ) -> Option<crate::junkenstein_navigation::BossTarget> {
+        pursuit.step(
+            bot,
+            tick,
+            self.ground,
+            (self.movers.for_body(Some(bot.spawn.body)), arc),
+            defenders,
+            |origin, direction, range| {
+                self.hitscan_wall(origin, direction, range)
+                    .is_ok_and(|wall| wall.is_none())
+            },
+        )
+    }
+
+    pub(crate) fn pursue_caster_target(
+        &self,
+        pursuit: &mut crate::junkenstein_navigation::BossPursuit,
+        bot: &mut Bot,
+        tick: u32,
+        target: &crate::script_enemy::EnemyTarget,
+        reach: f64,
+    ) {
+        let eye = crate::game_combat::eye_height(bot.spawn.hero, false);
+        pursuit.pursue(
+            bot,
+            tick,
+            (self.ground, self.movers.for_body(Some(bot.spawn.body))),
+            target,
+            reach,
+            |[x, y, z], pose| self.visible_aim([x, y + eye, z], pose).is_some(),
+        );
+    }
+
+    pub(crate) fn target(&self, bot: &Bot) -> crate::game_hitscan::TargetPose {
+        let settings = self.movers.for_body(Some(bot.spawn.body));
+        crate::game_hitscan::TargetPose {
+            feet: bot.position,
+            height: settings.stand_height,
+            radius: settings.stand_radius,
+            eye: crate::game_combat::eye_height(bot.spawn.hero, false),
+        }
+    }
+
+    pub(crate) fn hitscan_wall(
+        &self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        reach: f64,
+    ) -> Result<Option<f64>, crate::collision_index::IndexError> {
+        self.ground
+            .cast_ray(origin, direction, reach, MOVER_CATEGORY)
+            .map(|hit| hit.map(|hit| hit.distance))
+    }
+
+    pub(crate) fn summoner_beam_contacts(
+        &self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        reach: f64,
+        targets: &[crate::script_enemy::EnemyTarget],
+    ) -> [script_init::BeamContact; 2] {
+        use crate::static_ray::capsule_entry_distance;
+        let Ok(wall) = self.hitscan_wall(origin, direction, reach) else {
+            return Default::default();
+        };
+        [0.0, 0.2].map(|radius| {
+            let entity = targets
+                .iter()
+                .filter(|target| target.team == 0 && target.alive)
+                .filter_map(|target| {
+                    let [bottom, top] = target.pose.segment();
+                    let contact = capsule_entry_distance(
+                        origin,
+                        direction,
+                        reach,
+                        bottom,
+                        top,
+                        target.pose.radius + radius,
+                    )?;
+                    wall.is_none_or(|wall| contact < wall)
+                        .then_some((contact, target.entity))
+                })
+                .min_by(|(a, first), (b, second)| a.total_cmp(b).then_with(|| first.cmp(second)))
+                .map(|(_, entity)| entity);
+            script_init::BeamContact {
+                entity,
+                hit: entity.is_some() || wall.is_some(),
+            }
+        })
+    }
+
+    pub(crate) fn visible_aim(
+        &self,
+        origin: [f64; 3],
+        target: crate::game_hitscan::TargetPose,
+    ) -> Option<[f64; 3]> {
+        use crate::static_ray::{capsule_entry_distance, norm};
+        let [bottom, top] = target.segment();
+        let [x, y, z] = target.feet;
+        let aim = |point: [f64; 3]| {
+            let delta = std::array::from_fn(|axis| point[axis] - origin[axis]);
+            let distance = norm(delta);
+            if distance <= 1e-9 {
+                return None;
+            }
+            let direction = delta.map(|axis| axis / distance);
+            let contact =
+                capsule_entry_distance(origin, direction, distance, bottom, top, target.radius)?;
+            self.hitscan_wall(origin, direction, contact)
+                .is_ok_and(|wall| wall.is_none_or(|wall| wall >= contact))
+                .then_some(direction)
+        };
+        let eye = [x, y + target.eye.min(target.height - 0.01), z];
+        [eye, top, bottom].into_iter().find_map(aim).or_else(|| {
+            let dx = x - origin[0];
+            let dz = z - origin[2];
+            let horizontal = dx.hypot(dz);
+            if horizontal <= 1e-9 {
+                return None;
+            }
+            let width = target.radius * 0.75 / horizontal;
+            let middle = (bottom[1] + top[1]) * 0.5;
+            aim([x + dz * width, middle, z - dx * width])
+                .or_else(|| aim([x - dz * width, middle, z + dx * width]))
+        })
+    }
+}

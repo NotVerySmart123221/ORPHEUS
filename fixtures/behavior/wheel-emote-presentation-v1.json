@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "case_id": "wheel-emote-presentation-v1",
+  "target_build": 104319,
+  "source": {
+    "revision": "7164b85c79c6603936c6c74ba8bcbe386f020385",
+    "paths": ["src/ow174/game/script/driver.py", "docs/COMMUNICATION_WHEEL.txt"],
+    "notes": "The target build's 004B camera schema and 023A angle-limit graph supply the expected values. The Match Protocol reference describes component 65's sparse GUID fields. Local client inspection confirmed that 65 is present on the player controller and absent on the hero body. This replay uses a synthetic player loadout and input."
+  },
+  "evidence": "synthetic-reference",
+  "client_acceptance": "The 104319 client entered Practice Range and played Mercy's emote with the corrected camera placement. Live angle-lock coverage is pending.",
+  "input": {
+    "emote_slots": ["0x0250000000000904", "0x0250000000000BE2", "0x0"],
+    "chosen_action": "0x0A900000000001A1",
+    "start_angles": [8192, 1024],
+    "mouse_angles": [-16384, -2048]
+  },
+  "expected": {
+    "controller_cosmetics_update_hex": "014102e001c304095002c3e20b50020000",
+    "package_slot": [1],
+    "camera_bone": "0x0880000000000003",
+    "camera_distance": 3.0,
+    "camera_height_offset": -0.25,
+    "locked_degrees": [45.0, 5.625],
+    "locked_angles": [8192, 1024]
+  }
+}

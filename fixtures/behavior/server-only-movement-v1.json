@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "case_id": "movement.server-only-direction.v1",
+  "target_build": 104319,
+  "source": {
+    "revision": "c73e5a499ec73d499c97eaae46357af30c9e4b39",
+    "paths": ["src/ow174/game/mover.py", "src/ow174/game/correction.py", "src/ow174/game/match.py"],
+    "reference": "104319 graph 0D06 st42 (position 76): a server-only STU_316CFEF2 with throttle rows and a channel 2 STU_09F9B1FE row. RVAs C33960 (throttle mods), C33A85 through C33D91 (channel 2 direction) and 762A60 (throttle length)."
+  },
+  "evidence": "synthetic-reference",
+  "client_acceptance": "pending",
+  "input": {
+    "direction_cases": [
+      {"facing": [0.0, 1.0], "throttles": [0.0, 1.0], "mods": [["set", [4.0, 0.0, 0.0]]]},
+      {"facing": [0.0, 1.0], "throttles": [0.5, 0.5], "mods": [["set", [4.0, 0.0, 0.0]]]},
+      {"facing": [0.0, 1.0], "throttles": [0.25, 1.0], "mods": [["set", [0.0, 0.0, 1.0]]]},
+      {"facing": [1.0, 0.0], "throttles": [0.0, 1.0], "mods": [["set", [0.0, 7.0, 0.0]]]},
+      {"facing": [0.0, 1.0], "throttles": [0.0, 1.0], "mods": [["add", [1.0, 0.0, 0.0]]]},
+      {"facing": [0.6, 0.8], "throttles": [-0.5, 1.0], "mods": [["set", [-3.0, 0.0, 4.0]]]}
+    ],
+    "records": {"frame_us": 16000, "frames": [110, 145], "server_only_frames": [116, 124]}
+  },
+  "expected": {
+    "direction_cases": [
+      [-1.0, -4.371138828673793e-08],
+      [-0.4999999701976776, 0.4999999701976776],
+      [0.25, 1.0],
+      [1.0, -4.371138828673793e-08],
+      [-0.7071067690849304, 0.7071067690849304],
+      [0.8199999928474426, 0.7600000500679016]
+    ],
+    "records": {
+      "windows": [[115, null], [116, [117, 132]], [124, [117, 140]], [139, [117, 140]], [140, null]],
+      "sent_frames": [117, 140]
+    }
+  }
+}

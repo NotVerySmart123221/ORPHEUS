@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "case_id": "wheel-emote-weapon-v1",
+  "target_build": 104319,
+  "source": {
+    "revision": "7164b85c79c6603936c6c74ba8bcbe386f020385",
+    "paths": ["src/ow174/game/script/nodes.py", "src/ow174/game/script/driver.py"],
+    "notes": "104319 weapon graph 0015 initializes the presentation branch from the body default. Mercy's slot 1 activates the 006B staff and slot 2 the 006D pistol. The reported client symptom was reproduced in the owner stream. The durations and command timings in this fixture are synthetic."
+  },
+  "evidence": "synthetic-reference",
+  "client_acceptance": "The user confirmed the correct weapon model for 「放松」, including its stand-up animation, and 「权舞风起」 in the original 104319 Practice Range client.",
+  "input": {
+    "hero": "0x02E0000000000004",
+    "start_frame": 1000,
+    "wheel_selection_frame_offset": 1,
+    "wheel_action": "0x0A90000000000172",
+    "emotes": [
+      {
+        "name": "Relax",
+        "alias": "0x0C80000000000476",
+        "blend_tree": "0x0040000000000648",
+        "durations": {"0x028000000000006E": 0.25, "0x0280000000000082": 0.4, "0x0": 0.75},
+        "cancel_frame_offset": 179,
+        "active_at": {"22": 19, "100": 18, "180": 52},
+        "finished_at": 244
+      },
+      {
+        "name": "Flurry",
+        "alias": "0x0C8000000000045C",
+        "blend_tree": "0x0040000000000CE8",
+        "durations": {"0x0": 0.75},
+        "active_at": {"22": 0},
+        "finished_at": 70
+      },
+      {
+        "name": "Caduceus",
+        "alias": "0x0C8000000000045C",
+        "blend_tree": "0x0040000000000644",
+        "durations": {"0x0": 0.75},
+        "active_at": {"22": 0},
+        "finished_at": 70
+      }
+    ],
+    "switch_weapon_frame_offset": 251
+  },
+  "expected": {
+    "emote_weapon_slot": 1,
+    "weapon_graphs": {"1": "0x006B", "2": "0x006D"},
+    "post_emote_weapon_slot": 1,
+    "manual_switch_weapon_slot": 2
+  }
+}
