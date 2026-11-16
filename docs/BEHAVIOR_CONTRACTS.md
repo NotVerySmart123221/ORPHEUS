@@ -38,6 +38,48 @@ cargo test --locked -p orpheus --test world_queries
 
 The Python consumer uses the production strict component and expression evaluator. CI gives both consumers the same fixture file. This establishes query results and diagnostic categories only: Python strict failures stop the component, while Rust records an expression issue and declines the affected operation. Component recovery and fault lifecycle equivalence require separate contracts. Neither this fixture nor its reference revision establishes original-client presentation or gameplay acceptance.
 
+## Profile settings persistence
+
+The [profile settings fixture](../fixtures/behavior/profile-settings-v1.json)
+records synthetic client-to-lobby settings updates (`22200`–`22204`) and the
+resulting persisted profile state and outgoing lobby `20802` settings payload.
+Both Python (`ow174.accounts.profile`, `ow174.lobby.handlers.settings`,
+`ow174.content.player`) and Rust (`orpheus::accounts`,
+`orpheus::lobby_player_messages`) consume this same fixture, and the
+`shared-behavior-contracts` CI job runs both checks against it:
+
+```powershell
+cargo test --locked -p orpheus --test profile_settings
+python -S -B -m unittest tests.public.test_profile_settings_contracts -v
+```
+
+These synthetic cases establish persistence, overlay normalization, last-write-wins
+value merging and wire encoding equivalence between the Python and Rust
+implementations; original-client acceptance remains pending.
+
+## Python reference behavior fixtures synced from main
+
+Seven additional behavior contract fixtures authored on `main` are mirrored under
+`fixtures/behavior/` so `rust` maintains a strict superset of `main`'s behavior
+contracts:
+
+- Public synthetic contracts executed by `shared-behavior-contracts` CI via
+  `tests.public.test_behavior_contracts` against this branch's `fixtures/behavior/`:
+  - `fixtures/behavior/body-short-action-retry-v1.json`
+  - `fixtures/behavior/seismic-slam-placement-v1.json`
+  - `fixtures/behavior/seismic-slam-wave-v1.json`
+  - `fixtures/behavior/server-only-movement-v1.json`
+- Runtime-backed Python behavior contracts (executed on Python by
+  `tests.runtime.test_game_voicelines` and `tests.runtime.test_communication_wheel`
+  when an authorized 104319 runtime pack is present):
+  - `fixtures/behavior/player-voice-v1.json`
+  - `fixtures/behavior/wheel-emote-presentation-v1.json`
+  - `fixtures/behavior/wheel-emote-weapon-v1.json`
+
+Keeping all seven fixtures synchronized ensures zero fixture drift between
+`main` and `rust`, lets public Python contract tests verify every shared synthetic
+file in CI, and prepares dedicated Rust consumers to be added alongside parity work.
+
 ## Entity stack admission
 
 The [stack admission fixture](../fixtures/behavior/statescript-stack-admission-v1.json)
@@ -117,7 +159,7 @@ The public case establishes connection and room lifecycle recovery. The separate
 
 For time-dependent gameplay, also specify initial state, logical frames, seed, input order and packet-loss schedule wherever they affect the result. Compare stable decoded fields when identifiers or nonces vary. Update the semantic case version for an intentional incompatible behavior change, explaining the evidence for the new expected result. Consumers must reject unsupported schema or case versions rather than silently using a different contract.
 
-Keep the same fixture bytes in both branch changes, and update the pinned comparison consumer deliberately when importing a new case. A new Python contract can land before its Rust implementation; record the parity gap instead of changing expected output to make Rust pass. The current CI job covers framing and strict World queries, not arbitrary future fixtures. New cases need both a consumer test and an explicit CI command or runner registration.
+Keep the same fixture bytes in both branch changes, and update the pinned comparison consumer deliberately when importing a new case. A new Python contract can land before its Rust implementation; record the parity gap instead of changing expected output to make Rust pass. The current CI job covers framing, strict World queries, profile settings persistence and the public `test_behavior_contracts` fixtures synced from `main`, not arbitrary future fixtures. New cases need both a consumer test and an explicit CI command or runner registration.
 
 Follow the [contribution guide](../CONTRIBUTING.md) and update the [parity checklist](RUST_PARITY.md) when the affected migration workflow changes.
 

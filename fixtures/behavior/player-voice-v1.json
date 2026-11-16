@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "case_id": "player-voice-v1",
+  "target_build": 104319,
+  "source": {
+    "revision": "7164b85c79c6603936c6c74ba8bcbe386f020385",
+    "paths": ["src/ow174/game/match.py", "src/ow174/game/voicelines.py"],
+    "notes": "104319 player graphs supply the trigger IDs and timing. The voice set and line IDs below are synthetic."
+  },
+  "evidence": "synthetic-reference",
+  "client_acceptance": "pending",
+  "input": {
+    "hero": "0x02E0000000000004",
+    "skin": "0x0A5000000000FFF0",
+    "actions": ["0x016B", "0x0170", "0x0171"],
+    "equipped_choices": ["0x016F", "0x019D"],
+    "equipped_effects": ["0x030000000000FF20", "0x030000000000FF21"],
+    "healing_action": "0x016C",
+    "healing_directed_hero": "0x02E000000000006E",
+    "fixtures": {
+      "criteria": {
+        "0x0D80000000000AEB": ["0x0EE00000000001CF"],
+        "0x0D80000000001078": ["0x0EE00000000002F2"],
+        "0x0D80000000001073": ["0x0EE00000000001D0"],
+        "0x0D80000000000724": ["0x0EE0000000000045"],
+        "0x0D8000000000106C": ["0x0EE00000000002C6"]
+      },
+      "heroes": {
+        "0x02E0000000000004": "0x07A000000000FF00",
+        "0x02E000000000006E": "0x07A000000000FF00"
+      },
+      "skins": {"0x0A5000000000FFF0": {"0x07A000000000FF00": "0x07A000000000FF01"}},
+      "sets": {
+        "0x07A000000000FF01": {
+          "0x0EE00000000001CF": ["0x076000000000FF10"],
+          "0x0EE00000000002F2": ["0x076000000000FF11"],
+          "0x0EE00000000001D0": ["0x076000000000FF12"],
+          "0x0EE000000000FF30": ["0x076000000000FF15"],
+          "0x0EE000000000FF31": ["0x076000000000FF16"],
+          "0x0EE0000000000045": ["0x076000000000FF17"],
+          "0x0EE00000000002C6": ["0x076000000000FF18"]
+        }
+      },
+      "equipped": {
+        "0x030000000000FF20": "0x0EE000000000FF30",
+        "0x030000000000FF21": "0x0EE000000000FF31"
+      }
+    }
+  },
+  "expected": {
+    "wheel_friendly": [
+      ["0x0EE00000000001CF", "0x076000000000FF10"],
+      ["0x0EE00000000002F2", "0x076000000000FF11"],
+      ["0x0EE00000000001D0", "0x076000000000FF12"]
+    ],
+    "wheel_hostile": [],
+    "healing_friendly": [["0x0EE0000000000045", "0x076000000000FF17"]],
+    "healing_support_directed": [["0x0EE00000000002C6", "0x076000000000FF18"]],
+    "equipped_all": [
+      ["0x0EE000000000FF30", "0x076000000000FF15"],
+      ["0x0EE000000000FF31", "0x076000000000FF16"]
+    ]
+  }
+}
