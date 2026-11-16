@@ -77,7 +77,7 @@ Details: [docs/NATIVE_SERVER_ARCHITECTURE.md](docs/NATIVE_SERVER_ARCHITECTURE.md
 | `rust/crates/runtime/` (`orpheus-runtime`) | Runtime manifest inventory, preflight checks, and `prepare_server_runtime` CLI |
 | `rust/scripts/` | Lua patrol policy (`patrol.lua`) |
 | `rust/assets/inspector/`, `rust/tests/` | Web 3D debug viewer assets and integration test targets (`world_queries`, `profile_settings`, `protocol`, `runtime_preflight`) |
-| `fixtures/behavior/`, `scripts/` | 47 shared JSON behavior contracts and cross-language verifier scripts |
+| `fixtures/behavior/`, `scripts/` | 48 JSON behavior fixtures (including Rust-only regressions) and cross-language verifier scripts |
 | `relay/` | Windows C++ client TLS relay source |
 
 ## License & Credits

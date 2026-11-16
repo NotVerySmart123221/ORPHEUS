@@ -1,0 +1,1620 @@
+{
+  "schema_version": 1,
+  "case_id": "script-actions.synthetic-reference.v1",
+  "target_build": 104319,
+  "source": {
+    "revision": "f763beb9d7017b9364a3c8fc79ae6192df590043",
+    "paths": [
+      "rust/src/script_init.rs",
+      "rust/src/script_expr.rs",
+      "rust/src/script_graph.rs"
+    ],
+    "basis": "Expected results derived from the pre-lowering Rust executor. Synthetic graphs only; no Python or original-client equivalence is asserted."
+  },
+  "evidence": "synthetic-rust-reference",
+  "client_acceptance": "pending",
+  "harness": {
+    "entity": 42,
+    "instance": 1,
+    "graph": 42,
+    "frame": 0,
+    "default_work_budget": 1024,
+    "entry_node": 0,
+    "default_entries": [
+      0
+    ],
+    "value_encoding": "JSON null, bool, integer, float, string and arrays map to their corresponding script values. Object operands in graph fields are authored config objects.",
+    "invoke_node": "Call the production VM action dispatch at depth zero after normal GraphStore loading and Component startup. Each call uses the Component work-budget reset; this exposes the returned taken flag without a separate interpreter.",
+    "random_draws": "The component SplitMix64 seed is (entity << 32) | frame. Integer range 7..7 consumes exactly one draw and returns 7.",
+    "known_reference_behaviors": [
+      "A negative SetVar array index replaces the whole variable.",
+      "A failed batch store does not prevent later items from running.",
+      "An unlinked true condition is taken; an unlinked false condition is not.",
+      "Malformed and unsupported dormant operands remain loadable and report only when reached."
+    ]
+  },
+  "cases": [
+    {
+      "id": "startup-four-operation-chain",
+      "input": {
+        "nodes": [
+          {
+            "pos": 1,
+            "class": "STU_12F5D52D",
+            "fields": {
+              "m_143D4C5B": [
+                {
+                  "m_out_Var": {
+                    "$": "STUConfigVarDynamic",
+                    "m_identifier": 1,
+                    "m_60DB8F99": true
+                  },
+                  "m_value": 9
+                }
+              ],
+              "m_outPlug": {
+                "$": "Plug",
+                "links": [
+                  [
+                    2,
+                    "m_inPlug"
+                  ]
+                ],
+                "m_FF3DAF1E": []
+              }
+            }
+          },
+          {
+            "pos": 2,
+            "class": "STU_3387AB5D",
+            "fields": {
+              "m_condition": true,
+              "m_truePlug": {
+                "$": "Plug",
+                "links": [
+                  [
+                    3,
+                    "m_inPlug"
+                  ]
+                ],
+                "m_FF3DAF1E": []
+              }
+            }
+          },
+          {
+            "pos": 3,
+            "class": "STUStatescriptActionSwitch",
+            "fields": {
+              "m_262AE982": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 1,
+                "m_60DB8F99": true
+              },
+              "m_FDD34C25": [
+                {
+                  "$": "Plug",
+                  "links": [
+                    [
+                      4,
+                      "m_inPlug"
+                    ]
+                  ],
+                  "m_FF3DAF1E": [],
+                  "m_value": 9
+                }
+              ]
+            }
+          },
+          {
+            "pos": 4,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 2,
+                "m_60DB8F99": true
+              },
+              "m_value": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 1,
+                "m_60DB8F99": true
+              }
+            }
+          }
+        ],
+        "steps": [
+          {
+            "op": "check",
+            "expected": {
+              "entity": {
+                "1": 9,
+                "2": 9
+              },
+              "instance": {},
+              "diagnostics": [],
+              "random_draws_total": 0
+            }
+          }
+        ],
+        "entry_targets": [
+          1
+        ],
+        "expected_initial_diagnostics": []
+      }
+    },
+    {
+      "id": "dynamic-reexecution-and-variable-scope",
+      "input": {
+        "nodes": [
+          {
+            "pos": 1,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 2,
+                "m_60DB8F99": true
+              },
+              "m_value": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 1,
+                "m_60DB8F99": true
+              }
+            }
+          },
+          {
+            "pos": 2,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 4,
+                "m_60DB8F99": false
+              },
+              "m_value": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 2,
+                "m_60DB8F99": true
+              }
+            }
+          }
+        ],
+        "steps": [
+          {
+            "op": "invoke_node",
+            "node": 1,
+            "expected": {
+              "taken": true,
+              "entity": {
+                "1": 3,
+                "2": 3
+              },
+              "instance": {},
+              "diagnostics": [],
+              "random_draws_total": 0
+            }
+          },
+          {
+            "op": "set_entity",
+            "id": 1,
+            "value": 9
+          },
+          {
+            "op": "invoke_node",
+            "node": 1,
+            "expected": {
+              "taken": true,
+              "entity": {
+                "1": 9,
+                "2": 9
+              },
+              "instance": {},
+              "diagnostics": [],
+              "random_draws_total": 0
+            }
+          },
+          {
+            "op": "invoke_node",
+            "node": 2,
+            "expected": {
+              "taken": true,
+              "entity": {
+                "1": 9,
+                "2": 9
+              },
+              "instance": {
+                "4": 9
+              },
+              "diagnostics": [],
+              "random_draws_total": 0
+            }
+          }
+        ],
+        "entity": {
+          "1": 3
+        }
+      }
+    },
+    {
+      "id": "value-random-draw-precedes-invalid-lvalue",
+      "input": {
+        "nodes": [
+          {
+            "pos": 1,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": -1,
+                "m_60DB8F99": true
+              },
+              "m_value": {
+                "$": "STU_919FD47C",
+                "m_expression": {
+                  "m_opcodes": [
+                    14,
+                    0,
+                    14,
+                    1,
+                    69,
+                    0
+                  ],
+                  "m_dynamicVars": [],
+                  "m_D99EF254": []
+                },
+                "m_configVars": [
+                  {
+                    "$": "STUConfigVarInt",
+                    "m_value": 7
+                  },
+                  {
+                    "$": "STUConfigVarInt",
+                    "m_value": 7
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "pos": 2,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 2,
+                "m_60DB8F99": true
+              },
+              "m_value": {
+                "$": "STU_919FD47C",
+                "m_expression": {
+                  "m_opcodes": [
+                    14,
+                    0,
+                    14,
+                    1,
+                    69,
+                    0
+                  ],
+                  "m_dynamicVars": [],
+                  "m_D99EF254": []
+                },
+                "m_configVars": [
+                  {
+                    "$": "STUConfigVarInt",
+                    "m_value": 7
+                  },
+                  {
+                    "$": "STUConfigVarInt",
+                    "m_value": 7
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "steps": [
+          {
+            "op": "invoke_node",
+            "node": 1,
+            "expected": {
+              "taken": false,
+              "entity": {},
+              "instance": {},
+              "diagnostics": [
+                {
+                  "node": 1,
+                  "kind": "expression",
+                  "error": "malformed_config",
+                  "detail": "variable identifier out of range"
+                }
+              ],
+              "random_draws_total": 1
+            }
+          },
+          {
+            "op": "invoke_node",
+            "node": 2,
+            "expected": {
+              "taken": true,
+              "entity": {
+                "2": 7
+              },
+              "instance": {},
+              "diagnostics": [
+                {
+                  "node": 1,
+                  "kind": "expression",
+                  "error": "malformed_config",
+                  "detail": "variable identifier out of range"
+                }
+              ],
+              "random_draws_total": 2
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "discarded-target-skips-map-and-index-evaluation",
+      "input": {
+        "nodes": [
+          {
+            "pos": 1,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": null,
+              "m_value": {
+                "$": "STU_919FD47C",
+                "m_expression": {
+                  "m_opcodes": [
+                    14,
+                    0,
+                    14,
+                    1,
+                    69,
+                    0
+                  ],
+                  "m_dynamicVars": [],
+                  "m_D99EF254": []
+                },
+                "m_configVars": [
+                  {
+                    "$": "STUConfigVarInt",
+                    "m_value": 7
+                  },
+                  {
+                    "$": "STUConfigVarInt",
+                    "m_value": 7
+                  }
+                ]
+              },
+              "m_key": "unsupported map key",
+              "m_index": {
+                "$": "STU_919FD47C",
+                "m_expression": {
+                  "m_opcodes": [
+                    14,
+                    0,
+                    14,
+                    1,
+                    69,
+                    0
+                  ],
+                  "m_dynamicVars": [],
+                  "m_D99EF254": []
+                },
+                "m_configVars": [
+                  {
+                    "$": "STUConfigVarInt",
+                    "m_value": 7
+                  },
+                  {
+                    "$": "STUConfigVarInt",
+                    "m_value": 7
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "steps": [
+          {
+            "op": "invoke_node",
+            "node": 1,
+            "expected": {
+              "taken": true,
+              "entity": {},
+              "instance": {},
+              "diagnostics": [],
+              "random_draws_total": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "batch-failure-keeps-later-writes-and-blocks-output",
+      "input": {
+        "nodes": [
+          {
+            "pos": 1,
+            "class": "STU_12F5D52D",
+            "fields": {
+              "m_143D4C5B": [
+                {
+                  "m_out_Var": {
+                    "$": "STUConfigVarDynamic",
+                    "m_identifier": 10,
+                    "m_60DB8F99": true
+                  },
+                  "m_value": 1
+                },
+                {
+                  "m_out_Var": {
+                    "$": "STUConfigVarDynamic",
+                    "m_identifier": -1,
+                    "m_60DB8F99": true
+                  },
+                  "m_value": 2
+                },
+                7,
+                {
+                  "m_out_Var": {
+                    "$": "STUConfigVarDynamic",
+                    "m_identifier": 11,
+                    "m_60DB8F99": true
+                  },
+                  "m_value": {
+                    "$": "STUConfigVarDynamic",
+                    "m_identifier": 10,
+                    "m_60DB8F99": true
+                  }
+                }
+              ],
+              "m_outPlug": {
+                "$": "Plug",
+                "links": [
+                  [
+                    2,
+                    "m_inPlug"
+                  ]
+                ],
+                "m_FF3DAF1E": []
+              }
+            }
+          },
+          {
+            "pos": 2,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 99,
+                "m_60DB8F99": true
+              },
+              "m_value": true
+            }
+          }
+        ],
+        "steps": [
+          {
+            "op": "invoke_node",
+            "node": 1,
+            "expected": {
+              "taken": false,
+              "entity": {
+                "10": 1,
+                "11": 1
+              },
+              "instance": {},
+              "diagnostics": [
+                {
+                  "node": 1,
+                  "kind": "expression",
+                  "error": "malformed_config",
+                  "detail": "variable identifier out of range"
+                }
+              ],
+              "random_draws_total": 0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "array-index-coercion-and-live-index",
+      "input": {
+        "nodes": [
+          {
+            "pos": 1,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 10,
+                "m_60DB8F99": true
+              },
+              "m_value": 7,
+              "m_index": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 1,
+                "m_60DB8F99": true
+              }
+            }
+          },
+          {
+            "pos": 2,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 10,
+                "m_60DB8F99": true
+              },
+              "m_value": 9,
+              "m_index": -1
+            }
+          },
+          {
+            "pos": 3,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 10,
+                "m_60DB8F99": true
+              },
+              "m_value": 8,
+              "m_index": " 1 "
+            }
+          },
+          {
+            "pos": 4,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 10,
+                "m_60DB8F99": true
+              },
+              "m_value": 10,
+              "m_index": true
+            }
+          },
+          {
+            "pos": 5,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 10,
+                "m_60DB8F99": true
+              },
+              "m_value": 11,
+              "m_index": 65535
+            }
+          }
+        ],
+        "steps": [
+          {
+            "op": "invoke_node",
+            "node": 1,
+            "expected": {
+              "taken": true,
+              "entity": {
+                "1": 2,
+                "10": [
+                  5,
+                  null,
+                  7
+                ]
+              },
+              "instance": {},
+              "diagnostics": [],
+              "random_draws_total": 0
+            }
+          },
+          {
+            "op": "set_entity",
+            "id": 1,
+            "value": 0
+          },
+          {
+            "op": "invoke_node",
+            "node": 1,
+            "expected": {
+              "taken": true,
+              "entity": {
+                "1": 0,
+                "10": [
+                  7,
+                  null,
+                  7
+                ]
+              },
+              "instance": {},
+              "diagnostics": [],
+              "random_draws_total": 0
+            }
+          },
+          {
+            "op": "invoke_node",
+            "node": 2,
+            "expected": {
+              "taken": true,
+              "entity": {
+                "1": 0,
+                "10": 9
+              },
+              "instance": {},
+              "diagnostics": [],
+              "random_draws_total": 0
+            }
+          },
+          {
+            "op": "invoke_node",
+            "node": 3,
+            "expected": {
+              "taken": true,
+              "entity": {
+                "1": 0,
+                "10": [
+                  9,
+                  8
+                ]
+              },
+              "instance": {},
+              "diagnostics": [],
+              "random_draws_total": 0
+            }
+          },
+          {
+            "op": "invoke_node",
+            "node": 4,
+            "expected": {
+              "taken": true,
+              "entity": {
+                "1": 0,
+                "10": [
+                  9,
+                  10
+                ]
+              },
+              "instance": {},
+              "diagnostics": [],
+              "random_draws_total": 0
+            }
+          },
+          {
+            "op": "invoke_node",
+            "node": 5,
+            "expected": {
+              "taken": false,
+              "entity": {
+                "1": 0,
+                "10": [
+                  9,
+                  10
+                ]
+              },
+              "instance": {},
+              "diagnostics": [
+                {
+                  "node": 5,
+                  "kind": "unsupported_field",
+                  "detail": "SetVar array exceeds the wire count"
+                }
+              ],
+              "random_draws_total": 0
+            }
+          }
+        ],
+        "entity": {
+          "1": 2,
+          "10": 5
+        }
+      }
+    },
+    {
+      "id": "array-extension-budget-is-charged-before-write",
+      "input": {
+        "nodes": [
+          {
+            "pos": 1,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 1,
+                "m_60DB8F99": true
+              },
+              "m_value": 7,
+              "m_index": 4
+            }
+          }
+        ],
+        "steps": [
+          {
+            "op": "invoke_node",
+            "node": 1,
+            "expected": {
+              "fault": {
+                "kind": "work_budget",
+                "limit": 4,
+                "operation": "SetVar array extension"
+              },
+              "entity": {},
+              "instance": {},
+              "diagnostics": [],
+              "random_draws_total": 0,
+              "work_remaining": 3
+            }
+          }
+        ],
+        "work_budget": 4,
+        "entries": []
+      }
+    },
+    {
+      "id": "array-extension-exact-budget",
+      "input": {
+        "nodes": [
+          {
+            "pos": 1,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 1,
+                "m_60DB8F99": true
+              },
+              "m_value": 7,
+              "m_index": 4
+            }
+          }
+        ],
+        "steps": [
+          {
+            "op": "invoke_node",
+            "node": 1,
+            "expected": {
+              "taken": true,
+              "entity": {
+                "1": [
+                  null,
+                  null,
+                  null,
+                  null,
+                  7
+                ]
+              },
+              "instance": {},
+              "diagnostics": [],
+              "random_draws_total": 0,
+              "work_remaining": 0
+            }
+          }
+        ],
+        "work_budget": 7,
+        "entries": []
+      }
+    },
+    {
+      "id": "conditional-empty-plug-asymmetry",
+      "input": {
+        "nodes": [
+          {
+            "pos": 1,
+            "class": "STU_3387AB5D",
+            "fields": {
+              "m_condition": true
+            }
+          },
+          {
+            "pos": 2,
+            "class": "STU_3387AB5D",
+            "fields": {
+              "m_condition": false
+            }
+          },
+          {
+            "pos": 3,
+            "class": "STU_3387AB5D",
+            "fields": {
+              "m_condition": true,
+              "m_falsePlug": {
+                "$": "Plug",
+                "links": [
+                  [
+                    null,
+                    "m_inPlug"
+                  ]
+                ],
+                "m_FF3DAF1E": []
+              }
+            }
+          },
+          {
+            "pos": 4,
+            "class": "STU_3387AB5D",
+            "fields": {
+              "m_condition": false,
+              "m_falsePlug": {
+                "$": "Plug",
+                "links": [
+                  [
+                    null,
+                    "m_inPlug"
+                  ]
+                ],
+                "m_FF3DAF1E": []
+              }
+            }
+          }
+        ],
+        "steps": [
+          {
+            "op": "invoke_node",
+            "node": 1,
+            "expected": {
+              "taken": true,
+              "entity": {},
+              "instance": {},
+              "diagnostics": [],
+              "random_draws_total": 0
+            }
+          },
+          {
+            "op": "invoke_node",
+            "node": 2,
+            "expected": {
+              "taken": false,
+              "entity": {},
+              "instance": {},
+              "diagnostics": [],
+              "random_draws_total": 0
+            }
+          },
+          {
+            "op": "invoke_node",
+            "node": 3,
+            "expected": {
+              "taken": false,
+              "entity": {},
+              "instance": {},
+              "diagnostics": [],
+              "random_draws_total": 0
+            }
+          },
+          {
+            "op": "invoke_node",
+            "node": 4,
+            "expected": {
+              "taken": true,
+              "entity": {},
+              "instance": {},
+              "diagnostics": [],
+              "random_draws_total": 0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "switch-first-match-keeps-case-hole-and-output-order",
+      "input": {
+        "nodes": [
+          {
+            "pos": 1,
+            "class": "STUStatescriptActionSwitch",
+            "fields": {
+              "m_262AE982": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 1,
+                "m_60DB8F99": true
+              },
+              "m_FDD34C25": [
+                null,
+                {
+                  "$": "Plug",
+                  "links": [
+                    [
+                      2,
+                      "m_inPlug"
+                    ]
+                  ],
+                  "m_FF3DAF1E": [],
+                  "m_value": 0
+                },
+                {
+                  "$": "Plug",
+                  "links": [
+                    [
+                      3,
+                      "m_inPlug"
+                    ]
+                  ],
+                  "m_FF3DAF1E": [],
+                  "m_value": 7
+                },
+                {
+                  "$": "Plug",
+                  "links": [
+                    [
+                      4,
+                      "m_inPlug"
+                    ]
+                  ],
+                  "m_FF3DAF1E": [],
+                  "m_value": 7
+                },
+                {
+                  "$": "Plug",
+                  "links": [
+                    [
+                      4,
+                      "m_inPlug"
+                    ]
+                  ],
+                  "m_FF3DAF1E": [],
+                  "m_value": {
+                    "$": "FixtureUnreachedCase"
+                  }
+                }
+              ],
+              "m_CD38D5DB": {
+                "$": "Plug",
+                "links": [
+                  [
+                    4,
+                    "m_inPlug"
+                  ]
+                ],
+                "m_FF3DAF1E": []
+              },
+              "m_outPlug": {
+                "$": "Plug",
+                "links": [
+                  [
+                    5,
+                    "m_inPlug"
+                  ]
+                ],
+                "m_FF3DAF1E": []
+              }
+            }
+          },
+          {
+            "pos": 2,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 100,
+                "m_60DB8F99": true
+              },
+              "m_value": "wrong nonmatching case"
+            }
+          },
+          {
+            "pos": 3,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 2,
+                "m_60DB8F99": true
+              },
+              "m_value": 5
+            }
+          },
+          {
+            "pos": 4,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 100,
+                "m_60DB8F99": true
+              },
+              "m_value": "wrong later/default case"
+            }
+          },
+          {
+            "pos": 5,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 3,
+                "m_60DB8F99": true
+              },
+              "m_value": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 2,
+                "m_60DB8F99": true
+              }
+            }
+          }
+        ],
+        "steps": [
+          {
+            "op": "invoke_node",
+            "node": 1,
+            "expected": {
+              "taken": true,
+              "entity": {
+                "1": 7,
+                "2": 5,
+                "3": 5
+              },
+              "instance": {},
+              "diagnostics": [],
+              "random_draws_total": 0
+            }
+          },
+          {
+            "op": "set_entity",
+            "id": 1,
+            "value": 999
+          },
+          {
+            "op": "invoke_node",
+            "node": 1,
+            "expected": {
+              "taken": false,
+              "entity": {
+                "1": 999,
+                "2": 5,
+                "3": 5
+              },
+              "instance": {},
+              "diagnostics": [
+                {
+                  "node": 1,
+                  "kind": "expression",
+                  "error": "unsupported_config",
+                  "detail": "FixtureUnreachedCase"
+                }
+              ],
+              "random_draws_total": 0
+            }
+          }
+        ],
+        "entity": {
+          "1": 7,
+          "2": 0
+        }
+      }
+    },
+    {
+      "id": "switch-default-before-common-output",
+      "input": {
+        "nodes": [
+          {
+            "pos": 1,
+            "class": "STUStatescriptActionSwitch",
+            "fields": {
+              "m_262AE982": 8,
+              "m_FDD34C25": [
+                null,
+                {
+                  "$": "Plug",
+                  "links": [
+                    [
+                      2,
+                      "m_inPlug"
+                    ]
+                  ],
+                  "m_FF3DAF1E": [],
+                  "m_value": 0
+                }
+              ],
+              "m_CD38D5DB": {
+                "$": "Plug",
+                "links": [
+                  [
+                    3,
+                    "m_inPlug"
+                  ]
+                ],
+                "m_FF3DAF1E": []
+              },
+              "m_outPlug": {
+                "$": "Plug",
+                "links": [
+                  [
+                    4,
+                    "m_inPlug"
+                  ]
+                ],
+                "m_FF3DAF1E": []
+              }
+            }
+          },
+          {
+            "pos": 2,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 100,
+                "m_60DB8F99": true
+              },
+              "m_value": "wrong case"
+            }
+          },
+          {
+            "pos": 3,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 2,
+                "m_60DB8F99": true
+              },
+              "m_value": 9
+            }
+          },
+          {
+            "pos": 4,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 3,
+                "m_60DB8F99": true
+              },
+              "m_value": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 2,
+                "m_60DB8F99": true
+              }
+            }
+          }
+        ],
+        "steps": [
+          {
+            "op": "invoke_node",
+            "node": 1,
+            "expected": {
+              "taken": true,
+              "entity": {
+                "2": 9,
+                "3": 9
+              },
+              "instance": {},
+              "diagnostics": [],
+              "random_draws_total": 0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "authored-link-order-is-not-node-order",
+      "input": {
+        "nodes": [
+          {
+            "pos": 1,
+            "class": "STU_3387AB5D",
+            "fields": {
+              "m_condition": true,
+              "m_truePlug": {
+                "$": "Plug",
+                "links": [
+                  [
+                    3,
+                    "m_inPlug"
+                  ],
+                  [
+                    2,
+                    "m_inPlug"
+                  ]
+                ],
+                "m_FF3DAF1E": []
+              }
+            }
+          },
+          {
+            "pos": 2,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 2,
+                "m_60DB8F99": true
+              },
+              "m_value": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 1,
+                "m_60DB8F99": true
+              }
+            }
+          },
+          {
+            "pos": 3,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 1,
+                "m_60DB8F99": true
+              },
+              "m_value": 5
+            }
+          }
+        ],
+        "steps": [
+          {
+            "op": "invoke_node",
+            "node": 1,
+            "expected": {
+              "taken": true,
+              "entity": {
+                "1": 5,
+                "2": 5
+              },
+              "instance": {},
+              "diagnostics": [],
+              "random_draws_total": 0
+            }
+          }
+        ],
+        "entity": {
+          "1": 0
+        }
+      }
+    },
+    {
+      "id": "unresolved-missing-client-links-and-dormant-unknowns",
+      "input": {
+        "nodes": [
+          {
+            "pos": 1,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 1,
+                "m_60DB8F99": true
+              },
+              "m_value": 1,
+              "m_outPlug": {
+                "$": "Plug",
+                "links": [
+                  [
+                    null,
+                    "m_inPlug"
+                  ],
+                  [
+                    99,
+                    "m_inPlug"
+                  ],
+                  [
+                    2,
+                    "m_inPlug"
+                  ],
+                  [
+                    3,
+                    "m_inPlug"
+                  ]
+                ],
+                "m_FF3DAF1E": []
+              }
+            }
+          },
+          {
+            "pos": 2,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 2,
+                "m_60DB8F99": true
+              },
+              "m_value": 2
+            },
+            "client_only": true
+          },
+          {
+            "pos": 3,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 3,
+                "m_60DB8F99": true
+              },
+              "m_value": 3
+            }
+          },
+          {
+            "pos": 4,
+            "class": "FixtureUnknownAction",
+            "fields": {}
+          },
+          {
+            "pos": 5,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": -1,
+                "m_60DB8F99": true
+              },
+              "m_value": {
+                "$": "FixtureUnknownValue"
+              }
+            }
+          }
+        ],
+        "steps": [
+          {
+            "op": "invoke_node",
+            "node": 1,
+            "expected": {
+              "taken": true,
+              "entity": {
+                "1": 1,
+                "3": 3
+              },
+              "instance": {},
+              "diagnostics": [
+                {
+                  "node": 1,
+                  "kind": "missing_node",
+                  "position": 99
+                }
+              ],
+              "random_draws_total": 0
+            }
+          },
+          {
+            "op": "invoke_node",
+            "node": 4,
+            "expected": {
+              "taken": false,
+              "entity": {
+                "1": 1,
+                "3": 3
+              },
+              "instance": {},
+              "diagnostics": [
+                {
+                  "node": 1,
+                  "kind": "missing_node",
+                  "position": 99
+                },
+                {
+                  "node": 4,
+                  "kind": "unsupported_action",
+                  "class": "FixtureUnknownAction"
+                }
+              ],
+              "random_draws_total": 0
+            }
+          },
+          {
+            "op": "invoke_node",
+            "node": 5,
+            "expected": {
+              "taken": false,
+              "entity": {
+                "1": 1,
+                "3": 3
+              },
+              "instance": {},
+              "diagnostics": [
+                {
+                  "node": 1,
+                  "kind": "missing_node",
+                  "position": 99
+                },
+                {
+                  "node": 4,
+                  "kind": "unsupported_action",
+                  "class": "FixtureUnknownAction"
+                },
+                {
+                  "node": 5,
+                  "kind": "expression",
+                  "error": "unsupported_config",
+                  "detail": "FixtureUnknownValue"
+                }
+              ],
+              "random_draws_total": 0
+            }
+          }
+        ],
+        "expected_initial_diagnostics": []
+      }
+    },
+    {
+      "id": "invalid-scalar-index-is-not-an-omitted-index",
+      "input": {
+        "nodes": [
+          {
+            "pos": 1,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 1,
+                "m_60DB8F99": true
+              },
+              "m_value": {
+                "$": "STU_919FD47C",
+                "m_expression": {
+                  "m_opcodes": [
+                    14,
+                    0,
+                    14,
+                    1,
+                    69,
+                    0
+                  ],
+                  "m_dynamicVars": [],
+                  "m_D99EF254": []
+                },
+                "m_configVars": [
+                  {
+                    "$": "STUConfigVarInt",
+                    "m_value": 7
+                  },
+                  {
+                    "$": "STUConfigVarInt",
+                    "m_value": 7
+                  }
+                ]
+              },
+              "m_index": []
+            }
+          },
+          {
+            "pos": 2,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 1,
+                "m_60DB8F99": true
+              },
+              "m_value": 2,
+              "m_index": "bad"
+            }
+          }
+        ],
+        "steps": [
+          {
+            "op": "invoke_node",
+            "node": 1,
+            "expected": {
+              "taken": false,
+              "entity": {},
+              "instance": {},
+              "diagnostics": [
+                {
+                  "node": 1,
+                  "kind": "unsupported_field",
+                  "detail": "SetVar array index"
+                }
+              ],
+              "random_draws_total": 1
+            }
+          },
+          {
+            "op": "invoke_node",
+            "node": 2,
+            "expected": {
+              "taken": false,
+              "entity": {},
+              "instance": {},
+              "diagnostics": [
+                {
+                  "node": 1,
+                  "kind": "unsupported_field",
+                  "detail": "SetVar array index"
+                },
+                {
+                  "node": 2,
+                  "kind": "unsupported_field",
+                  "detail": "SetVar array index"
+                }
+              ],
+              "random_draws_total": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "map-key-failure-follows-value-and-skips-dynamic-index",
+      "input": {
+        "nodes": [
+          {
+            "pos": 1,
+            "class": "STUStatescriptActionSetVar",
+            "fields": {
+              "m_out_Var": {
+                "$": "STUConfigVarDynamic",
+                "m_identifier": 1,
+                "m_60DB8F99": true
+              },
+              "m_value": {
+                "$": "STU_919FD47C",
+                "m_expression": {
+                  "m_opcodes": [
+                    14,
+                    0,
+                    14,
+                    1,
+                    69,
+                    0
+                  ],
+                  "m_dynamicVars": [],
+                  "m_D99EF254": []
+                },
+                "m_configVars": [
+                  {
+                    "$": "STUConfigVarInt",
+                    "m_value": 7
+                  },
+                  {
+                    "$": "STUConfigVarInt",
+                    "m_value": 7
+                  }
+                ]
+              },
+              "m_key": "unsupported map key",
+              "m_index": {
+                "$": "STU_919FD47C",
+                "m_expression": {
+                  "m_opcodes": [
+                    14,
+                    0,
+                    14,
+                    1,
+                    69,
+                    0
+                  ],
+                  "m_dynamicVars": [],
+                  "m_D99EF254": []
+                },
+                "m_configVars": [
+                  {
+                    "$": "STUConfigVarInt",
+                    "m_value": 7
+                  },
+                  {
+                    "$": "STUConfigVarInt",
+                    "m_value": 7
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "steps": [
+          {
+            "op": "invoke_node",
+            "node": 1,
+            "expected": {
+              "taken": false,
+              "entity": {},
+              "instance": {},
+              "diagnostics": [
+                {
+                  "node": 1,
+                  "kind": "unsupported_field",
+                  "detail": "SetVar map key"
+                }
+              ],
+              "random_draws_total": 1
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -65,6 +65,8 @@ For two-room release timing benchmarks, see `docs/NATIVE_SERVER_ARCHITECTURE.md#
 
 ## Architecture & Behavior Contract Guidelines
 
+For a focused VM walkthrough, the pinned action regression and synthetic performance harness, see [StateScript development](docs/STATESCRIPT_DEVELOPMENT.md).
+
 - **Respect workspace boundaries:** Keep `orpheus-wire`, `orpheus-collision`, and `orpheus-runtime` free of server/ECS/socket dependencies (`cargo tree --locked -p <crate>`).
 - **Shared contracts:** Keep protocol, World-query, profile-settings, and VM semantics aligned with Python via `fixtures/behavior/*.json` ([docs/BEHAVIOR_CONTRACTS.md](docs/BEHAVIOR_CONTRACTS.md)).
 - **Original-client observations:** Keep fixture/headless results clearly separate from live 1.74.0.0.104319 client testing ([gameplay report form](https://github.com/leafall903/ORPHEUS/issues/new?template=gameplay-verification.yml)).

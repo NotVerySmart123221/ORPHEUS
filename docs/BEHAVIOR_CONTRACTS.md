@@ -1,6 +1,8 @@
 # Shared Behavior Contracts (`rust`)
 
-ORPHEUS stores language-neutral JSON contracts under `fixtures/behavior/` (`47` files total) so Python (`main`) and Rust (`rust`) run identical synthetic test cases through production code paths without bundling copyrighted game assets or captures.
+ORPHEUS stores language-neutral JSON contracts under `fixtures/behavior/` (`48` files total). Cross-language consumers compare Python (`main`) and Rust (`rust`) through production code paths; Rust-only regression contracts identify their narrower scope explicitly. Fixtures do not bundle game assets or captures.
+
+The Rust-only `script-actions-v1.json` adds 15 historical assignment/branch cases pinned to `f763beb`. Both public workspace lanes run `script_init::tests::actions_contract::actions_preserve_the_pinned_synthetic_reference_contract`; it is not registered in the Python/Rust differential job. See the [action development guide](STATESCRIPT_DEVELOPMENT.md) for provenance, current module boundaries and the synthetic benchmark.
 
 Public synthetic fixtures must never contain game binaries, raw captures, signing keys, or private credentials.
 
