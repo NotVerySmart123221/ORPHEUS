@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "case_id": "profile-settings.persistence.v1",
+  "target_build": 104319,
+  "source": {
+    "revision": "7164b85c",
+    "paths": [
+      "src/ow174/accounts/profile.py",
+      "src/ow174/lobby/handlers/settings.py",
+      "src/ow174/content/player.py"
+    ]
+  },
+  "evidence": "synthetic-reference",
+  "client_acceptance": "pending",
+  "input": {
+    "cases": [
+      {
+        "name": "blocks_replace_and_overlay_defaults",
+        "initial_profile": {
+          "player_name": "ContractTester",
+          "settings": {}
+        },
+        "input_packets": [
+          {
+            "msg_id": 22200,
+            "payload": {
+              "+0x78": { "+0x0": 10, "+0x4": 20 }
+            }
+          },
+          {
+            "msg_id": 22200,
+            "payload": {
+              "+0x78": { "+0x0": 99 }
+            }
+          },
+          {
+            "msg_id": 22201,
+            "payload": {
+              "+0x78": { "+0x4": false }
+            }
+          },
+          {
+            "msg_id": 22202,
+            "payload": {
+              "+0x78": { "+0x0": false, "+0x5": 0 }
+            }
+          },
+          {
+            "msg_id": 22203,
+            "payload": {
+              "+0x78": { "+0x0": 7 }
+            }
+          }
+        ]
+      },
+      {
+        "name": "values_merge_last_write_wins_and_sentinel",
+        "initial_profile": {
+          "player_name": "ContractTester",
+          "settings": {
+            "+0x130": [
+              { "+0x0": 3, "+0x8": "0x00E0B03A" },
+              { "+0x0": 42, "+0x8": "14725179" }
+            ]
+          }
+        },
+        "input_packets": [
+          {
+            "msg_id": 22204,
+            "payload": {
+              "+0x78": [
+                { "+0x0": 100, "+0x8": 14725179 },
+                { "+0x0": 200, "+0x8": 14725179 },
+                { "+0x0": -1, "+0x8": 14725178 },
+                { "+0x0": 4611686018427387904, "+0x8": 2147483649 }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "name": "defaults_when_blocks_absent",
+        "initial_profile": {
+          "player_name": "ContractTester",
+          "settings": {}
+        },
+        "input_packets": []
+      }
+    ]
+  },
+  "expected": {
+    "cases": {
+      "blocks_replace_and_overlay_defaults": {
+        "settings": {
+          "+0x78": { "+0x0": 99 },
+          "+0x108": { "+0x4": false },
+          "+0x10D": { "+0x0": false, "+0x5": 0 },
+          "+0x120": { "+0x0": 7 }
+        },
+        "message_20802": {
+          "+0x78": { "+0x0": 99 },
+          "+0x108": { "+0x4": false },
+          "+0x10D": { "+0x0": false, "+0x5": 0 },
+          "+0x120": { "+0x0": 7 },
+          "+0x130": []
+        }
+      },
+      "values_merge_last_write_wins_and_sentinel": {
+        "settings": {
+          "+0x130": [
+            { "+0x0": -1, "+0x8": 14725178 },
+            { "+0x0": 200, "+0x8": 14725179 },
+            { "+0x0": 4611686018427387904, "+0x8": -2147483647 }
+          ]
+        },
+        "message_20802": {
+          "+0x78": {},
+          "+0x108": { "+0x4": true },
+          "+0x10D": { "+0x0": true, "+0x5": 1 },
+          "+0x120": {},
+          "+0x130": [
+            { "+0x0": -1, "+0x8": 14725178 },
+            { "+0x0": 200, "+0x8": 14725179 },
+            { "+0x0": 4611686018427387904, "+0x8": -2147483647 }
+          ]
+        }
+      },
+      "defaults_when_blocks_absent": {
+        "settings": {},
+        "message_20802": {
+          "+0x78": {},
+          "+0x108": { "+0x4": true },
+          "+0x10D": { "+0x0": true, "+0x5": 1 },
+          "+0x120": {},
+          "+0x130": []
+        }
+      }
+    }
+  }
+}
