@@ -63,7 +63,7 @@ cargo run --locked --features inspector --bin orpheus_server -- --data-dir 'C:\p
 | **怪鼠复仇与卡西迪** | 全部 14 张卡牌初始化完成；普通难度卡西迪左/右键、翻滚、闪光弹、午时已到、`0B8B` 充能、计分、Boss 语音与城门阶段已通过离线回放。 | 已实机确认失败结算标题；卡西迪全部技能手感、Boss 登场镜头/追击、结算耗时与自然胜利待实机验收。 |
 | **底层架构与隔离** | `orpheus-wire`、`orpheus-collision`、`orpheus-runtime` 已独立成 Crate；`script_init/`、`game_combat/`、`scene_assets/`、`game_service/` 完成模块化拆分及房间级 Panic 隔离。 | 剩余大文件拆分（#60）、双向契约补齐（#61）、3D Inspector 增强（#62）、通用 NavMesh（#63）、独立 `statescript` Crate（#64）与全 ECS 统一（#65）已建 Issue 跟进。 |
 
-更多详情见 [架构文档](docs/NATIVE_SERVER_ARCHITECTURE.md) · [对等进度](docs/RUST_PARITY.md) · [行为契约](docs/BEHAVIOR_CONTRACTS.md) · [路线图](docs/ROADMAP.md)。
+更多详情见 [架构与迁移](docs/NATIVE_SERVER_ARCHITECTURE.md) · [进度与对等状态](docs/STATE.md) · [行为契约](docs/BEHAVIOR_CONTRACTS.md) · [路线图](docs/ROADMAP.md)。
 
 ---
 
@@ -82,4 +82,4 @@ cargo run --locked --features inspector --bin orpheus_server -- --data-dir 'C:\p
 
 ## 许可与声明
 
-源码采用 [MIT 协议](LICENSE)，致谢见 [CREDITS.md](CREDITS.md) 与 [CONTRIBUTORS.md](CONTRIBUTORS.md)。严禁向公开仓库提交游戏客户端、商业资源、签名输入、密钥、账号数据或原始网络抓包。
+源码采用 [MIT 协议](LICENSE)，贡献者与致谢见 [CREDITS.md](CREDITS.md)。严禁向公开仓库提交游戏客户端、商业资源、签名输入、密钥、账号数据或原始网络抓包。

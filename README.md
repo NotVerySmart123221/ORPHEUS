@@ -63,7 +63,7 @@ These overrides apply only to card `0x3C` and do not affect default runs or othe
 | **Junkenstein & Normal Cassidy** | All 14 cards load; Normal Cassidy Primary/Fan/Roll/Flashbang/Deadeye, ultimate charge (`0B8B`), team score, boss speech (`40E05F6B`), and gate stages pass headless replays. | Client Defeat heading verified; full Cassidy skills, Boss intro cameras/pursuit, recap timer, and natural Victory await live client acceptance. |
 | **Architecture & Isolation** | Independent `orpheus-wire`, `orpheus-collision`, and `orpheus-runtime` workspace crates; modularized `script_init/`, `game_combat/`, `scene_assets/`, and `game_service/` with room-level fault/panic isolation. | Portable `orpheus-statescript` crate (#64), remaining module splits (#60), cross-map NavMesh (#63), unified ECS player bodies (#65), and Inspector ray/nav overlay (#62) tracked in issues. |
 
-Details: [docs/NATIVE_SERVER_ARCHITECTURE.md](docs/NATIVE_SERVER_ARCHITECTURE.md) · [docs/RUST_PARITY.md](docs/RUST_PARITY.md) · [docs/BEHAVIOR_CONTRACTS.md](docs/BEHAVIOR_CONTRACTS.md) · [docs/ROADMAP.md](docs/ROADMAP.md)
+Details: [docs/NATIVE_SERVER_ARCHITECTURE.md](docs/NATIVE_SERVER_ARCHITECTURE.md) · [docs/STATE.md](docs/STATE.md) · [docs/BEHAVIOR_CONTRACTS.md](docs/BEHAVIOR_CONTRACTS.md) · [docs/ROADMAP.md](docs/ROADMAP.md)
 
 ---
 
@@ -82,4 +82,4 @@ Details: [docs/NATIVE_SERVER_ARCHITECTURE.md](docs/NATIVE_SERVER_ARCHITECTURE.md
 
 ## License & Credits
 
-MIT-licensed source code ([LICENSE](LICENSE)); upstream protocol research and authorship credits live in [CREDITS.md](CREDITS.md) and [CONTRIBUTORS.md](CONTRIBUTORS.md). Never commit game clients, commercial assets, signing inputs, keys, credentials, or raw packet captures.
+MIT-licensed source code ([LICENSE](LICENSE)); upstream protocol research and contributor credits live in [CREDITS.md](CREDITS.md). Never commit game clients, commercial assets, signing inputs, keys, credentials, or raw packet captures.
