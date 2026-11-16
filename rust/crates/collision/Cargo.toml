@@ -3,6 +3,7 @@ name = "orpheus-collision"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 description = "Static geometry queries and character contact solver for ORPHEUS"
 

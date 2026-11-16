@@ -44,7 +44,7 @@ cargo test --locked --all-targets -p orpheus-collision -p orpheus-runtime -p orp
 python3 -B scripts/check_gallery_preview_policy.py
 ```
 
-Note: `public-checks.yml` also verifies all **38** `shared_*_contract` tests by `--exact` name. When splitting modules or moving tests, preserve the exact test module path expected by `.github/workflows/public-checks.yml`, `docs/RUST_FOUNDATION_BASELINE.md`, and `docs/RUST_PARITY.md`.
+Note: `public-checks.yml` also verifies all **38** `shared_*_contract` tests by `--exact` name. When splitting modules or moving tests, preserve the exact test module path expected by `.github/workflows/public-checks.yml` and [docs/STATE.md](docs/STATE.md).
 
 ---
 

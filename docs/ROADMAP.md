@@ -1,8 +1,8 @@
 # Restoration Roadmap (`rust`)
 
 Target build: **Overwatch 1 retail 1.74.0.0.104319**.
-- For Rust vs. Python implementation parity, see [RUST_PARITY.md](RUST_PARITY.md).
-- For architectural and crate refactoring tracks (`#60`–`#65`), see [RUST_FOUNDATION_REVIEW.md](RUST_FOUNDATION_REVIEW.md).
+- For Rust verification & Python parity status, see [STATE.md](STATE.md).
+- For workspace architecture, crate boundaries, and `#60`–`#65` tracking, see [NATIVE_SERVER_ARCHITECTURE.md](NATIVE_SERVER_ARCHITECTURE.md).
 - For active tasks, see [GitHub Issues](https://github.com/leafall903/ORPHEUS/issues).
 
 ---
