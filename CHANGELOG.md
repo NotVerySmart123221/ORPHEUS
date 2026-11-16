@@ -4,6 +4,14 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ## Unreleased
 
+### 2026-11-15
+
+#### Native lobby settings persistence (22200–22204)
+
+- Added `SettingsRequest` (`SOCIAL_OUT` 22200–22204) in `lobby_player_messages` and wired it into `server::Lobby::serve_peer` so full setting blocks (`+0x78`, `+0x108`, `+0x10D`, `+0x120`) replace in place and `+0x130` key-value updates merge by canonical `+0x8` key (last write wins, preserving sentinel `-1` and 64-bit `+0x0` values).
+- Added `Profile::from_json` and `normalize_settings` in `accounts`, normalizing stringified decimal/hex `+0x8` keys to signed 32-bit integers and rejecting boolean or out-of-range values on load.
+- Added the shared synthetic `fixtures/behavior/profile-settings-v1.json` contract and `rust/tests/profile_settings.rs` integration test covering persistence across save/reload and `20802` reconstruction. Original-client acceptance remains pending.
+
 ### 2026-11-12
 
 #### Room fault containment

@@ -36,6 +36,10 @@ path = "rust/tests/protocol.rs"
 name = "world_queries"
 path = "rust/tests/world_queries.rs"
 
+[[test]]
+name = "profile_settings"
+path = "rust/tests/profile_settings.rs"
+
 [features]
 default = []
 inspector = ["dep:httparse"]

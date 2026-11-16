@@ -209,7 +209,7 @@ fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
-pub(crate) fn restore_fields(map: Map<String, Json>) -> io::Result<Fields> {
+pub fn restore_fields(map: Map<String, Json>) -> io::Result<Fields> {
     map.into_iter()
         .map(|(key, value)| {
             let offset = key
@@ -251,6 +251,44 @@ pub(crate) fn restore_value(value: Json) -> io::Result<Value> {
             }
         }
         Json::Null => Err(invalid("unexpected null in a retail template field")),
+    }
+}
+
+pub fn fields_to_json(fields: &Fields) -> io::Result<Map<String, Json>> {
+    fields
+        .iter()
+        .map(|(offset, value)| Ok((format!("+0x{offset:X}"), value_to_json(value)?)))
+        .collect()
+}
+
+pub(crate) fn value_to_json(value: &Value) -> io::Result<Json> {
+    match value {
+        Value::Bool(flag) => Ok(Json::Bool(*flag)),
+        Value::Signed(number) => Ok(Json::from(*number)),
+        Value::Unsigned(number) => Ok(Json::from(*number)),
+        Value::Float32(number) => serde_json::Number::from_f64(f64::from(*number))
+            .map(Json::Number)
+            .ok_or_else(|| invalid("non-finite f32 in JAM value")),
+        Value::Float64(number) => serde_json::Number::from_f64(*number)
+            .map(Json::Number)
+            .ok_or_else(|| invalid("non-finite f64 in JAM value")),
+        Value::String(text) => Ok(Json::String(text.clone())),
+        Value::Blob(bytes) => {
+            let mut hex = String::with_capacity(bytes.len() * 2);
+            for byte in bytes {
+                use std::fmt::Write as _;
+                let _ = write!(&mut hex, "{byte:02x}");
+            }
+            let mut map = Map::new();
+            map.insert("$bytes".into(), Json::String(hex));
+            Ok(Json::Object(map))
+        }
+        Value::Array(items) => items
+            .iter()
+            .map(value_to_json)
+            .collect::<io::Result<Vec<_>>>()
+            .map(Json::Array),
+        Value::Struct(fields) => fields_to_json(fields).map(Json::Object),
     }
 }
 

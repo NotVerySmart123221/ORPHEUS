@@ -29,6 +29,7 @@ use crate::{
     lobby_gallery::EquipRequest,
     lobby_login::SIGNED_IN_ELSEWHERE,
     lobby_menu::{MenuHero, extra_preload_themes},
+    lobby_player_messages::SettingsRequest,
     lobby_practice::{self, SoloPracticeHandoff},
     lobby_presence::{PRO_ACCOUNT_BITS, Presence},
     lobby_ranked::{LeaderboardPlaces, Ranked},
@@ -420,6 +421,12 @@ impl Lobby {
             session.send(&join_chat_channel(general_channel()))?;
         }
         while let Some(request) = session.receive_message_until(|| lease.current())? {
+            if let Some(settings) = SettingsRequest::read(&request) {
+                if let Err(error) = settings.apply(&login.account) {
+                    eprintln!("[lobby] ignoring invalid settings update: {error}");
+                }
+                continue;
+            }
             if let Some(equip) = EquipRequest::read(&request) {
                 if let Some(equipped) = equip.apply(&login, &self.collection, wall_time)? {
                     if let (Some(seat), Some(skin)) = (&lease.seat, equipped.skin) {

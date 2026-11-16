@@ -3,7 +3,7 @@
 use std::{collections::BTreeMap, io};
 
 use crate::{
-    accounts::{Profile, battle_tag},
+    accounts::{Account, Profile, battle_tag, normalize_setting_entries, normalize_setting_key},
     catalog::{game_region_number, region_of},
     jam_codec::{
         Fields, Schemas,
@@ -12,11 +12,20 @@ use crate::{
     },
     lobby_login::Identity,
     lobby_transport::LobbyMessage,
-    retail_templates::{LOBBY, restore_fields, restore_value},
+    retail_templates::{LOBBY, restore_fields, restore_value, value_to_json},
 };
 
 pub const ENDORSEMENTS: u32 = 0x79bf_ddbe;
 pub const PERMISSIONS: u32 = 0xbcd5_7a46;
+pub const SOCIAL_OUT: u32 = 0x75d3_2ae2;
+
+const SETTINGS_BLOCKS: [(u32, &str); 4] = [
+    (22200, "+0x78"),
+    (22201, "+0x108"),
+    (22202, "+0x10D"),
+    (22203, "+0x120"),
+];
+const SETTINGS_VALUES_MSG: u32 = 22204;
 
 const ACCOUNT_FEATURES: [u64; 8] = [
     0x0d80_0000_0000_55ed,
@@ -187,6 +196,77 @@ fn settings_block(fields: &mut Fields, offset: u32) -> io::Result<&mut Fields> {
 
 fn invalid(message: impl std::fmt::Display) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.to_string())
+}
+
+pub enum SettingsRequest {
+    Block { field: &'static str, payload: Value },
+    Values { entries: Vec<Value> },
+}
+
+impl SettingsRequest {
+    /// Parse an incoming SOCIAL_OUT settings update (22200-22204).
+    pub fn read((crc, id, fields): &LobbyMessage) -> Option<Self> {
+        if *crc != SOCIAL_OUT {
+            return None;
+        }
+        if let Some((_, field)) = SETTINGS_BLOCKS.iter().find(|(msg_id, _)| msg_id == id) {
+            return Some(Self::Block {
+                field,
+                payload: fields.get(&0x78)?.clone(),
+            });
+        }
+        if *id == SETTINGS_VALUES_MSG {
+            let Array(entries) = fields.get(&0x78)? else {
+                return None;
+            };
+            return Some(Self::Values {
+                entries: entries.clone(),
+            });
+        }
+        None
+    }
+
+    /// Persist a settings block (full replacement) or key-value delta (merge by +0x8).
+    pub fn apply(&self, account: &Account) -> io::Result<()> {
+        account.edit_profile(|profile| {
+            match self {
+                Self::Block { field, payload } => {
+                    profile
+                        .settings
+                        .insert((*field).into(), value_to_json(payload)?);
+                }
+                Self::Values { entries } => {
+                    let existing = match profile.settings.get("+0x130") {
+                        Some(raw) if !raw.is_null() => normalize_setting_entries(raw)?,
+                        _ => Vec::new(),
+                    };
+                    let incoming_json = serde_json::Value::Array(
+                        entries
+                            .iter()
+                            .map(value_to_json)
+                            .collect::<io::Result<Vec<_>>>()?,
+                    );
+                    let incoming = normalize_setting_entries(&incoming_json)?;
+                    let mut merged: Vec<serde_json::Value> = Vec::new();
+                    let mut index_by_key: BTreeMap<i32, usize> = BTreeMap::new();
+                    for entry in existing.into_iter().chain(incoming) {
+                        let key = normalize_setting_key(&entry["+0x8"])?;
+                        if let Some(&idx) = index_by_key.get(&key) {
+                            merged[idx] = entry;
+                        } else {
+                            index_by_key.insert(key, merged.len());
+                            merged.push(entry);
+                        }
+                    }
+                    profile
+                        .settings
+                        .insert("+0x130".into(), serde_json::Value::Array(merged));
+                }
+            }
+            Ok(Some(()))
+        })?;
+        Ok(())
+    }
 }
 
 pub fn features() -> Fields {
