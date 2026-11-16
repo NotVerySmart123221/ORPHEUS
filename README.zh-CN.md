@@ -77,7 +77,7 @@ cargo run --locked --features inspector --bin orpheus_server -- --data-dir 'C:\p
 | `rust/crates/runtime/`（`orpheus-runtime`） | 运行时清单校验、`--check-runtime` 自检与 `prepare_server_runtime` 打包工具 |
 | `rust/scripts/` | Lua 巡逻策略脚本（`patrol.lua`） |
 | `rust/assets/inspector/`、`rust/tests/` | 3D 调试前端页面与跨模块集成测试（`world_queries`、`profile_settings`、`protocol`、`runtime_preflight`） |
-| `fixtures/behavior/`、`scripts/` | 与 `main` 共用的 47 个 JSON 行为契约夹具与校验脚本 |
+| `fixtures/behavior/`、`scripts/` | 48 个 JSON 行为夹具（包含仅用于 Rust 的回归契约）及跨语言校验脚本 |
 | `relay/` | Windows C++ 客户端 TLS 中继源码 |
 
 ## 许可与声明

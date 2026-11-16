@@ -4,6 +4,16 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ## Unreleased
 
+### 2026-11-16
+
+#### Integrate historical action verification into the current VM
+
+- Retained 15 synthetic action cases from the local foundation experiment, with unchanged expected results pinned to `f763beb`. Adapted their consumer to the current VM test modules; no production interpreter or existing module split is replaced.
+- Added a Criterion harness for loading an 11-node graph and executing 32 dynamic messages through production APIs. Both workloads check expected state in public test mode. Added contributor guidance covering the current module layout, contract provenance and measurement limits.
+- Kept the newer nested-destination behavior and the current documentation structure. Deferred the older typed-IR implementation: its historical loading regression and changed VM semantics need fresh evaluation before adoption. The retained fixture is a Rust regression contract, not additional Python or original-client acceptance.
+- Passed formatting, both Clippy lanes, 506 default / 509 inspector public workspace tests, both benchmark workloads in test mode and exact Rust 1.85.0 checking. Two selected prepared regressions (rifle/reload and controller/bot startup), runtime preflight and headless startup passed.
+- The existing ignored `scene_assets::tests::stock_soldier_owner_session_idles_fires_reloads_and_sprints` check failed with the local target-tagged base pack: fixed instance `24` held graph `0x0F82` rather than expected `0x05AD`. Diagnostic inspection found the message table still present and a further switch-instance mismatch (`19` versus `18`). Its assertions and production code are unchanged; this is an unresolved prepared acceptance gap, not a passing result. No original-client session or new performance comparison was run.
+
 ### 2026-11-15
 
 #### Native lobby settings persistence (22200–22204)

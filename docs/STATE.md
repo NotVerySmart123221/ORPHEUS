@@ -11,13 +11,15 @@ Tracks implemented capabilities, Python-vs-Rust parity, verified baselines, and 
 | Lane / Suite | Scope Verified in CI (`.github/workflows/public-checks.yml`) |
 | --- | --- |
 | **Portable crates (Linux)** | `orpheus-wire`, `orpheus-collision`, and `orpheus-runtime` compile and pass isolated tests without server/ECS deps (`cargo test --locked --all-targets -p orpheus-collision -p orpheus-runtime -p orpheus-wire`). |
-| **Root workspace (`default` / `inspector`)** | `rustfmt --check`, zero-warning `clippy`, `532` (`406` public / `126` `#[ignore]`) tests in `default`, and `536` (`410` public / `126` `#[ignore]`) tests in `--features inspector`, plus MSRV `1.85.0` check. |
+| **Root workspace (`default` / `inspector`)** | `rustfmt --check`, zero-warning `clippy`, root library `533` (`407` public / `126` `#[ignore]`) tests in `default`, and `537` (`411` public / `126` `#[ignore]`) tests in `--features inspector`, plus MSRV `1.85.0` check. Workspace members and integration targets bring public totals to `506` / `509`; the synthetic action benchmark also validates both workloads in test mode. |
 | **Cross-language contracts (`shared-behavior-contracts`)** | Checks out pinned `main` (`python-reference`) and verifies identical outputs across `jam-framing-v1.json`, `world-queries-v1.json`, and `profile-settings-v1.json`, `12` public Python tests, and `38` exact StateScript VM contracts on `rust`. |
 | **C++ gallery preview policy** | `scripts/check_gallery_preview_policy.py` compiles `relay/gallery_preview_policy.h` and checks `18` resource-selection + `6` owned-tree pruning cases against `gallery-preview-policy-v1.json`. |
 
 ---
 
 ## Core Workflow Parity Matrix (`main` vs. `rust`)
+
+Local integration check (2026-11-16): rifle/reload and controller/training-bot startup prepared tests passed with the target-tagged base pack, as did runtime preflight and headless startup. The longer `scene_assets::tests::stock_soldier_owner_session_idles_fires_reloads_and_sprints` test failed its fixed-instance assertion: instance `24` contained graph `0x0F82`, not `0x05AD`. The message table was present elsewhere; diagnostic inspection also found switch instance `19` versus expected `18`. The original assertions are retained. This prepared acceptance gap needs a reference-backed review of instance identity expectations and is not covered by the public test results above.
 
 | Workflow | Python (`main`) | Rust (`rust`) | Open Client / Parity Gap |
 | --- | --- | --- | --- |
