@@ -1,194 +1,38 @@
-# Project state
+# Verification & Implementation State (`rust`)
 
-Local evidence from 2026-11-05, for client **1.74.0.0.104319**. This record
-includes historical checkpoints. See the [changelog](../CHANGELOG.md) for
-subsequent repairs and the [roadmap](ROADMAP.md) for current acceptance goals.
-The gameplay integration uses LizRollin's wip revision
-`9f8f3bcb5eccab6fb7738bee3c2371fcf0623f29`, on top of the Boi baseline and the
-local startup/research work. [WIP.md](https://github.com/leafall903/ORPHEUS/blob/main/docs/WIP.md) retains the upstream author's
-test claims and known issues. Those claims are separate from the observations below.
-The Python code, launchers and tests described here live on
-[`main`](https://github.com/leafall903/ORPHEUS/tree/main); their paths are those at the time of this record.
+Tracks what has been verified on the `rust` native server branch targeting **Overwatch 1.74.0.0.104319**. For detailed Python comparison parity see [RUST_PARITY.md](RUST_PARITY.md), and for baseline prepared test names see [RUST_FOUNDATION_BASELINE.md](RUST_FOUNDATION_BASELINE.md).
 
-Maintainer automation runs server work and offline checks. Volunteer client
-playtests are a separate, manual verification lane described in
-[CONTRIBUTING.md](../CONTRIBUTING.md#original-client-verification).
-The Python server-only entry is `START_SERVER_LOCAL.cmd` / `--mode retail
---no-launch`; it retains the Battle.net/RPC/lobby/game services without a game
-path, relay preparation or client-launch manager.
+*(Note: historical Python `9f8f3bcb` notes reside on `main`; this file tracks the Rust developer preview.)*
 
-## Local client observations
+---
 
-- The real `_retail_/Overwatch.exe` logs into the local emulator without running
-  the official Battle.net launcher.
-- The Practice Range loads and the hero-selection screen appears. A hero switch
-  was observed and recorded by the server.
-- After the gameplay integration, the user reports killing training robots. The
-  corresponding log records multiple damage notifications (25001), eliminations
-  (25005), bot deaths and respawns.
-- The user reports **no enemy overhead health bar**, no expected hit effect,
-  and an elimination label without the robot's name. These remain unresolved.
-  A robot's expected effect must be checked separately from flesh blood effects.
+## Current Capabilities on `rust`
 
-The automated UI check was stopped by the user with Escape. It did not establish
-stable weapon/ammo HUD, a complete shooting/reload cycle, ten repeated hero
-switches/reentries, or multiplayer agreement. Server logs and model tests do not
-replace these client acceptance checks.
+### 1. Public CI & Workspace Checks (No Game Data Required)
+- **Workspace crates:** `orpheus-wire`, `orpheus-collision`, and `orpheus-runtime` build and pass isolated Linux & Windows tests (`cargo test --locked --all-targets -p orpheus-collision -p orpheus-runtime -p orpheus-wire`).
+- **Server public suites:** `532` library unit tests (`406` run publicly, `126` `#[ignore]` prepared-data tests) in `default`, and `536` (`410` public, `126` `#[ignore]`) in `--features inspector`, plus zero-warning `clippy`, `cargo fmt --check`, and MSRV `1.85.0` checks.
+- **Cross-language contracts (`shared-behavior-contracts`):** Hosted CI checks out `main` (`python-reference`) and verifies identical behavior across `jam-framing-v1.json`, `world-queries-v1.json`, and `profile-settings-v1.json`, plus `12` public Python tests and `38` exact StateScript VM contracts on `rust`.
+- **C++ gallery preview policy:** `scripts/check_gallery_preview_policy.py` compiles the client preview relay header cleanly and verifies 18 resource fallback + 6 owned-tree pruning cases.
 
-## Gameplay implementation now present
+### 2. Prepared-Runtime Regressions (`--ignored` with Base / Junkenstein 104319 Packs)
+- **Lobby & Match Loopback:** Encrypted Battle.net RPC + JAM lobby login, gallery skin selection, runtime pack preparation (`prepare_server_runtime`), UDP authentication, Practice Range & all 14 Junkenstein card loading.
+- **Practice Range & Soldier: 76:** 43 collision-backed movers match Python reference kinematics; authored Soldier body tree, rifle/reload, Sprint modifier, Helix Rockets, and Biotic Field run in loopback rooms alongside Bevy ECS bots and Lua patrols.
+- **Junkenstein & Normal Cassidy:** Full headless replays cover Normal Cassidy Primary/Fan damage against all 5 Bosses and common NPCs, Combat Roll, Flashbang, Deadeye, `0B8B` ultimate charge, team score, Boss voice selection (`40E05F6B`), and Natural Victory / Defeat outcomes.
+- **Fault Isolation & Worker Timing:** Room errors and `catch_unwind` panics retire only the broken room while sibling rooms keep serving encrypted world updates and hits; two-room timing workload benchmark verifies worker histograms (`p95`/`p99`) cleanly.
 
-The canonical gameplay path uses `game/script/driver.py`, `runtime.py`,
-`nodes.py` and `expr.py`, with target-build graph and codec data. It runs body,
-weapon-manager and weapon instances and encodes owner/observer state frames.
-It is no longer the earlier flat-movement/lobby-only implementation.
+---
 
-The imported implementation includes collision-based movement, hitscan and
-projectiles, health pools, damage/death/respawn, Practice Range bots, and partial
-hero abilities and match presentation. Each feature still needs scenario-specific
-client validation. It does not constitute a complete game server or support all
-heroes and match rules.
+## Remaining Open Work
 
-Local repairs add bounded expression execution and malformed-bytecode handling;
-freeze reliable body creates to their original hero, skin, pose and projectile
-lease; retire queued/in-flight entity records and ACK callbacks after destroy;
-and reject late input packets without resetting only one command consumer.
-Command decoding handles uint32 wrap. At this checkpoint the native body driver
-rejected a forward wrap before changing its old-epoch timers and state. Later
-server-driven handoff and global clock recovery work is recorded in the
-[changelog](../CHANGELOG.md), with original-client recovery still to verify.
+### Live Original-Client Gaps
+- **Practice Range:** Live 60s Soldier: 76 weapon/ammo HUD acceptance (#3), bot overhead health bars (#7), localized kill feed names (#8), headshot SFX (#9), boundary death plane (#13), and upstairs patrol verification.
+- **Junkenstein (`0x3C`):** Recap elapsed-time display, Boss intro cameras & AI pursuit, Witch pistol fallback, Zombardier attacks, live Flashbang reaction animations, Hero Gallery client rendering, and Natural Victory client pass.
 
-Runtime event/update exhaustion and immediate plug cycles now fail the entire
-component with `ScriptBudgetError` (entity, frame and time included). Pending
-shots/events are discarded and later command/snapshot/frame generation is
-rejected. The live match handler retires that body's script; other players keep
-running. This prevents half-completed simulations from looking successful. It
-does not add automatic recovery or prove the cause of the reported live issues.
-
-At the initial integration checkpoint, 1086 Python tests passed. The formerly skipped
-King's Row physics case now runs with the locally built cache. A separate 62.448-second offline
-Soldier sequence applied/decoded 3903 owner chunks, observed ammo spending and
-seven refills, and ended with no active volley after release. This is a native
-driver/local decoder model check, not real-client HUD or combat acceptance.
-
-The Practice Range collision cache was built from this user's local CASC data:
-`0688.col`, format 5, 470397 bytes, SHA-256
-`dfdb71fbe9ad079d9d0b56fe12bd7c992a76c6ec942084d86f6388827f36a169`.
-This proves cache extraction and loading inputs, not complete map collision fidelity.
-
-All 95 catalog maps now have locally extracted, integrity-checked format-5 collision
-caches. Workshop Green Screen uses a checked slice of its original CASC bundle;
-both the container and asset content keys are verified. Matches now gate spawning
-and simulation on an explicit ready state and keep their World after global LRU
-eviction. Pending requests also keep their own completion handle. Movement, bots
-and combat use the same match World. Load failure reports an unavailable state
-and returns players rather than continuing with empty collision. Nine regressions
-cover loading, walls, failed workers, concurrent matches and six pending requests.
-
-Server and Match clocks and secure entropy now share an explicitly injectable
-execution environment. The default still reads the original time/secrets sources
-at each call. Ordered-read tests cover initialization, handoffs, pings and the
-network loop. An explicit in-memory recording/replay wrapper preserves all six
-read types, argument/callsite order and float bits, with permanent failure after
-any mismatch. It has no default recording or file output; returned tapes can
-contain private handoff keys. Fifteen wrapper tests pass. These are boundaries for
-full battle replay, not a complete recorder or deterministic Match replay.
-
-Body observation hashes now include lazy state-allocation order and the next
-event sequence without consuming it. Button resync, teardown and volley reporting
-traverse stored state order; equal-time events use sequence order. The isolated 975-command body
-example still matches. The real Match's projectile-lease discovery also allocates
-states after body creation; a body-only trace without that external operation now
-correctly reports an incomplete boundary instead of hiding the difference. Full
-Match capture must include that operation and its causal order.
-
-An explicit controlled-server journal now replays real encrypted ingress through
-the same GameServer router and captures API results, external-read positions,
-send bytes/outcomes and callback order. Collision reads verify the materialized
-World content; a source/table/runtime/config manifest rejects mismatched models.
-A real Practice Range cache scenario moved out of spawn, eliminated a visible
-training bot and observed its replacement after respawn; all86 controlled roots
-and13 send attempts matched replay, with the largest datagram1189 bytes. No
-game or network socket was started. This verifies controlled roots and wire;
-complete_battle_replay and full_state_verified remain False.
-
-The v2 journal adds an opt-in registered stored-state profile. It independently
-compares hashes before and after each root, including VM event/timer order and
-mutable identity, mover/contact/GJK state, combat and lifecycle state, stream
-baselines, transport queues and callbacks. An unrecorded change between roots or
-before the end fails the recording. A two-player encrypted protocol scenario
-replays damage, death, respawn and hero selection with the registered state check.
-The default wire-only profile remains available. The profile is not a live-loop
-recorder or a snapshot of the whole process. See
-[CONTROLLED_SERVER_JOURNAL_V2.txt](CONTROLLED_SERVER_JOURNAL_V2.txt) and
-[SERVER_STORED_STATE_V1.txt](SERVER_STORED_STATE_V1.txt).
-
-The new scenario exposed oversized native datagrams at spawn: the old budget
-loop stopped at one entity although messages plus that entity exceeded1264 bytes.
-Frame selection now permits zero entities, preserves ordered pending prefixes
-and commits queues, correction tokens and remote-create visibility only after a
-successful send. Known send errors retain queues while still consuming the nonce
-sequence. Ch2-only projectile events no longer remain forever in the pending
-queue. Nine dedicated packet-budget regressions pass. Individual records needing
-unimplemented fragmentation are explicitly rejected and retained; see
-[PACKET_BUDGET.txt](PACKET_BUDGET.txt) for this remaining limitation.
-
-## Research and regression boundary
-
-`script/research_runtime.py`, `script/body.py`, `script/replication.py`,
-`game/simulation.py`, `game/flat_model.py` and `game/range_model.py` preserve
-the earlier strict research, replay and geometry models. The live body driver
-does not run through those prototypes. Their reports measure their stated
-models; they are not a list of failures of the imported native gameplay runtime.
-
-The v1 replay schema deliberately keeps its original seven input fields. Native
-command extensions with non-default values require a newer recording contract;
-the v1 adapter rejects them instead of silently losing information. See
-[SIMULATION_CONTRACT.txt](SIMULATION_CONTRACT.txt).
-
-Observed native body traces now have a separate v2 recording/replay path, including
-all eleven decoded command fields, model/data fingerprints, stored-state and
-shot-boundary checks, explicit retirement, and missing-input/fault/truncation
-diagnostics. Movement log v2 also preserves windows before old/duplicate filtering.
-These diagnostics are opt-in. A 975-command offline-generated body trace matched
-its replay; it is not a full Match/combat/network capture. See
-[NATIVE_BODY_REPLAY_V2.txt](NATIVE_BODY_REPLAY_V2.txt).
-
-The repeated lifecycle protocol model covers ten Soldier/Reaper/Soldier round
-trips and ten leave/rejoins. Real encrypted loopback UDP packets pass through the
-production router and ACK handling, with an independent world-record reader
-feeding the body decoder model. The cases exercise create/full ACK gates,
-ordinary retransmission, retired records, observer references, fresh ammo/weapon
-state, and old connection packets after reentry. This is backend protocol-model
-acceptance; the user's real-client lifecycle/HUD checks remain separate.
-
-## Remaining acceptance and implementation work
-
-- Validate Soldier: 76 firing/reload and stable HUD for at least 60 seconds, then
-  repeated hero switches and leaving/reentering the Practice Range.
-- Resolve robot overhead bars, hit presentation and elimination-name lookup using
-  target-build evidence. The bot body cannot accept player-only component 123.
-- Recheck upstream defects: stuck firing/ammo after kills, Sprint eventually
-  failing, crashes after kills, skin-dependent Biotic Field and stale HUD health.
-  The new regression repairs are not proof that these live symptoms are cured.
-- Establish two-client combat and loss/reordering acceptance, then complete mode
-  phases, objectives, doors, health packs, match results and additional heroes.
-- Verify real command-epoch transitions and owner-frame recovery. Do not infer a
-  restart merely from a low frame in a late datagram.
-
-## Local startup
-
-The Python `START_LOCAL.cmd` uses `.venv`, `--test-players 1` and `--bnet-port 1118`.
-The relay RPC port is 21119. Passing an install folder or `Overwatch Launcher.exe` resolves to the
-actual game executable. The original client files and launcher are retained.
-
-## Lobby and data
-
-The existing lobby includes menus/scenes, loot boxes, catalog purchases, profile
-and cosmetic management, events/challenges, competitive menu data and the local
-dashboard. See the upstream README for its scope.
-
-`data/` in the local research checkout contains target-build schemas,
-catalogs, graphs and data derived from 1.68 reference traffic decoded with 1.74
-schemas. The [public data guide](../data/README.md) describes the separate runtime.
-Cross-version references, unavailable specifications and evidence limits are recorded in
-[RESEARCH_EVIDENCE.txt](RESEARCH_EVIDENCE.txt).
+### Low-Level Engineering Roadmap (Issues `#60`–`#65` & `#12`)
+- **#60:** Split remaining large modules (`script_enemy.rs`, `script_expr.rs`, `game_replication.rs`, `script_snapshot_wire.rs`, `script_player.rs`, `game_service.rs`).
+- **#61:** Add Rust consumers for the 4 synced `main` behavior fixtures (`server-only-movement-v1`, `body-short-action-retry-v1`, `seismic-slam-*`) and port 19 VM contracts back to `main`.
+- **#62:** Add raycast, contact-normal, nav-path, and live StateScript inspection overlays to `--features inspector`.
+- **#63:** Generalize walkable-surface / NavMesh extraction across maps (including King's Row).
+- **#64:** Extract portable `orpheus-statescript` workspace crate.
+- **#65:** Unify player/gate entities into `bevy_ecs` and expose bounded hot-reloadable AI `think()` scripting.
+- **#12:** Prevent recycled body IDs from receiving stale reliable combat notices.

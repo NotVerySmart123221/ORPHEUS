@@ -1,30 +1,19 @@
-# ORPHEUS
+# ORPHEUS (Rust)
 
-[简体中文](README.zh-CN.md) · [Discord](https://discord.gg/tqukqjAk7)
+[简体中文](README.zh-CN.md) · [Discord](https://discord.gg/tqukqjAk7) · [Python `main` branch](https://github.com/leafall903/ORPHEUS/tree/main)
 
-ORPHEUS is an independent, open-source server reimplementation for **Overwatch 1 retail 1.74.0.0.104319**. It aims to preserve the server behavior and client-facing events for this build. The first end-to-end target is Soldier: 76 in the Practice Range.
+ORPHEUS is an open-source server reimplementation for **Overwatch 1 (retail build 1.74.0.0.104319)** focused on research and preservation.
 
-> **Rust developer preview.** You can build and run synthetic tests from the public source. Native startup needs an authorized, prepared 104319 runtime. A publicly reproducible original-client authentication setup and a Rust one-click client launcher are still open.
+- **`rust` (this branch):** the experimental native Rust dedicated server, workspace crates, and local 3D debug inspector (`--features inspector`).
+- **`main`:** the community-maintained Python server, Windows game launcher, data extractors, and reference tests ([main branch](https://github.com/leafall903/ORPHEUS/tree/main)).
 
-This is the Rust branch. It contains only the native server and the sources its contributors need. The [default branch](https://github.com/leafall903/ORPHEUS/tree/main) contains the community-maintained Python server, which is also the behavioral reference, with its Windows launcher, tests and data tools.
+[Public Rust Tests](#public-rust-tests) · [Run Native Server](#run-the-native-server) · [Current Status](#current-status) · [Architecture](docs/NATIVE_SERVER_ARCHITECTURE.md) · [Contributing](CONTRIBUTING.md) · [Issues](https://github.com/leafall903/ORPHEUS/issues)
 
-[Contribute](CONTRIBUTING.md) · [Python/Rust parity](docs/RUST_PARITY.md) · [Architecture](docs/NATIVE_SERVER_ARCHITECTURE.md) · [Rust contribution rules](docs/NATIVE_SERVER_ARCHITECTURE.md#rust-contribution-rules) · [Roadmap](docs/ROADMAP.md) · [Changelog](CHANGELOG.md) · [Open issues](https://github.com/leafall903/ORPHEUS/issues)
+---
 
-## Current status
+## Public Rust Tests (No Game Files Required)
 
-| Area | Python on `main` | Rust on `rust` | Original-client evidence |
-| --- | --- | --- | --- |
-| Login and solo Practice Range | Windows launcher and local login, lobby and match handoff with prepared data. | Native loopback login, lobby, world creation and encrypted UDP pass headless regressions with prepared data. | A previous Rust playtest entered Practice Range. The latest Rust build awaits a client retest. |
-| Soldier: 76 body and weapon | The reference runs stock-body paths with partial weapon, Sprint and ability behavior. | Authored rifle, reload, Sprint and Helix timing have isolated regressions. The native stock body still stops at an unsupported effect action. Match tests use fixture weapons. | The Rust playtest reported a missing weapon and unusable abilities. |
-| Bot combat and projectiles | Practice Range hits, damage and respawn have reference checks. | Encrypted fixture matches verify bot hits, lost-packet recovery, death, respawn and Helix damage. Bots and physical flight live in the room's Bevy ECS. Lua handles patrol decisions. | Stock-client damage presentation and the reported upstairs patrol discrepancy still need verification. |
-| HUD, audio and ultimate charge | Partial HUD wire evidence and community-estimated ultimate charge. | Combat messages and prediction records have focused tests. Full HUD, audio and ultimate-charge parity remain open. | Historical tests reported missing overhead health, named eliminations, kill feed and headshot audio. |
-| Diagnostics and scale | Local dashboard and Python reference replays. | The optional inspector shows actors, collision samples, patrol clips, tick timing and bounded room-fault records. Public and prepared tests verify that another room survives an isolated room fault. | These checks use independent solo rooms and synthetic fault injection. Multiplayer in a shared original-client room remains open. |
-
-Fixture, wire and original-client results cover different scopes. See the [parity checklist](docs/RUST_PARITY.md), [verification record](docs/STATE.md) and [migration guide](docs/RUST_MIGRATION.md) for the evidence and cutover gates.
-
-## Start with the public Rust checks
-
-Use Git and stable Rust. The Windows build also needs the x64 MSVC C++ Build Tools and Windows SDK for the vendored Lua runtime. Public Rust tests use synthetic fixtures and run without game files or a runtime pack.
+Install **Git** and **stable Rust** (`>= 1.85.0`). On Windows, also install the **x64 MSVC C++ Build Tools** and **Windows SDK** so Cargo can build the vendored Lua 5.4 runtime.
 
 ```powershell
 git clone --branch rust https://github.com/leafall903/ORPHEUS.git
@@ -32,13 +21,13 @@ cd ORPHEUS
 cargo test --locked --workspace --all-targets
 ```
 
-The contribution guide lists the default and inspector checks that public CI runs. [Contribution guide](CONTRIBUTING.md#public-source-checks)
+Public tests use synthetic fixtures only. See [CONTRIBUTING.md](CONTRIBUTING.md) for running `clippy`, `--features inspector`, MSRV, and the 38 StateScript contract checks that public CI runs.
 
-## Run the native server
+---
 
-### Separate deployment data
+## Run the Native Server
 
-Use a prepared, authorized **base** 104319 Practice Range runtime. The public source and client installation alone leave required research data and restricted local inputs outstanding. The Rust packer copies prepared inputs and writes a SHA-256 manifest. See the [three-part input checklist](data/README.md).
+Starting the native server requires a prepared **base 104319 Practice Range** runtime pack (optionally enriched with Junkenstein data). See [data/README.md](data/README.md) for the full input checklist and packing steps.
 
 ```powershell
 $env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\authorized-base-runtime'
@@ -46,56 +35,51 @@ cargo run --locked --bin orpheus_server -- --check-runtime
 cargo run --locked --bin orpheus_server -- --data-dir 'C:\path\to\local-state'
 ```
 
-The preflight reports missing inputs by category and checks the signing input length. The native server parses the runtime before opening its loopback listeners. It can start independently of a game installation or relay DLL. The local state directory holds profiles and server state. Use a separate directory for each running server.
-
-The read-only inspector is disabled in default builds. Enable its Cargo feature and choose a loopback port when running it.
+Enable the optional loopback web 3D inspector (`--features inspector`):
 
 ```powershell
 cargo run --locked --features inspector --bin orpheus_server -- --data-dir 'C:\path\to\local-state' --debug-port 3726
 ```
 
-Open [127.0.0.1:3726](http://127.0.0.1:3726/) after startup. The [architecture guide](docs/NATIVE_SERVER_ARCHITECTURE.md#collision-and-live-inspection) describes its sampling limits. Original-client verification uses a separately configured local connection and the exact 104319 client. [Verification procedure](CONTRIBUTING.md#original-client-verification)
+Then open `http://127.0.0.1:3726/` to view live room actors, sampled collision geometry, bot patrol clips, tick timing histograms, and room-fault records.
 
-## Get involved
+### Local Junkenstein Validation Overrides (Normal Cassidy)
 
-- **Developers and AI-assisted contributors** can start with the public Rust tests. The contribution guide covers validation and review for Codex, Claude Code and manual contributions. [Contribution guide](CONTRIBUTING.md)
-- **Reverse engineers** can document a field, event or timing rule against build 104319. [Research evidence](docs/RESEARCH_EVIDENCE.txt)
-- **Players with a working local setup** can report repeatable original-client observations. Include the branch, commit, client build and exact steps. [Gameplay verification form](https://github.com/leafall903/ORPHEUS/issues/new?template=gameplay-verification.yml)
-- **New contributors** can pick tasks that use only public source and synthetic fixtures. [Good first issues](https://github.com/leafall903/ORPHEUS/labels/good%20first%20issue)
+For isolated Normal Revenge (`0x3C`) acceptance runs, pass `--junkenstein-validation <path.json>` before startup:
 
-## Project layout
+- **High-capacity gate victory check:** `{"invulnerable_cassidy": true, "gate_capacity": 1000000000}`
+- **Destructible-gate defeat check:** `{"invulnerable_cassidy": true}`
+
+These overrides apply only to card `0x3C` and do not affect default runs or other heroes/cards. Keep local profile files outside the repository.
+
+---
+
+## Current Status
+
+| Area | Native Rust (`rust`) | Original-Client Status & Open Work |
+| --- | --- | --- |
+| **Login, Profiles & Gallery** | Native Battle.net RPC, JAM lobby, profile settings persistence (`profile-settings-v1`), and Hero Gallery loadout previews (including 23 NPC previews). | Encrypted lobby login and Practice Range entry work; client Hero Gallery NPC framing & full live flows await retest. |
+| **Practice Range & Soldier: 76** | Loopback UDP rooms, Bevy ECS bots/projectiles, Lua patrol scripts, authored rifle/reload/Sprint/Helix/Biotic Field VM & fixture combat. | Headless encrypted tests pass; live 104319 weapon attachment, Sprint/ammo sync, and upstairs patrol need client acceptance. |
+| **Junkenstein & Normal Cassidy** | All 14 cards load; Normal Cassidy Primary/Fan/Roll/Flashbang/Deadeye, ultimate charge (`0B8B`), team score, boss speech (`40E05F6B`), and gate stages pass headless replays. | Client Defeat heading verified; full Cassidy skills, Boss intro cameras/pursuit, recap timer, and natural Victory await live client acceptance. |
+| **Architecture & Isolation** | Independent `orpheus-wire`, `orpheus-collision`, and `orpheus-runtime` workspace crates; modularized `script_init/`, `game_combat/`, `scene_assets/`, and `game_service/` with room-level fault/panic isolation. | Portable `orpheus-statescript` crate (#64), remaining module splits (#60), cross-map NavMesh (#63), unified ECS player bodies (#65), and Inspector ray/nav overlay (#62) tracked in issues. |
+
+Details: [docs/NATIVE_SERVER_ARCHITECTURE.md](docs/NATIVE_SERVER_ARCHITECTURE.md) · [docs/RUST_PARITY.md](docs/RUST_PARITY.md) · [docs/BEHAVIOR_CONTRACTS.md](docs/BEHAVIOR_CONTRACTS.md) · [docs/ROADMAP.md](docs/ROADMAP.md)
+
+---
+
+## Workspace Layout
 
 | Path | Role |
 | --- | --- |
-| `rust/src`, `rust/scripts` | Native server, unit tests and the Lua patrol policy |
-| `rust/crates/collision` | Collision cache decoding, static queries and contact solver |
-| `rust/crates/runtime` | External runtime inventory, preflight and independent preparation tool |
-| `rust/tests` | Native CLI integration tests |
-| `relay` | C++ relay source for connecting the original client |
-| `docs` | Architecture, acceptance criteria and research records |
+| `rust/src/` | Main server binary (`orpheus_server`), lobby, match worker, replication, ECS simulation (`game_combat/`), scene prep (`scene_assets/`), and StateScript VM (`script_init/`) |
+| `rust/crates/wire/` (`orpheus-wire`) | JAM cipher, framing, codec readers/writers, game datagrams, commands |
+| `rust/crates/collision/` (`orpheus-collision`) | Collision cache reader, spatial triangle index, static rays, GJK/contact solver |
+| `rust/crates/runtime/` (`orpheus-runtime`) | Runtime manifest inventory, preflight checks, and `prepare_server_runtime` CLI |
+| `rust/scripts/` | Lua patrol policy (`patrol.lua`) |
+| `rust/assets/inspector/`, `rust/tests/` | Web 3D debug viewer assets and integration test targets (`world_queries`, `profile_settings`, `protocol`, `runtime_preflight`) |
+| `fixtures/behavior/`, `scripts/` | 47 shared JSON behavior contracts and cross-language verifier scripts |
+| `relay/` | Windows C++ client TLS relay source |
 
-ORPHEUS is an unofficial preservation project. The public source retains the upstream [MIT notice](LICENSE) and [credits](CREDITS.md). Keep game clients, commercial assets, signing material, content keys, private logs, captures and dumps out of the repository and public discussion.
+## License & Credits
 
-### Local Halloween acceptance sessions
-
-For an isolated Normal Cassidy acceptance session, add
-`--junkenstein-validation <local-json>` to the native server command. The local
-file is read before listeners start; clients cannot change these settings.
-For the requested success scenario, use:
-
-```json
-{"invulnerable_cassidy": true, "gate_capacity": 1000000000}
-```
-
-For a destructible-gate failure scenario, use:
-
-```json
-{"invulnerable_cassidy": true}
-```
-
-Only Normal Revenge card 0x3C uses this profile. Cassidy's health is protected
-from enemy damage; the optional gate capacity uses the authored health binding.
-Boss logic, introductions, camera transitions, weapon inputs, ultimate charge,
-score and result progression still run normally. Default launches and other
-cards/heroes use their usual policy. Keep these local files and session data
-outside the source checkout. This setup does not itself prove client acceptance.
+MIT-licensed source code ([LICENSE](LICENSE)); upstream protocol research and authorship credits live in [CREDITS.md](CREDITS.md) and [CONTRIBUTORS.md](CONTRIBUTORS.md). Never commit game clients, commercial assets, signing inputs, keys, credentials, or raw packet captures.
