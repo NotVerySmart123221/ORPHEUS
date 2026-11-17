@@ -1042,6 +1042,7 @@ dependencies = [
  "mlua",
  "orpheus-collision",
  "orpheus-runtime",
+ "orpheus-statescript",
  "orpheus-wire",
  "prost",
  "prost-reflect",
@@ -1069,6 +1070,19 @@ version = "0.0.0"
 dependencies = [
  "flate2",
  "roxmltree",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "orpheus-statescript"
+version = "0.0.0"
+dependencies = [
+ "flate2",
+ "indexmap",
+ "orpheus-runtime",
+ "orpheus-wire",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
 ]

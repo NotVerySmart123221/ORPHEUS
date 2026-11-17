@@ -4,18 +4,18 @@ Use the current `rust` module boundaries when extending the VM. This guide integ
 
 ## Follow an action
 
-1. [`script_graph.rs`](../rust/src/script_graph.rs) loads authored graph metadata and preserves wire slots and link order.
-2. [`script_init.rs`](../rust/src/script_init.rs) exposes the component API; [`machine.rs`](../rust/src/script_init/machine.rs) owns execution state and queues.
-3. [`vm/nodes.rs`](../rust/src/script_init/vm/nodes.rs) dispatches actions and writes variables. Reuse its shared write and routing mechanisms, including the newer nested-destination support.
-4. [`script_expr.rs`](../rust/src/script_expr.rs) evaluates live operands, while [`world.rs`](../rust/src/script_init/world.rs) supplies host queries. Values, World reads and random draws must retain their event-time semantics.
+1. [`script_graph.rs`](../rust/crates/statescript/src/script_graph.rs) loads authored graph metadata and preserves wire slots and link order.
+2. [`script_init.rs`](../rust/crates/statescript/src/script_init.rs) exposes the component API; [`machine.rs`](../rust/crates/statescript/src/script_init/machine.rs) owns execution state and queues.
+3. [`vm/nodes.rs`](../rust/crates/statescript/src/script_init/vm/nodes.rs) dispatches actions and writes variables. Reuse its shared write and routing mechanisms, including the newer nested-destination support.
+4. [`script_expr.rs`](../rust/crates/statescript/src/script_expr.rs) evaluates live operands, while [`world.rs`](../rust/crates/statescript/src/script_init/world.rs) supplies host queries. Values, World reads and random draws must retain their event-time semantics.
 5. [`script_snapshot_wire.rs`](../rust/src/script_snapshot_wire.rs) encodes the resulting state. Fixture agreement and original-client presentation are separate acceptance categories.
 
 ## Pinned action contract
 
-The [synthetic fixture](../fixtures/behavior/script-actions-v1.json) records 15 cases against Rust `f763beb9d7017b9364a3c8fc79ae6192df590043`. Its expected values were checked against that old executor before integration. The [consumer](../rust/src/script_init/tests/actions_contract.rs) uses the current production loader and VM, checking scoped writes, dynamic values, error sites, RNG consumption, index behavior, work budgets and ordered links.
+The [synthetic fixture](../fixtures/behavior/script-actions-v1.json) records 15 cases against Rust `f763beb9d7017b9364a3c8fc79ae6192df590043`. Its expected values were checked against that old executor before integration. The [consumer](../rust/crates/statescript/src/script_init/tests/actions_contract.rs) uses the current production loader and VM, checking scoped writes, dynamic values, error sites, RNG consumption, index behavior, work budgets and ordered links.
 
 ```powershell
-cargo test --locked -p orpheus --lib actions_preserve_the_pinned_synthetic_reference_contract
+cargo test --locked -p orpheus-statescript --lib actions_preserve_the_pinned_synthetic_reference_contract
 ```
 
 This is a Rust regression contract with a historical reference, not a Python or original-server equivalence claim. It runs in both public workspace test lanes; the existing cross-language contracts remain separate. Do not update expected output merely to accommodate an implementation change: explain the evidence and version any intentional semantic change.

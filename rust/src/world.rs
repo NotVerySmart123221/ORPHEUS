@@ -8,10 +8,13 @@ use std::{borrow::Borrow, error::Error, fmt};
 use crate::bits::{BitError, BitWriter};
 use crate::game_link::{HEADER_SIZE, MAX_DATAGRAM};
 use crate::game_messages::{ChannelError, MAX_PER_KIND, write_channel};
+pub use orpheus_statescript::script_runtime::{
+    ARMOUR_POOL, GAME_MODE_ENTITY, HEALTH_POOL, MAX_MOVEMENT_AXIS, MOVEMENT_AXIS_BITS,
+    POSITION_UNITS, SHIELDS_POOL,
+};
 
 pub const MAX_ENTITY_RECORDS: usize = 127;
 pub const MAX_PAYLOAD: usize = MAX_DATAGRAM - HEADER_SIZE;
-pub const GAME_MODE_ENTITY: u32 = 0xd000_0010;
 
 pub const WITH_SKIN: u8 = 0x01;
 pub const WITH_MOVEMENT: u8 = 0x02;
@@ -22,16 +25,10 @@ pub const WITH_PARTICIPANT: u8 = 0x20;
 pub const SKIN_THEME: u8 = 0x40;
 
 pub const POOLS: usize = 16;
-pub const HEALTH_POOL: usize = 0;
-pub const ARMOUR_POOL: usize = 1;
-pub const SHIELDS_POOL: usize = 2;
 
 pub const NO_INPUT: u32 = u32::MAX;
 pub const CREATE_BASE: u32 = u32::MAX;
 pub const ANGLE_UNITS: f64 = 65536.0 / std::f64::consts::TAU;
-pub const POSITION_UNITS: f64 = 1024.0;
-pub const MOVEMENT_AXIS_BITS: usize = 24;
-pub const MAX_MOVEMENT_AXIS: f64 = ((1 << (MOVEMENT_AXIS_BITS - 1)) - 1) as f64 / POSITION_UNITS;
 pub(crate) const GMP_STATS_FIELDS: usize = 45;
 
 #[derive(Debug)]

@@ -61,7 +61,7 @@ These overrides apply only to card `0x3C` and do not affect default runs or othe
 | **Login, Profiles & Gallery** | Native Battle.net RPC, JAM lobby, profile settings persistence (`profile-settings-v1`), and Hero Gallery loadout previews (including 23 NPC previews). | Encrypted lobby login and Practice Range entry work; client Hero Gallery NPC framing & full live flows await retest. |
 | **Practice Range & Soldier: 76** | Loopback UDP rooms, Bevy ECS bots/projectiles, Lua patrol scripts, authored rifle/reload/Sprint/Helix/Biotic Field VM & fixture combat. | Headless encrypted tests pass; live 104319 weapon attachment, Sprint/ammo sync, and upstairs patrol need client acceptance. |
 | **Junkenstein & Normal Cassidy** | All 14 cards load; Normal Cassidy Primary/Fan/Roll/Flashbang/Deadeye, ultimate charge (`0B8B`), team score, boss speech (`40E05F6B`), and gate stages pass headless replays. | Client Defeat heading verified; full Cassidy skills, Boss intro cameras/pursuit, recap timer, and natural Victory await live client acceptance. |
-| **Architecture & Isolation** | Independent `orpheus-wire`, `orpheus-collision`, and `orpheus-runtime` workspace crates; modularized `script_init/`, `game_combat/`, `scene_assets/`, and `game_service/` with room-level fault/panic isolation. | Portable `orpheus-statescript` crate (#64), remaining module splits (#60), cross-map NavMesh (#63), unified ECS player bodies (#65), and Inspector ray/nav overlay (#62) tracked in issues. |
+| **Architecture & Isolation** | Independent `orpheus-wire`, `orpheus-collision`, `orpheus-runtime`, and `orpheus-statescript` workspace crates; modularized `game_combat/`, `scene_assets/`, and `game_service/` with room-level fault/panic isolation. | Cross-map NavMesh (#63), unified ECS player bodies (#65), and Inspector ray/nav overlay (#62) tracked in issues. |
 
 Details: [docs/NATIVE_SERVER_ARCHITECTURE.md](docs/NATIVE_SERVER_ARCHITECTURE.md) · [docs/STATE.md](docs/STATE.md) · [docs/BEHAVIOR_CONTRACTS.md](docs/BEHAVIOR_CONTRACTS.md) · [docs/ROADMAP.md](docs/ROADMAP.md)
 
@@ -71,7 +71,8 @@ Details: [docs/NATIVE_SERVER_ARCHITECTURE.md](docs/NATIVE_SERVER_ARCHITECTURE.md
 
 | Path | Role |
 | --- | --- |
-| `rust/src/` | Main server binary (`orpheus_server`), lobby, match worker, replication, ECS simulation (`game_combat/`), scene prep (`scene_assets/`), and StateScript VM (`script_init/`) |
+| `rust/src/` | Main server binary (`orpheus_server`), lobby, match worker, replication, ECS simulation (`game_combat/`), scene prep (`scene_assets/`), and host VM adapters |
+| `rust/crates/statescript/` (`orpheus-statescript`) | Portable StateScript graph loader, expression evaluator, codec tables, and decoupled VM core |
 | `rust/crates/wire/` (`orpheus-wire`) | JAM cipher, framing, codec readers/writers, game datagrams, commands |
 | `rust/crates/collision/` (`orpheus-collision`) | Collision cache reader, spatial triangle index, static rays, GJK/contact solver |
 | `rust/crates/runtime/` (`orpheus-runtime`) | Runtime manifest inventory, preflight checks, and `prepare_server_runtime` CLI |

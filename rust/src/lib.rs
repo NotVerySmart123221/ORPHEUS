@@ -7,6 +7,10 @@ pub use orpheus_collision::{
     contact_hull, contact_manifolds, contact_math, contact_mesh, contact_round, contact_solver,
     contact_triangle, contact_world, static_ray,
 };
+pub use orpheus_statescript::{
+    script_codecs, script_destination, script_entity_state, script_expr, script_graph, script_init,
+    script_runtime, script_voice, script_wire,
+};
 pub use orpheus_wire::{bits, commands, game_link, jam_cipher, jam_codec, jam_framing};
 
 pub mod accounts;
@@ -83,19 +87,12 @@ pub mod retail_templates;
 mod weapon_spread;
 pub use orpheus_runtime as runtime;
 pub mod scene_assets;
-pub mod script_codecs;
-pub mod script_destination;
 mod script_enemy;
-pub mod script_entity_state;
-pub mod script_expr;
-pub mod script_graph;
-pub mod script_init;
+#[cfg(test)]
+mod script_init_host_tests;
 mod script_player;
-pub mod script_runtime;
 pub mod script_snapshot_wire;
 pub mod script_stream;
-pub mod script_voice;
-pub mod script_wire;
 pub mod server;
 mod service_tcp;
 pub mod vitals;

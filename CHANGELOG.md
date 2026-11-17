@@ -6,6 +6,12 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-17
 
+#### Decouple StateScript VM host imports and extract `orpheus-statescript`
+
+- Replaced direct StateScript dependencies on `accounts::parse_guid`, `bits`, `commands`, `game_clock::TICK_PERIOD`, `vitals::PoolKind`, `mover_modifiers`, `world::{GAME_MODE_ENTITY, MAX_MOVEMENT_AXIS}`, and `junkenstein_{messages,voice}` with portable workspace definitions (`orpheus_runtime::format::parse_guid`, `orpheus_wire::{bits, commands}`, `script_modifiers`, `script_runtime`, `script_voice::IntroCue`) and narrow `World` voice-cue hooks (`boss_intro_cue`, `is_victory_voice`, `gate_voice_cue`).
+- Extracted `script_codecs`, `script_destination`, `script_entity_state`, `script_expr/`, `script_graph`, `script_init/`, `script_modifiers`, `script_runtime`, `script_voice`, and `script_wire` into `rust/crates/statescript/` (`orpheus-statescript`), re-exporting all moved modules from `rust/src/lib.rs` and isolating root-coupled VM integration tests in `rust/src/script_init_host_tests.rs`.
+- Added `-p orpheus-statescript` to `rust-portable-tests` on Ubuntu and preserved all `38` `--exact` StateScript/host behavior contract checks across `orpheus-statescript` (`22`) and `orpheus` (`16`) in `.github/workflows/public-checks.yml`, `scripts/check_combined_rust.sh`, and `scripts/check_combined_rust.ps1` (#64).
+
 #### Retire ported StateScript contract helper scripts
 
 - Removed the 19 `scripts/check_*_contract.py` helper scripts now superseded by `tests/public/test_statescript_*.py` on `main` (#101), keeping `scripts/check_gallery_preview_policy.py` and the two Draft-#32 helpers (`scripts/check_body_field_contract.py`, `scripts/check_spatial_owner_absence_contract.py`).

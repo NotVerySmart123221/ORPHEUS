@@ -70,6 +70,10 @@ impl World for EncounterWorld<'_> {
         crate::junkenstein_host::engine_setting(key)
     }
 
+    fn is_victory_voice(&self, node: &crate::script_graph::Node) -> bool {
+        crate::junkenstein_voice::victory_cue(node)
+    }
+
     fn play_victory_voice(&mut self, site: Site, actor: &Value) -> Option<u64> {
         use crate::junkenstein_voice::{VICTORY_CUE, VoiceRequest, victory_line};
 
@@ -428,6 +432,10 @@ impl World for GateWorld<'_> {
         self.state.team = Some(team);
         true
     }
+    fn gate_voice_cue(&self, node: &crate::script_graph::Node) -> Option<u64> {
+        crate::junkenstein_voice::gate_cue(node)
+    }
+
     fn play_gate_voice(&mut self, site: Site, stimulus: u64, attacker: Option<u32>) -> Option<u64> {
         use crate::junkenstein_voice::{VoiceRequest, gate_lines, select_line};
 

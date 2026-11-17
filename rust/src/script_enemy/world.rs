@@ -773,6 +773,10 @@ impl World for EnemyWorld<'_> {
         self.voice_context(site).map(|_| 0.0)
     }
 
+    fn boss_intro_cue(&self, node: &crate::script_graph::Node) -> Option<IntroCue> {
+        junkenstein_voice::intro_cue(node)
+    }
+
     fn play_boss_intro_voice(&mut self, site: Site, cue: IntroCue) -> Option<u64> {
         if site.entity != self.binding.body
             || site.graph != 0x0ce0
