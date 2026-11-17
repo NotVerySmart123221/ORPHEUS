@@ -6,8 +6,12 @@ use std::{cmp::Ordering, collections::BTreeMap};
 
 use crate::{
     commands::{FRAME_HALF, frame_distance},
+    mover_ground::flat_unit,
     mover_settings::MoverSettings,
 };
+
+const DEFAULT_DIRECTION: [f32; 2] = [0.0, 1.0];
+const THROTTLE_EPSILON: f32 = 1e-6;
 
 const THROTTLE_FORWARD: u8 = 17;
 const THROTTLE_BACKWARD: u8 = 18;
@@ -60,6 +64,68 @@ impl Operation {
             Self::Minimum | Self::Maximum => value,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DirectionModifier {
+    pub operation: Operation,
+    pub value: [f32; 3],
+}
+
+fn throttle_length(right: f32, forward: f32) -> f32 {
+    let squared = right * right + forward * forward;
+    if squared <= THROTTLE_EPSILON {
+        return 0.0;
+    }
+    let estimate = orpheus_collision::contact_math::rsqrt(squared);
+    squared * ((3.0 - squared * (estimate * estimate)) * (estimate * 0.5))
+}
+
+fn flat_angle(x: f32, z: f32) -> f32 {
+    if x != 0.0 || z != 0.0 {
+        x.atan2(z)
+    } else {
+        0.0
+    }
+}
+
+/// Apply channel-2 `MOVE_DIRECTION` vector mods to turn `(right, forward)` throttles while
+/// preserving throttle length (`ow174/game/mover.py::directed_throttles`).
+pub fn directed_throttles(
+    mods: &[DirectionModifier],
+    right: f32,
+    forward: f32,
+    facing: [f32; 2],
+) -> [f32; 2] {
+    if mods.is_empty() {
+        return [right, forward];
+    }
+    let [fx, fz] = flat_unit(facing[0], facing[1]).unwrap_or(DEFAULT_DIRECTION);
+    let reference = [fx, 0.0, fz];
+    let mut direction = reference;
+    for modifier in mods {
+        direction = match modifier.operation {
+            Operation::Add => [
+                direction[0] + modifier.value[0],
+                direction[1] + modifier.value[1],
+                direction[2] + modifier.value[2],
+            ],
+            Operation::Multiply => [
+                direction[0] * modifier.value[0],
+                direction[1] * modifier.value[1],
+                direction[2] * modifier.value[2],
+            ],
+            Operation::Set => modifier.value,
+            Operation::Minimum | Operation::Maximum => direction,
+        };
+    }
+    if direction == reference {
+        return [right, forward];
+    }
+    let [x, z] = flat_unit(direction[0], direction[2]).unwrap_or(DEFAULT_DIRECTION);
+    let length = throttle_length(right, forward);
+    let angle = flat_angle(right, forward) - (flat_angle(x, z) - flat_angle(fx, fz));
+    [angle.sin() * length, angle.cos() * length]
 }
 
 #[derive(Clone, Copy, Debug)]

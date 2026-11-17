@@ -45,6 +45,13 @@ pub enum View {
     Observer,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FrameCallout {
+    pub serial: u32,
+    pub instance: u16,
+    pub position: u16,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectedSnapshot {
     pub(super) entity: u32,
@@ -52,6 +59,9 @@ pub struct ProjectedSnapshot {
     pub(super) entity_exclusions: BTreeSet<u32>,
     pub(super) variables: ProjectedVariables,
     pub(super) instances: BTreeMap<u16, ProjectedInstance>,
+    pub(super) callout: u32,
+    pub(super) callouts: Vec<FrameCallout>,
+    pub(super) emit_events: bool,
 }
 
 impl ProjectedSnapshot {
@@ -65,6 +75,21 @@ impl ProjectedSnapshot {
 
     pub fn instance_count(&self) -> usize {
         self.instances.len()
+    }
+
+    pub fn acknowledged_callout(&self) -> u32 {
+        self.callout
+    }
+
+    pub fn with_callout(mut self, callout: FrameCallout) -> Self {
+        self.callouts.push(callout);
+        self
+    }
+
+    /// Omit per-instance event queues when matching action-only owner deltas.
+    pub fn without_events(mut self) -> Self {
+        self.emit_events = false;
+        self
     }
 
     /// The activation counter and absolute start in milliseconds from this frame.

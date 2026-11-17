@@ -300,6 +300,7 @@ impl<'a> SnapshotEncoder<'a> {
                 instance.events.clear();
             }
         }
+        baseline.callouts.clear();
         Ok(stream.full(&payload, baseline)?)
     }
 
@@ -338,11 +339,20 @@ impl<'a> SnapshotEncoder<'a> {
         } else {
             BTreeSet::new()
         };
+        let next_chunk = stream
+            .last()
+            .checked_add(1)
+            .ok_or(StreamError::ChunkExhausted)?;
         let mut delta = self.differences(base, snapshot, &touched, &known)?;
+        apply_callout(base, snapshot, &touched, next_chunk, &mut delta);
         if view == View::Observer && delta.keys.is_empty() {
             return Ok(None);
         }
         let mut delivered = snapshot.clone();
+        delivered.callout = delta
+            .callout
+            .map_or(base.callout, |(serial, ..)| serial)
+            .max(delivered.callout);
         delta.seed_owner_ammo(&mut delivered);
         let frame = self.delta_frame(snapshot, &delta, kind, frame_ms)?;
         Ok(Some(stream.delta(&frame, delivered, delta.keys, kind)?))
@@ -546,8 +556,56 @@ impl<'a> SnapshotEncoder<'a> {
         if cmfd.is_some() {
             frame.bit(false);
         }
-        frame.bits(0, 2)?;
+        self.write_frame_action(&mut frame, delta.callout, current, mode)?;
         Ok(frame)
+    }
+
+    fn write_frame_action(
+        &self,
+        out: &mut BitWriter,
+        action: Option<(u32, u32, u16, u16)>,
+        current: &ProjectedSnapshot,
+        mode: PayloadMode,
+    ) -> Result<(), SnapshotError> {
+        let Some((_, stamp, target, position)) = action else {
+            out.bits(0, 2)?;
+            return Ok(());
+        };
+        let instance = current
+            .instances
+            .get(&target)
+            .ok_or(WireError::InvalidValue)?;
+        let graph = self.graph(target, instance.graph)?;
+        let node = graph
+            .node(position)
+            .filter(|node| node.is_action() && node.is_networked() && node.remote >= 0)
+            .ok_or(WireError::InvalidValue)?;
+        let (index, width) = match mode {
+            PayloadMode::Owner { .. } => {
+                (u64::from(node.rid), usize::from(graph.header.nodes_bits))
+            }
+            PayloadMode::Remote { .. } => (
+                u64::try_from(node.remote).map_err(|_| WireError::InvalidValue)?,
+                usize::from(graph.header.remote_bits),
+            ),
+        };
+        let mut entry = BitWriter::new();
+        entry.bit(true); // TrID present
+        entry.w_u16(target);
+        entry.bits(index, width)?;
+
+        out.bit(true);
+        out.w_u32(stamp);
+        let entry_bits = u32::try_from(entry.bit_len()).map_err(|_| WireError::ChunkRange)?;
+        out.w_var(10 + entry_bits); // RMSz excludes the group terminator
+        out.bit(true); // one entry
+        out.bit(false); // short length and no node payload
+        out.bits(8 + u64::from(entry_bits), 8)?;
+        out.append(&entry);
+        out.bit(false); // no more entries
+        out.bit(false); // no more groups
+        out.bit(false); // no ungrouped entries
+        Ok(())
     }
 
     fn owner_events(
@@ -557,8 +615,9 @@ impl<'a> SnapshotEncoder<'a> {
         frame_time: u64,
     ) -> Result<(), SnapshotError> {
         // Even an empty event list replaces that instance's former queue.
-        out.bit(!current.instances.is_empty());
-        if current.instances.is_empty() {
+        let has_lists = current.emit_events && !current.instances.is_empty();
+        out.bit(has_lists);
+        if !has_lists {
             return Ok(());
         }
         let mut last_id = 0;
@@ -733,6 +792,34 @@ pub(super) struct SnapshotDelta<'a> {
     pub(super) instances: BTreeMap<u16, InstanceDelta<'a>>,
     pub(super) keys: BTreeSet<ChangeKey>,
     pub(super) ammo_seeds: BTreeMap<(u16, u32), i64>,
+    pub(super) callout: Option<(u32, u32, u16, u16)>,
+}
+
+/// Choose the next action for this stream and retain its original stamp until ACK.
+fn apply_callout(
+    base: &ProjectedSnapshot,
+    current: &ProjectedSnapshot,
+    touched: &BTreeSet<ChangeKey>,
+    next_chunk: u32,
+    delta: &mut SnapshotDelta<'_>,
+) {
+    let Some(callout) = current
+        .callouts
+        .iter()
+        .find(|callout| callout.serial > base.callout)
+    else {
+        return;
+    };
+    let stamp = touched
+        .iter()
+        .filter_map(|key| match *key {
+            ChangeKey::Callout(serial, stamp) if serial == callout.serial => Some(stamp),
+            _ => None,
+        })
+        .min()
+        .unwrap_or(next_chunk);
+    delta.keys.insert(ChangeKey::Callout(callout.serial, stamp));
+    delta.callout = Some((callout.serial, stamp, callout.instance, callout.position));
 }
 
 impl SnapshotDelta<'_> {

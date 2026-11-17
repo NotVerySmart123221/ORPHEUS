@@ -10,6 +10,32 @@ rust-version = "1.85"
 license = "MIT"
 publish = false
 
+[workspace.lints.rust]
+elided_lifetimes_in_paths = "warn"
+meta_variable_misuse = "warn"
+redundant_lifetimes = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unsafe_code = "forbid"
+unused_import_braces = "warn"
+unused_lifetimes = "warn"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+empty_structs_with_brackets = "warn"
+exit = "warn"
+flat_map_option = "warn"
+fn_to_numeric_cast_any = "warn"
+inefficient_to_string = "warn"
+mem_forget = "warn"
+mutex_atomic = "warn"
+needless_pass_by_ref_mut = "warn"
+rc_mutex = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+todo = "warn"
+unimplemented = "warn"
+verbose_file_reads = "warn"
+
 [package]
 name = "orpheus"
 version.workspace = true
@@ -18,6 +44,9 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 description = "Server reimplementation for Overwatch 1.74"
+
+[lints]
+workspace = true
 
 [lib]
 path = "rust/src/lib.rs"
@@ -41,6 +70,18 @@ path = "rust/tests/world_queries.rs"
 [[test]]
 name = "profile_settings"
 path = "rust/tests/profile_settings.rs"
+
+[[test]]
+name = "server_only_movement"
+path = "rust/tests/server_only_movement.rs"
+
+[[test]]
+name = "body_short_action_retry"
+path = "rust/tests/body_short_action_retry.rs"
+
+[[test]]
+name = "seismic_slam"
+path = "rust/tests/seismic_slam.rs"
 
 [[bench]]
 name = "script_actions"

@@ -103,6 +103,17 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         self.update_movement_sample(key, node, previous)?;
                     }
                     Some(StateKind::Switch { .. }) => self.post(id, Event::Reevaluate(raw))?,
+                    Some(StateKind::Shockwave { .. }) => self.tick_shockwave(key)?,
+                    Some(StateKind::ModifyHealth) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("modify health state");
+                        self.world.modify_health(self.site(id, node), elapsed_ms);
+                    }
+                    Some(StateKind::PlacementSelector { .. }) => {
+                        self.tick_placement_selector(key)?
+                    }
                     Some(StateKind::ForCode) => {
                         let node = self
                             .graph(id)
@@ -1131,6 +1142,24 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             StateKind::MovementSample(previous) => {
                 self.update_movement_sample(key, node, previous)?;
+            }
+            StateKind::Shockwave { .. } => {
+                if let Some(state) = self.state_mut(key) {
+                    state.kind = StateKind::Shockwave { managed: false };
+                }
+            }
+            StateKind::PlacementSelector { .. } => {
+                if let Some(state) = self.state_mut(key) {
+                    state.kind = StateKind::PlacementSelector {
+                        confirmed: false,
+                        sampled: false,
+                    };
+                }
+            }
+            StateKind::MoveTo { .. } => {
+                if let Some(state) = self.state_mut(key) {
+                    state.kind = StateKind::MoveTo { movement: None };
+                }
             }
             StateKind::TargetTag {
                 effect: Some(effect),

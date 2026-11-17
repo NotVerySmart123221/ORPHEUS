@@ -186,6 +186,9 @@ impl<'a> SnapshotEncoder<'a> {
             variables,
             entity_exclusions,
             instances,
+            callout: 0,
+            callouts: Vec::new(),
+            emit_events: true,
         })
     }
 
@@ -457,6 +460,9 @@ impl<'a> SnapshotEncoder<'a> {
             entity_exclusions: BTreeSet::new(),
             variables,
             instances,
+            callout: 0,
+            callouts: Vec::new(),
+            emit_events: true,
         }))
     }
 
@@ -533,6 +539,9 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             StateKind::Plain
             | StateKind::ForCode
             | StateKind::ModifyHealth
+            | StateKind::Shockwave { .. }
+            | StateKind::PlacementSelector { .. }
+            | StateKind::MoveTo { .. }
             | StateKind::ShieldRecharge
             | StateKind::ExplosionContact
             | StateKind::DeadeyeEffects

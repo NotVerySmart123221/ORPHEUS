@@ -285,6 +285,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         node: &Node,
     ) -> Result<(), InitFault> {
         let site = self.site(key.instance, node);
+        if self.world.modify_health(site, 0) {
+            self.register_tick(key, self.machine.now_ms);
+            return Ok(());
+        }
         let Some(target) = self.creation_scalar(
             key.instance,
             node,
@@ -2177,5 +2181,233 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .or_default()
             .entry(key.raw)
             .or_insert(start_ms);
+    }
+
+    pub(in crate::script_init) fn begin_shockwave(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        let site = self.site(key.instance, node);
+        let immediate = self
+            .evaluate(key.instance, node, field(&node.fields, "m_3418CEA4"), None)
+            .is_some_and(|value| truthy(&value));
+        let has_target = script_expr::lvalue(field(&node.fields, "m_8A2905A0"))
+            .ok()
+            .flatten()
+            .is_some();
+        if (site.graph, node.pos) == (0x0B27, 95)
+            && has_target
+            && field(&node.fields, "m_04F3240D").is_null()
+            && immediate
+            && self.collect_shockwave(key, node, 0.0)?
+        {
+            if let Some(state) = self.state_mut(key) {
+                state.kind = StateKind::Shockwave { managed: true };
+            }
+            self.register_tick(key, self.machine.now_ms);
+        } else {
+            self.report(site, Issue::UnsupportedField("shockwave service"));
+        }
+        Ok(())
+    }
+
+    fn collect_shockwave(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+        reach: f64,
+    ) -> Result<bool, InitFault> {
+        let site = self.site(key.instance, node);
+        let Some(target) = script_expr::lvalue(field(&node.fields, "m_8A2905A0"))
+            .ok()
+            .flatten()
+        else {
+            return Ok(false);
+        };
+        let Some(bodies) = self.world.shockwave_targets(site, reach) else {
+            return Ok(false);
+        };
+        let var_key = source_key(key.instance, target);
+        let mut items = match self.machine.value(var_key, None) {
+            Value::Array(items) => items,
+            _ => Vec::new(),
+        };
+        let mut seen: std::collections::HashSet<u32> = items
+            .iter()
+            .filter_map(|item| match *item {
+                Value::Entity(id) if id != 0 => Some(id),
+                _ => None,
+            })
+            .collect();
+        let before = items.len();
+        for body in bodies {
+            if body != 0 && seen.insert(body) {
+                items.push(Value::Entity(body));
+            }
+        }
+        if items.len() != before {
+            self.write(var_key, Value::Array(items))?;
+        }
+        Ok(true)
+    }
+
+    pub(in crate::script_init) fn tick_shockwave(
+        &mut self,
+        key: StateKey,
+    ) -> Result<(), InitFault> {
+        let node = self
+            .graph(key.instance)
+            .state(usize::from(key.raw))
+            .expect("shockwave state");
+        let reach = self
+            .evaluate(key.instance, node, field(&node.fields, "m_6A79BD98"), None)
+            .and_then(|value| match value {
+                Value::Bool(_) | Value::Integer(_) | Value::Float(_) => {
+                    let f = script_expr::to_float(&value);
+                    Some(if f.is_finite() { f.max(0.0) } else { 0.0 })
+                }
+                _ => None,
+            })
+            .unwrap_or(0.0);
+        if !self.collect_shockwave(key, node, reach)? {
+            let site = self.site(key.instance, node);
+            self.report(site, Issue::UnsupportedField("shockwave service"));
+        }
+        self.post(key.instance, Event::Finish(key.raw))
+    }
+
+    pub(in crate::script_init) fn begin_placement_selector(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        let site = self.site(key.instance, node);
+        if (site.graph, node.pos) != (0x0B27, 15) {
+            self.report(site, Issue::UnsupportedState(node.class.clone()));
+            return Ok(());
+        }
+        let enabled = !field(&node.fields, "m_B02B1FD7").is_null()
+            && self
+                .evaluate(key.instance, node, field(&node.fields, "m_A6BB0869"), None)
+                .is_some_and(|value| truthy(&value));
+        if enabled {
+            self.register_tick(key, self.machine.now_ms);
+        }
+        Ok(())
+    }
+
+    pub(in crate::script_init) fn tick_placement_selector(
+        &mut self,
+        key: StateKey,
+    ) -> Result<(), InitFault> {
+        let node = self
+            .graph(key.instance)
+            .state(usize::from(key.raw))
+            .expect("placement selector state");
+        let site = self.site(key.instance, node);
+        if (site.graph, node.pos) != (0x0B27, 15) {
+            return Ok(());
+        }
+        let sampled = matches!(
+            self.state(key).map(|state| state.kind),
+            Some(StateKind::PlacementSelector { sampled: true, .. })
+        );
+        let frame_ms = crate::script_runtime::FRAME_MS;
+        let at_frame_end = self.machine.now_ms % frame_ms == frame_ms - 1;
+        if (sampled && !at_frame_end)
+            || !self
+                .evaluate(key.instance, node, field(&node.fields, "m_B02B1FD7"), None)
+                .is_some_and(|value| truthy(&value))
+        {
+            return Ok(());
+        }
+        if let Some(StateKind::PlacementSelector { sampled, .. }) =
+            self.state_mut(key).map(|state| &mut state.kind)
+        {
+            *sampled = true;
+        }
+        let point = match self.world.select_landing(site) {
+            super::super::LandingSelection::Unhandled => {
+                self.report(site, Issue::UnsupportedField("landing selection"));
+                return Ok(());
+            }
+            super::super::LandingSelection::Invalid => None,
+            super::super::LandingSelection::Point(point) => Some(point),
+        };
+        if let Some(point) = point {
+            for field_name in ["m_2FECD1E3", "m_1549F0F9"] {
+                if let Some(target) = script_expr::lvalue(field(&node.fields, field_name))
+                    .ok()
+                    .flatten()
+                {
+                    self.write(source_key(key.instance, target), Value::Entity(0))?;
+                }
+            }
+            if let Some(target) = script_expr::lvalue(field(&node.fields, "m_30710B76"))
+                .ok()
+                .flatten()
+            {
+                self.write(source_key(key.instance, target), Value::Vector(point))?;
+            }
+        }
+        if let Some(target) = script_expr::lvalue(field(&node.fields, "m_C3240FFC"))
+            .ok()
+            .flatten()
+        {
+            self.write(
+                source_key(key.instance, target),
+                Value::Bool(point.is_some()),
+            )?;
+        }
+        if point.is_some() {
+            self.post(key.instance, Event::CheckTransitions(key.raw))?;
+        }
+        Ok(())
+    }
+
+    pub(in crate::script_init) fn begin_move_to(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        let speed_config = field(&node.fields, "m_speed");
+        if field(&node.fields, "m_B060F688").as_u64() != Some(0)
+            || speed_config.is_null()
+            || !field(&node.fields, "m_destinationBone").is_null()
+            || !field(&node.fields, "m_5BEFF040").is_null()
+        {
+            return Ok(());
+        }
+        let entity_config = field(&node.fields, "m_destinationEntity");
+        if !entity_config.is_null()
+            && self.evaluate(key.instance, node, entity_config, None) != Some(Value::Entity(0))
+        {
+            return Ok(());
+        }
+        let Some(Value::Vector(destination)) =
+            self.evaluate(key.instance, node, field(&node.fields, "m_865F3D01"), None)
+        else {
+            return Ok(());
+        };
+        let speed = match self.evaluate(key.instance, node, speed_config, None) {
+            Some(Value::Integer(n)) => n as f64,
+            Some(Value::Float(f)) => f,
+            _ => return Ok(()),
+        };
+        let max_axis = crate::world::MAX_MOVEMENT_AXIS;
+        if speed > 0.0
+            && speed <= max_axis
+            && destination
+                .iter()
+                .all(|&axis| (-max_axis..=max_axis).contains(&axis))
+        {
+            if let Some(state) = self.state_mut(key) {
+                state.kind = StateKind::MoveTo {
+                    movement: Some((destination, speed)),
+                };
+            }
+        }
+        Ok(())
     }
 }
