@@ -11,6 +11,11 @@ This log records tested changes and their acceptance status. Entries are grouped
 - Added `ChangeKey::Callout(serial, stamp)` in `rust/src/script_stream.rs`, `FrameCallout` / `apply_callout` / `write_frame_action` in `rust/src/script_snapshot_wire.rs` so body owner and observer deltas emit short frame actions and keep the first chunk stamp across packet loss until acknowledgement.
 - Added `rust/tests/body_short_action_retry.rs` consuming `fixtures/behavior/body-short-action-retry-v1.json` and wired it into `shared-behavior-contracts` in `.github/workflows/public-checks.yml`.
 
+#### Server-only movement direction and correction window contract
+
+- Added `DirectionModifier` and `directed_throttles` in `rust/src/mover_modifiers.rs` (reusing `mover_ground::flat_unit` and `orpheus_collision::contact_math::rsqrt`) and `CorrectionHistory::server_motion` / `candidate_with_hero` / `impulse_correction` window tracking in `rust/src/mover_correction.rs`.
+- Added `rust/tests/server_only_movement.rs` consuming `fixtures/behavior/server-only-movement-v1.json` and wired it into `shared-behavior-contracts` in `.github/workflows/public-checks.yml`.
+
 ### 2026-11-16
 
 #### Integrate historical action verification into the current VM
