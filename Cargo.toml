@@ -79,6 +79,10 @@ path = "rust/tests/server_only_movement.rs"
 name = "body_short_action_retry"
 path = "rust/tests/body_short_action_retry.rs"
 
+[[test]]
+name = "seismic_slam"
+path = "rust/tests/seismic_slam.rs"
+
 [[bench]]
 name = "script_actions"
 path = "rust/benches/script_actions.rs"

@@ -131,6 +131,16 @@ pub enum StateKind {
     SpawnSearch,
     RecentInput,
     LivingBodyArray,
+    Shockwave {
+        managed: bool,
+    },
+    PlacementSelector {
+        confirmed: bool,
+        sampled: bool,
+    },
+    MoveTo {
+        movement: Option<([f64; 3], f64)>,
+    },
     WeaponVolley {
         volleys: u8,
         offset_ms: u64,
@@ -179,6 +189,13 @@ impl State {
     /// outside the reference's client-agreed set.
     pub fn reads_untrusted_native(&self) -> bool {
         self.untrusted_native
+    }
+
+    pub fn move_request(&self) -> Option<([f64; 3], f64)> {
+        match self.kind {
+            StateKind::MoveTo { movement } if self.active => movement,
+            _ => None,
+        }
     }
 
     pub(super) fn dormant(kind: StateKind) -> Self {

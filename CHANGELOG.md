@@ -6,6 +6,11 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-17
 
+#### Seismic Slam placement and shockwave contracts
+
+- Added `World::shockwave_targets`, `World::modify_health`, and `World::select_landing` plus `StateKind::Shockwave`, `StateKind::PlacementSelector`, and `StateKind::MoveTo` handling in `rust/src/script_init/`.
+- Added `rust/tests/seismic_slam.rs` consuming `fixtures/behavior/seismic-slam-wave-v1.json` and `fixtures/behavior/seismic-slam-placement-v1.json` and wired it into `shared-behavior-contracts` in `.github/workflows/public-checks.yml`.
+
 #### Short-frame body action retry contract
 
 - Added `ChangeKey::Callout(serial, stamp)` in `rust/src/script_stream.rs`, `FrameCallout` / `apply_callout` / `write_frame_action` in `rust/src/script_snapshot_wire.rs` so body owner and observer deltas emit short frame actions and keep the first chunk stamp across packet loss until acknowledgement.

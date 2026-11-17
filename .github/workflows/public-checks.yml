@@ -189,3 +189,5 @@ jobs:
         run: cargo +stable test --locked -p orpheus --test server_only_movement
       - name: Check short-frame action retry against the same fixture
         run: cargo +stable test --locked -p orpheus --test body_short_action_retry
+      - name: Check Seismic Slam placement and shockwave against the same fixtures
+        run: cargo +stable test --locked -p orpheus --test seismic_slam
