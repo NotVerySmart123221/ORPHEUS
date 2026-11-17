@@ -1712,6 +1712,8 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             | StateKind::ForCode
             | StateKind::ModifyHealth
             | StateKind::Shockwave { .. }
+            | StateKind::PlacementSelector { .. }
+            | StateKind::MoveTo { .. }
             | StateKind::ShieldRecharge
             | StateKind::ExplosionContact
             | StateKind::DeadeyeEffects

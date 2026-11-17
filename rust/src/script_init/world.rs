@@ -85,6 +85,13 @@ pub struct AiBehaviorRequest {
     pub inputs: [f64; 5],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LandingSelection {
+    Unhandled,
+    Invalid,
+    Point([f64; 3]),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TargetTagEffect {
     pub entity: u32,
@@ -617,6 +624,10 @@ pub trait World {
 
     fn modify_health(&mut self, _site: Site, _elapsed_ms: u64) -> bool {
         false
+    }
+
+    fn select_landing(&mut self, _site: Site) -> LandingSelection {
+        LandingSelection::Unhandled
     }
 }
 

@@ -172,7 +172,7 @@ pub use types::{
 pub(crate) use types::{SpawnSearch, SpawnSearchKey};
 pub use world::{
     AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, CreationKind,
-    EmptyWorld, EntityCreation, PlayScript, Site, TargetTagEffect, World,
+    EmptyWorld, EntityCreation, LandingSelection, PlayScript, Site, TargetTagEffect, World,
 };
 pub(crate) use world::{TargetTagEffects, TargetTagSnapshot};
 
@@ -453,7 +453,8 @@ impl Component {
         })
     }
 
-    pub(crate) fn set_instance_variable(
+    #[doc(hidden)]
+    pub fn set_instance_variable(
         &mut self,
         instance: u16,
         id: u32,

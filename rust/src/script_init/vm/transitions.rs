@@ -111,6 +111,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             .expect("modify health state");
                         self.world.modify_health(self.site(id, node), elapsed_ms);
                     }
+                    Some(StateKind::PlacementSelector { .. }) => {
+                        self.tick_placement_selector(key)?
+                    }
                     Some(StateKind::ForCode) => {
                         let node = self
                             .graph(id)
@@ -1143,6 +1146,19 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             StateKind::Shockwave { .. } => {
                 if let Some(state) = self.state_mut(key) {
                     state.kind = StateKind::Shockwave { managed: false };
+                }
+            }
+            StateKind::PlacementSelector { .. } => {
+                if let Some(state) = self.state_mut(key) {
+                    state.kind = StateKind::PlacementSelector {
+                        confirmed: false,
+                        sampled: false,
+                    };
+                }
+            }
+            StateKind::MoveTo { .. } => {
+                if let Some(state) = self.state_mut(key) {
+                    state.kind = StateKind::MoveTo { movement: None };
                 }
             }
             StateKind::TargetTag {

@@ -1189,6 +1189,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             "STUStatescriptStateGameMessageEntry" => StateKind::MessageIdle,
             "STUStatescriptStateWait" if !configured(node, "m_BF1A93B0") => StateKind::Wait,
             "STUStatescriptStateShockwave" => StateKind::Shockwave { managed: false },
+            "STU_4C96470A" => StateKind::PlacementSelector {
+                confirmed: false,
+                sampled: false,
+            },
+            "STUStatescriptStateMoveTo" => StateKind::MoveTo { movement: None },
             "STU_54FEB21C"
                 if (self.graph(id).index, node.pos) == (0x01f0, 14)
                     && ["m_7C8AD485", "m_C7A42E2A", "m_F8CE386A", "m_C46403A5"]
@@ -1388,6 +1393,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             StateKind::ExplosionContact => self.refresh_contact(key, node)?,
             StateKind::ModifyHealth => self.begin_npc_health_change(key, node)?,
             StateKind::Shockwave { .. } => self.begin_shockwave(key, node)?,
+            StateKind::PlacementSelector { .. } => self.begin_placement_selector(key, node)?,
+            StateKind::MoveTo { .. } => self.begin_move_to(key, node)?,
             StateKind::ShieldRecharge => self.begin_shield_recharge(key, node)?,
             StateKind::TrackedTargets => self.refresh_tracked_targets(key, node)?,
             StateKind::DeadeyeEffects => self.refresh_deadeye_effects(key, node)?,
