@@ -7,6 +7,9 @@ license.workspace = true
 publish.workspace = true
 description = "Static geometry queries and character contact solver for ORPHEUS"
 
+[lints]
+workspace = true
+
 [dependencies]
 lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "xz"] }
 serde = { version = "1", features = ["derive"] }
