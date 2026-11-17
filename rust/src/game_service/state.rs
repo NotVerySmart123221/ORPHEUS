@@ -5,6 +5,20 @@ use crate::game_egress::SendError;
 
 const MAX_RECENT_FAULTS: usize = 64;
 
+pub(super) struct State {
+    pub(super) schemas: Arc<Schemas>,
+    pub(super) preloaded_patrol: Option<PatrolScript>,
+    pub(super) clock: GameClock,
+    pub(super) timing: Option<WorkerTiming>,
+    pub(super) links: GameConnections,
+    pub(super) rooms: HashMap<MatchId, Room>,
+    pub(super) routes: HashMap<u32, MatchId>,
+    pub(super) order: IndexMap<u32, ()>,
+    pub(super) next_connection: u32,
+    pub(super) next_input_peer: Option<u32>,
+    pub(super) recent_faults: VecDeque<FaultRecord>,
+}
+
 impl State {
     pub(super) fn new(schemas: Arc<Schemas>, patrol: PatrolScript) -> Self {
         Self {
