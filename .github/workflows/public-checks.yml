@@ -110,3 +110,5 @@ jobs:
         run: cargo +stable test --locked -p orpheus --test world_queries
       - name: Check profile settings persistence against the same fixture
         run: cargo +stable test --locked -p orpheus --test profile_settings
+      - name: Check short-frame action retry against the same fixture
+        run: cargo +stable test --locked -p orpheus --test body_short_action_retry
