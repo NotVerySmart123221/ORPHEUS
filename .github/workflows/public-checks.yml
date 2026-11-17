@@ -37,6 +37,10 @@ jobs:
           persist-credentials: false
       - name: Install Rust tools
         run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          shared-key: protocol-${{ matrix.features }}
+          save-if: ${{ github.ref == 'refs/heads/rust' }}
       - name: Check Rust formatting and lint
         run: |
           cargo +stable fmt --all -- --check
@@ -62,6 +66,9 @@ jobs:
           persist-credentials: false
       - name: Install minimum supported Rust
         run: rustup toolchain install 1.85.0 --profile minimal
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/rust' }}
       - name: Check workspace on minimum supported Rust
         run: cargo +1.85.0 check --locked --workspace --all-targets --features inspector
 
@@ -74,6 +81,9 @@ jobs:
           persist-credentials: false
       - name: Install Rust tools
         run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/rust' }}
       - name: Run portable crate regressions
         run: cargo +stable test --locked --all-targets -p orpheus-collision -p orpheus-runtime -p orpheus-wire
 
@@ -103,6 +113,9 @@ jobs:
         run: python -S -B -m unittest tests.public.test_behavior_contracts tests.public.test_world_query_contracts tests.public.test_profile_settings_contracts -v
       - name: Install Rust tools
         run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/rust' }}
       - name: Check Rust against the same fixture
         shell: bash
         run: |
