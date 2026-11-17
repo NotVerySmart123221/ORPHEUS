@@ -1,0 +1,1572 @@
+use super::{body::*, delivery::*, *};
+use crate::{
+    bits::BitReader,
+    collision_index::TriangleIndex,
+    contact_world::ContactWorld,
+    game_clock::FIRST_TICK,
+    game_content::GameMap,
+    game_heroes::SOLDIER,
+    game_instance::RETAIL_QUANTA,
+    game_parameters::{CLIENT_GAME_MESSAGE, PICK_HERO},
+    jam_codec::{Fields, Value},
+    match_scene::PlayerCard,
+    mover_settings::MoverSettings,
+    scene_assets::SceneAssets,
+    script_codecs::CodecTable,
+    script_graph::GraphStore,
+    script_init::{Component, EmptyWorld, MAX_INIT_WORK, Root},
+    script_runtime::FRAME_MS,
+    world::{MAX_ENTITY_RECORDS, Movement},
+};
+use std::sync::{
+    Mutex,
+    atomic::{AtomicBool, Ordering},
+};
+
+fn forward(frame: u32) -> Command {
+    Command {
+        frame,
+        forward: 127,
+        ..Command::default()
+    }
+}
+
+#[test]
+fn bot_health_replaces_stale_packets_and_respawn_keeps_creation_order() {
+    use crate::{
+        game_bots::BOT_ENTITY,
+        game_egress::PacketDelivery,
+        world::{Create, health},
+    };
+    let old = BOT_ENTITY;
+    let new = old + 1;
+    let create = |entity| EntityUpdate {
+        entity,
+        operation: Some(Operation::Create(Box::new(Create::new(1, vec![])))),
+        ..EntityUpdate::default()
+    };
+    let health_update = |now| EntityUpdate {
+        entity: old,
+        operation: Some(Operation::Update(vec![health(now, 200.0, 0.0, 0.0)])),
+        ..EntityUpdate::default()
+    };
+    let send = |world: &mut WorldDelivery, index: usize| {
+        let ready = &world.ready()[index];
+        let record = ready.tracked();
+        let queue_index = ready.index;
+        world.sent(&[queue_index]);
+        record
+    };
+    let resolve = |world: &mut WorldDelivery, record, arrived| {
+        world.acknowledge(
+            DeliveryReport {
+                requeued_reliable: 0,
+                packets: vec![PacketDelivery {
+                    sequence: 0,
+                    arrived,
+                    records: vec![record],
+                }],
+            },
+            Duration::ZERO,
+        );
+    };
+    let mut world = WorldDelivery::new(OWNER);
+    world.started = Some(FIRST_TICK);
+    world.bots.insert(old, BotLifetime::Live);
+    world.push(Record {
+        update: create(old),
+        delivery: Delivery::BotCreate { after: None },
+    });
+    world.queue_health(health_update(160.0));
+    assert_eq!(world.ready().len(), 1);
+    assert!(!world.identity_ready(old));
+    let spawn = send(&mut world, 0);
+    assert!(world.ready().is_empty());
+    resolve(&mut world, spawn, true);
+    assert!(world.identity_ready(old));
+
+    let earlier_health = send(&mut world, 0);
+    world.queue_health(health_update(0.0));
+    resolve(&mut world, earlier_health, false);
+    let ready = world.ready();
+    assert_eq!(ready.len(), 1);
+    assert_eq!(ready[0].record.update, health_update(0.0));
+    let terminal = send(&mut world, 0);
+    resolve(&mut world, Arc::clone(&terminal), false);
+    assert!(world.health_pending(old));
+    let terminal_retry = send(&mut world, 0);
+    assert!(Arc::ptr_eq(&terminal, &terminal_retry));
+    resolve(&mut world, terminal_retry, true);
+    assert!(!world.health_pending(old));
+
+    world.replace_bot(BotReplacement {
+        retired: old,
+        created: create(new),
+    });
+    assert!(!world.identity_ready(old));
+    let ready = world.ready();
+    assert_eq!(
+        ready
+            .iter()
+            .map(|item| item.record.update.entity)
+            .collect::<Vec<_>>(),
+        [old, new]
+    );
+    let destroy = send(&mut world, 0); // the datagram only had room for the destroy
+    assert!(world.ready().is_empty());
+    resolve(&mut world, destroy, false);
+    let retry = send(&mut world, 0);
+    resolve(&mut world, retry, true);
+    let replacement = send(&mut world, 0);
+    assert_eq!(replacement.update.entity, new);
+    resolve(&mut world, replacement, true);
+    resolve(&mut world, terminal, false);
+    world.queue_health(health_update(120.0));
+    assert!(world.ready().is_empty());
+    assert!(!world.identity_ready(old));
+    assert!(world.identity_ready(new));
+}
+
+#[test]
+fn sparse_vm_work_retains_the_reference_release_and_timer_tail() {
+    use BodyStep::{UnposedBoundary, UnposedTimer};
+    assert_eq!(ScriptGap::before(100, 101).count(), 0);
+    assert_eq!(
+        ScriptGap::before(100, 102).collect::<Vec<_>>(),
+        [(101, UnposedBoundary)]
+    );
+    assert_eq!(
+        ScriptGap::before(100, 104).collect::<Vec<_>>(),
+        [
+            (101, UnposedBoundary),
+            (102, UnposedTimer),
+            (103, UnposedBoundary),
+        ]
+    );
+    let frames = ScriptGap::before(100, 500).collect::<Vec<_>>();
+    assert_eq!(frames.len(), 258);
+    assert_eq!(frames[0], (101, UnposedBoundary));
+    assert!(
+        frames[1..257]
+            .iter()
+            .copied()
+            .eq((243..499).map(|frame| (frame, UnposedTimer)))
+    );
+    assert_eq!(frames[257], (499, UnposedBoundary));
+}
+
+#[test]
+fn enemy_observer_waits_for_identity_and_retries_the_exact_baseline() {
+    use crate::{
+        game_combat::RoomSimulation,
+        script_enemy::{EnemySpawn, fixture},
+        script_snapshot_wire::SceneProjection,
+        script_wire::Variables,
+    };
+    let (graphs, codecs, definition, request) = fixture(false);
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    let entity = room
+        .create_enemy(EnemySpawn {
+            graphs: Arc::clone(&graphs),
+            codecs: Arc::clone(&codecs),
+            definition: &definition,
+            request: &request,
+            mode: 0x0230_0000_0000_019f,
+            mode_variables: Arc::new(Variables::new()),
+            tick: 1000,
+            walk: crate::game_bots::BotWalk::default(),
+            gate: None,
+        })
+        .unwrap();
+    let mut script = Component::start(
+        Arc::clone(&graphs),
+        entity,
+        Variables::new(),
+        vec![Root::new(1, 42)],
+        1000,
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let mut world = WorldDelivery::new(0xa000_0100);
+    world.started = Some(1000);
+    world.create_bot(room.take_created().pop().unwrap());
+    world
+        .present_scene_script(SceneProjection {
+            snapshot: script.snapshot().unwrap(),
+            encoder: SnapshotEncoder::new(&graphs, &codecs),
+        })
+        .unwrap();
+    assert_eq!(world.ready().len(), 1);
+    let create = world.ready()[0].tracked();
+    world.sent(&eligible(&world));
+    assert!(world.ready().is_empty());
+    world.acknowledge(outcome(create, true), Duration::ZERO);
+    assert_eq!(world.ready().len(), 1);
+    let baseline = world.ready()[0].tracked();
+    world.sent(&eligible(&world));
+    script
+        .set_entity_variable(
+            12345,
+            crate::script_wire::Value::Integer(5),
+            &mut EmptyWorld,
+        )
+        .unwrap();
+    world
+        .present_scene_script(SceneProjection {
+            snapshot: script.snapshot().unwrap(),
+            encoder: SnapshotEncoder::new(&graphs, &codecs),
+        })
+        .unwrap();
+    assert!(world.ready().is_empty());
+    world.acknowledge(outcome(Arc::clone(&baseline), false), Duration::ZERO);
+    assert!(Arc::ptr_eq(&baseline, &world.ready()[0].tracked()));
+    world.sent(&eligible(&world));
+    world.acknowledge(outcome(baseline, true), Duration::ZERO);
+    world
+        .present_scene_script(SceneProjection {
+            snapshot: script.snapshot().unwrap(),
+            encoder: SnapshotEncoder::new(&graphs, &codecs),
+        })
+        .unwrap();
+    let delta = world.ready()[0].tracked();
+    assert!(matches!(delta.delivery, Delivery::SceneScript { last: 2 }));
+    world.sent(&eligible(&world));
+    world.acknowledge(outcome(delta, true), Duration::ZERO);
+    world
+        .present_scene_script(SceneProjection {
+            snapshot: script.snapshot().unwrap(),
+            encoder: SnapshotEncoder::new(&graphs, &codecs),
+        })
+        .unwrap();
+    assert!(world.ready().is_empty());
+    assert!(world.scene_views[&entity].base().is_some());
+    world.clear();
+    assert!(world.scene_views.is_empty());
+}
+
+#[test]
+fn gate_voice_anchor_waits_for_the_placeable_acknowledgment() {
+    let mut world = WorldDelivery::new(OWNER);
+    world.started = Some(1001);
+    let gate = 0x8000_0032;
+    let notice = crate::game_combat_messages::CombatNotice::Voice {
+        anchor: gate,
+        speaker: GAME_MODE_ENTITY,
+        listener: OWNER | 1,
+        stimulus: 0x0ee0_0000_0000_06c7,
+        line: 0x0760_0000_0000_8c71,
+    };
+    let identity = notice.required_identity().unwrap();
+    let placeable = Arc::new(Record::baseline(EntityUpdate {
+        entity: gate,
+        operation: Some(Operation::Placeable(0x32)),
+        ..EntityUpdate::default()
+    }));
+    world.acknowledge(outcome(Arc::clone(&placeable), false), Duration::ZERO);
+    assert!(!world.identity_ready(identity));
+    world.acknowledge(outcome(placeable, true), Duration::ZERO);
+    assert!(world.identity_ready(identity));
+}
+
+#[test]
+#[ignore = "requires the separately prepared 104319 Junkenstein runtime"]
+fn junkenstein_notifications_and_countdown_share_reliable_delivery() {
+    use crate::game_content::{JUNKENSTEIN_MAP, JunkensteinCard, MapCatalog};
+    let root = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let assets = SceneAssets::load(&root).unwrap();
+    let maps = MapCatalog::load(root.join("data/game_maps_174.json")).unwrap();
+    let card = JunkensteinCard::from_index(0x3c).unwrap();
+    let map = maps
+        .game_map(
+            JUNKENSTEIN_MAP,
+            card.mode,
+            "Junkenstein's Revenge",
+            false,
+            &[4, 0],
+        )
+        .unwrap();
+    let mut scene = assets.prepare_junkenstein(map, card, 0).unwrap();
+    let hero = scene.heroes().find_hero("Cassidy").unwrap().guid;
+    let mut world = WorldDelivery::new(OWNER);
+    world.started = Some(FIRST_TICK);
+    let bootstrap = world.mode.full(&crate::bits::BitWriter::new()).unwrap();
+    assert!(world.mode.arrived(bootstrap.last));
+    let mut countdowns = 0;
+    let mut notifications = 0;
+    let mut phases = 0;
+    for tick in 2700..2724 {
+        scene.step_encounter(tick, Some(hero));
+        let before = world.countdown.clone();
+        let phases_before = world.encounter_phases.clone();
+        world.queue_encounter_presentation(&scene).unwrap();
+        assert_eq!(world.ready().len(), 1);
+        if phases_before != world.encounter_phases {
+            phases += 1;
+        } else if before != world.countdown {
+            countdowns += 1;
+        } else {
+            notifications += 1;
+            assert!(world.encounter_notifications.is_some());
+        }
+        let record = world.ready()[0].tracked();
+        world.sent(&eligible(&world));
+        world.queue_encounter_presentation(&scene).unwrap();
+        assert!(world.ready().is_empty(), "wait for the in-flight chunk");
+        if tick == 2700 {
+            world.acknowledge(outcome(Arc::clone(&record), false), Duration::ZERO);
+            assert!(Arc::ptr_eq(&record, &world.ready()[0].tracked()));
+            world.sent(&eligible(&world));
+        }
+        world.acknowledge(outcome(record, true), Duration::ZERO);
+        assert!(!world.mode.data_in_flight());
+    }
+    assert!(countdowns >= 9, "countdown must not starve: {countdowns}");
+    assert!(
+        notifications >= 9,
+        "notifications must not starve: {notifications}"
+    );
+    // The first loop only covers hero readiness and its countdown. Advance
+    // through the authored opening rather than injecting a HUD message.
+    let mut battle_clock = None;
+    for tick in 2724..=8000 {
+        scene.step_encounter(tick, Some(hero));
+        let before = world.encounter_phases.clone();
+        world.queue_encounter_presentation(&scene).unwrap();
+        if before != world.encounter_phases {
+            phases += 1;
+            assert!(
+                scene
+                    .encounter_phase_wire(&world.encounter_phases)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        if tick == 7000 {
+            battle_clock = world.countdown.as_ref().map(|frame| frame.value.clone());
+        }
+        assert!(world.ready().len() <= 1);
+        if let Some(record) = world.ready().first().map(|record| record.tracked()) {
+            world.sent(&eligible(&world));
+            if before != world.encounter_phases {
+                world.acknowledge(outcome(Arc::clone(&record), false), Duration::ZERO);
+                assert!(Arc::ptr_eq(&record, &world.ready()[0].tracked()));
+                world.sent(&eligible(&world));
+            }
+            world.acknowledge(outcome(record, true), Duration::ZERO);
+        }
+    }
+    assert!(phases > 0, "authored HUD startup must reach the client");
+    let clock = world.countdown.as_ref().unwrap();
+    assert_ne!(
+        battle_clock.as_ref(),
+        Some(&clock.value),
+        "battle clock updates must continue after the authored HUD announcement"
+    );
+    assert!(
+        clock.states[2].is_some(),
+        "battle clock chase must reach the client"
+    );
+    assert!(clock.states[..2].iter().all(Option::is_none));
+    assert_eq!(phases, world.encounter_phases.len());
+    // The final boss objective uses the second client-only announcement.
+    // Keep projecting through that transition, not just the opening HUD.
+    for tick in 8001..=43000 {
+        scene.step_encounter(tick, Some(hero));
+        world.queue_encounter_presentation(&scene).unwrap();
+        if let Some(record) = world.ready().first().map(|record| record.tracked()) {
+            world.sent(&eligible(&world));
+            world.acknowledge(outcome(record, true), Duration::ZERO);
+        }
+    }
+    world.clear();
+    assert!(world.encounter_notifications.is_none());
+    assert!(world.encounter_notification_turn);
+    assert!(world.encounter_phases.is_empty());
+}
+
+#[test]
+fn native_command_window_keeps_duplicates_and_future_input_unacknowledged() {
+    let (fresh, boundary) = command_prefix(
+        Some(1000),
+        1000,
+        &[
+            forward(1000),
+            forward(1001),
+            forward(1096),
+            forward(1097),
+            forward(20_000),
+        ],
+    );
+    assert_eq!(fresh, [forward(1001), forward(1096)]);
+    assert_eq!(boundary, None);
+
+    let (fresh, boundary) = command_prefix(None, 1000, &[forward(MAX_LEASE_FRAME + 1)]);
+    assert!(fresh.is_empty());
+    assert_eq!(boundary, Some(MAX_LEASE_FRAME + 1));
+    let (fresh, boundary) = command_prefix(
+        None,
+        MAX_LEASE_FRAME - 2,
+        &[forward(MAX_LEASE_FRAME - 1), forward(MAX_LEASE_FRAME + 1)],
+    );
+    assert_eq!(fresh, [forward(MAX_LEASE_FRAME - 1)]);
+    assert_eq!(boundary, Some(MAX_LEASE_FRAME + 1));
+}
+
+#[test]
+fn overlapping_bursts_enqueue_each_frame_once_and_do_not_ack_pending_work() {
+    let mut world = WorldDelivery::new(0xa000_0100);
+    world.started = Some(1000);
+    let first: Vec<_> = (980..1012).map(forward).collect();
+    let next: Vec<_> = (1000..1032).map(forward).collect();
+    world.queue_commands(1000, &first);
+    world.queue_commands(1000, &next);
+    world.queue_commands(1000, &first);
+    let frames: Vec<_> = world
+        .input
+        .work
+        .iter()
+        .map(|work| {
+            let InputWork::Command {
+                command,
+                pending: None,
+            } = work
+            else {
+                panic!("fresh command");
+            };
+            command.frame
+        })
+        .collect();
+    assert_eq!(frames, (980..1032).collect::<Vec<_>>());
+    assert_eq!(world.command_ack(1000), 979);
+    world.clear();
+    assert!(!world.has_input_work());
+    assert_eq!(world.command_ack(1001), 979);
+}
+
+#[test]
+fn pending_queue_closes_after_the_prefix_at_a_boundary_or_capacity() {
+    let mut input = InputQueue::default();
+    input.commands(
+        MAX_LEASE_FRAME - 2,
+        &[forward(MAX_LEASE_FRAME - 1), forward(MAX_LEASE_FRAME + 1)],
+    );
+    assert!(input.closing);
+    assert_eq!(input.admitted, Some(MAX_LEASE_FRAME - 1));
+    assert!(matches!(
+        input.work.pop_front(),
+        Some(InputWork::Command { .. })
+    ));
+    assert!(matches!(input.work.pop_front(), Some(InputWork::Leave)));
+
+    let mut input = InputQueue::default();
+    for frame in 1..=MAX_PENDING_INPUT as u32 + 2 {
+        input.commands(frame, &[forward(frame)]);
+    }
+    assert_eq!(input.work.len(), MAX_PENDING_INPUT + 1);
+    assert_eq!(input.admitted, Some(MAX_PENDING_INPUT as u32));
+    assert!(matches!(input.work.back(), Some(InputWork::Leave)));
+    assert_eq!(input.processed, None);
+}
+
+#[test]
+#[ignore = "requires a prepared 104319 Practice Range pack without bot VM graphs"]
+fn queued_player_requests_ignore_invalid_input_but_propagate_replacement_failure() {
+    let assets = SceneAssets::load(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap()).unwrap();
+    let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
+    // Script support is independently optional in this developer preview.
+    scene.owner_body_factory = None;
+    let owner = 0xa000_0100;
+    let card = PlayerCard::default();
+    let viewer = PlayerAppearance {
+        entity: owner,
+        slot: 0,
+        team: 0,
+        card: &card,
+    };
+    let mut world = WorldDelivery::new(owner);
+    world.start(&scene, &viewer, FIRST_TICK).unwrap();
+    world.created.insert(owner);
+    world.present(&scene, FIRST_TICK).unwrap();
+    let pick = |entity, hero: u64| Message {
+        id: CLIENT_GAME_MESSAGE,
+        fields: Fields::from([
+            (
+                0x78,
+                Value::Struct(Fields::from([(0, Value::Unsigned(u64::from(entity)))])),
+            ),
+            (0x80, Value::Blob(hero.to_le_bytes().to_vec())),
+            (0xa8, Value::Unsigned(PICK_HERO)),
+            (0xb0, Value::Signed(3)),
+        ]),
+    };
+    for message in [
+        Message {
+            id: 0,
+            fields: Fields::new(),
+        },
+        pick(owner + 1, SOLDIER),
+        pick(owner, 0),
+    ] {
+        world.queue_game_message(FIRST_TICK, Duration::ZERO, message);
+    }
+    world.queue_skin(SOLDIER, FIRST_TICK, Duration::ZERO);
+    assert_eq!(
+        world
+            .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+            .unwrap(),
+        (4, false)
+    );
+    assert!(world.body.is_none());
+
+    world.generation = u64::MAX;
+    world.queue_game_message(FIRST_TICK, Duration::ZERO, pick(owner, SOLDIER));
+    let error = world
+        .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+        .unwrap_err();
+    assert_eq!(error.to_string(), "player body lifetime exhausted");
+    assert!(world.body.is_none());
+    world.generation = 0;
+    world.queue_game_message(FIRST_TICK, Duration::ZERO, pick(owner, SOLDIER));
+    assert_eq!(
+        world
+            .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+            .unwrap(),
+        (1, false)
+    );
+    let body = world.body.unwrap();
+    assert!(world.body_script.is_none());
+
+    let mut card = PlayerCard::default();
+    card.skins.insert(
+        SOLDIER,
+        SkinTheme {
+            guid: 1,
+            ..SkinTheme::default()
+        },
+    );
+    let viewer = PlayerAppearance {
+        card: &card,
+        ..viewer
+    };
+    world.queue_skin(0, FIRST_TICK, Duration::ZERO);
+    assert_eq!(
+        world
+            .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+            .unwrap(),
+        (1, false)
+    );
+    world.generation = u64::MAX;
+    world.queue_skin(SOLDIER, FIRST_TICK, Duration::ZERO);
+    let error = world
+        .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+        .unwrap_err();
+    assert_eq!(error.to_string(), "player body lifetime exhausted");
+    assert_eq!(world.body.unwrap().id, body.id);
+}
+
+#[test]
+#[ignore = "requires a prepared 104319 Practice Range pack without bot VM graphs"]
+fn native_world_resumes_a_gap_before_switching_the_body_and_acknowledging_input() {
+    let runtime = std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap();
+    let assets = SceneAssets::load(runtime).unwrap();
+    let scene = assets.prepare(GameMap::practice_range()).unwrap();
+    let owner = 0xa000_0100;
+    let viewer = PlayerAppearance {
+        entity: owner,
+        slot: 0,
+        team: 0,
+        card: &PlayerCard::default(),
+    };
+    let mut world = WorldDelivery::new(owner);
+    let first = FIRST_TICK + 1;
+    world.queue_commands(FIRST_TICK, &[forward(first)]);
+    assert!(!world.has_input_work());
+    assert_eq!(world.command_ack(FIRST_TICK), FIRST_TICK);
+    world.start(&scene, &viewer, FIRST_TICK).unwrap();
+    world.queue_commands(FIRST_TICK, &[forward(first)]);
+    assert_eq!(
+        world
+            .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+            .unwrap(),
+        (1, false)
+    );
+    assert_eq!(world.command_ack(FIRST_TICK + 2), first);
+    world.created.insert(owner);
+    world.present(&scene, FIRST_TICK).unwrap();
+    let hero = scene.heroes().get(SOLDIER).unwrap();
+    world
+        .switch(
+            &scene,
+            &viewer,
+            FIRST_TICK,
+            RETAIL_QUANTA,
+            owner | 1,
+            (hero, SkinTheme::default()),
+        )
+        .unwrap();
+    assert!(world.body_script.is_some());
+    let initial = world.mover.as_ref().unwrap().pose();
+    let actual = Command {
+        yaw: initial.yaw,
+        ..forward(first + 1)
+    };
+    let gap = Command {
+        frame: actual.frame + 64,
+        ..actual
+    };
+    let later = Command {
+        frame: gap.frame + 1,
+        ..actual
+    };
+    world.queue_commands(FIRST_TICK + 2, &[actual]);
+    assert_eq!(
+        world
+            .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+            .unwrap(),
+        (1, false)
+    );
+    world.queue_commands(FIRST_TICK + 2, &[actual, gap]);
+
+    let tracer = scene.heroes().find_hero("Tracer").unwrap();
+    let switch = Message {
+        id: CLIENT_GAME_MESSAGE,
+        fields: Fields::from([
+            (
+                0x78,
+                Value::Struct(Fields::from([(0, Value::Unsigned(u64::from(owner)))])),
+            ),
+            (0x80, Value::Blob(tracer.guid.to_le_bytes().to_vec())),
+            (0xa8, Value::Unsigned(PICK_HERO)),
+            (0xb0, Value::Signed(3)),
+        ]),
+    };
+    world.queue_game_message(FIRST_TICK + 3, Duration::ZERO, switch);
+    world.queue_commands(FIRST_TICK + 3, &[gap, later]);
+
+    for turn in 1..=4 {
+        assert_eq!(
+            world
+                .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+                .unwrap(),
+            (16, false)
+        );
+        assert_eq!(world.body.unwrap().id.entity, owner | 1);
+        assert_eq!(
+            world.mover.as_ref().unwrap().pose().frame,
+            Some(actual.frame + turn * 16)
+        );
+        assert_eq!(
+            world.command_ack(FIRST_TICK + 90),
+            if turn == 4 { gap.frame } else { actual.frame }
+        );
+    }
+    let mut synchronous = scene.player_spawn_mover(hero.body, viewer.team).unwrap();
+    for command in [actual, gap] {
+        synchronous
+            .step(scene.movement_index(), command, 0.016, |_, _| {})
+            .unwrap();
+    }
+    assert_eq!(world.mover.as_ref().unwrap().pose(), synchronous.pose());
+    assert_ne!(synchronous.pose().position, initial.position);
+
+    assert_eq!(
+        world
+            .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+            .unwrap(),
+        (2, false)
+    );
+    assert_eq!(world.body.unwrap().id.entity, owner | 2);
+    assert_eq!(world.command_ack(FIRST_TICK + 90), later.frame);
+    let mut synchronous = scene.player_spawn_mover(tracer.body, viewer.team).unwrap();
+    synchronous
+        .step(scene.movement_index(), later, 0.016, |_, _| {})
+        .unwrap();
+    assert_eq!(world.mover.as_ref().unwrap().pose(), synchronous.pose());
+
+    world.queue_commands(FIRST_TICK + 3, &[forward(later.frame + 1)]);
+    world.clear();
+    assert!(!world.has_input_work());
+    assert_eq!(world.command_ack(FIRST_TICK + 90), later.frame);
+}
+use crate::game_egress::PacketDelivery;
+
+const OWNER: u32 = 0xa000_0100;
+
+fn avatar(suffix: u32, generation: u64) -> BodyId {
+    BodyId {
+        entity: OWNER | suffix,
+        generation,
+    }
+}
+
+fn body(id: BodyId) -> Body {
+    Body {
+        id,
+        hero: 7,
+        skin: SkinTheme::default(),
+    }
+}
+
+fn record(entity: u32, delivery: Delivery) -> Record {
+    let operation = match delivery {
+        Delivery::CreateBody(_) => {
+            Operation::Create(Box::new(crate::world::Create::new(1, Vec::new())))
+        }
+        Delivery::DestroyBody(_) => Operation::Destroy,
+        _ => Operation::Update(Vec::new()),
+    };
+    Record {
+        update: EntityUpdate {
+            entity,
+            operation: Some(operation),
+            ..EntityUpdate::default()
+        },
+        delivery,
+    }
+}
+
+fn outcome(record: Arc<Record>, arrived: bool) -> DeliveryReport<Arc<Record>> {
+    DeliveryReport {
+        requeued_reliable: 0,
+        packets: vec![PacketDelivery {
+            sequence: 0,
+            arrived,
+            records: vec![record],
+        }],
+    }
+}
+
+fn eligible(world: &WorldDelivery) -> Vec<usize> {
+    world.ready().iter().map(|ready| ready.index).collect()
+}
+
+struct SyntheticOwner {
+    component: Component,
+    graphs: Arc<GraphStore>,
+    codecs: CodecTable,
+    modifiers: BTreeMap<ModifierKey, Modifier>,
+    failed: Arc<AtomicBool>,
+    health_update: Arc<Mutex<Option<WorldComponent>>>,
+}
+
+impl OwnerBodyRuntime for SyntheticOwner {
+    fn snapshot(&self) -> Option<&Snapshot> {
+        (!self.failed.load(Ordering::Relaxed))
+            .then(|| self.component.snapshot())
+            .flatten()
+    }
+
+    fn encoder(&self) -> SnapshotEncoder<'_> {
+        SnapshotEncoder::new(&self.graphs, &self.codecs)
+    }
+
+    fn advance(&mut self, command: Command, _mover: &Mover, _step: BodyStep) -> io::Result<()> {
+        self.component
+            .advance_command(command, &mut EmptyWorld)
+            .map_err(invalid)
+    }
+
+    fn frame_ms(&self) -> u32 {
+        FRAME_MS as u32
+    }
+
+    fn take_health_update(&mut self) -> Option<WorldComponent> {
+        self.health_update.lock().unwrap().take()
+    }
+
+    fn movement_modifiers(&self) -> Option<&BTreeMap<ModifierKey, Modifier>> {
+        Some(&self.modifiers)
+    }
+}
+
+fn synthetic_owner(entity: u32, frame: u32, failed: Arc<AtomicBool>) -> SyntheticOwner {
+    let graphs = Arc::new(
+        GraphStore::from_json(
+            br#"{"version":1,"bodies":{},"missing":[],"graphs":[{
+            "index":42,"items":0,"nodes":[],"states":[],"entries":[],"remote":[],
+            "sync_vars":[],"containers":{},"unknown_nodes":[],"fields":{},
+            "header":{"m_nodesBitCount":4,"m_statesBitCount":4,
+                "m_remoteSyncNodesBitCount":4,"m_syncVarsBitCount":4}
+        }]}"#,
+        )
+        .unwrap(),
+    );
+    let component = Component::start(
+        Arc::clone(&graphs),
+        entity,
+        Default::default(),
+        vec![Root::new(1, 42)],
+        frame,
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    SyntheticOwner {
+        component,
+        graphs,
+        codecs: CodecTable::from_json(r#"{"classes":{}}"#).unwrap(),
+        modifiers: BTreeMap::new(),
+        failed,
+        health_update: Arc::default(),
+    }
+}
+
+fn activate_script(world: &mut WorldDelivery, id: BodyId, hero: u64, failed: Arc<AtomicBool>) {
+    let body = Body { hero, ..body(id) };
+    world.body = Some(body);
+    world.bound = None;
+    world
+        .bodies
+        .insert(id.entity, (id.generation, Lifetime::Live));
+    world.created.remove(&id.entity);
+    let runtime = Box::new(synthetic_owner(id.entity, 100, failed));
+    world.body_script = Some(BodyScript::new(body, 100, runtime).unwrap());
+}
+
+fn transmit(
+    world: &mut WorldDelivery,
+    egress: &mut GameEgress<Arc<Record>>,
+    tick: u32,
+    sequence: u32,
+) -> (Vec<u8>, SentFrame) {
+    let mut bytes = Vec::new();
+    let sent = world
+        .send_frame(tick, Vec::new(), false, egress, |payload| {
+            bytes = payload;
+            Ok::<_, ()>(sequence)
+        })
+        .unwrap();
+    (bytes, sent)
+}
+
+fn transport_outcome(
+    world: &mut WorldDelivery,
+    egress: &mut GameEgress<Arc<Record>>,
+    sequence: u32,
+    arrived: bool,
+) {
+    world.acknowledge(
+        egress.acknowledge(sequence + 1, u64::from(arrived)),
+        Duration::ZERO,
+    );
+}
+
+#[test]
+fn projectile_retirement_retries_destroys_and_ignores_stale_confirmations() {
+    use crate::script_init::ShotEvent;
+
+    const DEFINITION: u64 = 0x0400_0000_0000_072c;
+    let id = avatar(1, 1);
+    let mut world = WorldDelivery::new(OWNER);
+    world.started = Some(100);
+    activate_script(&mut world, id, SOLDIER, Arc::default());
+    let leases = ProjectileLeases::new(0, 100, [DEFINITION]).unwrap();
+    let alias = leases.entity(DEFINITION, 101, 0).unwrap();
+    let mut projectiles = OwnerProjectiles::new(id.entity, leases);
+    let token = projectiles
+        .admit(
+            ShotEvent {
+                entity: id.entity,
+                instance: 1,
+                graph: 42,
+                raw_state: 0,
+                frame: 101,
+                time_ms: 101 * FRAME_MS,
+                activation: 1,
+                activation_ms: 101 * FRAME_MS,
+                ordinal: 0,
+            },
+            DEFINITION,
+            125,
+        )
+        .unwrap();
+    let confirmation = projectiles.advance(133);
+    world.body_script.as_mut().unwrap().projectiles = Some(projectiles);
+    world.queue_projectiles(id, confirmation).unwrap();
+    let old = Arc::clone(&world.queued[0]);
+    assert!(
+        matches!(old.delivery, Delivery::ProjectileConfirm { id: source, token: key }
+            if source == id && key == token)
+    );
+    assert!(eligible(&world).is_empty());
+    world.created.insert(id.entity);
+    world.bound = Some(id);
+    assert_eq!(eligible(&world), [0]);
+    world.sent(&[0]);
+
+    world.cancel_body_script();
+    activate_script(&mut world, avatar(2, 2), SOLDIER, Arc::default());
+    world.acknowledge(outcome(old, false), Duration::ZERO);
+    let destroy = Arc::clone(&world.queued[0]);
+    assert_eq!(world.queued.len(), 1);
+    assert_eq!(destroy.update.entity, alias);
+    assert!(destroy.update.ch2.is_none());
+    assert!(matches!(destroy.update.operation, Some(Operation::Destroy)));
+    world.sent(&[0]);
+    world.acknowledge(outcome(Arc::clone(&destroy), false), Duration::ZERO);
+    assert_eq!(world.queued.len(), 1);
+    world.sent(&[0]);
+    world.acknowledge(outcome(destroy, true), Duration::ZERO);
+    assert!(world.queued.is_empty());
+    assert!(world.projectile_destroys.is_empty());
+}
+
+#[test]
+fn admitted_owner_projectile_preserves_gravity_and_expiry_blast() {
+    use crate::{
+        game_hitscan::{HitDefinition, TargetPose},
+        projectile_flight::{Blast, ProjectileBallistics, lifted_direction},
+        script_init::ShotEvent,
+    };
+    const DEFINITION: u64 = 0x0400_0000_0000_037d;
+    let id = avatar(1, 2);
+    let mut world = WorldDelivery::new(OWNER);
+    activate_script(&mut world, id, CASSIDY, Arc::default());
+    let script = world.body_script.as_mut().unwrap();
+    script.projectiles = Some(OwnerProjectiles::new(
+        id.entity,
+        ProjectileLeases::new(0, 100, [DEFINITION]).unwrap(),
+    ));
+    script.launch_projectile(PosedProjectile {
+        stun: crate::game_combat::Stun::from_seconds(0.8),
+        shot: ShotEvent {
+            entity: id.entity,
+            instance: 1,
+            graph: 0x01e9,
+            raw_state: 1,
+            frame: 101,
+            time_ms: 101 * FRAME_MS,
+            activation: 1,
+            activation_ms: 101 * FRAME_MS,
+            ordinal: 0,
+        },
+        ballistics: ProjectileBallistics {
+            speed: 30.0,
+            lifetime: 7.0 / 30.0,
+            definition: Some(DEFINITION),
+            direct: None,
+            blast: Some(Blast {
+                hit: HitDefinition {
+                    tags: crate::game_hitscan::DamageTags::EMPTY,
+                    amount: 25.0,
+                    loadout: None,
+                    critical: 1.0,
+                    falloff: None,
+                },
+                rings: vec![(3.0, 1.0)],
+            }),
+        },
+        origin: [0.0, 1.55, 0.0],
+        direction: lifted_direction([0.0, 0.0, 1.0], 0.05).unwrap(),
+        gravity: Some(20.0),
+        expiry_blast: true,
+    });
+    let (_, mut launches) = world.take_projectile_launches().unwrap();
+    let [launch] = launches.as_mut_slice() else {
+        panic!("one admitted flight")
+    };
+    assert_eq!(launch.stun.unwrap().ticks, 50);
+    let targets = [(
+        42,
+        TargetPose {
+            feet: [2.0, 0.0, 7.0],
+            height: 1.8,
+            radius: 0.35,
+            eye: 1.55,
+        },
+    )];
+    let mut headings = Vec::new();
+    let end = (1..=30)
+        .find_map(|tick| {
+            launch
+                .flight
+                .advance(tick, &targets, |_, direction, _| {
+                    headings.push(direction[1]);
+                    Ok(None)
+                })
+                .unwrap()
+        })
+        .expect("range-end blast");
+    assert!(end.expired);
+    assert!(
+        headings.iter().any(|y| *y < -0.05),
+        "gravity was lost at admission"
+    );
+    assert_eq!(
+        end.impacts
+            .iter()
+            .map(|hit| (hit.entity, hit.damage))
+            .collect::<Vec<_>>(),
+        [(42, 25.0)]
+    );
+}
+
+#[test]
+fn room_flight_outcomes_release_only_the_current_owner_alias() {
+    use crate::{projectile_flight::ProjectileBallistics, script_init::ShotEvent};
+
+    const DEFINITION: u64 = 0x0400_0000_0000_072c;
+    let id = avatar(1, 2);
+    for completed in [false, true] {
+        let mut world = WorldDelivery::new(OWNER);
+        world.started = Some(100);
+        activate_script(&mut world, id, SOLDIER, Arc::default());
+        let leases = ProjectileLeases::new(0, 100, [DEFINITION]).unwrap();
+        let alias = leases.entity(DEFINITION, 101, 0).unwrap();
+        let script = world.body_script.as_mut().unwrap();
+        script.projectiles = Some(OwnerProjectiles::new(id.entity, leases));
+        script.launch_projectile(PosedProjectile {
+            stun: None,
+            gravity: None,
+            expiry_blast: false,
+            shot: ShotEvent {
+                entity: id.entity,
+                instance: 1,
+                graph: 42,
+                raw_state: 0,
+                frame: 101,
+                time_ms: 101 * FRAME_MS,
+                activation: 1,
+                activation_ms: 101 * FRAME_MS,
+                ordinal: 0,
+            },
+            ballistics: ProjectileBallistics {
+                speed: 1.0,
+                lifetime: 2.0,
+                definition: Some(DEFINITION),
+                direct: None,
+                blast: None,
+            },
+            origin: [0.0; 3],
+            direction: [1.0, 0.0, 0.0],
+        });
+        let (owner, launches) = world.take_projectile_launches().unwrap();
+        assert_eq!(owner, id);
+        let [launch] = launches.as_slice() else {
+            panic!("one accepted flight");
+        };
+        let token = launch.token;
+        assert!(world.take_projectile_launches().unwrap().1.is_empty());
+        world
+            .finish_projectiles(avatar(1, 1), 133, vec![FlightOutcome::Failed(token)])
+            .unwrap();
+        assert!(world.queued.is_empty());
+
+        world.finish_projectiles(id, 133, Vec::new()).unwrap();
+        let confirm = Arc::clone(&world.queued[0]);
+        assert_eq!(confirm.update.entity, alias);
+        assert!(matches!(
+            confirm.delivery,
+            Delivery::ProjectileConfirm { .. }
+        ));
+        world.created.insert(id.entity);
+        world.bound = Some(id);
+        world.sent(&[0]);
+        world.acknowledge(outcome(confirm, true), Duration::ZERO);
+
+        let finished = if completed {
+            FlightOutcome::Ended {
+                token,
+                travelled: 30.25 * TICK_PERIOD.as_secs_f64(),
+            }
+        } else {
+            FlightOutcome::Failed(token)
+        };
+        world.finish_projectiles(id, 134, vec![finished]).unwrap();
+        if completed {
+            world.finish_projectiles(id, 137, Vec::new()).unwrap();
+            assert!(world.queued.is_empty());
+            world.finish_projectiles(id, 138, Vec::new()).unwrap();
+        }
+        let [release] = world.queued.as_slice() else {
+            panic!("one predicted alias retirement");
+        };
+        assert_eq!(release.update.entity, alias);
+        assert!(matches!(release.update.operation, Some(Operation::Destroy)));
+        assert_eq!(release.update.ch2.is_some(), completed);
+        if let Some(bits) = &release.update.ch2 {
+            let mut reader = BitReader::new(bits.as_bytes());
+            assert!(!reader.bit().unwrap());
+            assert!(reader.bit().unwrap());
+            assert_eq!(reader.var_b().unwrap(), u32::MAX);
+            assert_eq!(reader.var_b().unwrap(), 138 + 4096 + 1);
+        }
+    }
+}
+
+#[test]
+fn owner_health_waits_for_creation_and_discards_superseded_lifetimes() {
+    use crate::world::{ARMOUR_POOL, POOLS, health, pool, pool_component};
+
+    let id = avatar(1, 1);
+    let mut world = WorldDelivery::new(OWNER);
+    world.started = Some(100);
+    world.body = Some(body(id));
+    world
+        .bodies
+        .insert(id.entity, (id.generation, Lifetime::Live));
+    let runtime = synthetic_owner(id.entity, 100, Arc::default());
+    let pending = Arc::clone(&runtime.health_update);
+    world.body_script = Some(BodyScript::new(body(id), 100, Box::new(runtime)).unwrap());
+    world.push(record(id.entity, Delivery::CreateBody(id)));
+
+    let mut egress = GameEgress::default();
+    let first = health(160.0, 200.0, 50.0, 0.0);
+    *pending.lock().unwrap() = Some(first.clone());
+    let sent = world
+        .send_frame(100, Vec::new(), false, &mut egress, |_| Ok::<_, ()>(0))
+        .unwrap();
+    assert_eq!(sent.records, [RecordSource::Queued(0)]);
+    assert!(world.health_pending(id.entity));
+    assert!(world.ready().is_empty());
+    transport_outcome(&mut world, &mut egress, 0, true);
+
+    let old = world.ready()[0].tracked();
+    assert_eq!(old.update.operation, Some(Operation::Update(vec![first])));
+    world.sent(&[0]);
+    let latest = pool_component([
+        (0, pool(1, 0, 200.0, 120.0)),
+        (ARMOUR_POOL * POOLS, [0; 20]),
+    ]);
+    *pending.lock().unwrap() = Some(latest.clone());
+    let rejected = world.send_frame(101, Vec::new(), false, &mut egress, |_| Err::<u32, _>(()));
+    assert!(matches!(rejected, Err(SendError::Transport(()))));
+    world.acknowledge(outcome(Arc::clone(&old), false), Duration::ZERO);
+    world.acknowledge(outcome(old, true), Duration::ZERO);
+    assert!(world.health_pending(id.entity));
+    let mut updates = world
+        .ready()
+        .into_iter()
+        .filter(|item| matches!(item.record.delivery, Delivery::Health { .. }));
+    let ready = updates.next().expect("latest health revision");
+    assert!(updates.next().is_none());
+    let latest_record = ready.tracked();
+    assert_eq!(
+        latest_record.update.operation,
+        Some(Operation::Update(vec![latest]))
+    );
+
+    world.sent(&[ready.index]);
+    world.body = Some(body(avatar(2, 2)));
+    world.cancel_body_script();
+    world.retire_body(id);
+    world.remove_stale();
+    world.queue_health(latest_record.update.clone());
+    world.acknowledge(outcome(latest_record, false), Duration::ZERO);
+    assert!(!world.health_pending(id.entity));
+    assert!(!world.identity_ready(id.entity));
+    let [destroy] = world.queued.as_slice() else {
+        panic!("expected only the retired body's destroy record");
+    };
+    assert!(matches!(destroy.delivery, Delivery::DestroyBody(retired) if retired == id));
+}
+
+#[test]
+fn body_script_retries_frozen_initial_frames_and_ignores_old_generation_reports() {
+    let mut world = WorldDelivery::new(OWNER);
+    let id = avatar(1, 1);
+    world.started = Some(100);
+    activate_script(&mut world, id, 7, Arc::default());
+    world.push(record(id.entity, Delivery::CreateBody(id)));
+    let mut egress = GameEgress::default();
+    assert_eq!(
+        transmit(&mut world, &mut egress, 100, 0).1.records,
+        [RecordSource::Queued(0)]
+    );
+    assert!(
+        transmit(&mut world, &mut egress, 100, 1)
+            .1
+            .records
+            .is_empty()
+    );
+    transport_outcome(&mut world, &mut egress, 0, true);
+    let (h0, sent) = transmit(&mut world, &mut egress, 101, 2);
+    assert_eq!(sent.records, [RecordSource::Queued(0)]);
+    transport_outcome(&mut world, &mut egress, 2, false);
+    assert_eq!(transmit(&mut world, &mut egress, 101, 3).0, h0);
+    transport_outcome(&mut world, &mut egress, 3, true);
+    assert_eq!(
+        world.body_script.as_ref().unwrap().stream.base().unwrap().0,
+        1
+    );
+
+    let blocked = transmit(&mut world, &mut egress, 101, 4).1;
+    assert!(blocked.records.is_empty());
+    let mut mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        [0.0; 3],
+        0,
+        0x18,
+    )
+    .unwrap();
+    let rays = TriangleIndex::new([]).unwrap();
+    let command = forward(101);
+    mover
+        .step(&rays, command, 0.016, |mover, command| {
+            world
+                .body_script
+                .as_mut()
+                .unwrap()
+                .advance(mover, command, BodyStep::Posed)
+                .unwrap();
+        })
+        .unwrap();
+    assert!(
+        transmit(&mut world, &mut egress, 101, 5)
+            .1
+            .records
+            .is_empty()
+    );
+    let stream = &world.body_script.as_ref().unwrap().stream;
+    assert_eq!(
+        stream.pending().map(|(last, ..)| last).collect::<Vec<_>>(),
+        [3]
+    );
+    assert_eq!(stream.command_frame(), 101);
+
+    world.push(record(OWNER, Delivery::Possession(id)));
+    assert_eq!(
+        transmit(&mut world, &mut egress, 101, 6).1.records,
+        [RecordSource::Queued(0)]
+    );
+    transport_outcome(&mut world, &mut egress, 6, true);
+    let (c0, sent) = transmit(&mut world, &mut egress, 102, 7);
+    assert_eq!(sent.records, [RecordSource::Queued(0)]);
+    let command = forward(117);
+    mover
+        .step(&rays, command, 0.016, |mover, command| {
+            world
+                .body_script
+                .as_mut()
+                .unwrap()
+                .advance(mover, command, BodyStep::Posed)
+                .unwrap();
+        })
+        .unwrap();
+    assert!(
+        transmit(&mut world, &mut egress, 102, 8)
+            .1
+            .records
+            .is_empty()
+    );
+    transport_outcome(&mut world, &mut egress, 7, false);
+    assert_eq!(transmit(&mut world, &mut egress, 102, 9).0, c0);
+    transport_outcome(&mut world, &mut egress, 9, true);
+    assert_eq!(
+        transmit(&mut world, &mut egress, 117, 10).1.records,
+        [RecordSource::Queued(0)]
+    );
+    transport_outcome(&mut world, &mut egress, 10, false);
+    assert!(
+        transmit(&mut world, &mut egress, 118, 11)
+            .1
+            .records
+            .is_empty()
+    );
+
+    mover
+        .step(&rays, forward(118), 0.016, |mover, command| {
+            world
+                .body_script
+                .as_mut()
+                .unwrap()
+                .advance(mover, command, BodyStep::Posed)
+                .unwrap();
+        })
+        .unwrap();
+    assert_eq!(
+        transmit(&mut world, &mut egress, 118, 12).1.records,
+        [RecordSource::Queued(0)]
+    );
+    world.cancel_body_script();
+    let reused = avatar(1, 257);
+    activate_script(&mut world, reused, 7, Arc::default());
+    transport_outcome(&mut world, &mut egress, 12, true);
+    assert_eq!(world.body_script.as_ref().unwrap().stream.last(), 0);
+    assert!(world.queued.is_empty());
+}
+
+fn read_ack(payload: &[u8]) -> u32 {
+    let mut bits = BitReader::new(payload);
+    bits.var_a().unwrap();
+    assert!(!bits.bit().unwrap());
+    bits.var_a().unwrap()
+}
+
+#[test]
+fn owner_correction_respects_create_budget_and_failed_transport() {
+    for hero in [SOLDIER, CASSIDY] {
+        let mut world = WorldDelivery::new(OWNER);
+        let id = avatar(1, 1);
+        world.started = Some(100);
+        let failed = Arc::new(AtomicBool::new(false));
+        activate_script(&mut world, id, hero, Arc::clone(&failed));
+        world.input.processed = Some(125);
+        let history = world
+            .body_script
+            .as_mut()
+            .unwrap()
+            .corrections
+            .as_mut()
+            .unwrap();
+        history.record(Movement {
+            frame: Some(100),
+            ..Movement::default()
+        });
+        let mut egress = GameEgress::default();
+        let (blocked, sent) = transmit(&mut world, &mut egress, 100, 0);
+        assert_eq!(read_ack(&blocked), 102);
+        assert!(sent.records.is_empty());
+        world.acknowledge(
+            outcome(Arc::new(record(id.entity, Delivery::CreateBody(id))), true),
+            Duration::ZERO,
+        );
+        let (first, sent) = transmit(&mut world, &mut egress, 100, 1);
+        assert_eq!(read_ack(&first), 102);
+        assert!(sent.records.contains(&RecordSource::Movement(0)));
+        transport_outcome(&mut world, &mut egress, 1, true);
+        let history = world
+            .body_script
+            .as_mut()
+            .unwrap()
+            .corrections
+            .as_mut()
+            .unwrap();
+        assert_eq!(history.corrected(), Some(100));
+        history.record(Movement {
+            frame: Some(106),
+            ..Movement::default()
+        });
+        history.record(Movement {
+            frame: Some(112),
+            ..Movement::default()
+        });
+        for i in 0..MAX_ENTITY_RECORDS {
+            world.push(Record::baseline(EntityUpdate {
+                entity: 0x8000_0100 + i as u32,
+                operation: Some(Operation::Destroy),
+                ..EntityUpdate::default()
+            }));
+        }
+        let (crowded, sent) = transmit(&mut world, &mut egress, 107, 2);
+        assert_eq!(read_ack(&crowded), 102);
+        assert_eq!(sent.records.len(), MAX_ENTITY_RECORDS);
+        assert!(!sent.records.contains(&RecordSource::Movement(0)));
+        transport_outcome(&mut world, &mut egress, 2, true);
+        let rejected = world.send_frame(107, Vec::new(), false, &mut egress, |payload| {
+            assert_eq!(read_ack(&payload), 108);
+            Err(())
+        });
+        assert!(matches!(rejected, Err(SendError::Transport(()))));
+        assert_eq!(
+            world
+                .body_script
+                .as_ref()
+                .unwrap()
+                .corrections
+                .as_ref()
+                .unwrap()
+                .corrected(),
+            Some(100)
+        );
+        let (selected, sent) = transmit(&mut world, &mut egress, 107, 3);
+        assert_eq!(read_ack(&selected), 108);
+        assert_eq!(sent.records, [RecordSource::Movement(0)]);
+        assert!(egress.acknowledge(4, 0).packets.is_empty());
+        assert!(
+            transmit(&mut world, &mut egress, 107, 4)
+                .1
+                .records
+                .is_empty()
+        );
+
+        failed.store(true, Ordering::Relaxed);
+        let (payload, sent) = transmit(&mut world, &mut egress, 112, 5);
+        assert_eq!(read_ack(&payload), 125);
+        assert!(world.body_script.is_none());
+        assert!(sent.records.is_empty());
+        assert!(world.queued.is_empty());
+    }
+}
+
+#[test]
+#[ignore = "requires a prepared 104319 Practice Range pack without bot VM graphs"]
+fn prepared_worker_resumes_unposed_vm_frames_before_advancing_physics() {
+    let runtime = std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap();
+    let assets = SceneAssets::load(runtime).unwrap();
+    let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
+    let (factory, _) = crate::script_player::fixture_body_factory();
+    scene.owner_body_factory = Some(Arc::new(move |_, spawn| {
+        Ok(Some(Box::new(factory.start(spawn)?)))
+    }));
+    let viewer = PlayerAppearance {
+        entity: OWNER,
+        slot: 0,
+        team: 0,
+        card: &PlayerCard::default(),
+    };
+    let mut world = WorldDelivery::new(OWNER);
+    world.started = Some(FIRST_TICK);
+    let hero = scene.heroes().get(SOLDIER).unwrap();
+    world
+        .switch(
+            &scene,
+            &viewer,
+            FIRST_TICK,
+            RETAIL_QUANTA,
+            OWNER | 1,
+            (hero, SkinTheme::default()),
+        )
+        .unwrap();
+    let tick = FIRST_TICK + 1;
+    world.queue_commands(tick, &[forward(tick)]);
+    assert_eq!(
+        world
+            .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+            .unwrap(),
+        (1, false)
+    );
+    assert_eq!(world.body_script.as_ref().unwrap().frame, tick);
+    let mut egress = GameEgress::default();
+    assert!(
+        !transmit(&mut world, &mut egress, tick, 0)
+            .1
+            .records
+            .contains(&RecordSource::Movement(0))
+    );
+    transport_outcome(&mut world, &mut egress, 0, true);
+    assert_eq!(
+        transmit(&mut world, &mut egress, tick, 1).1.records,
+        [RecordSource::Queued(0), RecordSource::Movement(0)]
+    );
+    transport_outcome(&mut world, &mut egress, 1, true);
+
+    let after_unposed_gap = tick + 400;
+    world.queue_commands(after_unposed_gap, &[forward(after_unposed_gap)]);
+    for turn in 1..=16 {
+        assert_eq!(
+            world
+                .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+                .unwrap(),
+            (16, false)
+        );
+        assert_eq!(
+            world.body_script.as_ref().unwrap().frame,
+            tick + 141 + turn * 16
+        );
+        assert_eq!(world.mover.as_ref().unwrap().pose().frame, Some(tick));
+        assert_eq!(world.command_ack(after_unposed_gap), tick);
+        assert!(
+            transmit(&mut world, &mut egress, after_unposed_gap, turn + 1)
+                .1
+                .records
+                .is_empty()
+        );
+        world.queue_commands(after_unposed_gap, &[forward(after_unposed_gap)]);
+    }
+    assert_eq!(
+        world
+            .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+            .unwrap(),
+        (3, false)
+    );
+    assert!(!world.has_input_work());
+    assert_eq!(world.command_ack(after_unposed_gap), after_unposed_gap);
+    assert_eq!(world.body_script.as_ref().unwrap().frame, after_unposed_gap);
+    assert_eq!(
+        world.mover.as_ref().unwrap().pose().frame,
+        Some(after_unposed_gap)
+    );
+    assert_eq!(
+        transmit(&mut world, &mut egress, after_unposed_gap, 18)
+            .1
+            .records,
+        [RecordSource::Queued(0), RecordSource::Movement(0)]
+    );
+}
+
+#[test]
+fn possession_and_retirement_wait_when_budget_splits_the_prerequisites() {
+    let mut world = WorldDelivery::new(OWNER);
+    world.started = Some(1001);
+    let previous = avatar(1, 1);
+    let current = avatar(2, 2);
+    world.body = Some(body(current));
+    world
+        .bodies
+        .insert(previous.entity, (1, Lifetime::Retiring));
+    world.bodies.insert(current.entity, (2, Lifetime::Live));
+    world.push(record(current.entity, Delivery::CreateBody(current)));
+    world.push(record(OWNER, Delivery::Possession(current)));
+    world.push(record(previous.entity, Delivery::DestroyBody(previous)));
+    assert_eq!(eligible(&world), [0, 1, 2]);
+
+    let create = world.ready()[0].tracked();
+    world.sent(&[0]); // The packet budget only fit the create.
+    assert!(eligible(&world).is_empty());
+    world.acknowledge(outcome(Arc::clone(&create), false), Duration::ZERO);
+    assert_eq!(eligible(&world), [0, 1, 2]);
+    world.sent(&[0]);
+    world.acknowledge(outcome(create, true), Duration::ZERO);
+    assert_eq!(eligible(&world), [0, 1]);
+
+    let possess = world.ready()[0].tracked();
+    world.sent(&[0]);
+    assert!(eligible(&world).is_empty());
+    world.acknowledge(outcome(possess, true), Duration::ZERO);
+    assert_eq!(eligible(&world), [0]);
+    let destroy = world.ready()[0].tracked();
+    world.sent(&[0]);
+    let now = Duration::from_secs(5);
+    world.acknowledge(outcome(destroy, true), now);
+    assert!(matches!(
+        world.bodies[&previous.entity].1,
+        Lifetime::ReusableAt(at) if at == now + BODY_REUSE_DELAY
+    ));
+}
+
+#[test]
+fn a_late_ack_or_loss_cannot_resurrect_a_retired_or_reused_body() {
+    let mut world = WorldDelivery::new(OWNER);
+    world.started = Some(1001);
+    let old = avatar(1, 1);
+    let reused = avatar(1, 257);
+    world.body = Some(body(reused));
+    world
+        .bodies
+        .insert(reused.entity, (reused.generation, Lifetime::Live));
+    let stale = Arc::new(record(old.entity, Delivery::CreateBody(old)));
+    world.acknowledge(outcome(Arc::clone(&stale), true), Duration::ZERO);
+    world.acknowledge(outcome(stale, false), Duration::ZERO);
+    assert!(!world.created.contains(&reused.entity));
+    assert!(world.queued.is_empty());
+    world.acknowledge(
+        outcome(Arc::new(record(OWNER, Delivery::Possession(old))), true),
+        Duration::ZERO,
+    );
+    assert!(world.bound.is_none());
+}
+
+#[test]
+fn ring_reuses_only_acknowledged_destroy_after_the_retention_window() {
+    let mut world = WorldDelivery::new(OWNER);
+    world.body = Some(body(avatar(255, 255)));
+    for suffix in 1..=255 {
+        world
+            .bodies
+            .insert(OWNER | suffix, (u64::from(suffix), Lifetime::Live));
+    }
+    let target = avatar(1, 1);
+    world.bodies.insert(target.entity, (1, Lifetime::Retiring));
+    assert_eq!(world.next_body(Duration::from_secs(1000)), None);
+    world
+        .bodies
+        .insert(target.entity, (1, Lifetime::ReusableAt(BODY_REUSE_DELAY)));
+    assert_eq!(
+        world.next_body(BODY_REUSE_DELAY - Duration::from_millis(1)),
+        None
+    );
+    assert_eq!(world.next_body(BODY_REUSE_DELAY), Some(target.entity));
+}
