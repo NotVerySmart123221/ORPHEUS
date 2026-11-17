@@ -4,6 +4,86 @@ use super::*;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use thiserror::Error;
 
+pub(super) struct WorldStart {
+    pub(super) scene: Box<PreparedScene>,
+    pub(super) card: PlayerCard,
+}
+
+pub(super) struct RoomWorld {
+    pub(super) scene: Box<PreparedScene>,
+    pub(super) card: PlayerCard,
+    pub(super) patrol: PatrolScript,
+}
+
+pub(super) struct Player {
+    pub(super) info: MatchPlayer,
+    pub(super) entity: u32,
+    pub(super) gone: bool,
+}
+
+impl Player {
+    pub(super) fn quanta(&self) -> u32 {
+        if self.info.tournament {
+            TOURNAMENT_QUANTA
+        } else {
+            RETAIL_QUANTA
+        }
+    }
+}
+
+pub(super) struct Room {
+    pub(super) map: GameMap,
+    pub(super) players: Vec<Player>,
+    pub(super) members: IndexMap<u32, RoomMember>,
+    pub(super) world: Option<RoomWorld>,
+    #[cfg(test)]
+    pub(super) injection: Option<(RoomStage, InjectedFault)>,
+}
+
+pub(super) struct RoomMember {
+    pub(super) slot: usize,
+    pub(super) peer: Option<Peer>,
+}
+
+impl Room {
+    pub(super) fn appearance(&self, slot: usize) -> Option<PlayerAppearance<'_>> {
+        let player = self.players.get(slot)?;
+        Some(PlayerAppearance {
+            entity: player.entity,
+            slot: i8::try_from(slot).ok()?,
+            team: player.info.team,
+            card: &self.world.as_ref()?.card,
+        })
+    }
+
+    pub(super) fn message(&self, slot: usize, initial: bool) -> Result<Message, RoomError> {
+        let members: Vec<_> = self
+            .players
+            .iter()
+            .map(|player| InstanceMember {
+                entity: player.entity,
+                name: &player.info.name,
+                team: player.info.team,
+                gone: player.gone,
+                ranked: player.info.ranked,
+            })
+            .collect();
+        let instance = Instance {
+            map: &self.map,
+            members: &members,
+        };
+        let player = self
+            .players
+            .get(slot)
+            .ok_or(RoomError::Invariant("member slot outside roster"))?;
+        Ok(if initial {
+            instance.load(player.entity, player.quanta())
+        } else {
+            instance.update(player.entity)
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RoomStage {
     Admission,
