@@ -222,6 +222,7 @@ pub enum ChangeKey {
     Variable(u16, u32),
     State(u16, u16),
     VolleyIntroduction(u16, u16),
+    Callout(u32, u32),
 }
 
 impl ChangeKey {

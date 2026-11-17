@@ -75,6 +75,10 @@ path = "rust/tests/profile_settings.rs"
 name = "server_only_movement"
 path = "rust/tests/server_only_movement.rs"
 
+[[test]]
+name = "body_short_action_retry"
+path = "rust/tests/body_short_action_retry.rs"
+
 [[bench]]
 name = "script_actions"
 path = "rust/benches/script_actions.rs"
