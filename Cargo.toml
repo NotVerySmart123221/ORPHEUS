@@ -71,6 +71,10 @@ path = "rust/tests/world_queries.rs"
 name = "profile_settings"
 path = "rust/tests/profile_settings.rs"
 
+[[test]]
+name = "server_only_movement"
+path = "rust/tests/server_only_movement.rs"
+
 [[bench]]
 name = "script_actions"
 path = "rust/benches/script_actions.rs"
