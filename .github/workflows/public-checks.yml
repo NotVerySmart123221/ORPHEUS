@@ -110,3 +110,5 @@ jobs:
         run: cargo +stable test --locked -p orpheus --test world_queries
       - name: Check profile settings persistence against the same fixture
         run: cargo +stable test --locked -p orpheus --test profile_settings
+      - name: Check server-only movement contract against the same fixture
+        run: cargo +stable test --locked -p orpheus --test server_only_movement

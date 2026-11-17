@@ -4,6 +4,13 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ## Unreleased
 
+### 2026-11-17
+
+#### Server-only movement direction and correction window contract
+
+- Added `DirectionModifier` and `directed_throttles` in `rust/src/mover_modifiers.rs` (reusing `mover_ground::flat_unit` and `orpheus_collision::contact_math::rsqrt`) and `CorrectionHistory::server_motion` / `candidate_with_hero` / `impulse_correction` window tracking in `rust/src/mover_correction.rs`.
+- Added `rust/tests/server_only_movement.rs` consuming `fixtures/behavior/server-only-movement-v1.json` and wired it into `shared-behavior-contracts` in `.github/workflows/public-checks.yml`.
+
 ### 2026-11-16
 
 #### Integrate historical action verification into the current VM

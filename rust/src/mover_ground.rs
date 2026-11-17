@@ -318,7 +318,7 @@ pub(crate) fn stance_height(settings: &MoverSettings, crouched: bool) -> f32 {
     height.max(minimum)
 }
 
-fn flat_unit(x: f32, z: f32) -> Option<[f32; 2]> {
+pub(crate) fn flat_unit(x: f32, z: f32) -> Option<[f32; 2]> {
     let length = x * x + z * z;
     if length < FLAT_TINY || length.is_nan() {
         return None;

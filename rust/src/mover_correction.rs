@@ -11,6 +11,7 @@ use crate::world::{EntityUpdate, Movement};
 const HISTORY: usize = 64;
 // The client retains input from ACK - 1. To replay after F it needs F + 1.
 const ACK_LEAD: u32 = 2;
+const SERVER_MOTION_TAIL_US: u32 = 250_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct BodyLifetime {
@@ -45,6 +46,7 @@ pub struct CorrectionHistory {
     body: BodyLifetime,
     poses: VecDeque<Movement>,
     corrected: Option<u32>,
+    impulse_correction: Option<(u32, u32)>,
 }
 
 impl CorrectionHistory {
@@ -53,7 +55,25 @@ impl CorrectionHistory {
             body: BodyLifetime { entity, generation },
             poses: VecDeque::with_capacity(HISTORY),
             corrected: None,
+            impulse_correction: None,
         }
+    }
+
+    /// Open or extend the server-only motion correction window through this frame's tail.
+    pub fn server_motion(&mut self, frame: u32, frame_us: u32) {
+        if frame_us == 0 {
+            return;
+        }
+        let first = frame.saturating_add(1);
+        let through = first.saturating_add((SERVER_MOTION_TAIL_US - 1) / frame_us);
+        self.impulse_correction = Some(match self.impulse_correction {
+            Some((prev_first, prev_through)) => (prev_first, prev_through.max(through)),
+            None => (first, through),
+        });
+    }
+
+    pub fn impulse_correction(&self) -> Option<(u32, u32)> {
+        self.impulse_correction
     }
 
     /// Save each simulated pose, including recovered poses in a command gap.
@@ -89,11 +109,27 @@ impl CorrectionHistory {
                 let frame = pose.frame?;
                 (frame <= tick).then_some((frame, pose))
             })
-            .filter(|&(frame, _)| self.corrected.is_none_or(|sent| frame > sent))
+            .filter(|&(frame, _)| {
+                self.corrected.is_none_or(|sent| frame > sent)
+                    && self
+                        .impulse_correction
+                        .is_none_or(|(first, _)| frame >= first)
+            })
     }
 
     pub fn candidate(&self, tick: u32, create_arrived: bool) -> Option<Correction> {
-        if !create_arrived {
+        self.candidate_with_hero(tick, create_arrived, true)
+    }
+
+    /// Return a correction candidate only when `create_arrived` and either the hero
+    /// is always corrected or a server-only `impulse_correction` window is open.
+    pub fn candidate_with_hero(
+        &self,
+        tick: u32,
+        create_arrived: bool,
+        hero_eligible: bool,
+    ) -> Option<Correction> {
+        if !create_arrived || (!hero_eligible && self.impulse_correction.is_none()) {
             return None;
         }
         let (frame, pose) = self.snapshot_for(tick)?;
@@ -131,6 +167,12 @@ impl CorrectionHistory {
             return false;
         }
         self.corrected = Some(correction.frame);
+        if self
+            .impulse_correction
+            .is_some_and(|(_, through)| correction.frame >= through)
+        {
+            self.impulse_correction = None;
+        }
         true
     }
 }
@@ -350,5 +392,32 @@ mod tests {
         assert!(history.sent(&own));
         assert_eq!(history.corrected(), Some(107));
         assert_eq!(history.command_ack(108, Some(113), None), 109);
+    }
+
+    #[test]
+    fn candidate_defaults_hero_eligible_and_candidate_with_hero_gates_on_window() {
+        let mut history = CorrectionHistory::new(ENTITY, 1);
+        assert!(history.record(pose(10)));
+        assert_eq!(history.candidate(10, true).map(|c| c.frame), Some(10));
+        assert!(history.candidate_with_hero(10, true, false).is_none());
+
+        history.server_motion(10, 160_000);
+        assert!(history.record(pose(11)));
+        assert_eq!(
+            history
+                .candidate_with_hero(11, true, false)
+                .map(|c| c.frame),
+            Some(11)
+        );
+    }
+
+    #[test]
+    fn server_motion_ignores_zero_frame_us_and_saturates_frame_bounds() {
+        let mut history = CorrectionHistory::new(ENTITY, 1);
+        history.server_motion(10, 0);
+        assert_eq!(history.impulse_correction(), None);
+
+        history.server_motion(u32::MAX, 16_000);
+        assert_eq!(history.impulse_correction(), Some((u32::MAX, u32::MAX)));
     }
 }
