@@ -610,6 +610,14 @@ pub trait World {
     ) -> bool {
         false
     }
+
+    fn shockwave_targets(&mut self, _site: Site, _reach: f64) -> Option<Vec<u32>> {
+        None
+    }
+
+    fn modify_health(&mut self, _site: Site, _elapsed_ms: u64) -> bool {
+        false
+    }
 }
 
 #[derive(Default)]

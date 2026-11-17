@@ -4,6 +4,13 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ## Unreleased
 
+### 2026-11-17
+
+#### Seismic Slam placement and shockwave contracts
+
+- Added `World::shockwave_targets`, `World::modify_health`, and `World::select_landing` plus `StateKind::Shockwave`, `StateKind::PlacementSelector`, and `StateKind::MoveTo` handling in `rust/src/script_init/`.
+- Added `rust/tests/seismic_slam.rs` consuming `fixtures/behavior/seismic-slam-wave-v1.json` and `fixtures/behavior/seismic-slam-placement-v1.json` and wired it into `shared-behavior-contracts` in `.github/workflows/public-checks.yml`.
+
 ### 2026-11-16
 
 #### Integrate historical action verification into the current VM

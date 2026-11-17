@@ -42,6 +42,10 @@ path = "rust/tests/world_queries.rs"
 name = "profile_settings"
 path = "rust/tests/profile_settings.rs"
 
+[[test]]
+name = "seismic_slam"
+path = "rust/tests/seismic_slam.rs"
+
 [[bench]]
 name = "script_actions"
 path = "rust/benches/script_actions.rs"

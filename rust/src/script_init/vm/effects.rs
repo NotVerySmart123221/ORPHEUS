@@ -285,6 +285,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         node: &Node,
     ) -> Result<(), InitFault> {
         let site = self.site(key.instance, node);
+        if self.world.modify_health(site, 0) {
+            self.register_tick(key, self.machine.now_ms);
+            return Ok(());
+        }
         let Some(target) = self.creation_scalar(
             key.instance,
             node,
@@ -2177,5 +2181,99 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .or_default()
             .entry(key.raw)
             .or_insert(start_ms);
+    }
+
+    pub(in crate::script_init) fn begin_shockwave(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        let site = self.site(key.instance, node);
+        let immediate = self
+            .evaluate(key.instance, node, field(&node.fields, "m_3418CEA4"), None)
+            .is_some_and(|value| truthy(&value));
+        let has_target = script_expr::lvalue(field(&node.fields, "m_8A2905A0"))
+            .ok()
+            .flatten()
+            .is_some();
+        if (site.graph, node.pos) == (0x0B27, 95)
+            && has_target
+            && field(&node.fields, "m_04F3240D").is_null()
+            && immediate
+            && self.collect_shockwave(key, node, 0.0)?
+        {
+            if let Some(state) = self.state_mut(key) {
+                state.kind = StateKind::Shockwave { managed: true };
+            }
+            self.register_tick(key, self.machine.now_ms);
+        } else {
+            self.report(site, Issue::UnsupportedField("shockwave service"));
+        }
+        Ok(())
+    }
+
+    fn collect_shockwave(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+        reach: f64,
+    ) -> Result<bool, InitFault> {
+        let site = self.site(key.instance, node);
+        let Some(target) = script_expr::lvalue(field(&node.fields, "m_8A2905A0"))
+            .ok()
+            .flatten()
+        else {
+            return Ok(false);
+        };
+        let Some(bodies) = self.world.shockwave_targets(site, reach) else {
+            return Ok(false);
+        };
+        let var_key = source_key(key.instance, target);
+        let mut items = match self.machine.value(var_key, None) {
+            Value::Array(items) => items,
+            _ => Vec::new(),
+        };
+        let mut seen: std::collections::HashSet<u32> = items
+            .iter()
+            .filter_map(|item| match *item {
+                Value::Entity(id) if id != 0 => Some(id),
+                _ => None,
+            })
+            .collect();
+        let before = items.len();
+        for body in bodies {
+            if body != 0 && seen.insert(body) {
+                items.push(Value::Entity(body));
+            }
+        }
+        if items.len() != before {
+            self.write(var_key, Value::Array(items))?;
+        }
+        Ok(true)
+    }
+
+    pub(in crate::script_init) fn tick_shockwave(
+        &mut self,
+        key: StateKey,
+    ) -> Result<(), InitFault> {
+        let node = self
+            .graph(key.instance)
+            .state(usize::from(key.raw))
+            .expect("shockwave state");
+        let reach = self
+            .evaluate(key.instance, node, field(&node.fields, "m_6A79BD98"), None)
+            .and_then(|value| match value {
+                Value::Bool(_) | Value::Integer(_) | Value::Float(_) => {
+                    let f = script_expr::to_float(&value);
+                    Some(if f.is_finite() { f.max(0.0) } else { 0.0 })
+                }
+                _ => None,
+            })
+            .unwrap_or(0.0);
+        if !self.collect_shockwave(key, node, reach)? {
+            let site = self.site(key.instance, node);
+            self.report(site, Issue::UnsupportedField("shockwave service"));
+        }
+        self.post(key.instance, Event::Finish(key.raw))
     }
 }

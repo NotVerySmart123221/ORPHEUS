@@ -468,6 +468,16 @@ impl Component {
         })
     }
 
+    #[doc(hidden)]
+    pub fn begin_state(
+        &mut self,
+        instance: u16,
+        raw: u16,
+        world: &mut impl World,
+    ) -> Result<(), InitFault> {
+        self.run(world, |vm| vm.begin(machine::StateKey { instance, raw }, 0))
+    }
+
     /// Read the rows published by state lifecycle and dependency events.
     /// Authoritative modifiers require a fully supported runtime path.
     pub fn movement_modifiers(

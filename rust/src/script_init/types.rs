@@ -131,6 +131,9 @@ pub enum StateKind {
     SpawnSearch,
     RecentInput,
     LivingBodyArray,
+    Shockwave {
+        managed: bool,
+    },
     WeaponVolley {
         volleys: u8,
         offset_ms: u64,
