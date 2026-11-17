@@ -3,20 +3,12 @@
 //! The damage and healing order follows the Python reference. Original-client
 //! validation of the armour reduction and healing order remains open.
 
-use crate::world::{
-    ARMOUR_POOL, Component, HEALTH_POOL, POOLS, SHIELDS_POOL, pool, pool_component,
-};
+use crate::world::{Component, POOLS, pool, pool_component};
+pub use orpheus_statescript::script_runtime::PoolKind;
+use orpheus_statescript::script_runtime::{HEALTH_POOL, SHIELDS_POOL};
 
 const ARMOUR_BLOCK: f64 = 5.0;
 const DEATH_EPSILON: f64 = 1e-9;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(usize)]
-pub enum PoolKind {
-    Health = HEALTH_POOL,
-    Armour = ARMOUR_POOL,
-    Shields = SHIELDS_POOL,
-}
 
 const DAMAGE_ORDER: [PoolKind; 3] = [PoolKind::Shields, PoolKind::Armour, PoolKind::Health];
 

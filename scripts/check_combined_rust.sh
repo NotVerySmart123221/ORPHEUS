@@ -68,7 +68,7 @@ else
     CARGO_CMD=(cargo)
 fi
 
-SHARED_CONTRACTS=(
+STATESCRIPT_CONTRACTS=(
     "script_init::tests::shared_unkeyed_array_contract"
     "script_expr::tests::shared_engine_setting_contract"
     "script_entity_state::tests::shared_foreign_component_contract"
@@ -81,48 +81,58 @@ SHARED_CONTRACTS=(
     "script_expr::tests::shared_ally_filter_contract"
     "script_expr::tests::shared_native_filter_tag_clauses"
     "script_init::tests::shared_voice_lifecycle_contract"
-    "junkenstein_voice::tests::shared_boss_speech_contract"
     "script_expr::tests::shared_body_field_contract"
     "script_expr::tests::shared_body_angle_contract"
+    "script_expr::tests::shared_flashbang_filter_admission_contract"
+    "script_expr::tests::shared_absent_target_filter_contract"
+    "script_init::tests::shared_nested_destination_contract"
+    "script_init::tests::shared_unbound_loadout_action_contract"
+    "script_init::tests::shared_foreign_notification_contract"
+    "script_init::tests::shared_spatial_owner_absence_contract"
+    "script_init::tests::shared_ability_press_window_contract"
+    "script_init::tests::shared_stack_admission_contract"
+)
+
+ROOT_CONTRACTS=(
+    "junkenstein_voice::tests::shared_boss_speech_contract"
     "linked_aim::tests::shared_captured_aim_numeric_contract"
     "script_enemy::tests::shared_captured_aim_lifecycle_contract"
-    "script_init::tests::shared_charge_contract"
+    "script_init_host_tests::tests::shared_charge_contract"
     "script_enemy::tests::shared_retired_entity_contract"
     "script_enemy::tests::shared_self_damage_clock_contract"
     "script_enemy::tests::shared_flashbang_effect_dispatch_contract"
     "script_enemy::tests::shared_flashbang_entry_guard_contract"
     "script_enemy::tests::shared_flashbang_exclusion_guard_contract"
-    "script_expr::tests::shared_flashbang_filter_admission_contract"
-    "script_expr::tests::shared_absent_target_filter_contract"
-    "script_init::tests::shared_nested_destination_contract"
-    "script_init::tests::shared_unbound_loadout_action_contract"
-    "script_init::tests::shared_flashbang_base_state_contract"
+    "script_init_host_tests::tests::shared_flashbang_base_state_contract"
     "script_enemy::tests::shared_flashbang_targeted_message_contract"
     "script_enemy::tests::shared_flashbang_velocity_action_contract"
     "game_bots::tests::shared_flashbang_horizontal_motion_contract"
-    "script_init::tests::shared_foreign_notification_contract"
-    "script_init::tests::shared_victory_view_route_contract"
-    "script_init::tests::shared_spatial_owner_absence_contract"
-    "script_init::tests::shared_ability_press_window_contract"
-    "script_init::tests::shared_stack_admission_contract"
+    "script_init_host_tests::tests::shared_victory_view_route_contract"
     "script_player::tests::shared_deadeye_aim_ray_visibility_contract"
     "junkenstein_validation::tests::shared_junkenstein_validation_contract"
 )
 
-verify_shared_contracts() {
-    local feature="$1"
+verify_package_contracts() {
+    local pkg="$1"
+    local feature="$2"
+    shift 2
+    local -a contracts=("$@")
     local inventory ignored_inventory
-    inventory="$("${CARGO_CMD[@]}" test --locked -p orpheus --lib --features "$feature" -- --list)"
-    ignored_inventory="$("${CARGO_CMD[@]}" test --locked -p orpheus --lib --features "$feature" -- --ignored --list)"
+    local -a feature_args=()
+    if [[ "$pkg" == "orpheus" ]]; then
+        feature_args=(--features "$feature")
+    fi
+    inventory="$("${CARGO_CMD[@]}" test --locked -p "$pkg" --lib ${feature_args[@]+"${feature_args[@]}"} -- --list)"
+    ignored_inventory="$("${CARGO_CMD[@]}" test --locked -p "$pkg" --lib ${feature_args[@]+"${feature_args[@]}"} -- --ignored --list)"
 
     local contract
-    for contract in "${SHARED_CONTRACTS[@]}"; do
+    for contract in "${contracts[@]}"; do
         if ! grep -Fxq "${contract}: test" <<< "$inventory"; then
-            echo "Shared contract test is missing for feature '${feature}': ${contract}" >&2
+            echo "Shared contract test is missing in ${pkg} for feature '${feature}': ${contract}" >&2
             return 1
         fi
         if grep -Fxq "${contract}: test" <<< "$ignored_inventory"; then
-            echo "Shared contract test must not be marked #[ignore] for feature '${feature}': ${contract}" >&2
+            echo "Shared contract test must not be marked #[ignore] in ${pkg} for feature '${feature}': ${contract}" >&2
             return 1
         fi
     done
@@ -132,18 +142,24 @@ verify_shared_contracts() {
         if [[ "$line" =~ ^([^[:space:]]+::tests::shared_[^[:space:]]+):[[:space:]]test$ ]]; then
             test_name="${BASH_REMATCH[1]}"
             found=0
-            for contract in "${SHARED_CONTRACTS[@]}"; do
+            for contract in "${contracts[@]}"; do
                 if [[ "$test_name" == "$contract" ]]; then
                     found=1
                     break
                 fi
             done
             if (( found == 0 )); then
-                echo "Unlisted shared contract test found for feature '${feature}': ${test_name}" >&2
+                echo "Unlisted shared contract test found in ${pkg} for feature '${feature}': ${test_name}" >&2
                 return 1
             fi
         fi
     done <<< "$inventory"
+}
+
+verify_shared_contracts() {
+    local feature="$1"
+    verify_package_contracts "orpheus-statescript" "$feature" "${STATESCRIPT_CONTRACTS[@]}"
+    verify_package_contracts "orpheus" "$feature" "${ROOT_CONTRACTS[@]}"
 }
 
 RUNTIME_PATH=""

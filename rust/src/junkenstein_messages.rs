@@ -9,19 +9,18 @@ use crate::{
     world::GAME_MODE_ENTITY,
 };
 
+#[cfg(test)]
+pub(crate) use orpheus_statescript::script_runtime::{BOSS_CAMERA, BOSS_PAUSE};
+pub(crate) use orpheus_statescript::script_runtime::{
+    ENCOUNTER_RESULT, POST_MATCH_COMPLETE, POST_MATCH_PHASE, POST_MATCH_SIGNAL, RESULT_SUMMARY,
+    VICTORY_VIEW,
+};
+
 pub(crate) const FLASHBANG_HIT: u64 = 0x0240_0000_0000_0622;
 pub(crate) const SIGHTING: u64 = 0x0240_0000_0000_00bd;
 pub(crate) const BOSS_INTRO_STARTED: u64 = 0x0240_0000_0000_06b0;
 pub(crate) const BOSS_INTRO_ENDED: u64 = 0x0240_0000_0000_06ac;
-pub(crate) const BOSS_PAUSE: u64 = 0x0240_0000_0000_06af;
-pub(crate) const BOSS_CAMERA: u64 = 0x0240_0000_0000_06ab;
-pub(crate) const VICTORY_VIEW: u64 = 0x0240_0000_0000_06bb;
 pub(crate) const RESET_HIGHLIGHTS: u64 = 0x0240_0000_0000_06de;
-pub(crate) const POST_MATCH_PHASE: u64 = 0x0240_0000_0000_0695;
-pub(crate) const POST_MATCH_SIGNAL: u64 = 0x0240_0000_0000_08d6;
-pub(crate) const POST_MATCH_COMPLETE: u64 = 0x0240_0000_0000_0bed;
-pub(crate) const ENCOUNTER_RESULT: u64 = 0x0240_0000_0000_06be;
-pub(crate) const RESULT_SUMMARY: u64 = 0x0240_0000_0000_06e2;
 pub(crate) const SIGHTING_TAGS: [u64; 3] = [
     0x0d60_0000_0000_0326,
     0x0d60_0000_0000_051e,

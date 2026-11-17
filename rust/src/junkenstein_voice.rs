@@ -4,6 +4,7 @@ use crate::{
     script_expr::native_shape,
     script_graph::{Node, asset_guid},
 };
+pub use orpheus_statescript::script_voice::IntroCue;
 use serde_json::Value;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -43,13 +44,6 @@ const NARRATION: &[(u16, Lines)] = &[
     ),
     (0x08e4, &[(0xa400, 323072), (0xa401, 311360)]),
 ];
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct IntroCue {
-    pub stimulus: u64,
-    pub narrator: bool,
-    pub delay_ms: u16,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct VoiceRequest {

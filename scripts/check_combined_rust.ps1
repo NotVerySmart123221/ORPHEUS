@@ -7,7 +7,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$sharedContracts = @(
+$statescriptContracts = @(
     'script_init::tests::shared_unkeyed_array_contract',
     'script_expr::tests::shared_engine_setting_contract',
     'script_entity_state::tests::shared_foreign_component_contract',
@@ -20,30 +20,33 @@ $sharedContracts = @(
     'script_expr::tests::shared_ally_filter_contract',
     'script_expr::tests::shared_native_filter_tag_clauses',
     'script_init::tests::shared_voice_lifecycle_contract',
-    'junkenstein_voice::tests::shared_boss_speech_contract',
     'script_expr::tests::shared_body_field_contract',
     'script_expr::tests::shared_body_angle_contract',
+    'script_expr::tests::shared_flashbang_filter_admission_contract',
+    'script_expr::tests::shared_absent_target_filter_contract',
+    'script_init::tests::shared_nested_destination_contract',
+    'script_init::tests::shared_unbound_loadout_action_contract',
+    'script_init::tests::shared_foreign_notification_contract',
+    'script_init::tests::shared_spatial_owner_absence_contract',
+    'script_init::tests::shared_ability_press_window_contract',
+    'script_init::tests::shared_stack_admission_contract'
+)
+
+$rootContracts = @(
+    'junkenstein_voice::tests::shared_boss_speech_contract',
     'linked_aim::tests::shared_captured_aim_numeric_contract',
     'script_enemy::tests::shared_captured_aim_lifecycle_contract',
-    'script_init::tests::shared_charge_contract',
+    'script_init_host_tests::tests::shared_charge_contract',
     'script_enemy::tests::shared_retired_entity_contract',
     'script_enemy::tests::shared_self_damage_clock_contract',
     'script_enemy::tests::shared_flashbang_effect_dispatch_contract',
     'script_enemy::tests::shared_flashbang_entry_guard_contract',
     'script_enemy::tests::shared_flashbang_exclusion_guard_contract',
-    'script_expr::tests::shared_flashbang_filter_admission_contract',
-    'script_expr::tests::shared_absent_target_filter_contract',
-    'script_init::tests::shared_nested_destination_contract',
-    'script_init::tests::shared_unbound_loadout_action_contract',
-    'script_init::tests::shared_flashbang_base_state_contract',
+    'script_init_host_tests::tests::shared_flashbang_base_state_contract',
     'script_enemy::tests::shared_flashbang_targeted_message_contract',
     'script_enemy::tests::shared_flashbang_velocity_action_contract',
     'game_bots::tests::shared_flashbang_horizontal_motion_contract',
-    'script_init::tests::shared_foreign_notification_contract',
-    'script_init::tests::shared_victory_view_route_contract',
-    'script_init::tests::shared_spatial_owner_absence_contract',
-    'script_init::tests::shared_ability_press_window_contract',
-    'script_init::tests::shared_stack_admission_contract',
+    'script_init_host_tests::tests::shared_victory_view_route_contract',
     'script_player::tests::shared_deadeye_aim_ray_visibility_contract',
     'junkenstein_validation::tests::shared_junkenstein_validation_contract'
 )
@@ -88,33 +91,44 @@ function Invoke-CargoCheck {
     }
 }
 
-function Assert-SharedContractInventory {
-    param([string]$Feature)
-    $inventory = @(& cargo "+$Toolchain" test --locked -p orpheus --lib --features $Feature -- --list)
+function Assert-PackageContractInventory {
+    param(
+        [string]$Package,
+        [string]$Feature,
+        [string[]]$Contracts
+    )
+    $featureArgs = if ($Package -eq 'orpheus') { @('--features', $Feature) } else { @() }
+    $inventory = @(& cargo "+$Toolchain" test --locked -p $Package --lib @featureArgs -- --list)
     if ($LASTEXITCODE -ne 0) {
-        throw "cargo test --locked -p orpheus --lib --features $Feature -- --list failed with exit code $LASTEXITCODE"
+        throw "cargo test --locked -p $Package --lib $($featureArgs -join ' ') -- --list failed with exit code $LASTEXITCODE"
     }
-    $ignoredInventory = @(& cargo "+$Toolchain" test --locked -p orpheus --lib --features $Feature -- --ignored --list)
+    $ignoredInventory = @(& cargo "+$Toolchain" test --locked -p $Package --lib @featureArgs -- --ignored --list)
     if ($LASTEXITCODE -ne 0) {
-        throw "cargo test --locked -p orpheus --lib --features $Feature -- --ignored --list failed with exit code $LASTEXITCODE"
+        throw "cargo test --locked -p $Package --lib $($featureArgs -join ' ') -- --ignored --list failed with exit code $LASTEXITCODE"
     }
     $discovered = @(
         $inventory | ForEach-Object {
             if ($_ -cmatch '^(\S+::tests::shared_\S+): test$') { $Matches[1] }
         }
     )
-    $missingFromInventory = @($sharedContracts | Where-Object { $inventory -cnotcontains "${_}: test" })
+    $missingFromInventory = @($Contracts | Where-Object { $inventory -cnotcontains "${_}: test" })
     if ($missingFromInventory.Count -gt 0) {
-        throw "Shared contract test(s) missing from inventory for feature '$Feature': $($missingFromInventory -join ', ')"
+        throw "Shared contract test(s) missing from ${Package} inventory for feature '$Feature': $($missingFromInventory -join ', ')"
     }
-    $ignoredContracts = @($sharedContracts | Where-Object { $ignoredInventory -ccontains "${_}: test" })
+    $ignoredContracts = @($Contracts | Where-Object { $ignoredInventory -ccontains "${_}: test" })
     if ($ignoredContracts.Count -gt 0) {
-        throw "Shared contract test(s) must not be marked #[ignore] for feature '$Feature': $($ignoredContracts -join ', ')"
+        throw "Shared contract test(s) must not be marked #[ignore] in ${Package} for feature '$Feature': $($ignoredContracts -join ', ')"
     }
-    $missingFromContracts = @($discovered | Where-Object { $sharedContracts -cnotcontains $_ })
+    $missingFromContracts = @($discovered | Where-Object { $Contracts -cnotcontains $_ })
     if ($missingFromContracts.Count -gt 0) {
-        throw "Shared contract test(s) missing from contracts list for feature '$Feature': $($missingFromContracts -join ', ')"
+        throw "Shared contract test(s) missing from ${Package} contracts list for feature '$Feature': $($missingFromContracts -join ', ')"
     }
+}
+
+function Assert-SharedContractInventory {
+    param([string]$Feature)
+    Assert-PackageContractInventory -Package 'orpheus-statescript' -Feature $Feature -Contracts $statescriptContracts
+    Assert-PackageContractInventory -Package 'orpheus' -Feature $Feature -Contracts $rootContracts
 }
 
 Push-Location (Split-Path -Parent $PSScriptRoot)

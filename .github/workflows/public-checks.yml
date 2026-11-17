@@ -49,70 +49,87 @@ jobs:
         run: cargo +stable test --locked --workspace --all-targets --features "${{ matrix.features }}"
       - name: Check shared StateScript contracts
         run: |
-          $contracts = @(
-            'script_init::tests::shared_unkeyed_array_contract',
-            'script_expr::tests::shared_engine_setting_contract',
-            'script_entity_state::tests::shared_foreign_component_contract',
-            'script_init::tests::shared_corpse_retirement_contract',
-            'script_expr::tests::shared_velocity_contract',
-            'script_init::tests::shared_contains_condition_contract',
-            'script_expr::tests::shared_total_health_contract',
-            'script_expr::tests::shared_hostile_filter_contract',
-            'script_expr::tests::shared_combat_target_contract',
-            'script_expr::tests::shared_ally_filter_contract',
-            'script_expr::tests::shared_native_filter_tag_clauses',
-            'script_init::tests::shared_voice_lifecycle_contract',
-            'junkenstein_voice::tests::shared_boss_speech_contract',
-            'script_expr::tests::shared_body_field_contract',
-            'script_expr::tests::shared_body_angle_contract',
-            'linked_aim::tests::shared_captured_aim_numeric_contract',
-            'script_enemy::tests::shared_captured_aim_lifecycle_contract',
-            'script_init::tests::shared_charge_contract',
-            'script_enemy::tests::shared_retired_entity_contract',
-            'script_enemy::tests::shared_self_damage_clock_contract',
-            'script_enemy::tests::shared_flashbang_effect_dispatch_contract',
-            'script_enemy::tests::shared_flashbang_entry_guard_contract',
-            'script_enemy::tests::shared_flashbang_exclusion_guard_contract',
-            'script_expr::tests::shared_flashbang_filter_admission_contract',
-            'script_expr::tests::shared_absent_target_filter_contract',
-            'script_init::tests::shared_nested_destination_contract',
-            'script_init::tests::shared_unbound_loadout_action_contract',
-            'script_init::tests::shared_flashbang_base_state_contract',
-            'script_enemy::tests::shared_flashbang_targeted_message_contract',
-            'script_enemy::tests::shared_flashbang_velocity_action_contract',
-            'game_bots::tests::shared_flashbang_horizontal_motion_contract',
-            'script_init::tests::shared_foreign_notification_contract',
-            'script_init::tests::shared_victory_view_route_contract',
-            'script_init::tests::shared_spatial_owner_absence_contract',
-            'script_init::tests::shared_ability_press_window_contract',
-            'script_init::tests::shared_stack_admission_contract',
-            'script_player::tests::shared_deadeye_aim_ray_visibility_contract',
-            'junkenstein_validation::tests::shared_junkenstein_validation_contract'
-          )
-          $inventory = @(cargo +stable test --locked -p orpheus --lib --features "${{ matrix.features }}" -- --list)
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $ignoredInventory = @(cargo +stable test --locked -p orpheus --lib --features "${{ matrix.features }}" -- --ignored --list)
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $discovered = @(
-            $inventory | ForEach-Object {
-              if ($_ -cmatch '^(\S+::tests::shared_\S+): test$') { $Matches[1] }
+          $contractGroups = @(
+            @{
+              Package = 'orpheus-statescript'
+              FeatureArgs = @()
+              Contracts = @(
+                'script_init::tests::shared_unkeyed_array_contract',
+                'script_expr::tests::shared_engine_setting_contract',
+                'script_entity_state::tests::shared_foreign_component_contract',
+                'script_init::tests::shared_corpse_retirement_contract',
+                'script_expr::tests::shared_velocity_contract',
+                'script_init::tests::shared_contains_condition_contract',
+                'script_expr::tests::shared_total_health_contract',
+                'script_expr::tests::shared_hostile_filter_contract',
+                'script_expr::tests::shared_combat_target_contract',
+                'script_expr::tests::shared_ally_filter_contract',
+                'script_expr::tests::shared_native_filter_tag_clauses',
+                'script_init::tests::shared_voice_lifecycle_contract',
+                'script_expr::tests::shared_body_field_contract',
+                'script_expr::tests::shared_body_angle_contract',
+                'script_expr::tests::shared_flashbang_filter_admission_contract',
+                'script_expr::tests::shared_absent_target_filter_contract',
+                'script_init::tests::shared_nested_destination_contract',
+                'script_init::tests::shared_unbound_loadout_action_contract',
+                'script_init::tests::shared_foreign_notification_contract',
+                'script_init::tests::shared_spatial_owner_absence_contract',
+                'script_init::tests::shared_ability_press_window_contract',
+                'script_init::tests::shared_stack_admission_contract'
+              )
+            },
+            @{
+              Package = 'orpheus'
+              FeatureArgs = @('--features', '${{ matrix.features }}')
+              Contracts = @(
+                'junkenstein_voice::tests::shared_boss_speech_contract',
+                'linked_aim::tests::shared_captured_aim_numeric_contract',
+                'script_enemy::tests::shared_captured_aim_lifecycle_contract',
+                'script_init_host_tests::tests::shared_charge_contract',
+                'script_enemy::tests::shared_retired_entity_contract',
+                'script_enemy::tests::shared_self_damage_clock_contract',
+                'script_enemy::tests::shared_flashbang_effect_dispatch_contract',
+                'script_enemy::tests::shared_flashbang_entry_guard_contract',
+                'script_enemy::tests::shared_flashbang_exclusion_guard_contract',
+                'script_init_host_tests::tests::shared_flashbang_base_state_contract',
+                'script_enemy::tests::shared_flashbang_targeted_message_contract',
+                'script_enemy::tests::shared_flashbang_velocity_action_contract',
+                'game_bots::tests::shared_flashbang_horizontal_motion_contract',
+                'script_init_host_tests::tests::shared_victory_view_route_contract',
+                'script_player::tests::shared_deadeye_aim_ray_visibility_contract',
+                'junkenstein_validation::tests::shared_junkenstein_validation_contract'
+              )
             }
           )
-          $missingFromInventory = @($contracts | Where-Object { $inventory -cnotcontains "${_}: test" })
-          if ($missingFromInventory.Count -gt 0) {
-            throw "Shared contract test(s) missing from inventory: $($missingFromInventory -join ', ')"
-          }
-          $ignoredContracts = @($contracts | Where-Object { $ignoredInventory -ccontains "${_}: test" })
-          if ($ignoredContracts.Count -gt 0) {
-            throw "Shared contract test(s) must not be marked #[ignore]: $($ignoredContracts -join ', ')"
-          }
-          $missingFromContracts = @($discovered | Where-Object { $contracts -cnotcontains $_ })
-          if ($missingFromContracts.Count -gt 0) {
-            throw "Shared contract test(s) missing from contracts list: $($missingFromContracts -join ', ')"
-          }
-          foreach ($contract in $contracts) {
-            cargo +stable test --locked -p orpheus --lib --features "${{ matrix.features }}" $contract -- --exact
+          foreach ($group in $contractGroups) {
+            $pkg = $group.Package
+            $fArgs = $group.FeatureArgs
+            $contracts = $group.Contracts
+            $inventory = @(cargo +stable test --locked -p $pkg --lib @fArgs -- --list)
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $ignoredInventory = @(cargo +stable test --locked -p $pkg --lib @fArgs -- --ignored --list)
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $discovered = @(
+              $inventory | ForEach-Object {
+                if ($_ -cmatch '^(\S+::tests::shared_\S+): test$') { $Matches[1] }
+              }
+            )
+            $missingFromInventory = @($contracts | Where-Object { $inventory -cnotcontains "${_}: test" })
+            if ($missingFromInventory.Count -gt 0) {
+              throw "Shared contract test(s) missing from ${pkg} inventory: $($missingFromInventory -join ', ')"
+            }
+            $ignoredContracts = @($contracts | Where-Object { $ignoredInventory -ccontains "${_}: test" })
+            if ($ignoredContracts.Count -gt 0) {
+              throw "Shared contract test(s) must not be marked #[ignore] in ${pkg}: $($ignoredContracts -join ', ')"
+            }
+            $missingFromContracts = @($discovered | Where-Object { $contracts -cnotcontains $_ })
+            if ($missingFromContracts.Count -gt 0) {
+              throw "Shared contract test(s) missing from ${pkg} contracts list: $($missingFromContracts -join ', ')"
+            }
+            foreach ($contract in $contracts) {
+              cargo +stable test --locked -p $pkg --lib @fArgs $contract -- --exact
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
           }
 
   rust-msrv:
@@ -143,7 +160,7 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/rust' }}
       - name: Run portable crate regressions
-        run: cargo +stable test --locked --all-targets -p orpheus-collision -p orpheus-runtime -p orpheus-wire
+        run: cargo +stable test --locked --all-targets -p orpheus-collision -p orpheus-runtime -p orpheus-statescript -p orpheus-wire
 
   shared-behavior-contracts:
     runs-on: windows-latest
