@@ -6,6 +6,11 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-17
 
+#### Retire ported StateScript contract helper scripts
+
+- Removed the 19 `scripts/check_*_contract.py` helper scripts now superseded by `tests/public/test_statescript_*.py` on `main` (#101), keeping `scripts/check_gallery_preview_policy.py` and the two Draft-#32 helpers (`scripts/check_body_field_contract.py`, `scripts/check_spatial_owner_absence_contract.py`).
+- Updated `docs/BEHAVIOR_CONTRACTS.md` to document the remaining contract helpers and completed `#61` backport (#70).
+
 #### Seismic Slam placement and shockwave contracts
 
 - Added `World::shockwave_targets`, `World::modify_health`, and `World::select_landing` plus `StateKind::Shockwave`, `StateKind::PlacementSelector`, and `StateKind::MoveTo` handling in `rust/src/script_init/`.
