@@ -1,0 +1,368 @@
+use super::*;
+
+pub const MATCH: MatchId = [5, 8];
+
+pub fn local() -> SocketAddr {
+    "127.0.0.1:0".parse().unwrap()
+}
+
+pub fn player() -> Vec<MatchPlayer> {
+    vec![MatchPlayer {
+        name: "Protocol fixture".into(),
+        team: 0,
+        tournament: false,
+        ranked: false,
+    }]
+}
+
+pub fn fixture() -> Schemas {
+    Schemas::from_json(
+        r#"{
+            "C77F6403": {
+                "20300": [{"type":8,"off":1192,"size":8,"count":0,"array":false}],
+                "20301": [], "20302": [], "20304": [],
+                "20306": [
+                    {"type":6,"off":120,"size":4,"count":0,"array":false},
+                    {"type":8,"off":128,"size":8,"count":-1,"array":true}
+                ]
+            },
+            "A7FBBD0C": {
+                "21601": [], "21602": [],
+                "21610": [
+                    {"type":6,"off":120,"size":4,"count":0,"array":false},
+                    {"type":8,"off":128,"size":8,"count":-1,"array":true}
+                ]
+            }
+        }"#,
+    )
+    .unwrap()
+}
+
+pub struct Client {
+    pub socket: ClientSocket,
+    pub cipher: LinkCipher,
+    pub connection: u32,
+    pub next: u32,
+    pub window: ReceiveWindow,
+}
+
+impl Client {
+    pub fn new(address: SocketAddr, ticket: &Handoff) -> Self {
+        let socket = ClientSocket::bind(local()).unwrap();
+        socket.connect(address).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        Self {
+            socket,
+            cipher: LinkCipher::new(ticket.key_out, ticket.key_in),
+            connection: ticket.conn,
+            next: 0,
+            window: ReceiveWindow::default(),
+        }
+    }
+
+    pub fn send(&mut self, flags: u8, payload: Vec<u8>) {
+        let packet = Packet {
+            conn: self.connection,
+            kind: if payload.is_empty() {
+                KIND_CONTROL
+            } else {
+                KIND_FRAME
+            },
+            seq: self.next,
+            ack: self.window.expected,
+            ack_bits: self.window.bits,
+            flags,
+            payload,
+        };
+        self.next += 1;
+        self.socket
+            .send(&self.cipher.seal(&packet).unwrap())
+            .unwrap();
+    }
+
+    pub fn receive(&self) -> Packet {
+        let mut bytes = [0; MAX_DATAGRAM];
+        let count = self.socket.recv(&mut bytes).unwrap();
+        let packet = self.cipher.open(&bytes[..count]).unwrap();
+        assert_eq!(packet.conn, self.connection);
+        packet
+    }
+
+    pub fn handshake(&mut self) {
+        self.send(SYN, Vec::new());
+        let response = self.receive();
+        assert_eq!((response.kind, response.flags), (KIND_CONTROL, SYN | ACK));
+        assert!(self.window.accept(response.seq));
+        self.send(ACK, Vec::new());
+    }
+}
+
+pub fn messages(schemas: &Schemas, packet: &Packet) -> Vec<crate::game_messages::ReliableMessage> {
+    assert_eq!(packet.kind, KIND_FRAME);
+    let mut reader = BitReader::new(&packet.payload);
+    reader.var_a().unwrap();
+    read_channel(&mut reader, schemas).unwrap().reliable
+}
+
+pub fn exercise_loading(schemas: Schemas) {
+    let schemas = Arc::new(schemas);
+    let mut server = GameService::bind(local(), Arc::clone(&schemas)).unwrap();
+    let mut tickets = server
+        .open_match(MATCH, GameMap::practice_range(), player())
+        .unwrap();
+    let ticket = tickets.pop().unwrap();
+    assert!(server.handoff_pending(ticket.conn).unwrap());
+    let mut client = Client::new(server.local_addr(), &ticket);
+    client.handshake();
+    assert!(!server.handoff_pending(ticket.conn).unwrap());
+
+    let first = client.receive();
+    let initial = messages(&schemas, &first);
+    assert_eq!((initial[0].sequence, initial[0].message.id), (0, 20300));
+    assert_eq!(
+        initial[0].message.fields[&0x4a8],
+        Value::Unsigned(PRACTICE_RANGE_MAP)
+    );
+    // Drop the first instance datagram, then ACK the following heartbeat.
+    let heartbeat = client.receive();
+    assert!(messages(&schemas, &heartbeat).is_empty());
+    assert!(client.window.accept(heartbeat.seq));
+    client.send(ACK, Vec::new());
+    let until = Instant::now() + Duration::from_secs(2);
+    let retry = loop {
+        let packet = client.receive();
+        if !messages(&schemas, &packet).is_empty() {
+            break packet;
+        }
+        assert!(Instant::now() < until, "waiting for retransmitted instance");
+    };
+    assert_eq!(messages(&schemas, &retry), initial);
+    assert!(client.window.accept(retry.seq));
+
+    let loaded = encode(&schemas, 21602, &Fields::new()).unwrap();
+    let ping = encode(
+        &schemas,
+        21610,
+        &Fields::from([
+            (0x78, Value::Unsigned(17)),
+            (0x80, Value::Array(vec![Value::Unsigned(25)])),
+        ]),
+    )
+    .unwrap();
+    let mut payload = BitWriter::new();
+    write_channel(&mut payload, &[(0, loaded)], &[ping]).unwrap();
+    let start = Instant::now();
+    client.send(ACK, payload.into_bytes());
+    let mut received = Vec::new();
+    while received.len() < 3 && start.elapsed() < Duration::from_secs(2) {
+        let packet = client.receive();
+        assert!(client.window.accept(packet.seq));
+        received.extend(messages(&schemas, &packet));
+        client.send(ACK, Vec::new());
+    }
+    assert_eq!(
+        received
+            .iter()
+            .map(|message| (message.sequence, message.message.id))
+            .collect::<Vec<_>>(),
+        [(1, 20306), (2, 20302), (3, 20301)]
+    );
+    assert!(start.elapsed() >= Duration::from_millis(400));
+    assert_eq!(received[0].message.fields[&0x78], Value::Unsigned(17));
+    let Value::Array(stamps) = &received[0].message.fields[&0x80] else {
+        panic!("expected ping timestamps");
+    };
+    assert_eq!(stamps.len(), 3);
+    assert_eq!(stamps[0], Value::Unsigned(25));
+
+    client.send(FIN | ACK, Vec::new());
+    let until = Instant::now() + Duration::from_secs(2);
+    loop {
+        let packet = client.receive();
+        if packet.kind == KIND_CONTROL {
+            assert_eq!(packet.flags, FIN | ACK);
+            break;
+        }
+        assert!(Instant::now() < until, "waiting for FIN acknowledgement");
+    }
+    let address = server.local_addr();
+    server.stop().unwrap();
+    assert!(ClientSocket::bind(address).is_ok());
+    assert_eq!(
+        server
+            .open_match(MATCH, GameMap::practice_range(), player())
+            .err()
+            .unwrap()
+            .kind(),
+        io::ErrorKind::BrokenPipe
+    );
+}
+
+#[derive(Debug)]
+pub struct WorldRecord {
+    pub entity: u32,
+    pub operation: Option<u8>,
+    pub definition: Option<u32>,
+    pub movement: bool,
+    pub skin: Option<(u32, bool)>,
+    pub script: Option<ReceivedChunk>,
+    pub projectile_release: Option<u32>,
+    pub base_health: Option<f32>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct ReceivedChunk {
+    pub first: u32,
+    pub span: u32,
+    pub width: usize,
+    pub data: Vec<u8>,
+}
+
+impl ReceivedChunk {
+    pub fn bits(&self) -> BitReader<'_> {
+        BitReader::with_range(&self.data, 0, self.width).unwrap()
+    }
+}
+
+impl WorldRecord {
+    pub fn is_create(&self) -> bool {
+        self.operation == Some(1)
+    }
+}
+
+pub fn world_records(schemas: &Schemas, packet: &Packet) -> Vec<WorldRecord> {
+    let mut reader = BitReader::new(&packet.payload);
+    reader.var_a().unwrap();
+    read_channel(&mut reader, schemas).unwrap();
+    reader.var_a().unwrap();
+    assert_eq!(reader.bits(7).unwrap(), 0b010_0000);
+    let count = reader.bits(7).unwrap();
+    (0..count)
+        .map(|_| {
+            let mut record = WorldRecord {
+                entity: reader.entity_id().unwrap().unwrap(),
+                operation: None,
+                definition: None,
+                movement: false,
+                skin: None,
+                script: None,
+                projectile_release: None,
+                base_health: None,
+            };
+            assert!(reader.bit().unwrap());
+            if !reader.bit().unwrap() {
+                return record;
+            }
+            if reader.bit().unwrap() {
+                assert!(!reader.bit().unwrap());
+                let first = reader.w_u32().unwrap();
+                let span = reader.w_var().unwrap();
+                assert!(!reader.bit().unwrap());
+                let width = reader.w_var().unwrap() as usize;
+                record.script = Some(ReceivedChunk {
+                    first,
+                    span,
+                    width,
+                    data: reader.raw_bits(width).unwrap(),
+                });
+            }
+            if !reader.bit().unwrap() {
+                return record;
+            }
+            assert!(!reader.bit().unwrap()); // no channel-2 launch events
+            if reader.bit().unwrap() {
+                assert_eq!(reader.var_b().unwrap(), u32::MAX);
+                record.projectile_release = Some(reader.var_b().unwrap());
+                assert_eq!(reader.bits(2).unwrap(), 0);
+                assert_eq!(
+                    std::array::from_fn::<_, 3, _>(|_| reader.f32().unwrap()),
+                    [0.0, -1000.0, 0.0]
+                );
+                assert_eq!(reader.bits(5).unwrap(), 0);
+                assert!(reader.bit().unwrap()); // impact count is present
+                assert!(reader.bit().unwrap()); // short count
+                assert_eq!(reader.bits(4).unwrap(), 1);
+                assert_eq!(reader.bits(6).unwrap(), 0);
+            }
+            assert!(reader.bit().unwrap());
+            record.movement = reader.bit().unwrap();
+            if record.movement {
+                let length = reader.bits(12).unwrap() as usize;
+                reader.advance(length - 12).unwrap();
+            }
+            if reader.bit().unwrap() {
+                let operation = reader.bits(2).unwrap() as u8;
+                record.operation = Some(operation);
+                if operation != 3 {
+                    let length = reader.bits(14).unwrap() as usize;
+                    let start = reader.position();
+                    if operation == 1 && !reader.bit().unwrap() {
+                        record.definition = Some(reader.guid_index().unwrap());
+                        let flags = reader.bits(8).unwrap() as u8;
+                        if flags & crate::world::SKIN_THEME != 0 {
+                            assert_ne!(flags & crate::world::WITH_SKIN, 0);
+                            record.skin =
+                                Some((reader.bits(32).unwrap() as u32, reader.bit().unwrap()));
+                        }
+                    } else if operation == 2 {
+                        let mut components = reader;
+                        if components.bits(8).unwrap() == 1 && components.bits(8).unwrap() == 51 {
+                            components.align();
+                            if components.bits(8).unwrap() == 7 && components.bits(56).unwrap() == 1
+                            {
+                                components.advance(64).unwrap(); // ID and maximum
+                                record.base_health = Some(components.f32().unwrap());
+                            }
+                        }
+                    }
+                    reader
+                        .advance(length - (reader.position() - start))
+                        .unwrap();
+                }
+                assert!(!reader.bit().unwrap());
+            }
+            record
+        })
+        .collect()
+}
+
+pub fn input_batch(first: u32, count: u8, yaw: i16) -> Vec<u8> {
+    command_batch(first, count, yaw, 0, true)
+}
+
+pub fn command_batch(first: u32, count: u8, yaw: i16, buttons: u32, forward: bool) -> Vec<u8> {
+    let mut input = BitWriter::new();
+    input.bits(0, 24).unwrap(); // latency and key flags
+    input.bits(u64::from(count), 8).unwrap();
+    input.bits(u64::from(first), 32).unwrap();
+    input.bit(forward); // new throttles
+    if forward {
+        input.bit(true); // compact throttle direction
+        input.bit(true); // moving
+        input.bits(2, 3).unwrap();
+    }
+    input.signed(i64::from(yaw), 16).unwrap();
+    input.signed(0, 16).unwrap();
+    input.bits(u64::from(buttons), 24).unwrap();
+    input.bits(0, 8).unwrap(); // action
+    input.bits(0, 16).unwrap(); // extra
+    for _ in 1..count {
+        input.bit(false); // next consecutive frame
+        input.bit(false); // no changed fields
+    }
+    let mut payload = BitWriter::new();
+    write_channel(&mut payload, &[], &[]).unwrap();
+    payload.bit(true);
+    payload.bits(input.bit_len() as u64, 32).unwrap();
+    payload.raw_bits(input.as_bytes(), input.bit_len()).unwrap();
+    payload.into_bytes()
+}
+
+pub fn input_ack(schemas: &Schemas, packet: &Packet) -> u32 {
+    let mut reader = BitReader::new(&packet.payload);
+    reader.var_a().unwrap();
+    read_channel(&mut reader, schemas).unwrap();
+    reader.var_a().unwrap()
+}
