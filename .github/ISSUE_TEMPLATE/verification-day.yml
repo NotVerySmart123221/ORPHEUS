@@ -1,0 +1,85 @@
+name: Verification day
+description: Coordinate original-client Practice Range tests on one tagged server revision.
+title: "[Verification day] "
+labels: [testing, gameplay verification]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use one issue per implementation and tag. The maintainer opens the issue; each tester posts an independent reply with the session details and numbered results below. English or 简体中文 is welcome.
+
+        Use the original Windows client, build **1.74.0.0.104319**. Keep CI, headless tests and replay results in a separate note. Python v0.1 acceptance requires two testers to pass every in-scope row on the same tag. After the Rust cutover, use Python results as historical reference; record Rust acceptance in its own issue.
+  - type: dropdown
+    id: implementation
+    attributes:
+      label: Server implementation
+      options:
+        - Python reference
+        - Rust native server
+    validations:
+      required: true
+  - type: input
+    id: tag
+    attributes:
+      label: Verification tag
+      description: Use the published tag selected by the maintainer.
+      placeholder: verify-YYYY-Www
+    validations:
+      required: true
+  - type: input
+    id: revision
+    attributes:
+      label: Server commit SHA
+      description: Record the exact revision the tag resolves to.
+    validations:
+      required: true
+  - type: dropdown
+    id: name_scope
+    attributes:
+      label: Bot names in the elimination banner and kill feed (case 6)
+      description: "Include #8 by default. Only a recorded maintainer decision changes its release scope; still report what the client showed."
+      options:
+        - Included
+        - Deferred by maintainer (link decision below)
+    validations:
+      required: true
+  - type: textarea
+    id: session
+    attributes:
+      label: Session details for each tester
+      description: Copy into each reply. Use the public tester handle and replace local paths, addresses and account information with placeholders.
+      value: |
+        Tester handle:
+        Tag / server commit:
+        Client build / language:
+        Runtime manifest SHA-256:
+        Launch command or script (redacted):
+        Map / mode: Practice Range (0688)
+    validations:
+      required: true
+  - type: textarea
+    id: checklist
+    attributes:
+      label: Original-client checklist
+      description: 'Each tester copies these rows into a reply. Replace NOT RUN with PASS, FAIL or BLOCKED, and add what you observed. Partial cases stay open.'
+      value: |
+        1. NOT RUN — Log in, enter Practice Range and select Soldier: 76. Check weapon model and ammunition HUD. (#3)
+        2. NOT RUN — Play Soldier for 10 continuous minutes. Record elapsed time and any crash or disconnect. (#3)
+        3. NOT RUN — Hold primary fire, release and press again; then try firing during Sprint. Check shots and ammo, including whether firing gets stuck. (#4)
+        4. NOT RUN — Reload, Sprint, Helix Rockets and Biotic Field. For each, report the model, animation, visual effect and sound. (#3)
+        5. NOT RUN — Follow the same enemy bot from full health through one nonlethal hit, death and respawn. Check its overhead health bar at each step and whether it resets. (#7)
+        6. NOT RUN — Eliminate a bot. Record the name displayed in the center banner and the upper-right kill feed separately. (#8)
+        7. NOT RUN — Leave the map at a Practice Range edge. Record the starting landmark and route, then count deaths and respawns (expected: one each). (#13)
+        8. NOT RUN — Switch heroes 10 times, then leave and re-enter the range 10 times. Record counts, crashes, weapon availability and state after each transition.
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Extra cases or scope decisions
+      description: "Link any decision about case 6. List optional Doomfist retests separately using #5, #6, #36, #37, #38 and #47."
+  - type: textarea
+    id: observations
+    attributes:
+      label: Failures and supporting evidence
+      description: For each failed or blocked row, give the case number, exact steps, expected and actual result, elapsed time, and repeat count. A redacted screenshot or video timestamp is useful. Keep raw captures, dumps, runtime data, full logs and game files local.
