@@ -71,7 +71,11 @@ python -B scripts/inspect_python_room.py --reference C:\work\python-reference --
 
 Each schedule line contains `tick`, `elapsed_us`, `missed` and `inputs`. Start at tick and elapsed time zero, advance by the room's command quantum, and set `missed` to zero. Supply zero or one decoded command per tick using the Soldier comparison profile. The frozen room starts at frame 1000. Record actual offered frame numbers and let the command queue decide which it accepts. [Gameplay trace design](https://github.com/leafall903/ORPHEUS/pull/133)
 
-The tool writes a new diagnostic outside both checkouts and the pack. A successful recording prints `incomplete` and exits with code 2. Check its `missing` entries before interpreting any result. It records simulation state using immediate acknowledgements. Grouped delivery, reload state, and a common fingerprint for the effective data still need instrumentation. Keep the schedule and observations private. [Recorder work](https://github.com/leafall903/ORPHEUS/issues/131)
+The tool writes a new diagnostic outside both checkouts and the pack. A successful recording prints `incomplete` and exits with code 2. Check its `missing` entries before interpreting any result. It samples simulation state immediately after each room tick. The Soldier rifle's authored reload flag is initially null, which its boolean condition reads as false. During manual reload it remains true through the magazine refill.
+
+The `fixed-counter-v1` random model uses the pinned fixture's actual initial counter before room construction as its `seed`. Its deterministic entropy reads advance that counter. The diagnostic records the initial simulation tick in `initial_room_tick`, the starting clock in microseconds and the tick quantum.
+
+The production owner send path selects, budgets and submits records to an in-memory sink. The adapter groups only effects from successful sends and acknowledges each send afterwards. It records explicit magazine values, transmitted vital-pool updates, and body creation and retirement. A missing `effects` field means a required observation was unavailable. An empty array means the observed tick carried none of those effects. The diagnostic still requires common runtime-profile binding before use in a cross-language comparison. Keep the schedule and observations private. [Recorder work](https://github.com/leafall903/ORPHEUS/issues/131)
 
 ---
 

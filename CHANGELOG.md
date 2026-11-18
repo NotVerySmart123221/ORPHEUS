@@ -8,7 +8,7 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 #### Observe the frozen Python room offline
 
-- `scripts/inspect_python_room.py` accepts a semantic command schedule and a private output path. It loads the prepared Practice Range terrain and runs the pinned Python room with the combat test fixture's immediate acknowledgements. The diagnostic records input acceptance, Soldier pose and rifle ammunition, and the selected bot's health and body generation. Reload state, grouped delivery and the effective runtime fingerprint remain open.
+- `scripts/inspect_python_room.py` accepts a semantic command schedule and a private output path. It loads the prepared Practice Range terrain, records Soldier command acceptance, pose, ammunition and reload state, and follows the chosen bot's health and body generation. It projects body lifecycle, vital-pool and magazine effects from the production owner send path with in-memory acknowledgements. Common runtime-profile binding remains open.
 
 #### Add safe-boundary Lua AI hot reload with pre-activation validation and rollback
 

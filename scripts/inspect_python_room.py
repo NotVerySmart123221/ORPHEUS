@@ -1,8 +1,8 @@
 """Run an offline Soldier input schedule against the pinned Python room.
 
 Schedule rows are JSON lines with tick, elapsed_us, missed and inputs, in the
-golden comparison format. Output is a private incomplete diagnostic: the
-immediate-ack fixture does not observe grouped sends or establish reload state.
+golden comparison format. Output is a private diagnostic of observed room
+state and committed owner delivery groups, prior to common profile binding.
 """
 
 import argparse
@@ -96,12 +96,18 @@ def record(reference, runtime, schedule, bot_slot):
                     raise ValueError(f"noncontiguous command frame at tick {number}")
                 last_input = (generation, command.frame)
             accepted, (state, gaps) = room.step(command)
-            ticks.append({**row, "accepted": accepted if command is not None else None,
-                          "state": state, "missing": gaps})
+            observation = {**row, "accepted": accepted if command is not None else None,
+                           "state": state, "missing": gaps}
+            if room.owner_effects is not None:
+                observation["effects"] = room.owner_effects
+            ticks.append(observation)
             missing.update(gaps)
     if not ticks:
         raise ValueError("schedule is empty")
-    adapter_sources = (Path(__file__), Path(__file__).with_name("golden_python_room.py"))
+    adapter_sources = (
+        Path(__file__), Path(__file__).with_name("golden_python_room.py"),
+        Path(__file__).with_name("golden_python_delivery.py"),
+    )
     return {
         "status": "incomplete", "scope": "python-offline-room-state",
         "source_rev": REFERENCE, "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
@@ -109,8 +115,13 @@ def record(reference, runtime, schedule, bot_slot):
             p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in adapter_sources
         },
         "platform": [platform.system(), platform.machine()], "toolchain": platform.python_version(),
+        "seed": room.seed,
+        "random_model": "fixed-counter-v1",
+        "initial_room_tick": room.start_tick,
+        "start_clock_us": round(room.match.started * 1_000_000),
         "quanta_us": room.player.quanta,
-        "bot_spawner_slot": bot_slot, "transport": "immediate-ack combat fixture",
+        "bot_spawner_slot": bot_slot,
+        "transport": "production owner frame; in-memory send and acknowledgement",
         "missing": sorted(missing), "ticks": ticks,
     }
 
