@@ -25,6 +25,26 @@ fn normal_cassidy_common_npc_damage_charge_and_retirement() {
 
 use crate::game_bots::BOT_ENTITY;
 
+fn unique_script_instance(
+    snapshot: &crate::script_init::Snapshot,
+    graph: u32,
+    parent: Option<(u16, u16)>,
+) -> u16 {
+    let matches: Vec<_> = snapshot
+        .instances
+        .iter()
+        .filter_map(|(&id, instance)| {
+            (instance.graph == graph && instance.parent == parent).then_some(id)
+        })
+        .collect();
+    assert_eq!(
+        matches.len(),
+        1,
+        "graph {graph:04x}, parent {parent:?}: {matches:?}"
+    );
+    matches[0]
+}
+
 #[test]
 #[ignore = "requires a prepared 104319 Practice Range pack"]
 fn repeated_rooms_share_collision_indexes_and_keep_independent_bodies() {
@@ -81,6 +101,7 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
     use crate::commands::Command;
     use crate::game_replication::BodyStep;
     use crate::script_init::{Snapshot, StateKind};
+    use crate::script_snapshot_wire::identity_test_reader::IdentityReader;
     use crate::script_snapshot_wire::{View, uncertain_polled_switch};
     use crate::script_stream::{BodyStream, DeltaKind};
     use crate::script_wire::Value;
@@ -104,31 +125,13 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
         let mut runtime = scene.owner_body_runtime(hero, spawn).unwrap().unwrap();
         let snapshot = runtime.snapshot().unwrap();
         let encoder = runtime.encoder();
-        // Resolve each graph once at startup. Every later assertion then follows
-        // the same instance, including its attachment to the expected parent.
-        let resolve = |graph: u32, parent: Option<(u16, u16)>| {
-            let mut matches = snapshot
-                .instances
-                .iter()
-                .filter(|(_, instance)| instance.graph == graph && instance.parent == parent);
-            let (&id, _) = matches
-                .next()
-                .unwrap_or_else(|| panic!("missing graph {graph:04x} at {parent:?}"));
-            assert!(
-                matches.next().is_none(),
-                "ambiguous graph {graph:04x} at {parent:?}"
-            );
-            id
-        };
-        let body = resolve(0x0033, None);
-        let manager = resolve(0x004b, None);
-        let sprint_id = resolve(0x0255, None);
-        let rifle_id = resolve(0x0254, None);
-        let movement = resolve(0x01c7, Some((manager, 0)));
-        let equipment = resolve(0x01cf, Some((manager, 3)));
-        let idle_id = resolve(0x02c5, Some((manager, 5)));
-        let weapon_switch = resolve(0x0ba4, Some((manager, 11)));
-        let table_id = resolve(0x05ad, Some((manager, 7)));
+        let root = |graph| unique_script_instance(snapshot, graph, None);
+        let manager = root(0x004b);
+        let child = |graph, raw| unique_script_instance(snapshot, graph, Some((manager, raw)));
+        let table_id = child(0x05ad, 7);
+        let idle_id = child(0x02c5, 5);
+        let rifle_id = root(0x0254);
+        let sprint_id = root(0x0255);
         // The authored message table stays in the VM for lookups.
         let table = &snapshot.instances[&table_id];
         assert_eq!(table.graph, 0x05ad);
@@ -139,6 +142,14 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
             let mut stream = BodyStream::new(spawn.entity);
             let baseline = encoder.queue_full(&mut stream, &projected).unwrap();
             stream.create_arrived();
+            let mut wire = IdentityReader::default();
+            wire.apply(
+                baseline.update.chunk.as_ref().unwrap(),
+                true,
+                view == View::Owner,
+            )
+            .unwrap();
+            wire.verify(snapshot, &assets.graphs);
             stream.arrived(baseline.last);
             // Only the unbound table is omitted, as Python omits its None.
             let sent = projected.instance_variables(table_id).unwrap();
@@ -152,7 +163,7 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
                     assert_eq!(sent.get(&variable), Some(value), "{variable}");
                 }
             }
-            streams.push((stream, projected));
+            streams.push((stream, projected, wire));
         }
         // A live session: idle for about 3 s, hold fire for 1.5 s, reload,
         // fire briefly, stand until the idle fidget plays, fire through it,
@@ -183,27 +194,32 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
             }
             found
         };
-        // Check the exact set on this owner, including the switch attached
-        // to the weapon manager. Startup allocation can differ across hosts.
+        // The reference withholds these switches too, and two more in
+        // instance 9, which is absent from this startup snapshot. The 0ba4 child is
+        // one of the tagged weapon-manager subgraphs the reference lacks.
+        let root_0033 = root(0x0033);
+        let child_01c7 = child(0x01c7, 0);
+        let child_01cf = child(0x01cf, 3);
+        let child_0ba4 = child(0x0ba4, 11);
         let withheld = BTreeSet::from([
-            (body, 10),
-            (body, 15),
-            (body, 20),
-            (body, 21),
-            (body, 22),
-            (body, 23),
+            (root_0033, 10),
+            (root_0033, 15),
+            (root_0033, 20),
+            (root_0033, 21),
+            (root_0033, 22),
+            (root_0033, 23),
             (manager, 12),
             (manager, 13),
             (manager, 14),
-            (movement, 25),
-            (movement, 28),
-            (movement, 30),
-            (movement, 48),
-            (equipment, 17),
-            (weapon_switch, 0),
+            (child_01c7, 25),
+            (child_01c7, 28),
+            (child_01c7, 30),
+            (child_01c7, 48),
+            (child_01cf, 17),
+            (child_0ba4, 0),
         ]);
         assert_eq!(uncertain(snapshot), withheld);
-        for (_, projected) in &streams {
+        for (_, projected, _) in &streams {
             for &(id, raw) in &withheld {
                 assert!(!projected.instance_states(id).unwrap().contains(&raw));
             }
@@ -277,7 +293,7 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
             );
             let excluded = uncertain(snapshot);
             let encoder = runtime.encoder();
-            for (stream, initial) in &mut streams {
+            for (stream, initial, wire) in &mut streams {
                 let next = encoder.project_next(snapshot, initial).unwrap();
                 let kind = match initial.view() {
                     View::Owner => stream.owner_kind(frame, false, false).unwrap(),
@@ -287,6 +303,13 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
                 let delta = encoder.queue_delta(stream, &next, kind, runtime.frame_ms());
                 if let Some(chunk) = delta.unwrap() {
                     stream.sent(chunk.last);
+                    wire.apply(
+                        chunk.update.chunk.as_ref().unwrap(),
+                        false,
+                        next.view() == View::Owner,
+                    )
+                    .unwrap();
+                    wire.verify(snapshot, &assets.graphs);
                     stream.arrived(chunk.last);
                 }
                 if next.view() != View::Owner {
