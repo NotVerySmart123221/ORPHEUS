@@ -15,6 +15,7 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Add the offline `compare_golden` command for semantic Soldier traces. It checks input and runtime fingerprints, validates complete records and reports the first differing command acceptance, state field or owner effect. The public tests exercise an invented scenario with a bot respawn. [Comparison guide](docs/GOLDEN_COMPARISON.md)
 - Added a prepared-runtime observation of stock Soldier command processing and rifle ammo after possession, firing and reloading. This test drives the headless room.
+- The prepared 900-frame Soldier regression now locates each graph by parent and attachment before checking weapon behavior and both client projections. [Startup comparison and remaining parity question](docs/STATE.md)
 
 #### Document the planned GitHub default branch change
 
