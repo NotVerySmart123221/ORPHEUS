@@ -7,6 +7,8 @@ ORPHEUS 是面向 **《守望先锋 1》1.74.0.0.104319** 版本的独立开源�
 - **`rust`（当前分支）**：实验性原生 Rust 专用服务端、底层独立 Crate 以及可选 Web 3D 调试后台（`--features inspector`）。
 - **`main`**：社区维护的 Python 参考服务端、Windows 客户端启动器与数据提取工具集（[main 分支](https://github.com/leafall903/ORPHEUS/tree/main)）。
 
+**计划于 2026 年 11 月 19 日 12:00 UTC 切换仓库默认分支。** 届时，新克隆会默认检出 `rust`。Rust PR 提交到 `rust`，Python PR 提交到 `main`，两条分支都继续接受贡献。Rust 服务端目前处于开发预览阶段。[分支指南](docs/BRANCH_TRANSITION.md)
+
 [运行公开 Rust 测试](#运行公开-rust-测试无需游戏本体) · [启动原生服务端](#启动原生服务端) · [当前进度](#当前进度) · [服务端架构](docs/NATIVE_SERVER_ARCHITECTURE.md) · [贡献指南](CONTRIBUTING.md) · [问题列表](https://github.com/leafall903/ORPHEUS/issues)
 
 ---

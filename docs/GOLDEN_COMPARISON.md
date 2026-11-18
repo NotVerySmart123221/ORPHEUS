@@ -36,4 +36,4 @@ Both producers must use the same platform, clock configuration and runtime input
 
 **Outputs.** Record owner delivery groups in observed order, with each group's effects in observed order. Each effect contains recipient, kind, logical body and value. This revision supports `create`, `retire`, `health` and `ammo`. An empty list means the observer saw no relevant output. A producer that cannot observe the group boundary or account for a relevant effect must report incomplete evidence and withhold a complete trace.
 
-The comparator checks acceptance before other state and then compares grouped effects. The design and remaining adapter work are tracked in [the golden trace proposal](https://github.com/leafall903/ORPHEUS/pull/133).
+The comparator checks acceptance before other state and then compares grouped effects. The design describes the remaining recorder work. [Gameplay trace design](GOLDEN_TRACE.md)

@@ -6,7 +6,15 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-18
 
+#### Compare gameplay evidence across languages
+
 - Add the offline `compare_golden` command for semantic Soldier traces. It checks input and runtime fingerprints, validates complete records and reports the first differing command acceptance, state field or owner effect. The public tests exercise an invented scenario with a bot respawn. [Comparison guide](docs/GOLDEN_COMPARISON.md)
+- Added a prepared-runtime observation of stock Soldier command processing and rifle ammo after possession, firing and reloading. This test drives the headless room.
+
+#### Document the planned GitHub default branch change
+
+- Scheduled the repository default to switch to the existing `rust` branch on November 19 at 12:00 UTC. Documented contribution targets and verification steps for maintainers. Rust development continues on `rust` and Python development on `main`. [Branch guide](docs/BRANCH_TRANSITION.md)
+- Added an original-client verification day issue form for both implementations, linked the pinned Python parity matrix from the [Rust status page](docs/STATE.md), and documented a [design for comparing private gameplay traces](docs/GOLDEN_TRACE.md).
 
 #### Add safe-boundary Lua AI hot reload with pre-activation validation and rollback
 
