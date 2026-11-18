@@ -227,6 +227,8 @@ impl BodyScript {
         let record = Record {
             update: chunk.update,
             delivery: Delivery::BodyScript {
+                #[cfg(test)]
+                rifle_ammo_written: chunk.owner_rifle_ammo_written,
                 id: self.id,
                 last,
                 delta: kind.is_some(),

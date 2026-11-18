@@ -50,3 +50,16 @@ Both producers must use the same platform, clock configuration and runtime input
 **Outputs.** Record owner delivery groups in observed order, with each group's effects in observed order. Each effect contains recipient, kind, logical body and value. This revision supports `create`, `retire`, `health` and `ammo`. An empty list means the observer saw no relevant output. A producer that cannot observe the group boundary or account for a relevant effect must report incomplete evidence and withhold a complete trace.
 
 The comparator checks acceptance before other state and then compares grouped effects. The design describes the remaining recorder work. [Gameplay trace design](GOLDEN_TRACE.md)
+## Replay a private schedule in the native room
+
+The prepared-runtime test takes a local decoded schedule with the command fields listed above. Select an ordinary hostile Practice Range spawner by its zero-based position in the filtered catalog. Provide a fresh output filename in a private directory. The test leaves existing files intact.
+
+```powershell
+$env:ORPHEUS_RUNTIME_DIR = 'C:\private\runtime'
+$env:ORPHEUS_ROOM_SCHEDULE = 'C:\private\schedule.jsonl'
+$env:ORPHEUS_ROOM_OBSERVATION = 'C:\private\native-observation.json'
+$env:ORPHEUS_ROOM_BOT_SLOT = '2'
+cargo test --locked -p orpheus --lib same_schedule_practice_room -- --ignored
+```
+
+The fixture selects stock Soldier, acknowledges the initial owner and body, and passes each offered command through the production room. It samples the state after the worker tick. The output separates setup deliveries from scheduled deliveries and records the effective field set. The latter uses the records selected by successful sends in their original order. Compare independent runs under the same runtime and record source revisions, clock, RNG, and startup conditions separately. The resulting observation is a local input to the comparison runner.

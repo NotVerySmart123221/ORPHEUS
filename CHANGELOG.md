@@ -6,7 +6,7 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-18
 
-- Added an opt-in prepared-runtime test for replaying a private decoded Practice Range schedule through the native room. It records command acceptance, available player and bot fields, and the selected bot's death and respawn timing. The diagnostic records missing fields explicitly. Raw observations stay local.
+- Added an opt-in prepared-runtime test for replaying a private decoded Practice Range schedule through the native room. It records command acceptance, available player and bot fields, and the selected bot's death and respawn timing. It distinguishes pre-roll from scheduled owner records, observes selected body, health and rifle-ammo delivery, and records missing provenance explicitly. Raw observations stay local.
 
 #### Compare gameplay evidence across languages
 
