@@ -1,10 +1,13 @@
 # ORPHEUS (Rust)
 
-[English](README.md) · [Discord](https://discord.gg/tqukqjAk7) · [Python 参考快照](https://github.com/leafall903/ORPHEUS/tree/45044d0d62399d9eb876c08e788aaea1f56cecc9)
+[English](README.md) · [Discord](https://discord.gg/tqukqjAk7) · [Python `main` 分支](https://github.com/leafall903/ORPHEUS/tree/main)
 
 ORPHEUS 是面向 **《守望先锋 1》1.74.0.0.104319** 版本的独立开源服务端复刻与协议研究项目。
 
-**分支于 2026 年 11 月 19 日 12:00 UTC（赫尔辛基 14:00）切换。** Rust 开发从 `rust` 迁至默认分支 `main`。原 Python `main` 改名为 `python-archive`，保留作参考。从切换时起，Python 停止维护，面向归档分支的新 PR 将关闭。原生服务端目前是开发预览版，详见[分支切换清单](docs/BRANCH_TRANSITION.md)和下方的玩法验证进度。
+- **`rust`（当前分支）**：实验性原生 Rust 专用服务端、底层独立 Crate 以及可选 Web 3D 调试后台（`--features inspector`）。
+- **`main`**：社区维护的 Python 参考服务端、Windows 客户端启动器与数据提取工具集（[main 分支](https://github.com/leafall903/ORPHEUS/tree/main)）。
+
+**计划于 2026 年 11 月 19 日 12:00 UTC 切换仓库默认分支。** 届时，新克隆会默认检出 `rust`。Rust PR 提交到 `rust`，Python PR 提交到 `main`，两条分支都继续接受贡献。Rust 服务端目前处于开发预览阶段。[分支指南](docs/BRANCH_TRANSITION.md)
 
 [运行公开 Rust 测试](#运行公开-rust-测试无需游戏本体) · [启动原生服务端](#启动原生服务端) · [当前进度](#当前进度) · [服务端架构](docs/NATIVE_SERVER_ARCHITECTURE.md) · [贡献指南](CONTRIBUTING.md) · [问题列表](https://github.com/leafall903/ORPHEUS/issues)
 
@@ -15,9 +18,8 @@ ORPHEUS 是面向 **《守望先锋 1》1.74.0.0.104319** 版本的独立开源�
 安装 **Git** 与 **稳定版 Rust**（`>= 1.85.0`）。在 Windows 上还需安装 **x64 MSVC C++ Build Tools** 与 **Windows SDK**，以编译内置的 Lua 5.4 运行时。
 
 ```powershell
-git clone https://github.com/leafall903/ORPHEUS.git
+git clone --branch rust https://github.com/leafall903/ORPHEUS.git
 cd ORPHEUS
-if (-not (Test-Path Cargo.toml)) { git switch rust }
 cargo test --locked --workspace --all-targets
 ```
 

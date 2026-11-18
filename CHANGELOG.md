@@ -6,6 +6,10 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-18
 
+#### Document the planned GitHub default branch change
+
+- Scheduled the repository default to switch to the existing `rust` branch on November 19 at 12:00 UTC. Documented contribution targets and verification steps for maintainers. Rust development continues on `rust` and Python development on `main`. [Branch guide](docs/BRANCH_TRANSITION.md)
+
 #### Add safe-boundary Lua AI hot reload with pre-activation validation and rollback
 
 - Added opt-in safe-boundary Lua AI hot reload handled in `State::handle_request` between worker ticks (`GameService::reload_ai_script`, `GameService::reload_ai_script_file`, `GameService::ai_policy_status`, `ServerConfig::ai_script`, `Server::reload_ai_script`, and opt-in `--ai-script` / `'reload'` stdin command in `orpheus_server`) without altering the public wire protocol or weakening the `!Send` Lua sandbox (`debug_http.rs` remains read-only).

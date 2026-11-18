@@ -1,10 +1,13 @@
 # ORPHEUS (Rust)
 
-[简体中文](README.zh-CN.md) · [Discord](https://discord.gg/tqukqjAk7) · [Python reference snapshot](https://github.com/leafall903/ORPHEUS/tree/45044d0d62399d9eb876c08e788aaea1f56cecc9)
+[简体中文](README.zh-CN.md) · [Discord](https://discord.gg/tqukqjAk7) · [Python `main` branch](https://github.com/leafall903/ORPHEUS/tree/main)
 
 ORPHEUS is an open-source server reimplementation for **Overwatch 1 (retail build 1.74.0.0.104319)** focused on research and preservation.
 
-**Branch transition on November 19, 2026 at 12:00 UTC (14:00 in Helsinki).** Rust development moves from `rust` to the default branch, `main`. The former Python `main` becomes `python-archive` and stays available for reference. Python maintenance ends at cutover and new pull requests targeting the archive will be closed. The native server is a developer preview. See the [branch transition checklist](docs/BRANCH_TRANSITION.md) and the gameplay status below.
+- **`rust` (this branch):** the experimental native Rust dedicated server, workspace crates, and local 3D debug inspector (`--features inspector`).
+- **`main`:** the community-maintained Python server, Windows game launcher, data extractors, and reference tests ([main branch](https://github.com/leafall903/ORPHEUS/tree/main)).
+
+**Default branch change planned for November 19, 2026 at 12:00 UTC.** New clones will open on `rust`. Choose `rust` for Rust pull requests and `main` for Python pull requests. Both implementations welcome contributions. The Rust server is a developer preview. [Branch guide](docs/BRANCH_TRANSITION.md)
 
 [Public Rust Tests](#public-rust-tests) · [Run Native Server](#run-the-native-server) · [Current Status](#current-status) · [Architecture](docs/NATIVE_SERVER_ARCHITECTURE.md) · [Contributing](CONTRIBUTING.md) · [Issues](https://github.com/leafall903/ORPHEUS/issues)
 
@@ -15,9 +18,8 @@ ORPHEUS is an open-source server reimplementation for **Overwatch 1 (retail buil
 Install **Git** and **stable Rust** (`>= 1.85.0`). On Windows, also install the **x64 MSVC C++ Build Tools** and **Windows SDK** so Cargo can build the vendored Lua 5.4 runtime.
 
 ```powershell
-git clone https://github.com/leafall903/ORPHEUS.git
+git clone --branch rust https://github.com/leafall903/ORPHEUS.git
 cd ORPHEUS
-if (-not (Test-Path Cargo.toml)) { git switch rust }
 cargo test --locked --workspace --all-targets
 ```
 
