@@ -410,7 +410,7 @@ impl Room {
             };
             // Movement/input failure previously closes this member. Keep that
             // scope and report the cause; body-script failures are handled locally.
-            let active = world.scene.encounter_active();
+            let active = world.scene.simulation().encounter_active();
             if let Some(id) = peer.world.active_body_id() {
                 world
                     .scene
@@ -477,7 +477,7 @@ impl Room {
             return Ok(RoomUpdates::default());
         };
         let junkenstein = world.scene.map().is_junkenstein();
-        let active = world.scene.encounter_active();
+        let active = world.scene.simulation().encounter_active();
         world.scene.simulation_mut().sync_player_encounter(active);
 
         let (
@@ -542,7 +542,7 @@ impl Room {
                         .map(|state| state.id.entity)
                 })
                 .collect();
-            for request in world.scene.take_encounter_voice_requests() {
+            for request in world.scene.simulation_mut().take_encounter_voice_requests() {
                 for &listener in &voice_targets {
                     for member in self.members.values_mut() {
                         if let Some(peer) = &mut member.peer {

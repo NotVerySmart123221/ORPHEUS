@@ -352,18 +352,13 @@ fn configured_normal_validation_changes_gate_capacity_and_scopes_immunity() {
         assets.prepare_junkenstein(map, card, 0).unwrap()
     };
     let capacity = |scene: &PreparedScene| {
-        scene
-            .encounter
-            .as_ref()
-            .unwrap()
-            .gate_script
-            .resolved_variable(
-                0,
-                crate::script_expr::Variable {
-                    scope: crate::script_expr::Scope::Entity,
-                    id: 7786,
-                },
-            )
+        scene.gate_resolved_variable(
+            0,
+            crate::script_expr::Variable {
+                scope: crate::script_expr::Scope::Entity,
+                id: 7786,
+            },
+        )
     };
     let default = prepare(&assets, 0x3c);
     let harder = prepare(&assets, 0x3d);
@@ -415,11 +410,8 @@ fn normal_gate_damage_stages_publish_the_authored_animations() {
         (5, 0.0, 22, 0x0511),
     ] {
         if frame != 0 {
-            let gate = scene.junkenstein_gate.as_ref().unwrap();
-            let encounter = scene.encounter.as_mut().unwrap();
-            encounter
-                .gate_script
-                .queue_entity_frame_message(
+            scene
+                .step_test_gate_frame(
                     frame,
                     0x0240_0000_0000_06b2,
                     Variables::from([
@@ -427,16 +419,6 @@ fn normal_gate_damage_stages_publish_the_authored_animations() {
                         (0x12, Value::Entity(0)),
                     ]),
                 )
-                .unwrap();
-            let mut world = GateWorld {
-                entity: gate.entity,
-                state: &mut encounter.gate_state,
-                bodies: &scene.simulation,
-                mode_variables: &encounter.script.snapshot().unwrap().variables,
-            };
-            encounter
-                .gate_script
-                .advance_frame(frame, &mut world)
                 .unwrap();
         }
         let snapshot = scene.gate_snapshot().unwrap();
@@ -524,10 +506,7 @@ pub(super) fn verify_normal_cassidy_damage_and_charge(heroes: &[u64], variants: 
         let definition =
             encounter_definition(Some(&catalog), &graphs, scene.heroes(), boss).unwrap();
         for &(secondary, head) in variants {
-            scene.simulation = RoomSimulation::new(vec![]).unwrap();
-            scene
-                .simulation
-                .set_spawn_anchors(Arc::clone(&scene.junkenstein_anchors));
+            scene.reset_test_bodies();
             let mover = Mover::new(
                 *scene.movers.for_body(Some(cassidy.body)),
                 Arc::clone(scene.contacts.as_ref().unwrap()),
@@ -1713,11 +1692,7 @@ fn junkenstein_notification_updates_follow_authored_messages() {
     scene.step_encounter(2700, None);
     assert!(
         scene
-            .encounter
-            .as_mut()
-            .unwrap()
-            .script
-            .queue_entity_message(0x0240_0000_0000_0694, Variables::new())
+            .queue_test_encounter_entity_message(0x0240_0000_0000_0694, Variables::new())
             .unwrap()
             > 0
     );
@@ -1736,11 +1711,7 @@ fn junkenstein_notification_updates_follow_authored_messages() {
     );
     assert!(
         scene
-            .encounter
-            .as_mut()
-            .unwrap()
-            .script
-            .queue_entity_message(0x0240_0000_0000_06a8, Variables::new())
+            .queue_test_encounter_entity_message(0x0240_0000_0000_06a8, Variables::new())
             .unwrap()
             > 0
     );
@@ -1748,7 +1719,10 @@ fn junkenstein_notification_updates_follow_authored_messages() {
     let mut updates = 0;
     for tick in 2702..=2822 {
         scene.step_encounter(tick, None);
-        assert!(scene.encounter.is_some(), "encounter halted at {tick}");
+        assert!(
+            scene.encounter_snapshot().is_some(),
+            "encounter halted at {tick}"
+        );
         if let Some((current, payload)) =
             scene.encounter_notification_delta(Some(&baseline)).unwrap()
         {
@@ -2005,10 +1979,9 @@ fn junkenstein_room_clock_starts_countdown_once_after_cassidy_selection() {
     for tick in 3221..=4080 {
         scene.step_encounter(tick, Some(ana));
     }
-    let scene_vm = scene.encounter.as_ref().unwrap();
-    let gate = scene_vm.gate_script.snapshot().unwrap();
+    let gate = scene.gate_snapshot().unwrap();
     assert_eq!(gate.variables[&8571], Value::Integer(1));
-    assert_eq!(scene_vm.gate_state.team, Some(2));
+    assert_eq!(scene.gate_team(), Some(2));
     let snapshot = scene.encounter_snapshot().unwrap();
     let mode = &snapshot.instances[&ENCOUNTER_INSTANCE];
     assert_eq!(
@@ -2038,9 +2011,9 @@ fn junkenstein_room_clock_starts_countdown_once_after_cassidy_selection() {
     assert_eq!(first_spawner.variables[&6737], Value::Integer(8));
     let anchor = 0x8000_0107;
     assert_eq!(first_spawner.variables[&1629], Value::Entity(anchor));
-    let (search_key, request) = scene_vm
-        .script
-        .spawn_searches()
+    let searches = scene.encounter_spawn_search_keys();
+    let (search_key, request) = searches
+        .into_iter()
         .next()
         .expect("pending first spawn search");
     assert_eq!(
@@ -2206,10 +2179,8 @@ fn junkenstein_room_clock_starts_countdown_once_after_cassidy_selection() {
             snapshot.diagnostics
         );
     }
-    let encounter = scene.encounter.as_mut().unwrap();
-    let queued = encounter
-        .script
-        .queue_frame_message(
+    let queued = scene
+        .queue_test_encounter_frame_message(
             selected_tick - 2700 + 1,
             first_instance,
             0x0240_0000_0000_0695,
@@ -2227,11 +2198,7 @@ fn junkenstein_room_clock_starts_countdown_once_after_cassidy_selection() {
     );
     // A retired search must ignore a delayed completion without restoring its instance.
     scene
-        .encounter
-        .as_mut()
-        .unwrap()
-        .script
-        .queue_spawn_result(selected_tick - 2700 + 2, search_key, vec![[0.0; 3]; 10])
+        .queue_test_spawn_result(selected_tick - 2700 + 2, search_key, vec![[0.0; 3]; 10])
         .unwrap();
     scene.step_encounter(selected_tick + 2, Some(ana));
     assert!(
