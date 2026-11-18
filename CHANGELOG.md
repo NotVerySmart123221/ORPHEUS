@@ -23,6 +23,7 @@ This log records tested changes and their acceptance status. Entries are grouped
 #### Observe the pinned Python room offline
 
 - `scripts/inspect_python_room.py` accepts a semantic command schedule and a private output path. It loads the prepared Practice Range terrain, records Soldier command acceptance, pose, ammunition and reload state, and follows the chosen bot's health and body generation. It projects body lifecycle, vital-pool and magazine effects from the production owner send path with in-memory acknowledgements. The paired collector binds repeatable observations to their effective runtime profile.
+- The diagnostic identifies the host and stock-body random sources separately and records the selected spawner and initial owner delivery phase for cross-language comparisons.
 
 #### Add safe-boundary Lua AI hot reload with pre-activation validation and rollback
 

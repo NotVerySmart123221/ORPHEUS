@@ -77,6 +77,7 @@ def record(reference, runtime, schedule, bot_slot):
         raise ValueError("unexpected imported reference or runtime directory")
     room = PythonRoom(bot_slot)
     ticks = []
+    first_room_tick = None
     last_input = None
     missing = {"provenance.effective_data_sha256"}
     with schedule.open(encoding="utf-8") as stream:
@@ -96,6 +97,8 @@ def record(reference, runtime, schedule, bot_slot):
                     raise ValueError(f"noncontiguous command frame at tick {number}")
                 last_input = (generation, command.frame)
             accepted, (state, gaps) = room.step(command)
+            if first_room_tick is None:
+                first_room_tick = room.match.tick
             observation = {**row, "accepted": accepted if command is not None else None,
                            "state": state, "missing": gaps}
             if room.owner_effects is not None:
@@ -117,10 +120,19 @@ def record(reference, runtime, schedule, bot_slot):
         "platform": [platform.system(), platform.machine()], "toolchain": platform.python_version(),
         "seed": room.seed,
         "random_model": "fixed-counter-v1",
+        "host_initial_seed": room.seed,
+        "host_random_model": "fixed-counter-v1",
+        "player_vm_initial_seed": room.vm_seed,
+        "player_vm_random_model": "cpython-mt19937",
         "initial_room_tick": room.start_tick,
+        "first_scheduled_room_tick": first_room_tick,
+        "initial_owner_delivery_phase": "before-first-send",
+        "setup_delivery_ticks": room.setup_delivery_ticks,
         "start_clock_us": round(room.match.started * 1_000_000),
         "quanta_us": room.player.quanta,
         "bot_spawner_slot": bot_slot,
+        "bot_spawner": room.spawner_identity,
+        "bot_roster_size": room.roster_size,
         "transport": "production owner frame; in-memory send and acknowledgement",
         "missing": sorted(missing), "ticks": ticks,
     }
