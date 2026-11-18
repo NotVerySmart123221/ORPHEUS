@@ -649,9 +649,8 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
                 Value::Bool(fresh_at.is_some_and(|at| now_ms.saturating_sub(at) <= 500)),
             ),
         ]),
-        (StateKind::PhaseScriptList, Some("hits")) | (StateKind::PhaseTransition, Some("bit")) => {
-            StatePayload::new()
-        }
+        (StateKind::Plain | StateKind::PhaseScriptList, Some("hits"))
+        | (StateKind::PhaseTransition, Some("bit")) => StatePayload::new(),
         (StateKind::EmptyTargets, Some("targets")) => StatePayload::new(),
         (StateKind::TrackedTargets, Some("targets")) => StatePayload::from([(
             "targets".into(),
