@@ -3,16 +3,19 @@ import hashlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from capture_room_pair import (
     built_artifact,
     finish_receipt,
+    record_attempts,
     recording_environment,
     validate_observation,
 )
@@ -137,6 +140,35 @@ class InputTests(unittest.TestCase):
             env = recording_environment(self.pack, self.schedule)
         self.assertEqual(env, {"PATH": "tools", "ORPHEUS_RUNTIME_DIR": str(self.pack),
                                "ORPHEUS_ROOM_SCHEDULE": str(self.schedule)})
+
+    def test_candidate_failure_preserves_both_independent_reference_attempts(self):
+        args = SimpleNamespace(python="python", python_adapter=self.root, python_source=self.root,
+                               rust_source=self.root, runtime=self.pack, schedule=self.schedule, bot_slot=1)
+        row = json.loads(self.schedule.read_bytes())
+        observation = {"status": "incomplete", "bot_spawner_slot": 1, "quanta_us": 16000, "ticks": [row]}
+        unsupported = {"status": "unavailable", "reason": "unsupported-native-practice-room"}
+        for failure in ("unsupported-room", "recorder-failed", "invalid-observation", "native-build-failed"):
+            with self.subTest(failure=failure):
+                out = self.root / failure
+                out.mkdir()
+
+                def run(cmd, failure=failure, **kwargs):
+                    if cmd[0] == "python":
+                        cmd[-1].write_text(json.dumps(observation))
+                        return subprocess.CompletedProcess(cmd, 2)
+                    dest = Path(kwargs["env"]["ORPHEUS_ROOM_OBSERVATION"])
+                    if failure == "unsupported-room":
+                        dest.write_text(json.dumps(unsupported))
+                    elif failure == "invalid-observation":
+                        dest.write_text("{}")
+                    return subprocess.CompletedProcess(cmd, int(failure == "recorder-failed"))
+
+                native = None if failure == "native-build-failed" else "native"
+                with patch("capture_room_pair.subprocess.run", side_effect=run):
+                    hashes, failures = record_attempts(args, out, self.inputs(), {}, native)
+                self.assertEqual(set(hashes), {"reference-1.json", "reference-2.json"})
+                self.assertEqual(hashes["reference-1.json"], hashes["reference-2.json"])
+                self.assertEqual(failures, {"candidate-1.json": failure, "candidate-2.json": failure})
 
     def test_bad_reference_metadata_preserves_independently_validated_candidate(self):
         fixture = Path(__file__).resolve().parents[2] / "rust/crates/golden-trace/tests/fixtures/reference.jsonl"

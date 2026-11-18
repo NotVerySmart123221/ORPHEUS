@@ -33,13 +33,19 @@ The collector builds the native room test and the validator once, then runs the 
 
 Captured `orpheus.golden.v2` headers bind the selected spawner, roster size, initial and first scheduled room frames, setup delivery ticks and owner acknowledgement phase. Host and player VM random models and initial seeds have separate fields. An OS-entropy transport records a null host seed. When setups differ, both validated recordings stay on disk and the receipt identifies the incompatible fields. Synthetic v1 records and historical v1 headers with the smaller setup remain readable.
 
+The collector attempts both recordings for each implementation. A local recorder or native build failure is listed under `recording_failures` in the receipt. A valid pair from the other implementation can still produce a checked single trace. Changed runtime inputs or source revisions invalidate the run.
+
 ## What has been recorded
 
 On Windows, the pinned Python reference and the Rust room each processed all 339
 inputs in three headless scenarios: sustained fire at a training bot, a single
 shot followed by a reload, and an idle-weapon control. Each implementation ran
 each scenario twice in a fresh process. Both copies of each role's recording
-agreed and passed the single-trace validator.
+agreed and passed the single-trace validator. The pack supplied stock bot
+placements and health, but lacked their optional body scripts. Native solo
+admission currently rejects a Practice Range that includes scripted bot bodies.
+The collector reports that profile as unsupported for Rust and can preserve
+the checked Python recording for the same inputs.
 
 The paired comparison returned `incompatible` in all three scenarios. The
 first scheduled room tick matched, but the initial owner acknowledgements,

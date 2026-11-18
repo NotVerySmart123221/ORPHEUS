@@ -117,6 +117,13 @@ fn same_schedule_practice_room() {
         .unwrap()
         .prepare(GameMap::practice_range())
         .unwrap();
+    if !scene.movement_ready() {
+        write_observation(
+            &destination,
+            &json!({"status":"unavailable","reason":"unsupported-native-practice-room"}),
+        );
+        return;
+    }
     let roster_size = scene.simulation().bodies().unwrap().len();
     let slot: usize = std::env::var("ORPHEUS_ROOM_BOT_SLOT")
         .map_or(2, |s| s.parse().expect("an unsigned bot slot"));
@@ -309,9 +316,13 @@ fn same_schedule_practice_room() {
         "input_boundary":"after owner identity, controller data and bound body delivery; before next room tick",
         "receipt_policy":"immediate successful owner record acknowledgement on scheduled sends","initial_room_tick":FIRST_TICK,
         "missing":unavailable,"ticks":ticks});
+    write_observation(&destination, &result);
+}
+
+fn write_observation(destination: &std::path::Path, result: &Json) {
     let parent = destination.parent().unwrap();
     let mut file = tempfile::NamedTempFile::new_in(parent).unwrap();
-    serde_json::to_writer(file.as_file_mut(), &result).unwrap();
+    serde_json::to_writer(file.as_file_mut(), result).unwrap();
     writeln!(file).unwrap();
     file.persist_noclobber(destination)
         .expect("observation output must be new");

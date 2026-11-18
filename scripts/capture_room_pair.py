@@ -27,6 +27,8 @@ def revision(root, paths):
 
 def validate_observation(path, inputs, bot_slot):
     data = json.loads(path.read_bytes())
+    if data == {"status": "unavailable", "reason": "unsupported-native-practice-room"}:
+        return None
     rows = data["ticks"]
     if data["status"] != "incomplete" or len(rows) != inputs.ticks:
         raise ValueError("expected one diagnostic row per offered tick")
@@ -128,21 +130,25 @@ def capture(args):
     env = recording_environment(runtime, schedule)
     with tempfile.TemporaryDirectory(prefix="orpheus-capture-") as tmp:
         private_dir = Path(tmp)
-        native = build_once(args.rust_source, private_dir, out, env, native=True)
         validator = build_once(ROOT, private_dir, out, env, native=False)
+        try:
+            native = build_once(args.rust_source, private_dir, out, env, native=True)
+        except (subprocess.CalledProcessError, ValueError):
+            native = None
         toolchain = subprocess.check_output([env.get("RUSTC", "rustc"), "--version"], cwd=args.rust_source,
                                             env=env, text=True).split()[1]
-        results = record_attempts(args, out, inputs, env, native)
+        results, failures = record_attempts(args, out, inputs, env, native)
         if revisions != [revision(root, paths) for root, paths in tracked]:
             raise ValueError("source changed during recording")
-        repeatable = {role: results[f"{role}-1.json"] == results[f"{role}-2.json"]
+        repeatable = {role: f"{role}-1.json" in results and results[f"{role}-1.json"] == results.get(f"{role}-2.json")
                       for role in ("reference", "candidate")}
         receipt = {
-            "status": "incomplete" if all(repeatable.values()) else "unstable-diagnostics",
+            "status": "unstable-diagnostics" if not failures and not all(repeatable.values()) else "incomplete",
+            "recording_failures": failures,
             "repeatable": repeatable, "inputs": asdict(inputs), "observation_sha256": results,
             "bot_spawner_slot": args.bot_slot, "platform": [platform.system(), platform.machine()],
             "python_source_rev": revisions[0], "python_adapter_rev": revisions[1], "rust_source_rev": revisions[2],
-            "capture_source_rev": revisions[3], "native_test_sha256": file_digest(native).hex(), "validator_sha256": file_digest(validator).hex(),
+            "capture_source_rev": revisions[3], "native_test_sha256": file_digest(native).hex() if native is not None else None, "validator_sha256": file_digest(validator).hex(),
             "capture_sources_sha256": {p.name: file_digest(p).hex() for p in
                                        (Path(__file__), Path(__file__).with_name("golden_inputs.py"),
                                         Path(__file__).with_name("golden_reference.py"))},
@@ -152,6 +158,7 @@ def capture(args):
 
 def record_attempts(args, out, inputs, env, native):
     results = {}
+    failures = {}
     for attempt in (1, 2):
         for role in ("reference", "candidate"):
             run_env = env
@@ -162,17 +169,33 @@ def record_attempts(args, out, inputs, env, native):
                            "--private-output", result]
                 cwd, expected = args.python_source, 2
             else:
+                if native is None:
+                    failures[result.name] = "native-build-failed"
+                    continue
                 run_env = env | {"ORPHEUS_ROOM_OBSERVATION": str(result), "ORPHEUS_ROOM_BOT_SLOT": str(args.bot_slot)}
                 command = [native, NATIVE_TEST, "--ignored", "--exact"]
                 cwd, expected = args.rust_source, 0
             with (out / f"{role}-{attempt}.log").open("xb") as log:
-                proc = subprocess.run(command, check=False, cwd=cwd, env=run_env, stdout=log, stderr=subprocess.STDOUT)
-            if proc.returncode != expected or not result.is_file():
-                raise ValueError(f"{role} did not produce its diagnostic; see its private log")
+                try:
+                    code = subprocess.run(command, check=False, cwd=cwd, env=run_env,
+                                          stdout=log, stderr=subprocess.STDOUT).returncode
+                except OSError:
+                    code = None
             if ReplayInputs.read(args.runtime, args.schedule) != inputs:
                 raise ValueError("inputs changed during recording")
-            results[result.name] = validate_observation(result, inputs, args.bot_slot)
-    return results
+            if code != expected or not result.is_file():
+                failures[result.name] = "recorder-failed"
+                continue
+            try:
+                digest = validate_observation(result, inputs, args.bot_slot)
+            except (ValueError, KeyError, TypeError):
+                failures[result.name] = "invalid-observation"
+            else:
+                if digest is None:
+                    failures[result.name] = "unsupported-room" if role == "candidate" else "invalid-observation"
+                else:
+                    results[result.name] = digest
+    return results, failures
 
 
 def finish_receipt(out, validator, inputs, revisions, rust_toolchain, receipt):
