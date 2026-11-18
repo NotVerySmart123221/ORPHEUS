@@ -438,14 +438,22 @@ impl State {
                 let truncated = bots.len() > MAX_DEBUG_ACTORS;
                 let mut actors: Vec<_> = bots.take(MAX_DEBUG_ACTORS).collect();
                 actors.sort_unstable_by_key(|actor| actor.entity);
+                let simulation = world.scene.simulation();
+                let physics = simulation.debug_physics()?;
+                let navigation = simulation.debug_navigation()?;
+                let (scripts, scripts_truncated) = simulation.debug_scripts()?;
                 Ok(Some((
                     game_debug::Room {
                         id: format!("{:016X}{:016X}", id[0], id[1]),
                         map: format!("{:016X}", room.map.map_guid),
                         name: room.map.name.clone(),
                         actors,
-                        encounter: world.scene.simulation().encounter_debug(),
+                        encounter: simulation.encounter_debug(),
                         ai_generation: Some(world.patrol_generation),
+                        physics,
+                        navigation,
+                        scripts,
+                        scripts_truncated,
                     },
                     truncated,
                 )))

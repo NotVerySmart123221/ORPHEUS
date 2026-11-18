@@ -511,4 +511,163 @@ mod tests {
             assert!(!response.contains("private simulation error"));
         }
     }
+
+    #[test]
+    fn serves_physics_navigation_and_script_overlays_read_only() {
+        use crate::game_debug::{
+            Actor, ActorKind, DebugBotRoute, DebugContactNormal, DebugGroundProbe, DebugRay,
+            DebugSpawnCandidate, EntityScriptSnapshot, NavigationOverlay, NavigationTruncation,
+            PhysicsOverlay, PhysicsTruncation, Room, ScriptInstanceSummary, ScriptStateSummary,
+            ScriptVarSummary,
+        };
+
+        let http = DebugHttp::bind(0, fixture_geometry(), || {
+            Ok(Snapshot {
+                tick: 99,
+                rooms: vec![Room {
+                    id: "00000000000000050000000000000008".into(),
+                    map: "0800000000000688".into(),
+                    name: "Practice Range".into(),
+                    actors: vec![Actor {
+                        entity: 0xc000_1000,
+                        generation: None,
+                        kind: ActorKind::Bot,
+                        team: 1,
+                        position: [1.0, 0.0, 2.0],
+                        velocity: [0.0; 3],
+                        alive: true,
+                        health: Some(200.0),
+                        script_active: true,
+                        last_contact_clip: None,
+                    }],
+                    encounter: None,
+                    ai_generation: Some(1),
+                    physics: Some(PhysicsOverlay {
+                        rays: vec![DebugRay {
+                            tick: 99,
+                            source: 0xa000_0001,
+                            kind: "hitscan",
+                            origin: [0.0, 1.5, 0.0],
+                            end: [1.0, 1.5, 2.0],
+                            hit: "actor",
+                            target: Some(0xc000_1000),
+                            critical: true,
+                        }],
+                        contact_normals: vec![DebugContactNormal {
+                            tick: 99,
+                            entity: 0xa000_0001,
+                            point: [0.0, 0.0, 1.0],
+                            normal: [0.0, 0.0, -1.0],
+                        }],
+                        ground_probes: vec![DebugGroundProbe {
+                            tick: 99,
+                            entity: 0xa000_0001,
+                            origin: [0.0, 0.1, 0.0],
+                            hit: Some([0.0, 0.0, 0.0]),
+                            normal: Some([0.0, 1.0, 0.0]),
+                            grounded: true,
+                            non_ground_under: false,
+                        }],
+                        truncated: PhysicsTruncation::default(),
+                    }),
+                    navigation: Some(NavigationOverlay {
+                        routes: vec![DebugBotRoute {
+                            entity: 0xc000_1000,
+                            kind: "patrol",
+                            patrol_index: Some(0),
+                            waypoints: vec![[1.0, 0.0, 2.0], [4.0, 0.0, 2.0]],
+                            target: Some([4.0, 0.0, 2.0]),
+                            target_entity: None,
+                            path: Vec::new(),
+                            truncated: false,
+                        }],
+                        spawn_candidates: vec![DebugSpawnCandidate {
+                            tick: 99,
+                            instance: 2,
+                            state: 11,
+                            origin: [70.0, 12.0, -100.0],
+                            candidate: [72.0, 12.0, -98.0],
+                            accepted: true,
+                            landed: Some([72.0, 12.0, -98.0]),
+                        }],
+                        truncated: NavigationTruncation::default(),
+                    }),
+                    scripts: vec![EntityScriptSnapshot {
+                        entity: 0xa000_0001,
+                        kind: "player",
+                        now_ms: 1584,
+                        diagnostics: 0,
+                        instances: vec![ScriptInstanceSummary {
+                            id: 1,
+                            graph: "0x0043".into(),
+                            parent: None,
+                            active_states: vec![ScriptStateSummary {
+                                raw: 6,
+                                kind: "Ability",
+                                activation: 1,
+                                start_ms: 1500,
+                                flags: Some(7),
+                            }],
+                            states_truncated: false,
+                            variables: vec![ScriptVarSummary {
+                                id: 61,
+                                value: "1.000".into(),
+                                resolved: true,
+                            }],
+                            variables_truncated: false,
+                        }],
+                        instances_truncated: false,
+                        variables: Vec::new(),
+                        variables_truncated: false,
+                    }],
+                    scripts_truncated: true,
+                }],
+                truncated: false,
+                timing: None,
+                ai_policy: None,
+                faults: Vec::new(),
+            })
+        })
+        .unwrap();
+        let addr = http.addr();
+
+        let index = request(addr, &format!("GET / HTTP/1.1\r\nHost: {addr}\r\n\r\n"));
+        assert!(index.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(index.contains("id=\"physics\""));
+        assert!(index.contains("id=\"navigation\""));
+        assert!(index.contains("id=\"vm-panel\""));
+
+        let js = request(
+            addr,
+            &format!("GET /debug.js HTTP/1.1\r\nHost: {addr}\r\n\r\n"),
+        );
+        assert!(js.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(js.contains("renderScripts"));
+        assert!(js.contains("drawPhysicsOverlay"));
+
+        let state_res = request(
+            addr,
+            &format!("GET /api/debug/v1/state HTTP/1.1\r\nHost: {addr}\r\n\r\n"),
+        );
+        assert!(state_res.starts_with("HTTP/1.1 200 OK\r\n"));
+        let (_, body) = state_res.split_once("\r\n\r\n").unwrap();
+        let state_json: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(state_json["rooms"][0]["physics"]["rays"][0]["hit"], "actor");
+        assert_eq!(
+            state_json["rooms"][0]["navigation"]["spawn_candidates"][0]["accepted"],
+            true
+        );
+        assert_eq!(
+            state_json["rooms"][0]["scripts"][0]["instances"][0]["active_states"][0]["flags"],
+            7
+        );
+        assert_eq!(state_json["rooms"][0]["scripts_truncated"], true);
+
+        let denied = request(
+            addr,
+            &format!("POST /api/debug/v1/state HTTP/1.1\r\nHost: {addr}\r\n\r\n"),
+        );
+        assert!(denied.starts_with("HTTP/1.1 405 Method Not Allowed\r\n"));
+        assert!(denied.contains("Allow: GET\r\n"));
+    }
 }

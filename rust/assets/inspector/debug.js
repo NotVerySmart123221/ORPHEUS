@@ -9,7 +9,8 @@ const sampleActor = byId("sample-actor");
 const sampleSpawn = byId("sample-spawn");
 const samplePoint = byId("sample-point");
 const connection = byId("connection");
-const layers = ["triangles", "proxies", "actors"].map(byId);
+const layers = ["triangles", "proxies", "actors", "physics", "navigation"].map(byId);
+const vmEntitySelect = byId("vm-entity");
 const views = [
   { canvas: byId("top"), vertical: 2, up: false },
   { canvas: byId("side"), vertical: 1, up: true },
@@ -30,6 +31,7 @@ let snapshot;
 let geometry;
 let roomOptions = "";
 let actorOptions = "";
+let vmEntityOptions = "";
 let geometryLoading = false;
 let geometryMessage = "";
 
@@ -171,13 +173,117 @@ function render() {
     info.textContent = geometry ? "No collision sample for this room's map." : "Collision sample unavailable.";
   }
 
+  setText(byId("overlay-info"), formatOverlaySummary(room));
   renderGeometryControls(geometry && !sample ? [] : actors);
   renderTiming(snapshot?.timing);
   renderFaults(snapshot?.faults);
   renderActors(actors);
+  renderScripts(room);
   for (const view of views) {
-    renderView(view, sample, actors);
+    renderView(view, sample, room);
   }
+}
+
+function formatOverlaySummary(room) {
+  if (!room) return "";
+  const parts = [];
+  if (room.physics) {
+    const p = room.physics;
+    const t = [];
+    if (p.truncated?.rays) t.push("rays");
+    if (p.truncated?.contact_normals) t.push("normals");
+    if (p.truncated?.ground_probes) t.push("probes");
+    parts.push(
+      p.rays.length + " rays, " + p.contact_normals.length + " normals, "
+      + p.ground_probes.length + " ground probes" + (t.length ? " (capped " + t.join(", ") + ")" : "")
+    );
+  }
+  if (room.navigation) {
+    const n = room.navigation;
+    const t = [];
+    if (n.truncated?.routes) t.push("routes");
+    if (n.truncated?.spawn_candidates) t.push("spawns");
+    parts.push(
+      n.routes.length + " AI routes, " + n.spawn_candidates.length + " spawn candidates"
+      + (t.length ? " (capped " + t.join(", ") + ")" : "")
+    );
+  }
+  return parts.join(" · ");
+}
+
+function formatVarList(vars, truncated) {
+  if (!vars || vars.length === 0) return truncated ? "(capped)" : "—";
+  const text = vars.map((entry) => entry.id + (entry.resolved ? "*=" : "=") + entry.value).join(", ");
+  return truncated ? text + " · (capped)" : text;
+}
+
+function renderScripts(room) {
+  const panel = byId("vm-panel");
+  const scripts = room?.scripts ?? [];
+  panel.hidden = scripts.length === 0;
+  setText(byId("vm-count"), scripts.length
+    ? String(scripts.length) + (room?.scripts_truncated ? " (capped)" : "")
+    : "");
+  if (scripts.length === 0) {
+    vmEntityOptions = "";
+    vmEntitySelect.replaceChildren();
+    vmEntitySelect.disabled = true;
+    setText(byId("vm-meta"), "");
+    setText(byId("vm-entity-vars"), "");
+    byId("vm-rows").replaceChildren();
+    return;
+  }
+
+  const keyOf = (entry) => entry.entity + ":" + entry.kind;
+  const options = JSON.stringify(scripts.map((entry) => [entry.entity, entry.kind]));
+  if (options !== vmEntityOptions) {
+    const previous = vmEntitySelect.value;
+    vmEntitySelect.replaceChildren();
+    for (const entry of scripts) {
+      vmEntitySelect.add(new Option(entry.entity + " · " + entry.kind, keyOf(entry)));
+    }
+    if (scripts.some((entry) => keyOf(entry) === previous)) {
+      vmEntitySelect.value = previous;
+    }
+    vmEntityOptions = options;
+  }
+  vmEntitySelect.disabled = false;
+
+  const selected = scripts.find((entry) => keyOf(entry) === vmEntitySelect.value) ?? scripts[0];
+  setText(
+    byId("vm-meta"),
+    "now " + selected.now_ms + " ms · " + selected.diagnostics + " diagnostics"
+      + (selected.instances_truncated ? " · instances capped" : ""),
+  );
+  setText(
+    byId("vm-entity-vars"),
+    "Entity vars: " + formatVarList(selected.variables, selected.variables_truncated),
+  );
+
+  const rows = document.createDocumentFragment();
+  if (selected.instances.length === 0) {
+    const cell = rows.appendChild(document.createElement("tr")).insertCell();
+    cell.colSpan = 5;
+    cell.className = "empty";
+    cell.textContent = "No script instances.";
+  }
+  for (const instance of selected.instances) {
+    const row = rows.appendChild(document.createElement("tr"));
+    const parent = instance.parent ? instance.parent[0] + ":" + instance.parent[1] : "—";
+    const states = instance.active_states.map((state) => {
+      const base = state.raw + ":" + state.kind + "#" + state.activation;
+      return state.flags != null ? base + "[f=" + state.flags + "]" : base;
+    });
+    const statesText = (states.length ? states.join(", ") : "—")
+      + (instance.states_truncated ? " · (capped)" : "");
+    const varsText = formatVarList(instance.variables, instance.variables_truncated);
+    for (const value of [instance.id, instance.graph, parent, statesText, varsText]) {
+      const cell = row.insertCell();
+      cell.textContent = String(value);
+      cell.className = "coordinates";
+    }
+  }
+  byId("vm-rows").replaceChildren(rows);
 }
 
 function renderActors(actors) {
@@ -230,7 +336,7 @@ function actorBounds(actors) {
   return { min, max };
 }
 
-function renderView({ canvas, vertical, up }, sample, actors) {
+function renderView({ canvas, vertical, up }, sample, room) {
   const { clientWidth: width, clientHeight: height } = canvas;
   if (width === 0 || height === 0) {
     return;
@@ -243,6 +349,7 @@ function renderView({ canvas, vertical, up }, sample, actors) {
     canvas.height = rasterHeight;
   }
 
+  const actors = room?.actors ?? [];
   const ctx = canvas.getContext("2d");
   ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
   ctx.clearRect(0, 0, width, height);
@@ -259,6 +366,7 @@ function renderView({ canvas, vertical, up }, sample, actors) {
   const x = (value) => width / 2 + (value - centerX) * scale;
   const y = (value) => height / 2 + (value - centerV) * scale * (up ? -1 : 1);
   const project = (point) => [x(point[0]), y(point[vertical])];
+  const finitePoint = (point) => Array.isArray(point) && point.length === 3 && point.every(Number.isFinite);
 
   drawGrid(ctx, { min, max, vertical, scale, x, y });
   if (sample && layers[0].checked) {
@@ -284,6 +392,12 @@ function renderView({ canvas, vertical, up }, sample, actors) {
     }
     ctx.setLineDash([]);
   }
+  if (room?.navigation && layers[4].checked) {
+    drawNavigationOverlay(ctx, project, room.navigation);
+  }
+  if (room?.physics && layers[3].checked) {
+    drawPhysicsOverlay(ctx, project, room.physics);
+  }
   if (layers[2].checked) {
     ctx.font = "12px monospace";
     for (const actor of positionedActors) {
@@ -299,6 +413,178 @@ function renderView({ canvas, vertical, up }, sample, actors) {
         ctx.stroke();
       }
       ctx.fillText(String(actor.entity), left + 7, top - 6);
+    }
+  }
+
+  function drawPhysicsOverlay(ctx, project, physics) {
+    for (const probe of physics.ground_probes ?? []) {
+      if (!finitePoint(probe.origin)) continue;
+      const [ox, oy] = project(probe.origin);
+      const tint = color(probe.grounded ? "probe-hit" : "probe-miss");
+      ctx.strokeStyle = tint;
+      ctx.fillStyle = tint;
+      if (finitePoint(probe.hit)) {
+        const [hx, hy] = project(probe.hit);
+        ctx.beginPath();
+        ctx.moveTo(ox, oy);
+        ctx.lineTo(hx, hy);
+        ctx.stroke();
+        if (finitePoint(probe.normal)) {
+          const tip = probe.hit.map((v, i) => v + probe.normal[i] * 0.6);
+          ctx.beginPath();
+          ctx.moveTo(hx, hy);
+          ctx.lineTo(...project(tip));
+          ctx.stroke();
+        }
+        ctx.beginPath();
+        ctx.arc(hx, hy, 2.5, 0, 2 * Math.PI);
+        ctx.fill();
+      } else {
+        ctx.beginPath();
+        ctx.arc(ox, oy, 2.5, 0, 2 * Math.PI);
+        ctx.stroke();
+      }
+    }
+
+    ctx.strokeStyle = color("normal");
+    ctx.fillStyle = color("normal");
+    for (const contact of physics.contact_normals ?? []) {
+      if (!finitePoint(contact.point) || !finitePoint(contact.normal)) continue;
+      const tip = contact.point.map((v, i) => v + contact.normal[i] * 0.8);
+      const [px, py] = project(contact.point);
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      ctx.lineTo(...project(tip));
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(px, py, 2, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+
+    for (const ray of physics.rays ?? []) {
+      if (!finitePoint(ray.origin) || !finitePoint(ray.end)) continue;
+      const tint = color(ray.hit === "actor" ? "ray-hit" : ray.hit === "world" ? "ray-world" : "ray-miss");
+      ctx.strokeStyle = tint;
+      ctx.fillStyle = tint;
+      ctx.setLineDash(ray.hit === "none" ? [4, 3] : []);
+      const [sx, sy] = project(ray.origin);
+      const [ex, ey] = project(ray.end);
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(ex, ey, 2.5, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+    ctx.setLineDash([]);
+  }
+
+  function drawNavigationOverlay(ctx, project, navigation) {
+    const actorByEntity = new Map(actors.map((actor) => [actor.entity, actor]));
+    for (const route of navigation.routes ?? []) {
+      if (route.waypoints?.length) {
+        ctx.strokeStyle = color("route");
+        ctx.fillStyle = color("route");
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath();
+        let started = false;
+        let firstFinite = null;
+        let finiteCount = 0;
+        for (const pt of route.waypoints) {
+          if (!finitePoint(pt)) continue;
+          const [px, py] = project(pt);
+          if (!started) {
+            ctx.moveTo(px, py);
+            firstFinite = pt;
+            started = true;
+          } else {
+            ctx.lineTo(px, py);
+          }
+          finiteCount += 1;
+        }
+        if (finiteCount > 2 && firstFinite) {
+          ctx.closePath();
+        }
+        if (started) {
+          ctx.stroke();
+        }
+        ctx.setLineDash([]);
+        for (const pt of route.waypoints) {
+          if (!finitePoint(pt)) continue;
+          const [px, py] = project(pt);
+          ctx.fillRect(px - 2, py - 2, 4, 4);
+        }
+      }
+      const actorPos = actorByEntity.get(route.entity)?.position;
+      const linePoints = [];
+      if (finitePoint(actorPos)) {
+        linePoints.push(actorPos);
+      }
+      for (const pt of route.path ?? []) {
+        if (finitePoint(pt)) {
+          linePoints.push(pt);
+        }
+      }
+      if (finitePoint(route.target)) {
+        linePoints.push(route.target);
+      }
+      if (linePoints.length >= 2) {
+        ctx.strokeStyle = color("path");
+        ctx.beginPath();
+        let started = false;
+        for (const pt of linePoints) {
+          const [px, py] = project(pt);
+          if (!started) {
+            ctx.moveTo(px, py);
+            started = true;
+          } else {
+            ctx.lineTo(px, py);
+          }
+        }
+        if (started) {
+          ctx.stroke();
+        }
+      }
+      if (finitePoint(route.target)) {
+        const [tx, ty] = project(route.target);
+        ctx.strokeStyle = color("path");
+        ctx.beginPath();
+        ctx.moveTo(tx, ty - 4);
+        ctx.lineTo(tx + 4, ty);
+        ctx.lineTo(tx, ty + 4);
+        ctx.lineTo(tx - 4, ty);
+        ctx.closePath();
+        ctx.stroke();
+      }
+    }
+
+    for (const cand of navigation.spawn_candidates ?? []) {
+      if (!finitePoint(cand.origin) || !finitePoint(cand.candidate)) continue;
+      const tint = color(cand.accepted ? "spawn-ok" : "spawn-no");
+      const end = finitePoint(cand.landed) ? cand.landed : cand.candidate;
+      const [ox, oy] = project(cand.origin);
+      const [cx, cy] = project(end);
+      ctx.strokeStyle = tint;
+      ctx.fillStyle = tint;
+      ctx.globalAlpha = .7;
+      ctx.beginPath();
+      ctx.moveTo(ox, oy);
+      ctx.lineTo(cx, cy);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      if (cand.accepted) {
+        ctx.beginPath();
+        ctx.arc(cx, cy, 2.5, 0, 2 * Math.PI);
+        ctx.fill();
+      } else {
+        ctx.beginPath();
+        ctx.moveTo(cx - 3, cy - 3);
+        ctx.lineTo(cx + 3, cy + 3);
+        ctx.moveTo(cx + 3, cy - 3);
+        ctx.lineTo(cx - 3, cy + 3);
+        ctx.stroke();
+      }
     }
   }
 }
@@ -390,13 +676,14 @@ sampleActor.addEventListener("click", () => {
 });
 sampleSpawn.addEventListener("click", () => void loadGeometry("geometry", true));
 roomSelect.addEventListener("change", render);
+vmEntitySelect.addEventListener("change", render);
 for (const layer of layers) {
   layer.addEventListener("change", render);
 }
 const resize = new ResizeObserver(() => {
   const room = selectedRoom();
   for (const view of views) {
-    renderView(view, matchingGeometry(room), room?.actors ?? []);
+    renderView(view, matchingGeometry(room), room);
   }
 });
 for (const { canvas } of views) {

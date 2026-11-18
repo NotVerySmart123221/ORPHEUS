@@ -1697,3 +1697,381 @@ fn normal_common_enemy_death_updates_authored_team_score() {
 fn normal_encounter_first_reaper_finishes_intro_and_pursues_live_defender() {
     junkenstein::normal_encounter_first_reaper_finishes_intro_and_pursues_live_defender();
 }
+
+#[test]
+fn debug_physics_records_hitscan_rays_and_enforces_ring_cap() {
+    use crate::{
+        collision_cache::{CollisionCache, Mesh, Triangle},
+        collision_scene::CollisionScene,
+        game_debug::MAX_DEBUG_RAYS,
+        mover_settings::MoverCatalog,
+    };
+
+    let cache = CollisionCache {
+        header: serde_json::from_str(
+            r#"{"meshes":[[4,2]],"hulls":0,"models":0,"placements":0,"identifiers":[]}"#,
+        )
+        .unwrap(),
+        meshes: vec![Mesh {
+            vertices: vec![
+                [10.0, -2.0, -5.0],
+                [10.0, 5.0, -5.0],
+                [10.0, 5.0, 5.0],
+                [10.0, -2.0, 5.0],
+            ],
+            triangles: vec![
+                Triangle {
+                    corners: [0, 1, 2],
+                    wings: [-1; 3],
+                    mask: 0x18,
+                    surface: 0,
+                },
+                Triangle {
+                    corners: [0, 2, 3],
+                    wings: [-1; 3],
+                    mask: 0x18,
+                    surface: 0,
+                },
+            ],
+        }],
+        hulls: vec![],
+        models: vec![],
+        placements: vec![],
+    };
+    let ground = CollisionScene::movement_probe(&cache, &Default::default()).unwrap();
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, &ground, None);
+
+    let bots = fixture_bots();
+    let target = bots[0].entity;
+    let mut room = RoomSimulation::new(bots).unwrap();
+    assert!(room.debug_physics().unwrap().is_none());
+
+    let make_shot = |tick: u32, origin: [f64; 3], direction: [f64; 3], reach: f64| PosedHitscan {
+        source: 0xa000_0101,
+        origin,
+        direction,
+        command: Command {
+            frame: tick,
+            ..Command::default()
+        },
+        shot_frame: tick,
+        reach,
+        hit: HitDefinition {
+            tags: crate::game_hitscan::DamageTags::EMPTY,
+            amount: 20.0,
+            loadout: None,
+            critical: 2.0,
+            falloff: None,
+        },
+    };
+
+    // 1) Hit bot target at (1, 0, 0).
+    let ctx = ShotContext {
+        team: 0,
+        quanta: RETAIL_QUANTA,
+        tick: 10,
+        now: Duration::from_secs(1),
+    };
+    assert!(
+        room.hitscan(
+            &queries,
+            make_shot(10, [0.0, 1.0, 0.0], [1.0, 0.0, 0.0], 50.0),
+            ctx,
+            |_| true
+        )
+        .unwrap()
+        .is_some()
+    );
+    // 2) Miss bots and hit wall at X = 10.
+    let ctx_wall = ShotContext { tick: 11, ..ctx };
+    assert!(
+        room.hitscan(
+            &queries,
+            make_shot(11, [0.0, 1.0, 3.0], [1.0, 0.0, 0.0], 50.0),
+            ctx_wall,
+            |_| true,
+        )
+        .unwrap()
+        .is_none()
+    );
+    // 3) Miss bots and walls cleanly (-X).
+    let ctx_miss = ShotContext { tick: 12, ..ctx };
+    assert!(
+        room.hitscan(
+            &queries,
+            make_shot(12, [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], 25.0),
+            ctx_miss,
+            |_| true,
+        )
+        .unwrap()
+        .is_none()
+    );
+
+    let overlay = room.debug_physics().unwrap().unwrap();
+    assert!(!overlay.truncated.rays);
+    assert_eq!(overlay.rays.len(), 3);
+    assert_eq!(overlay.rays[0].hit, "actor");
+    assert_eq!(overlay.rays[0].target, Some(target));
+    assert_eq!(overlay.rays[1].hit, "world");
+    assert!((overlay.rays[1].end[0] - 10.0).abs() < 1e-6);
+    assert_eq!(overlay.rays[2].hit, "none");
+    assert_eq!(overlay.rays[2].end, [-25.0, 1.0, 0.0]);
+
+    // Overflow ring buffer and assert truncation flag + newest ticks retained.
+    for i in 0..(MAX_DEBUG_RAYS + 5) {
+        let tick = 100 + i as u32;
+        let _ = room
+            .hitscan(
+                &queries,
+                make_shot(tick, [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], 10.0),
+                ShotContext { tick, ..ctx },
+                |_| true,
+            )
+            .unwrap();
+    }
+    let capped = room.debug_physics().unwrap().unwrap();
+    assert!(capped.truncated.rays);
+    assert_eq!(capped.rays.len(), MAX_DEBUG_RAYS);
+    assert_eq!(
+        capped.rays.last().unwrap().tick,
+        100 + (MAX_DEBUG_RAYS as u32 + 4)
+    );
+}
+
+#[test]
+fn debug_navigation_reports_patrol_routes_and_caps_waypoints() {
+    use crate::game_debug::MAX_DEBUG_ROUTE_WAYPOINTS;
+
+    let mut hints = serde_json::Map::new();
+    let mut keys = Vec::new();
+    for i in 0..40 {
+        let name = format!("h{i}");
+        hints.insert(
+            name.clone(),
+            serde_json::json!([f64::from(i) * 2.0, 0.0, 0.0]),
+        );
+        keys.push(serde_json::Value::String(name));
+    }
+    let catalog_json = serde_json::json!({
+        "heroes": {"0x01": {"name": "Patrol bot", "body": "0x02", "health": 100}},
+        "maps": {"0x03": {
+            "hints": hints,
+            "spawners": [{
+                "hero": "0x01",
+                "team": 1,
+                "position": [0.0, 0.0, 0.0],
+                "rotation": [0.0, 0.0, 0.0, 1.0],
+                "graphs": ["0x0580000000000B8E"],
+                "vars": {"0x0D80000000001B23": keys}
+            }]
+        }}
+    });
+    let mut bots = crate::game_bots::BotCatalog::from_json(&catalog_json.to_string())
+        .unwrap()
+        .make(3, |_| {
+            crate::game_bots::BotWalk::from_mover(4.5, 10.0, 10.0)
+        });
+    let patrol = crate::patrol_script::PatrolScript::load().unwrap();
+    for tick in 1..=200 {
+        bots[0].step(tick, &patrol, |_, _, _, _| Some(0.0)).unwrap();
+    }
+    let room = RoomSimulation::new(bots).unwrap();
+    let nav = room.debug_navigation().unwrap().unwrap();
+    assert!(!nav.truncated.routes);
+    assert_eq!(nav.routes.len(), 1);
+    let route = &nav.routes[0];
+    assert_eq!(route.kind, "patrol");
+    assert_eq!(route.waypoints.len(), MAX_DEBUG_ROUTE_WAYPOINTS);
+    assert!(route.truncated);
+    assert!(route.target.is_some());
+}
+
+#[test]
+fn debug_scripts_is_read_only_and_enforces_summary_caps() {
+    use indexmap::IndexMap;
+
+    use crate::{
+        game_debug::{MAX_DEBUG_VM_STATES, MAX_DEBUG_VM_VARS, summarize_script_snapshot},
+        script_enemy::{EnemySpawn, fixture},
+        script_graph::GraphStore,
+        script_init::{Component, EmptyWorld, Root, Snapshot, State, StateKind},
+        script_wire::{Value, Variables},
+    };
+
+    // Part 1: RoomSimulation::debug_scripts reads live enemy scripts without mutating VM state.
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    let (graphs, codecs, definition, request) = fixture(false);
+    let entity = room
+        .create_enemy(EnemySpawn {
+            graphs,
+            codecs,
+            definition: &definition,
+            request: &request,
+            mode: 0x0230_0000_0000_019f,
+            mode_variables: Arc::new(Variables::new()),
+            tick: 1000,
+            walk: crate::game_bots::BotWalk::default(),
+            gate: None,
+        })
+        .unwrap();
+    let before_body = state(&room, entity)
+        .unwrap()
+        .enemy
+        .as_ref()
+        .unwrap()
+        .scripts
+        .body
+        .snapshot()
+        .unwrap()
+        .clone();
+    let (first, truncated) = room.debug_scripts().unwrap();
+    let (second, truncated_again) = room.debug_scripts().unwrap();
+    assert!(!truncated);
+    assert!(!truncated_again);
+    assert!(
+        first
+            .iter()
+            .any(|entry| entry.entity == entity && entry.kind == "enemy_body")
+    );
+    assert!(
+        first
+            .iter()
+            .any(|entry| entry.entity == entity + 1 && entry.kind == "enemy_controller")
+    );
+    assert_eq!(
+        serde_json::to_value(&first).unwrap(),
+        serde_json::to_value(&second).unwrap()
+    );
+    let after_body = state(&room, entity)
+        .unwrap()
+        .enemy
+        .as_ref()
+        .unwrap()
+        .scripts
+        .body
+        .snapshot()
+        .unwrap();
+    assert_eq!(before_body.now_ms, after_body.now_ms);
+    assert_eq!(before_body.variables, after_body.variables);
+    assert_eq!(before_body.instances.len(), after_body.instances.len());
+
+    // Part 2: summarize_script_snapshot omits dormant states, preserves flags/resolved bindings,
+    // and enforces state/variable/string caps.
+    let graph_payload = serde_json::to_vec(&serde_json::json!({
+        "version": 1,
+        "graphs": [{
+            "index": 0x0043,
+            "items": 2,
+            "nodes": [
+                {
+                    "pos": 0,
+                    "class": "STUStatescriptEntry",
+                    "uid": 0,
+                    "rid": 0,
+                    "remote": -1,
+                    "state": null,
+                    "client_only": false,
+                    "server_only": false,
+                    "fields": {
+                        "m_2BBEEAB8": false,
+                        "m_ADEB6E05": false,
+                        "m_outPlug": {
+                            "$": "Plug",
+                            "links": [[1, "m_beginPlug"]],
+                            "m_FF3DAF1E": [0]
+                        }
+                    }
+                },
+                {
+                    "pos": 1,
+                    "class": "STUStatescriptState",
+                    "uid": 1,
+                    "rid": 1,
+                    "remote": -1,
+                    "state": 0,
+                    "client_only": false,
+                    "server_only": false,
+                    "fields": {
+                        "m_2BBEEAB8": true,
+                        "m_ADEB6E05": false
+                    }
+                }
+            ],
+            "states": [1],
+            "entries": [0],
+            "remote": [],
+            "sync_vars": [],
+            "containers": {},
+            "unknown_nodes": [],
+            "fields": {},
+            "header": {
+                "m_nodesBitCount": 4,
+                "m_statesBitCount": 4,
+                "m_remoteSyncNodesBitCount": 4,
+                "m_syncVarsBitCount": 4
+            }
+        }],
+        "bodies": {},
+        "missing": []
+    }))
+    .unwrap();
+    let graphs = Arc::new(GraphStore::from_json(&graph_payload).unwrap());
+    let mut empty_world = EmptyWorld;
+    let component = Component::start(
+        graphs,
+        0xa000_0001,
+        Variables::new(),
+        vec![Root::new(1, 0x0043)],
+        0,
+        &mut empty_world,
+        10_000,
+    )
+    .unwrap();
+    let mut synthetic: Snapshot = component.snapshot().unwrap().clone();
+    synthetic.now_ms = 480;
+    for var_id in 1..=(MAX_DEBUG_VM_VARS as u32 + 5) {
+        synthetic
+            .variables
+            .insert(var_id, Value::Integer(i64::from(var_id)));
+    }
+    synthetic.variables.insert(2, Value::String("ä".repeat(80)));
+    synthetic
+        .resolved_bindings
+        .insert((0, 1), Value::Integer(999));
+
+    let template_inst = synthetic.instances.get(&1).unwrap().clone();
+    let template_state: State = template_inst.states.get(&0).unwrap().clone();
+    let mut states = IndexMap::new();
+    for raw in 0..u16::try_from(MAX_DEBUG_VM_STATES + 4).unwrap() {
+        let mut s = template_state.clone();
+        s.active = raw != 1;
+        s.activation = raw + 1;
+        s.start_ms = u64::from(raw) * 16;
+        s.kind = if raw == 0 {
+            StateKind::Ability { flags: 7 }
+        } else {
+            StateKind::Plain
+        };
+        states.insert(raw, s);
+    }
+    let mut inst = template_inst;
+    inst.parent = Some((0, 2));
+    inst.states = states;
+    synthetic.instances.insert(1, inst);
+
+    let summary = summarize_script_snapshot(synthetic.entity, "player", &synthetic);
+    assert_eq!(summary.now_ms, 480);
+    assert!(summary.variables_truncated);
+    assert_eq!(summary.variables.len(), MAX_DEBUG_VM_VARS);
+    assert!(summary.variables[0].resolved);
+    assert_eq!(summary.variables[0].value, "999");
+    assert!(summary.variables[1].value.ends_with("..."));
+    assert_eq!(summary.variables[1].value.chars().count(), 67);
+    let inst_summary = &summary.instances[0];
+    assert!(inst_summary.states_truncated);
+    assert_eq!(inst_summary.active_states.len(), MAX_DEBUG_VM_STATES);
+    assert_eq!(inst_summary.active_states[0].kind, "Ability");
+    assert_eq!(inst_summary.active_states[0].flags, Some(7));
+    assert!(inst_summary.active_states.iter().all(|s| s.raw != 1));
+}

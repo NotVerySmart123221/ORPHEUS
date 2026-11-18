@@ -260,6 +260,8 @@ struct PatrolCollision {
 #[derive(Debug, Default)]
 struct PatrolTrace {
     last_clip: Option<ContactClip>,
+    #[cfg(any(test, feature = "inspector"))]
+    last_normals: Vec<crate::game_debug::DebugContactNormal>,
 }
 
 impl PatrolCollision {
@@ -302,12 +304,38 @@ impl PatrolCollision {
             self.body.move_capsule(delta, dt as f32)
         };
         let after = match movement {
-            Ok(moved) if moved.position == add(start, delta) => to,
             Ok(moved) => {
-                let [x, y, z] = moved.position.map(f64::from);
-                [x, y - f64::from(self.lift), z]
+                let after = if moved.position == add(start, delta) {
+                    to
+                } else {
+                    let [x, y, z] = moved.position.map(f64::from);
+                    [x, y - f64::from(self.lift), z]
+                };
+                #[cfg(any(test, feature = "inspector"))]
+                if let Some(trace) = &mut self.trace {
+                    trace.last_normals.clear();
+                    trace.last_normals.extend(
+                        moved
+                            .planes
+                            .iter()
+                            .take(crate::game_debug::MAX_DEBUG_MOVER_NORMALS)
+                            .map(|plane| crate::game_debug::DebugContactNormal {
+                                tick,
+                                entity: 0,
+                                point: after,
+                                normal: plane.normal.map(f64::from),
+                            }),
+                    );
+                }
+                after
             }
-            Err(_) => return from,
+            Err(_) => {
+                #[cfg(any(test, feature = "inspector"))]
+                if let Some(trace) = &mut self.trace {
+                    trace.last_normals.clear();
+                }
+                return from;
+            }
         };
         if let (Some(trace), Some(clip)) = (&mut self.trace, clip) {
             trace.last_clip = Some(ContactClip {
@@ -462,6 +490,56 @@ impl Bot {
     #[cfg(any(test, feature = "inspector"))]
     pub(crate) fn last_contact_clip(&self) -> Option<ContactClip> {
         self.collision.as_ref()?.trace.as_ref()?.last_clip
+    }
+
+    #[cfg(any(test, feature = "inspector"))]
+    pub(crate) fn debug_contact_normals(&self) -> Vec<crate::game_debug::DebugContactNormal> {
+        let Some(trace) = self
+            .collision
+            .as_ref()
+            .and_then(|collision| collision.trace.as_ref())
+        else {
+            return Vec::new();
+        };
+        trace
+            .last_normals
+            .iter()
+            .copied()
+            .map(|mut contact| {
+                contact.entity = self.entity;
+                contact
+            })
+            .collect()
+    }
+
+    #[cfg(any(test, feature = "inspector"))]
+    pub(crate) fn debug_route(&self) -> Option<crate::game_debug::DebugBotRoute> {
+        if self.spawn.route.is_empty() && self.target.is_none() && self.waypoints.is_empty() {
+            return None;
+        }
+        let truncated = self.spawn.route.len() > crate::game_debug::MAX_DEBUG_ROUTE_WAYPOINTS
+            || self.waypoints.len() > crate::game_debug::MAX_DEBUG_ROUTE_WAYPOINTS;
+        Some(crate::game_debug::DebugBotRoute {
+            entity: self.entity,
+            kind: "patrol",
+            patrol_index: (!self.spawn.route.is_empty()).then_some(self.index),
+            waypoints: self
+                .spawn
+                .route
+                .iter()
+                .copied()
+                .take(crate::game_debug::MAX_DEBUG_ROUTE_WAYPOINTS)
+                .collect(),
+            target: self.target,
+            target_entity: None,
+            path: self
+                .waypoints
+                .iter()
+                .copied()
+                .take(crate::game_debug::MAX_DEBUG_ROUTE_WAYPOINTS)
+                .collect(),
+            truncated,
+        })
     }
 
     fn detour(
@@ -1325,6 +1403,7 @@ mod tests {
         traced.enable_contact_trace();
         allowed.enable_contact_trace();
         let mut observed_block = false;
+        let mut observed_normal = false;
         for tick in 1..=295 {
             let before = traced.position;
             for bot in [&mut blocked, &mut traced, &mut allowed] {
@@ -1338,10 +1417,17 @@ mod tests {
                 assert_eq!(clip.before, before);
                 assert_eq!(clip.after, traced.position);
                 observed_block |= clip.after[2] < clip.intended[2];
+                let normals = traced.debug_contact_normals();
+                observed_normal |= normals
+                    .iter()
+                    .any(|normal| normal.entity == traced.entity && normal.normal[2] < -0.5);
             }
         }
         assert!(observed_block, "no clipped approach to the synthetic wall");
+        assert!(observed_normal, "expected traced patrol contact normal");
+        assert!(traced.debug_route().is_some());
         assert!(blocked.last_contact_clip().is_none());
+        assert!(blocked.debug_contact_normals().is_empty());
         assert!(allowed.last_contact_clip().is_none());
         assert!(
             traced

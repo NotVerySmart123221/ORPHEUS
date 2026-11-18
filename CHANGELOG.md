@@ -6,6 +6,14 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-18
 
+#### Add bounded read-only physics, navigation, and VM overlays to inspector (#62)
+
+- Extended `--features inspector` (`rust/src/game_debug.rs`, `rust/src/game_combat.rs`, `rust/src/mover.rs`, `rust/src/game_bots.rs`, `rust/src/junkenstein_spawn.rs`, `rust/src/junkenstein_navigation.rs`, `rust/src/game_service/state.rs`, and `rust/assets/inspector/`) with bounded, read-only room overlays while keeping `rust/src/debug_http.rs` strictly `GET`-only and default non-inspector production builds free of overlay buffers:
+  - **Physics overlay:** bounded `MAX_DEBUG_RAYS` (`64`) ring buffer of player and enemy hitscan rays (`actor` / `world` / `none`), capped `ContactWorld` contact normals from `Mover` (`MAX_DEBUG_MOVER_NORMALS = 8`) and traced `Bot` sweeps, and `mover_ground` probe hits/normals (`MAX_DEBUG_GROUND_PROBES = 64`).
+  - **AI navigation overlay:** patrol waypoint loops and detour paths (`MAX_DEBUG_ROUTE_WAYPOINTS = 32`), Junkenstein `GateApproach` / `BossPursuit` target paths (`MAX_DEBUG_ROUTES = 64`), and `SpawnSearches` accepted/rejected candidates (`MAX_DEBUG_SPAWN_CANDIDATES = 64`) with explicit truncation flags.
+  - **Read-only StateScript VM panel:** capped per-entity snapshots (`player`, `enemy_body`, `enemy_controller`, `encounter`, `gate`) showing `now_ms`, diagnostics count, instances (`MAX_DEBUG_VM_INSTANCES = 32`), active state kinds/activations/ability flags (`MAX_DEBUG_VM_STATES = 64`), and resolved/base variables (`MAX_DEBUG_VM_VARS = 32`) without mutating VM state.
+- Added unit tests covering `Mover` probes/normals, `SpawnSearches` candidates/caps, hitscan ray recording/caps, patrol route truncation, non-mutating StateScript summarization/UTF-8 bounds, and loopback HTTP serialization/method enforcement.
+
 #### Support Quick Melee (`0x0043`) on live owner bodies (#121)
 
 - Admitted the remaining `0x0043` Quick Melee nodes in `orpheus-statescript` (`STU_CEBDAF17` self-target stat actions, `STUStatescriptStateTrackTargets` `(0x0043, 11)` as `StateKind::EmptyTargets`, and `0x0043` `STU_23A00A53`, `STUStatescriptStateModifyHealth`, `STU_B5C87F3D`, `STU_54FEB21C`, `STU_77E13026`, `STU_0A6BE10E`, and `STUStatescriptStatePhysicsExplosion` states as `StateKind::Plain`), and projected `(StateKind::Plain, Some("hits"))` in `script_snapshot_wire` for `STU_77E13026` (`state 24`).

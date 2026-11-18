@@ -105,6 +105,14 @@ pub(crate) enum ReaperExit {
 }
 
 impl ReaperExit {
+    #[cfg(any(test, feature = "inspector"))]
+    pub(crate) fn debug_mover(&self) -> Option<&Mover> {
+        match self {
+            Self::Waiting => None,
+            Self::Walking { mover, .. } => Some(mover),
+        }
+    }
+
     pub(crate) fn at_spawn(bot: &Bot) -> Option<Self> {
         (bot.spawn.hero == REAPER && distance(bot.position, REAPER_BALCONY) < 0.25)
             .then_some(Self::Waiting)
@@ -370,6 +378,29 @@ pub(crate) struct BossPursuit {
 }
 
 impl BossPursuit {
+    #[cfg(any(test, feature = "inspector"))]
+    pub(crate) fn debug_route(&self, entity: u32) -> Option<crate::game_debug::DebugBotRoute> {
+        if self.goal.is_none() && self.path.is_empty() {
+            return None;
+        }
+        let truncated = self.path.len() > crate::game_debug::MAX_DEBUG_ROUTE_WAYPOINTS;
+        Some(crate::game_debug::DebugBotRoute {
+            entity,
+            kind: "boss_pursuit",
+            patrol_index: None,
+            waypoints: Vec::new(),
+            target: self.goal.map(|(_, point)| point),
+            target_entity: self.goal.map(|(target_entity, _)| target_entity),
+            path: self
+                .path
+                .iter()
+                .copied()
+                .take(crate::game_debug::MAX_DEBUG_ROUTE_WAYPOINTS)
+                .collect(),
+            truncated,
+        })
+    }
+
     pub(crate) fn stop(&mut self, bot: &mut Bot, tick: u32) {
         *self = Self::default();
         bot.stop_objective(tick);
@@ -543,6 +574,29 @@ impl GateApproach {
 
     pub(crate) fn active(&self) -> bool {
         !self.failed
+    }
+
+    #[cfg(any(test, feature = "inspector"))]
+    pub(crate) fn debug_route(&self, entity: u32) -> Option<crate::game_debug::DebugBotRoute> {
+        if (self.arrived || self.failed) && self.path.is_empty() {
+            return None;
+        }
+        let truncated = self.path.len() > crate::game_debug::MAX_DEBUG_ROUTE_WAYPOINTS;
+        Some(crate::game_debug::DebugBotRoute {
+            entity,
+            kind: "gate_approach",
+            patrol_index: None,
+            waypoints: Vec::new(),
+            target: Some(self.gate),
+            target_entity: None,
+            path: self
+                .path
+                .iter()
+                .copied()
+                .take(crate::game_debug::MAX_DEBUG_ROUTE_WAYPOINTS)
+                .collect(),
+            truncated,
+        })
     }
 
     /// Returns true only on the tick the body reaches its gate threshold.

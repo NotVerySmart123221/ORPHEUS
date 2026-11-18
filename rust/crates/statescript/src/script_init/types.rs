@@ -231,6 +231,24 @@ pub struct SpawnSearchKey {
     pub(super) start_ms: u64,
 }
 
+impl SpawnSearchKey {
+    pub const fn instance(self) -> u16 {
+        self.instance
+    }
+
+    pub const fn raw(self) -> u16 {
+        self.raw
+    }
+
+    pub const fn activation(self) -> u16 {
+        self.activation
+    }
+
+    pub const fn start_ms(self) -> u64 {
+        self.start_ms
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SpawnSearch {
     pub position: [f64; 3],

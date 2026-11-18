@@ -726,6 +726,58 @@ impl RoomSimulation {
             .collect()
     }
 
+    #[cfg(any(test, feature = "inspector"))]
+    pub(super) fn push_player_debug_physics(
+        &self,
+        contact_normals: &mut Vec<crate::game_debug::DebugContactNormal>,
+        normals_truncated: &mut bool,
+        ground_probes: &mut Vec<crate::game_debug::DebugGroundProbe>,
+        probes_truncated: &mut bool,
+    ) {
+        for &entity in self.players_by_wire.values() {
+            let Some(state) = self.world.get::<PlayerBodyState>(entity) else {
+                continue;
+            };
+            if let Some(probe) = state.mover.debug_ground_probe(state.id.entity) {
+                if ground_probes.len() == crate::game_debug::MAX_DEBUG_GROUND_PROBES {
+                    *probes_truncated = true;
+                } else {
+                    ground_probes.push(probe);
+                }
+            }
+            for contact in state.mover.debug_contact_normals(state.id.entity) {
+                if contact_normals.len() == crate::game_debug::MAX_DEBUG_CONTACT_NORMALS {
+                    *normals_truncated = true;
+                    break;
+                }
+                contact_normals.push(contact);
+            }
+        }
+    }
+
+    #[cfg(any(test, feature = "inspector"))]
+    pub(super) fn push_player_debug_scripts(
+        &self,
+        out: &mut Vec<crate::game_debug::EntityScriptSnapshot>,
+    ) {
+        for &entity in self.players_by_wire.values() {
+            let Some(state) = self.world.get::<PlayerBodyState>(entity) else {
+                continue;
+            };
+            if let Some(snapshot) = state
+                .runtime
+                .as_ref()
+                .and_then(|runtime| runtime.snapshot())
+            {
+                out.push(crate::game_debug::summarize_script_snapshot(
+                    state.id.entity,
+                    "player",
+                    snapshot,
+                ));
+            }
+        }
+    }
+
     pub(super) fn push_player_hitscan_candidates(
         &self,
         source: u32,
