@@ -72,8 +72,15 @@ impl Peer {
         self.combat_ui = CombatUi::default();
     }
 
+    pub(super) fn clear_world_in_room(
+        &mut self,
+        simulation: &mut crate::game_combat::RoomSimulation,
+    ) {
+        self.world.clear_in_room(simulation);
+        self.combat_ui = CombatUi::default();
+    }
+
     pub(super) fn bot_hit(&mut self, hit: BotHit) {
-        self.world.deliver_applied_damage(hit.damage);
         self.world.queue_health(hit.health);
         for notice in hit.notices.into_iter().flatten() {
             self.queue_combat_notice(notice);

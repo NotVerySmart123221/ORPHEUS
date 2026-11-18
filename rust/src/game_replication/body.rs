@@ -1,23 +1,23 @@
 use super::{delivery::*, *};
 
+pub(super) struct StepBuffers<'a> {
+    pub(super) frame: &'a mut u32,
+    pub(super) fields: &'a mut Vec<(ProjectileToken, BioticField)>,
+    pub(super) launches: &'a mut Vec<AdmittedFlight>,
+    pub(super) hitscan: &'a mut Vec<PosedHitscan>,
+}
+
 pub(super) struct BodyScript {
     pub(super) id: BodyId,
-    pub(super) runtime: Box<dyn OwnerBodyRuntime>,
     pub(super) stream: BodyStream<ProjectedSnapshot>,
     pub(super) frame: u32,
     pub(super) unsent_delta: Option<(u32, DeltaKind)>,
     pub(super) corrections: Option<CorrectionHistory>,
     pub(super) projectiles: Option<OwnerProjectiles>,
-    pub(super) fields: Vec<(ProjectileToken, BioticField)>,
-    pub(super) launches: Vec<AdmittedFlight>,
 }
 
 impl BodyScript {
-    pub(super) fn new(
-        body: Body,
-        frame: u32,
-        runtime: Box<dyn OwnerBodyRuntime>,
-    ) -> io::Result<Self> {
+    pub(super) fn new(body: Body, frame: u32, runtime: &dyn OwnerBodyRuntime) -> io::Result<Self> {
         let snapshot = runtime
             .snapshot()
             .ok_or_else(|| invalid("body VM is unavailable"))?;
@@ -37,28 +37,28 @@ impl BodyScript {
             .map(|leases| OwnerProjectiles::new(body.id.entity, leases.clone()));
         Ok(Self {
             id: body.id,
-            runtime,
             stream: BodyStream::new(body.id.entity),
             frame,
             unsent_delta: None,
             corrections,
             projectiles,
-            fields: Vec::new(),
-            launches: Vec::new(),
         })
     }
 
-    pub(super) fn advance(
+    pub(super) fn advance_step(
         &mut self,
+        runtime: &mut dyn OwnerBodyRuntime,
         mover: &mut Mover,
+        buffers: &mut StepBuffers<'_>,
         command: Command,
         step: BodyStep,
-    ) -> io::Result<Vec<PosedHitscan>> {
-        if command.frame > self.frame {
-            self.runtime.advance(command, mover, step)?;
+    ) -> io::Result<()> {
+        if command.frame > *buffers.frame {
+            runtime.advance(command, mover, step)?;
+            *buffers.frame = command.frame;
             self.frame = command.frame;
         }
-        match self.runtime.snapshot() {
+        match runtime.snapshot() {
             Some(snapshot) if snapshot.initialization_complete() => {}
             Some(snapshot) => {
                 let sites: Vec<String> = snapshot
@@ -81,17 +81,17 @@ impl BodyScript {
             }
             None => return Err(invalid("body VM has no snapshot")),
         }
-        mover.set_cinematic_aim(self.runtime.cinematic_aim());
-        for (frame, change) in self.runtime.take_velocity_changes() {
+        mover.set_cinematic_aim(runtime.cinematic_aim());
+        for (frame, change) in runtime.take_velocity_changes() {
             mover.queue_velocity_change(frame, change);
         }
         if step == BodyStep::UnposedTimer {
             // Combat discards the neutral interval's reports at its boundary.
             // Drain interior reports early so a long gap cannot fill the VM queue.
-            self.runtime.take_shots(None, mover);
-            return Ok(Vec::new());
+            runtime.take_shots(None, mover);
+            return Ok(());
         }
-        if let Some(modifiers) = self.runtime.movement_modifiers() {
+        if let Some(modifiers) = runtime.movement_modifiers() {
             mover.track_modifiers(command.frame, modifiers);
         } else if self.corrections.is_some() {
             return Err(invalid("body VM lost its movement projection"));
@@ -103,29 +103,33 @@ impl BodyScript {
         {
             history.record(mover.pose());
         }
-        let mut hitscan = Vec::new();
-        for shot in self
-            .runtime
-            .take_shots((step == BodyStep::Posed).then_some(command), mover)
-        {
+        for shot in runtime.take_shots((step == BodyStep::Posed).then_some(command), mover) {
             match shot {
-                PosedShot::Hitscan(shot) => hitscan.push(*shot),
-                PosedShot::Projectile(shot) => self.launch_projectile(*shot),
-                PosedShot::BioticField(shot) => self.launch_biotic_field(shot),
+                PosedShot::Hitscan(shot) => buffers.hitscan.push(*shot),
+                PosedShot::Projectile(shot) => self.launch_projectile(*shot, buffers.launches),
+                PosedShot::BioticField(shot) => self.launch_biotic_field(shot, buffers.fields),
             }
         }
-        Ok(hitscan)
+        Ok(())
     }
 
-    fn launch_biotic_field(&mut self, field: PosedBioticField) {
+    fn launch_biotic_field(
+        &mut self,
+        field: PosedBioticField,
+        fields: &mut Vec<(ProjectileToken, BioticField)>,
+    ) {
         if let Some(token) = self.projectiles.as_mut().and_then(|projectiles| {
             projectiles.admit(field.shot, BIOTIC_CANISTER, BioticField::BOUND)
         }) {
-            self.fields.push((token, BioticField::new(field.feet)));
+            fields.push((token, BioticField::new(field.feet)));
         }
     }
 
-    pub(super) fn launch_projectile(&mut self, projectile: PosedProjectile) {
+    pub(super) fn launch_projectile(
+        &mut self,
+        projectile: PosedProjectile,
+        launches: &mut Vec<AdmittedFlight>,
+    ) {
         let Some((projectiles, definition)) = self
             .projectiles
             .as_mut()
@@ -149,7 +153,7 @@ impl BodyScript {
         };
         let flight = flight.with_expiry_blast(projectile.expiry_blast);
         if let Some(token) = projectiles.admit(projectile.shot, definition, bound) {
-            self.launches.push(AdmittedFlight {
+            launches.push(AdmittedFlight {
                 token,
                 flight,
                 stun: projectile.stun,
@@ -166,14 +170,14 @@ impl BodyScript {
 
     pub(super) fn next_record(
         &mut self,
+        runtime: &dyn OwnerBodyRuntime,
         created: bool,
     ) -> io::Result<Option<(Record, Option<u32>)>> {
         if !created {
             return Ok(None);
         }
-        let encoder = self.runtime.encoder();
-        let snapshot = self
-            .runtime
+        let encoder = runtime.encoder();
+        let snapshot = runtime
             .snapshot()
             .ok_or_else(|| invalid("body VM is unavailable"))?;
         let (chunk, kind) = if self.stream.last() == 0 {
@@ -200,7 +204,7 @@ impl BodyScript {
                 .expect("owner delta requires the baseline");
             let snapshot = encoder.project_next(snapshot, base).map_err(invalid)?;
             let chunk = encoder
-                .queue_delta(&mut self.stream, &snapshot, kind, self.runtime.frame_ms())
+                .queue_delta(&mut self.stream, &snapshot, kind, runtime.frame_ms())
                 .map_err(invalid)?
                 .expect("owner deltas include a command frame");
             (chunk, Some(kind))

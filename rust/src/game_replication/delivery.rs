@@ -17,6 +17,8 @@ pub(super) enum Delivery {
         revision: u64,
     },
     BotDestroy,
+    RemotePlayerCreate(BodyId),
+    RemotePlayerDestroy(BodyId),
     CreateBody(BodyId),
     Possession(BodyId),
     DestroyBody(BodyId),
@@ -81,22 +83,26 @@ impl WorldDelivery {
             bound: None,
             generation: 0,
             bodies: HashMap::new(),
+            remote_players: HashMap::new(),
             input: InputQueue::default(),
-            mover: None,
             body_script: None,
             projectile_destroys: HashMap::new(),
             biotic_views: BTreeMap::new(),
             scene_views: BTreeMap::new(),
             gate: None,
             next_biotic_view: FIRST_BIOTIC_VIEW,
-            hitscan: Vec::new(),
         }
+    }
+
+    pub(crate) fn owner(&self) -> u32 {
+        self.owner
     }
 
     pub(crate) fn clear(&mut self) {
         self.queued.clear();
         self.created.clear();
         self.bots.clear();
+        self.remote_players.clear();
         self.health_updates.clear();
         self.started = None;
         self.presentation_due = false;
@@ -108,14 +114,17 @@ impl WorldDelivery {
         self.encounter_phases.clear();
         self.encounter_result_queued = false;
         self.encounter_outcome_queued = false;
-        self.mover = None;
         self.body_script = None;
         self.projectile_destroys.clear();
         self.biotic_views.clear();
         self.scene_views.clear();
         self.gate = None;
         self.input.clear();
-        self.hitscan.clear();
+    }
+
+    pub(crate) fn clear_in_room(&mut self, simulation: &mut RoomSimulation) {
+        simulation.retire_player_owner(self.owner);
+        self.clear();
     }
 
     pub(super) fn push(&mut self, record: Record) {
@@ -126,130 +135,16 @@ impl WorldDelivery {
         self.started.is_some()
     }
 
-    pub(crate) fn junkenstein_defender(&self, team: u8) -> Option<u32> {
-        let script = self.body_script.as_ref()?;
-        (team == 0
-            && self.world_started()
-            && self.body.is_some_and(|body| body.id == script.id)
-            && script
-                .runtime
-                .vitals()
-                .is_some_and(|vitals| vitals.death().is_none())
-            && script.runtime.snapshot().is_some_and(|snapshot| {
-                snapshot.initialization_complete()
-                    && snapshot
-                        .instances
-                        .values()
-                        .any(|instance| instance.graph == 0x0ca5)
-            }))
-        .then_some(script.id.entity)
-    }
-
-    pub(crate) fn set_junkenstein_defenders(&mut self, defenders: Arc<[u32]>) {
-        if let Some(script) = &mut self.body_script {
-            script.runtime.set_defenders(defenders);
-        }
-    }
-
-    pub(crate) fn take_defender_sightings(
-        &mut self,
-    ) -> Vec<crate::junkenstein_messages::DefenderSighting> {
-        self.body_script
-            .as_mut()
-            .map_or_else(Vec::new, |script| script.runtime.take_sightings())
-    }
-
-    pub(crate) fn deliver_defender_sighting(
-        &mut self,
-        team: u8,
-        message: crate::junkenstein_messages::DefenderSighting,
-    ) {
-        if self.junkenstein_defender(team) != Some(message.target) {
-            return;
-        }
-        if let Some(script) = &mut self.body_script {
-            if let Err(error) = script.runtime.receive_sighting(message) {
-                eprintln!(
-                    "Junkenstein defender message failed for {:08x}: {error}",
-                    script.id.entity
-                );
-            }
-        }
-    }
-
-    pub(crate) fn encounter_hero(&self) -> Option<u64> {
-        self.body.map(|body| body.hero)
-    }
-
-    pub(crate) fn deliver_applied_damage(&mut self, damage: crate::game_combat::AppliedDamage) {
-        if self.spawned_body() == Some(damage.source) {
-            if let Some(script) = &mut self.body_script {
-                if script.id.entity == damage.source {
-                    if let Err(error) = script.runtime.receive_applied_damage(damage) {
-                        eprintln!(
-                            "Owner damage event failed for {:08x}: {error}",
-                            script.id.entity
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    pub(crate) fn deliver_defender_message(
-        &mut self,
-        scene: &PreparedScene,
-        body: u32,
-        message: crate::junkenstein_messages::DefenderMessage,
-    ) {
-        if self.spawned_body() == Some(body) {
-            if let Some(script) = &mut self.body_script {
-                if script.id.entity == body {
-                    if let Err(error) = script.runtime.set_deadeye_scene(scene, 0) {
-                        eprintln!("Junkenstein view facts failed for {body:08x}: {error}");
-                        return;
-                    }
-                    match script.runtime.receive_defender_message(message) {
-                        Ok(_) => {
-                            if let Some(mover) = &mut self.mover {
-                                mover.set_cinematic_aim(script.runtime.cinematic_aim());
-                            }
-                        }
-                        Err(error) => {
-                            eprintln!("Junkenstein defender message failed for {body:08x}: {error}")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     pub(crate) fn spawned_body(&self) -> Option<u32> {
         self.body
             .filter(|_| self.world_started())
             .map(|body| body.id.entity)
     }
 
-    #[cfg(any(test, feature = "inspector"))]
-    pub(crate) fn debug_actor(&self, team: u8) -> Option<Actor> {
-        let (body, mover) = self.body.zip(self.mover.as_ref())?;
-        let pose = mover.pose();
-        let vitals = self
-            .body_script
-            .as_ref()
-            .and_then(|script| script.runtime.vitals());
-        Some(Actor {
-            entity: body.id.entity,
-            generation: Some(body.id.generation),
-            kind: ActorKind::Player,
-            team,
-            position: pose.position,
-            velocity: pose.velocity,
-            alive: vitals.is_none_or(|vitals| vitals.death().is_none()),
-            health: vitals.map(Vitals::total),
-            script_active: self.body_script.is_some(),
-            last_contact_clip: None,
-        })
+    pub(crate) fn active_body_id(&self) -> Option<BodyId> {
+        self.body
+            .filter(|_| self.world_started())
+            .map(|body| body.id)
     }
 
     pub(crate) fn identity_ready(&self, entity: u32) -> bool {
@@ -267,11 +162,15 @@ impl WorldDelivery {
     pub(crate) fn queue_health(&mut self, update: EntityUpdate) {
         let entity = update.entity;
         let live_bot = self.bots.get(&entity) == Some(&BotLifetime::Live);
+        let live_remote = self
+            .remote_players
+            .get(&entity)
+            .is_some_and(|&(_, life)| life == BotLifetime::Live);
         let live_body = self.body.is_some_and(|body| {
             body.id.entity == entity
                 && self.bodies.get(&entity) == Some(&(body.id.generation, Lifetime::Live))
         });
-        if !live_bot && !live_body {
+        if !live_bot && !live_remote && !live_body {
             return;
         }
         self.health_revision = self.health_revision.wrapping_add(1);
@@ -282,6 +181,46 @@ impl WorldDelivery {
             update,
             delivery: Delivery::Health { revision },
         });
+    }
+
+    pub(crate) fn create_remote_player(&mut self, id: BodyId, update: EntityUpdate) {
+        if !self.world_started() || self.remote_players.contains_key(&id.entity) {
+            return;
+        }
+        self.remote_players
+            .insert(id.entity, (id, BotLifetime::Live));
+        self.push(Record {
+            update,
+            delivery: Delivery::RemotePlayerCreate(id),
+        });
+    }
+
+    pub(crate) fn retire_remote_player(&mut self, id: BodyId) {
+        if self.remote_players.get(&id.entity) != Some(&(id, BotLifetime::Live)) {
+            return;
+        }
+        let unsent_create = !self.created.contains(&id.entity)
+            && self.queued.iter().any(
+                |record| matches!(record.delivery, Delivery::RemotePlayerCreate(qid) if qid == id),
+            );
+        self.health_updates.remove(&id.entity);
+        self.scene_views.remove(&id.entity);
+        if unsent_create {
+            self.remote_players.remove(&id.entity);
+            self.remove_stale();
+        } else {
+            self.remote_players
+                .insert(id.entity, (id, BotLifetime::RetiringEnemy));
+            self.remove_stale();
+            self.push(Record {
+                update: EntityUpdate {
+                    entity: id.entity,
+                    operation: Some(Operation::Destroy),
+                    ..Default::default()
+                },
+                delivery: Delivery::RemotePlayerDestroy(id),
+            });
+        }
     }
 
     pub(crate) fn create_bot(&mut self, update: EntityUpdate) {
@@ -351,8 +290,26 @@ impl WorldDelivery {
                 self.bots.get(&entity),
                 Some(BotLifetime::Retiring | BotLifetime::RetiringEnemy)
             ),
+            Delivery::RemotePlayerCreate(id) => {
+                matches!(
+                    self.remote_players.get(&id.entity),
+                    Some(&(current, BotLifetime::Live)) if current == id
+                ) || (matches!(
+                    self.remote_players.get(&id.entity),
+                    Some(&(current, BotLifetime::RetiringEnemy)) if current == id
+                ) && !self.created.contains(&id.entity))
+            }
+            Delivery::RemotePlayerDestroy(id) => matches!(
+                self.remote_players.get(&id.entity),
+                Some(&(current, BotLifetime::RetiringEnemy)) if current == id
+            ),
             Delivery::SceneScript { last } => {
-                (self.gate == Some(entity) || self.bots.get(&entity) == Some(&BotLifetime::Live))
+                (self.gate == Some(entity)
+                    || self.bots.get(&entity) == Some(&BotLifetime::Live)
+                    || self
+                        .remote_players
+                        .get(&entity)
+                        .is_some_and(|&(_, life)| life == BotLifetime::Live))
                     && self.scene_views.get(&entity).is_some_and(|stream| {
                         stream.pending().any(|(pending, _, _)| pending == last)
                     })
@@ -459,6 +416,21 @@ impl WorldDelivery {
                         self.created.remove(&record.update.entity);
                         self.scene_views.remove(&record.update.entity);
                     }
+                    (true, Delivery::RemotePlayerCreate(id)) => {
+                        self.created.insert(id.entity);
+                        if let Some(stream) = self.scene_views.get_mut(&id.entity) {
+                            stream.create_arrived();
+                        }
+                    }
+                    (true, Delivery::RemotePlayerDestroy(id)) => {
+                        if self.remote_players.get(&id.entity)
+                            == Some(&(id, BotLifetime::RetiringEnemy))
+                        {
+                            self.remote_players.remove(&id.entity);
+                        }
+                        self.created.remove(&id.entity);
+                        self.scene_views.remove(&id.entity);
+                    }
                     (true, Delivery::Health { .. }) => {
                         self.health_updates.remove(&record.update.entity);
                     }
@@ -554,6 +526,15 @@ impl WorldDelivery {
                         }
                         destroyed.insert(record.update.entity);
                     }
+                    Delivery::RemotePlayerDestroy(id) => {
+                        if self.remote_players.get(&id.entity)
+                            == Some(&(id, BotLifetime::RetiringEnemy))
+                            && !self.identity_ready(id.entity)
+                        {
+                            return None;
+                        }
+                        destroyed.insert(id.entity);
+                    }
                     Delivery::BotCreate { after: Some(old) }
                         if self.bots.contains_key(&old) && !destroyed.contains(&old) =>
                     {
@@ -642,11 +623,14 @@ impl WorldDelivery {
         tick: u32,
         mut movements: Vec<EntityUpdate>,
         reliable_only: bool,
+        simulation: Option<&mut RoomSimulation>,
         egress: &mut GameEgress<Arc<Record>>,
         send: impl FnOnce(Vec<u8>) -> Result<u32, E>,
     ) -> Result<SentFrame, SendError<E>> {
         if !reliable_only {
-            self.prepare_body_updates();
+            if let Some(simulation) = simulation {
+                self.prepare_body_updates(simulation);
+            }
         }
         let script = self.body_script.as_ref();
         let history = script.and_then(|script| script.corrections.as_ref());
@@ -705,7 +689,7 @@ impl WorldDelivery {
         Ok(sent)
     }
 
-    fn prepare_body_updates(&mut self) {
+    fn prepare_body_updates(&mut self, simulation: &mut RoomSimulation) {
         // A split input gap can update physics history immediately. The owner
         // VM and health publish only after the queued command completes.
         if matches!(
@@ -717,34 +701,45 @@ impl WorldDelivery {
         ) {
             return;
         }
-        if let Some(update) = self.body_script.as_mut().and_then(|script| {
-            let health = script.runtime.take_health_update()?;
-            Some(EntityUpdate {
-                entity: script.id.entity,
-                operation: Some(Operation::Update(vec![health])),
-                ..EntityUpdate::default()
-            })
-        }) {
-            self.queue_health(update);
-        }
-        let Some(script) = &mut self.body_script else {
+        let Some(id) = self.body_script.as_ref().map(|script| script.id) else {
             return;
         };
-        let (record, replaced) = match script.next_record(self.created.contains(&script.id.entity))
-        {
+        let created = self.created.contains(&id.entity);
+        let (health, next) = {
+            let Some(runtime) = simulation
+                .player_body_mut(id)
+                .and_then(|state| state.runtime.as_deref_mut())
+            else {
+                self.cancel_body_script(Some(simulation));
+                return;
+            };
+            let health = runtime.take_health_update();
+            let next = self
+                .body_script
+                .as_mut()
+                .expect("checked body script")
+                .next_record(runtime, created);
+            (health, next)
+        };
+        if let Some(health) = health {
+            let update = EntityUpdate {
+                entity: id.entity,
+                operation: Some(Operation::Update(vec![health])),
+                ..EntityUpdate::default()
+            };
+            simulation.record_observer_player_health(self.owner, update.clone());
+            self.queue_health(update);
+        }
+        let (record, replaced) = match next {
             Ok(Some(record)) => record,
             Ok(None) => return,
             Err(error) => {
-                eprintln!(
-                    "body {:08X} owner statescript stopped: {error}",
-                    script.id.entity
-                );
-                self.cancel_body_script();
+                eprintln!("body {:08X} owner statescript stopped: {error}", id.entity);
+                self.cancel_body_script(Some(simulation));
                 return;
             }
         };
         if let Some(replaced) = replaced {
-            let id = script.id;
             self.queued.retain(|queued| {
                 !matches!(queued.delivery, Delivery::BodyScript { id: queued_id, last, .. }
                     if queued_id == id && last == replaced)
@@ -753,14 +748,12 @@ impl WorldDelivery {
         self.push(record);
     }
 
-    pub(super) fn cancel_body_script(&mut self) {
+    pub(super) fn cancel_body_script(&mut self, simulation: Option<&mut RoomSimulation>) {
         if let Some(mut script) = self.body_script.take() {
             self.retire_biotic_views(|_| false);
             script.stream.retire();
-            if let Some(mover) = &mut self.mover {
-                let frame = mover.pose().frame.unwrap_or(script.frame);
-                mover.track_modifiers(frame, &BTreeMap::new());
-                mover.set_cinematic_aim(None);
+            if let Some(sim) = simulation {
+                sim.clear_player_runtime(script.id);
             }
             if let Some(projectiles) = &mut script.projectiles {
                 self.queue_projectiles(script.id, projectiles.retire())
@@ -794,6 +787,14 @@ impl WorldDelivery {
                 self.push(Record::baseline(update));
             }
         }
+        for (id, update) in scene.simulation().observer_player_creates(self.owner) {
+            self.remote_players
+                .insert(id.entity, (id, BotLifetime::Live));
+            self.push(Record {
+                update,
+                delivery: Delivery::RemotePlayerCreate(id),
+            });
+        }
         self.started = Some(tick);
         Ok(())
     }
@@ -813,30 +814,14 @@ impl WorldDelivery {
         Ok(())
     }
 
-    pub(crate) fn set_encounter_active(&mut self, active: bool) {
-        if let Some(script) = &mut self.body_script {
-            if script
-                .runtime
-                .snapshot()
-                .is_some_and(Snapshot::initialization_complete)
-            {
-                if let Err(error) = script.runtime.set_encounter_active(active) {
-                    // Preserve the existing owner-local VM fault policy. The next input
-                    // observes the unavailable runtime; this does not retire other seats.
-                    eprintln!(
-                        "Owner encounter admission failed for {:08x}: {error}",
-                        script.id.entity
-                    );
-                }
-            }
-        }
-    }
-
     pub(crate) fn present_scene_scripts(&mut self, scene: &PreparedScene) -> io::Result<()> {
         if let Some(projection) = scene.gate_projection() {
             self.present_scene_script(projection)?;
         }
         for projection in scene.enemy_projections().map_err(io::Error::other)? {
+            self.present_scene_script(projection)?;
+        }
+        for projection in scene.simulation().player_projections(self.owner) {
             self.present_scene_script(projection)?;
         }
         Ok(())
@@ -847,7 +832,13 @@ impl WorldDelivery {
         projection: crate::script_snapshot_wire::SceneProjection<'_>,
     ) -> io::Result<()> {
         let entity = projection.snapshot.entity;
-        if self.gate != Some(entity) && self.bots.get(&entity) != Some(&BotLifetime::Live) {
+        if self.gate != Some(entity)
+            && self.bots.get(&entity) != Some(&BotLifetime::Live)
+            && !self
+                .remote_players
+                .get(&entity)
+                .is_some_and(|&(_, life)| life == BotLifetime::Live)
+        {
             return Ok(());
         }
         let stream = self
@@ -991,7 +982,7 @@ impl WorldDelivery {
 
     fn game_message(
         &mut self,
-        scene: &PreparedScene,
+        scene: &mut PreparedScene,
         viewer: &PlayerAppearance<'_>,
         tick: u32,
         now: Duration,
@@ -1007,8 +998,19 @@ impl WorldDelivery {
         if message.entity != self.owner {
             return Ok(());
         }
-        match message.hero_select(scene.heroes()) {
-            Some(HeroSelectRequest::Pick(Some(hero))) => {
+        enum HeroSelectAction {
+            Pick(Hero),
+            OpenOrClose(Option<bool>),
+        }
+        let action = match message.hero_select(scene.heroes()) {
+            Some(HeroSelectRequest::Pick(Some(hero))) => Some(HeroSelectAction::Pick(hero.clone())),
+            Some(HeroSelectRequest::OpenOrClose(wanted)) => {
+                Some(HeroSelectAction::OpenOrClose(wanted))
+            }
+            _ => None,
+        };
+        match action {
+            Some(HeroSelectAction::Pick(hero)) => {
                 if viewer
                     .card
                     .role
@@ -1028,14 +1030,14 @@ impl WorldDelivery {
                 {
                     self.queue_controller(scene, tick, false, Some(hero.guid))?;
                 } else if let Some(entity) = self.next_body(now) {
-                    self.switch(scene, viewer, tick, quanta, entity, (hero, skin))?;
+                    self.switch(scene, viewer, tick, quanta, entity, (&hero, skin))?;
                 }
             }
-            Some(HeroSelectRequest::OpenOrClose(wanted)) => {
+            Some(HeroSelectAction::OpenOrClose(wanted)) => {
                 let open = self.body.is_none() || wanted.unwrap_or(!self.select_open);
                 self.queue_controller(scene, tick, open, self.body.map(|body| body.hero))?;
             }
-            _ => {}
+            None => {}
         }
         Ok(())
     }
@@ -1070,7 +1072,7 @@ impl WorldDelivery {
 
     fn apply_skin(
         &mut self,
-        scene: &PreparedScene,
+        scene: &mut PreparedScene,
         viewer: &PlayerAppearance<'_>,
         hero: u64,
         tick: u32,
@@ -1089,11 +1091,11 @@ impl WorldDelivery {
             return Ok(());
         };
         if let Some(entity) = self.next_body(now) {
-            let hero = scene
-                .heroes()
-                .get(hero)
-                .ok_or_else(|| invalid("active player hero is absent from the scene catalog"))?;
-            self.switch(scene, viewer, tick, quanta, entity, (hero, skin))?;
+            let hero =
+                scene.heroes().get(hero).cloned().ok_or_else(|| {
+                    invalid("active player hero is absent from the scene catalog")
+                })?;
+            self.switch(scene, viewer, tick, quanta, entity, (&hero, skin))?;
         }
         Ok(())
     }
@@ -1112,99 +1114,40 @@ impl WorldDelivery {
         self.body_script.is_some()
     }
 
-    pub(crate) fn enemy_target(&self, team: u8) -> Option<crate::script_enemy::EnemyTarget> {
-        let body = self.body?;
-        let mover = self.mover.as_ref()?;
-        let (height, radius) = mover.capsule();
-        let vitals = self.body_script.as_ref()?.runtime.vitals()?;
-        let alive = vitals.death().is_none();
-        Some(crate::script_enemy::EnemyTarget {
-            hero: Some(body.hero),
-            filter_flags: self.body_script.as_ref()?.runtime.target_filter_flags(),
-            tags: self.body_script.as_ref()?.runtime.target_tags(),
-            health: Some(vitals.total()),
-            velocity: Some(mover.pose().velocity),
-            script_state: self
-                .body_script
-                .as_ref()
-                .and_then(|script| script.runtime.snapshot())
-                .map_or(
-                    crate::script_entity_state::EntityScriptState::Unavailable,
-                    |snapshot| {
-                        crate::script_entity_state::EntityScriptState::Running(Arc::new(
-                            snapshot.variables.clone(),
-                        ))
-                    },
-                ),
-            entity: body.id.entity,
-            team,
-            pose: TargetPose {
-                feet: mover.pose().position,
-                height,
-                radius,
-                eye: crate::game_combat::eye_height(body.hero, mover.crouched()),
-            },
-            alive,
-        })
+    pub(crate) fn take_hitscan(&self, simulation: &mut RoomSimulation) -> Vec<PosedHitscan> {
+        let Some(id) = self.body_script.as_ref().map(|script| script.id) else {
+            return Vec::new();
+        };
+        simulation.take_player_hitscan(id)
     }
 
-    pub(crate) fn apply_enemy_damage(
+    pub(crate) fn advance_fields(
         &mut self,
-        hit: crate::script_enemy::EnemyDamage,
-        now: Duration,
+        simulation: &mut RoomSimulation,
         tick: u32,
-    ) -> bool {
-        self.body_script
+    ) -> io::Result<Vec<HealingPulse>> {
+        let Some(id) = self
+            .body_script
+            .as_ref()
+            .filter(|script| script.projectiles.is_some())
+            .map(|script| script.id)
+        else {
+            return Ok(Vec::new());
+        };
+        let Some(state) = simulation.player_body_mut(id) else {
+            return Ok(Vec::new());
+        };
+        let (pulses, expired_tokens) = state.advance_fields(tick);
+        let Some(projectiles) = self
+            .body_script
             .as_mut()
-            .filter(|script| script.id.entity == hit.target)
-            .is_some_and(|script| {
-                script.runtime.receive_damage(
-                    hit.amount,
-                    Death {
-                        time: now.as_secs_f64(),
-                        frame: tick,
-                        killer: hit.source,
-                    },
-                )
-            })
-    }
-
-    pub(crate) fn take_hitscan(&mut self) -> Vec<PosedHitscan> {
-        std::mem::take(&mut self.hitscan)
-    }
-
-    pub(crate) fn advance_fields(&mut self, tick: u32) -> io::Result<Vec<HealingPulse>> {
-        let Some(script) = &mut self.body_script else {
+            .and_then(|script| script.projectiles.as_mut())
+        else {
             return Ok(Vec::new());
         };
-        let Some(projectiles) = &mut script.projectiles else {
-            return Ok(Vec::new());
-        };
-        let id = script.id;
         let mut deliveries = Vec::new();
-        let mut pulses = Vec::new();
-        script.fields.retain_mut(|(token, field)| {
-            let (pulse, expired) = field.advance(tick);
-            pulses.extend(pulse);
-            if expired {
-                projectiles.cancel(*token, &mut deliveries);
-            }
-            !expired
-        });
-        if let Some(mover) = &self.mover {
-            let (height, radius) = mover.capsule();
-            let pose = TargetPose {
-                feet: mover.pose().position,
-                height,
-                radius,
-                eye: 0.0,
-            };
-            let amount = pulses
-                .iter()
-                .filter(|pulse| pulse.reaches(pose))
-                .map(|pulse| pulse.amount)
-                .sum();
-            script.runtime.heal(amount);
+        for token in expired_tokens {
+            projectiles.cancel(token, &mut deliveries);
         }
         self.queue_projectiles(id, deliveries)?;
         Ok(pulses)
@@ -1226,18 +1169,25 @@ impl WorldDelivery {
         }
     }
 
-    pub(crate) fn advance_biotic_views(&mut self, tick: u32) -> io::Result<()> {
+    pub(crate) fn advance_biotic_views(
+        &mut self,
+        simulation: &RoomSimulation,
+        tick: u32,
+    ) -> io::Result<()> {
         let Some((body, script)) = self.body.zip(self.body_script.as_ref()) else {
             return Ok(());
         };
         let Some(projectiles) = &script.projectiles else {
             return Ok(());
         };
-        if script.fields.is_empty() && self.biotic_views.is_empty() {
+        let Some(state) = simulation.player_body(script.id) else {
+            return Ok(());
+        };
+        if state.fields.is_empty() && self.biotic_views.is_empty() {
             return Ok(());
         }
         let mut active = Vec::new();
-        for (token, field) in &script.fields {
+        for (token, field) in &state.fields {
             if let Some(faded) = field.presentation(tick) {
                 active.extend(
                     projectiles
@@ -1259,11 +1209,10 @@ impl WorldDelivery {
                 .find(|(_, view)| view.token == token && view.parent == parent);
             if let Some((_, view)) = existing {
                 if view.created && !view.retiring && view.faded != Some(faded) {
-                    let payload = self
-                        .body_script
-                        .as_ref()
-                        .expect("current owner VM")
-                        .runtime
+                    let Some(runtime) = &state.runtime else {
+                        return Ok(());
+                    };
+                    let payload = runtime
                         .encoder()
                         .biotic_field_frame(faded)
                         .map_err(invalid)?;
@@ -1312,10 +1261,14 @@ impl WorldDelivery {
         Ok(())
     }
 
-    pub(crate) fn take_projectile_launches(&mut self) -> Option<(BodyId, Vec<AdmittedFlight>)> {
-        let script = self.body_script.as_mut()?;
+    pub(crate) fn take_projectile_launches(
+        &self,
+        simulation: &mut RoomSimulation,
+    ) -> Option<(BodyId, Vec<AdmittedFlight>)> {
+        let script = self.body_script.as_ref()?;
         script.projectiles.as_ref()?;
-        Some((script.id, std::mem::take(&mut script.launches)))
+        let launches = simulation.take_player_projectile_launches(script.id)?;
+        Some((script.id, launches))
     }
 
     pub(crate) fn finish_projectiles(
@@ -1376,7 +1329,7 @@ impl WorldDelivery {
     /// A fresh frame is committed only after its final pose has completed.
     pub(crate) fn advance_input(
         &mut self,
-        scene: &PreparedScene,
+        scene: &mut PreparedScene,
         viewer: &PlayerAppearance<'_>,
         quanta: u32,
         budget: usize,
@@ -1408,8 +1361,14 @@ impl WorldDelivery {
                     command,
                     mut pending,
                 } => {
-                    if let Some(script) = &mut self.body_script {
-                        script.runtime.set_deadeye_scene(scene, viewer.team)?;
+                    if let Some(id) = self.body_script.as_ref().map(|script| script.id) {
+                        if scene.simulation().player_has_deadeye(id) {
+                            let deadeye =
+                                scene.deadeye_scene(viewer.team).map_err(io::Error::other)?;
+                            scene
+                                .simulation_mut()
+                                .set_player_deadeye_targets(id, deadeye);
+                        }
                     }
                     let (used, complete) =
                         self.advance_command(scene, command, &mut pending, dt, remaining)?;
@@ -1430,30 +1389,54 @@ impl WorldDelivery {
 
     fn advance_command(
         &mut self,
-        scene: &PreparedScene,
+        scene: &mut PreparedScene,
         command: Command,
         pending: &mut Option<PendingCommand>,
         dt: f64,
         budget: usize,
     ) -> io::Result<(usize, bool)> {
-        let Some(mover) = &mut self.mover else {
+        let Some(id) = self.body.map(|body| body.id) else {
+            return Ok((1, true));
+        };
+        let (simulation, rays) = scene.simulation_and_rays();
+        let Some(state) = simulation.player_body_mut(id) else {
             return Ok((1, true));
         };
         let pending = pending.get_or_insert_with(|| {
-            PendingCommand::new(mover.pending_poses(command), self.body_script.as_ref())
+            PendingCommand::new(
+                state.mover.pending_poses(command),
+                self.body_script.as_ref(),
+            )
         });
         let mut used = 0;
         let mut failed = false;
         let script = &mut self.body_script;
-        let hitscan = &mut self.hitscan;
-        if let Some(script) = script {
+        let PlayerBodyState {
+            mover,
+            runtime,
+            frame: body_frame,
+            fields,
+            launches,
+            hitscan,
+            ..
+        } = state;
+        let mut buffers = StepBuffers {
+            frame: body_frame,
+            fields,
+            launches,
+            hitscan,
+        };
+        if let Some((script, runtime)) = script.as_mut().zip(runtime.as_deref_mut()) {
             for (frame, step) in pending.gap.by_ref().take(budget) {
                 used += 1;
                 let neutral = Command {
                     frame,
                     ..Command::default()
                 };
-                if script.advance(mover, neutral, step).is_err() {
+                if script
+                    .advance_step(runtime, mover, &mut buffers, neutral, step)
+                    .is_err()
+                {
                     mover.track_modifiers(frame, &BTreeMap::new());
                     pending.gap = ScriptGap::default();
                     failed = true;
@@ -1462,31 +1445,35 @@ impl WorldDelivery {
             }
         }
         let stepped = mover.step_pending(
-            scene.movement_index(),
+            rays,
             &mut pending.poses,
             dt,
             budget - used,
             |mover, command| {
-                if let Some(script) = script.as_mut().filter(|_| !failed) {
-                    match script.advance(mover, command, BodyStep::Posed) {
-                        Ok(shots) => hitscan.extend(shots),
-                        Err(error) => {
-                            eprintln!(
-                                "body owner statescript stopped at frame {}: {error}",
-                                command.frame
-                            );
-                            mover.track_modifiers(command.frame, &BTreeMap::new());
-                            failed = true;
-                        }
+                if let Some((script, runtime)) = script
+                    .as_mut()
+                    .zip(runtime.as_deref_mut())
+                    .filter(|_| !failed)
+                {
+                    if let Err(error) =
+                        script.advance_step(runtime, mover, &mut buffers, command, BodyStep::Posed)
+                    {
+                        eprintln!(
+                            "body owner statescript stopped at frame {}: {error}",
+                            command.frame
+                        );
+                        mover.track_modifiers(command.frame, &BTreeMap::new());
+                        failed = true;
                     }
                 }
             },
         );
+        let complete = pending.poses.len() == 0;
         if failed {
-            self.cancel_body_script();
+            self.cancel_body_script(Some(simulation));
         }
         used += stepped.map_err(invalid)?;
-        Ok((used, pending.poses.len() == 0))
+        Ok((used, complete))
     }
 
     pub(super) fn next_body(&self, now: Duration) -> Option<u32> {
@@ -1502,7 +1489,7 @@ impl WorldDelivery {
 
     pub(super) fn switch(
         &mut self,
-        scene: &PreparedScene,
+        scene: &mut PreparedScene,
         viewer: &PlayerAppearance<'_>,
         tick: u32,
         quanta: u32,
@@ -1513,10 +1500,9 @@ impl WorldDelivery {
         let mover = scene.player_spawn_mover(hero.body, viewer.team)?;
         let movement = mover.pose();
         let pose = owner_pose(movement);
-        let generation = self
-            .generation
-            .checked_add(1)
-            .ok_or_else(|| invalid("player body lifetime exhausted"))?;
+        let generation = scene
+            .simulation_mut()
+            .next_player_generation(self.owner, self.generation)?;
         let id = BodyId { entity, generation };
         let body = Body {
             id,
@@ -1525,11 +1511,12 @@ impl WorldDelivery {
         };
         let body_filter = team_bit(viewer.team)?;
         let start_frame = self.input.processed.unwrap_or(tick);
-        let script = scene
+        let slot = u8::try_from(viewer.slot).map_err(invalid)?;
+        let mut runtime = scene
             .owner_body_runtime(
                 hero,
                 OwnerBodySpawn {
-                    slot: u8::try_from(viewer.slot).map_err(invalid)?,
+                    slot,
                     controller: self.owner,
                     entity,
                     body_filter,
@@ -1539,8 +1526,22 @@ impl WorldDelivery {
                 },
             )
             .ok()
-            .flatten()
+            .flatten();
+        let script = runtime
+            .as_deref()
             .and_then(|runtime| BodyScript::new(body, start_frame, runtime).ok());
+        if script.is_none() {
+            runtime = None;
+        }
+        let body_create_input = BodyCreate {
+            entity,
+            hero,
+            team_bit: body_filter,
+            position: pose.position,
+            yaw: pose.yaw,
+            skin,
+            vitals: runtime.as_deref().and_then(OwnerBodyRuntime::vitals),
+        };
         let create = body_create(
             BodyCreate {
                 entity,
@@ -1549,17 +1550,18 @@ impl WorldDelivery {
                 position: pose.position,
                 yaw: pose.yaw,
                 skin,
-                vitals: script.as_ref().and_then(|script| script.runtime.vitals()),
+                vitals: body_create_input.vitals,
             },
             BodyView::Owner {
                 pose: Some(pose),
-                leases: script
-                    .as_ref()
-                    .and_then(|script| script.runtime.projectile_leases())
+                leases: runtime
+                    .as_deref()
+                    .and_then(OwnerBodyRuntime::projectile_leases)
                     .map_or(&[], ProjectileLeases::blocks),
             },
             scene.pools(),
         );
+        let observer_create = body_create(body_create_input, BodyView::Observer, scene.pools());
         let possession = Possession {
             body: entity,
             hero: hero.guid,
@@ -1567,13 +1569,24 @@ impl WorldDelivery {
         };
         let close = self.controller_chunk(scene, tick, false, Some(hero.guid))?;
 
+        let state = PlayerBodyState::new(
+            id,
+            self.owner,
+            slot,
+            viewer.team,
+            hero.guid,
+            mover,
+            runtime,
+            start_frame,
+            Some(observer_create),
+        );
+        scene.simulation_mut().spawn_player_body(state)?;
         self.generation = generation;
         self.bodies.insert(entity, (generation, Lifetime::Live));
         self.created.remove(&entity);
         let old = self.body.replace(body);
-        self.cancel_body_script();
+        self.cancel_body_script(None);
         self.body_script = script;
-        self.mover = Some(mover);
         self.bound = None;
         self.select_open = false;
         self.push(Record {
@@ -1662,7 +1675,7 @@ impl WorldDelivery {
         {
             return Ok(Vec::new());
         }
-        Ok(scene
+        let mut updates: Vec<_> = scene
             .bots()?
             .filter(|bot| self.created.contains(&bot.entity) && bot.record_due(tick, SEND_EVERY))
             .map(|bot| EntityUpdate {
@@ -1670,7 +1683,19 @@ impl WorldDelivery {
                 movement: Some(bot.movement(tick)),
                 ..EntityUpdate::default()
             })
-            .collect())
+            .collect();
+        if tick % SEND_EVERY == 0 {
+            for (entity, movement) in scene.simulation().observer_player_movements(self.owner) {
+                if self.created.contains(&entity) {
+                    updates.push(EntityUpdate {
+                        entity,
+                        movement: Some(movement),
+                        ..EntityUpdate::default()
+                    });
+                }
+            }
+        }
+        Ok(updates)
     }
 }
 

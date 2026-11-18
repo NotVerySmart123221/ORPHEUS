@@ -4,6 +4,16 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ## Unreleased
 
+### 2026-11-18
+
+#### Move player body authority and lifecycle into `RoomSimulation` ECS
+
+- Moved shared player body simulation state (`Mover`, `OwnerBodyRuntime` VM & `Vitals`, rewind `TargetHistory`, active `BioticField`s, admitted `launches`, posed `hitscan` shots, and observer create metadata) out of per-peer `WorldDelivery`/`BodyScript` into `RoomSimulation`'s `bevy_ecs::world::World` (`PlayerBodyState` component in `rust/src/game_combat/player.rs`) behind generation-checked handles (`BodyId` / `PlayerBodyHandle`).
+- Kept per-peer delivery concerns (`Stream`/`BodyStream` delta cursors, ACK/prerequisite tracking, `OwnerProjectiles` leases, and prediction `CorrectionHistory`) in `WorldDelivery` / `BodyScript` (`rust/src/game_replication/{delivery.rs,body.rs}`).
+- Retired production `set_external_targets(...)` copying in `rust/src/game_service/room.rs` (gating `set_external_targets` under `#[cfg(test)]`) in favor of direct `RoomSimulation` ECS queries with friendly/dead pass-through and hostile blocking.
+- Added unit tests in `rust/src/game_replication/tests.rs` covering shared owner+observer room authority, reconnect generation monotonicity, death/respawn target eligibility, and stale-generation mutation rejection (#65).
+- Documented room-owned player/body authority vs. per-peer delivery state and updated test baselines in `docs/NATIVE_SERVER_ARCHITECTURE.md`, `docs/STATE.md`, and `docs/ROADMAP.md`.
+
 ### 2026-11-17
 
 #### Decouple StateScript VM host imports and extract `orpheus-statescript`

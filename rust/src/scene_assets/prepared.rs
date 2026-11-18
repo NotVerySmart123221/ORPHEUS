@@ -24,6 +24,18 @@ pub struct PreparedScene {
 }
 
 impl PreparedScene {
+    pub(crate) fn simulation(&self) -> &RoomSimulation {
+        &self.simulation
+    }
+
+    pub(crate) fn simulation_mut(&mut self) -> &mut RoomSimulation {
+        &mut self.simulation
+    }
+
+    pub(crate) fn simulation_and_rays(&mut self) -> (&mut RoomSimulation, &TriangleIndex) {
+        (&mut self.simulation, self.ground.triangles())
+    }
+
     pub(crate) fn enemy_projections(
         &self,
     ) -> Result<impl Iterator<Item = crate::script_snapshot_wire::SceneProjection<'_>>, CombatError>
@@ -68,6 +80,7 @@ impl PreparedScene {
             && self.contacts.is_some()
     }
 
+    #[cfg(test)]
     pub(crate) fn movement_index(&self) -> &TriangleIndex {
         self.ground.triangles()
     }
@@ -561,6 +574,8 @@ impl PreparedScene {
         if let Some(encounter) = &self.encounter {
             self.simulation.set_mode_voice_set(encounter.voice_set);
         }
+        self.simulation
+            .set_cassidy_protected(self.protects_cassidy(Some(crate::game_heroes::CASSIDY)));
         (
             &mut self.simulation,
             BotQueries::new(
@@ -576,6 +591,7 @@ impl PreparedScene {
         self.simulation.retire_projectiles(connection);
     }
 
+    #[cfg(test)]
     pub(crate) fn set_junkenstein_defenders(&mut self, defenders: Arc<[u32]>) {
         self.simulation.set_junkenstein_defenders(defenders);
     }

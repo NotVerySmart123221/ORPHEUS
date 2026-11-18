@@ -290,6 +290,10 @@ impl Room {
             player.gone = true;
             if let Some(world) = &mut self.world {
                 world.scene.retire_projectiles(connection);
+                world
+                    .scene
+                    .simulation_mut()
+                    .retire_player_owner(player.entity);
             }
         }
         Ok(())
@@ -380,25 +384,41 @@ impl Room {
         budget: usize,
     ) -> Result<(usize, bool), RoomError> {
         self.with_peer(connection, |room, peer, slot| {
+            let (quanta, player_entity, team) = {
+                let player = room
+                    .players
+                    .get(slot)
+                    .ok_or(RoomError::Invariant("input without viewer"))?;
+                (player.quanta(), player.entity, player.info.team)
+            };
             let world = room
                 .world
-                .as_ref()
+                .as_mut()
                 .ok_or(RoomError::Invariant("input without world"))?;
-            let viewer = room
-                .appearance(slot)
-                .ok_or(RoomError::Invariant("input without viewer"))?;
+            let viewer = PlayerAppearance {
+                entity: player_entity,
+                slot: i8::try_from(slot)
+                    .map_err(|_| RoomError::Invariant("input without viewer"))?,
+                team,
+                card: &world.card,
+            };
             let context = ShotContext {
                 team: viewer.team,
-                quanta: room.players[slot].quanta(),
+                quanta,
                 tick,
                 now,
             };
             // Movement/input failure previously closes this member. Keep that
             // scope and report the cause; body-script failures are handled locally.
-            peer.world
-                .set_encounter_active(world.scene.encounter_active());
+            let active = world.scene.encounter_active();
+            if let Some(id) = peer.world.active_body_id() {
+                world
+                    .scene
+                    .simulation_mut()
+                    .set_player_encounter_active(id, active);
+            }
             let (used, leave) = match peer.world.advance_input(
-                &world.scene,
+                &mut world.scene,
                 &viewer,
                 context.quanta,
                 budget,
@@ -414,27 +434,22 @@ impl Room {
             if used > budget {
                 return Err(RoomError::Invariant("input exceeded assigned budget"));
             }
-            let shots = peer.world.take_hitscan();
+            let shots = peer.world.take_hitscan(world.scene.simulation_mut());
             if (!leave && peer.world.combat_body_active()) || !shots.is_empty() {
-                let world = room
-                    .world
-                    .as_mut()
-                    .ok_or(RoomError::Invariant("combat without world"))?;
                 let (bots, queries) = world.scene.bot_simulation();
                 bots.activate_combat();
                 for shot in shots {
                     if let Some(hit) = bots.hitscan(&queries, shot, context, |entity| {
                         peer.world.identity_ready(entity)
                     })? {
+                        bots.deliver_applied_damage(peer.world.owner(), hit.damage.clone());
                         peer.bot_hit(hit);
                     }
                 }
             }
             if leave {
-                peer.clear_world();
-                if let Some(world) = &mut room.world {
-                    world.scene.retire_projectiles(connection);
-                }
+                peer.clear_world_in_room(world.scene.simulation_mut());
+                world.scene.retire_projectiles(connection);
                 peer.loading = MapReadiness::default();
             }
             Ok((used, leave))
@@ -448,6 +463,8 @@ pub(super) struct RoomUpdates {
     pub(super) created: Vec<EntityUpdate>,
     pub(super) health: Vec<EntityUpdate>,
     pub(super) retired: Vec<u32>,
+    pub(super) player_events: Vec<crate::game_combat::PlayerBodyEvent>,
+    pub(super) observer_player_health: Vec<(u32, EntityUpdate)>,
 }
 
 impl Room {
@@ -461,133 +478,92 @@ impl Room {
         };
         let junkenstein = world.scene.map().is_junkenstein();
         let active = world.scene.encounter_active();
-        for member in self.members.values_mut() {
-            if let Some(peer) = &mut member.peer {
-                peer.world.set_encounter_active(active);
-            }
-        }
-        let mut defenders = Vec::new();
-        let mut bodies = Vec::new();
-        let mut targets = Vec::new();
-        for (&connection, member) in &self.members {
-            let player = self
-                .players
-                .get(member.slot)
-                .ok_or(RoomError::Invariant("encounter member has invalid slot"))?;
-            let Some(peer) = &member.peer else {
-                continue;
-            };
-            if player.gone {
-                continue;
-            }
-            if peer.world.world_started() {
-                if let Some(target) = peer.world.enemy_target(player.info.team) {
-                    targets.push(target);
-                }
-            }
-            if junkenstein {
-                if let Some(body) = peer.world.junkenstein_defender(player.info.team) {
-                    defenders.push((member.slot, connection, body));
-                }
-                if let Some(body) = peer.world.spawned_body() {
-                    bodies.push((connection, body, player.info.team));
-                }
-            }
-        }
-        defenders.sort_unstable_by_key(|entry| entry.0);
-        let mut sightings = Vec::new();
-        if junkenstein {
-            let entities: Arc<[u32]> = defenders.iter().map(|entry| entry.2).collect();
-            world.scene.set_junkenstein_defenders(Arc::clone(&entities));
-            for &(_, connection, _) in &defenders {
-                let peer = self
-                    .members
-                    .get_mut(&connection)
-                    .and_then(|member| member.peer.as_mut())
-                    .ok_or(RoomError::Invariant("encounter defender disappeared"))?;
-                peer.world.set_junkenstein_defenders(Arc::clone(&entities));
-                sightings.extend(peer.world.take_defender_sightings());
-            }
-        }
-        let (replacements, health, retired, damage, messages, bot_sightings) = {
+        world.scene.simulation_mut().sync_player_encounter(active);
+
+        let (
+            replacements,
+            health,
+            retired,
+            messages,
+            bot_sightings,
+            deaths,
+            player_events,
+            observer_player_health,
+        ) = {
             let (bots, queries) = world.scene.bot_simulation();
-            bots.set_external_targets(targets);
+            let sightings = bots.take_player_defender_sightings();
             let replacements = bots.finish_tick(&queries, tick, now)?;
+            let mut all_sightings = sightings;
+            all_sightings.extend(bots.take_defender_sightings());
             (
                 replacements,
                 bots.take_scripted_health(),
                 bots.take_retired_enemies(),
-                bots.take_external_enemy_damage(),
                 bots.take_defender_messages(),
-                bots.take_defender_sightings(),
+                all_sightings,
+                bots.take_player_deaths(),
+                bots.take_player_events(),
+                bots.take_observer_player_health(),
             )
         };
-        if junkenstein {
-            for hit in damage {
-                let Some(&(connection, _, _)) = bodies.iter().find(|entry| entry.1 == hit.target)
-                else {
-                    continue;
-                };
-                let peer = self
-                    .members
-                    .get_mut(&connection)
-                    .and_then(|member| member.peer.as_mut())
-                    .ok_or(RoomError::Invariant("damage recipient disappeared"))?;
-                let source = hit.source;
-                if !world.scene.protects_cassidy(peer.world.encounter_hero())
-                    && peer.world.apply_enemy_damage(hit, now, tick)
-                {
-                    peer.queue_combat_notice(CombatNotice::Death {
-                        source,
-                        killed_by: true,
-                    });
-                }
-            }
-            for message in messages {
-                for &(connection, body, team) in &bodies {
-                    if team != 0 || !message.accepts_body(body) {
-                        continue;
-                    }
-                    self.members
-                        .get_mut(&connection)
-                        .and_then(|member| member.peer.as_mut())
-                        .ok_or(RoomError::Invariant(
-                            "defender message recipient disappeared",
-                        ))?
-                        .world
-                        .deliver_defender_message(&world.scene, body, message.clone());
-                }
-            }
-            for request in world.scene.take_encounter_voice_requests() {
-                for &(connection, listener, team) in &bodies {
-                    if team != 0 {
-                        continue;
-                    }
-                    self.members
-                        .get_mut(&connection)
-                        .and_then(|member| member.peer.as_mut())
-                        .ok_or(RoomError::Invariant("voice recipient disappeared"))?
-                        .queue_combat_notice(CombatNotice::Voice {
-                            anchor: request.anchor,
-                            speaker: request.speaker,
-                            listener,
-                            stimulus: request.stimulus,
-                            line: request.line,
+        for death in deaths {
+            for member in self.members.values_mut() {
+                if let Some(peer) = &mut member.peer {
+                    if peer.world.owner() == death.owner {
+                        peer.queue_combat_notice(CombatNotice::Death {
+                            source: death.source,
+                            killed_by: true,
                         });
+                    }
                 }
             }
-            sightings.extend(bot_sightings);
-            for message in sightings {
-                if let Some(&(slot, connection, _)) =
-                    defenders.iter().find(|entry| entry.2 == message.target)
-                {
-                    self.members
-                        .get_mut(&connection)
-                        .and_then(|member| member.peer.as_mut())
-                        .ok_or(RoomError::Invariant("sighting recipient disappeared"))?
-                        .world
-                        .deliver_defender_sighting(self.players[slot].info.team, message);
+        }
+        if junkenstein {
+            if !messages.is_empty() {
+                let deadeye = world.scene.deadeye_scene(0).ok();
+                world
+                    .scene
+                    .simulation_mut()
+                    .deliver_player_defender_messages(deadeye.as_ref(), &messages);
+            }
+            let voice_targets: Vec<u32> = self
+                .members
+                .values()
+                .filter_map(|member| {
+                    let player = self.players.get(member.slot)?;
+                    if player.gone || player.info.team != 0 {
+                        return None;
+                    }
+                    let peer = member.peer.as_ref()?;
+                    world
+                        .scene
+                        .simulation()
+                        .player_body_by_owner(peer.world.owner())
+                        .map(|state| state.id.entity)
+                })
+                .collect();
+            for request in world.scene.take_encounter_voice_requests() {
+                for &listener in &voice_targets {
+                    for member in self.members.values_mut() {
+                        if let Some(peer) = &mut member.peer {
+                            if peer.world.spawned_body() == Some(listener) {
+                                peer.queue_combat_notice(CombatNotice::Voice {
+                                    anchor: request.anchor,
+                                    speaker: request.speaker,
+                                    listener,
+                                    stimulus: request.stimulus,
+                                    line: request.line,
+                                });
+                            }
+                        }
+                    }
                 }
+            }
+            for message in bot_sightings {
+                world
+                    .scene
+                    .simulation_mut()
+                    .deliver_player_defender_sighting(message);
             }
         }
         Ok(RoomUpdates {
@@ -595,6 +571,8 @@ impl Room {
             created: world.scene.take_enemy_creates(),
             health,
             retired,
+            player_events,
+            observer_player_health,
         })
     }
 }

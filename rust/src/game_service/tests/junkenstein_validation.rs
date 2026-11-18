@@ -59,7 +59,7 @@ fn configured_cassidy_immunity_routes_real_room_damage_and_death_notices() {
                 &[4, 0],
             )
             .unwrap();
-        let scene = assets.prepare_junkenstein(map, card, 0).unwrap();
+        let mut scene = assets.prepare_junkenstein(map, card, 0).unwrap();
         let hero = scene.heroes().find_hero("Cassidy").unwrap().guid;
         let owner = player_entity(0);
         let appearance_card = PlayerCard::default();
@@ -90,12 +90,17 @@ fn configured_cassidy_immunity_routes_real_room_damage_and_death_notices() {
         );
         assert_eq!(
             peer.world
-                .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+                .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
                 .unwrap(),
             (1, false)
         );
         assert_eq!(
-            peer.world.debug_actor(0).unwrap().health,
+            scene
+                .simulation()
+                .player_body_by_owner(owner)
+                .unwrap()
+                .debug_actor()
+                .health,
             input["initial_health"].as_f64()
         );
         let body = peer.world.spawned_body().unwrap();
@@ -136,7 +141,15 @@ fn configured_cassidy_immunity_routes_real_room_damage_and_death_notices() {
             room.finish_simulation(tick, Duration::from_millis(u64::from(tick) * 16))
                 .unwrap();
             let peer = room.members[&1].peer.as_ref().unwrap();
-            let actor = peer.world.debug_actor(0).unwrap();
+            let actor = room
+                .world
+                .as_ref()
+                .unwrap()
+                .scene
+                .simulation()
+                .player_body_by_owner(owner)
+                .unwrap()
+                .debug_actor();
             assert_eq!(
                 actor.health,
                 case["health"][step].as_f64(),

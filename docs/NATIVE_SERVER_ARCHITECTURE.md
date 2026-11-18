@@ -8,7 +8,7 @@ This document defines the Rust workspace boundaries, simulation authorities, scr
 ## Rust Contribution Rules
 
 1. **Dedicated server authority:** Rust owns sockets, encryption, protocol codecs, tick scheduling, lifetimes, collision queries, and command validation.
-2. **One room authority:** Move all room entities (bots, projectiles, and eventually players/gates) under `RoomSimulation`'s room-local `bevy_ecs::world::World` with generation-safe handles and explicit stage order ([#65](https://github.com/leafall903/ORPHEUS/issues/65)).
+2. **One room authority:** Keep bots, player bodies (`PlayerBodyState`), physical projectiles, and eventually encounter gates under `RoomSimulation`'s room-local `bevy_ecs::world::World` with generation-safe handles and explicit stage order ([#65](https://github.com/leafall903/ORPHEUS/issues/65)).
 3. **Data & script-driven gameplay:** Use authored StateScript graphs (`orpheus-statescript` under `rust/crates/statescript/`) for hero/mode logic and vendored Lua 5.4 (`mlua`) for hot-reloadable patrol/AI decisions bounded per room.
 4. **Fault isolation:** Errors and panics in one room retire only that room and revoke its links (`game_service/room.rs`), leaving sibling rooms running (`fixtures/behavior/room-isolation-v1.json`).
 5. **Non-intrusive diagnostics:** The loopback web inspector (`--features inspector`) reads bounded, tick-stamped projections off the simulation thread without mutating match state.
@@ -39,7 +39,7 @@ cargo tree --locked -p orpheus-collision -p orpheus-runtime -p orpheus-statescri
 
 Recent refactors separated portable StateScript execution and broke up server monoliths into focused submodule trees:
 - **`orpheus-statescript` (`rust/crates/statescript/`):** portable `script_graph`, `script_wire`, `script_codecs`, `script_expr/`, `script_entity_state`, `script_destination`, `script_modifiers`, `script_runtime`, `script_voice`, and `script_init/` VM core (tested on Linux in `rust-portable-tests`).
-- **`game_combat/`** (`combat`, `enemy.rs`, `projectiles.rs`, `tests/`): `RoomSimulation` Bevy ECS world housing bot vitals/movement and physical projectiles.
+- **`game_combat/`** (`combat`, `enemy.rs`, `player.rs`, `projectiles.rs`, `tests/`): `RoomSimulation` Bevy ECS world housing bot vitals/movement, room-owned `PlayerBodyState` bodies, and physical projectiles.
 - **`scene_assets/`** (`encounter.rs`, `prepared.rs`, `queries.rs`, `tests/`): `SceneAssets` cold map/collision loader separated from `PreparedScene` and `BotQueries`.
 - **`game_service/`** (`room.rs`, `state.rs`, `tests/isolation.rs`): peer routing, input turn budgets, and room panic/fault retirement.
 
@@ -53,7 +53,7 @@ Remaining boundary cleanups:
 
 | Current Gap | Impact | Tracked Issue |
 | --- | --- | --- |
-| Player bodies (`OwnerBodyRuntime`) and Junkenstein gate/mode entities live on `WorldDelivery` / `PreparedScene` instead of `RoomSimulation` ECS. | Requires manual per-tick `set_external_targets(...)` snapshot copying; player/bot authority is split. | [#65](https://github.com/leafall903/ORPHEUS/issues/65) |
+| Junkenstein gate/mode entities and scene scripts still live on `PreparedScene` rather than `RoomSimulation` ECS (player bodies moved into `RoomSimulation` ECS and production `set_external_targets(...)` copying has been retired). | Remaining gate/mode state must finish moving into `RoomSimulation` alongside bounded AI `think()` scripting. | [#65](https://github.com/leafall903/ORPHEUS/issues/65) |
 | Navigation relies on Practice Range Lua hints (`patrol.lua`) and Junkenstein searches rather than a general NavMesh. | Maps without cached nav data (e.g. King's Row) lack general AI pathfinding. | [#63](https://github.com/leafall903/ORPHEUS/issues/63) |
 | Combat wall queries use legacy `CollisionScene` while movement uses `ContactWorld`. | Discrepancies between contact bounds and wall rays must be diagnosed via inspector before changing masks. | [#62](https://github.com/leafall903/ORPHEUS/issues/62) |
 
@@ -62,7 +62,11 @@ Remaining boundary cleanups:
 ## Room Authority & Worker Scheduling
 
 - **Peer scheduling:** `game_service` processes incoming commands round-robin (up to `16` poses/events per peer, `64` per event-loop turn; `96`-frame lead limit) to prevent one noisy peer from starving others.
-- **Room ECS tick:** steps patrolling/pursuing bots via `BotQueries`, advances projectile flight against static map geometry and target capsules, executes scheduled respawns, records rewind poses (`TargetHistory`), and prepares encrypted owner/observer deltas.
+- **Room ECS tick:** steps patrolling/pursuing bots via `BotQueries`, queries room-owned `PlayerBodyState` and `BotState` components directly for combat targets/hitscan/projectiles/defenders (with friendly and dead pass-through and hostile blocking), advances projectile flight, executes scheduled respawns, records rewind poses (`TargetHistory`), and prepares encrypted owner/observer deltas.
+- **Room-owned player authority vs. per-peer `WorldDelivery` state:**
+  - **`RoomSimulation` (`bevy_ecs`):** owns shared gameplay truth per active player body (`PlayerBodyState`): `BodyId` / `PlayerBodyHandle`, owner wire ID, team/slot/hero, `Mover` physics, rewind `TargetHistory`, `OwnerBodyRuntime` VM & `Vitals`, active `BioticField`s, admitted `launches`, and posed `hitscan` shots, plus `PlayerBodyEvent` observer create/retire notifications.
+  - **Generation-safe handle/lifecycle contract:** `next_player_generation(owner, floor)` advances per-owner generation monotonically across switches, leaves (`retire_player_owner`), and reconnects without resetting prior wire-slot history. `spawn_player_body` replaces any prior owner or wire-slot body and binds `(entity, generation)` inside `PlayerBodyHandle`; `player_body`, `player_body_mut`, `player_body_generation_current`, `clear_player_runtime`, `damage_player_body_by_wire`, and `advance_projectiles` reject stale generations.
+  - **`WorldDelivery` / `BodyScript`:** stays per-peer and owns transport/projection concerns only — wire entity prerequisite tracking (`bodies`, `remote_players`, `bots`), delta/stream cursors (`BodyStream`), predicted projectile leases (`OwnerProjectiles`), and prediction `CorrectionHistory`.
 - **Fault retirement:** all room ticks run inside typed error/panic guards (`panic=unwind`). On error or panic, only that room is retired (all seats/links detached and up to `64` bounded fault records stored for inspector viewing).
 
 ---

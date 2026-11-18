@@ -513,7 +513,7 @@ fn queued_player_requests_ignore_invalid_input_but_propagate_replacement_failure
     world.queue_skin(SOLDIER, FIRST_TICK, Duration::ZERO);
     assert_eq!(
         world
-            .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+            .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
             .unwrap(),
         (4, false)
     );
@@ -522,7 +522,7 @@ fn queued_player_requests_ignore_invalid_input_but_propagate_replacement_failure
     world.generation = u64::MAX;
     world.queue_game_message(FIRST_TICK, Duration::ZERO, pick(owner, SOLDIER));
     let error = world
-        .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+        .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
         .unwrap_err();
     assert_eq!(error.to_string(), "player body lifetime exhausted");
     assert!(world.body.is_none());
@@ -530,7 +530,7 @@ fn queued_player_requests_ignore_invalid_input_but_propagate_replacement_failure
     world.queue_game_message(FIRST_TICK, Duration::ZERO, pick(owner, SOLDIER));
     assert_eq!(
         world
-            .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+            .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
             .unwrap(),
         (1, false)
     );
@@ -552,14 +552,14 @@ fn queued_player_requests_ignore_invalid_input_but_propagate_replacement_failure
     world.queue_skin(0, FIRST_TICK, Duration::ZERO);
     assert_eq!(
         world
-            .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+            .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
             .unwrap(),
         (1, false)
     );
     world.generation = u64::MAX;
     world.queue_skin(SOLDIER, FIRST_TICK, Duration::ZERO);
     let error = world
-        .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+        .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
         .unwrap_err();
     assert_eq!(error.to_string(), "player body lifetime exhausted");
     assert_eq!(world.body.unwrap().id, body.id);
@@ -570,7 +570,7 @@ fn queued_player_requests_ignore_invalid_input_but_propagate_replacement_failure
 fn native_world_resumes_a_gap_before_switching_the_body_and_acknowledging_input() {
     let runtime = std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap();
     let assets = SceneAssets::load(runtime).unwrap();
-    let scene = assets.prepare(GameMap::practice_range()).unwrap();
+    let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
     let owner = 0xa000_0100;
     let viewer = PlayerAppearance {
         entity: owner,
@@ -587,26 +587,31 @@ fn native_world_resumes_a_gap_before_switching_the_body_and_acknowledging_input(
     world.queue_commands(FIRST_TICK, &[forward(first)]);
     assert_eq!(
         world
-            .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+            .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
             .unwrap(),
         (1, false)
     );
     assert_eq!(world.command_ack(FIRST_TICK + 2), first);
     world.created.insert(owner);
     world.present(&scene, FIRST_TICK).unwrap();
-    let hero = scene.heroes().get(SOLDIER).unwrap();
+    let hero = scene.heroes().get(SOLDIER).unwrap().clone();
     world
         .switch(
-            &scene,
+            &mut scene,
             &viewer,
             FIRST_TICK,
             RETAIL_QUANTA,
             owner | 1,
-            (hero, SkinTheme::default()),
+            (&hero, SkinTheme::default()),
         )
         .unwrap();
     assert!(world.body_script.is_some());
-    let initial = world.mover.as_ref().unwrap().pose();
+    let initial = scene
+        .simulation()
+        .player_body_by_owner(owner)
+        .unwrap()
+        .mover
+        .pose();
     let actual = Command {
         yaw: initial.yaw,
         ..forward(first + 1)
@@ -622,13 +627,13 @@ fn native_world_resumes_a_gap_before_switching_the_body_and_acknowledging_input(
     world.queue_commands(FIRST_TICK + 2, &[actual]);
     assert_eq!(
         world
-            .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+            .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
             .unwrap(),
         (1, false)
     );
     world.queue_commands(FIRST_TICK + 2, &[actual, gap]);
 
-    let tracer = scene.heroes().find_hero("Tracer").unwrap();
+    let tracer = scene.heroes().find_hero("Tracer").unwrap().clone();
     let switch = Message {
         id: CLIENT_GAME_MESSAGE,
         fields: Fields::from([
@@ -647,13 +652,19 @@ fn native_world_resumes_a_gap_before_switching_the_body_and_acknowledging_input(
     for turn in 1..=4 {
         assert_eq!(
             world
-                .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+                .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
                 .unwrap(),
             (16, false)
         );
         assert_eq!(world.body.unwrap().id.entity, owner | 1);
         assert_eq!(
-            world.mover.as_ref().unwrap().pose().frame,
+            scene
+                .simulation()
+                .player_body_by_owner(owner)
+                .unwrap()
+                .mover
+                .pose()
+                .frame,
             Some(actual.frame + turn * 16)
         );
         assert_eq!(
@@ -667,12 +678,20 @@ fn native_world_resumes_a_gap_before_switching_the_body_and_acknowledging_input(
             .step(scene.movement_index(), command, 0.016, |_, _| {})
             .unwrap();
     }
-    assert_eq!(world.mover.as_ref().unwrap().pose(), synchronous.pose());
+    assert_eq!(
+        scene
+            .simulation()
+            .player_body_by_owner(owner)
+            .unwrap()
+            .mover
+            .pose(),
+        synchronous.pose()
+    );
     assert_ne!(synchronous.pose().position, initial.position);
 
     assert_eq!(
         world
-            .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+            .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
             .unwrap(),
         (2, false)
     );
@@ -682,7 +701,15 @@ fn native_world_resumes_a_gap_before_switching_the_body_and_acknowledging_input(
     synchronous
         .step(scene.movement_index(), later, 0.016, |_, _| {})
         .unwrap();
-    assert_eq!(world.mover.as_ref().unwrap().pose(), synchronous.pose());
+    assert_eq!(
+        scene
+            .simulation()
+            .player_body_by_owner(owner)
+            .unwrap()
+            .mover
+            .pose(),
+        synchronous.pose()
+    );
 
     world.queue_commands(FIRST_TICK + 3, &[forward(later.frame + 1)]);
     world.clear();
@@ -748,6 +775,7 @@ struct SyntheticOwner {
     modifiers: BTreeMap<ModifierKey, Modifier>,
     failed: Arc<AtomicBool>,
     health_update: Arc<Mutex<Option<WorldComponent>>>,
+    vitals: Option<crate::vitals::Vitals>,
 }
 
 impl OwnerBodyRuntime for SyntheticOwner {
@@ -771,8 +799,30 @@ impl OwnerBodyRuntime for SyntheticOwner {
         FRAME_MS as u32
     }
 
+    fn vitals(&self) -> Option<&crate::vitals::Vitals> {
+        self.vitals.as_ref()
+    }
+
+    fn heal(&mut self, amount: f64) {
+        if let Some(vitals) = &mut self.vitals {
+            vitals.heal(amount);
+        }
+    }
+
+    fn receive_damage(&mut self, amount: f64, source: crate::vitals::Death) -> bool {
+        self.vitals
+            .as_mut()
+            .is_some_and(|vitals| vitals.damage(amount, source).killed)
+    }
+
     fn take_health_update(&mut self) -> Option<WorldComponent> {
-        self.health_update.lock().unwrap().take()
+        if let Some(update) = self.health_update.lock().unwrap().take() {
+            return Some(update);
+        }
+        let vitals = self.vitals.as_mut()?;
+        let component = vitals.changed_component()?;
+        vitals.clear_changed();
+        Some(component)
     }
 
     fn movement_modifiers(&self) -> Option<&BTreeMap<ModifierKey, Modifier>> {
@@ -780,7 +830,12 @@ impl OwnerBodyRuntime for SyntheticOwner {
     }
 }
 
-fn synthetic_owner(entity: u32, frame: u32, failed: Arc<AtomicBool>) -> SyntheticOwner {
+fn synthetic_owner_with_vitals(
+    entity: u32,
+    frame: u32,
+    failed: Arc<AtomicBool>,
+    vitals: Option<crate::vitals::Vitals>,
+) -> SyntheticOwner {
     let graphs = Arc::new(
         GraphStore::from_json(
             br#"{"version":1,"bodies":{},"missing":[],"graphs":[{
@@ -809,10 +864,36 @@ fn synthetic_owner(entity: u32, frame: u32, failed: Arc<AtomicBool>) -> Syntheti
         modifiers: BTreeMap::new(),
         failed,
         health_update: Arc::default(),
+        vitals,
     }
 }
 
-fn activate_script(world: &mut WorldDelivery, id: BodyId, hero: u64, failed: Arc<AtomicBool>) {
+fn synthetic_owner(entity: u32, frame: u32, failed: Arc<AtomicBool>) -> SyntheticOwner {
+    synthetic_owner_with_vitals(entity, frame, failed, None)
+}
+
+fn mover_at(position: [f64; 3]) -> Mover {
+    Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        position,
+        0,
+        0x18,
+    )
+    .unwrap()
+}
+
+fn empty_mover() -> Mover {
+    mover_at([0.0; 3])
+}
+
+fn activate_script(
+    world: &mut WorldDelivery,
+    simulation: &mut RoomSimulation,
+    id: BodyId,
+    hero: u64,
+    failed: Arc<AtomicBool>,
+) {
     let body = Body { hero, ..body(id) };
     world.body = Some(body);
     world.bound = None;
@@ -820,19 +901,71 @@ fn activate_script(world: &mut WorldDelivery, id: BodyId, hero: u64, failed: Arc
         .bodies
         .insert(id.entity, (id.generation, Lifetime::Live));
     world.created.remove(&id.entity);
-    let runtime = Box::new(synthetic_owner(id.entity, 100, failed));
-    world.body_script = Some(BodyScript::new(body, 100, runtime).unwrap());
+    let runtime = synthetic_owner(id.entity, 100, failed);
+    world.body_script = Some(BodyScript::new(body, 100, &runtime).unwrap());
+    let state = PlayerBodyState::new(
+        id,
+        world.owner,
+        0,
+        0,
+        hero,
+        empty_mover(),
+        Some(Box::new(runtime)),
+        100,
+        None,
+    );
+    simulation.spawn_player_body(state).unwrap();
+}
+
+fn step_player(
+    world: &mut WorldDelivery,
+    simulation: &mut RoomSimulation,
+    rays: &TriangleIndex,
+    id: BodyId,
+    command: Command,
+) {
+    let state = simulation.player_body_mut(id).unwrap();
+    let PlayerBodyState {
+        mover,
+        runtime,
+        frame,
+        fields,
+        launches,
+        hitscan,
+        ..
+    } = state;
+    let script = world.body_script.as_mut().unwrap();
+    let mut buffers = StepBuffers {
+        frame,
+        fields,
+        launches,
+        hitscan,
+    };
+    mover
+        .step(rays, command, 0.016, |mover, command| {
+            script
+                .advance_step(
+                    runtime.as_deref_mut().unwrap(),
+                    mover,
+                    &mut buffers,
+                    command,
+                    BodyStep::Posed,
+                )
+                .unwrap();
+        })
+        .unwrap();
 }
 
 fn transmit(
     world: &mut WorldDelivery,
+    simulation: Option<&mut RoomSimulation>,
     egress: &mut GameEgress<Arc<Record>>,
     tick: u32,
     sequence: u32,
 ) -> (Vec<u8>, SentFrame) {
     let mut bytes = Vec::new();
     let sent = world
-        .send_frame(tick, Vec::new(), false, egress, |payload| {
+        .send_frame(tick, Vec::new(), false, simulation, egress, |payload| {
             bytes = payload;
             Ok::<_, ()>(sequence)
         })
@@ -859,8 +992,9 @@ fn projectile_retirement_retries_destroys_and_ignores_stale_confirmations() {
     const DEFINITION: u64 = 0x0400_0000_0000_072c;
     let id = avatar(1, 1);
     let mut world = WorldDelivery::new(OWNER);
+    let mut simulation = RoomSimulation::new(Vec::new()).unwrap();
     world.started = Some(100);
-    activate_script(&mut world, id, SOLDIER, Arc::default());
+    activate_script(&mut world, &mut simulation, id, SOLDIER, Arc::default());
     let leases = ProjectileLeases::new(0, 100, [DEFINITION]).unwrap();
     let alias = leases.entity(DEFINITION, 101, 0).unwrap();
     let mut projectiles = OwnerProjectiles::new(id.entity, leases);
@@ -895,8 +1029,14 @@ fn projectile_retirement_retries_destroys_and_ignores_stale_confirmations() {
     assert_eq!(eligible(&world), [0]);
     world.sent(&[0]);
 
-    world.cancel_body_script();
-    activate_script(&mut world, avatar(2, 2), SOLDIER, Arc::default());
+    world.cancel_body_script(Some(&mut simulation));
+    activate_script(
+        &mut world,
+        &mut simulation,
+        avatar(2, 2),
+        SOLDIER,
+        Arc::default(),
+    );
     world.acknowledge(outcome(old, false), Duration::ZERO);
     let destroy = Arc::clone(&world.queued[0]);
     assert_eq!(world.queued.len(), 1);
@@ -922,47 +1062,52 @@ fn admitted_owner_projectile_preserves_gravity_and_expiry_blast() {
     const DEFINITION: u64 = 0x0400_0000_0000_037d;
     let id = avatar(1, 2);
     let mut world = WorldDelivery::new(OWNER);
-    activate_script(&mut world, id, CASSIDY, Arc::default());
+    let mut simulation = RoomSimulation::new(Vec::new()).unwrap();
+    activate_script(&mut world, &mut simulation, id, CASSIDY, Arc::default());
     let script = world.body_script.as_mut().unwrap();
     script.projectiles = Some(OwnerProjectiles::new(
         id.entity,
         ProjectileLeases::new(0, 100, [DEFINITION]).unwrap(),
     ));
-    script.launch_projectile(PosedProjectile {
-        stun: crate::game_combat::Stun::from_seconds(0.8),
-        shot: ShotEvent {
-            entity: id.entity,
-            instance: 1,
-            graph: 0x01e9,
-            raw_state: 1,
-            frame: 101,
-            time_ms: 101 * FRAME_MS,
-            activation: 1,
-            activation_ms: 101 * FRAME_MS,
-            ordinal: 0,
+    let launches = &mut simulation.player_body_mut(id).unwrap().launches;
+    script.launch_projectile(
+        PosedProjectile {
+            stun: crate::game_combat::Stun::from_seconds(0.8),
+            shot: ShotEvent {
+                entity: id.entity,
+                instance: 1,
+                graph: 0x01e9,
+                raw_state: 1,
+                frame: 101,
+                time_ms: 101 * FRAME_MS,
+                activation: 1,
+                activation_ms: 101 * FRAME_MS,
+                ordinal: 0,
+            },
+            ballistics: ProjectileBallistics {
+                speed: 30.0,
+                lifetime: 7.0 / 30.0,
+                definition: Some(DEFINITION),
+                direct: None,
+                blast: Some(Blast {
+                    hit: HitDefinition {
+                        tags: crate::game_hitscan::DamageTags::EMPTY,
+                        amount: 25.0,
+                        loadout: None,
+                        critical: 1.0,
+                        falloff: None,
+                    },
+                    rings: vec![(3.0, 1.0)],
+                }),
+            },
+            origin: [0.0, 1.55, 0.0],
+            direction: lifted_direction([0.0, 0.0, 1.0], 0.05).unwrap(),
+            gravity: Some(20.0),
+            expiry_blast: true,
         },
-        ballistics: ProjectileBallistics {
-            speed: 30.0,
-            lifetime: 7.0 / 30.0,
-            definition: Some(DEFINITION),
-            direct: None,
-            blast: Some(Blast {
-                hit: HitDefinition {
-                    tags: crate::game_hitscan::DamageTags::EMPTY,
-                    amount: 25.0,
-                    loadout: None,
-                    critical: 1.0,
-                    falloff: None,
-                },
-                rings: vec![(3.0, 1.0)],
-            }),
-        },
-        origin: [0.0, 1.55, 0.0],
-        direction: lifted_direction([0.0, 0.0, 1.0], 0.05).unwrap(),
-        gravity: Some(20.0),
-        expiry_blast: true,
-    });
-    let (_, mut launches) = world.take_projectile_launches().unwrap();
+        launches,
+    );
+    let (_, mut launches) = world.take_projectile_launches(&mut simulation).unwrap();
     let [launch] = launches.as_mut_slice() else {
         panic!("one admitted flight")
     };
@@ -1010,44 +1155,55 @@ fn room_flight_outcomes_release_only_the_current_owner_alias() {
     let id = avatar(1, 2);
     for completed in [false, true] {
         let mut world = WorldDelivery::new(OWNER);
+        let mut simulation = RoomSimulation::new(Vec::new()).unwrap();
         world.started = Some(100);
-        activate_script(&mut world, id, SOLDIER, Arc::default());
+        activate_script(&mut world, &mut simulation, id, SOLDIER, Arc::default());
         let leases = ProjectileLeases::new(0, 100, [DEFINITION]).unwrap();
         let alias = leases.entity(DEFINITION, 101, 0).unwrap();
         let script = world.body_script.as_mut().unwrap();
         script.projectiles = Some(OwnerProjectiles::new(id.entity, leases));
-        script.launch_projectile(PosedProjectile {
-            stun: None,
-            gravity: None,
-            expiry_blast: false,
-            shot: ShotEvent {
-                entity: id.entity,
-                instance: 1,
-                graph: 42,
-                raw_state: 0,
-                frame: 101,
-                time_ms: 101 * FRAME_MS,
-                activation: 1,
-                activation_ms: 101 * FRAME_MS,
-                ordinal: 0,
+        let launches = &mut simulation.player_body_mut(id).unwrap().launches;
+        script.launch_projectile(
+            PosedProjectile {
+                stun: None,
+                gravity: None,
+                expiry_blast: false,
+                shot: ShotEvent {
+                    entity: id.entity,
+                    instance: 1,
+                    graph: 42,
+                    raw_state: 0,
+                    frame: 101,
+                    time_ms: 101 * FRAME_MS,
+                    activation: 1,
+                    activation_ms: 101 * FRAME_MS,
+                    ordinal: 0,
+                },
+                ballistics: ProjectileBallistics {
+                    speed: 1.0,
+                    lifetime: 2.0,
+                    definition: Some(DEFINITION),
+                    direct: None,
+                    blast: None,
+                },
+                origin: [0.0; 3],
+                direction: [1.0, 0.0, 0.0],
             },
-            ballistics: ProjectileBallistics {
-                speed: 1.0,
-                lifetime: 2.0,
-                definition: Some(DEFINITION),
-                direct: None,
-                blast: None,
-            },
-            origin: [0.0; 3],
-            direction: [1.0, 0.0, 0.0],
-        });
-        let (owner, launches) = world.take_projectile_launches().unwrap();
+            launches,
+        );
+        let (owner, launches) = world.take_projectile_launches(&mut simulation).unwrap();
         assert_eq!(owner, id);
         let [launch] = launches.as_slice() else {
             panic!("one accepted flight");
         };
         let token = launch.token;
-        assert!(world.take_projectile_launches().unwrap().1.is_empty());
+        assert!(
+            world
+                .take_projectile_launches(&mut simulation)
+                .unwrap()
+                .1
+                .is_empty()
+        );
         world
             .finish_projectiles(avatar(1, 1), 133, vec![FlightOutcome::Failed(token)])
             .unwrap();
@@ -1101,21 +1257,43 @@ fn owner_health_waits_for_creation_and_discards_superseded_lifetimes() {
 
     let id = avatar(1, 1);
     let mut world = WorldDelivery::new(OWNER);
+    let mut simulation = RoomSimulation::new(Vec::new()).unwrap();
     world.started = Some(100);
-    world.body = Some(body(id));
+    let body_value = body(id);
+    world.body = Some(body_value);
     world
         .bodies
         .insert(id.entity, (id.generation, Lifetime::Live));
     let runtime = synthetic_owner(id.entity, 100, Arc::default());
     let pending = Arc::clone(&runtime.health_update);
-    world.body_script = Some(BodyScript::new(body(id), 100, Box::new(runtime)).unwrap());
+    world.body_script = Some(BodyScript::new(body_value, 100, &runtime).unwrap());
+    simulation
+        .spawn_player_body(PlayerBodyState::new(
+            id,
+            OWNER,
+            0,
+            0,
+            body_value.hero,
+            empty_mover(),
+            Some(Box::new(runtime)),
+            100,
+            None,
+        ))
+        .unwrap();
     world.push(record(id.entity, Delivery::CreateBody(id)));
 
     let mut egress = GameEgress::default();
     let first = health(160.0, 200.0, 50.0, 0.0);
     *pending.lock().unwrap() = Some(first.clone());
     let sent = world
-        .send_frame(100, Vec::new(), false, &mut egress, |_| Ok::<_, ()>(0))
+        .send_frame(
+            100,
+            Vec::new(),
+            false,
+            Some(&mut simulation),
+            &mut egress,
+            |_| Ok::<_, ()>(0),
+        )
         .unwrap();
     assert_eq!(sent.records, [RecordSource::Queued(0)]);
     assert!(world.health_pending(id.entity));
@@ -1130,7 +1308,14 @@ fn owner_health_waits_for_creation_and_discards_superseded_lifetimes() {
         (ARMOUR_POOL * POOLS, [0; 20]),
     ]);
     *pending.lock().unwrap() = Some(latest.clone());
-    let rejected = world.send_frame(101, Vec::new(), false, &mut egress, |_| Err::<u32, _>(()));
+    let rejected = world.send_frame(
+        101,
+        Vec::new(),
+        false,
+        Some(&mut simulation),
+        &mut egress,
+        |_| Err::<u32, _>(()),
+    );
     assert!(matches!(rejected, Err(SendError::Transport(()))));
     world.acknowledge(outcome(Arc::clone(&old), false), Duration::ZERO);
     world.acknowledge(outcome(old, true), Duration::ZERO);
@@ -1149,7 +1334,7 @@ fn owner_health_waits_for_creation_and_discards_superseded_lifetimes() {
 
     world.sent(&[ready.index]);
     world.body = Some(body(avatar(2, 2)));
-    world.cancel_body_script();
+    world.cancel_body_script(Some(&mut simulation));
     world.retire_body(id);
     world.remove_stale();
     world.queue_health(latest_record.update.clone());
@@ -1165,56 +1350,45 @@ fn owner_health_waits_for_creation_and_discards_superseded_lifetimes() {
 #[test]
 fn body_script_retries_frozen_initial_frames_and_ignores_old_generation_reports() {
     let mut world = WorldDelivery::new(OWNER);
+    let mut simulation = RoomSimulation::new(Vec::new()).unwrap();
     let id = avatar(1, 1);
     world.started = Some(100);
-    activate_script(&mut world, id, 7, Arc::default());
+    activate_script(&mut world, &mut simulation, id, 7, Arc::default());
     world.push(record(id.entity, Delivery::CreateBody(id)));
     let mut egress = GameEgress::default();
     assert_eq!(
-        transmit(&mut world, &mut egress, 100, 0).1.records,
+        transmit(&mut world, Some(&mut simulation), &mut egress, 100, 0)
+            .1
+            .records,
         [RecordSource::Queued(0)]
     );
     assert!(
-        transmit(&mut world, &mut egress, 100, 1)
+        transmit(&mut world, Some(&mut simulation), &mut egress, 100, 1)
             .1
             .records
             .is_empty()
     );
     transport_outcome(&mut world, &mut egress, 0, true);
-    let (h0, sent) = transmit(&mut world, &mut egress, 101, 2);
+    let (h0, sent) = transmit(&mut world, Some(&mut simulation), &mut egress, 101, 2);
     assert_eq!(sent.records, [RecordSource::Queued(0)]);
     transport_outcome(&mut world, &mut egress, 2, false);
-    assert_eq!(transmit(&mut world, &mut egress, 101, 3).0, h0);
+    assert_eq!(
+        transmit(&mut world, Some(&mut simulation), &mut egress, 101, 3).0,
+        h0
+    );
     transport_outcome(&mut world, &mut egress, 3, true);
     assert_eq!(
         world.body_script.as_ref().unwrap().stream.base().unwrap().0,
         1
     );
 
-    let blocked = transmit(&mut world, &mut egress, 101, 4).1;
+    let blocked = transmit(&mut world, Some(&mut simulation), &mut egress, 101, 4).1;
     assert!(blocked.records.is_empty());
-    let mut mover = Mover::new(
-        MoverSettings::default(),
-        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
-        [0.0; 3],
-        0,
-        0x18,
-    )
-    .unwrap();
     let rays = TriangleIndex::new([]).unwrap();
     let command = forward(101);
-    mover
-        .step(&rays, command, 0.016, |mover, command| {
-            world
-                .body_script
-                .as_mut()
-                .unwrap()
-                .advance(mover, command, BodyStep::Posed)
-                .unwrap();
-        })
-        .unwrap();
+    step_player(&mut world, &mut simulation, &rays, id, command);
     assert!(
-        transmit(&mut world, &mut egress, 101, 5)
+        transmit(&mut world, Some(&mut simulation), &mut egress, 101, 5)
             .1
             .records
             .is_empty()
@@ -1228,61 +1402,52 @@ fn body_script_retries_frozen_initial_frames_and_ignores_old_generation_reports(
 
     world.push(record(OWNER, Delivery::Possession(id)));
     assert_eq!(
-        transmit(&mut world, &mut egress, 101, 6).1.records,
+        transmit(&mut world, Some(&mut simulation), &mut egress, 101, 6)
+            .1
+            .records,
         [RecordSource::Queued(0)]
     );
     transport_outcome(&mut world, &mut egress, 6, true);
-    let (c0, sent) = transmit(&mut world, &mut egress, 102, 7);
+    let (c0, sent) = transmit(&mut world, Some(&mut simulation), &mut egress, 102, 7);
     assert_eq!(sent.records, [RecordSource::Queued(0)]);
     let command = forward(117);
-    mover
-        .step(&rays, command, 0.016, |mover, command| {
-            world
-                .body_script
-                .as_mut()
-                .unwrap()
-                .advance(mover, command, BodyStep::Posed)
-                .unwrap();
-        })
-        .unwrap();
+    step_player(&mut world, &mut simulation, &rays, id, command);
     assert!(
-        transmit(&mut world, &mut egress, 102, 8)
+        transmit(&mut world, Some(&mut simulation), &mut egress, 102, 8)
             .1
             .records
             .is_empty()
     );
     transport_outcome(&mut world, &mut egress, 7, false);
-    assert_eq!(transmit(&mut world, &mut egress, 102, 9).0, c0);
+    assert_eq!(
+        transmit(&mut world, Some(&mut simulation), &mut egress, 102, 9).0,
+        c0
+    );
     transport_outcome(&mut world, &mut egress, 9, true);
     assert_eq!(
-        transmit(&mut world, &mut egress, 117, 10).1.records,
+        transmit(&mut world, Some(&mut simulation), &mut egress, 117, 10)
+            .1
+            .records,
         [RecordSource::Queued(0)]
     );
     transport_outcome(&mut world, &mut egress, 10, false);
     assert!(
-        transmit(&mut world, &mut egress, 118, 11)
+        transmit(&mut world, Some(&mut simulation), &mut egress, 118, 11)
             .1
             .records
             .is_empty()
     );
 
-    mover
-        .step(&rays, forward(118), 0.016, |mover, command| {
-            world
-                .body_script
-                .as_mut()
-                .unwrap()
-                .advance(mover, command, BodyStep::Posed)
-                .unwrap();
-        })
-        .unwrap();
+    step_player(&mut world, &mut simulation, &rays, id, forward(118));
     assert_eq!(
-        transmit(&mut world, &mut egress, 118, 12).1.records,
+        transmit(&mut world, Some(&mut simulation), &mut egress, 118, 12)
+            .1
+            .records,
         [RecordSource::Queued(0)]
     );
-    world.cancel_body_script();
+    world.cancel_body_script(Some(&mut simulation));
     let reused = avatar(1, 257);
-    activate_script(&mut world, reused, 7, Arc::default());
+    activate_script(&mut world, &mut simulation, reused, 7, Arc::default());
     transport_outcome(&mut world, &mut egress, 12, true);
     assert_eq!(world.body_script.as_ref().unwrap().stream.last(), 0);
     assert!(world.queued.is_empty());
@@ -1299,10 +1464,11 @@ fn read_ack(payload: &[u8]) -> u32 {
 fn owner_correction_respects_create_budget_and_failed_transport() {
     for hero in [SOLDIER, CASSIDY] {
         let mut world = WorldDelivery::new(OWNER);
+        let mut simulation = RoomSimulation::new(Vec::new()).unwrap();
         let id = avatar(1, 1);
         world.started = Some(100);
         let failed = Arc::new(AtomicBool::new(false));
-        activate_script(&mut world, id, hero, Arc::clone(&failed));
+        activate_script(&mut world, &mut simulation, id, hero, Arc::clone(&failed));
         world.input.processed = Some(125);
         let history = world
             .body_script
@@ -1316,14 +1482,14 @@ fn owner_correction_respects_create_budget_and_failed_transport() {
             ..Movement::default()
         });
         let mut egress = GameEgress::default();
-        let (blocked, sent) = transmit(&mut world, &mut egress, 100, 0);
+        let (blocked, sent) = transmit(&mut world, Some(&mut simulation), &mut egress, 100, 0);
         assert_eq!(read_ack(&blocked), 102);
         assert!(sent.records.is_empty());
         world.acknowledge(
             outcome(Arc::new(record(id.entity, Delivery::CreateBody(id))), true),
             Duration::ZERO,
         );
-        let (first, sent) = transmit(&mut world, &mut egress, 100, 1);
+        let (first, sent) = transmit(&mut world, Some(&mut simulation), &mut egress, 100, 1);
         assert_eq!(read_ack(&first), 102);
         assert!(sent.records.contains(&RecordSource::Movement(0)));
         transport_outcome(&mut world, &mut egress, 1, true);
@@ -1350,15 +1516,22 @@ fn owner_correction_respects_create_budget_and_failed_transport() {
                 ..EntityUpdate::default()
             }));
         }
-        let (crowded, sent) = transmit(&mut world, &mut egress, 107, 2);
+        let (crowded, sent) = transmit(&mut world, Some(&mut simulation), &mut egress, 107, 2);
         assert_eq!(read_ack(&crowded), 102);
         assert_eq!(sent.records.len(), MAX_ENTITY_RECORDS);
         assert!(!sent.records.contains(&RecordSource::Movement(0)));
         transport_outcome(&mut world, &mut egress, 2, true);
-        let rejected = world.send_frame(107, Vec::new(), false, &mut egress, |payload| {
-            assert_eq!(read_ack(&payload), 108);
-            Err(())
-        });
+        let rejected = world.send_frame(
+            107,
+            Vec::new(),
+            false,
+            Some(&mut simulation),
+            &mut egress,
+            |payload| {
+                assert_eq!(read_ack(&payload), 108);
+                Err(())
+            },
+        );
         assert!(matches!(rejected, Err(SendError::Transport(()))));
         assert_eq!(
             world
@@ -1371,19 +1544,19 @@ fn owner_correction_respects_create_budget_and_failed_transport() {
                 .corrected(),
             Some(100)
         );
-        let (selected, sent) = transmit(&mut world, &mut egress, 107, 3);
+        let (selected, sent) = transmit(&mut world, Some(&mut simulation), &mut egress, 107, 3);
         assert_eq!(read_ack(&selected), 108);
         assert_eq!(sent.records, [RecordSource::Movement(0)]);
         assert!(egress.acknowledge(4, 0).packets.is_empty());
         assert!(
-            transmit(&mut world, &mut egress, 107, 4)
+            transmit(&mut world, Some(&mut simulation), &mut egress, 107, 4)
                 .1
                 .records
                 .is_empty()
         );
 
         failed.store(true, Ordering::Relaxed);
-        let (payload, sent) = transmit(&mut world, &mut egress, 112, 5);
+        let (payload, sent) = transmit(&mut world, Some(&mut simulation), &mut egress, 112, 5);
         assert_eq!(read_ack(&payload), 125);
         assert!(world.body_script.is_none());
         assert!(sent.records.is_empty());
@@ -1409,36 +1582,50 @@ fn prepared_worker_resumes_unposed_vm_frames_before_advancing_physics() {
     };
     let mut world = WorldDelivery::new(OWNER);
     world.started = Some(FIRST_TICK);
-    let hero = scene.heroes().get(SOLDIER).unwrap();
+    let hero = scene.heroes().get(SOLDIER).unwrap().clone();
     world
         .switch(
-            &scene,
+            &mut scene,
             &viewer,
             FIRST_TICK,
             RETAIL_QUANTA,
             OWNER | 1,
-            (hero, SkinTheme::default()),
+            (&hero, SkinTheme::default()),
         )
         .unwrap();
     let tick = FIRST_TICK + 1;
     world.queue_commands(tick, &[forward(tick)]);
     assert_eq!(
         world
-            .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+            .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
             .unwrap(),
         (1, false)
     );
     assert_eq!(world.body_script.as_ref().unwrap().frame, tick);
     let mut egress = GameEgress::default();
     assert!(
-        !transmit(&mut world, &mut egress, tick, 0)
-            .1
-            .records
-            .contains(&RecordSource::Movement(0))
+        !transmit(
+            &mut world,
+            Some(scene.simulation_mut()),
+            &mut egress,
+            tick,
+            0
+        )
+        .1
+        .records
+        .contains(&RecordSource::Movement(0))
     );
     transport_outcome(&mut world, &mut egress, 0, true);
     assert_eq!(
-        transmit(&mut world, &mut egress, tick, 1).1.records,
+        transmit(
+            &mut world,
+            Some(scene.simulation_mut()),
+            &mut egress,
+            tick,
+            1
+        )
+        .1
+        .records,
         [RecordSource::Queued(0), RecordSource::Movement(0)]
     );
     transport_outcome(&mut world, &mut egress, 1, true);
@@ -1448,7 +1635,7 @@ fn prepared_worker_resumes_unposed_vm_frames_before_advancing_physics() {
     for turn in 1..=16 {
         assert_eq!(
             world
-                .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+                .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
                 .unwrap(),
             (16, false)
         );
@@ -1456,19 +1643,34 @@ fn prepared_worker_resumes_unposed_vm_frames_before_advancing_physics() {
             world.body_script.as_ref().unwrap().frame,
             tick + 141 + turn * 16
         );
-        assert_eq!(world.mover.as_ref().unwrap().pose().frame, Some(tick));
+        assert_eq!(
+            scene
+                .simulation()
+                .player_body_by_owner(OWNER)
+                .unwrap()
+                .mover
+                .pose()
+                .frame,
+            Some(tick)
+        );
         assert_eq!(world.command_ack(after_unposed_gap), tick);
         assert!(
-            transmit(&mut world, &mut egress, after_unposed_gap, turn + 1)
-                .1
-                .records
-                .is_empty()
+            transmit(
+                &mut world,
+                Some(scene.simulation_mut()),
+                &mut egress,
+                after_unposed_gap,
+                turn + 1,
+            )
+            .1
+            .records
+            .is_empty()
         );
         world.queue_commands(after_unposed_gap, &[forward(after_unposed_gap)]);
     }
     assert_eq!(
         world
-            .advance_input(&scene, &viewer, RETAIL_QUANTA, 16)
+            .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
             .unwrap(),
         (3, false)
     );
@@ -1476,13 +1678,25 @@ fn prepared_worker_resumes_unposed_vm_frames_before_advancing_physics() {
     assert_eq!(world.command_ack(after_unposed_gap), after_unposed_gap);
     assert_eq!(world.body_script.as_ref().unwrap().frame, after_unposed_gap);
     assert_eq!(
-        world.mover.as_ref().unwrap().pose().frame,
+        scene
+            .simulation()
+            .player_body_by_owner(OWNER)
+            .unwrap()
+            .mover
+            .pose()
+            .frame,
         Some(after_unposed_gap)
     );
     assert_eq!(
-        transmit(&mut world, &mut egress, after_unposed_gap, 18)
-            .1
-            .records,
+        transmit(
+            &mut world,
+            Some(scene.simulation_mut()),
+            &mut egress,
+            after_unposed_gap,
+            18,
+        )
+        .1
+        .records,
         [RecordSource::Queued(0), RecordSource::Movement(0)]
     );
 }
@@ -1569,4 +1783,744 @@ fn ring_reuses_only_acknowledged_destroy_after_the_retention_window() {
         None
     );
     assert_eq!(world.next_body(BODY_REUSE_DELAY), Some(target.entity));
+}
+
+fn fixture_ground() -> crate::collision_scene::CollisionScene {
+    use crate::{
+        collision_cache::{CollisionCache, Mesh, Triangle},
+        collision_scene::CollisionScene,
+    };
+
+    let cache = CollisionCache {
+        header: serde_json::from_str(
+            r#"{"meshes":[[3,1]],"hulls":0,"models":0,"placements":0,"identifiers":[]}"#,
+        )
+        .unwrap(),
+        meshes: vec![Mesh {
+            vertices: vec![[-1.0, 0.0, 0.0], [-1.0, 2.0, 0.0], [-1.0, 0.0, 1.0]],
+            triangles: vec![Triangle {
+                corners: [0, 1, 2],
+                wings: [-1; 3],
+                mask: 0x18,
+                surface: 0,
+            }],
+        }],
+        hulls: vec![],
+        models: vec![],
+        placements: vec![],
+    };
+    CollisionScene::movement_probe(&cache, &Default::default()).unwrap()
+}
+
+fn fixture_player_state(
+    id: BodyId,
+    owner: u32,
+    slot: u8,
+    team: u8,
+    position: [f64; 3],
+    health: f64,
+    with_observer_create: bool,
+) -> PlayerBodyState {
+    use crate::vitals::Vitals;
+
+    let runtime = synthetic_owner_with_vitals(
+        id.entity,
+        100,
+        Arc::default(),
+        Some(Vitals::new(health, 0.0, 0.0)),
+    );
+    let observer_create = with_observer_create.then(|| EntityUpdate {
+        entity: id.entity,
+        operation: Some(Operation::Create(Box::new(crate::world::Create::new(
+            1,
+            Vec::new(),
+        )))),
+        ..EntityUpdate::default()
+    });
+    PlayerBodyState::new(
+        id,
+        owner,
+        slot,
+        team,
+        SOLDIER,
+        mover_at(position),
+        Some(Box::new(runtime)),
+        100,
+        observer_create,
+    )
+}
+
+fn fixture_projectile_flight(
+    owner: BodyId,
+    tick: u32,
+    speed: f64,
+    damage: Option<f64>,
+) -> AdmittedFlight {
+    use crate::{
+        game_combat::{AdmittedFlight, PosedProjectile},
+        game_hitscan::{DamageTags, HitDefinition},
+        projectile_flight::{ProjectileBallistics, ProjectileFlight},
+        script_init::ShotEvent,
+    };
+
+    let definition = 0x0400_0000_0000_072c;
+    let leases = ProjectileLeases::new(0, tick, [definition]).unwrap();
+    let token = OwnerProjectiles::new(owner.entity, leases)
+        .admit(
+            ShotEvent {
+                entity: owner.entity,
+                instance: 1,
+                graph: 42,
+                raw_state: 0,
+                frame: tick,
+                time_ms: 0,
+                activation: 1,
+                activation_ms: 0,
+                ordinal: 0,
+            },
+            definition,
+            3,
+        )
+        .unwrap();
+    let posed = PosedProjectile {
+        stun: None,
+        gravity: None,
+        expiry_blast: false,
+        shot: ShotEvent {
+            entity: owner.entity,
+            instance: 1,
+            graph: 42,
+            raw_state: 0,
+            frame: tick,
+            time_ms: 0,
+            activation: 1,
+            activation_ms: 0,
+            ordinal: 0,
+        },
+        ballistics: ProjectileBallistics {
+            speed,
+            lifetime: 1.0,
+            definition: Some(definition),
+            direct: damage.map(|amount| HitDefinition {
+                tags: DamageTags::EMPTY,
+                amount,
+                loadout: None,
+                critical: 1.0,
+                falloff: None,
+            }),
+            blast: None,
+        },
+        origin: [0.0, 1.0, 0.0],
+        direction: [1.0, 0.0, 0.0],
+    };
+    let flight =
+        ProjectileFlight::new(posed.ballistics, posed.origin, posed.direction, None).unwrap();
+    AdmittedFlight {
+        token,
+        flight,
+        stun: None,
+        hit_effect: None,
+    }
+}
+
+#[test]
+fn owner_and_observer_share_one_authoritative_room_body() {
+    use crate::{
+        game_combat::{PlayerBodyEvent, PosedHitscan, ShotContext},
+        game_hitscan::{DamageTags, HitDefinition},
+        mover_settings::MoverCatalog,
+        scene_assets::BotQueries,
+    };
+
+    let ground = fixture_ground();
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, &ground, None);
+    let rays = TriangleIndex::new(Vec::new()).unwrap();
+    let mut simulation = RoomSimulation::new(Vec::new()).unwrap();
+
+    let id = avatar(1, 1);
+    let owner = OWNER;
+    let observer_owner = OWNER + 0x100;
+
+    let mut owner_world = WorldDelivery::new(owner);
+    owner_world.started = Some(100);
+    let body_value = body(id);
+    owner_world.body = Some(body_value);
+    owner_world
+        .bodies
+        .insert(id.entity, (id.generation, Lifetime::Live));
+
+    let state = fixture_player_state(id, owner, 0, 0, [8.0, 0.0, 0.0], 200.0, true);
+    owner_world.body_script = Some(
+        BodyScript::new(
+            body_value,
+            100,
+            state.runtime.as_deref().expect("owner runtime"),
+        )
+        .unwrap(),
+    );
+    simulation.spawn_player_body(state).unwrap();
+    simulation.record_player_poses(100);
+
+    let mut observer_world = WorldDelivery::new(observer_owner);
+    observer_world.started = Some(100);
+    for event in simulation.take_player_events() {
+        if let PlayerBodyEvent::Created {
+            owner: created_owner,
+            id: created_id,
+            update,
+        } = event
+        {
+            if created_owner != observer_owner {
+                observer_world.create_remote_player(created_id, *update);
+            }
+        }
+    }
+    let mut observer_egress = GameEgress::default();
+    let (_, observer_create_sent) = transmit(
+        &mut observer_world,
+        Some(&mut simulation),
+        &mut observer_egress,
+        100,
+        0,
+    );
+    assert_eq!(observer_create_sent.records, [RecordSource::Queued(0)]);
+    transport_outcome(&mut observer_world, &mut observer_egress, 0, true);
+    assert!(observer_world.identity_ready(id.entity));
+
+    // Step the owner once: only RoomSimulation holds the authoritative Mover/pose.
+    step_player(&mut owner_world, &mut simulation, &rays, id, forward(101));
+    let moved_pose = simulation.player_body_by_owner(owner).unwrap().mover.pose();
+    assert_ne!(moved_pose.position, [8.0, 0.0, 0.0]);
+
+    // Hostile hitscan in RoomSimulation mutates the single authoritative body.
+    let shooter = OWNER + 0x200;
+    let shooter_id = BodyId {
+        entity: shooter | 1,
+        generation: 1,
+    };
+    simulation
+        .spawn_player_body(fixture_player_state(
+            shooter_id,
+            shooter,
+            1,
+            1,
+            [0.0, 0.0, 0.0],
+            200.0,
+            false,
+        ))
+        .unwrap();
+    let hit = simulation
+        .hitscan(
+            &queries,
+            PosedHitscan {
+                source: shooter_id.entity,
+                origin: [moved_pose.position[0] - 4.0, 1.0, moved_pose.position[2]],
+                direction: [1.0, 0.0, 0.0],
+                command: Command {
+                    frame: 100,
+                    ..Command::default()
+                },
+                shot_frame: 101,
+                reach: 20.0,
+                hit: HitDefinition {
+                    tags: DamageTags::EMPTY,
+                    amount: 75.0,
+                    loadout: None,
+                    critical: 1.0,
+                    falloff: None,
+                },
+            },
+            ShotContext {
+                team: 1,
+                quanta: RETAIL_QUANTA,
+                tick: 101,
+                now: Duration::from_secs(2),
+            },
+            |_| true,
+        )
+        .unwrap()
+        .expect("authoritative player hit");
+    assert_eq!(hit.damage.target, id.entity);
+    assert_eq!(
+        simulation
+            .player_body_by_owner(owner)
+            .unwrap()
+            .runtime
+            .as_ref()
+            .unwrap()
+            .vitals()
+            .unwrap()
+            .total(),
+        125.0
+    );
+
+    // Owner and observer derive their updates from that single room body.
+    assert_eq!(simulation.player_projections(observer_owner).count(), 2);
+    assert!(
+        simulation
+            .player_projections(observer_owner)
+            .any(|projection| projection.snapshot.entity == id.entity)
+    );
+    let observer_movements: Vec<_> = simulation
+        .observer_player_movements(observer_owner)
+        .into_iter()
+        .filter(|(entity, _)| *entity == id.entity)
+        .map(|(entity, movement)| EntityUpdate {
+            entity,
+            movement: Some(movement),
+            ..EntityUpdate::default()
+        })
+        .collect();
+    assert_eq!(observer_movements.len(), 1);
+    assert_eq!(observer_movements[0].movement, Some(moved_pose));
+
+    observer_world.queue_health(hit.health);
+    assert!(observer_world.health_pending(id.entity));
+    let observer_update_sent = observer_world
+        .send_frame(
+            101,
+            observer_movements,
+            false,
+            Some(&mut simulation),
+            &mut observer_egress,
+            |_| Ok::<_, ()>(1),
+        )
+        .unwrap();
+    assert!(
+        observer_update_sent
+            .records
+            .contains(&RecordSource::Queued(0))
+    );
+    assert!(
+        observer_update_sent
+            .records
+            .contains(&RecordSource::Movement(0))
+    );
+}
+
+#[test]
+fn reconnect_attaches_to_room_authority_and_advances_generation() {
+    use crate::game_combat::PlayerBodyEvent;
+
+    let mut simulation = RoomSimulation::new(Vec::new()).unwrap();
+    let owner = OWNER;
+    let wire = owner | 1;
+
+    let gen1 = simulation.next_player_generation(owner, 0).unwrap();
+    assert_eq!(gen1, 1);
+    let id1 = BodyId {
+        entity: wire,
+        generation: gen1,
+    };
+
+    let mut first_peer = WorldDelivery::new(owner);
+    first_peer.started = Some(100);
+    first_peer.body = Some(body(id1));
+    first_peer
+        .bodies
+        .insert(id1.entity, (id1.generation, Lifetime::Live));
+    simulation
+        .spawn_player_body(fixture_player_state(
+            id1, owner, 0, 0, [0.0; 3], 200.0, true,
+        ))
+        .unwrap();
+    let _ = simulation.take_player_events();
+    assert_eq!(simulation.player_body_by_owner(owner).unwrap().id, id1);
+
+    // Disconnect retires the room-owned handle while retaining generation history.
+    first_peer.clear_in_room(&mut simulation);
+    assert!(first_peer.active_body_id().is_none());
+    assert!(simulation.player_body_by_owner(owner).is_none());
+    assert!(simulation.player_body(id1).is_none());
+    assert!(!simulation.player_body_generation_current(id1));
+    let events = simulation.take_player_events();
+    assert!(matches!(
+        events.as_slice(),
+        [PlayerBodyEvent::Retired {
+            owner: retired_owner,
+            id: retired_id,
+        }] if *retired_owner == owner && *retired_id == id1
+    ));
+
+    // Reconnecting with a fresh peer (client floor 0) continues monotonic generation.
+    let gen2 = simulation.next_player_generation(owner, 0).unwrap();
+    assert_eq!(gen2, 2);
+    let id2 = BodyId {
+        entity: wire,
+        generation: gen2,
+    };
+    let mut reconnected = WorldDelivery::new(owner);
+    reconnected.started = Some(120);
+    reconnected.body = Some(body(id2));
+    reconnected
+        .bodies
+        .insert(id2.entity, (id2.generation, Lifetime::Live));
+    simulation
+        .spawn_player_body(fixture_player_state(
+            id2,
+            owner,
+            0,
+            0,
+            [2.0, 0.0, 0.0],
+            200.0,
+            true,
+        ))
+        .unwrap();
+
+    assert_eq!(simulation.player_body_by_owner(owner).unwrap().id, id2);
+    assert!(simulation.player_body(id1).is_none());
+    assert!(simulation.player_body(id2).is_some());
+    assert!(!simulation.player_body_generation_current(id1));
+    assert!(simulation.player_body_generation_current(id2));
+    assert_eq!(simulation.next_player_generation(owner, 0).unwrap(), 3);
+}
+
+#[test]
+fn death_and_respawn_preserve_friendly_passthrough_and_hostile_blocking() {
+    use crate::{
+        game_combat::{PosedHitscan, ShotContext},
+        game_hitscan::{DamageTags, HitDefinition},
+        mover_settings::MoverCatalog,
+        scene_assets::BotQueries,
+    };
+
+    let ground = fixture_ground();
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, &ground, None);
+    let mut simulation = RoomSimulation::new(Vec::new()).unwrap();
+
+    let shooter_owner = OWNER;
+    let ally_owner = OWNER + 0x100;
+    let front_foe_owner = OWNER + 0x200;
+    let back_foe_owner = OWNER + 0x300;
+
+    let shooter_id = BodyId {
+        entity: shooter_owner | 1,
+        generation: 1,
+    };
+    let ally_id = BodyId {
+        entity: ally_owner | 1,
+        generation: 1,
+    };
+    let front_foe_id = BodyId {
+        entity: front_foe_owner | 1,
+        generation: 1,
+    };
+    let back_foe_id = BodyId {
+        entity: back_foe_owner | 1,
+        generation: 1,
+    };
+
+    simulation
+        .spawn_player_body(fixture_player_state(
+            shooter_id,
+            shooter_owner,
+            0,
+            0,
+            [0.0, 0.0, 0.0],
+            200.0,
+            false,
+        ))
+        .unwrap();
+    simulation
+        .spawn_player_body(fixture_player_state(
+            ally_id,
+            ally_owner,
+            1,
+            0,
+            [4.0, 0.0, 0.0],
+            200.0,
+            false,
+        ))
+        .unwrap();
+    simulation
+        .spawn_player_body(fixture_player_state(
+            front_foe_id,
+            front_foe_owner,
+            2,
+            1,
+            [8.0, 0.0, 0.0],
+            100.0,
+            false,
+        ))
+        .unwrap();
+    simulation
+        .spawn_player_body(fixture_player_state(
+            back_foe_id,
+            back_foe_owner,
+            3,
+            1,
+            [12.0, 0.0, 0.0],
+            200.0,
+            false,
+        ))
+        .unwrap();
+    simulation.record_player_poses(1000);
+
+    let mut context = ShotContext {
+        team: 0,
+        quanta: RETAIL_QUANTA,
+        tick: 1000,
+        now: Duration::from_secs(4),
+    };
+    let fire_hitscan = |sim: &mut RoomSimulation, ctx: ShotContext| {
+        sim.hitscan(
+            &queries,
+            PosedHitscan {
+                source: shooter_id.entity,
+                origin: [0.0, 1.0, 0.0],
+                direction: [1.0, 0.0, 0.0],
+                command: Command {
+                    frame: ctx.tick,
+                    ..Command::default()
+                },
+                shot_frame: ctx.tick,
+                reach: 30.0,
+                hit: HitDefinition {
+                    tags: DamageTags::EMPTY,
+                    amount: 120.0,
+                    loadout: None,
+                    critical: 1.0,
+                    falloff: None,
+                },
+            },
+            ctx,
+            |_| true,
+        )
+        .unwrap()
+    };
+
+    // Shot 1: friendly at x=4 passes through; front hostile at x=8 blocks & dies; back at x=12 untouched.
+    let first_hit = fire_hitscan(&mut simulation, context).expect("front hostile hit");
+    assert_eq!(first_hit.damage.target, front_foe_id.entity);
+    assert!(!simulation.player_body(front_foe_id).unwrap().alive());
+    assert_eq!(
+        simulation
+            .player_body(ally_id)
+            .unwrap()
+            .runtime
+            .as_ref()
+            .unwrap()
+            .vitals()
+            .unwrap()
+            .total(),
+        200.0
+    );
+    assert_eq!(
+        simulation
+            .player_body(back_foe_id)
+            .unwrap()
+            .runtime
+            .as_ref()
+            .unwrap()
+            .vitals()
+            .unwrap()
+            .total(),
+        200.0
+    );
+
+    // Shot 2: dead front hostile passes through, hitting back hostile at x=12.
+    let second_hit = fire_hitscan(&mut simulation, context).expect("back hostile hit");
+    assert_eq!(second_hit.damage.target, back_foe_id.entity);
+    assert_eq!(
+        simulation
+            .player_body(back_foe_id)
+            .unwrap()
+            .runtime
+            .as_ref()
+            .unwrap()
+            .vitals()
+            .unwrap()
+            .total(),
+        80.0
+    );
+
+    // Projectile along the same ray also passes friendly + dead hostile and kills back hostile.
+    let flight = fixture_projectile_flight(shooter_id, context.tick, 1000.0, Some(90.0));
+    let (outcomes, hits) = simulation
+        .advance_projectiles(&queries, 7, shooter_id, vec![flight], context)
+        .unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].damage.target, back_foe_id.entity);
+    assert!(!simulation.player_body(back_foe_id).unwrap().alive());
+
+    // Respawn front and back hostiles with fresh generations -> front hostile blocks again.
+    let front_respawn = BodyId {
+        entity: front_foe_owner | 2,
+        generation: simulation
+            .next_player_generation(front_foe_owner, 0)
+            .unwrap(),
+    };
+    let back_respawn = BodyId {
+        entity: back_foe_owner | 2,
+        generation: simulation
+            .next_player_generation(back_foe_owner, 0)
+            .unwrap(),
+    };
+    simulation
+        .spawn_player_body(fixture_player_state(
+            front_respawn,
+            front_foe_owner,
+            2,
+            1,
+            [8.0, 0.0, 0.0],
+            200.0,
+            false,
+        ))
+        .unwrap();
+    simulation
+        .spawn_player_body(fixture_player_state(
+            back_respawn,
+            back_foe_owner,
+            3,
+            1,
+            [12.0, 0.0, 0.0],
+            200.0,
+            false,
+        ))
+        .unwrap();
+    context.tick += 5;
+    simulation.record_player_poses(context.tick);
+    let respawn_hit = fire_hitscan(&mut simulation, context).expect("respawned hostile blocks");
+    assert_eq!(respawn_hit.damage.target, front_respawn.entity);
+    assert_eq!(
+        simulation
+            .player_body(front_respawn)
+            .unwrap()
+            .runtime
+            .as_ref()
+            .unwrap()
+            .vitals()
+            .unwrap()
+            .total(),
+        80.0
+    );
+    assert_eq!(
+        simulation
+            .player_body(back_respawn)
+            .unwrap()
+            .runtime
+            .as_ref()
+            .unwrap()
+            .vitals()
+            .unwrap()
+            .total(),
+        200.0
+    );
+}
+
+#[test]
+fn body_replacement_rejects_stale_generation_mutations() {
+    use crate::{
+        game_combat::ShotContext, mover_settings::MoverCatalog, scene_assets::BotQueries,
+        vitals::Death as VitalsDeath,
+    };
+
+    let ground = fixture_ground();
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, &ground, None);
+    let mut simulation = RoomSimulation::new(Vec::new()).unwrap();
+
+    let owner = OWNER;
+    let wire = owner | 1;
+    let gen1 = simulation.next_player_generation(owner, 0).unwrap();
+    let id1 = BodyId {
+        entity: wire,
+        generation: gen1,
+    };
+    simulation
+        .spawn_player_body(fixture_player_state(
+            id1, owner, 0, 1, [0.0; 3], 200.0, false,
+        ))
+        .unwrap();
+
+    let gen2 = simulation.next_player_generation(owner, 0).unwrap();
+    assert!(gen2 > gen1);
+    let id2 = BodyId {
+        entity: wire,
+        generation: gen2,
+    };
+    simulation
+        .spawn_player_body(fixture_player_state(
+            id2,
+            owner,
+            0,
+            1,
+            [5.0, 0.0, 0.0],
+            200.0,
+            false,
+        ))
+        .unwrap();
+
+    // Stale generation spawn and foreign wire-entity collision are rejected cleanly.
+    assert!(
+        simulation
+            .spawn_player_body(fixture_player_state(
+                id1, owner, 0, 1, [0.0; 3], 200.0, false,
+            ))
+            .is_err()
+    );
+    assert!(
+        simulation
+            .spawn_player_body(fixture_player_state(
+                BodyId {
+                    entity: wire,
+                    generation: gen2 + 1,
+                },
+                owner + 0x100,
+                1,
+                1,
+                [0.0; 3],
+                200.0,
+                false,
+            ))
+            .is_err()
+    );
+
+    // Stale handle cannot inspect, mutate, strip runtime, retire, damage, or run projectiles.
+    assert!(simulation.player_body(id1).is_none());
+    assert!(simulation.player_body_mut(id1).is_none());
+    assert!(!simulation.player_body_generation_current(id1));
+    assert!(simulation.player_body_generation_current(id2));
+    assert!(!simulation.retire_player_body(id1));
+    assert!(!simulation.clear_player_runtime(id1));
+    assert!(
+        simulation
+            .damage_player_body_by_wire(
+                id1,
+                90.0,
+                VitalsDeath {
+                    time: 1.0,
+                    frame: 100,
+                    killer: 9,
+                },
+            )
+            .is_none()
+    );
+    let context = ShotContext {
+        team: 1,
+        quanta: RETAIL_QUANTA,
+        tick: 1000,
+        now: Duration::from_secs(4),
+    };
+    let stale_flight = fixture_projectile_flight(id1, context.tick, 20.0, None);
+    let (outcomes, hits) = simulation
+        .advance_projectiles(&queries, 9, id1, vec![stale_flight], context)
+        .unwrap();
+    assert!(outcomes.is_empty() && hits.is_empty());
+
+    // Current handle remained untouched at full health.
+    let current = simulation.player_body(id2).unwrap();
+    assert!(current.alive());
+    assert_eq!(
+        current.runtime.as_ref().unwrap().vitals().unwrap().total(),
+        200.0
+    );
+
+    // Current handle can retire cleanly, and repeated retirement is idempotent.
+    assert!(simulation.retire_player_body(id2));
+    assert!(!simulation.retire_player_body(id2));
+    assert!(simulation.player_body(id2).is_none());
 }

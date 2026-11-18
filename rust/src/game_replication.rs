@@ -16,12 +16,12 @@ use crate::{
     game_clock::{MAX_LEASE_FRAME, SEND_EVERY, TICK_PERIOD},
     game_combat::{
         AdmittedFlight, BIOTIC_CANISTER, BioticField, BotReplacement, CombatError, FlightOutcome,
-        HealingPulse, PosedBioticField, PosedHitscan, PosedProjectile, PosedShot,
+        HealingPulse, PlayerBodyState, PosedBioticField, PosedHitscan, PosedProjectile, PosedShot,
+        RoomSimulation,
     },
     game_controller::ControllerFrame,
     game_egress::{DeliveryReport, FrameRecords, GameEgress, RecordSource, SendError, SentFrame},
     game_heroes::{CASSIDY, Hero, SOLDIER},
-    game_hitscan::TargetPose,
     game_messages::Message,
     game_parameters::{ClientGameMessage, HeroSelectRequest},
     game_projectiles::{OwnerProjectiles, ProjectileDelivery, ProjectileLeases, ProjectileToken},
@@ -43,9 +43,6 @@ use crate::{
         Operation, SkinTheme, frame,
     },
 };
-
-#[cfg(any(test, feature = "inspector"))]
-use crate::game_debug::{Actor, ActorKind};
 
 const BODY_REUSE_DELAY: Duration = Duration::from_secs(30);
 // Resource bound for this worker. The reference keeps 64 predicted states and
@@ -78,7 +75,7 @@ struct Body {
 /// A running owner VM and the authored data used to encode its snapshots.
 /// A supported modifier projection is required before the mover can correct
 /// the owner's prediction, even if the current set of modifiers is empty.
-pub(crate) trait OwnerBodyRuntime: Send {
+pub(crate) trait OwnerBodyRuntime: Send + Sync {
     fn set_encounter_active(&mut self, _active: bool) -> io::Result<()> {
         Ok(())
     }
@@ -111,7 +108,17 @@ pub(crate) trait OwnerBodyRuntime: Send {
         None
     }
 
-    fn set_deadeye_scene(&mut self, _scene: &PreparedScene, _team: u8) -> io::Result<()> {
+    fn has_deadeye(&self) -> bool {
+        false
+    }
+
+    fn set_deadeye_targets(&mut self, _scene: crate::script_player::DeadeyeScene) {}
+
+    #[cfg(test)]
+    fn set_deadeye_scene(&mut self, scene: &PreparedScene, team: u8) -> io::Result<()> {
+        if self.has_deadeye() {
+            self.set_deadeye_targets(scene.deadeye_scene(team).map_err(io::Error::other)?);
+        }
         Ok(())
     }
 
@@ -228,15 +235,14 @@ pub(crate) struct WorldDelivery {
     bound: Option<BodyId>,
     generation: u64,
     bodies: HashMap<u32, (u64, Lifetime)>,
+    remote_players: HashMap<u32, (BodyId, BotLifetime)>,
     input: InputQueue,
-    mover: Option<Mover>,
     body_script: Option<BodyScript>,
     projectile_destroys: HashMap<u32, (BodyId, ProjectileToken)>,
     biotic_views: BTreeMap<u32, BioticView>,
     scene_views: BTreeMap<u32, BodyStream<ProjectedSnapshot>>,
     gate: Option<u32>,
     next_biotic_view: u32,
-    hitscan: Vec<PosedHitscan>,
 }
 
 mod body;

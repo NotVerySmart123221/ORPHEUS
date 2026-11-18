@@ -325,6 +325,7 @@ fn panic_after_peer_detachment_and_mutation_retires_the_whole_room() {
                     FIRST_TICK,
                     Vec::new(),
                     true,
+                    None,
                     &mut peer.egress,
                     |payload| {
                         let packet = Packet {
