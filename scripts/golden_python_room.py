@@ -4,15 +4,21 @@ The caller supplies decoded commands and drives one production room tick per cal
 The production owner delivery path sends to memory and acknowledges committed groups.
 """
 
+import inspect
+import platform
+import random
+from unittest.mock import patch
+
 from golden_python_delivery import OwnerDelivery, bits
 from tests.runtime.test_server_journal import FixedSource
 
-from ow174.game import collision, content
+from ow174.game import bots, collision, content
 from ow174.game.commands import Command
 from ow174.game.match import Match
 from ow174.game.script import expr
 from ow174.game.script.driver import OWNER_HEALTH
 from ow174.game.script.nodes import WeaponVolley
+from ow174.game.script.runtime import Component
 from ow174.game.server import FIRST_TICK
 
 
@@ -55,6 +61,28 @@ def rifle_reloading(rifle):
     return expr.truthy(var.base) if var.base is None or type(var.base) is bool else None
 
 
+def select_stock_body(match, player):
+    """Observe the actual VM seed at construction without drawing from its random stream."""
+    initialize = Component.__init__
+    parameters = inspect.signature(initialize)
+    seeds = {}
+
+    def observe(component, *args, **kwargs):
+        arguments = parameters.bind(component, *args, **kwargs)
+        arguments.apply_defaults()
+        initialize(component, *args, **kwargs)
+        seeds[component] = arguments.arguments["seed"]
+
+    with patch.object(Component, "__init__", observe):
+        if not match.switch_hero(player, player.hero) or player.body_script is None:
+            raise ValueError("stock Soldier failed to initialize")
+    component = player.body_script.component
+    if (component not in seeds or type(seeds[component]) is not int
+            or type(component.rng) is not random.Random or platform.python_implementation() != "CPython"):
+        raise ValueError("unrecognized stock player VM random stream")
+    return seeds[component]
+
+
 class PythonRoom:
     """A single stock Soldier and an identified Practice Range spawner, after selection."""
 
@@ -71,12 +99,21 @@ class PythonRoom:
         self.match.tick = FIRST_TICK
         self.start_tick = self.match.tick
         self.delivery = OwnerDelivery(self.match, self.player)
-        if not self.match.switch_hero(self.player, self.player.hero) or self.player.body_script is None:
-            raise ValueError("stock Soldier failed to initialize")
+        self.vm_seed = select_stock_body(self.match, self.player)
+        if self.delivery.seq != 0 or self.delivery.in_flight:
+            raise ValueError("unexpected owner delivery before the first scheduled tick")
+        self.setup_delivery_ticks = self.match.tick - self.start_tick
         if not 0 <= bot_slot < len(self.match.bots) or self.match.bots[bot_slot].team == self.player.team:
             raise ValueError("select a hostile Practice Range bot slot")
         self.spawner = self.match.bots[bot_slot].spawner
         self.bot = self.match.bots[bot_slot]
+        self.roster_size = len(self.match.bots)
+        self.spawner_identity = {
+            "team": self.spawner["team"],
+            "hero": f"{int(self.spawner['hero'], 16):016x}",
+            "position_bits": [bits(value) for value in self.spawner["position"]],
+            "yaw": bots.yaw_of(self.spawner["rotation"]),
+        }
         self.bot_generation = 1
         self.player_script = self.player.body_script
         self.player_entity = self.player.body
