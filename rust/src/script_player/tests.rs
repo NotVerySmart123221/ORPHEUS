@@ -1054,22 +1054,14 @@ fn unsupported_projectile_modes_do_not_become_hitscan_or_straight_damage() {
     }
 }
 
-#[test]
-#[ignore = "requires the separately prepared 104319 statescript catalog"]
-fn prepared_soldier_starts_the_reference_body_and_weapon_tree() {
-    use crate::{
-        game_clock::FIRST_TICK, game_content::GameMap, script_codecs::PayloadMode,
-        script_init::StateKind,
-    };
-    use std::path::PathBuf;
-
-    let root = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
-    let graphs = Arc::new(GraphStore::load(root.join("data/game_graphs_174.json.gz")).unwrap());
+fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Component, BodyWorld) {
+    use crate::{game_clock::FIRST_TICK, game_content::GameMap};
     let pools = crate::game_pools::PoolCatalog::from_graphs(&graphs)
         .unwrap()
         .hero_pools(SOLDIER)
         .unwrap();
     let body = &graphs.bodies()[&0x0400_0000_0000_03cf];
+    assert!(body.target_tags.is_some());
     let roots = crate::script_init::player_roots(body, &graphs).unwrap();
     let health = pools.total();
     let variables = crate::script_init::player_entity_variables(body, health, health);
@@ -1085,7 +1077,7 @@ fn prepared_soldier_starts_the_reference_body_and_weapon_tree() {
         hero: SOLDIER,
         vitals: Vitals::empty(),
         pool_types_known: true,
-        target_tags: body.target_tags.clone(),
+        target_tags: tagged.then(|| body.target_tags.clone().unwrap()),
         target_tag_effects: TargetTagEffects::default(),
         controller_on_fire: false,
         defenders: Arc::default(),
@@ -1107,6 +1099,39 @@ fn prepared_soldier_starts_the_reference_body_and_weapon_tree() {
     )
     .unwrap();
     component.advance_frame(FIRST_TICK, &mut world).unwrap();
+    (component, world)
+}
+
+#[test]
+#[ignore = "requires a tagged separately prepared 104319 statescript catalog"]
+fn prepared_soldier_without_target_tags_reports_unavailable_filter() {
+    use crate::{script_expr::EvalError, script_init::Issue};
+    let root = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let graphs = Arc::new(GraphStore::load(root.join("data/game_graphs_174.json.gz")).unwrap());
+    let (component, world) = prepared_soldier_component(graphs, false);
+    assert!(world.target_tags.is_none());
+    let snapshot = component.snapshot().unwrap();
+    assert!(!snapshot.initialization_complete());
+    assert!(snapshot.diagnostics.iter().any(|diagnostic| {
+        diagnostic.site.graph == 0x004b
+            && diagnostic.site.node == Some(21)
+            && matches!(&diagnostic.issue, Issue::Expression(EvalError::UnsupportedConfig(class)) if class == "STU_AC829876")
+    }), "{:?}", snapshot.diagnostics);
+}
+
+#[test]
+#[ignore = "requires a tagged separately prepared 104319 statescript catalog"]
+fn prepared_soldier_starts_the_tagged_body_and_weapon_tree() {
+    use crate::{game_clock::FIRST_TICK, script_codecs::PayloadMode, script_init::StateKind};
+    use std::path::PathBuf;
+
+    let root = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let graphs = Arc::new(GraphStore::load(root.join("data/game_graphs_174.json.gz")).unwrap());
+    let pools = crate::game_pools::PoolCatalog::from_graphs(&graphs)
+        .unwrap()
+        .hero_pools(SOLDIER)
+        .unwrap();
+    let (mut component, mut world) = prepared_soldier_component(graphs, true);
     let snapshot = component.snapshot().unwrap();
     for diagnostic in &snapshot.diagnostics {
         eprintln!(
@@ -1114,8 +1139,8 @@ fn prepared_soldier_starts_the_reference_body_and_weapon_tree() {
             diagnostic.site.graph, diagnostic.site.node, diagnostic.issue
         );
     }
-    // The frozen BodyScript replay allocates the same IDs with the team
-    // mask. The exit retires 08B6 (9) and its unstarted child 0BF8 (25).
+    // The tagged tree includes 01CB, shifting subsequent IDs from the
+    // frozen BodyScript replay. IDs 9 and 26 are absent after startup.
     let expected = [
         (1, 0x0033, None),
         (2, 0x004b, None),
@@ -1133,14 +1158,15 @@ fn prepared_soldier_starts_the_reference_body_and_weapon_tree() {
         (15, 0x0b8b, Some((2, 10))),
         (16, 0x0c7d, Some((2, 18))),
         (17, 0x01ca, Some((2, 1))),
-        (18, 0x0ba4, Some((2, 11))),
-        (19, 0x05ac, Some((2, 8))),
-        (20, 0x02cf, Some((2, 6))),
-        (21, 0x0b3b, Some((2, 9))),
-        (22, 0x01d8, Some((2, 4))),
-        (23, 0x0f82, Some((2, 21))),
-        (24, 0x05ad, Some((2, 7))),
-        (26, 0x0e8f, Some((13, 32))),
+        (18, 0x01cb, Some((2, 2))),
+        (19, 0x0ba4, Some((2, 11))),
+        (20, 0x05ac, Some((2, 8))),
+        (21, 0x02cf, Some((2, 6))),
+        (22, 0x0b3b, Some((2, 9))),
+        (23, 0x01d8, Some((2, 4))),
+        (24, 0x0f82, Some((2, 21))),
+        (25, 0x05ad, Some((2, 7))),
+        (27, 0x0e8f, Some((13, 32))),
     ];
     let instances: Vec<_> = snapshot
         .instances
@@ -1196,7 +1222,7 @@ fn prepared_soldier_starts_the_reference_body_and_weapon_tree() {
             .iter()
             .any(|diagnostic| diagnostic.site == site)
     );
-    let Value::Map(messages) = &snapshot.instances[&24].variables[&29859] else {
+    let Value::Map(messages) = &snapshot.instances[&25].variables[&29859] else {
         panic!("the authored message table must be a map");
     };
     assert_eq!(messages.len(), 20);
@@ -1272,10 +1298,10 @@ fn prepared_soldier_starts_the_reference_body_and_weapon_tree() {
         assert!(child.active);
         assert_eq!(child.kind, StateKind::BooleanSwitch(false));
     }
-    let selection = &snapshot.instances[&18].states[&0];
+    let selection = &snapshot.instances[&19].states[&0];
     assert!(selection.active);
     assert_eq!(selection.kind, StateKind::BooleanSwitch(false));
-    assert!(!snapshot.instances[&18].states.contains_key(&1));
+    assert!(!snapshot.instances[&19].states.contains_key(&1));
     let on_fire = &snapshot.instances[&13].states[&17];
     assert!(on_fire.active);
     assert_eq!(on_fire.kind, StateKind::BooleanSwitch(false));
@@ -1315,7 +1341,7 @@ fn prepared_soldier_starts_the_reference_body_and_weapon_tree() {
     if world.target_tags.is_some() {
         let filter = &snapshot.instances[&2].states[&14];
         assert!(filter.active);
-        assert_eq!(filter.kind, StateKind::BooleanSwitch(false));
+        assert_eq!(filter.kind, StateKind::BooleanSwitch(true));
     }
 
     let authored_graphs = Arc::clone(&world.graphs);
@@ -1358,7 +1384,7 @@ fn prepared_soldier_starts_the_reference_body_and_weapon_tree() {
     message["m_configVars"] = serde_json::json!([entries["m_configVars"][0]["m_key"].clone()]);
     message["m_expression"]["m_opcodes"] = serde_json::json!([8, 0, 14, 0, 17, 0]);
     assert_eq!(
-        component.evaluate_state_config(24, 0, &message, &mut world),
+        component.evaluate_state_config(25, 0, &message, &mut world),
         Ok(Value::Asset(0x0240_0000_0000_05ad))
     );
     if let Some(original_tags) = world.target_tags.clone() {
@@ -1372,7 +1398,7 @@ fn prepared_soldier_starts_the_reference_body_and_weapon_tree() {
             }
             assert_eq!(
                 component.evaluate_state_config(2, 14, &filter, &mut world),
-                Ok(Value::Bool(present))
+                Ok(Value::Bool(!present))
             );
             assert_eq!(
                 component.evaluate_state_config(3, 0, &tag_query, &mut world),

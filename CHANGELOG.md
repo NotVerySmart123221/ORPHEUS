@@ -6,6 +6,10 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-18
 
+#### Correct prepared Soldier test identities
+
+- Pin the ordered live startup tree and resolve long-session assertions by unique graph and attachment instead of fixed instance IDs. The production filter, encoder, and allocator are unchanged; wire-level identity verification and original-client verification remain open.
+
 #### Compare gameplay evidence across languages
 
 - Add the offline `compare_golden` command for semantic Soldier traces. It checks input and runtime fingerprints, validates complete records and reports the first differing command acceptance, state field or owner effect. The public tests exercise an invented scenario with a bot respawn. [Comparison guide](docs/GOLDEN_COMPARISON.md)

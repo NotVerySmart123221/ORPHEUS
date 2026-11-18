@@ -25,6 +25,26 @@ fn normal_cassidy_common_npc_damage_charge_and_retirement() {
 
 use crate::game_bots::BOT_ENTITY;
 
+fn unique_script_instance(
+    snapshot: &crate::script_init::Snapshot,
+    graph: u32,
+    parent: Option<(u16, u16)>,
+) -> u16 {
+    let matches: Vec<_> = snapshot
+        .instances
+        .iter()
+        .filter_map(|(&id, instance)| {
+            (instance.graph == graph && instance.parent == parent).then_some(id)
+        })
+        .collect();
+    assert_eq!(
+        matches.len(),
+        1,
+        "graph {graph:04x}, parent {parent:?}: {matches:?}"
+    );
+    matches[0]
+}
+
 #[test]
 #[ignore = "requires a prepared 104319 Practice Range pack"]
 fn repeated_rooms_share_collision_indexes_and_keep_independent_bodies() {
@@ -104,8 +124,15 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
         let mut runtime = scene.owner_body_runtime(hero, spawn).unwrap().unwrap();
         let snapshot = runtime.snapshot().unwrap();
         let encoder = runtime.encoder();
+        let root = |graph| unique_script_instance(snapshot, graph, None);
+        let manager = root(0x004b);
+        let child = |graph, raw| unique_script_instance(snapshot, graph, Some((manager, raw)));
+        let table_id = child(0x05ad, 7);
+        let idle_id = child(0x02c5, 5);
+        let rifle_id = root(0x0254);
+        let sprint_id = root(0x0255);
         // The authored message table stays in the VM for lookups.
-        let table = &snapshot.instances[&24];
+        let table = &snapshot.instances[&table_id];
         assert_eq!(table.graph, 0x05ad);
         assert!(matches!(&table.variables[&29859], Value::Map(entries) if entries.len() == 20));
         let mut streams = Vec::new();
@@ -116,12 +143,12 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
             stream.create_arrived();
             stream.arrived(baseline.last);
             // Only the unbound table is omitted, as Python omits its None.
-            let sent = projected.instance_variables(24).unwrap();
+            let sent = projected.instance_variables(table_id).unwrap();
             assert!(!sent.contains_key(&29859));
             for (&variable, value) in &table.variables {
                 let value = snapshot
                     .resolved_bindings
-                    .get(&(24, variable))
+                    .get(&(table_id, variable))
                     .unwrap_or(value);
                 if variable != 29859 && !matches!(value, Value::Null) {
                     assert_eq!(sent.get(&variable), Some(value), "{variable}");
@@ -159,24 +186,28 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
             found
         };
         // The reference withholds these switches too, and two more in
-        // instance 9, which this tree retires at startup. Instance 18 is
+        // instance 9, which is absent from this startup snapshot. The 0ba4 child is
         // one of the tagged weapon-manager subgraphs the reference lacks.
+        let root_0033 = root(0x0033);
+        let child_01c7 = child(0x01c7, 0);
+        let child_01cf = child(0x01cf, 3);
+        let child_0ba4 = child(0x0ba4, 11);
         let withheld = BTreeSet::from([
-            (1, 10),
-            (1, 15),
-            (1, 20),
-            (1, 21),
-            (1, 22),
-            (1, 23),
-            (2, 12),
-            (2, 13),
-            (2, 14),
-            (12, 25),
-            (12, 28),
-            (12, 30),
-            (12, 48),
-            (13, 17),
-            (18, 0),
+            (root_0033, 10),
+            (root_0033, 15),
+            (root_0033, 20),
+            (root_0033, 21),
+            (root_0033, 22),
+            (root_0033, 23),
+            (manager, 12),
+            (manager, 13),
+            (manager, 14),
+            (child_01c7, 25),
+            (child_01c7, 28),
+            (child_01c7, 30),
+            (child_01c7, 48),
+            (child_01cf, 17),
+            (child_0ba4, 0),
         ]);
         assert_eq!(uncertain(snapshot), withheld);
         for (_, projected) in &streams {
@@ -220,7 +251,7 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
             // The idle fidget animation has no authored duration. Like
             // the reference, it stays on without a timer until held fire
             // ends it.
-            let idle = &snapshot.instances[&14];
+            let idle = &snapshot.instances[&idle_id];
             assert_eq!(idle.graph, 0x02c5);
             let playing = idle.states.get(&19).is_some_and(|state| state.active);
             if playing {
@@ -228,7 +259,7 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
                 assert!(
                     snapshot
                         .pending_timers
-                        .get(&14)
+                        .get(&idle_id)
                         .into_iter()
                         .flatten()
                         .all(|timer| timer.raw_state != 19)
@@ -238,7 +269,7 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
             // Sprint starts on the press with forward held, runs while
             // forward stays held and drives its HUD flag, as in the
             // reference.
-            let sprint = &snapshot.instances[&5];
+            let sprint = &snapshot.instances[&sprint_id];
             assert_eq!(sprint.graph, 0x0255);
             let (flags, hud) = match t {
                 700 => (5, Some(1)),
@@ -271,12 +302,12 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
                 for &(id, raw) in &excluded {
                     assert!(!next.instance_states(id).unwrap().contains(&raw), "{t}");
                 }
-                let rifle = next.instance_variables(11).unwrap();
+                let rifle = next.instance_variables(rifle_id).unwrap();
                 let fact = (int(rifle.get(&53)), flag(rifle.get(&51)));
                 if owner.last().is_none_or(|&(_, last)| last != fact) {
                     owner.push((t, fact));
                 }
-                let hud = int(next.instance_variables(5).unwrap().get(&699));
+                let hud = int(next.instance_variables(sprint_id).unwrap().get(&699));
                 if owner_hud.last().is_none_or(|&(_, last)| last != hud) {
                     owner_hud.push((t, hud));
                 }
