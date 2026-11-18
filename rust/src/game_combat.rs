@@ -69,6 +69,22 @@ pub enum CombatError {
     },
     #[error("combat collision query failed: {0}")]
     Collision(#[from] IndexError),
+    #[error("gate {wire:08X} references missing ECS component {entity:?}")]
+    MissingGate { wire: u32, entity: Entity },
+    #[error("gate index {wire:08X} references gate with wire ID {actual:08X}")]
+    GateIdentity { wire: u32, actual: u32 },
+    #[error("gate {0:08X} is already registered")]
+    GateAlreadyRegistered(u32),
+    #[error("encounter references missing ECS component {entity:?}")]
+    MissingEncounter { entity: Entity },
+    #[error("encounter is already registered")]
+    EncounterAlreadyRegistered,
+    #[error("encounter requires a registered Junkenstein gate")]
+    MissingEncounterGate,
+    #[error("invalid Junkenstein gate definition: {0}")]
+    InvalidGate(&'static str),
+    #[error("invalid Junkenstein encounter state: {0}")]
+    InvalidEncounter(&'static str),
 }
 
 pub(crate) fn eye_height(hero: u64, crouched: bool) -> f64 {
@@ -217,8 +233,15 @@ pub(crate) struct BotReplacement {
     pub created: EntityUpdate,
 }
 
+mod encounter;
 mod enemy;
 mod player;
+pub(crate) use encounter::{
+    ENCOUNTER_INSTANCE, EncounterRegistration, EncounterWorld, GateState, GateWorld,
+};
+use encounter::{EncounterComponent, GateHandle};
+#[cfg(test)]
+pub(crate) use encounter::{EncounterPhase, GateDamageStage, GateHealth};
 use enemy::{BotState, EnemyState};
 pub(crate) use player::{PlayerBodyEvent, PlayerBodyHandle, PlayerBodyState};
 
@@ -273,6 +296,8 @@ pub(crate) struct RoomSimulation {
     mode_voice_set: Option<u64>,
     mode_boss_pause: bool,
     spawn_anchors: Option<Arc<crate::scene_assets::SpawnAnchors>>,
+    gate_handle: Option<GateHandle>,
+    encounter_entity: Option<Entity>,
     // Handle lists preserve launch order within the worker's ordered peer turns.
     projectiles: HashMap<u32, FlightBatch>,
     enemy_projectiles: Vec<Entity>,
@@ -528,6 +553,11 @@ impl RoomSimulation {
     }
     pub(crate) fn set_mode_boss_pause(&mut self, active: bool) {
         self.mode_boss_pause = active;
+        if let Some(entity) = self.encounter_entity {
+            if let Some(mut encounter) = self.world.get_mut::<EncounterComponent>(entity) {
+                encounter.boss_pause = active;
+            }
+        }
     }
     pub(crate) fn new(bots: Vec<Bot>) -> Result<Self, CombatError> {
         let mut world = World::new();
@@ -571,14 +601,21 @@ impl RoomSimulation {
             mode_voice_set: None,
             mode_boss_pause: false,
             spawn_anchors: None,
+            gate_handle: None,
+            encounter_entity: None,
             projectiles: HashMap::new(),
             enemy_projectiles: Vec::new(),
             witch_staff_links: IndexMap::new(),
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn set_spawn_anchors(&mut self, anchors: Arc<crate::scene_assets::SpawnAnchors>) {
         self.spawn_anchors = Some(anchors);
+    }
+
+    pub(crate) fn spawn_anchors(&self) -> Option<&Arc<crate::scene_assets::SpawnAnchors>> {
+        self.spawn_anchors.as_ref()
     }
 
     fn states(&self) -> impl ExactSizeIterator<Item = Result<&BotState, CombatError>> {
@@ -887,7 +924,8 @@ impl RoomSimulation {
     pub(crate) fn take_encounter_voice_requests(
         &mut self,
     ) -> Vec<crate::junkenstein_voice::VoiceRequest> {
-        let mut requests = std::mem::take(&mut self.mode_voice_requests);
+        let mut requests = self.take_gate_voice_requests();
+        requests.extend(std::mem::take(&mut self.mode_voice_requests));
         requests.extend(
             self.by_wire
                 .values()
@@ -1320,6 +1358,7 @@ impl RoomSimulation {
         now: Duration,
     ) -> Result<Vec<BotReplacement>, CombatError> {
         self.states().try_for_each(|state| state.map(|_| ()))?;
+        self.validate_gate_and_encounter_handles()?;
         if !self.players_by_wire.is_empty() {
             let defenders: Arc<[u32]> = Arc::from(self.collect_junkenstein_defenders());
             self.set_junkenstein_defenders(Arc::clone(&defenders));
@@ -1406,6 +1445,7 @@ impl RoomSimulation {
                     .is_some_and(|enemy| enemy.fault.is_none() && enemy.scripts.boss_pause_active())
             })
             .count();
+        let mode_boss_pause = self.encounter_boss_pause();
         for &entity in self.by_wire.values() {
             let mut state = self
                 .world
@@ -1422,7 +1462,7 @@ impl RoomSimulation {
                 let stunned = bot.is_stunned(tick);
                 enemy.scripts.set_control_blocked(stunned);
                 let other_pause = pause_senders > usize::from(enemy.scripts.boss_pause_active());
-                let room_pause = self.mode_boss_pause || other_pause;
+                let room_pause = mode_boss_pause || other_pause;
                 enemy.scripts.set_room_boss_pause(room_pause);
                 if enemy.binding.hero == WITCH {
                     let targets = roster.as_deref().map(Vec::as_slice).unwrap_or_default();
@@ -1897,6 +1937,39 @@ impl RoomSimulation {
             return false;
         };
         entity.take::<BotState>().is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reset_test_bodies(&mut self) {
+        for entity in self.by_wire.drain(..).map(|(_, entity)| entity) {
+            self.world.despawn(entity);
+        }
+        self.clear_players();
+        self.clear_projectiles();
+        for entity in self.enemy_projectiles.drain(..) {
+            self.world.despawn(entity);
+        }
+        self.player_generations.clear();
+        self.spawned_player_generations.clear();
+        self.latest_wire_generations.clear();
+        self.next_bot = BOT_ENTITY;
+        self.combat_active = false;
+        self.player_targets_active = false;
+        self.cassidy_protected = false;
+        self.created.clear();
+        self.player_events.clear();
+        self.player_deaths.clear();
+        self.observer_player_health.clear();
+        self.scene_messages.clear();
+        self.external_targets = None;
+        self.external_enemy_damage.clear();
+        self.scripted_health.clear();
+        self.retired_enemies.clear();
+        self.retired_entity_ids = Arc::default();
+        self.defender_messages.clear();
+        self.mode_voice_requests.clear();
+        self.witch_staff_links.clear();
+        self.debug_assert_encounter_invariants();
     }
 }
 

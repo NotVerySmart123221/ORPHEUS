@@ -157,6 +157,7 @@ pub(crate) struct EnemyGate {
     pub position: [f64; 3],
 }
 
+#[derive(Clone)]
 pub(crate) struct SceneMessage {
     pub target: u32,
     pub message: u64,
