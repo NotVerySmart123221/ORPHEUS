@@ -429,10 +429,7 @@ impl RoomSimulation {
                 .get::<PlayerBodyState>(entity)
                 .is_some_and(|state| state.id == body);
         }
-        if self.latest_wire_generations.contains_key(&body.entity) {
-            return false;
-        }
-        true
+        !self.latest_wire_generations.contains_key(&body.entity)
     }
 
     pub(crate) fn take_player_events(&mut self) -> Vec<PlayerBodyEvent> {
