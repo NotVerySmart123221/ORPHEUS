@@ -2,7 +2,7 @@
 
 Tracks implemented capabilities, Python-vs-Rust parity, verified baselines, and remaining gaps on `rust` targeting **Overwatch 1.74.0.0.104319**. For crate boundaries and contribution rules, see [NATIVE_SERVER_ARCHITECTURE.md](NATIVE_SERVER_ARCHITECTURE.md); for open milestones, see [ROADMAP.md](ROADMAP.md).
 
-*(Historical Python `9f8f3bcb` notes reside on `main`; this document tracks the Rust native server.)*
+The [pinned Python → Rust parity matrix](https://github.com/leafall903/ORPHEUS/blob/3cf5147bf77a7810aefa634dbfcae91eecc56038/docs/PARITY.md) records 24 behaviors, their evidence and the next acceptance check for each. After the Python archive freezes, use that snapshot as the comparison baseline and record new Rust test and original-client results here. Earlier Python observations remain available at revision `9f8f3bcb`.
 
 ---
 
@@ -15,19 +15,21 @@ Tracks implemented capabilities, Python-vs-Rust parity, verified baselines, and 
 | **Cross-language contracts (`shared-behavior-contracts`)** | Checks out pinned `main` (`python-reference`) and verifies identical outputs across `jam-framing-v1.json`, `world-queries-v1.json`, and `profile-settings-v1.json`, `12` public Python tests, and `38` exact StateScript VM contracts on `rust`. |
 | **C++ gallery preview policy** | `scripts/check_gallery_preview_policy.py` compiles `relay/gallery_preview_policy.h` and checks `18` resource-selection + `6` owned-tree pruning cases against `gallery-preview-policy-v1.json`. |
 
+[#61](https://github.com/leafall903/ORPHEUS/issues/61) is complete. [#79](https://github.com/leafall903/ORPHEUS/issues/79) records the four Rust consumers and [#80](https://github.com/leafall903/ORPHEUS/issues/80) records the Python StateScript consumers.
+
 ---
 
-## Core Workflow Parity Matrix (`main` vs. `rust`)
+## Implementation and prepared-runtime observations
 
 Local integration check (2026-11-16): rifle/reload and controller/training-bot startup prepared tests passed with the target-tagged base pack, as did runtime preflight and headless startup. The longer `scene_assets::tests::stock_soldier_owner_session_idles_fires_reloads_and_sprints` test failed its fixed-instance assertion: instance `24` contained graph `0x0F82`, not `0x05AD`. The message table was present elsewhere; diagnostic inspection also found switch instance `19` versus expected `18`. The original assertions are retained. This prepared acceptance gap needs a reference-backed review of instance identity expectations and is not covered by the public test results above.
 
-| Workflow | Python (`main`) | Rust (`rust`) | Open Client / Parity Gap |
+| Workflow | Python reference | Rust implementation | Open client or parity gap |
 | --- | --- | --- | --- |
 | **Login, Profiles & Lobby** | Battle.net/JAM auth, profiles, settings (`22200`–`22204`), queues, Windows launcher + TLS relay. | Native BNet/JAM lobby, `profile-settings-v1` (CI verified), encrypted UDP seat handoff. | Standalone Rust launcher & public client connection flow open. |
 | **Hero Gallery** | Loadouts, skins, equipped voice & emotes. | Loadout equip/persist, live skin body replacement, 23 NPC previews (C++ policy verified in CI). | Client Hero Gallery NPC framing & animation retest pending. |
 | **Practice Range & Soldier: 76** | Full body/weapon VM, rifle, Sprint, Helix, Biotic Field, bots, format-5 collision. | Stock Soldier startup tree + rifle/Sprint/Helix/Biotic Field VM regressions; bots/projectiles in Bevy ECS + bounded versioned Lua `think()` patrol ABI (`v2`); all 43 movers match Python trajectories. | Client 60s stock-weapon mount, HUD/ammo sync, upstairs patrol & bot HUD/SFX (#3, #7–#9, #13) pending. |
 | **Movement & Collision** | GJK/contact solver, static ray queries, `0688` + 95 map caches. | `orpheus-collision` matches 10,148 Python movement records & 8,256 velocity cases; player bodies now live in `RoomSimulation` ECS ([#65](https://github.com/leafall903/ORPHEUS/issues/65)). | Cross-map NavMesh (incl. King's Row) tracked in [#63](https://github.com/leafall903/ORPHEUS/issues/63); remaining gate/AI scripting in [#65](https://github.com/leafall903/ORPHEUS/issues/65). |
-| **Doomfist & Wrecking Ball** | `leafall` merged into `main`: Slam, Rocket Punch dash/slow, Uppercut, Shield, Grapple, Quad Cannons, Piledriver, Minefield. | All 47 fixtures synced in `fixtures/behavior/`; Rust VM consumers tracked in [#61](https://github.com/leafall903/ORPHEUS/issues/61). | Port remaining Doomfist/Wrecking Ball node handlers once #61 completes. |
+| **Doomfist & Wrecking Ball** | `leafall` merged into `main`: Slam, Rocket Punch dash/slow, Uppercut, Shield, Grapple, Quad Cannons, Piledriver, Minefield. | Rust has consumers for the movement, short-action retry, Slam placement and shockwave fixtures. | Verify the remaining ability behavior on the original client. |
 | **Fault Isolation & Inspector** | Single-process dashboard & replay journals. | Room-owned errors & `catch_unwind` recovery (`room-isolation-v1`), `--features inspector` 3D viewer, two-room worker timing benchmark. | Inspector ray/nav/VM overlays tracked in [#62](https://github.com/leafall903/ORPHEUS/issues/62); multi-player live room retest open. |
 
 ---
@@ -55,7 +57,6 @@ Headless offline regressions against pinned Python `e1128509` and prepared 10431
 | --- | --- |
 | [#12](https://github.com/leafall903/ORPHEUS/issues/12) | Guard recycled body IDs against stale reliable combat notices. |
 | [#60](https://github.com/leafall903/ORPHEUS/issues/60) | Split remaining large `rust/src/` modules (`script_enemy.rs`, `script_expr.rs`, `game_replication.rs`, `script_snapshot_wire.rs`, `script_player.rs`, `game_service.rs`). |
-| [#61](https://github.com/leafall903/ORPHEUS/issues/61) | Add Rust consumers for the 4 remaining synced `main` fixtures and port 19 VM contracts back to `main`. |
 | [#62](https://github.com/leafall903/ORPHEUS/issues/62) | Add raycast, contact-normal, nav-path, and live StateScript inspection overlays to `--features inspector`. |
 | [#63](https://github.com/leafall903/ORPHEUS/issues/63) | Generalize walkable-surface / NavMesh extraction across maps (including King's Row). |
 | [#64](https://github.com/leafall903/ORPHEUS/issues/64) | Extract portable `orpheus-statescript` workspace crate. |

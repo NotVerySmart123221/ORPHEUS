@@ -41,7 +41,7 @@ Target build: **Overwatch 1 retail 1.74.0.0.104319**.
 
 ## System Checklist
 
-- [ ] **Research & Replay:** Generate deterministic replays covering random seeds, loss schedules, and multi-client sessions (`#61`).
+- [ ] **Research & Replay:** Generate deterministic replays covering random seeds, loss schedules, and multi-client sessions.
 - [ ] **Navigation & Collision ([#63](https://github.com/leafall903/ORPHEUS/issues/63)):** Build map-agnostic walkable-surface / NavMesh extraction so PvP maps without cached nav data (including King's Row) support general AI movement, alongside shared player-vs-player and player-vs-bot character collision blocking.
 - [ ] **ECS & Script Boundary ([#65](https://github.com/leafall903/ORPHEUS/issues/65)):** Player bodies and Junkenstein gate/encounter state now live under `RoomSimulation`'s `bevy_ecs` world alongside bots and projectiles (`WorldDelivery` retains delivery-only cursors), and Practice Range patrol runs on a versioned, resource-bounded Lua `think()` ABI (`v2`); remaining follow-up adds safe-boundary script hot reload with rollback.
 - [ ] **Workspace Modularity ([#60](https://github.com/leafall903/ORPHEUS/issues/60), [#64](https://github.com/leafall903/ORPHEUS/issues/64)):** Finish splitting `script_enemy.rs`, `script_expr.rs`, `game_replication.rs`, `script_snapshot_wire.rs`, and extract `orpheus-statescript`.
