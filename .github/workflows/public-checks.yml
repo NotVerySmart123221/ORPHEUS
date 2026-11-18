@@ -97,7 +97,8 @@ jobs:
                 'game_bots::tests::shared_flashbang_horizontal_motion_contract',
                 'script_init_host_tests::tests::shared_victory_view_route_contract',
                 'script_player::tests::shared_deadeye_aim_ray_visibility_contract',
-                'junkenstein_validation::tests::shared_junkenstein_validation_contract'
+                'junkenstein_validation::tests::shared_junkenstein_validation_contract',
+                'game_replication::tests::shared_first_command_anchor_respects_body_and_existing_input_history'
               )
             }
           )
