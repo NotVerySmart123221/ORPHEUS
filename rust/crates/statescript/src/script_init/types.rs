@@ -276,7 +276,7 @@ pub struct Instance {
     pub(super) join_inputs: BTreeMap<u16, HashSet<(u16, String)>>,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Issue {
     MissingGraph(u32),
     MissingNode(u16),
@@ -289,13 +289,13 @@ pub enum Issue {
     Expression(EvalError),
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Diagnostic {
     pub site: Site,
     pub issue: Issue,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Snapshot {
     pub entity: u32,
     pub now_ms: u64,

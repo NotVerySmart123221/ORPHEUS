@@ -236,11 +236,12 @@ pub(crate) struct BotReplacement {
 mod encounter;
 mod enemy;
 mod player;
-#[allow(unused_imports)]
 pub(crate) use encounter::{
-    ENCOUNTER_INSTANCE, EncounterComponent, EncounterPhase, EncounterRegistration, EncounterWorld,
-    GateComponent, GateDamageStage, GateHandle, GateHealth, GateRuntime, GateState, GateWorld,
+    ENCOUNTER_INSTANCE, EncounterRegistration, EncounterWorld, GateState, GateWorld,
 };
+use encounter::{EncounterComponent, GateHandle};
+#[cfg(test)]
+pub(crate) use encounter::{EncounterPhase, GateDamageStage, GateHealth};
 use enemy::{BotState, EnemyState};
 pub(crate) use player::{PlayerBodyEvent, PlayerBodyHandle, PlayerBodyState};
 

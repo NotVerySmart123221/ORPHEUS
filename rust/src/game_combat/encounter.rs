@@ -72,7 +72,10 @@ impl GateHealth {
             .is_some_and(|state| state.active);
         let destroyed = instance
             .and_then(|inst| inst.states.get(&2))
-            .is_some_and(|state| state.kind == script_init::StateKind::BooleanSwitch(false))
+            .is_some_and(|state| {
+                state.active && state.kind == script_init::StateKind::BooleanSwitch(false)
+            })
+            || !remaining.is_finite()
             || remaining <= 0.0;
         let stage = if destroyed {
             GateDamageStage::Destroyed
@@ -113,7 +116,7 @@ impl GateHealth {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct GateState {
     pub(crate) team: Option<i8>,
     pub(crate) messages: Vec<crate::script_enemy::SceneMessage>,
@@ -121,6 +124,7 @@ pub(crate) struct GateState {
     pub(crate) voice_variation: u64,
 }
 
+#[derive(Clone)]
 pub(crate) struct GateRuntime {
     pub(crate) graphs: Arc<GraphStore>,
     pub(crate) codecs: Option<Arc<CodecTable>>,
@@ -881,7 +885,7 @@ impl RoomSimulation {
         else {
             return Err(invalid("missing Junkenstein encounter"));
         };
-        let (gate_graph, mut runtime) = {
+        let (gate_graph, original_runtime) = {
             let mut gate = self
                 .world
                 .get_mut::<GateComponent>(handle.entity)
@@ -892,6 +896,7 @@ impl RoomSimulation {
                 .ok_or_else(|| invalid("missing Junkenstein gate runtime"))?;
             (gate.definition.graph, runtime)
         };
+        let mut runtime = original_runtime.clone();
         let result = {
             let mut world = GateWorld {
                 entity: handle.wire,
@@ -921,15 +926,18 @@ impl RoomSimulation {
                     }
                 })
         };
-        if result.is_ok() {
+        let final_runtime = if result.is_ok() {
             if let Some(snapshot) = runtime.script.snapshot() {
                 runtime.health = GateHealth::from_snapshot(snapshot, &runtime.graphs, gate_graph);
             }
-        }
+            runtime
+        } else {
+            original_runtime
+        };
         self.world
             .get_mut::<GateComponent>(handle.entity)
             .expect("validated gate component")
-            .runtime = Some(runtime);
+            .runtime = Some(final_runtime);
         result
     }
 
@@ -1389,14 +1397,14 @@ impl RoomSimulation {
         let previous_gate_variables = gate_runtime
             .script
             .snapshot()
-            .expect("live gate")
+            .ok_or(InitFault::Halted)?
             .variables
             .clone();
         {
             let mode_variables = &encounter
                 .script
                 .snapshot()
-                .expect("live encounter")
+                .ok_or(InitFault::Halted)?
                 .variables;
             let mut gate_world = GateWorld {
                 entity: gate.entity,
@@ -1410,7 +1418,7 @@ impl RoomSimulation {
         let gate_variables = &gate_runtime
             .script
             .snapshot()
-            .expect("advanced gate")
+            .ok_or(InitFault::Halted)?
             .variables;
         for id in previous_gate_variables
             .keys()
@@ -1453,13 +1461,13 @@ impl RoomSimulation {
         let gate_variables = &gate_runtime
             .script
             .snapshot()
-            .expect("advanced gate script")
+            .ok_or(InitFault::Halted)?
             .variables;
         let mode_variables = Arc::new(
             encounter
                 .script
                 .snapshot()
-                .expect("live encounter")
+                .ok_or(InitFault::Halted)?
                 .variables
                 .clone(),
         );
@@ -1485,7 +1493,7 @@ impl RoomSimulation {
         };
         encounter.script.advance_frame(frame, &mut world)?;
         // E10: publish mode variables, boss pause, and derived ECS projections.
-        let mode = encounter.script.snapshot().expect("live encounter");
+        let mode = encounter.script.snapshot().ok_or(InitFault::Halted)?;
         self.set_mode_variables(Arc::new(mode.variables.clone()));
         let boss_pause = mode.boss_pause_active();
         self.set_mode_boss_pause(boss_pause);

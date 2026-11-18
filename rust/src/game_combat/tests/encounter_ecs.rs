@@ -7,7 +7,7 @@ use crate::{
     game_bots::BotWalk,
     game_combat::{
         CombatError, ENCOUNTER_INSTANCE, EncounterPhase, EncounterRegistration, EncounterWorld,
-        GateDamageStage, GateState, GateWorld, RoomSimulation,
+        GateDamageStage, GateHealth, GateState, GateWorld, RoomSimulation,
     },
     game_heroes::HeroCatalog,
     junkenstein_messages::{BOSS_PAUSE, ENCOUNTER_RESULT, POST_MATCH_COMPLETE, POST_MATCH_PHASE},
@@ -16,8 +16,9 @@ use crate::{
     scene_assets::{BotQueries, JunkensteinGate, SpawnAnchors},
     script_codecs::CodecTable,
     script_enemy::SceneMessage,
+    script_expr::{Scope, Variable},
     script_graph::GraphStore,
-    script_init::{self, Root, StateKind},
+    script_init::{self, InitFault, Root, StateKind},
     script_stream::{BodyStream, DeltaKind},
     script_wire::{Value, Variables},
     world::GAME_MODE_ENTITY,
@@ -1151,4 +1152,259 @@ fn finish_tick_catches_corrupted_ecs_gate_and_encounter_components_as_combat_err
         missing_encounter_room.finish_tick(&queries, 1, Duration::ZERO),
         Err(CombatError::MissingEncounter { .. })
     ));
+}
+
+fn setup_room_with_gate_graph(
+    gate_graph: Json,
+) -> (RoomSimulation, Arc<GraphStore>, Arc<CodecTable>) {
+    let mut graphs = vec![gate_graph];
+    graphs.extend(mode_graphs_json());
+    let bundle = json!({
+        "version": 1,
+        "graphs": graphs,
+        "bodies": {},
+        "entities": {},
+        "missing": []
+    });
+    let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    let codecs = Arc::new(CodecTable::from_json(ENCOUNTER_CODECS).unwrap());
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    room.register_junkenstein_gate(synthetic_gate(), Arc::new(SpawnAnchors::default()))
+        .unwrap();
+    let reg = build_registration(&mut room, Arc::clone(&graphs), Arc::clone(&codecs));
+    room.register_junkenstein_encounter(reg).unwrap();
+    (room, graphs, codecs)
+}
+
+#[test]
+fn set_gate_capacity_rolls_back_on_vm_init_fault_and_binding_failure() {
+    let collision = super::fixture_ground();
+    let mover = MoverSettings::default();
+
+    // Part 1: VM InitFault triggered by watching instance variable 8567 >= 1200.0.
+    let mut fault_gate = gate_graph_json();
+    fault_gate["items"] = json!(27);
+    fault_gate["nodes"].as_array_mut().unwrap().extend([
+        node(
+            23,
+            "STUStatescriptStateBooleanSwitch",
+            Some(11),
+            json!({
+                "m_condition": {
+                    "$": "STU_919FD47C",
+                    "m_expression": {
+                        "m_opcodes": [8, 0, 6, 0, 36, 0],
+                        "m_dynamicVars": [var(8567, false)],
+                        "m_D99EF254": [1200.0]
+                    }
+                },
+                "m_trueSubgraphPlug": plug(&[(24, "m_beginPlug")], &[12])
+            }),
+        ),
+        node(
+            24,
+            "STUStatescriptState",
+            Some(12),
+            json!({
+                "m_onBeginPlug": plug(&[(25, "m_inPlug")], &[])
+            }),
+        ),
+        node(
+            25,
+            "STUStatescriptEntry",
+            None,
+            json!({
+                "m_outPlug": plug(&[(25, "m_inPlug")], &[])
+            }),
+        ),
+    ]);
+    fault_gate["states"]
+        .as_array_mut()
+        .unwrap()
+        .extend([json!(23), json!(24)]);
+    fault_gate["nodes"][0]["fields"]["m_outPlug"]["links"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!([23, "m_beginPlug"]));
+
+    let (mut fault_room, _graphs, _codecs) = setup_room_with_gate_graph(fault_gate);
+    fault_room.set_gate_capacity(1000.0).unwrap();
+    let before_health = fault_room.gate_health().unwrap();
+
+    assert!(
+        fault_room.set_gate_capacity(1500.0).is_err(),
+        "capacity crossing fault threshold must fail"
+    );
+    assert!(
+        fault_room.gate_snapshot().is_some(),
+        "failed set_gate_capacity must roll back without leaving gate script halted"
+    );
+    assert_eq!(fault_room.gate_health(), Some(before_health));
+    assert_eq!(
+        fault_room.gate_resolved_variable(
+            1,
+            Variable {
+                scope: Scope::Instance,
+                id: 8567,
+            },
+        ),
+        Some(Value::Float(1000.0))
+    );
+    assert_eq!(
+        fault_room.gate_resolved_variable(
+            0,
+            Variable {
+                scope: Scope::Entity,
+                id: 7786,
+            },
+        ),
+        Some(Value::Float(1000.0))
+    );
+    assert!(fault_room.encounter_snapshot().is_some());
+    fault_room
+        .step_encounter(&collision, &mover, 1, None)
+        .unwrap();
+    assert!(fault_room.gate_snapshot().is_some());
+    assert!(fault_room.encounter_snapshot().is_some());
+
+    // Part 2: binding check failure when stack node 5 is disconnected from entry 0.
+    let mut unbound_gate = gate_graph_json();
+    unbound_gate["nodes"][0]["fields"]["m_outPlug"]["links"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|edge| edge[0] != 5);
+
+    let (mut unbound_room, _graphs, _codecs) = setup_room_with_gate_graph(unbound_gate);
+    let before_unbound_health = unbound_room.gate_health().unwrap();
+    assert_eq!(
+        unbound_room.gate_resolved_variable(
+            1,
+            Variable {
+                scope: Scope::Instance,
+                id: 8567,
+            },
+        ),
+        Some(Value::Null)
+    );
+
+    assert!(
+        unbound_room.set_gate_capacity(500.0).is_err(),
+        "missing stack binding for Entity:7786 must fail"
+    );
+    assert!(unbound_room.gate_snapshot().is_some());
+    assert_eq!(unbound_room.gate_health(), Some(before_unbound_health));
+    assert_eq!(
+        unbound_room.gate_resolved_variable(
+            1,
+            Variable {
+                scope: Scope::Instance,
+                id: 8567,
+            },
+        ),
+        Some(Value::Null)
+    );
+    assert_eq!(
+        unbound_room.gate_resolved_variable(
+            0,
+            Variable {
+                scope: Scope::Entity,
+                id: 7786,
+            },
+        ),
+        Some(Value::Float(1000.0))
+    );
+    unbound_room
+        .step_encounter(&collision, &mover, 1, None)
+        .unwrap();
+}
+
+#[test]
+fn step_encounter_retires_halted_gate_script_without_panicking() {
+    let collision = super::fixture_ground();
+    let mover = MoverSettings::default();
+
+    let mut fault_gate = gate_graph_json();
+    fault_gate["items"] = json!(25);
+    fault_gate["nodes"].as_array_mut().unwrap().extend([
+        node(
+            23,
+            "STUStatescriptEntryGameMessage",
+            None,
+            json!({
+                "m_gameMessage": {"m_gameMessage": format!("0x{TRIGGER_FAULT_MSG:016X}")},
+                "m_outPlug": plug(&[(24, "m_inPlug")], &[])
+            }),
+        ),
+        node(
+            24,
+            "STUStatescriptEntry",
+            None,
+            json!({
+                "m_outPlug": plug(&[(24, "m_inPlug")], &[])
+            }),
+        ),
+    ]);
+    fault_gate["entries"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!(23));
+
+    let (mut room, _graphs, _codecs) = setup_room_with_gate_graph(fault_gate);
+    assert_eq!(
+        room.step_test_gate_frame(1, TRIGGER_FAULT_MSG, Variables::new()),
+        Err(InitFault::PlugDepth)
+    );
+    assert!(room.gate_snapshot().is_none());
+    assert!(room.encounter_snapshot().is_some());
+
+    room.step_encounter(&collision, &mover, 2, None).unwrap();
+    assert!(room.encounter_snapshot().is_none());
+    assert!(room.encounter_phase().is_none());
+    assert!(!room.encounter_boss_pause());
+    assert!(room.junkenstein_gate().is_some());
+    assert!(room.gate_snapshot().is_none());
+}
+
+#[test]
+fn gate_health_from_snapshot_ignores_inactive_switch_and_treats_nan_as_destroyed() {
+    let (room, graphs, _codecs) = setup_registered_room();
+    let base_snapshot = room.gate_snapshot().unwrap().clone();
+
+    // Inactive BooleanSwitch(false) on state 2 with remaining == 1.0 must stay Intact.
+    let mut inactive_switch_snapshot = base_snapshot.clone();
+    inactive_switch_snapshot
+        .variables
+        .insert(8571, Value::Float(1.0));
+    {
+        let inst = inactive_switch_snapshot.instances.get_mut(&1).unwrap();
+        let state2 = inst.states.get_mut(&2).unwrap();
+        state2.active = false;
+        state2.kind = StateKind::BooleanSwitch(false);
+        for raw in [3u16, 4, 5, 6] {
+            if let Some(state) = inst.states.get_mut(&raw) {
+                state.active = false;
+            }
+        }
+    }
+    let inactive_health = GateHealth::from_snapshot(&inactive_switch_snapshot, &graphs, 0x0ca7);
+    assert_eq!(inactive_health.stage, GateDamageStage::Intact);
+
+    // Active BooleanSwitch(false) on state 2 must report Destroyed.
+    let mut active_switch_snapshot = inactive_switch_snapshot.clone();
+    active_switch_snapshot
+        .instances
+        .get_mut(&1)
+        .unwrap()
+        .states
+        .get_mut(&2)
+        .unwrap()
+        .active = true;
+    let active_health = GateHealth::from_snapshot(&active_switch_snapshot, &graphs, 0x0ca7);
+    assert_eq!(active_health.stage, GateDamageStage::Destroyed);
+
+    // NaN remaining without active stage nodes must report Destroyed, never Stage3.
+    let mut nan_snapshot = inactive_switch_snapshot;
+    nan_snapshot.variables.insert(8571, Value::Float(f64::NAN));
+    let nan_health = GateHealth::from_snapshot(&nan_snapshot, &graphs, 0x0ca7);
+    assert_eq!(nan_health.stage, GateDamageStage::Destroyed);
 }

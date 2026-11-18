@@ -184,6 +184,7 @@ use vm::Vm;
 use voice::InstanceContext;
 
 /// A single body using the same authored graph engine as one-shot initialization.
+#[derive(Clone)]
 pub struct Component {
     graphs: Arc<GraphStore>,
     machine: Machine,
