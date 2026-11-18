@@ -68,6 +68,31 @@ pub struct ControllerFrame<'a> {
 }
 
 impl Controller {
+    #[cfg(test)]
+    pub(crate) fn fixture_for_test() -> Self {
+        let empty_layout = Layout {
+            graph: 0,
+            owner_slots: 0,
+            remote_slots: 0,
+            presence_slots: 0,
+        };
+        let slot = StateSlot { index: 0, wire: 0 };
+        Self {
+            root: empty_layout,
+            host: empty_layout,
+            screen: empty_layout,
+            entry: empty_layout,
+            hud: None,
+            parent: None,
+            allow: 0,
+            hero_select: 0,
+            start_host: slot,
+            start_screen: slot,
+            start_entry: slot,
+            assembling: 0,
+        }
+    }
+
     pub fn load(graphs: &GraphStore, mode_guid: u64) -> io::Result<Self> {
         let (root_id, hero_select, start_host, start_hud) = if mode_guid == PRACTICE_RANGE_MODE {
             (PRACTICE, 29, 43, Some(42))

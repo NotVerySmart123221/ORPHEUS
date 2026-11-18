@@ -21,6 +21,51 @@ pub struct PreparedScene {
 }
 
 impl PreparedScene {
+    #[cfg(test)]
+    pub(crate) fn fixture_for_bots(bots: Vec<Bot>) -> Self {
+        use crate::collision_cache::{CollisionCache, Mesh, Triangle};
+
+        let cache = CollisionCache {
+            header: serde_json::from_str(
+                r#"{"meshes":[[3,1]],"hulls":0,"models":0,"placements":0,"identifiers":[]}"#,
+            )
+            .unwrap(),
+            meshes: vec![Mesh {
+                vertices: vec![[-1.0, 0.0, 0.0], [-1.0, 2.0, 0.0], [-1.0, 0.0, 1.0]],
+                triangles: vec![Triangle {
+                    corners: [0, 1, 2],
+                    wings: [-1; 3],
+                    mask: 0x18,
+                    surface: 0,
+                }],
+            }],
+            hulls: vec![],
+            models: vec![],
+            placements: vec![],
+        };
+        let ground = Arc::new(CollisionScene::movement_probe(&cache, &BTreeSet::new()).unwrap());
+        Self {
+            junkenstein_validation: None,
+            map: GameMap::practice_range(),
+            #[cfg(any(test, feature = "inspector"))]
+            movement_cache: String::new(),
+            ground,
+            contacts: None,
+            controller: Controller::fixture_for_test(),
+            mode_ui: BitWriter::new(),
+            initial_board: Component {
+                index: 0,
+                fields: Vec::new(),
+            },
+            simulation: RoomSimulation::new(bots).unwrap(),
+            scripted_bots: 0,
+            movers: Arc::new(MoverCatalog::default()),
+            heroes: Arc::new(HeroCatalog::default()),
+            pools: Arc::new(PoolCatalog::default()),
+            owner_body_factory: None,
+        }
+    }
+
     pub(crate) fn simulation(&self) -> &RoomSimulation {
         &self.simulation
     }

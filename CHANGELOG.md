@@ -6,6 +6,13 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-18
 
+#### Define bounded Lua AI `think()` ABI and migrate Practice Range patrol
+
+- Added a dedicated `!Send` vendored Lua 5.4 host (`rust/src/ai_script.rs`, `AI_ABI_VERSION = 2`) enforcing `StdLib::NONE`, `ChunkMode::Text`, empty `_ENV`, raw table reads, and named, documented caps (`AI_MEMORY_LIMIT_BYTES`, `AI_INSTRUCTION_HOOK_INTERVAL`, `AI_INIT_HOOK_BUDGET`, `AI_THINK_HOOK_BUDGET`, `AI_MAX_SNAPSHOT_TARGETS`, `AI_MAX_EVENTS_PER_TICK`, `AI_MAX_COMMANDS_PER_TICK`, `AI_MAX_WAIT_SECONDS`) that return deterministic `AiScriptError` values without panicking or hanging.
+- Added read-only `BodyId` handle validation (`query_body_handle`, `validate_player_body_handle`, `validate_commands_against_simulation`) checking `id.generation != 0 && sim.player_body_generation_current(id) && sim.player_body(id).is_some()` to reject stale, zero-generation, and unknown handles against `RoomSimulation` without mutating ECS state.
+- Refactored `rust/src/patrol_script.rs` into a thin adapter over `AiScript` (`DEFAULT_SOURCE`, `from_source_checked`) and migrated `rust/scripts/patrol.lua` and `rust/src/game_bots.rs` onto `{ abi = 2, think = function(snapshot, events) ... end }` with bit-for-bit Practice Range movement parity and zero changes to authored StateScript graphs.
+- Added unconditional unit tests covering OOM, init/think instruction budgets, target/event/command caps, invalid command/ABI rejection, stale/zero/unknown `BodyId` rejection, and per-bot/per-room fault isolation (`rust/src/ai_script.rs`, `rust/src/game_service/tests.rs`), and updated `docs/NATIVE_SERVER_ARCHITECTURE.md`, `docs/STATE.md`, and `docs/ROADMAP.md` (#65).
+
 #### Move Junkenstein gate and encounter state into `RoomSimulation` ECS
 
 - Moved Junkenstein gate runtime (`GateState`, `GateRuntime`, `0x0ca7` script, `GateHealth`, `GateDamageStage`) and encounter runtime (`EncounterComponent`, `EncounterPhase`, `SpawnSearches`, `result_action`, `screens_complete`, `boss_pause`) out of `PreparedScene` / `scene_assets/encounter.rs` into `RoomSimulation`'s `bevy_ecs::world::World` (`rust/src/game_combat/encounter.rs`), keeping `rust/src/scene_assets/encounter.rs` as pure map-asset definitions.

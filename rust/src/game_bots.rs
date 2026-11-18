@@ -14,6 +14,7 @@ use std::{
 use serde::Deserialize;
 
 use crate::accounts::parse_guid;
+use crate::ai_script::{AiActorSnapshot, AiPatrolSnapshot};
 use crate::contact_body::CharacterBody;
 use crate::contact_math::{add, sub};
 use crate::contact_world::ContactWorld;
@@ -594,6 +595,31 @@ impl Bot {
         !self.spawn.route.is_empty() && !self.dead && !self.patrol_failed
     }
 
+    #[cfg(test)]
+    pub(crate) fn fixture_walker(target: [f64; 3]) -> Self {
+        tests::walker(target)
+    }
+
+    fn ai_actor_snapshot(&self, tick: u32) -> AiActorSnapshot {
+        AiActorSnapshot {
+            entity: self.entity,
+            generation: None,
+            team: self.spawn.team,
+            position: self.position,
+            yaw: self.yaw,
+            alive: !self.dead,
+            health: self.spawn.health,
+            max_health: self.spawn.health,
+            stunned: self.is_stunned(tick),
+            patrol: Some(AiPatrolSnapshot {
+                route_index: self.index,
+                route_count: self.spawn.route.len(),
+                wait_seconds: self.wait,
+                walking: self.keys,
+            }),
+        }
+    }
+
     fn step_patrol(
         &mut self,
         tick: u32,
@@ -603,7 +629,7 @@ impl Bot {
         ground: &mut impl FnMut(f64, f64, f64, f64) -> Option<f64>,
     ) -> io::Result<()> {
         if first_step {
-            self.wait = script.wait(WaitEvent::Spawn, tick)?;
+            self.wait = script.wait(self.ai_actor_snapshot(tick), WaitEvent::Spawn, tick)?;
         }
         let dt = TICK_PERIOD.as_secs_f64();
         for at in tick - (ticks - 1)..=tick {
@@ -625,7 +651,7 @@ impl Bot {
             self.wait -= dt;
             if self.target.is_none() && self.wait <= EPSILON {
                 let previous = self.index;
-                self.index = script.think(tick, previous, self.spawn.route.len())?;
+                self.index = script.think(self.ai_actor_snapshot(tick), tick)?;
                 let goal = self.spawn.route[self.index];
                 let detour = self.planned_detour(previous);
                 self.waypoints.extend(detour.into_iter().flatten());
@@ -673,7 +699,7 @@ impl Bot {
             }
         }
         if distance <= ARRIVED {
-            self.wait = script.wait(WaitEvent::Release, tick)?;
+            self.wait = script.wait(self.ai_actor_snapshot(tick), WaitEvent::Release, tick)?;
             self.keys = false;
             self.stand();
             return Ok(());
@@ -687,7 +713,7 @@ impl Bot {
             .filter(|&slide| distance - stride <= slide);
         if let Some(slide) = stop {
             // Resolve the decision before publishing this tick's steering.
-            self.wait = script.wait(WaitEvent::Release, tick)?;
+            self.wait = script.wait(self.ai_actor_snapshot(tick), WaitEvent::Release, tick)?;
             stride = (distance - slide).max(0.0);
             self.keys = false;
             self.turning = TURN_AFTER;
@@ -1002,7 +1028,7 @@ mod tests {
     const TRAINING_BODY: u64 = 0x0400_0000_0000_1403;
     const FAR_RUNNER: u64 = 0x02e0_0000_0000_016e;
 
-    fn walker(target: [f64; 3]) -> Bot {
+    pub(super) fn walker(target: [f64; 3]) -> Bot {
         Bot::new(
             BOT_ENTITY,
             Arc::new(BotSpawn {
@@ -1380,13 +1406,19 @@ mod tests {
     fn failed_patrol_decision_leaves_the_route_unmodified_and_only_stops_that_body() {
         let patrol = PatrolScript::from_source(
             r#"
-            return 1, function(event, frame)
-                if event == "think" then
-                    if frame == 188 then return 99 end
-                    return 1
-                end
-                return 3
-            end
+            return {
+                abi = 2,
+                think = function(snapshot, events)
+                    local event = events[1]
+                    if event.kind == "think" then
+                        if event.tick == 188 then
+                            return { { kind = "patrol_slot", slot = 99 } }
+                        end
+                        return { { kind = "patrol_slot", slot = 1 } }
+                    end
+                    return { { kind = "wait", seconds = 3 } }
+                end,
+            }
             "#,
         )
         .unwrap();
@@ -1418,10 +1450,18 @@ mod tests {
     fn failed_release_does_not_publish_an_unapplied_input() {
         let patrol = PatrolScript::from_source(
             r#"
-            return 1, function(event)
-                if event == "spawn" then return 0.016 end
-                if event == "think" then return 1 end
-            end
+            return {
+                abi = 2,
+                think = function(snapshot, events)
+                    local event = events[1]
+                    if event.kind == "spawn" then
+                        return { { kind = "wait", seconds = 0.016 } }
+                    elseif event.kind == "think" then
+                        return { { kind = "patrol_slot", slot = 1 } }
+                    end
+                    return {}
+                end,
+            }
             "#,
         )
         .unwrap();
@@ -1430,7 +1470,7 @@ mod tests {
         for tick in 1..=188 {
             let previous = (bot.position, bot.yaw, bot.input_tick, bot.last_held);
             if let Err(error) = bot.step(tick, &patrol, |_, _, _, _| None) {
-                assert!(error.to_string().contains("patrol wait must be a number"));
+                assert!(error.to_string().contains("invalid AI command"));
                 assert!(planar_distance(bot.position, target) > ARRIVED);
                 assert_eq!(
                     previous,
