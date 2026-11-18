@@ -23,7 +23,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-mod practice_observation;
+pub(crate) mod practice_observation;
 
 fn pick_hero(entity: u32, hero: u64) -> Message {
     Message {

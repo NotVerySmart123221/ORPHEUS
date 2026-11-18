@@ -629,6 +629,19 @@ impl RoomSimulation {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn observed_bot_death(
+        &self,
+        wire: u32,
+    ) -> Result<Option<(crate::vitals::Death, Duration)>, CombatError> {
+        Ok(self
+            .states()
+            .collect::<Result<Vec<_>, _>>()?
+            .iter()
+            .find(|state| state.bot.entity == wire)
+            .and_then(|state| state.vitals.death().zip(state.respawn_at)))
+    }
+
     fn checked_states(&self) -> Result<Vec<&BotState>, CombatError> {
         self.states().collect()
     }

@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-18
 
+- Added an opt-in prepared-runtime test for replaying a private decoded Practice Range schedule through the native room. It records command acceptance, available player and bot fields, and the selected bot's death and respawn timing. The diagnostic records missing fields explicitly. Raw observations stay local.
+
 #### Compare gameplay evidence across languages
 
 - Add the offline `compare_golden` command for semantic Soldier traces. It checks input and runtime fingerprints, validates complete records and reports the first differing command acceptance, state field or owner effect. The public tests exercise an invented scenario with a bot respawn. [Comparison guide](docs/GOLDEN_COMPARISON.md)
