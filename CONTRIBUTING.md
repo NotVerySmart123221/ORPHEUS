@@ -16,7 +16,7 @@ git clone --branch rust https://github.com/leafall903/ORPHEUS.git
 cd ORPHEUS
 ```
 
-If you need a cross-language comparison against Python, keep a separate `main` worktree or checkout.
+For Python work, clone with `git clone --branch main https://github.com/leafall903/ORPHEUS.git`. Set the PR base to `main` for Python and `rust` for Rust, including after the planned default branch change on November 19, 2026 at 12:00 UTC. [Branch guide](docs/BRANCH_TRANSITION.md)
 
 ---
 
@@ -40,11 +40,13 @@ Optional local checks matching the other GitHub Actions lanes:
 cargo +1.85.0 check --locked --workspace --all-targets --features inspector
 
 # Portable crates & gallery preview policy
-cargo test --locked --all-targets -p orpheus-collision -p orpheus-runtime -p orpheus-wire
+cargo test --locked --all-targets -p orpheus-collision -p orpheus-golden-trace -p orpheus-runtime -p orpheus-statescript -p orpheus-wire
 python3 -B scripts/check_gallery_preview_policy.py
 ```
 
 Note: `public-checks.yml` also verifies all **38** `shared_*_contract` tests by `--exact` name. When splitting modules or moving tests, preserve the exact test module path expected by `.github/workflows/public-checks.yml` and [docs/STATE.md](docs/STATE.md).
+
+To compare local cross-language gameplay evidence, see [the trace format, command and synthetic example](docs/GOLDEN_COMPARISON.md).
 
 ---
 

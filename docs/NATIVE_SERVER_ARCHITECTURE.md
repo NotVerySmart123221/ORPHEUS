@@ -107,5 +107,5 @@ cargo test --locked --release --lib prepared_worker_timing_two_solo_rooms -- --i
 
 ## Cutover & Provenance Rules
 
-1. **Reference pinning:** Python (`main`) remains the default server until `rust` matches or exceeds Python's verified hero/mode coverage and passes original-client validation on the audited public checkout. Compare both using identical prepared `104319` packs, collision caches, commands, and packet-loss schedules.
+1. **Reference pinning:** Use the maintained Python server on `main` as a behavioral reference. Rust gameplay parity requires matching or exceeding the verified Python hero and mode coverage plus original-client validation on the audited public checkout. Compare both using identical prepared `104319` packs, collision caches, commands, and packet-loss schedules.
 2. **Legacy path comments:** Older Rust modules occasionally cite `ow174/...` paths from Python `74f36cd`, which predate `main`'s reorganization into `src/ow174/`, `tests/public/`, and `tests/runtime/`. Inspect a separate `main` checkout (or `git show 74f36cd:<path>`) when cross-checking those notes.

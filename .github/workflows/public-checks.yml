@@ -160,7 +160,7 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/rust' }}
       - name: Run portable crate regressions
-        run: cargo +stable test --locked --all-targets -p orpheus-collision -p orpheus-runtime -p orpheus-statescript -p orpheus-wire
+        run: cargo +stable test --locked --all-targets -p orpheus-collision -p orpheus-golden-trace -p orpheus-runtime -p orpheus-statescript -p orpheus-wire
 
   shared-behavior-contracts:
     runs-on: windows-latest

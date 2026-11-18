@@ -7,6 +7,8 @@ ORPHEUS is an open-source server reimplementation for **Overwatch 1 (retail buil
 - **`rust` (this branch):** the experimental native Rust dedicated server, workspace crates, and local 3D debug inspector (`--features inspector`).
 - **`main`:** the community-maintained Python server, Windows game launcher, data extractors, and reference tests ([main branch](https://github.com/leafall903/ORPHEUS/tree/main)).
 
+**Default branch change planned for November 19, 2026 at 12:00 UTC.** New clones will open on `rust`. Choose `rust` for Rust pull requests and `main` for Python pull requests. Both implementations welcome contributions. The Rust server is a developer preview. [Branch guide](docs/BRANCH_TRANSITION.md)
+
 [Public Rust Tests](#public-rust-tests) · [Run Native Server](#run-the-native-server) · [Current Status](#current-status) · [Architecture](docs/NATIVE_SERVER_ARCHITECTURE.md) · [Contributing](CONTRIBUTING.md) · [Issues](https://github.com/leafall903/ORPHEUS/issues)
 
 ---
