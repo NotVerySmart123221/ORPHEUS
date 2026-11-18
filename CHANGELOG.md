@@ -20,6 +20,10 @@ This log records tested changes and their acceptance status. Entries are grouped
 - Scheduled the repository default to switch to the existing `rust` branch on November 19 at 12:00 UTC. Documented contribution targets and verification steps for maintainers. Rust development continues on `rust` and Python development on `main`. [Branch guide](docs/BRANCH_TRANSITION.md)
 - Added an original-client verification day issue form for both implementations, linked the pinned Python parity matrix from the [Rust status page](docs/STATE.md), and documented a [design for comparing private gameplay traces](docs/GOLDEN_TRACE.md).
 
+#### Observe the pinned Python room offline
+
+- `scripts/inspect_python_room.py` accepts a semantic command schedule and a private output path. It loads the prepared Practice Range terrain, records Soldier command acceptance, pose, ammunition and reload state, and follows the chosen bot's health and body generation. It projects body lifecycle, vital-pool and magazine effects from the production owner send path with in-memory acknowledgements. The paired collector binds repeatable observations to their effective runtime profile.
+
 #### Add safe-boundary Lua AI hot reload with pre-activation validation and rollback
 
 - Added opt-in safe-boundary Lua AI hot reload handled in `State::handle_request` between worker ticks (`GameService::reload_ai_script`, `GameService::reload_ai_script_file`, `GameService::ai_policy_status`, `ServerConfig::ai_script`, `Server::reload_ai_script`, and opt-in `--ai-script` / `'reload'` stdin command in `orpheus_server`) without altering the public wire protocol or weakening the `!Send` Lua sandbox (`debug_http.rs` remains read-only).
