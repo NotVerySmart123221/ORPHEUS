@@ -23,6 +23,23 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+mod practice_observation;
+
+fn pick_hero(entity: u32, hero: u64) -> Message {
+    Message {
+        id: CLIENT_GAME_MESSAGE,
+        fields: Fields::from([
+            (
+                0x78,
+                Value::Struct(Fields::from([(0, Value::Unsigned(u64::from(entity)))])),
+            ),
+            (0x80, Value::Blob(hero.to_le_bytes().to_vec())),
+            (0xa8, Value::Unsigned(PICK_HERO)),
+            (0xb0, Value::Signed(3)),
+        ]),
+    }
+}
+
 fn forward(frame: u32) -> Command {
     Command {
         frame,
@@ -488,25 +505,13 @@ fn queued_player_requests_ignore_invalid_input_but_propagate_replacement_failure
     world.start(&scene, &viewer, FIRST_TICK).unwrap();
     world.created.insert(owner);
     world.present(&scene, FIRST_TICK).unwrap();
-    let pick = |entity, hero: u64| Message {
-        id: CLIENT_GAME_MESSAGE,
-        fields: Fields::from([
-            (
-                0x78,
-                Value::Struct(Fields::from([(0, Value::Unsigned(u64::from(entity)))])),
-            ),
-            (0x80, Value::Blob(hero.to_le_bytes().to_vec())),
-            (0xa8, Value::Unsigned(PICK_HERO)),
-            (0xb0, Value::Signed(3)),
-        ]),
-    };
     for message in [
         Message {
             id: 0,
             fields: Fields::new(),
         },
-        pick(owner + 1, SOLDIER),
-        pick(owner, 0),
+        pick_hero(owner + 1, SOLDIER),
+        pick_hero(owner, 0),
     ] {
         world.queue_game_message(FIRST_TICK, Duration::ZERO, message);
     }
@@ -520,14 +525,14 @@ fn queued_player_requests_ignore_invalid_input_but_propagate_replacement_failure
     assert!(world.body.is_none());
 
     world.generation = u64::MAX;
-    world.queue_game_message(FIRST_TICK, Duration::ZERO, pick(owner, SOLDIER));
+    world.queue_game_message(FIRST_TICK, Duration::ZERO, pick_hero(owner, SOLDIER));
     let error = world
         .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
         .unwrap_err();
     assert_eq!(error.to_string(), "player body lifetime exhausted");
     assert!(world.body.is_none());
     world.generation = 0;
-    world.queue_game_message(FIRST_TICK, Duration::ZERO, pick(owner, SOLDIER));
+    world.queue_game_message(FIRST_TICK, Duration::ZERO, pick_hero(owner, SOLDIER));
     assert_eq!(
         world
             .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
@@ -634,18 +639,7 @@ fn native_world_resumes_a_gap_before_switching_the_body_and_acknowledging_input(
     world.queue_commands(FIRST_TICK + 2, &[actual, gap]);
 
     let tracer = scene.heroes().find_hero("Tracer").unwrap().clone();
-    let switch = Message {
-        id: CLIENT_GAME_MESSAGE,
-        fields: Fields::from([
-            (
-                0x78,
-                Value::Struct(Fields::from([(0, Value::Unsigned(u64::from(owner)))])),
-            ),
-            (0x80, Value::Blob(tracer.guid.to_le_bytes().to_vec())),
-            (0xa8, Value::Unsigned(PICK_HERO)),
-            (0xb0, Value::Signed(3)),
-        ]),
-    };
+    let switch = pick_hero(owner, tracer.guid);
     world.queue_game_message(FIRST_TICK + 3, Duration::ZERO, switch);
     world.queue_commands(FIRST_TICK + 3, &[gap, later]);
 
