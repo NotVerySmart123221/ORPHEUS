@@ -9,15 +9,15 @@ import platform
 import random
 from unittest.mock import patch
 
-from golden_python_delivery import OwnerDelivery, bits
-from ow174.game import bots, collision, content
+from golden_python_delivery import MemorySink, OwnerDelivery, bits
+from ow174.game import bots, collision, content, world
 from ow174.game.commands import Command
-from ow174.game.match import Match
 from ow174.game.script import expr
 from ow174.game.script.driver import OWNER_HEALTH
 from ow174.game.script.nodes import WeaponVolley
 from ow174.game.script.runtime import Component
-from ow174.game.server import FIRST_TICK
+from ow174.game.server import GameServer
+from tests.runtime.test_game_server import pick
 from tests.runtime.test_server_journal import FixedSource
 
 
@@ -60,7 +60,7 @@ def rifle_reloading(rifle):
     return expr.truthy(var.base) if var.base is None or type(var.base) is bool else None
 
 
-def select_stock_body(match, player):
+def select_stock_body(match, player, now):
     """Observe the actual VM seed at construction without drawing from its random stream."""
     initialize = Component.__init__
     parameters = inspect.signature(initialize)
@@ -73,7 +73,8 @@ def select_stock_body(match, player):
         seeds[component] = arguments.arguments["seed"]
 
     with patch.object(Component, "__init__", observe):
-        if not match.switch_hero(player, player.hero) or player.body_script is None:
+        match.game_message(player, pick(player.entity, player.hero.guid), now)
+        if player.body_script is None:
             raise ValueError("stock Soldier failed to initialize")
     component = player.body_script.component
     if (component not in seeds or type(seeds[component]) is not int
@@ -93,15 +94,16 @@ class PythonRoom:
         provider = collision.StaticCollisionProvider(terrain)
         self.clock = RoomClock()
         self.seed = self.clock.counter
-        self.match = Match(scene, environment=self.clock, collision_provider=provider)
-        self.player = self.match.add_player(1, "player", content.SOLDIER, 0, False)
-        self.match.tick = FIRST_TICK
-        self.start_tick = self.match.tick
-        self.delivery = OwnerDelivery(self.match, self.player)
-        self.vm_seed = select_stock_body(self.match, self.player)
-        if self.delivery.seq != 0 or self.delivery.in_flight:
-            raise ValueError("unexpected owner delivery before the first scheduled tick")
-        self.setup_delivery_ticks = self.match.tick - self.start_tick
+        host = GameServer(environment=self.clock, collision_provider_factory=lambda: provider)
+        host.sock = MemorySink()
+        tickets = host.create_match(scene, [(1, "player", content.SOLDIER, 0, False)])
+        if not tickets:
+            raise ValueError("stock Practice Range room could not be created")
+        self.host = host
+        self.match, = host.matches
+        self.player, = self.match.players
+        self.start_tick = host.tick
+        self.delivery = OwnerDelivery.join(host, tickets[0], self.match.started)
         if not 0 <= bot_slot < len(self.match.bots) or self.match.bots[bot_slot].team == self.player.team:
             raise ValueError("select a hostile Practice Range bot slot")
         self.spawner = self.match.bots[bot_slot].spawner
@@ -114,12 +116,65 @@ class PythonRoom:
             "yaw": bots.yaw_of(self.spawner["rotation"]),
         }
         self.bot_generation = 1
+        self.identities = {self.bot.entity: "bot/0/body/1"}
+        self.startup_acks = {}
+        self.bootstrap_effects = []
+        self._load()
+        self.setup_delivery_ticks = self.match.tick - self.start_tick
+        self.setup_elapsed_us = self.clock.elapsed_us
         self.player_script = self.player.body_script
         self.player_entity = self.player.body
         self.player_generation = 1
         self.ambiguous_player_body = False
-        self.identities = {}
         self.owner_effects = None
+
+    def _load(self):
+        m, player = self.match, self.player
+        self.vm_seed = None
+        map_loaded = False
+
+        def confirmed(records, possession, script):
+            for update in records:
+                if update.entity == self.bot.entity and update.op == world.OP_CREATE:
+                    if self.delivery.bot_create_acked(self.bot.entity):
+                        self.startup_acks.setdefault("bot_create", m.tick)
+                if player.has_body and update.entity == player.body and update.op == world.OP_CREATE:
+                    if player.body_script.create_arrived:
+                        self.startup_acks.setdefault("owner_create", m.tick)
+                if (possession and update is possession[1] and possession[0] == player.body
+                        and player.entity not in self.delivery._pending_possessions):
+                    self.startup_acks.setdefault("owner_possession", m.tick)
+                for name, item in zip(("owner_full_tree", "owner_first_delta"), script):
+                    if update is item and player.body_script.stream.base_last >= update.chunk_last:
+                        self.startup_acks.setdefault(name, m.tick)
+
+        for _ in range(256):
+            now = self._tick_time()
+            previous = self.delivery.seq
+            self.host._tick(now)
+            instance_sent = not map_loaded and any(
+                index == 0 for index, _ in self.delivery.in_flight.get(previous, ((), ()))[0]
+            )
+            if player.steps_done == 4 and self.delivery.controller_ready and self.vm_seed is None:
+                self.vm_seed = select_stock_body(m, player, now)
+                self.component_start_frame = player.body_script.frame
+                self.identities[player.body] = "player/0/body/1"
+            effects, gaps = self.delivery.received_frame(previous, now, self.identities, confirmed)
+            if instance_sent:
+                m.map_loaded(player, now)
+                map_loaded = True
+            if gaps:
+                raise ValueError(f"unobserved owner delivery during loading: {sorted(gaps)}")
+            self.bootstrap_effects.extend(effects)
+            if self.startup_acks.keys() >= {"bot_create", "owner_create", "owner_possession"}:
+                if player.commands.last_frame is not None:
+                    raise ValueError("gameplay input processed during loading")
+                return
+        raise ValueError(f"room readiness timed out; observed receipts: {sorted(self.startup_acks)}")
+
+    def _tick_time(self):
+        self.clock.elapsed_us = (self.host.tick - self.start_tick) * self.player.quanta
+        return self.match.started + self.clock.elapsed_us / 1_000_000
 
     def _remember(self, entity, actor):
         if self.identities.setdefault(entity, actor) != actor:
@@ -127,7 +182,7 @@ class PythonRoom:
 
     def step(self, command):
         """Take at most one semantic submission before one production room update."""
-        self.clock.elapsed_us = (self.match.tick - FIRST_TICK) * self.player.quanta
+        now = self._tick_time()
         before = self.player.commands.last_frame
         boundary = None
         if command is not None:
@@ -138,10 +193,10 @@ class PythonRoom:
             boundary = self.player.take_commands([command])
         after = self.player.commands.last_frame
         accepted = command is not None and boundary is None and before != after and after == command.frame
-        now = self.match.started + self.clock.elapsed_us / 1_000_000
-        self.match.update(now, self.match.tick + 1)
+        previous = self.delivery.seq
+        self.host._tick(now)
         state, missing = self.observe()
-        self.owner_effects, delivery_gaps = self.delivery.transmit(self.match.tick, now, self.identities)
+        self.owner_effects, delivery_gaps = self.delivery.received_frame(previous, now, self.identities)
         return accepted, (state, sorted(set(missing) | delivery_gaps))
 
     def observe(self):

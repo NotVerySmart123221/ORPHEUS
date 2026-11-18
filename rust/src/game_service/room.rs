@@ -315,6 +315,10 @@ impl Room {
         self.with_peer(connection, |room, peer, slot| {
             if let Some((ack, bits)) = received.ack {
                 let report = peer.egress.acknowledge(ack, bits);
+                #[cfg(test)]
+                if let Some(sink) = &mut peer.observed_receipts {
+                    sink.push(report.clone());
+                }
                 if !draining {
                     peer.world.acknowledge(report, now);
                 }

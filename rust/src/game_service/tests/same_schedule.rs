@@ -4,13 +4,15 @@ use crate::commands::{Click, Command, SUBFRAME};
 use crate::game_bots::BotSpawn;
 use crate::game_clock::{FIRST_TICK, SEND_EVERY};
 use crate::game_replication::tests::owner_effects::{script_receipts, selected};
-use crate::game_replication::tests::practice_observation::{prepare_owner, processed, rifle_state};
+use crate::game_replication::tests::practice_observation::{processed, rifle_state};
 use crate::scene_assets::SceneAssets;
 use serde::Deserialize;
 use serde_json::{Value as Json, json};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
+
+mod startup;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -145,7 +147,7 @@ fn same_schedule_practice_room() {
         generation: 0,
     };
     let schemas = Arc::new(Schemas::load(runtime.join("data/game_schemas_174.json")).unwrap());
-    let mut state = State::new(schemas, PatrolScript::load().unwrap());
+    let mut state = State::new(Arc::clone(&schemas), PatrolScript::load().unwrap());
     let ticket = state
         .open_match(
             MATCH,
@@ -161,29 +163,7 @@ fn same_schedule_practice_room() {
         .remove(0);
     let server = UdpSocket::bind(local()).unwrap();
     let mut client = Client::new(server.local_addr().unwrap(), &ticket);
-    // Exercise ordinary room scheduling with the test transport. Only the receipt sequence is observed.
-    let syn = client
-        .cipher
-        .seal(&Packet {
-            conn: ticket.conn,
-            kind: KIND_CONTROL,
-            flags: SYN | ACK,
-            ..Packet::default()
-        })
-        .unwrap();
-    state
-        .receive(
-            &server,
-            &syn,
-            client.socket.local_addr().unwrap(),
-            Duration::ZERO,
-        )
-        .unwrap();
-    let hello = client.receive();
-    client.window.accept(hello.seq);
-    let room = state.rooms.get_mut(&MATCH).unwrap();
-    let peer = room.members[&ticket.conn].peer.as_mut().unwrap();
-    let scene = &mut room.world.as_mut().unwrap().scene;
+    let scene = &state.rooms[&MATCH].world.as_ref().unwrap().scene;
     let initial_bot = scene
         .simulation()
         .bodies()
@@ -192,22 +172,20 @@ fn same_schedule_practice_room() {
         .unwrap()
         .entity;
     let mut names = std::collections::BTreeMap::from([(initial_bot, "bot/0/body/1".to_string())]);
-    let mut bootstrap_effects = Vec::new();
-    let mut bootstrap_scripts = [0; 2];
-    let setup = prepare_owner(scene, &mut peer.world, &mut peer.egress, |receipt, body| {
-        if let Some(wire) = body {
-            let applied = script_receipts(receipt, wire);
-            bootstrap_scripts[0] += applied[0];
-            bootstrap_scripts[1] += applied[1];
-            names.insert(wire, "player/0/body/1".to_string());
-        }
-        bootstrap_effects.extend(selected(receipt, &names));
-    });
-    let initial_player = scene
-        .simulation()
-        .player_body_by_owner(peer.world.owner())
-        .unwrap()
-        .id;
+    let setup = startup::join(
+        &mut state,
+        &server,
+        &mut client,
+        &schemas,
+        initial_bot,
+        &mut names,
+    );
+    let peer = state.rooms[&MATCH].members[&ticket.conn]
+        .peer
+        .as_ref()
+        .unwrap();
+    let initial_player = peer.world.active_body_id().unwrap();
+    let first_scheduled_time = setup.now + Duration::from_micros(u64::from(RETAIL_QUANTA));
     let mut first_scheduled_frame = None;
     let mut ticks = Vec::new();
     let mut bot_deaths = Vec::new();
@@ -220,7 +198,7 @@ fn same_schedule_practice_room() {
         assert!(t.tick < 100_000 && t.inputs.len() <= 1);
         assert_eq!(t.elapsed_us, u64::from(t.tick) * u64::from(RETAIL_QUANTA));
         assert_eq!(t.missed, 0);
-        let now = Duration::from_micros(t.elapsed_us);
+        let now = first_scheduled_time + Duration::from_micros(t.elapsed_us);
         let command = t.inputs.into_iter().next().map(Offer::command);
         let room = state.rooms.get_mut(&MATCH).unwrap();
         let peer = room.members[&ticket.conn].peer.as_mut().unwrap();
@@ -231,8 +209,15 @@ fn same_schedule_practice_room() {
         }
         let frame = state.clock.frame();
         state.tick(&server, now, t.missed).unwrap();
-        assert_eq!(state.clock.frame(), FIRST_TICK + t.tick + 1);
+        assert_eq!(state.clock.frame(), setup.tick + t.tick + 1);
         first_scheduled_frame.get_or_insert(state.clock.frame());
+        let receipt = if state.clock.frame() / SEND_EVERY > frame / SEND_EVERY {
+            let sent = client.receive();
+            assert!(client.window.accept(sent.seq));
+            Some(startup::acknowledge(&mut state, &server, &mut client, now))
+        } else {
+            None
+        };
         let room = state.rooms.get_mut(&MATCH).expect("room survived the tick");
         let peer = room.members[&ticket.conn].peer.as_mut().unwrap();
         let mut rows = Vec::new();
@@ -242,16 +227,7 @@ fn same_schedule_practice_room() {
             names.insert(wire, format!("bot/0/body/{}", bot.generation));
         }
         names.insert(initial_player.entity, "player/0/body/1".to_string());
-        let mut effects = Vec::new();
-        if state.clock.frame() / SEND_EVERY > frame / SEND_EVERY {
-            let sent = client.receive();
-            assert!(client.window.accept(sent.seq));
-            let receipt = peer
-                .egress
-                .acknowledge(client.window.expected, client.window.bits);
-            effects = selected(&receipt, &names);
-            peer.world.acknowledge(receipt, now);
-        }
+        let effects = receipt.map_or_else(Vec::new, |delivery| selected(&delivery, &names));
         let accepted = processed(&peer.world);
         row["accepted"] =
             json!(command.is_some_and(|c| accepted == Some(c.frame) && accepted != before));
@@ -302,15 +278,16 @@ fn same_schedule_practice_room() {
     }
     assert!(!ticks.is_empty());
     unavailable.insert("provenance.effective_data_sha256");
-    let vm_seed = (u64::from(initial_player.entity) << 32) | u64::from(setup.component_start_frame);
+    let vm_seed = (u64::from(initial_player.entity) << 32) | u64::from(setup.component_frame);
     let result = json!({"status":"incomplete","scope":"stock Practice Range owner and selected ordinary spawner",
         "quanta_us":RETAIL_QUANTA,"bot_spawner_slot":slot,"bot_spawner":spawn_description,"bot_roster_size":roster_size,
-        "transport":"stock identity delivery pre-roll, then loopback worker sends and immediate modeled receipts",
-        "bootstrap_effects":bootstrap_effects,"bootstrap_full_body_receipts":bootstrap_scripts[0],"bootstrap_owner_delta_receipts":bootstrap_scripts[1],
-        "bot_death_timing":bot_deaths,"setup_delivery_ticks":setup.delivery_tick-FIRST_TICK,
-        "owner_component_start_frame":setup.component_start_frame,"owner_component_entity":initial_player.entity,
+        "transport":"loopback room loading and owner acknowledgements on ordinary worker ticks",
+        "bootstrap_effects":setup.effects,"bootstrap_full_body_receipts":setup.scripts[0],"bootstrap_owner_delta_receipts":setup.scripts[1],
+        "bot_death_timing":bot_deaths,"setup_delivery_ticks":setup.tick-FIRST_TICK,
+        "startup_acks":setup.acks,"setup_elapsed_us":setup.now.as_micros(),"owner_component_start_frame":setup.component_frame,
+        "owner_component_entity":initial_player.entity,
         "player_vm_random_model":"splitmix64","player_vm_initial_seed":vm_seed,
-        "first_scheduled_room_tick":first_scheduled_frame,"initial_owner_delivery_phase":"after-setup-ack",
+        "first_scheduled_room_tick":first_scheduled_frame,"initial_owner_delivery_phase":"after-possession-ack",
         "host_random_model":"os-entropy-transport-only","host_initial_seed":null,
         "server_player_slots":1,
         "input_boundary":"after owner identity, controller data and bound body delivery; before next room tick",

@@ -125,6 +125,12 @@ class InputTests(unittest.TestCase):
             setup = json.loads(header)["setup"]
             self.assertEqual((setup["host_initial_seed"], setup["player_vm_initial_seed"]), (0, 2**64-1))
             self.assertEqual(json.loads(footer)["sha256"], hashlib.sha256(header + tick).hexdigest())
+        data.update(initial_owner_delivery_phase="after-possession-ack", first_scheduled_room_tick=16,
+                    setup_delivery_ticks=5, setup_elapsed_us=64000, owner_component_start_frame=13,
+                    startup_acks={"bot_create":12, "owner_create":15, "owner_possession":15})
+        setup = json.loads(encoded("reference")[0])["setup"]
+        for field in ("startup_acks", "setup_elapsed_us", "owner_component_start_frame"):
+            self.assertEqual(setup[field], data[field])
         row["missing"] = ["effects"]
         with self.assertRaisesRegex(ValueError, "unobserved"):
             encoded("candidate")

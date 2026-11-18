@@ -5,12 +5,10 @@ import struct
 from weakref import WeakKeyDictionary
 
 from ow174.game import world
-from ow174.game.link import LinkCipher
-from ow174.game.match import sends
+from ow174.game.link import ACK, SYN, LinkCipher, Packet
 from ow174.game.script import decode
-from ow174.game.server import Client, GameServer
+from ow174.game.server import Client
 from tests.runtime.test_game_health import bar
-from tests.runtime.test_game_packet_budget import KEY_IN, KEY_OUT
 
 
 def bits(value):
@@ -20,25 +18,39 @@ def bits(value):
 
 
 class MemorySink:
-    """Accept the server's sends in memory without retaining datagrams or addresses."""
+    """Hold the most recent send until the in-memory peer receives it."""
 
     def sendto(self, data, address):
+        self.last = data
         return len(data)
 
 
 class OwnerDelivery(Client):
-    def __init__(self, match, player):
-        host = GameServer(environment=match.environment)
-        host.sock = MemorySink()
-        super().__init__(host, ("memory.test", 1), 1, LinkCipher(KEY_IN, KEY_OUT), player)
-        player.client = self
-        player.spawned = True
-        player.steps_done = 4
-        self.open = True
+    def __init__(self, *args):
+        super().__init__(*args)
         self.health_records = WeakKeyDictionary()
-        self.queue_ownership()
-        self.queue_entities(match.spawn_updates(player))
-        match.combat.spawned(player)
+
+    @classmethod
+    def join(cls, host, ticket, now):
+        from unittest.mock import patch
+
+        address = ("127.0.0.1", 1)
+        peer = LinkCipher(ticket.key_out, ticket.key_in)
+        with patch("ow174.game.server.Client", cls):
+            host._datagram(peer.seal(Packet(ticket.conn, flags=SYN)), address, now)
+        delivery = host.clients[ticket.conn]
+        hello = peer.open(host.sock.last)
+        if hello is None or hello.flags != SYN | ACK:
+            raise ValueError("room handshake did not complete")
+        delivery.peer_cipher = peer
+        delivery.peer_sequence = 1
+        delivery.confirm(hello.seq, now)
+        return delivery
+
+    def confirm(self, sequence, now):
+        ack = Packet(self.conn, seq=self.peer_sequence, flags=ACK, ack=(sequence + 1) % 2**32, ack_bits=1)
+        self.server._datagram(self.peer_cipher.seal(ack), self.address, now)
+        self.peer_sequence += 1
 
     def queue_body_health(self, entity, components):
         previous = self._body_health.get(entity)
@@ -70,12 +82,14 @@ class OwnerDelivery(Client):
             raise ValueError("unsupported encoded magazine")
         return amount
 
-    def transmit(self, tick, now, identities):
+    def received_frame(self, previous_sequence, now, identities, on_receipt=None):
         """Project only records selected by send_frame after its successful send."""
-        if not sends(tick):
+        if self.seq == previous_sequence:
             return [], set()
-        sequence = self.seq
-        self.send_frame(tick, now)
+        packet = self.peer_cipher.open(self.server.sock.last)
+        if packet is None or packet.seq != previous_sequence:
+            raise ValueError("owner frame was not received")
+        sequence = packet.seq
         sent = self.in_flight.get(sequence)
         if sent is None:
             return None, {"effects.grouped_delivery"}
@@ -104,7 +118,13 @@ class OwnerDelivery(Client):
                 plain, over = bar(self.health_records[update])
                 health = sum(current for current, _ in plain) + sum(over)
                 group.append(["owner", "health", actor, bits(health)])
-        self.acked((sequence + 1) % 2**32, 1)
+        if on_receipt is not None:
+            pending = self._pending_possessions.get(self.player.entity)
+            body = self.player.body_script
+            script = (body.stream.full_update, body.stream.initial_owner) if body else (None, None)
+        self.confirm(sequence, now)
+        if on_receipt is not None:
+            on_receipt(sent[1], pending, script)
         if missing:
             return None, missing
         return ([group] if group else []), set()

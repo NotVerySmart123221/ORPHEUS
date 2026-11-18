@@ -28,12 +28,16 @@ def write_trace(stream, data, inputs, *, role, source_revision, reference_revisi
         digest.update(encoded)
         stream.write(encoded)
 
+    setup = {k: data[k] for k in CAPTURE_SETUP}
+    if setup["initial_owner_delivery_phase"] == "after-possession-ack":
+        setup.update({k: data[k] for k in ("startup_acks", "setup_elapsed_us", "owner_component_start_frame")})
+
     line({
         "kind": "header", "schema": "orpheus.golden.v2", "profile": "soldier-range-v1",
         "scenario": "soldier-range", "build": 104319, "role": role,
         "source_rev": source_revision, "reference_rev": reference_revision, "adapter_rev": adapter_revision,
         "toolchain": toolchain, "platform": platform, "quanta_us": data["quanta_us"],
-        "setup": {k: data[k] for k in CAPTURE_SETUP},
+        "setup": setup,
         "runtime_sha256": inputs.runtime_sha256, "profile_sha256": inputs.profile_sha256,
         "schedule_sha256": inputs.schedule_sha256,
     })

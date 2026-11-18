@@ -80,7 +80,6 @@ fn deliver_until(
     scene: &mut PreparedScene,
     egress: &mut GameEgress<Arc<Record>>,
     tick: &mut u32,
-    observed: &mut impl FnMut(&DeliveryReport<Arc<Record>>, Option<u32>),
     ready: impl Fn(&WorldDelivery) -> bool,
 ) {
     // Receipt is modelled only after the real egress selected the frame and
@@ -98,7 +97,6 @@ fn deliver_until(
             *tick - FIRST_TICK,
         );
         let receipt = egress.acknowledge(sent.sequence + 1, 1);
-        observed(&receipt, world.spawned_body());
         world.acknowledge(receipt, Duration::ZERO);
         *tick += 1;
     }
@@ -109,17 +107,23 @@ pub(crate) fn processed(world: &WorldDelivery) -> Option<u32> {
     world.input.processed
 }
 
-pub(crate) struct PreparedOwner {
-    pub(crate) delivery_tick: u32,
-    pub(crate) component_start_frame: u32,
+pub(crate) fn controller_acked(world: &WorldDelivery) -> bool {
+    world.identity_ready(world.owner()) && world.controller.delivered() != 0
 }
 
-pub(crate) fn prepare_owner(
+pub(crate) fn possession_acked(world: &WorldDelivery) -> bool {
+    world.bound.is_some() && world.bound == world.active_body_id()
+}
+
+pub(crate) fn body_script_frame(world: &WorldDelivery) -> Option<u32> {
+    world.body_script.as_ref().map(|script| script.frame)
+}
+
+fn prepare_owner(
     scene: &mut PreparedScene,
     world: &mut WorldDelivery,
     egress: &mut GameEgress<Arc<Record>>,
-    mut observed: impl FnMut(&DeliveryReport<Arc<Record>>, Option<u32>),
-) -> PreparedOwner {
+) -> u32 {
     let viewer = PlayerAppearance {
         entity: OWNER,
         slot: 0,
@@ -133,7 +137,7 @@ pub(crate) fn prepare_owner(
     world.queue_game_message(tick, Duration::ZERO, pick_hero(OWNER, SOLDIER));
     assert!(!world.has_input_work());
 
-    deliver_until(world, scene, egress, &mut tick, &mut observed, |world| {
+    deliver_until(world, scene, egress, &mut tick, |world| {
         world.identity_ready(OWNER) && world.controller.latest_data() != 0
     });
     world.queue_game_message(tick, Duration::ZERO, pick_hero(OWNER, SOLDIER));
@@ -153,15 +157,12 @@ pub(crate) fn prepare_owner(
         200.0
     );
     assert_eq!(rifle_state(body).0, 30);
-    deliver_until(world, scene, egress, &mut tick, &mut observed, |world| {
+    deliver_until(world, scene, egress, &mut tick, |world| {
         world.identity_ready(id.entity) && world.bound == Some(id)
     });
     assert_eq!(world.input.processed, None);
 
-    PreparedOwner {
-        delivery_tick: tick,
-        component_start_frame,
-    }
+    tick
 }
 
 #[test]
@@ -173,7 +174,7 @@ fn stock_practice_owner_observes_processed_commands_and_rifle_state() {
     assert!(scene.movement_ready());
     let mut world = WorldDelivery::new(OWNER);
     let mut egress = GameEgress::default();
-    let mut tick = prepare_owner(&mut scene, &mut world, &mut egress, |_, _| {}).delivery_tick;
+    let mut tick = prepare_owner(&mut scene, &mut world, &mut egress);
     let viewer = PlayerAppearance {
         entity: OWNER,
         slot: 0,

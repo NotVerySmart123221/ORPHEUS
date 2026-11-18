@@ -67,22 +67,31 @@ pub(super) fn items(v: &Value, n: usize, predicate: impl Fn(&Value) -> bool) -> 
 
 fn captured_setup(s: &Value) -> bool {
     let spawn = &s["bot_spawner"];
-    exact_fields(
-        s,
-        &[
-            "bot_spawner",
-            "bot_spawner_slot",
-            "bot_roster_size",
-            "initial_room_tick",
-            "first_scheduled_room_tick",
-            "setup_delivery_ticks",
-            "initial_owner_delivery_phase",
-            "host_random_model",
-            "host_initial_seed",
-            "player_vm_random_model",
-            "player_vm_initial_seed",
-        ],
-    ) && exact_fields(spawn, &["team", "hero", "position_bits", "yaw"])
+    let mut fields = vec![
+        "bot_spawner",
+        "bot_spawner_slot",
+        "bot_roster_size",
+        "initial_room_tick",
+        "first_scheduled_room_tick",
+        "setup_delivery_ticks",
+        "initial_owner_delivery_phase",
+        "host_random_model",
+        "host_initial_seed",
+        "player_vm_random_model",
+        "player_vm_initial_seed",
+    ];
+    if s["initial_owner_delivery_phase"] == "after-possession-ack" {
+        fields.extend([
+            "startup_acks",
+            "setup_elapsed_us",
+            "owner_component_start_frame",
+        ]);
+        if !confirmed_startup(s) {
+            return false;
+        }
+    }
+    exact_fields(s, &fields)
+        && exact_fields(spawn, &["team", "hero", "position_bits", "yaw"])
         && uint(&spawn["team"], u8::MAX.into())
         && is_hex(&spawn["hero"], 16)
         && items(&spawn["position_bits"], 3, finite_bits)
@@ -99,7 +108,7 @@ fn captured_setup(s: &Value) -> bool {
         && s["bot_spawner_slot"].as_u64() < s["bot_roster_size"].as_u64()
         && matches!(
             s["initial_owner_delivery_phase"].as_str(),
-            Some("before-first-send" | "after-setup-ack")
+            Some("before-first-send" | "after-setup-ack" | "after-possession-ack")
         )
         && token(&s["host_random_model"])
         && token(&s["player_vm_random_model"])
@@ -109,6 +118,37 @@ fn captured_setup(s: &Value) -> bool {
             s["host_initial_seed"].as_u64().is_some()
         })
         && s["player_vm_initial_seed"].as_u64().is_some()
+}
+
+fn confirmed_startup(s: &Value) -> bool {
+    let (Some(start), Some(first), Some(ticks), Some(component), Some(acks)) = (
+        s["initial_room_tick"].as_u64(),
+        s["first_scheduled_room_tick"].as_u64(),
+        s["setup_delivery_ticks"].as_u64(),
+        s["owner_component_start_frame"].as_u64(),
+        s["startup_acks"].as_object(),
+    ) else {
+        return false;
+    };
+    let Some(cut) = first.checked_sub(1) else {
+        return false;
+    };
+    let required = ["bot_create", "owner_create", "owner_possession"];
+    start.checked_add(ticks) == Some(cut)
+        && uint(&s["setup_elapsed_us"], u64::MAX)
+        && (start..=cut).contains(&component)
+        && required.iter().all(|name| acks.contains_key(*name))
+        && acks["owner_create"]
+            .as_u64()
+            .is_some_and(|t| component <= t)
+        && required
+            .iter()
+            .any(|name| acks[*name].as_u64() == Some(cut))
+        && acks.iter().all(|(name, value)| {
+            (required.contains(&name.as_str())
+                || matches!(name.as_str(), "owner_full_tree" | "owner_first_delta"))
+                && value.as_u64().is_some_and(|t| (start..=cut).contains(&t))
+        })
 }
 
 pub(super) fn check_header(h: &Value, role: &str) -> Invalid<()> {

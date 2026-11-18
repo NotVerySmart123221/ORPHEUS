@@ -398,6 +398,59 @@ fn both_captured_roles_validate_even_when_delivery_and_randomness_differ() {
 }
 
 #[test]
+fn possession_boundary_requires_real_clock_and_each_actor_receipt() {
+    let setup = |rows: &mut [Value]| {
+        captured(rows);
+        let s = &mut rows[0]["setup"];
+        s["initial_owner_delivery_phase"] = json!("after-possession-ack");
+        s["setup_delivery_ticks"] = json!(6);
+        s["first_scheduled_room_tick"] = json!(1007);
+        s["setup_elapsed_us"] = json!(80000);
+        s["owner_component_start_frame"] = json!(1004);
+        s["startup_acks"] = json!({"bot_create":1003,"owner_create":1006,"owner_possession":1006});
+    };
+    let reference = trace("reference", setup);
+    assert!(
+        Files::with_traces(&reference, &candidate(setup))
+            .compare(&[])
+            .status
+            .success()
+    );
+    for (key, value) in [
+        ("first_scheduled_room_tick", json!(1001)),
+        ("owner_component_start_frame", json!(1010)),
+        (
+            "startup_acks",
+            json!({"bot_create":1003,"owner_create":1006}),
+        ),
+        (
+            "startup_acks",
+            json!({"bot_create":1003,"owner_create":1006,"owner_possession":1007}),
+        ),
+    ] {
+        let cand = candidate(|rows| {
+            setup(rows);
+            rows[0]["setup"][key] = value;
+        });
+        assert_eq!(
+            Files::with_traces(&reference, &cand).compare(&[]).stdout,
+            b"incomplete\n",
+            "{key}"
+        );
+    }
+    let different = candidate(|rows| {
+        setup(rows);
+        rows[0]["setup"]["startup_acks"]["bot_create"] = json!(1004);
+    });
+    let files = Files::with_traces(&reference, &different);
+    assert_eq!(
+        files.compare(&["--report", "report.json"]).stdout,
+        b"incompatible\n"
+    );
+    assert_eq!(files.report()["fields"], json!(["setup.startup_acks"]));
+}
+
+#[test]
 fn captured_provenance_requires_complete_spawn_and_rng_values() {
     let reference = trace("reference", captured);
     assert!(
