@@ -11,9 +11,6 @@ pub struct PreparedScene {
     pub(super) contacts: Option<Arc<ContactWorld>>,
     pub(super) controller: Controller,
     pub(super) mode_ui: BitWriter,
-    pub(super) junkenstein_gate: Option<JunkensteinGate>,
-    pub(super) junkenstein_anchors: Arc<SpawnAnchors>,
-    pub(super) encounter: Option<JunkensteinEncounter>,
     pub(super) initial_board: Component,
     pub(super) simulation: RoomSimulation,
     pub(super) scripted_bots: usize,
@@ -42,29 +39,20 @@ impl PreparedScene {
     {
         self.simulation.enemy_projections()
     }
+    #[cfg(test)]
     pub(crate) fn gate_projection(
         &self,
     ) -> Option<crate::script_snapshot_wire::SceneProjection<'_>> {
-        let encounter = self.encounter.as_ref()?;
-        Some(crate::script_snapshot_wire::SceneProjection {
-            snapshot: encounter.gate_script.snapshot()?,
-            encoder: crate::script_snapshot_wire::SnapshotEncoder::new(
-                &encounter.graphs,
-                encounter.codecs.as_deref()?,
-            ),
-        })
+        self.simulation.gate_projection()
     }
     pub(crate) fn take_enemy_creates(&mut self) -> Vec<EntityUpdate> {
         self.simulation.take_created()
     }
+    #[cfg(test)]
     pub(crate) fn take_encounter_voice_requests(
         &mut self,
     ) -> Vec<crate::junkenstein_voice::VoiceRequest> {
-        let mut requests = self.encounter.as_mut().map_or_else(Vec::new, |encounter| {
-            std::mem::take(&mut encounter.gate_state.voice_requests)
-        });
-        requests.extend(self.simulation.take_encounter_voice_requests());
-        requests
+        self.simulation.take_encounter_voice_requests()
     }
     pub fn map(&self) -> &GameMap {
         &self.map
@@ -145,12 +133,82 @@ impl PreparedScene {
     }
 
     pub fn junkenstein_gate(&self) -> Option<&JunkensteinGate> {
-        self.junkenstein_gate.as_ref()
+        self.simulation.junkenstein_gate()
     }
 
     #[cfg(test)]
     pub(crate) fn gate_snapshot(&self) -> Option<&script_init::Snapshot> {
-        self.encounter.as_ref()?.gate_script.snapshot()
+        self.simulation.gate_snapshot()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gate_resolved_variable(
+        &self,
+        instance: u16,
+        variable: crate::script_expr::Variable,
+    ) -> Option<Value> {
+        self.simulation.gate_resolved_variable(instance, variable)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gate_team(&self) -> Option<i8> {
+        self.simulation.gate_team()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn step_test_gate_frame(
+        &mut self,
+        frame: u32,
+        message: u64,
+        parameters: Variables,
+    ) -> Result<(), script_init::InitFault> {
+        self.simulation
+            .step_test_gate_frame(frame, message, parameters)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reset_test_bodies(&mut self) {
+        self.simulation.reset_test_bodies();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn queue_test_encounter_entity_message(
+        &mut self,
+        message: u64,
+        parameters: Variables,
+    ) -> Result<usize, script_init::InitFault> {
+        self.simulation
+            .queue_test_encounter_entity_message(message, parameters)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn queue_test_encounter_frame_message(
+        &mut self,
+        frame: u32,
+        instance: u16,
+        message: u64,
+        parameters: Variables,
+    ) -> Result<usize, script_init::InitFault> {
+        self.simulation
+            .queue_test_encounter_frame_message(frame, instance, message, parameters)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn queue_test_spawn_result(
+        &mut self,
+        frame: u32,
+        key: script_init::SpawnSearchKey,
+        positions: Vec<[f64; 3]>,
+    ) -> Result<(), script_init::InitFault> {
+        self.simulation
+            .queue_test_spawn_result(frame, key, positions)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn encounter_spawn_search_keys(
+        &self,
+    ) -> Vec<(script_init::SpawnSearchKey, script_init::SpawnSearch)> {
+        self.simulation.encounter_spawn_search_keys()
     }
 
     #[cfg(test)]
@@ -159,36 +217,7 @@ impl PreparedScene {
     }
 
     pub(super) fn set_gate_capacity(&mut self, capacity: f64) -> io::Result<()> {
-        let capacity = f64::from(capacity as f32);
-        if !capacity.is_finite() || capacity <= 0.0 {
-            return Err(invalid("gate capacity must be positive and finite"));
-        }
-        let gate = self.junkenstein_gate.as_ref().unwrap();
-        let encounter = self.encounter.as_mut().unwrap();
-        let mut world = GateWorld {
-            entity: gate.entity,
-            state: &mut encounter.gate_state,
-            bodies: &self.simulation,
-            mode_variables: &encounter.script.snapshot().unwrap().variables,
-        };
-        encounter
-            .gate_script
-            .set_instance_variable(1, 8567, Value::Float(capacity), &mut world)
-            .map_err(invalid)?;
-        encounter.gate_script.run_now(&mut world).map_err(invalid)?;
-        if encounter.gate_script.resolved_variable(
-            0,
-            crate::script_expr::Variable {
-                scope: crate::script_expr::Scope::Entity,
-                id: 7786,
-            },
-        ) != Some(Value::Float(capacity))
-        {
-            return Err(invalid(
-                "gate capacity override did not reach its authored binding",
-            ));
-        }
-        Ok(())
+        self.simulation.set_gate_capacity(capacity)
     }
 
     pub(crate) fn protects_cassidy(&self, hero: Option<u64>) -> bool {
@@ -197,334 +226,90 @@ impl PreparedScene {
     }
 
     pub(crate) fn encounter_snapshot(&self) -> Option<&script_init::Snapshot> {
-        self.encounter.as_ref()?.script.snapshot()
+        self.simulation.encounter_snapshot()
     }
 
+    #[cfg(test)]
     pub(crate) fn encounter_countdown(&self) -> Option<CountdownFrame> {
-        let snapshot = self.encounter_snapshot()?;
-        let instance = snapshot.instances.get(&ENCOUNTER_INSTANCE)?;
-        if instance.states.get(&COUNTDOWN_STATES[0])?.activation == 0 {
-            return None;
-        }
-        let value = snapshot
-            .resolved_bindings
-            .get(&(0, COUNTDOWN_VAR))
-            .or_else(|| snapshot.variables.get(&COUNTDOWN_VAR))?
-            .clone();
-        Some(CountdownFrame {
-            value,
-            states: COUNTDOWN_STATES.map(|raw| {
-                instance
-                    .states
-                    .get(&raw)
-                    .filter(|state| state.active)?
-                    .chase
-                    .clone()
-            }),
-        })
+        self.simulation.encounter_countdown()
     }
 
+    #[cfg(test)]
     pub(crate) fn encounter_countdown_wire(
         &self,
         countdown: &CountdownFrame,
     ) -> io::Result<Option<BitWriter>> {
-        let Some(encounter) = &self.encounter else {
-            return Ok(None);
-        };
-        let Some(codecs) = &encounter.codecs else {
-            return Ok(None);
-        };
-        let instance = self
-            .encounter_snapshot()
-            .and_then(|snapshot| snapshot.instances.get(&ENCOUNTER_INSTANCE))
-            .ok_or_else(|| invalid("missing Junkenstein encounter instance"))?;
-        let graph = encounter
-            .script
-            .graph_store()
-            .graph(instance.graph)
-            .ok_or_else(|| invalid("missing Junkenstein encounter graph"))?;
-        encounter_countdown_delta(graph, codecs, ENCOUNTER_INSTANCE, countdown)
-            .map(Some)
-            .map_err(invalid)
+        self.simulation.encounter_countdown_wire(countdown)
     }
 
+    #[cfg(test)]
     pub(crate) fn encounter_screens_complete(&self) -> bool {
-        self.encounter
-            .as_ref()
-            .is_some_and(|encounter| encounter.screens_complete)
+        self.simulation.encounter_screens_complete()
     }
 
+    #[cfg(test)]
     pub(crate) fn encounter_screen_delta(
         &self,
         previous: Option<&ProjectedSnapshot>,
     ) -> io::Result<Option<(ProjectedSnapshot, BitWriter)>> {
-        let Some(encounter) = &self.encounter else {
-            return Ok(None);
-        };
-        let (Some(snapshot), Some(codecs)) =
-            (encounter.script.snapshot(), encounter.codecs.as_ref())
-        else {
-            return Ok(None);
-        };
-        let encoder = SnapshotEncoder::new(&encounter.graphs, codecs);
-        let Some(current) = encoder.post_match_screens(snapshot).map_err(invalid)? else {
-            return Ok(None);
-        };
-        let Some(payload) = encoder
-            .post_match_delta(previous, &current)
-            .map_err(invalid)?
-        else {
-            return Ok(None);
-        };
-        Ok(Some((current, payload)))
+        self.simulation.encounter_screen_delta(previous)
     }
 
+    #[cfg(test)]
     pub(crate) fn encounter_notification_delta(
         &self,
         previous: Option<&ProjectedSnapshot>,
     ) -> io::Result<Option<(ProjectedSnapshot, BitWriter)>> {
-        let Some(encounter) = &self.encounter else {
-            return Ok(None);
-        };
-        let (Some(snapshot), Some(codecs)) =
-            (encounter.script.snapshot(), encounter.codecs.as_ref())
-        else {
-            return Ok(None);
-        };
-        let encoder = SnapshotEncoder::new(&encounter.graphs, codecs);
-        let Some(current) = encoder.mission_notifications(snapshot).map_err(invalid)? else {
-            return Ok(None);
-        };
-        let Some(payload) = encoder.mounted_delta(previous, &current).map_err(invalid)? else {
-            return Ok(None);
-        };
-        Ok(Some((current, payload)))
+        self.simulation.encounter_notification_delta(previous)
     }
 
+    #[cfg(test)]
     pub(crate) fn encounter_phase_wire(
         &self,
         delivered: &std::collections::BTreeMap<u16, u16>,
     ) -> io::Result<Option<(u16, u16, BitWriter)>> {
-        let Some(encounter) = &self.encounter else {
-            return Ok(None);
-        };
-        let (Some(snapshot), Some(codecs)) =
-            (encounter.script.snapshot(), encounter.codecs.as_ref())
-        else {
-            return Ok(None);
-        };
-        let Some(instance) = snapshot.instances.get(&ENCOUNTER_INSTANCE) else {
-            return Ok(None);
-        };
-        let graph = encounter
-            .graphs
-            .graph(instance.graph)
-            .ok_or_else(|| invalid("missing Junkenstein encounter graph"))?;
-        // These are authored persistent sends, not the notification graph's
-        // server-side receivers. The client-only HUD listens to the sends.
-        for (&raw, state) in &instance.states {
-            if !state.active
-                || !matches!(
-                    state.kind,
-                    script_init::StateKind::PersistentSend(
-                        0x0240_0000_0000_0694 | 0x0240_0000_0000_06a8
-                    )
-                )
-                || delivered.get(&raw) == Some(&state.activation)
-            {
-                continue;
-            }
-            let payload = encounter_message_delta(
-                graph,
-                codecs,
-                (ENCOUNTER_INSTANCE, None),
-                raw,
-                &Variables::new(),
-                Variables::new(),
-            )
-            .map_err(invalid)?;
-            return Ok(Some((raw, state.activation, payload)));
-        }
-        Ok(None)
+        self.simulation.encounter_phase_wire(delivered)
     }
 
+    #[cfg(test)]
     pub(crate) fn encounter_active(&self) -> bool {
-        self.encounter
-            .as_ref()
-            .is_some_and(|encounter| encounter.result_action.is_none())
+        self.simulation.encounter_active()
     }
 
+    #[cfg(test)]
     pub(crate) fn encounter_match_result(&self) -> Option<Component> {
-        let encounter = self.encounter.as_ref()?;
-        encounter.result_action?;
-        let snapshot = encounter.script.snapshot()?;
-        let instance = snapshot.instances.get(&ENCOUNTER_INSTANCE)?;
-        let Value::Integer(winner) = instance.variables.get(&7525)? else {
-            return None;
-        };
-        let winner = i32::try_from(*winner).ok()?;
-        // Retail MECGameMode: the winner at +168 is compared with the local
-        // team; the native MatchTime binding reads the float at +170.
-        let mut fields = vec![None; 10];
-        fields[7] = Some(ComponentValue::I32(winner));
-        fields[9] = Some(ComponentValue::F32(
-            encounter.script.now_ms() as f32 / 1000.0,
-        ));
-        Some(Component { index: 114, fields })
+        self.simulation.encounter_match_result()
     }
 
+    #[cfg(test)]
     pub(crate) fn encounter_post_match_wire(&self) -> io::Result<Option<BitWriter>> {
-        let Some(encounter) = &self.encounter else {
-            return Ok(None);
-        };
-        let (Some(snapshot), Some(codecs)) =
-            (encounter.script.snapshot(), encounter.codecs.as_ref())
-        else {
-            return Ok(None);
-        };
-        let Some(instance) = snapshot.instances.get(&ENCOUNTER_INSTANCE) else {
-            return Ok(None);
-        };
-        let raw = 8;
-        if !instance.states.get(&raw).is_some_and(|state| {
-            state.active && state.kind == script_init::StateKind::PersistentSend(POST_MATCH_PHASE)
-        }) {
-            return Ok(None);
-        }
-        let graph = encounter
-            .graphs
-            .graph(instance.graph)
-            .ok_or_else(|| invalid("missing Junkenstein encounter graph"))?;
-        let entity_variables = snapshot
-            .variables
-            .get(&8619)
-            .map(|value| (8619, value.clone()))
-            .into_iter()
-            .collect();
-        let instance_variables = instance
-            .variables
-            .get(&7525)
-            .map(|value| (7525, value.clone()))
-            .into_iter()
-            .collect();
-        encounter_message_delta(
-            graph,
-            codecs,
-            (ENCOUNTER_INSTANCE, None),
-            raw,
-            &entity_variables,
-            instance_variables,
-        )
-        .map(Some)
-        .map_err(invalid)
+        self.simulation.encounter_post_match_wire()
     }
 
+    #[cfg(test)]
     pub(crate) fn encounter_result_wire(&self) -> io::Result<Option<BitWriter>> {
-        use crate::junkenstein_messages::RESULT_SUMMARY;
-        use crate::script_init::StateKind;
-
-        let Some(encounter) = &self.encounter else {
-            return Ok(None);
-        };
-        let (Some(snapshot), Some(codecs)) =
-            (encounter.script.snapshot(), encounter.codecs.as_ref())
-        else {
-            return Ok(None);
-        };
-        let parent = (ENCOUNTER_INSTANCE, 13);
-        let Some((&id, instance)) = snapshot
-            .instances
-            .iter()
-            .find(|(_, instance)| instance.graph == 0x0cc7 && instance.parent == Some(parent))
-        else {
-            return Ok(None);
-        };
-        let Some(raw) = [2, 11].into_iter().find(|raw| {
-            instance.states.get(raw).is_some_and(|state| {
-                state.active && state.kind == StateKind::PersistentSend(RESULT_SUMMARY)
-            })
-        }) else {
-            return Ok(None);
-        };
-        let graph = encounter
-            .graphs
-            .graph(instance.graph)
-            .ok_or_else(|| invalid("missing Junkenstein results graph"))?;
-        let select = |variables: &Variables, ids: &[u32]| -> Variables {
-            ids.iter()
-                .filter_map(|&id| variables.get(&id).map(|value| (id, value.clone())))
-                .collect()
-        };
-        let (entity_ids, instance_ids): (&[u32], &[u32]) = if raw == 2 {
-            (&[8525, 8642, 8643], &[])
-        } else {
-            (&[1303], &[176, 11817])
-        };
-        encounter_message_delta(
-            graph,
-            codecs,
-            (id, Some(parent)),
-            raw,
-            &select(&snapshot.variables, entity_ids),
-            select(&instance.variables, instance_ids),
-        )
-        .map(Some)
-        .map_err(invalid)
+        self.simulation.encounter_result_wire()
     }
 
+    #[cfg(test)]
     pub(crate) fn encounter_outcome_wire(&self, stamp: u32) -> io::Result<Option<BitWriter>> {
-        let Some(encounter) = &self.encounter else {
-            return Ok(None);
-        };
-        let Some(site) = encounter.result_action else {
-            return Ok(None);
-        };
-        let graph = encounter
-            .graphs
-            .graph(site.graph)
-            .ok_or_else(|| invalid("missing encounter outcome graph"))?;
-        let position = site
-            .node
-            .ok_or_else(|| invalid("missing encounter outcome node"))?;
-        mode_action_delta(graph, site.instance, position, stamp)
-            .map(Some)
-            .map_err(invalid)
+        self.simulation.encounter_outcome_wire(stamp)
     }
 
-    #[cfg(any(test, feature = "inspector"))]
-    pub(crate) fn encounter_debug(&self) -> Option<crate::game_debug::Encounter> {
-        let encounter = self.encounter.as_ref()?;
-        encounter.first_tick?;
-        let snapshot = encounter.script.snapshot()?;
-        let instance = snapshot.instances.get(&ENCOUNTER_INSTANCE)?;
-        Some(crate::game_debug::Encounter {
-            elapsed_ms: encounter.script.now_ms(),
-            countdown_started: instance
-                .states
-                .get(&52)
-                .is_some_and(|state| state.activation != 0),
-        })
-    }
-
-    pub(crate) fn step_encounter(&mut self, tick: u32, hero: Option<u64>) {
-        let Some(encounter) = &mut self.encounter else {
-            return;
-        };
-        let gate = self
-            .junkenstein_gate
-            .as_ref()
-            .expect("initialized Junkenstein gate");
+    pub(crate) fn try_step_encounter(
+        &mut self,
+        tick: u32,
+        hero: Option<u64>,
+    ) -> Result<(), CombatError> {
         let spawn_mover = self.movers.for_body(Some(0x0400_0000_0000_16be));
-        if let Err(error) = encounter.step(
-            (gate, &self.junkenstein_anchors, &mut self.simulation),
-            (&self.ground, spawn_mover),
-            tick,
-            hero,
-        ) {
-            eprintln!("Junkenstein encounter halted: {error}");
-            self.simulation.set_mode_boss_pause(false);
-            self.encounter = None;
-        }
+        self.simulation
+            .step_encounter(&self.ground, spawn_mover, tick, hero)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn step_encounter(&mut self, tick: u32, hero: Option<u64>) {
+        self.try_step_encounter(tick, hero)
+            .expect("valid Junkenstein ECS gate and encounter handles");
     }
 
     pub fn bots(&self) -> Result<impl ExactSizeIterator<Item = &Bot>, CombatError> {
@@ -571,9 +356,6 @@ impl PreparedScene {
     }
 
     pub(crate) fn bot_simulation(&mut self) -> (&mut RoomSimulation, BotQueries<'_>) {
-        if let Some(encounter) = &self.encounter {
-            self.simulation.set_mode_voice_set(encounter.voice_set);
-        }
         self.simulation
             .set_cassidy_protected(self.protects_cassidy(Some(crate::game_heroes::CASSIDY)));
         (

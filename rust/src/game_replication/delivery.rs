@@ -770,7 +770,10 @@ impl WorldDelivery {
         tick: u32,
     ) -> io::Result<()> {
         let records = scene.initial_world(viewer)?;
-        self.gate = scene.junkenstein_gate().map(|gate| gate.entity);
+        self.gate = scene
+            .simulation()
+            .junkenstein_gate()
+            .map(|gate| gate.entity);
         self.bots.extend(
             scene
                 .bots()
@@ -815,7 +818,7 @@ impl WorldDelivery {
     }
 
     pub(crate) fn present_scene_scripts(&mut self, scene: &PreparedScene) -> io::Result<()> {
-        if let Some(projection) = scene.gate_projection() {
+        if let Some(projection) = scene.simulation().gate_projection() {
             self.present_scene_script(projection)?;
         }
         for projection in scene.enemy_projections().map_err(io::Error::other)? {
@@ -885,8 +888,9 @@ impl WorldDelivery {
         if !self.mode_ready() || self.mode.data_in_flight() {
             return Ok(());
         }
+        let sim = scene.simulation();
         if !self.encounter_post_match_queued {
-            if let Some(payload) = scene.encounter_post_match_wire()? {
+            if let Some(payload) = sim.encounter_post_match_wire()? {
                 let chunk = self.mode.reliable_delta(&payload).map_err(invalid)?;
                 self.push(Record::script(chunk, false));
                 self.encounter_post_match_queued = true;
@@ -894,7 +898,7 @@ impl WorldDelivery {
             }
         }
         if !self.encounter_result_queued {
-            if let Some(payload) = scene.encounter_result_wire()? {
+            if let Some(payload) = sim.encounter_result_wire()? {
                 let chunk = self.mode.reliable_delta(&payload).map_err(invalid)?;
                 self.push(Record::script(chunk, false));
                 self.encounter_result_queued = true;
@@ -903,9 +907,9 @@ impl WorldDelivery {
         }
         if !self.encounter_outcome_queued {
             if let Some(stamp) = self.mode.latest_data().checked_add(1) {
-                if let Some(payload) = scene.encounter_outcome_wire(stamp)? {
+                if let Some(payload) = sim.encounter_outcome_wire(stamp)? {
                     let mut chunk = self.mode.reliable_delta(&payload).map_err(invalid)?;
-                    if let Some(result) = scene.encounter_match_result() {
+                    if let Some(result) = sim.encounter_match_result() {
                         chunk.update.operation = Some(Operation::Update(vec![result]));
                     }
                     self.push(Record::script(chunk, false));
@@ -916,7 +920,7 @@ impl WorldDelivery {
         }
         if self.encounter_post_match_queued {
             if let Some((snapshot, payload)) =
-                scene.encounter_screen_delta(self.encounter_screens.as_ref())?
+                sim.encounter_screen_delta(self.encounter_screens.as_ref())?
             {
                 let chunk = self.mode.reliable_delta(&payload).map_err(invalid)?;
                 self.push(Record::script(chunk, false));
@@ -929,7 +933,7 @@ impl WorldDelivery {
         }
         if self.encounter_notifications.is_some() {
             if let Some((raw, activation, payload)) =
-                scene.encounter_phase_wire(&self.encounter_phases)?
+                sim.encounter_phase_wire(&self.encounter_phases)?
             {
                 let chunk = self.mode.reliable_delta(&payload).map_err(invalid)?;
                 self.push(Record::script(chunk, false));
@@ -937,7 +941,7 @@ impl WorldDelivery {
                 return Ok(());
             }
         }
-        let countdown = scene
+        let countdown = sim
             .encounter_countdown()
             .filter(|value| self.countdown.as_ref() != Some(value));
         // Both projections can change every tick because they read the clock.
@@ -946,7 +950,7 @@ impl WorldDelivery {
             && (self.encounter_notification_turn || countdown.is_none())
         {
             if let Some((snapshot, payload)) =
-                scene.encounter_notification_delta(self.encounter_notifications.as_ref())?
+                sim.encounter_notification_delta(self.encounter_notifications.as_ref())?
             {
                 let chunk = self.mode.reliable_delta(&payload).map_err(invalid)?;
                 self.push(Record::script(chunk, false));
@@ -956,7 +960,7 @@ impl WorldDelivery {
             }
         }
         if let Some(countdown) = countdown {
-            if let Some(payload) = scene.encounter_countdown_wire(&countdown)? {
+            if let Some(payload) = sim.encounter_countdown_wire(&countdown)? {
                 let chunk = self.mode.reliable_delta(&payload).map_err(invalid)?;
                 self.push(Record::script(chunk, false));
                 self.countdown = Some(countdown);

@@ -98,6 +98,7 @@ pub(crate) struct QueueFull {
 
 /// Each instance consumes events in timestamp order, with FIFO ties. The
 /// component controls the order in which instances take a turn.
+#[derive(Clone)]
 pub(crate) struct Timeline<E> {
     instances: BTreeMap<u16, BTreeMap<u64, VecDeque<E>>>,
     pending: usize,

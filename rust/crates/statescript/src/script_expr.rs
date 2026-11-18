@@ -350,7 +350,7 @@ pub struct EmptyContext;
 
 impl Context for EmptyContext {}
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EvalError {
     UnsupportedConfig(String),
     UnsupportedOpcode { opcode: u8, offset: usize },
