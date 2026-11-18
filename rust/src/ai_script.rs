@@ -38,6 +38,9 @@ pub(crate) const AI_MAX_COMMANDS_PER_TICK: usize = 8;
 /// Preserves the existing 60-second upper bound on bot wait timers.
 pub(crate) const AI_MAX_WAIT_SECONDS: f64 = 60.0;
 
+/// Caps AI script source text at 64 KiB so parser and bytecode fit inside the room Lua heap.
+pub(crate) const AI_MAX_SOURCE_BYTES: usize = 64 * 1024;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TargetRole {
     Enemy,
@@ -67,7 +70,6 @@ pub(crate) struct AiActorSnapshot {
 }
 
 impl AiActorSnapshot {
-    #[cfg(test)]
     pub(crate) fn patrol_fixture(route_index: usize, route_count: usize) -> Self {
         Self {
             entity: 0xc000_1000,
@@ -140,6 +142,8 @@ pub(crate) enum AiExecutionPhase {
 pub(crate) enum AiScriptError {
     #[error("AI script syntax error: {0}")]
     Syntax(String),
+    #[error("AI script source exceeded size limit ({bytes} > {max} bytes)")]
+    SourceTooLarge { bytes: usize, max: usize },
     #[error("AI script exceeded memory limit ({AI_MEMORY_LIMIT_BYTES} bytes)")]
     MemoryLimitExceeded,
     #[error("AI script exceeded {phase:?} instruction budget")]
@@ -221,6 +225,21 @@ pub(crate) fn validate_commands_against_simulation(
     Ok(())
 }
 
+pub(crate) fn validate_ai_source_bounds(source: &str) -> Result<(), AiScriptError> {
+    if source.len() > AI_MAX_SOURCE_BYTES {
+        return Err(AiScriptError::SourceTooLarge {
+            bytes: source.len(),
+            max: AI_MAX_SOURCE_BYTES,
+        });
+    }
+    if source.trim().is_empty() {
+        return Err(AiScriptError::InvalidAbi(String::from(
+            "AI script source must not be empty",
+        )));
+    }
+    Ok(())
+}
+
 pub(crate) struct AiScript {
     think: Function,
     lua: Lua,
@@ -230,6 +249,7 @@ pub(crate) struct AiScript {
 
 impl AiScript {
     pub(crate) fn from_source(chunk_name: &str, source: &str) -> Result<Self, AiScriptError> {
+        validate_ai_source_bounds(source)?;
         let lua = Lua::new_with(StdLib::NONE, LuaOptions::default()).map_err(map_mlua_error)?;
         lua.set_memory_limit(AI_MEMORY_LIMIT_BYTES)
             .map_err(map_mlua_error)?;

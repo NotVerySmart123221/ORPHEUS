@@ -1,10 +1,12 @@
 //! Read-only patrol policy adapter over the bounded Lua `AiScript` host.
 
-use std::io;
+use std::{fmt::Write, io};
+
+use sha2::{Digest, Sha256};
 
 use crate::{
     ai_script::{AiActorSnapshot, AiCommand, AiEvent, AiScript, AiScriptError, AiSnapshot},
-    game_clock::TICK_PERIOD,
+    game_clock::{FIRST_TICK, TICK_PERIOD},
 };
 
 pub(crate) const DEFAULT_SOURCE: &str = include_str!("../scripts/patrol.lua");
@@ -15,8 +17,17 @@ pub(crate) enum WaitEvent {
     Release,
 }
 
+pub(crate) fn format_digest(digest: &[u8; 32]) -> String {
+    let mut out = String::with_capacity(64);
+    for byte in digest {
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
+}
+
 pub(crate) struct PatrolScript {
     inner: AiScript,
+    digest: [u8; 32],
 }
 
 impl PatrolScript {
@@ -29,9 +40,18 @@ impl PatrolScript {
     }
 
     pub(crate) fn from_source_checked(source: &str) -> Result<Self, AiScriptError> {
-        Ok(Self {
-            inner: AiScript::from_source("=patrol.lua", source)?,
-        })
+        let inner = AiScript::from_source("=patrol.lua", source)?;
+        let digest = Sha256::digest(source.as_bytes()).into();
+        Ok(Self { inner, digest })
+    }
+
+    pub(crate) fn digest(&self) -> [u8; 32] {
+        self.digest
+    }
+
+    #[cfg(test)]
+    pub(crate) fn digest_hex(&self) -> String {
+        format_digest(&self.digest)
     }
 
     pub(crate) fn wait(
@@ -40,6 +60,16 @@ impl PatrolScript {
         event: WaitEvent,
         tick: u32,
     ) -> io::Result<f64> {
+        self.wait_checked(actor, event, tick)
+            .map_err(io::Error::from)
+    }
+
+    pub(crate) fn wait_checked(
+        &self,
+        actor: AiActorSnapshot,
+        event: WaitEvent,
+        tick: u32,
+    ) -> Result<f64, AiScriptError> {
         let snapshot = AiSnapshot {
             tick,
             dt_secs: TICK_PERIOD.as_secs_f64(),
@@ -55,17 +85,23 @@ impl PatrolScript {
             [AiCommand::Wait { seconds }] => Ok(*seconds),
             [other] => Err(AiScriptError::InvalidCommand(format!(
                 "expected wait command from patrol script, got {other:?}"
-            ))
-            .into()),
+            ))),
             many => Err(AiScriptError::InvalidCommand(format!(
                 "expected 1 wait command from patrol script, got {}",
                 many.len()
-            ))
-            .into()),
+            ))),
         }
     }
 
     pub(crate) fn think(&self, actor: AiActorSnapshot, tick: u32) -> io::Result<usize> {
+        self.think_checked(actor, tick).map_err(io::Error::from)
+    }
+
+    pub(crate) fn think_checked(
+        &self,
+        actor: AiActorSnapshot,
+        tick: u32,
+    ) -> Result<usize, AiScriptError> {
         let snapshot = AiSnapshot {
             tick,
             dt_secs: TICK_PERIOD.as_secs_f64(),
@@ -77,14 +113,32 @@ impl PatrolScript {
             [AiCommand::MovePatrolSlot { slot }] => Ok(*slot),
             [other] => Err(AiScriptError::InvalidCommand(format!(
                 "expected patrol_slot command from patrol script, got {other:?}"
-            ))
-            .into()),
+            ))),
             many => Err(AiScriptError::InvalidCommand(format!(
                 "expected 1 patrol_slot command from patrol script, got {}",
                 many.len()
-            ))
-            .into()),
+            ))),
         }
+    }
+
+    pub(crate) fn smoke_check(&self) -> Result<(), AiScriptError> {
+        let _ = self.wait_checked(
+            AiActorSnapshot::patrol_fixture(0, 4),
+            WaitEvent::Spawn,
+            FIRST_TICK,
+        )?;
+        let slot = self.think_checked(AiActorSnapshot::patrol_fixture(0, 4), FIRST_TICK + 1)?;
+        if slot >= 4 {
+            return Err(AiScriptError::InvalidCommand(format!(
+                "smoke check patrol_slot {slot} out of bounds for 4 slots"
+            )));
+        }
+        let _ = self.wait_checked(
+            AiActorSnapshot::patrol_fixture(0, 4),
+            WaitEvent::Release,
+            FIRST_TICK + 2,
+        )?;
+        Ok(())
     }
 }
 

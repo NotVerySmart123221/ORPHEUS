@@ -122,6 +122,7 @@ fn configured_cassidy_immunity_routes_real_room_damage_and_death_notices() {
                 scene: Box::new(scene),
                 card: PlayerCard::default(),
                 patrol: PatrolScript::load().unwrap(),
+                patrol_generation: 0,
             }),
             injection: None,
         };

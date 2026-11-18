@@ -7,12 +7,22 @@ use crate::game_timing::WorkerTiming;
 
 #[cfg(any(test, feature = "inspector"))]
 #[derive(Serialize)]
+pub(crate) struct AiPolicy {
+    pub generation: u64,
+    pub abi_version: u32,
+    pub digest: String,
+}
+
+#[cfg(any(test, feature = "inspector"))]
+#[derive(Serialize)]
 pub(crate) struct Snapshot {
     pub tick: u32,
     pub rooms: Vec<Room>,
     pub truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timing: Option<WorkerTiming>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_policy: Option<AiPolicy>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub faults: Vec<RoomFault>,
 }
@@ -36,6 +46,8 @@ pub(crate) struct Room {
     pub actors: Vec<Actor>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encounter: Option<Encounter>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_generation: Option<u64>,
 }
 
 #[cfg(any(test, feature = "inspector"))]
