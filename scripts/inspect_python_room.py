@@ -99,7 +99,7 @@ def record(reference, runtime, schedule, bot_slot):
             if first_room_tick is None:
                 first_room_tick = room.match.tick
             observation = {**row, "accepted": accepted if command is not None else None,
-                           "state": state, "missing": gaps}
+                           "state": state, "missing": gaps, "owner_frame": room.delivery.wire_frame}
             if room.owner_effects is not None:
                 observation["effects"] = room.owner_effects
             ticks.append(observation)

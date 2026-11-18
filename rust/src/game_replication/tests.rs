@@ -404,6 +404,61 @@ fn junkenstein_notifications_and_countdown_share_reliable_delivery() {
 }
 
 #[test]
+fn shared_first_command_anchor_respects_body_and_existing_input_history() {
+    #[derive(serde::Deserialize)]
+    struct Contract {
+        room_frame: u32,
+        cases: Vec<Case>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Case {
+        name: String,
+        body_frame: Option<u32>,
+        prior: Option<u32>,
+        offered: Vec<u32>,
+        fresh: Vec<u32>,
+    }
+    let contract: Contract = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/owner-first-command-anchor-v1.json"
+    ))
+    .unwrap();
+    for case in contract.cases {
+        let mut world = WorldDelivery::new(OWNER);
+        world.started = Some(contract.room_frame);
+        if let Some(frame) = case.prior {
+            world.queue_commands(contract.room_frame, &[forward(frame)]);
+            world.input.work.pop_front().unwrap();
+            world.input.processed = Some(frame);
+        }
+        if let Some(frame) = case.body_frame {
+            let id = avatar(1, 1);
+            let body = body(id);
+            let runtime = synthetic_owner(id.entity, frame, Arc::new(AtomicBool::new(false)));
+            world.body = Some(body);
+            world.body_script = Some(BodyScript::new(body, frame, &runtime).unwrap());
+        }
+        for frame in case.offered {
+            world.queue_commands(contract.room_frame, &[forward(frame)]);
+        }
+        let fresh: Vec<_> = world
+            .input
+            .work
+            .iter()
+            .map(|work| match work {
+                InputWork::Command { command, .. } => command.frame,
+                _ => panic!("unexpected input boundary for {}", case.name),
+            })
+            .collect();
+        assert_eq!(fresh, case.fresh, "{}", case.name);
+        assert_eq!(world.input.processed, case.prior);
+        assert_eq!(world.input.admitted, fresh.last().copied().or(case.prior));
+        if fresh.is_empty() && case.prior.is_none() {
+            assert_eq!(world.command_ack(contract.room_frame), contract.room_frame);
+        }
+    }
+}
+
+#[test]
 fn native_command_window_keeps_duplicates_and_future_input_unacknowledged() {
     let (fresh, boundary) = command_prefix(
         Some(1000),
@@ -468,6 +523,7 @@ fn pending_queue_closes_after_the_prefix_at_a_boundary_or_capacity() {
     input.commands(
         MAX_LEASE_FRAME - 2,
         &[forward(MAX_LEASE_FRAME - 1), forward(MAX_LEASE_FRAME + 1)],
+        None,
     );
     assert!(input.closing);
     assert_eq!(input.admitted, Some(MAX_LEASE_FRAME - 1));
@@ -479,7 +535,7 @@ fn pending_queue_closes_after_the_prefix_at_a_boundary_or_capacity() {
 
     let mut input = InputQueue::default();
     for frame in 1..=MAX_PENDING_INPUT as u32 + 2 {
-        input.commands(frame, &[forward(frame)]);
+        input.commands(frame, &[forward(frame)], None);
     }
     assert_eq!(input.work.len(), MAX_PENDING_INPUT + 1);
     assert_eq!(input.admitted, Some(MAX_PENDING_INPUT as u32));

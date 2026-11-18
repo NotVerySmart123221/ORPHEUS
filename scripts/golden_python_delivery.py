@@ -4,7 +4,8 @@ import math
 import struct
 from weakref import WeakKeyDictionary
 
-from ow174.game import world
+from ow174.game import messages, world
+from ow174.game.bits import BitReader
 from ow174.game.link import ACK, SYN, LinkCipher, Packet
 from ow174.game.script import decode
 from ow174.game.server import Client
@@ -84,12 +85,17 @@ class OwnerDelivery(Client):
 
     def received_frame(self, previous_sequence, now, identities, on_receipt=None):
         """Project only records selected by send_frame after its successful send."""
+        self.wire_frame = None
         if self.seq == previous_sequence:
             return [], set()
         packet = self.peer_cipher.open(self.server.sock.last)
         if packet is None or packet.seq != previous_sequence:
             raise ValueError("owner frame was not received")
         sequence = packet.seq
+        reader = BitReader(packet.payload)
+        tick = reader.var_a()
+        messages.read_channel(reader)
+        self.wire_frame = {"room_tick": tick, "command_ack": reader.var_a()}
         sent = self.in_flight.get(sequence)
         if sent is None:
             return None, {"effects.grouped_delivery"}

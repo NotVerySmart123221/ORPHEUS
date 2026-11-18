@@ -214,8 +214,14 @@ fn same_schedule_practice_room() {
         let receipt = if state.clock.frame() / SEND_EVERY > frame / SEND_EVERY {
             let sent = client.receive();
             assert!(client.window.accept(sent.seq));
+            let mut reader = BitReader::new(&sent.payload);
+            let sent_tick = reader.var_a().unwrap();
+            read_channel(&mut reader, &schemas).unwrap();
+            row["owner_frame"] =
+                json!({"room_tick":sent_tick, "command_ack":reader.var_a().unwrap()});
             Some(startup::acknowledge(&mut state, &server, &mut client, now))
         } else {
+            row["owner_frame"] = Json::Null;
             None
         };
         let room = state.rooms.get_mut(&MATCH).expect("room survived the tick");

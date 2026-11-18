@@ -1109,7 +1109,8 @@ impl WorldDelivery {
 
     pub(crate) fn queue_commands(&mut self, tick: u32, commands: &[Command]) {
         if self.started.is_some() {
-            self.input.commands(tick, commands);
+            self.input
+                .commands(tick, commands, self.body_script.as_ref().map(|s| s.frame));
         }
     }
 

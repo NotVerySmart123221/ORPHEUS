@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-18
 
+- Native input admission now uses the initialized owner's body-script frame when a connection has no admitted command yet. Stale movement and aim offers no longer move a newly possessed player or become the owner's acknowledged command. Existing command history still sets the order through hero switches. Offline diagnostics now include each delivered owner's room frame and command acknowledgement.
+
 - The offline Soldier recorders now run normal map loading and hero selection on the room clock and start the input schedule after the selected bot, player body and possession have been acknowledged. New traces bind those receipt frames, elapsed startup time and player VM construction frame. Earlier recordings remain readable.
 
 - Added an opt-in prepared-runtime test for replaying a private decoded Practice Range schedule through the native room. It records command acceptance, available player and bot fields, and the selected bot's death and respawn timing. It distinguishes pre-roll from scheduled owner records, observes selected body, health and rifle-ammo delivery, and records missing provenance explicitly. Raw observations stay local.

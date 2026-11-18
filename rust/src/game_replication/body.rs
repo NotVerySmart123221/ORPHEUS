@@ -355,11 +355,11 @@ impl InputQueue {
         true
     }
 
-    pub(super) fn commands(&mut self, tick: u32, commands: &[Command]) {
+    pub(super) fn commands(&mut self, tick: u32, commands: &[Command], body_frame: Option<u32>) {
         if self.closing || commands.is_empty() {
             return;
         }
-        let (fresh, boundary) = command_prefix(self.admitted, tick, commands);
+        let (fresh, boundary) = command_prefix(self.admitted.or(body_frame), tick, commands);
         for command in fresh {
             if !self.push(InputWork::Command {
                 command,
