@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "case_id": "owner.first-command-anchor.v1",
+  "evidence": "synthetic-reference",
+  "client_acceptance": "pending",
+  "provenance": "Synthetic server input contract from the Python reference command-clock handoff. Frames and actors are invented.",
+  "room_frame": 180,
+  "cases": [
+    {"name": "no body or prior command", "body_frame": null, "prior": null, "offered": [85, 85, 86], "fresh": [85, 86]},
+    {"name": "fresh body drops stale equal and half-range frames", "body_frame": 100, "prior": null, "offered": [96, 100, 2147483748, 101, 101, 99, 102], "fresh": [101, 102]},
+    {"name": "entire first burst is stale", "body_frame": 100, "prior": null, "offered": [96, 97, 98, 99, 100], "fresh": []},
+    {"name": "replacement uses continuing history behind room time", "body_frame": 85, "prior": 85, "offered": [84, 85, 86, 86, 87], "fresh": [86, 87]}
+  ]
+}

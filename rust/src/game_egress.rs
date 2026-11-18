@@ -65,6 +65,7 @@ pub struct SentFrame {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+#[cfg_attr(test, derive(Clone))]
 pub struct PacketDelivery<T> {
     pub sequence: u32,
     pub arrived: bool,
@@ -72,6 +73,7 @@ pub struct PacketDelivery<T> {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+#[cfg_attr(test, derive(Clone))]
 pub struct DeliveryReport<T> {
     pub requeued_reliable: usize,
     /// Resolved tracked datagrams in send order. The match checks record

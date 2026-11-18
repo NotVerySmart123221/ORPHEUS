@@ -63,6 +63,8 @@ impl From<WireError> for StreamError {
 
 #[derive(Debug, PartialEq)]
 pub struct ScriptChunk {
+    #[cfg(test)]
+    pub(crate) owner_rifle_ammo_written: Option<i64>,
     pub update: EntityUpdate,
     pub last: u32,
     /// Retry on loss by default. Body streams also retain the exact initial
@@ -83,6 +85,8 @@ fn update(
 ) -> Result<ScriptChunk, StreamError> {
     let span = last.checked_sub(first).ok_or(StreamError::ChunkExhausted)?;
     Ok(ScriptChunk {
+        #[cfg(test)]
+        owner_rifle_ammo_written: None,
         update: EntityUpdate {
             entity,
             chunk: Some(chunk(payload, first, span)?),

@@ -252,4 +252,4 @@ use body::{BioticView, BodyScript, InputQueue};
 use delivery::{BotLifetime, Delivery, Lifetime};
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

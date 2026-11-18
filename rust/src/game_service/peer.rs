@@ -12,6 +12,8 @@ pub(super) struct Peer {
     pub(super) open: bool,
     pub(super) world: WorldDelivery,
     pub(super) combat_ui: CombatUi,
+    #[cfg(test)]
+    pub(super) observed_receipts: Option<Vec<crate::game_egress::DeliveryReport<Arc<Record>>>>,
 }
 
 #[derive(Default)]
@@ -64,6 +66,8 @@ impl Peer {
             open: false,
             world: WorldDelivery::new(owner),
             combat_ui: CombatUi::default(),
+            #[cfg(test)]
+            observed_receipts: None,
         }
     }
 

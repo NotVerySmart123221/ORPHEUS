@@ -97,6 +97,56 @@ fn accepts_a_python_written_reference_with_a_retirement_gap() {
 }
 
 #[test]
+fn validates_a_standalone_reference_and_preserves_the_setup_boundary() {
+    let add_setup = |rows: &mut [Value]| {
+        rows[0]["setup"] =
+            json!({"bot_spawner_slot": 2, "initial_room_tick": 1000, "random_model": "counter-v1"});
+    };
+    let reference = trace("reference", add_setup);
+    let files = Files::with_traces(&reference, &candidate(add_setup));
+    let check = |name| {
+        Command::new(env!("CARGO_BIN_EXE_compare_golden"))
+            .current_dir(files.0.path())
+            .args(["--check-reference", name])
+            .output()
+            .unwrap()
+    };
+    assert_eq!(check("reference").stdout, b"valid-reference\n");
+    assert_eq!(check("candidate").status.code(), Some(2));
+    assert_eq!(files.compare(&[]).status.code(), Some(0));
+    for (key, value) in [
+        ("bot_spawner_slot", json!(3)),
+        ("initial_room_tick", json!(1010)),
+        ("random_model", json!("different-model")),
+    ] {
+        let changed = candidate(|rows| {
+            add_setup(rows);
+            rows[0]["setup"][key] = value;
+        });
+        assert_eq!(
+            Files::with_traces(&reference, &changed)
+                .compare(&[])
+                .status
+                .code(),
+            Some(2)
+        );
+    }
+    assert_eq!(
+        Files::with_traces(&reference, &candidate(|_| {}))
+            .compare(&[])
+            .status
+            .code(),
+        Some(2)
+    );
+    fs::write(
+        files.0.path().join("reference"),
+        &reference[..reference.len() - 5],
+    )
+    .unwrap();
+    assert_eq!(check("reference").status.code(), Some(2));
+}
+
+#[test]
 fn reports_the_earliest_field_privately_and_preserves_an_existing_report() {
     let files = Files::new(&candidate(|rows| {
         *field_mut(&mut rows[2], "player/0/body/1", "ammo") = json!(1);
@@ -248,7 +298,7 @@ fn input_comparison_uses_the_decoded_subframe_flag() {
 }
 
 #[test]
-fn incompatible_evidence_stays_incomplete_even_with_valid_hashes() {
+fn distinguishes_different_inputs_from_invalid_evidence() {
     for change in [
         "platform",
         "profile",
@@ -284,7 +334,161 @@ fn incompatible_evidence_stays_incomplete_even_with_valid_hashes() {
         });
         let result = Files::new(&bytes).compare(&[]);
         assert_eq!(result.status.code(), Some(2), "{change}: {result:?}");
-        assert_eq!(result.stdout, b"incomplete\n");
+        let status: &[u8] = if matches!(change, "platform" | "profile" | "input") {
+            b"incompatible\n"
+        } else {
+            b"incomplete\n"
+        };
+        assert_eq!(result.stdout, status);
         assert!(result.stderr.is_empty());
     }
+}
+
+fn captured(rows: &mut [Value]) {
+    rows[0].as_object_mut().unwrap().remove("seed");
+    rows[0]["schema"] = json!("orpheus.golden.v2");
+    rows[0]["setup"] = json!({
+        "bot_spawner_slot": 2, "bot_roster_size": 3,
+        "bot_spawner": {"team":1, "hero":"0000000000000002", "position_bits":["0000000000000000","0000000000000000","0000000000000000"], "yaw":-1},
+        "initial_room_tick": 1000, "first_scheduled_room_tick": 1001, "setup_delivery_ticks": 0,
+        "initial_owner_delivery_phase":"before-first-send", "host_random_model":"counter", "host_initial_seed":0,
+        "player_vm_random_model":"invented-vm", "player_vm_initial_seed":1,
+    });
+}
+
+#[test]
+fn both_captured_roles_validate_even_when_delivery_and_randomness_differ() {
+    let reference = trace("reference", captured);
+    let cand = candidate(|rows| {
+        captured(rows);
+        let s = &mut rows[0]["setup"];
+        s["setup_delivery_ticks"] = json!(3);
+        s["initial_owner_delivery_phase"] = json!("after-setup-ack");
+        s["host_random_model"] = json!("os-entropy-transport-only");
+        s["host_initial_seed"] = Value::Null;
+        s["player_vm_random_model"] = json!("splitmix64");
+        s["player_vm_initial_seed"] = json!(u64::MAX);
+    });
+    let files = Files::with_traces(&reference, &cand);
+    for role in ["reference", "candidate"] {
+        let check = Command::new(env!("CARGO_BIN_EXE_compare_golden"))
+            .current_dir(files.0.path())
+            .args([format!("--check-{role}"), role.to_owned()])
+            .output()
+            .unwrap();
+        assert!(check.status.success());
+        assert_eq!(check.stdout, format!("valid-{role}\n").as_bytes());
+    }
+    let result = files.compare(&["--report", "report.json"]);
+    assert_eq!(result.stdout, b"incompatible\n");
+    assert_eq!(result.status.code(), Some(2));
+    assert_eq!(
+        files.report()["fields"],
+        json!([
+            "setup.host_initial_seed",
+            "setup.host_random_model",
+            "setup.initial_owner_delivery_phase",
+            "setup.player_vm_initial_seed",
+            "setup.player_vm_random_model",
+            "setup.setup_delivery_ticks"
+        ])
+    );
+    let bad = Files::with_traces(&reference, &cand[..cand.len() - 5]).compare(&[]);
+    assert_eq!(bad.stdout, b"incomplete\n");
+}
+
+#[test]
+fn possession_boundary_requires_real_clock_and_each_actor_receipt() {
+    let setup = |rows: &mut [Value]| {
+        captured(rows);
+        let s = &mut rows[0]["setup"];
+        s["initial_owner_delivery_phase"] = json!("after-possession-ack");
+        s["setup_delivery_ticks"] = json!(6);
+        s["first_scheduled_room_tick"] = json!(1007);
+        s["setup_elapsed_us"] = json!(80000);
+        s["owner_component_start_frame"] = json!(1004);
+        s["startup_acks"] = json!({"bot_create":1003,"owner_create":1006,"owner_possession":1006});
+    };
+    let reference = trace("reference", setup);
+    assert!(
+        Files::with_traces(&reference, &candidate(setup))
+            .compare(&[])
+            .status
+            .success()
+    );
+    for (key, value) in [
+        ("first_scheduled_room_tick", json!(1001)),
+        ("owner_component_start_frame", json!(1010)),
+        (
+            "startup_acks",
+            json!({"bot_create":1003,"owner_create":1006}),
+        ),
+        (
+            "startup_acks",
+            json!({"bot_create":1003,"owner_create":1006,"owner_possession":1007}),
+        ),
+    ] {
+        let cand = candidate(|rows| {
+            setup(rows);
+            rows[0]["setup"][key] = value;
+        });
+        assert_eq!(
+            Files::with_traces(&reference, &cand).compare(&[]).stdout,
+            b"incomplete\n",
+            "{key}"
+        );
+    }
+    let different = candidate(|rows| {
+        setup(rows);
+        rows[0]["setup"]["startup_acks"]["bot_create"] = json!(1004);
+    });
+    let files = Files::with_traces(&reference, &different);
+    assert_eq!(
+        files.compare(&["--report", "report.json"]).stdout,
+        b"incompatible\n"
+    );
+    assert_eq!(files.report()["fields"], json!(["setup.startup_acks"]));
+}
+
+#[test]
+fn captured_provenance_requires_complete_spawn_and_rng_values() {
+    let reference = trace("reference", captured);
+    assert!(
+        Files::with_traces(&reference, &candidate(captured))
+            .compare(&[])
+            .status
+            .success()
+    );
+    for (key, value, status) in [
+        ("bot_spawner_slot", json!(1), "incompatible"),
+        ("bot_spawner_slot", json!(3), "incomplete"),
+        ("bot_roster_size", json!(4), "incompatible"),
+        ("initial_room_tick", json!(999), "incompatible"),
+        ("first_scheduled_room_tick", json!(1002), "incompatible"),
+        ("host_initial_seed", Value::Null, "incomplete"),
+        ("player_vm_initial_seed", Value::Null, "incomplete"),
+        (
+            "initial_owner_delivery_phase",
+            json!("unspecified"),
+            "incomplete",
+        ),
+        ("bot_spawner", json!({}), "incomplete"),
+    ] {
+        let cand = candidate(|rows| {
+            captured(rows);
+            rows[0]["setup"][key] = value;
+        });
+        let result = Files::with_traces(&reference, &cand).compare(&[]);
+        assert_eq!(result.stdout, format!("{status}\n").as_bytes(), "{key}");
+    }
+    let changed_spawn = candidate(|rows| {
+        captured(rows);
+        rows[0]["setup"]["bot_spawner"]["yaw"] = json!(-2);
+    });
+    let files = Files::with_traces(&reference, &changed_spawn);
+    assert_eq!(
+        files.compare(&["--report", "report.json"]).stdout,
+        b"incompatible\n"
+    );
+    assert_eq!(files.report()["fields"], json!(["setup.bot_spawner"]));
 }

@@ -1,7 +1,37 @@
 use super::*;
+use crate::script_expr::{Scope, Variable, dynamic, truthy};
+use crate::script_graph::Graph;
 use crate::script_wire::Value as ScriptValue;
 
-fn rifle_state(body: &PlayerBodyState) -> (i64, Option<bool>) {
+fn declared_reload_flag(graph: &Graph) -> bool {
+    let reload = Variable {
+        scope: Scope::Instance,
+        id: 51,
+    };
+    let Some(switch) = graph
+        .node(2)
+        .filter(|n| n.class == "STUStatescriptStateBooleanSwitch")
+    else {
+        return false;
+    };
+    let Some(write) = graph
+        .node(5)
+        .filter(|n| n.class == "STUStatescriptActionSetVar")
+    else {
+        return false;
+    };
+    let reads = switch
+        .fields
+        .pointer("/m_condition/m_expression/m_dynamicVars")
+        .and_then(serde_json::Value::as_array);
+    reads.is_some_and(|vars| vars.iter().any(|v| dynamic(v) == Ok(Some(reload))))
+        && write
+            .fields
+            .get("m_out_Var")
+            .is_some_and(|v| dynamic(v) == Ok(Some(reload)))
+}
+
+pub(crate) fn rifle_state(body: &PlayerBodyState) -> (i64, Option<bool>) {
     let snapshot = body.runtime.as_ref().unwrap().snapshot().unwrap();
     assert!(snapshot.initialization_complete());
     // Resolve the authored rifle root independently of VM allocation order.
@@ -20,10 +50,27 @@ fn rifle_state(body: &PlayerBodyState) -> (i64, Option<bool>) {
     let Some(ScriptValue::Integer(ammo)) = value(53) else {
         panic!("stock rifle has no integer magazine value");
     };
-    let reload = match value(51) {
-        None | Some(ScriptValue::Null) => None,
-        Some(ScriptValue::Bool(active)) => Some(*active),
-        _ => panic!("unexpected stock rifle reload state"),
+    // Machine::value falls back to shapes::stored for an unbound local. The
+    // native store returns Null before the first write. Establish that the
+    // stock eligibility switch and an authored writer actually use this flag
+    // before applying that lookup to the otherwise sparse snapshot.
+    let graph = body
+        .runtime
+        .as_ref()
+        .unwrap()
+        .encoder()
+        .graphs
+        .graph(rifle.graph)
+        .unwrap();
+    let reload = if declared_reload_flag(graph)
+        && snapshot.bindings.get(&(id, 51)).is_none_or(Vec::is_empty)
+    {
+        match rifle.variables.get(&51).unwrap_or(&ScriptValue::Null) {
+            v @ (ScriptValue::Null | ScriptValue::Bool(_)) => Some(truthy(v)),
+            _ => None,
+        }
+    } else {
+        None
     };
     (*ammo, reload)
 }
@@ -49,10 +96,73 @@ fn deliver_until(
             *tick,
             *tick - FIRST_TICK,
         );
-        transport_outcome(world, egress, sent.sequence, true);
+        let receipt = egress.acknowledge(sent.sequence + 1, 1);
+        world.acknowledge(receipt, Duration::ZERO);
         *tick += 1;
     }
     panic!("owner delivery prerequisite was never reached");
+}
+
+pub(crate) fn processed(world: &WorldDelivery) -> Option<u32> {
+    world.input.processed
+}
+
+pub(crate) fn controller_acked(world: &WorldDelivery) -> bool {
+    world.identity_ready(world.owner()) && world.controller.delivered() != 0
+}
+
+pub(crate) fn possession_acked(world: &WorldDelivery) -> bool {
+    world.bound.is_some() && world.bound == world.active_body_id()
+}
+
+pub(crate) fn body_script_frame(world: &WorldDelivery) -> Option<u32> {
+    world.body_script.as_ref().map(|script| script.frame)
+}
+
+fn prepare_owner(
+    scene: &mut PreparedScene,
+    world: &mut WorldDelivery,
+    egress: &mut GameEgress<Arc<Record>>,
+) -> u32 {
+    let viewer = PlayerAppearance {
+        entity: OWNER,
+        slot: 0,
+        team: 0,
+        card: &PlayerCard::default(),
+    };
+    let mut tick = FIRST_TICK;
+    world.start(scene, &viewer, tick).unwrap();
+    assert_eq!(world.command_ack(tick), tick);
+    assert_eq!(world.input.processed, None);
+    world.queue_game_message(tick, Duration::ZERO, pick_hero(OWNER, SOLDIER));
+    assert!(!world.has_input_work());
+
+    deliver_until(world, scene, egress, &mut tick, |world| {
+        world.identity_ready(OWNER) && world.controller.latest_data() != 0
+    });
+    world.queue_game_message(tick, Duration::ZERO, pick_hero(OWNER, SOLDIER));
+    assert_eq!(
+        world
+            .advance_input(scene, &viewer, RETAIL_QUANTA, 1)
+            .unwrap(),
+        (1, false)
+    );
+    let body = scene.simulation().player_body_by_owner(OWNER).unwrap();
+    let id = body.id;
+    let component_start_frame = world.body_script.as_ref().unwrap().frame;
+    assert_eq!(component_start_frame, tick);
+    assert_eq!(body.hero, SOLDIER);
+    assert_eq!(
+        body.runtime.as_ref().unwrap().vitals().unwrap().total(),
+        200.0
+    );
+    assert_eq!(rifle_state(body).0, 30);
+    deliver_until(world, scene, egress, &mut tick, |world| {
+        world.identity_ready(id.entity) && world.bound == Some(id)
+    });
+    assert_eq!(world.input.processed, None);
+
+    tick
 }
 
 #[test]
@@ -62,44 +172,16 @@ fn stock_practice_owner_observes_processed_commands_and_rifle_state() {
     let assets = SceneAssets::load(runtime).unwrap();
     let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
     assert!(scene.movement_ready());
+    let mut world = WorldDelivery::new(OWNER);
+    let mut egress = GameEgress::default();
+    let mut tick = prepare_owner(&mut scene, &mut world, &mut egress);
     let viewer = PlayerAppearance {
         entity: OWNER,
         slot: 0,
         team: 0,
         card: &PlayerCard::default(),
     };
-    let mut world = WorldDelivery::new(OWNER);
-    let mut egress = GameEgress::default();
-    let mut tick = FIRST_TICK;
-    world.start(&scene, &viewer, tick).unwrap();
-    assert_eq!(world.command_ack(tick), tick);
-    assert_eq!(world.input.processed, None);
-    world.queue_game_message(tick, Duration::ZERO, pick_hero(OWNER, SOLDIER));
-    assert!(!world.has_input_work());
-
-    deliver_until(&mut world, &mut scene, &mut egress, &mut tick, |world| {
-        world.identity_ready(OWNER) && world.controller.latest_data() != 0
-    });
-    world.queue_game_message(tick, Duration::ZERO, pick_hero(OWNER, SOLDIER));
-    assert_eq!(
-        world
-            .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 1)
-            .unwrap(),
-        (1, false)
-    );
-    let body = scene.simulation().player_body_by_owner(OWNER).unwrap();
-    let id = body.id;
-    assert_eq!(body.hero, SOLDIER);
-    assert_eq!(
-        body.runtime.as_ref().unwrap().vitals().unwrap().total(),
-        200.0
-    );
-    assert_eq!(rifle_state(body).0, 30);
-    deliver_until(&mut world, &mut scene, &mut egress, &mut tick, |world| {
-        world.identity_ready(id.entity) && world.bound == Some(id)
-    });
-    assert_eq!(world.input.processed, None);
-
+    let id = scene.simulation().player_body_by_owner(OWNER).unwrap().id;
     let start = tick;
     for elapsed in 1..=164 {
         tick = start + elapsed;

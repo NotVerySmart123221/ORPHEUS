@@ -63,6 +63,22 @@ cargo test --locked -p orpheus --lib prepared_worker_delivers -- --ignored
 
 For two-room release timing benchmarks, see `docs/NATIVE_SERVER_ARCHITECTURE.md#two-room-headless-workload`.
 
+### Observe the Python reference room offline
+
+Use Python 3.12 with the dependencies from a clean [reference checkout at 45044d0d](https://github.com/leafall903/ORPHEUS/tree/45044d0d62399d9eb876c08e788aaea1f56cecc9), a prepared Practice Range pack, and a private input schedule. Choose the zero-based index of a hostile bot in the loaded range. The observer follows that spawner when its bot respawns.
+
+```powershell
+python -B scripts/inspect_python_room.py --reference C:\work\python-reference --runtime C:\private\pack --schedule C:\private\schedule.jsonl --bot-slot 2 --private-output C:\private\observation.json
+```
+
+Each schedule line contains `tick`, `elapsed_us`, `missed` and `inputs`. Start at tick and elapsed time zero, advance by the room's command quantum, and set `missed` to zero. Supply zero or one decoded command per tick using the Soldier comparison profile. The frozen room starts at frame 1000. Record actual offered frame numbers and let the command queue decide which it accepts. [Gameplay trace design](https://github.com/leafall903/ORPHEUS/pull/133)
+
+The tool writes a new diagnostic outside both checkouts and the pack. A successful recording prints `incomplete` and exits with code 2. Check its `missing` entries before interpreting any result. It samples simulation state immediately after each room tick. The Soldier rifle's authored reload flag is initially null, which its boolean condition reads as false. During manual reload it remains true through the magazine refill.
+
+The host uses the pinned fixture's `fixed-counter-v1` entropy source. The diagnostic records its counter before room construction and the separate initial seed passed to the stock player's CPython MT19937 script VM. It records the selected spawner's authored identity, startup roster size, first managed room tick, starting clock and tick quantum. In this Python setup the initial owner and bot creates are queued. They enter the observation when a scheduled send selects them, followed by its acknowledgement.
+
+The production owner send path selects, budgets and submits records to an in-memory sink. The adapter groups only effects from successful sends and acknowledges each send afterwards. It records explicit magazine values, transmitted vital-pool updates, and body creation and retirement. A missing `effects` field means a required observation was unavailable. An empty array means the observed tick carried none of those effects. The diagnostic still requires common runtime-profile binding before use in a cross-language comparison. Keep the schedule and observations private. [Recorder work](https://github.com/leafall903/ORPHEUS/issues/131)
+
 ---
 
 ## Architecture & Behavior Contract Guidelines

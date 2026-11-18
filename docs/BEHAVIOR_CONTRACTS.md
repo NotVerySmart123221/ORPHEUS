@@ -1,6 +1,6 @@
 # Shared Behavior Contracts (`rust`)
 
-ORPHEUS stores language-neutral JSON contracts under `fixtures/behavior/` (`48` files total). Cross-language consumers compare Python (`main`) and Rust (`rust`) through production code paths; Rust-only regression contracts identify their narrower scope explicitly. Fixtures do not bundle game assets or captures.
+ORPHEUS stores language-neutral JSON contracts under `fixtures/behavior/` (`49` files total). Cross-language consumers compare Python (`main`) and Rust (`rust`) through production code paths; Rust-only regression contracts identify their narrower scope explicitly. Fixtures do not bundle game assets or captures.
 
 The Rust-only `script-actions-v1.json` adds 15 historical assignment/branch cases pinned to `f763beb`. Both `orpheus-statescript` public workspace lanes run `script_init::tests::actions_contract::actions_preserve_the_pinned_synthetic_reference_contract`; it is not registered in the Python/Rust differential job. See the [action development guide](STATESCRIPT_DEVELOPMENT.md) for provenance, current module boundaries and the synthetic benchmark.
 
@@ -64,6 +64,7 @@ Mirrored under `fixtures/behavior/` so `rust` maintains a strict superset of `ma
 
 | Fixture | Scope & Consumer |
 | --- | --- |
+| `owner-first-command-anchor-v1.json` | First command admission with no body, a new initialized body, retransmissions and continuing input history. The native room regression uses the same fallback rule as the frozen Python command queue. |
 | `gallery-preview-policy-v1.json` | C++ client relay NPC preview resource fallback & 64-node tree pruning (`python3 -B scripts/check_gallery_preview_policy.py`) |
 | `room-isolation-v1.json` | Encrypted worker room fault/panic retirement while sibling rooms stay live (`encrypted_worker_satisfies_room_recovery_contract`) |
 | `junkenstein-validation-v1.json` | Normal Cassidy validation overrides (`--junkenstein-validation`) & post-AI immunity damage routing |

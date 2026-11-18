@@ -65,12 +65,125 @@ pub(super) fn items(v: &Value, n: usize, predicate: impl Fn(&Value) -> bool) -> 
         .is_some_and(|a| a.len() == n && a.iter().all(predicate))
 }
 
+fn captured_setup(s: &Value) -> bool {
+    let spawn = &s["bot_spawner"];
+    let mut fields = vec![
+        "bot_spawner",
+        "bot_spawner_slot",
+        "bot_roster_size",
+        "initial_room_tick",
+        "first_scheduled_room_tick",
+        "setup_delivery_ticks",
+        "initial_owner_delivery_phase",
+        "host_random_model",
+        "host_initial_seed",
+        "player_vm_random_model",
+        "player_vm_initial_seed",
+    ];
+    if s["initial_owner_delivery_phase"] == "after-possession-ack" {
+        fields.extend([
+            "startup_acks",
+            "setup_elapsed_us",
+            "owner_component_start_frame",
+        ]);
+        if !confirmed_startup(s) {
+            return false;
+        }
+    }
+    exact_fields(s, &fields)
+        && exact_fields(spawn, &["team", "hero", "position_bits", "yaw"])
+        && uint(&spawn["team"], u8::MAX.into())
+        && is_hex(&spawn["hero"], 16)
+        && items(&spawn["position_bits"], 3, finite_bits)
+        && sint(&spawn["yaw"], i32::MIN.into(), i32::MAX.into())
+        && [
+            "bot_spawner_slot",
+            "bot_roster_size",
+            "initial_room_tick",
+            "first_scheduled_room_tick",
+            "setup_delivery_ticks",
+        ]
+        .iter()
+        .all(|k| uint(&s[k], u32::MAX.into()))
+        && s["bot_spawner_slot"].as_u64() < s["bot_roster_size"].as_u64()
+        && matches!(
+            s["initial_owner_delivery_phase"].as_str(),
+            Some("before-first-send" | "after-setup-ack" | "after-possession-ack")
+        )
+        && token(&s["host_random_model"])
+        && token(&s["player_vm_random_model"])
+        && (if s["host_random_model"] == "os-entropy-transport-only" {
+            s["host_initial_seed"].is_null()
+        } else {
+            s["host_initial_seed"].as_u64().is_some()
+        })
+        && s["player_vm_initial_seed"].as_u64().is_some()
+}
+
+fn confirmed_startup(s: &Value) -> bool {
+    let (Some(start), Some(first), Some(ticks), Some(component), Some(acks)) = (
+        s["initial_room_tick"].as_u64(),
+        s["first_scheduled_room_tick"].as_u64(),
+        s["setup_delivery_ticks"].as_u64(),
+        s["owner_component_start_frame"].as_u64(),
+        s["startup_acks"].as_object(),
+    ) else {
+        return false;
+    };
+    let Some(cut) = first.checked_sub(1) else {
+        return false;
+    };
+    let required = ["bot_create", "owner_create", "owner_possession"];
+    start.checked_add(ticks) == Some(cut)
+        && uint(&s["setup_elapsed_us"], u64::MAX)
+        && (start..=cut).contains(&component)
+        && required.iter().all(|name| acks.contains_key(*name))
+        && acks["owner_create"]
+            .as_u64()
+            .is_some_and(|t| component <= t)
+        && required
+            .iter()
+            .any(|name| acks[*name].as_u64() == Some(cut))
+        && acks.iter().all(|(name, value)| {
+            (required.contains(&name.as_str())
+                || matches!(name.as_str(), "owner_full_tree" | "owner_first_delta"))
+                && value.as_u64().is_some_and(|t| (start..=cut).contains(&t))
+        })
+}
+
 pub(super) fn check_header(h: &Value, role: &str) -> Invalid<()> {
+    let fields_valid = match h["schema"].as_str() {
+        Some("orpheus.golden.v2") => {
+            let names: Vec<_> = HEADER
+                .iter()
+                .copied()
+                .filter(|k| *k != "seed")
+                .chain(["setup"])
+                .collect();
+            exact_fields(h, &names) && captured_setup(&h["setup"])
+        }
+        Some("orpheus.golden.v1") => {
+            let fields = if let Some(setup) = h.get("setup") {
+                exact_fields(
+                    setup,
+                    &["bot_spawner_slot", "initial_room_tick", "random_model"],
+                ) && uint(&setup["bot_spawner_slot"], u32::MAX.into())
+                    && uint(&setup["initial_room_tick"], u32::MAX.into())
+                    && token(&setup["random_model"])
+                    && h.as_object().is_some_and(|m| {
+                        m.len() == HEADER.len() + 1 && HEADER.iter().all(|k| m.contains_key(*k))
+                    })
+            } else {
+                exact_fields(h, HEADER)
+            };
+            fields && uint(&h["seed"], u32::MAX.into())
+        }
+        _ => false,
+    };
     require(
-        exact_fields(h, HEADER)
+        fields_valid
             && h["kind"] == "header"
             && h["role"] == role
-            && h["schema"] == "orpheus.golden.v1"
             && h["profile"] == "soldier-range-v1"
             && h["build"] == 104319
             && h["scenario"] == "soldier-range",
@@ -92,7 +205,6 @@ pub(super) fn check_header(h: &Value, role: &str) -> Invalid<()> {
     require(
         token(&h["platform"])
             && token(&h["toolchain"])
-            && uint(&h["seed"], u32::MAX.into())
             && uint(&h["quanta_us"], u32::MAX.into())
             && h["quanta_us"] != 0,
         "invalid model settings",

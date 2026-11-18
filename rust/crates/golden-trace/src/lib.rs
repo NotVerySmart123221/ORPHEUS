@@ -138,23 +138,50 @@ fn first_difference(left: &Frame, right: &Frame) -> Option<Difference> {
     effects_difference(left.tick, &left.effects, &right.effects)
 }
 
+#[derive(Debug)]
+pub enum Comparison {
+    Match,
+    Mismatch(Difference),
+    Incompatible(Vec<String>),
+}
+
+fn incompatible_fields(left: &Value, right: &Value) -> Vec<String> {
+    let mut fields: Vec<_> = HEADER
+        .iter()
+        .copied()
+        .filter(|key| {
+            !["role", "source_rev", "adapter_rev", "toolchain"].contains(key)
+                && left[*key] != right[*key]
+        })
+        .map(str::to_owned)
+        .collect();
+    match (left["setup"].as_object(), right["setup"].as_object()) {
+        (Some(a), Some(b)) => {
+            let keys: std::collections::BTreeSet<_> = a.keys().chain(b.keys()).collect();
+            for key in keys {
+                if a.get(key) != b.get(key) {
+                    fields.push(format!("setup.{key}"));
+                }
+            }
+        }
+        _ if left["setup"] != right["setup"] => fields.push("setup".into()),
+        _ => (),
+    }
+    fields
+}
+
 /// Validate both complete traces (including all checksums) before exposing the first semantic difference.
-pub fn compare<R: BufRead, S: BufRead>(
+pub fn compare_bound<R: BufRead, S: BufRead>(
     reference: R,
     candidate: S,
-) -> Result<Option<Difference>, TraceError> {
+) -> Result<Comparison, TraceError> {
     let mut left = Stream::new(reference, "reference")?;
     let mut right = Stream::new(candidate, "candidate")?;
-    for &key in HEADER {
-        if !["role", "source_rev", "adapter_rev", "toolchain"].contains(&key)
-            && left.header[key] != right.header[key]
-        {
-            return Err(TraceError {
-                side: "comparison",
-                line: 1,
-                reason: "incompatible trace headers",
-            });
-        }
+    let differences = incompatible_fields(&left.header, &right.header);
+    if !differences.is_empty() {
+        while left.next()?.is_some() {}
+        while right.next()?.is_some() {}
+        return Ok(Comparison::Incompatible(differences));
     }
     let mut first = None;
     loop {
@@ -164,7 +191,7 @@ pub fn compare<R: BufRead, S: BufRead>(
                     first = first_difference(&a, &b);
                 }
             }
-            (None, None) => return Ok(first),
+            (None, None) => return Ok(first.map_or(Comparison::Match, Comparison::Mismatch)),
             _ => {
                 return Err(TraceError {
                     side: "comparison",
@@ -174,4 +201,36 @@ pub fn compare<R: BufRead, S: BufRead>(
             }
         }
     }
+}
+
+/// Compare traces for callers that treat any incompatible setup as an error.
+pub fn compare<R: BufRead, S: BufRead>(
+    reference: R,
+    candidate: S,
+) -> Result<Option<Difference>, TraceError> {
+    match compare_bound(reference, candidate)? {
+        Comparison::Match => Ok(None),
+        Comparison::Mismatch(diff) => Ok(Some(diff)),
+        Comparison::Incompatible(_) => Err(TraceError {
+            side: "comparison",
+            line: 1,
+            reason: "incompatible trace headers",
+        }),
+    }
+}
+
+/// Validate a standalone Python recording through its footer and scenario coverage.
+pub fn validate_reference<R: BufRead>(source: R) -> Result<(), TraceError> {
+    validate_role(source, "reference")
+}
+
+/// Validate an independent native recording, including its schedule and footer.
+pub fn validate_candidate<R: BufRead>(source: R) -> Result<(), TraceError> {
+    validate_role(source, "candidate")
+}
+
+fn validate_role<R: BufRead>(source: R, role: &'static str) -> Result<(), TraceError> {
+    let mut stream = Stream::new(source, role)?;
+    while stream.next()?.is_some() {}
+    Ok(())
 }

@@ -6,19 +6,39 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-18
 
+#### Anchor pre-spawn owner inputs and paired room replays
+
+- Native input admission now uses the initialized owner's body-script frame when a connection has no admitted command yet. Stale movement and aim offers no longer move a newly possessed player or become the owner's acknowledged command. Existing command history still sets the order through hero switches. Offline diagnostics now include each delivered owner's room frame and command acknowledgement.
+
+- The offline Soldier recorders now run normal map loading and hero selection on the room clock and start the input schedule after the selected bot, player body and possession have been acknowledged. New traces bind those receipt frames, elapsed startup time and player VM construction frame. Earlier recordings remain readable.
+
+- Added an opt-in prepared-runtime test for replaying a private decoded Practice Range schedule through the native room. It records command acceptance, available player and bot fields, and the selected bot's death and respawn timing. It distinguishes pre-roll from scheduled owner records, observes selected body, health and rifle-ammo delivery, and records missing provenance explicitly. Raw observations stay local.
+
 #### Correct prepared Soldier test identities
 
 - Pin the ordered live startup tree and resolve long-session assertions by unique graph and attachment instead of fixed instance IDs. Independently decode descriptor sections of the prepared owner/observer frames and exercise synthetic child removal, cumulative delivery and chunk-sequence gaps. The production filter, encoder, and allocator are unchanged; state-link decoding and original-client verification remain open.
 
 #### Compare gameplay evidence across languages
 
+- Preserve independently repeatable room records if the other recorder fails or its normal room admission does not support the prepared profile.
+
+- Capture and validate each complete Python and Rust room trace independently. The private receipt records the frozen native executable and reports incompatible starting conditions before gameplay comparison. [Comparison guide](docs/GOLDEN_COMPARISON.md)
+- Replay capture clears inherited gameplay switches, checks the compiled fixture sources and keeps a valid role trace if the other role has malformed provenance.
+- Added a private two-run recorder for each implementation, input fingerprints that cover supplemental files, and standalone validation of complete Python references. The recorded setup identifies the chosen bot spawner and clock origin.
+
 - Add the offline `compare_golden` command for semantic Soldier traces. It checks input and runtime fingerprints, validates complete records and reports the first differing command acceptance, state field or owner effect. The public tests exercise an invented scenario with a bot respawn. [Comparison guide](docs/GOLDEN_COMPARISON.md)
 - Added a prepared-runtime observation of stock Soldier command processing and rifle ammo after possession, firing and reloading. This test drives the headless room.
+- The prepared 900-frame Soldier regression now locates each graph by parent and attachment before checking weapon behavior and both client projections. [Startup comparison and remaining parity question](docs/STATE.md)
 
 #### Document the planned GitHub default branch change
 
 - Scheduled the repository default to switch to the existing `rust` branch on November 19 at 12:00 UTC. Documented contribution targets and verification steps for maintainers. Rust development continues on `rust` and Python development on `main`. [Branch guide](docs/BRANCH_TRANSITION.md)
 - Added an original-client verification day issue form for both implementations, linked the pinned Python parity matrix from the [Rust status page](docs/STATE.md), and documented a [design for comparing private gameplay traces](docs/GOLDEN_TRACE.md).
+
+#### Observe the pinned Python room offline
+
+- `scripts/inspect_python_room.py` accepts a semantic command schedule and a private output path. It loads the prepared Practice Range terrain, records Soldier command acceptance, pose, ammunition and reload state, and follows the chosen bot's health and body generation. It projects body lifecycle, vital-pool and magazine effects from the production owner send path with in-memory acknowledgements. The paired collector binds repeatable observations to their effective runtime profile.
+- The diagnostic identifies the host and stock-body random sources separately and records the selected spawner and initial owner delivery phase for cross-language comparisons.
 
 #### Add safe-boundary Lua AI hot reload with pre-activation validation and rollback
 

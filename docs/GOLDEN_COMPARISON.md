@@ -6,15 +6,54 @@
 cargo run --locked -p orpheus-golden-trace --bin compare_golden -- reference.jsonl candidate.jsonl
 cargo run --locked -p orpheus-golden-trace --bin compare_golden -- reference.jsonl candidate.jsonl --report private-report.json
 cargo test --locked -p orpheus-golden-trace
+cargo run --locked -p orpheus-golden-trace --bin compare_golden -- --check-reference reference.jsonl
+cargo run --locked -p orpheus-golden-trace --bin compare_golden -- --check-candidate candidate.jsonl
 ```
 
 | Exit | Result | Meaning |
 | --- | --- | --- |
 | 0 | `match` | Both complete traces cover the same schedule and agree. |
 | 1 | `mismatch` | Both traces are valid. The local report identifies the first tick, phase, logical actor and field that differ. |
-| 2 | `incomplete` or a command error | The records are incomplete, corrupt or incompatible, or a requested file operation failed. A later bad footer invalidates an earlier apparent mismatch. |
+| 2 | `incompatible` | Both traces passed individual validation. The private report lists the inputs or setup fields that prevent a gameplay comparison. |
+| 2 | `incomplete` or a command error | A record is incomplete or corrupt, or a file operation failed. A bad footer invalidates an earlier apparent mismatch. |
 
 Detailed values go in the optional report. Choose a new file in a private directory. A report distinguishes a missing field from a field whose value is JSON `null`. Keep recordings and reports on the runner or maintainer machine. The repository ignores `local-data/` at the project root.
+
+## Record the same session twice on each server
+
+Use a prepared 104319 runtime and a private canonical input schedule. The Python reference checkout must match the revision pinned by the adapter. Select a Python interpreter with the reference project's dependencies installed. Both adapter checkouts must contain the replay observers.
+
+```sh
+python scripts/capture_room_pair.py --python-source /path/to/python-reference --python-adapter /path/to/rust-checkout --rust-source /path/to/rust-checkout --runtime /private/runtime-data --schedule /private/schedule.jsonl --bot-slot 2 --out /private/new-session --python /path/to/reference-venv/python
+```
+
+Each process receives the same input schedule and selected spawner. The collector checks the entire runtime tree, manifest and schedule before the first process and after each run. Its receipt records source revisions, observation hashes and whether the two recordings of each implementation agree. A repeatable diagnostic can still contain missing fields or disagree with the other server.
+
+The collector builds the native room test and the validator once, then runs the same private copy of the test executable in a fresh process for each attempt. The receipt records both executable digests. Each repeatable, complete role is encoded and checked through its footer before being saved as `reference.jsonl` or `candidate.jsonl`. The collector exits successfully only on `match`.
+
+Captured `orpheus.golden.v2` headers bind the selected spawner, roster size, initial and first scheduled room frames, setup delivery ticks and owner acknowledgement phase. Host and player VM random models and initial seeds have separate fields. An OS-entropy transport records a null host seed. When setups differ, both validated recordings stay on disk and the receipt identifies the incompatible fields. Synthetic v1 records and historical v1 headers with the smaller setup remain readable.
+
+The collector attempts both recordings for each implementation. A local recorder or native build failure is listed under `recording_failures` in the receipt. A valid pair from the other implementation can still produce a checked single trace. Changed runtime inputs or source revisions invalidate the run.
+
+## What has been recorded
+
+The current recorders wait for the room's map offer, load the map, select Soldier after the controller is ready, and advance real room ticks throughout. Recording starts on the next tick after acknowledgements for the selected bot, player body and possession. Each trace retains the actual startup duration, receipt frames and player VM construction frame. The schedule clock starts at zero at this boundary. Submitted command frames remain exactly as supplied. Earlier traces remain readable with their original startup metadata.
+
+In the earlier abbreviated-start experiment on Windows, the pinned Python reference and the Rust room each processed all 339
+inputs in three headless scenarios: sustained fire at a training bot, a single
+shot followed by a reload, and an idle-weapon control. Each implementation ran
+each scenario twice in a fresh process. Both copies of each role's recording
+agreed and passed the single-trace validator. The pack supplied stock bot
+placements and health, but lacked their optional body scripts. Native solo
+admission currently rejects a Practice Range that includes scripted bot bodies.
+The collector reports that profile as unsupported for Rust and can preserve
+the checked Python recording for the same inputs.
+
+The paired comparison returned `incompatible` in all three scenarios. The
+first scheduled room tick matched, but the initial owner acknowledgements,
+number of setup delivery steps, and host and player-script random streams
+differed. Confirm equivalent startup conditions before using these recordings
+as a gameplay parity gate. Original-client acceptance is recorded separately.
 
 ## Writing the first format
 
@@ -37,3 +76,16 @@ Both producers must use the same platform, clock configuration and runtime input
 **Outputs.** Record owner delivery groups in observed order, with each group's effects in observed order. Each effect contains recipient, kind, logical body and value. This revision supports `create`, `retire`, `health` and `ammo`. An empty list means the observer saw no relevant output. A producer that cannot observe the group boundary or account for a relevant effect must report incomplete evidence and withhold a complete trace.
 
 The comparator checks acceptance before other state and then compares grouped effects. The design describes the remaining recorder work. [Gameplay trace design](GOLDEN_TRACE.md)
+## Replay a private schedule in the native room
+
+The prepared-runtime test takes a local decoded schedule with the command fields listed above. Select an ordinary hostile Practice Range spawner by its zero-based position in the filtered catalog. Provide a fresh output filename in a private directory. The test leaves existing files intact.
+
+```powershell
+$env:ORPHEUS_RUNTIME_DIR = 'C:\private\runtime'
+$env:ORPHEUS_ROOM_SCHEDULE = 'C:\private\schedule.jsonl'
+$env:ORPHEUS_ROOM_OBSERVATION = 'C:\private\native-observation.json'
+$env:ORPHEUS_ROOM_BOT_SLOT = '2'
+cargo test --locked -p orpheus --lib same_schedule_practice_room -- --ignored
+```
+
+The fixture selects stock Soldier, acknowledges the initial owner and body, and passes each offered command through the production room. It samples the state after the worker tick. The output separates setup deliveries from scheduled deliveries and records the effective field set. The latter uses the records selected by successful sends in their original order. Compare independent runs under the same runtime and record source revisions, clock, RNG, and startup conditions separately. The resulting observation is a local input to the comparison runner.

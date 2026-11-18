@@ -7,10 +7,12 @@ use std::io::{self, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use orpheus_golden_trace::{Difference, compare};
+use orpheus_golden_trace::{
+    Comparison, Difference, compare_bound, validate_candidate, validate_reference,
+};
 use serde_json::{Value, json};
 
-const USAGE: &str = "Usage: compare_golden REFERENCE.jsonl CANDIDATE.jsonl [--report NEW_FILE]";
+const USAGE: &str = "Usage: compare_golden REFERENCE.jsonl CANDIDATE.jsonl [--report NEW_FILE]\n       compare_golden --check-reference REFERENCE.jsonl\n       compare_golden --check-candidate CANDIDATE.jsonl";
 
 fn write_report(path: &Path, report: &Value) -> io::Result<()> {
     let parent = path
@@ -43,22 +45,41 @@ fn run(args: &[OsString]) -> Result<u8, &'static str> {
         return Ok(0);
     }
     let (reference, candidate, output) = match args {
+        [flag, path] if flag == "--check-reference" || flag == "--check-candidate" => {
+            let reader = BufReader::new(File::open(path).map_err(|_| "Cannot open trace.")?);
+            let (label, result) = if flag == "--check-reference" {
+                ("valid-reference", validate_reference(reader))
+            } else {
+                ("valid-candidate", validate_candidate(reader))
+            };
+            if let Err(error) = result {
+                eprintln!("{error}");
+                return Ok(2);
+            }
+            println!("{label}");
+            return Ok(0);
+        }
         [a, b] => (a, b, None),
         [a, b, flag, path] if flag == "--report" => (a, b, Some(PathBuf::from(path))),
         _ => return Err(USAGE),
     };
     let reference = File::open(reference).map_err(|_| "Cannot open the reference trace.")?;
     let candidate = File::open(candidate).map_err(|_| "Cannot open the candidate trace.")?;
-    let (code, status, report) = match compare(BufReader::new(reference), BufReader::new(candidate))
-    {
-        Ok(None) => (0, "match", json!({"result": "match"})),
-        Ok(Some(diff)) => (1, "mismatch", difference_report(diff)),
-        Err(error) => (
-            2,
-            "incomplete",
-            json!({"result": "incomplete", "reason": error.to_string()}),
-        ),
-    };
+    let (code, status, report) =
+        match compare_bound(BufReader::new(reference), BufReader::new(candidate)) {
+            Ok(Comparison::Match) => (0, "match", json!({"result": "match"})),
+            Ok(Comparison::Mismatch(diff)) => (1, "mismatch", difference_report(diff)),
+            Ok(Comparison::Incompatible(fields)) => (
+                2,
+                "incompatible",
+                json!({"result":"incompatible","fields":fields}),
+            ),
+            Err(error) => (
+                2,
+                "incomplete",
+                json!({"result": "incomplete", "reason": error.to_string()}),
+            ),
+        };
     if let Some(path) = output {
         write_report(&path, &report)
             .map_err(|_| "Could not create the requested private report.")?;
