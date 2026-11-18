@@ -4,6 +4,7 @@ mod benchmark;
 mod harness;
 mod isolation;
 mod junkenstein_validation;
+mod same_schedule;
 mod world_harness;
 
 pub use harness::*;

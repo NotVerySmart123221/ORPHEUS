@@ -1,7 +1,7 @@
 use super::*;
 use crate::script_wire::Value as ScriptValue;
 
-fn rifle_state(body: &PlayerBodyState) -> (i64, Option<bool>) {
+pub(crate) fn rifle_state(body: &PlayerBodyState) -> (i64, Option<bool>) {
     let snapshot = body.runtime.as_ref().unwrap().snapshot().unwrap();
     assert!(snapshot.initialization_complete());
     // Resolve the authored rifle root independently of VM allocation order.
@@ -21,6 +21,11 @@ fn rifle_state(body: &PlayerBodyState) -> (i64, Option<bool>) {
         panic!("stock rifle has no integer magazine value");
     };
     let reload = match value(51) {
+        // The rifle's eligibility condition reads the flag as a boolean. An
+        // unbound stored Null is false; an absent variable is unobserved.
+        Some(ScriptValue::Null) if snapshot.bindings.get(&(id, 51)).is_none_or(Vec::is_empty) => {
+            Some(false)
+        }
         None | Some(ScriptValue::Null) => None,
         Some(ScriptValue::Bool(active)) => Some(*active),
         _ => panic!("unexpected stock rifle reload state"),
@@ -55,35 +60,35 @@ fn deliver_until(
     panic!("owner delivery prerequisite was never reached");
 }
 
-#[test]
-#[ignore = "requires the target-tagged 104319 Practice Range runtime"]
-fn stock_practice_owner_observes_processed_commands_and_rifle_state() {
-    let runtime = std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap();
-    let assets = SceneAssets::load(runtime).unwrap();
-    let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
-    assert!(scene.movement_ready());
+pub(crate) fn processed(world: &WorldDelivery) -> Option<u32> {
+    world.input.processed
+}
+
+pub(crate) fn prepare_owner(
+    scene: &mut PreparedScene,
+    world: &mut WorldDelivery,
+    egress: &mut GameEgress<Arc<Record>>,
+) -> u32 {
     let viewer = PlayerAppearance {
         entity: OWNER,
         slot: 0,
         team: 0,
         card: &PlayerCard::default(),
     };
-    let mut world = WorldDelivery::new(OWNER);
-    let mut egress = GameEgress::default();
     let mut tick = FIRST_TICK;
-    world.start(&scene, &viewer, tick).unwrap();
+    world.start(scene, &viewer, tick).unwrap();
     assert_eq!(world.command_ack(tick), tick);
     assert_eq!(world.input.processed, None);
     world.queue_game_message(tick, Duration::ZERO, pick_hero(OWNER, SOLDIER));
     assert!(!world.has_input_work());
 
-    deliver_until(&mut world, &mut scene, &mut egress, &mut tick, |world| {
+    deliver_until(world, scene, egress, &mut tick, |world| {
         world.identity_ready(OWNER) && world.controller.latest_data() != 0
     });
     world.queue_game_message(tick, Duration::ZERO, pick_hero(OWNER, SOLDIER));
     assert_eq!(
         world
-            .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 1)
+            .advance_input(scene, &viewer, RETAIL_QUANTA, 1)
             .unwrap(),
         (1, false)
     );
@@ -95,11 +100,31 @@ fn stock_practice_owner_observes_processed_commands_and_rifle_state() {
         200.0
     );
     assert_eq!(rifle_state(body).0, 30);
-    deliver_until(&mut world, &mut scene, &mut egress, &mut tick, |world| {
+    deliver_until(world, scene, egress, &mut tick, |world| {
         world.identity_ready(id.entity) && world.bound == Some(id)
     });
     assert_eq!(world.input.processed, None);
 
+    tick
+}
+
+#[test]
+#[ignore = "requires the target-tagged 104319 Practice Range runtime"]
+fn stock_practice_owner_observes_processed_commands_and_rifle_state() {
+    let runtime = std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap();
+    let assets = SceneAssets::load(runtime).unwrap();
+    let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
+    assert!(scene.movement_ready());
+    let mut world = WorldDelivery::new(OWNER);
+    let mut egress = GameEgress::default();
+    let mut tick = prepare_owner(&mut scene, &mut world, &mut egress);
+    let viewer = PlayerAppearance {
+        entity: OWNER,
+        slot: 0,
+        team: 0,
+        card: &PlayerCard::default(),
+    };
+    let id = scene.simulation().player_body_by_owner(OWNER).unwrap().id;
     let start = tick;
     for elapsed in 1..=164 {
         tick = start + elapsed;
