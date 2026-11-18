@@ -54,6 +54,7 @@ pub(super) struct RegisteredState {
     pub(super) suppresses_model: bool,
 }
 
+#[derive(Clone)]
 pub(super) enum LinkValue {
     Fixed(Value),
     Volley(u8),
@@ -62,6 +63,7 @@ pub(super) enum LinkValue {
     AbilityStack,
 }
 
+#[derive(Clone)]
 pub(super) struct VariableLink {
     pub(super) state: StateKey,
     pub(super) priority: StackPriority,
@@ -76,6 +78,7 @@ pub(super) struct ArrayInsertion {
     pub(super) unique: bool,
 }
 
+#[derive(Clone)]
 pub(super) struct Volley {
     pub(super) start_ms: u64,
     pub(super) ammo0: i64,
@@ -116,6 +119,7 @@ pub(super) struct AbilityPress {
     pub(super) activation: u16,
 }
 
+#[derive(Clone)]
 pub(super) enum Event {
     Entry(u16),
     Assign(VarKey, Value),
@@ -199,6 +203,42 @@ pub(super) struct Machine {
     pub(super) owner_dead: bool,
     pub(super) control_blocked: bool,
     pub(super) disabled_start_entries: HashSet<(u16, u16)>,
+}
+
+impl Clone for Machine {
+    fn clone(&self) -> Self {
+        Self {
+            public_schemas: self.public_schemas,
+            code_states: self.code_states.clone(),
+            code_pending: self.code_pending.clone(),
+            code_observers: self.code_observers.clone(),
+            snapshot: self.snapshot.clone(),
+            registered: self.registered.clone(),
+            queues: self.queues.clone(),
+            watchers: self.watchers.clone(),
+            foreign_watchers: self.foreign_watchers.clone(),
+            ticking: self.ticking.clone(),
+            deferred: self.deferred.clone(),
+            voice_poll: self.voice_poll.clone(),
+            links: self.links.clone(),
+            volleys: self.volleys.clone(),
+            movement_modifiers: self.movement_modifiers.clone(),
+            shots: self.shots.clone(),
+            ability_presses: self.ability_presses.clone(),
+            next_id: self.next_id,
+            work_left: self.work_left,
+            max_work: self.max_work,
+            frame: self.frame,
+            now_ms: self.now_ms,
+            random_state: AtomicU64::new(self.random_state.load(Ordering::Relaxed)),
+            command_buttons: self.command_buttons,
+            held_buttons: self.held_buttons.clone(),
+            button_blocks: self.button_blocks,
+            owner_dead: self.owner_dead,
+            control_blocked: self.control_blocked,
+            disabled_start_entries: self.disabled_start_entries.clone(),
+        }
+    }
 }
 
 impl Machine {

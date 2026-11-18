@@ -426,7 +426,7 @@ impl State {
                         map: format!("{:016X}", room.map.map_guid),
                         name: room.map.name.clone(),
                         actors,
-                        encounter: world.scene.encounter_debug(),
+                        encounter: world.scene.simulation().encounter_debug(),
                     },
                     truncated,
                 )))
@@ -746,10 +746,10 @@ impl State {
                                 .simulation()
                                 .player_body_by_owner(peer.world.owner())
                                 .map(|state| state.hero);
-                            world.scene.step_encounter(tick, encounter_hero);
+                            world.scene.try_step_encounter(tick, encounter_hero)?;
                             peer.world.queue_encounter_presentation(&world.scene)?;
                         }
-                        let active = world.scene.encounter_active();
+                        let active = world.scene.simulation().encounter_active();
                         if let Some(body_id) = peer.world.active_body_id() {
                             world
                                 .scene
@@ -822,10 +822,9 @@ impl State {
                 room.with_peer(connection, |room, peer, slot| {
                     let mut leave = false;
                     let encounter_finished = peer.world.encounter_screens_delivered()
-                        && room
-                            .world
-                            .as_ref()
-                            .is_some_and(|world| world.scene.encounter_screens_complete());
+                        && room.world.as_ref().is_some_and(|world| {
+                            world.scene.simulation().encounter_screens_complete()
+                        });
                     if !drain && encounter_finished {
                         if let Some(world) = &mut room.world {
                             peer.clear_world_in_room(world.scene.simulation_mut());

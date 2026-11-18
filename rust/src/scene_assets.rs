@@ -21,7 +21,10 @@ use crate::{
     contact_world::ContactWorld,
     game_bots::{Bot, BotCatalog, BotWalk},
     game_clock::FIRST_TICK,
-    game_combat::RoomSimulation,
+    game_combat::{
+        ENCOUNTER_INSTANCE, EncounterRegistration, EncounterWorld, GateState, GateWorld,
+        RoomSimulation,
+    },
     game_content::{
         GameMap, JUNKENSTEIN_GATE, JunkensteinCard, PRACTICE_RANGE_MAP, PRACTICE_RANGE_MODE,
     },
@@ -30,36 +33,37 @@ use crate::{
     game_instance::RETAIL_QUANTA,
     game_pools::PoolCatalog,
     game_replication::OwnerBodyRuntime,
-    game_service::player_entity,
     game_stats::{PlayerStats, StatsCatalog, initial_on_fire},
-    junkenstein_messages::{DefenderMessage, POST_MATCH_PHASE},
-    junkenstein_spawn::SpawnSearches,
     match_scene::{
         PlayerAppearance, initial_world, junkenstein_presentation, mode_presentation, team_bit,
     },
     mover::Mover,
     mover_ground::NOT_GROUND,
-    mover_settings::{MoverCatalog, MoverSettings},
+    mover_settings::MoverCatalog,
     patrol_script::PatrolScript,
     runtime::JUNKENSTEIN_MAP_WORLD,
     script_codecs::CodecTable,
-    script_expr::{EntityRelation, native_shape},
+    script_expr::native_shape,
     script_graph::{GraphStore, ModeValue, asset_guid},
-    script_init::{self, Root, Site, World},
+    script_init::{self, Root},
     script_player::{OwnerBodySpawn, PlayerBodyFactory},
-    script_snapshot_wire::{
-        COUNTDOWN_STATES, COUNTDOWN_VAR, CountdownFrame, ProjectedSnapshot, SnapshotEncoder,
-        encounter_countdown_delta, encounter_message_delta, mode_action_delta,
-    },
     script_wire::{Value, Variables},
-    world::{Component, ComponentValue, EntityUpdate, GAME_MODE_ENTITY},
+    world::{Component, EntityUpdate},
+};
+
+#[cfg(test)]
+use crate::{
+    game_service::player_entity,
+    junkenstein_messages::DefenderMessage,
+    script_init::{Site, World},
+    script_snapshot_wire::{CountdownFrame, ProjectedSnapshot},
+    world::GAME_MODE_ENTITY,
 };
 
 #[cfg(any(test, feature = "inspector"))]
 use crate::{debug_geometry::DebugGeometry, game_debug::Actor};
 
 pub(crate) const MOVER_CATEGORY: u16 = 0x18;
-const ENCOUNTER_INSTANCE: u16 = 2;
 
 fn mover_category(map: &GameMap, team: u8) -> u16 {
     match (map.free_for_all, team) {
@@ -126,8 +130,8 @@ mod queries;
 mod tests;
 
 pub use self::encounter::JunkensteinGate;
+use self::encounter::SpawnAnchor;
 pub(crate) use self::encounter::SpawnAnchors;
-use self::encounter::{EncounterWorld, GateState, GateWorld, JunkensteinEncounter, SpawnAnchor};
 pub use self::prepared::PreparedScene;
 pub(crate) use self::queries::BotQueries;
 
@@ -212,9 +216,14 @@ impl SceneAssets {
         }
         let mut scene = self.prepare(map)?;
         let gate = scene
-            .junkenstein_gate
-            .as_ref()
+            .junkenstein_gate()
+            .cloned()
             .expect("prepared Junkenstein gate");
+        let anchors = scene
+            .simulation()
+            .spawn_anchors()
+            .cloned()
+            .unwrap_or_default();
         let (shared, encounter) = self.encounter_roots(card.mode)?;
         let variables = self
             .graphs
@@ -248,16 +257,17 @@ impl SceneAssets {
             &mut GateWorld {
                 entity: gate.entity,
                 state: &mut gate_state,
-                bodies: &scene.simulation,
+                bodies: scene.simulation(),
                 mode_variables: &variables,
             },
             script_init::MAX_INIT_WORK,
         )
         .map_err(invalid)?;
-        let gate_variables = &gate_script
+        let gate_variables = gate_script
             .snapshot()
             .expect("started gate script")
-            .variables;
+            .variables
+            .clone();
         if gate_state.team != Some(2) || gate_variables.get(&8571) != Some(&Value::Integer(1)) {
             return Err(invalid(
                 "Junkenstein gate script did not initialize its team and health",
@@ -265,30 +275,32 @@ impl SceneAssets {
         }
         let mut result_action = None;
         let mut screens_complete = false;
-        let mut startup = EncounterWorld {
-            gate,
-            anchors: &scene.junkenstein_anchors,
-            gate_variables,
-            bodies: &mut scene.simulation,
-            creator: None,
-            result_action: &mut result_action,
-            screens_complete: &mut screens_complete,
-            team: admitted_team,
-            difficulty: card.difficulty,
+        let encounter = {
+            let mut startup = EncounterWorld {
+                gate: &gate,
+                anchors: &anchors,
+                gate_variables: &gate_variables,
+                bodies: scene.simulation_mut(),
+                creator: None,
+                result_action: &mut result_action,
+                screens_complete: &mut screens_complete,
+                team: admitted_team,
+                difficulty: card.difficulty,
+            };
+            script_init::Component::start(
+                Arc::clone(&self.graphs),
+                crate::world::GAME_MODE_ENTITY,
+                variables,
+                vec![
+                    Root::new(1, shared),
+                    Root::new(ENCOUNTER_INSTANCE, encounter),
+                ],
+                0,
+                &mut startup,
+                script_init::MAX_INIT_WORK,
+            )
+            .map_err(invalid)?
         };
-        let encounter = script_init::Component::start(
-            Arc::clone(&self.graphs),
-            GAME_MODE_ENTITY,
-            variables,
-            vec![
-                Root::new(1, shared),
-                Root::new(ENCOUNTER_INSTANCE, encounter),
-            ],
-            0,
-            &mut startup,
-            script_init::MAX_INIT_WORK,
-        )
-        .map_err(invalid)?;
         let snapshot = encounter.snapshot().expect("newly started encounter");
         scene.mode_ui = junkenstein_presentation(&self.graphs, snapshot)?;
         if snapshot.variables.get(&6751) != Some(&Value::Asset(card.difficulty))
@@ -311,37 +323,38 @@ impl SceneAssets {
             .and_then(|node| asset_guid(&node.fields["m_DA4846A5"]["m_C6C61CB0"]))
             .filter(|&guid| guid == crate::junkenstein_voice::ENCOUNTER_VOICE_SET)
             .ok_or_else(|| invalid("Junkenstein narrator voice-set binding is unavailable"))?;
-        scene.simulation.set_mode_voice_set(voice_set);
-        scene.encounter = Some(JunkensteinEncounter {
-            voice_set,
-            graphs: Arc::clone(&self.graphs),
-            heroes: Arc::clone(&self.heroes),
-            npcs: match crate::npc_catalog::NpcCatalog::load(
-                self.collision
-                    .parent()
-                    .expect("runtime root")
-                    .join(crate::runtime::JUNKENSTEIN_NPCS),
-            ) {
-                Ok(catalog) => Some(Arc::new(catalog)),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-                Err(error) => return Err(error),
-            },
-            movers: Arc::clone(&self.movers),
-            mode: scene.map.mode_guid,
-            script: encounter,
-            codecs: self.codecs.clone(),
-            searches: SpawnSearches::default(),
-            gate_script,
-            gate_state,
-            team: admitted_team,
-            difficulty: card.difficulty,
-            ready_message,
-            ready_parameter,
-            first_tick: None,
-            ready_hero: None,
-            result_action,
-            screens_complete,
-        });
+        let npcs = match crate::npc_catalog::NpcCatalog::load(
+            self.collision
+                .parent()
+                .expect("runtime root")
+                .join(crate::runtime::JUNKENSTEIN_NPCS),
+        ) {
+            Ok(catalog) => Some(Arc::new(catalog)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        };
+        let mode = scene.map.mode_guid;
+        scene
+            .simulation_mut()
+            .register_junkenstein_encounter(EncounterRegistration {
+                voice_set,
+                graphs: Arc::clone(&self.graphs),
+                npcs,
+                heroes: Arc::clone(&self.heroes),
+                movers: Arc::clone(&self.movers),
+                mode,
+                script: encounter,
+                codecs: self.codecs.clone(),
+                gate_script,
+                gate_state,
+                team: admitted_team,
+                difficulty: card.difficulty,
+                ready_message,
+                ready_parameter,
+                result_action,
+                screens_complete,
+            })
+            .map_err(invalid)?;
         if Some(card) == JunkensteinCard::from_index(0x3c) {
             scene.owner_body_factory = self.prepare_owner_body(&scene, CASSIDY);
         }
@@ -417,8 +430,10 @@ impl SceneAssets {
                 .component(&PlayerStats::default(), map.mode_guid, None, None);
         let junkenstein_anchors = Arc::new(junkenstein_anchors);
         let mut simulation = RoomSimulation::new(bots).map_err(io::Error::other)?;
-        if junkenstein_gate.is_some() {
-            simulation.set_spawn_anchors(Arc::clone(&junkenstein_anchors));
+        if let Some(gate) = junkenstein_gate {
+            simulation
+                .register_junkenstein_gate(gate, Arc::clone(&junkenstein_anchors))
+                .map_err(io::Error::other)?;
         }
         let mut scene = PreparedScene {
             map,
@@ -428,9 +443,6 @@ impl SceneAssets {
             contacts,
             controller,
             mode_ui,
-            junkenstein_gate,
-            junkenstein_anchors,
-            encounter: None,
             junkenstein_validation: None,
             initial_board,
             simulation,
