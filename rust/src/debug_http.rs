@@ -337,6 +337,7 @@ mod tests {
                 rooms: Vec::new(),
                 truncated: false,
                 timing: None,
+                ai_policy: None,
                 faults: vec![crate::game_debug::RoomFault {
                     room: "00000000000000050000000000000008".into(),
                     stage: "finish_tick",

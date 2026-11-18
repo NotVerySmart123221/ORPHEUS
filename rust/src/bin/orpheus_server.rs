@@ -8,7 +8,7 @@ use orpheus::{
 const USAGE: &str = "Usage: orpheus_server --data-dir <directory> [--runtime <directory>]
        [--account <name>] [--lobby-port <port>] [--game-port <port>]
        [--stall-port <port>] [--rpc-port <port>] [--debug-port <port>]
-       [--junkenstein-validation <local-json>]
+       [--junkenstein-validation <local-json>] [--ai-script <lua-file>]
        orpheus_server --check-runtime [--runtime <directory>]
 
 The native 1.74 server listens on loopback. Use an authorized base runtime
@@ -16,6 +16,7 @@ directory or set ORPHEUS_RUNTIME_DIR. --check-runtime lists missing inputs
 without starting listeners. --debug-port enables the read-only inspector
 in a binary built with --features inspector (disabled by default).
 --junkenstein-validation loads explicit local Normal Cassidy acceptance settings.
+--ai-script enables an opt-in Lua patrol script override and 'reload' command.
 Press Enter in the terminal to stop.";
 
 fn main() -> ExitCode {
@@ -65,6 +66,9 @@ fn run() -> io::Result<()> {
             Some("--junkenstein-validation") => {
                 config.junkenstein_validation = Some(PathBuf::from(value));
             }
+            Some("--ai-script") => {
+                config.ai_script = Some(PathBuf::from(value));
+            }
             _ => return Err(usage_error("unknown option")),
         }
     }
@@ -86,6 +90,7 @@ fn run() -> io::Result<()> {
             "--data-dir is required when starting the server",
         ));
     }
+    let ai_script_configured = config.ai_script.is_some();
     let mut server = Server::start(config)?;
     println!(
         "ORPHEUS native lobby {} · game {} · Battle.net {} / {}",
@@ -97,8 +102,41 @@ fn run() -> io::Result<()> {
     if let Some(address) = server.debug_addr() {
         println!("Read-only inspector http://{address}/");
     }
-    println!("Press Enter to stop.");
-    io::stdin().read_line(&mut String::new())?;
+    if ai_script_configured {
+        let status = server.ai_policy_status()?;
+        println!(
+            "AI policy gen {} (abi v{}, sha256 {}). Type 'reload' + Enter to reload, or press Enter to stop.",
+            status.generation, status.abi_version, status.digest
+        );
+        loop {
+            let mut line = String::new();
+            if io::stdin().read_line(&mut line)? == 0 || line.trim().is_empty() {
+                break;
+            }
+            if line.trim() == "reload" {
+                match server.reload_ai_script() {
+                    Ok(report) => println!(
+                        "AI policy gen {} (abi v{}, sha256 {}, active rooms {}, changed {}).",
+                        report.generation,
+                        report.abi_version,
+                        report.digest,
+                        report.active_rooms,
+                        report.changed
+                    ),
+                    Err(error) => {
+                        eprintln!("orpheus_server: AI reload failed (rolled back): {error}");
+                    }
+                }
+            } else {
+                println!(
+                    "Unknown command. Type 'reload' + Enter to reload AI script, or press Enter to stop."
+                );
+            }
+        }
+    } else {
+        println!("Press Enter to stop.");
+        io::stdin().read_line(&mut String::new())?;
+    }
     server.stop()
 }
 

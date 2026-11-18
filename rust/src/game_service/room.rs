@@ -13,6 +13,7 @@ pub(super) struct RoomWorld {
     pub(super) scene: Box<PreparedScene>,
     pub(super) card: PlayerCard,
     pub(super) patrol: PatrolScript,
+    pub(super) patrol_generation: u64,
 }
 
 pub(super) struct Player {

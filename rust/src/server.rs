@@ -22,7 +22,7 @@ use crate::{
     catalog::ItemDb,
     collection::Collection,
     game_content::{GameMap, JUNKENSTEIN_MAP, MapCatalog},
-    game_service::GameService,
+    game_service::{AiPolicyStatus, AiReloadReport, GameService},
     jam_codec::Schemas,
     lobby_arcade::Arcade,
     lobby_celebrations::Celebrations,
@@ -57,6 +57,7 @@ pub struct ServerConfig {
     pub rpc_port: u16,
     pub debug_port: Option<u16>,
     pub junkenstein_validation: Option<PathBuf>,
+    pub ai_script: Option<PathBuf>,
 }
 
 impl ServerConfig {
@@ -71,6 +72,7 @@ impl ServerConfig {
             rpc_port: bnet_service::RPC_PORT,
             debug_port: None,
             junkenstein_validation: None,
+            ai_script: None,
         }
     }
 }
@@ -82,6 +84,7 @@ pub struct Server {
     lobby: Option<JoinHandle<io::Result<()>>>,
     bnet: BnetService,
     game: Option<Arc<GameService>>,
+    ai_script: Option<PathBuf>,
     #[cfg(feature = "inspector")]
     debug: Option<DebugHttp>,
 }
@@ -149,6 +152,16 @@ impl Server {
             game_schemas,
             config.debug_port.is_some(),
         )?);
+        if let Some(path) = &config.ai_script {
+            let report = game.reload_ai_script_file(path)?;
+            eprintln!(
+                "[ai] loaded {} (abi v{}, gen {}, sha256 {})",
+                path.display(),
+                report.abi_version,
+                report.generation,
+                report.digest
+            );
+        }
         let game_addr = game.local_addr();
         #[cfg(feature = "inspector")]
         let debug = if let Some(port) = config.debug_port {
@@ -205,6 +218,7 @@ impl Server {
             lobby: Some(lobby),
             bnet,
             game: Some(game),
+            ai_script: config.ai_script,
             #[cfg(feature = "inspector")]
             debug,
         })
@@ -232,6 +246,36 @@ impl Server {
         {
             None
         }
+    }
+
+    pub fn reload_ai_script(&self) -> io::Result<AiReloadReport> {
+        let Some(path) = &self.ai_script else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "no AI script path configured (pass --ai-script <lua-file> or call reload_ai_script_file)",
+            ));
+        };
+        self.reload_ai_script_file(path)
+    }
+
+    pub fn reload_ai_script_file(&self, path: &Path) -> io::Result<AiReloadReport> {
+        let Some(game) = &self.game else {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "game service is not running",
+            ));
+        };
+        game.reload_ai_script_file(path)
+    }
+
+    pub fn ai_policy_status(&self) -> io::Result<AiPolicyStatus> {
+        let Some(game) = &self.game else {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "game service is not running",
+            ));
+        };
+        game.ai_policy_status()
     }
 
     pub fn stop(&mut self) -> io::Result<()> {

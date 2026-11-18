@@ -6,6 +6,13 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-18
 
+#### Add safe-boundary Lua AI hot reload with pre-activation validation and rollback
+
+- Added opt-in safe-boundary Lua AI hot reload handled in `State::handle_request` between worker ticks (`GameService::reload_ai_script`, `GameService::reload_ai_script_file`, `GameService::ai_policy_status`, `ServerConfig::ai_script`, `Server::reload_ai_script`, and opt-in `--ai-script` / `'reload'` stdin command in `orpheus_server`) without altering the public wire protocol or weakening the `!Send` Lua sandbox (`debug_http.rs` remains read-only).
+- Added pre-activation compilation and validation (`AI_MAX_SOURCE_BYTES`, non-empty source check, `PatrolScript::smoke_check` on a disposable VM, `next_preloaded`, and fresh per-room VMs) before swapping any live room VM or `active_patrol_source`; syntax, ABI, missing `think`, init/`think` memory or instruction budget, I/O, or staging failures abort and roll back atomically without interrupting active rooms.
+- Recorded SHA-256 policy digests and monotonic reload generations (`AiReloadReport`, `AiPolicyStatus`, `RoomWorld::patrol_generation`, and read-only `game_debug::{Snapshot, Room}` metadata) for deterministic reproduction while keeping `RoomSimulation` player `BodyId` generations untouched so stale handles are never resurrected across reloads.
+- Added 5 unconditional unit tests plus 1 ignored Practice Range runtime test in `rust/src/game_service/tests.rs` covering active/future-room reload, invalid-script and partial-staging atomic rollback, stale `BodyId` non-resurrection across reload, and opt-in/file-reload behavior (#65, #93).
+
 #### Define bounded Lua AI `think()` ABI and migrate Practice Range patrol
 
 - Added a dedicated `!Send` vendored Lua 5.4 host (`rust/src/ai_script.rs`, `AI_ABI_VERSION = 2`) enforcing `StdLib::NONE`, `ChunkMode::Text`, empty `_ENV`, raw table reads, and named, documented caps (`AI_MEMORY_LIMIT_BYTES`, `AI_INSTRUCTION_HOOK_INTERVAL`, `AI_INIT_HOOK_BUDGET`, `AI_THINK_HOOK_BUDGET`, `AI_MAX_SNAPSHOT_TARGETS`, `AI_MAX_EVENTS_PER_TICK`, `AI_MAX_COMMANDS_PER_TICK`, `AI_MAX_WAIT_SECONDS`) that return deterministic `AiScriptError` values without panicking or hanging.

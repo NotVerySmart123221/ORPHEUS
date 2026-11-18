@@ -306,6 +306,7 @@ fn busy_peers_resume_in_round_robin_order_after_the_global_input_budget() {
                 scene: Box::new(scene),
                 card: PlayerCard::default(),
                 patrol: PatrolScript::load().unwrap(),
+                patrol_generation: 0,
             }),
         },
     );
@@ -570,4 +571,761 @@ fn junkenstein_worker_delivers_castle_gate_and_mode_frame() {
         }
     }
     server.stop().unwrap();
+}
+
+const POLICY_STAY: &str = r#"
+return {
+    abi = 2,
+    think = function(snapshot, events)
+        local event = events[1]
+        if event.kind == "think" then
+            return { { kind = "patrol_slot", slot = 0 } }
+        end
+        return { { kind = "wait", seconds = 3.0 } }
+    end,
+}
+"#;
+
+const POLICY_MOVE: &str = r#"
+return {
+    abi = 2,
+    think = function(snapshot, events)
+        local event = events[1]
+        if event.kind == "think" then
+            return { { kind = "patrol_slot", slot = 1 } }
+        end
+        return { { kind = "wait", seconds = 0.016 } }
+    end,
+}
+"#;
+
+#[test]
+fn hot_reload_updates_active_rooms_future_rooms_and_digest() {
+    use crate::{
+        game_bots::{BOT_ENTITY, Bot},
+        scene_assets::PreparedScene,
+    };
+    use sha2::{Digest, Sha256};
+
+    let schemas = Arc::new(fixture());
+    let mut state = State::new(schemas, PatrolScript::from_source(POLICY_STAY).unwrap());
+    let socket = UdpSocket::bind(local()).unwrap();
+    let room_a = [5, 8];
+    let room_b = [5, 9];
+
+    state
+        .open_match(
+            room_a,
+            GameMap::practice_range(),
+            player(),
+            Some(WorldStart {
+                scene: Box::new(PreparedScene::fixture_for_bots(vec![Bot::fixture_walker(
+                    [0.0, 0.0, 10.0],
+                )])),
+                card: PlayerCard::default(),
+            }),
+            Duration::ZERO,
+        )
+        .unwrap();
+
+    for _ in 0..187 {
+        state.tick(&socket, Duration::ZERO, 0).unwrap();
+    }
+    let pos_before = state.rooms[&room_a]
+        .world
+        .as_ref()
+        .unwrap()
+        .scene
+        .bots()
+        .unwrap()
+        .find(|bot| bot.entity == BOT_ENTITY)
+        .unwrap()
+        .position;
+    assert_eq!(pos_before, [0.0; 3]);
+
+    let report = state.reload_patrol(POLICY_MOVE).unwrap();
+    let expected_digest = format!("{:x}", Sha256::digest(POLICY_MOVE.as_bytes()));
+    assert_eq!(report.generation, 1);
+    assert_eq!(report.abi_version, crate::ai_script::AI_ABI_VERSION);
+    assert_eq!(report.digest, expected_digest);
+    assert_eq!(report.active_rooms, 1);
+    assert!(report.changed);
+    assert_eq!(state.active_patrol_source.as_ref(), POLICY_MOVE);
+    assert_eq!(
+        state.rooms[&room_a]
+            .world
+            .as_ref()
+            .unwrap()
+            .patrol_generation,
+        1
+    );
+
+    // Identical source is idempotent and does not increment generation.
+    let same = state.reload_patrol(POLICY_MOVE).unwrap();
+    assert_eq!(same.generation, 1);
+    assert!(!same.changed);
+
+    for _ in 0..5 {
+        state.tick(&socket, Duration::ZERO, 0).unwrap();
+    }
+    let pos_after = state.rooms[&room_a]
+        .world
+        .as_ref()
+        .unwrap()
+        .scene
+        .bots()
+        .unwrap()
+        .find(|bot| bot.entity == BOT_ENTITY)
+        .unwrap()
+        .position;
+    assert!(pos_after[2] > 0.0, "active room should use reloaded policy");
+
+    // Room B opens after preloaded_patrol was consumed by Room A; it must use active_patrol_source.
+    state
+        .open_match(
+            room_b,
+            GameMap::practice_range(),
+            player(),
+            Some(WorldStart {
+                scene: Box::new(PreparedScene::fixture_for_bots(vec![Bot::fixture_walker(
+                    [0.0, 0.0, 10.0],
+                )])),
+                card: PlayerCard::default(),
+            }),
+            Duration::ZERO,
+        )
+        .unwrap();
+    for _ in 0..5 {
+        state.tick(&socket, Duration::ZERO, 0).unwrap();
+    }
+    let pos_b = state.rooms[&room_b]
+        .world
+        .as_ref()
+        .unwrap()
+        .scene
+        .bots()
+        .unwrap()
+        .find(|bot| bot.entity == BOT_ENTITY)
+        .unwrap()
+        .position;
+    assert!(
+        pos_b[2] > 0.0,
+        "newly opened room should use active_patrol_source (0.016s wait)"
+    );
+    assert_eq!(
+        state.rooms[&room_b]
+            .world
+            .as_ref()
+            .unwrap()
+            .patrol_generation,
+        1
+    );
+
+    // End-to-end GameService channel check.
+    let mut service = GameService::bind(local(), Arc::new(fixture())).unwrap();
+    service
+        .open_match(MATCH, GameMap::practice_range(), player())
+        .unwrap();
+    let svc_report = service.reload_ai_script(POLICY_MOVE).unwrap();
+    assert_eq!(svc_report.generation, 1);
+    assert_eq!(svc_report.digest, expected_digest);
+    assert_eq!(svc_report.active_rooms, 0);
+    assert!(svc_report.changed);
+    let status = service.ai_policy_status().unwrap();
+    assert_eq!(status.generation, 1);
+    assert_eq!(status.digest, expected_digest);
+    service.stop().unwrap();
+}
+
+#[test]
+fn hot_reload_rejects_invalid_scripts_and_rolls_back_atomically() {
+    use crate::{
+        ai_script::{AI_MAX_SOURCE_BYTES, AiExecutionPhase, AiScriptError},
+        game_bots::{BOT_ENTITY, Bot},
+        patrol_script::DEFAULT_SOURCE,
+        scene_assets::PreparedScene,
+    };
+
+    let schemas = Arc::new(fixture());
+    let default_script = PatrolScript::load().unwrap();
+    let digest_0 = default_script.digest();
+    let digest_0_hex = default_script.digest_hex();
+    let mut state = State::new(schemas, default_script);
+    let socket = UdpSocket::bind(local()).unwrap();
+    let room_a = [5, 8];
+
+    state
+        .open_match(
+            room_a,
+            GameMap::practice_range(),
+            player(),
+            Some(WorldStart {
+                scene: Box::new(PreparedScene::fixture_for_bots(vec![Bot::fixture_walker(
+                    [0.0, 0.0, 10.0],
+                )])),
+                card: PlayerCard::default(),
+            }),
+            Duration::ZERO,
+        )
+        .unwrap();
+    for _ in 0..10 {
+        state.tick(&socket, Duration::ZERO, 0).unwrap();
+    }
+
+    type InvalidCase<'a> = (&'a str, &'a str, fn(&AiScriptError) -> bool);
+    let oversized = format!("-- {}", "a".repeat(AI_MAX_SOURCE_BYTES));
+    let invalid_cases: Vec<InvalidCase<'_>> = vec![
+        ("syntax", "return {", |err| {
+            matches!(err, AiScriptError::Syntax(_))
+        }),
+        (
+            "abi_mismatch",
+            "return { abi = 1, think = function() return {} end }",
+            |err| matches!(err, AiScriptError::UnsupportedAbi { found: 1, .. }),
+        ),
+        ("missing_think", "return { abi = 2 }", |err| {
+            matches!(err, AiScriptError::InvalidAbi(_))
+        }),
+        (
+            "init_oom",
+            r#"local s = "0123456789abcdef"; for i = 1, 16 do s = s .. s end; return { abi = 2, think = function() return {} end }"#,
+            |err| matches!(err, AiScriptError::MemoryLimitExceeded),
+        ),
+        ("init_budget", "while true do end", |err| {
+            matches!(
+                err,
+                AiScriptError::InstructionBudgetExceeded {
+                    phase: AiExecutionPhase::Init
+                }
+            )
+        }),
+        (
+            "think_loop",
+            "return { abi = 2, think = function() while true do end end }",
+            |err| {
+                matches!(
+                    err,
+                    AiScriptError::InstructionBudgetExceeded {
+                        phase: AiExecutionPhase::Think
+                    }
+                )
+            },
+        ),
+        (
+            "think_oom",
+            r#"return { abi = 2, think = function() local s = "0123456789abcdef"; for i = 1, 16 do s = s .. s end; return {} end }"#,
+            |err| matches!(err, AiScriptError::MemoryLimitExceeded),
+        ),
+        ("empty", "", |err| {
+            matches!(err, AiScriptError::InvalidAbi(_))
+        }),
+        ("whitespace", "   \n\t  ", |err| {
+            matches!(err, AiScriptError::InvalidAbi(_))
+        }),
+        ("oversized", oversized.as_str(), |err| {
+            matches!(err, AiScriptError::SourceTooLarge { .. })
+        }),
+    ];
+
+    for (label, candidate, check) in invalid_cases {
+        let err = state.reload_patrol(candidate).unwrap_err();
+        let script_err = err
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<AiScriptError>())
+            .unwrap_or_else(|| panic!("{label}: expected AiScriptError source, got {err}"));
+        assert!(
+            check(script_err),
+            "{label}: unexpected error {script_err:?}"
+        );
+        assert_eq!(state.patrol_reload_generation, 0, "{label}");
+        assert_eq!(state.patrol_policy_digest, digest_0, "{label}");
+        assert_eq!(
+            state.active_patrol_source.as_ref(),
+            DEFAULT_SOURCE,
+            "{label}"
+        );
+        assert!(state.recent_faults.is_empty(), "{label}");
+        assert!(state.rooms.contains_key(&room_a), "{label}");
+        assert_eq!(
+            state.rooms[&room_a]
+                .world
+                .as_ref()
+                .unwrap()
+                .patrol_generation,
+            0,
+            "{label}"
+        );
+    }
+
+    for _ in 0..210 {
+        state.tick(&socket, Duration::ZERO, 0).unwrap();
+    }
+    let bot = state.rooms[&room_a]
+        .world
+        .as_ref()
+        .unwrap()
+        .scene
+        .bots()
+        .unwrap()
+        .find(|bot| bot.entity == BOT_ENTITY)
+        .unwrap();
+    assert!(bot.patrol_active());
+    assert!(
+        bot.position[2] > 0.0,
+        "room should continue patrolling with rolled-back original script"
+    );
+
+    // Worker stays alive and handles subsequent operations after rejecting invalid reloads.
+    let mut service = GameService::bind(local(), Arc::new(fixture())).unwrap();
+    assert!(service.reload_ai_script("return {").is_err());
+    assert!(service.reload_ai_script("").is_err());
+    assert!(service.reload_ai_script(oversized).is_err());
+    let status = service.ai_policy_status().unwrap();
+    assert_eq!(status.generation, 0);
+    assert_eq!(status.digest, digest_0_hex);
+    service
+        .open_match(MATCH, GameMap::practice_range(), player())
+        .unwrap();
+    assert_eq!(service.reload_ai_script(POLICY_MOVE).unwrap().generation, 1);
+    service.stop().unwrap();
+}
+
+#[test]
+fn hot_reload_partial_staging_failure_leaves_all_rooms_and_digest_unchanged() {
+    use crate::{
+        ai_script::AiScriptError,
+        game_bots::{BOT_ENTITY, Bot},
+        scene_assets::PreparedScene,
+    };
+
+    let schemas = Arc::new(fixture());
+    let mut state = State::new(schemas, PatrolScript::load().unwrap());
+    let initial = state.reload_patrol(POLICY_STAY).unwrap();
+    assert_eq!(initial.generation, 1);
+    let stay_digest = state.patrol_policy_digest;
+    let socket = UdpSocket::bind(local()).unwrap();
+    let room_a = [5, 8];
+    let room_b = [5, 9];
+    let room_c = [5, 10];
+
+    for id in [room_a, room_b] {
+        state
+            .open_match(
+                id,
+                GameMap::practice_range(),
+                player(),
+                Some(WorldStart {
+                    scene: Box::new(PreparedScene::fixture_for_bots(vec![Bot::fixture_walker(
+                        [0.0, 0.0, 10.0],
+                    )])),
+                    card: PlayerCard::default(),
+                }),
+                Duration::ZERO,
+            )
+            .unwrap();
+    }
+    for _ in 0..187 {
+        state.tick(&socket, Duration::ZERO, 0).unwrap();
+    }
+
+    // Fail on stage index 2 (Room B) after index 0 (next_preloaded) and index 1 (Room A) succeeded.
+    let err = state
+        .reload_patrol_with(POLICY_MOVE, |stage_idx, candidate| {
+            if stage_idx == 2 {
+                Err(AiScriptError::MemoryLimitExceeded)
+            } else {
+                PatrolScript::from_source_checked(candidate)
+            }
+        })
+        .unwrap_err();
+    let script_err = err
+        .get_ref()
+        .and_then(|source| source.downcast_ref::<AiScriptError>())
+        .unwrap();
+    assert_eq!(*script_err, AiScriptError::MemoryLimitExceeded);
+    assert_eq!(state.patrol_reload_generation, 1);
+    assert_eq!(state.patrol_policy_digest, stay_digest);
+    assert_eq!(state.active_patrol_source.as_ref(), POLICY_STAY);
+
+    // Tick both rooms past the 3s spawn wait: neither should adopt POLICY_MOVE (slot 1).
+    for _ in 0..33 {
+        state.tick(&socket, Duration::ZERO, 0).unwrap();
+    }
+    for id in [room_a, room_b] {
+        let world = state.rooms[&id].world.as_ref().unwrap();
+        assert_eq!(world.patrol_generation, 1);
+        let bot = world
+            .scene
+            .bots()
+            .unwrap()
+            .find(|bot| bot.entity == BOT_ENTITY)
+            .unwrap();
+        assert!(bot.patrol_active());
+        assert_eq!(bot.position, [0.0; 3]);
+    }
+
+    // Newly opened Room C after aborted reload must also use POLICY_STAY, not POLICY_MOVE.
+    state
+        .open_match(
+            room_c,
+            GameMap::practice_range(),
+            player(),
+            Some(WorldStart {
+                scene: Box::new(PreparedScene::fixture_for_bots(vec![Bot::fixture_walker(
+                    [0.0, 0.0, 10.0],
+                )])),
+                card: PlayerCard::default(),
+            }),
+            Duration::ZERO,
+        )
+        .unwrap();
+    for _ in 0..5 {
+        state.tick(&socket, Duration::ZERO, 0).unwrap();
+    }
+    let bot_c = state.rooms[&room_c]
+        .world
+        .as_ref()
+        .unwrap()
+        .scene
+        .bots()
+        .unwrap()
+        .find(|bot| bot.entity == BOT_ENTITY)
+        .unwrap();
+    assert_eq!(bot_c.position, [0.0; 3]);
+    assert_eq!(
+        state.rooms[&room_c]
+            .world
+            .as_ref()
+            .unwrap()
+            .patrol_generation,
+        1
+    );
+}
+
+#[test]
+fn hot_reload_never_resurrects_stale_body_id_handles() {
+    use crate::{
+        ai_script::{
+            AiActorSnapshot, AiEvent, AiScript, AiScriptError, AiSnapshot, AiTargetSnapshot,
+            validate_commands_against_simulation,
+        },
+        contact_world::ContactWorld,
+        game_bots::Bot,
+        game_combat::PlayerBodyState,
+        game_heroes::SOLDIER,
+        game_replication::BodyId,
+        mover::Mover,
+        mover_settings::MoverSettings,
+        scene_assets::PreparedScene,
+    };
+
+    const TARGET_SELECTOR_LUA: &str = r#"
+    return {
+        abi = 2,
+        think = function(snapshot, events)
+            if #snapshot.targets > 0 then
+                local target = snapshot.targets[1]
+                return {
+                    {
+                        kind = "select_target",
+                        role = "enemy",
+                        entity = target.entity,
+                        generation = target.generation,
+                    },
+                }
+            end
+            local event = events[1]
+            if event.kind == "think" then
+                return {
+                    {
+                        kind = "patrol_slot",
+                        slot = (snapshot.actor.patrol.route_index + 1) % snapshot.actor.patrol.route_count,
+                    },
+                }
+            end
+            return { { kind = "wait", seconds = 3.0 } }
+        end,
+    }
+    "#;
+
+    let schemas = Arc::new(fixture());
+    let mut state = State::new(schemas, PatrolScript::load().unwrap());
+    let room_id = [5, 8];
+    state
+        .open_match(
+            room_id,
+            GameMap::practice_range(),
+            player(),
+            Some(WorldStart {
+                scene: Box::new(PreparedScene::fixture_for_bots(vec![Bot::fixture_walker(
+                    [0.0, 0.0, 10.0],
+                )])),
+                card: PlayerCard::default(),
+            }),
+            Duration::ZERO,
+        )
+        .unwrap();
+
+    let contact_world = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+    let owner = 0xa000_0100;
+    let wire = owner | 1;
+    let make_state = |id: BodyId, pos: [f64; 3]| {
+        let mover = Mover::new(
+            MoverSettings::default(),
+            Arc::clone(&contact_world),
+            pos,
+            0,
+            0x08,
+        )
+        .unwrap();
+        PlayerBodyState::new(id, owner, 0, 1, SOLDIER, mover, None, 100, None)
+    };
+
+    let (id1, id2) = {
+        let sim = state
+            .rooms
+            .get_mut(&room_id)
+            .unwrap()
+            .world
+            .as_mut()
+            .unwrap()
+            .scene
+            .simulation_mut();
+        let gen1 = sim.next_player_generation(owner, 0).unwrap();
+        let id1 = BodyId {
+            entity: wire,
+            generation: gen1,
+        };
+        sim.spawn_player_body(make_state(id1, [0.0; 3])).unwrap();
+
+        let gen2 = sim.next_player_generation(owner, 0).unwrap();
+        let id2 = BodyId {
+            entity: wire,
+            generation: gen2,
+        };
+        sim.spawn_player_body(make_state(id2, [5.0, 0.0, 0.0]))
+            .unwrap();
+        (id1, id2)
+    };
+
+    let report = state.reload_patrol(TARGET_SELECTOR_LUA).unwrap();
+    assert_eq!(report.generation, 1);
+
+    let sim = state
+        .rooms
+        .get_mut(&room_id)
+        .unwrap()
+        .world
+        .as_mut()
+        .unwrap()
+        .scene
+        .simulation_mut();
+    assert!(!sim.player_body_generation_current(id1));
+    assert!(sim.player_body(id1).is_none());
+    assert!(sim.player_body_generation_current(id2));
+    assert!(sim.player_body(id2).is_some());
+
+    let script = AiScript::from_source("=target_selector.lua", TARGET_SELECTOR_LUA).unwrap();
+    let run_select = |body: BodyId| {
+        let snapshot = AiSnapshot {
+            tick: FIRST_TICK + 10,
+            dt_secs: crate::game_clock::TICK_PERIOD.as_secs_f64(),
+            actor: AiActorSnapshot::patrol_fixture(0, 4),
+            targets: vec![AiTargetSnapshot {
+                body: Some(body),
+                entity: body.entity,
+                team: 1,
+                alive: true,
+                health: 200.0,
+                max_health: 200.0,
+                distance: 5.0,
+                favored: false,
+                visible: true,
+            }],
+        };
+        let commands = script
+            .think(
+                &snapshot,
+                &[AiEvent::Think {
+                    tick: FIRST_TICK + 10,
+                }],
+            )
+            .unwrap();
+        validate_commands_against_simulation(&commands, sim)
+    };
+
+    assert_eq!(
+        run_select(id1).unwrap_err(),
+        AiScriptError::StaleBodyHandle(id1)
+    );
+    let zero_gen = BodyId {
+        entity: wire,
+        generation: 0,
+    };
+    assert_eq!(
+        run_select(zero_gen).unwrap_err(),
+        AiScriptError::StaleBodyHandle(zero_gen)
+    );
+    let unknown = BodyId {
+        entity: 0xDEAD_BEEF,
+        generation: 1,
+    };
+    assert_eq!(
+        run_select(unknown).unwrap_err(),
+        AiScriptError::UnknownTargetHandle(unknown)
+    );
+    assert!(run_select(id2).is_ok());
+
+    // Re-spawning with retired id1 must still be rejected after reload.
+    assert!(sim.spawn_player_body(make_state(id1, [0.0; 3])).is_err());
+}
+
+#[test]
+fn hot_reload_file_rejects_missing_or_invalid_file_and_server_config_defaults_opt_out() {
+    use crate::{ai_script::AI_MAX_SOURCE_BYTES, server::ServerConfig};
+    use sha2::{Digest, Sha256};
+
+    let config = ServerConfig::new(std::path::PathBuf::new(), std::path::PathBuf::new());
+    assert!(config.ai_script.is_none());
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut service = GameService::bind(local(), Arc::new(fixture())).unwrap();
+    service
+        .open_match(MATCH, GameMap::practice_range(), player())
+        .unwrap();
+
+    let missing = dir.path().join("missing.lua");
+    let err = service.reload_ai_script_file(&missing).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    assert_eq!(service.ai_policy_status().unwrap().generation, 0);
+
+    let script_path = dir.path().join("patrol.lua");
+    std::fs::write(&script_path, POLICY_MOVE).unwrap();
+    let report = service.reload_ai_script_file(&script_path).unwrap();
+    assert_eq!(report.generation, 1);
+    assert_eq!(
+        report.digest,
+        format!("{:x}", Sha256::digest(POLICY_MOVE.as_bytes()))
+    );
+
+    // Invalid file content (ABI mismatch) and oversized file (> 64 KiB) roll back cleanly.
+    std::fs::write(
+        &script_path,
+        "return { abi = 1, think = function() return {} end }",
+    )
+    .unwrap();
+    assert!(service.reload_ai_script_file(&script_path).is_err());
+    assert_eq!(service.ai_policy_status().unwrap().generation, 1);
+
+    let oversized_path = dir.path().join("oversized.lua");
+    std::fs::write(&oversized_path, "a".repeat(AI_MAX_SOURCE_BYTES + 1)).unwrap();
+    assert!(service.reload_ai_script_file(&oversized_path).is_err());
+    assert_eq!(service.ai_policy_status().unwrap().generation, 1);
+
+    let reset = service
+        .reload_ai_script(crate::patrol_script::DEFAULT_SOURCE)
+        .unwrap();
+    assert_eq!(reset.generation, 2);
+    assert!(reset.changed);
+    service.stop().unwrap();
+}
+
+#[test]
+#[ignore = "requires an authorized base 104319 Practice Range runtime"]
+fn prepared_practice_rooms_hot_reload_and_roll_back_without_interrupting_patrol() {
+    use crate::{
+        game_bots::BOT_ENTITY, game_heroes::SOLDIER, scene_assets::SceneAssets,
+        script_player::fixture_hitscan_factory,
+    };
+    use benchmark::{Driver, PeerCounts};
+
+    let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let schemas = Arc::new(Schemas::load(runtime.join("data/game_schemas_174.json")).unwrap());
+    let assets = SceneAssets::load(runtime).unwrap();
+    let factory = Arc::new(fixture_hitscan_factory(0.125));
+    let prepare = || {
+        let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
+        let [x, y, z] = scene.map().spawn_point(0, 0).unwrap().0;
+        let (bots, _) = scene.bot_simulation();
+        bots.body_mut(BOT_ENTITY + 1).unwrap().position = [x - 4.0, y, z];
+        let factory = Arc::clone(&factory);
+        scene.owner_body_factory = Some(Arc::new(move |hero, spawn| {
+            if hero.guid == SOLDIER {
+                Ok(Some(Box::new(factory.start(spawn)?)))
+            } else {
+                Ok(None)
+            }
+        }));
+        scene
+    };
+
+    let mut service = GameService::bind(local(), Arc::clone(&schemas)).unwrap();
+    let first_id = [5, 8];
+    let first_ticket = service
+        .open_prepared_practice(
+            first_id,
+            prepare(),
+            player().pop().unwrap(),
+            PlayerCard::default(),
+        )
+        .unwrap();
+    let mut first_driver = Driver::join(Client::new(service.local_addr(), &first_ticket), &schemas);
+    for _ in 0..4 {
+        first_driver.step(&schemas, None);
+    }
+
+    let fast_patrol = r#"
+    return {
+        abi = 2,
+        think = function(snapshot, events)
+            local patrol = snapshot.actor.patrol
+            local event = events[1]
+            if event.kind == "spawn" or event.kind == "release" then
+                return { { kind = "wait", seconds = 0.25 } }
+            elseif event.kind == "think" then
+                return { { kind = "patrol_slot", slot = (patrol.route_index + 1) % patrol.route_count } }
+            end
+            return {}
+        end,
+    }
+    "#;
+    let reloaded = service.reload_ai_script(fast_patrol).unwrap();
+    assert_eq!(reloaded.generation, 1);
+    assert_eq!(reloaded.active_rooms, 1);
+    assert!(reloaded.changed);
+
+    // Invalid reload (think loop) must roll back without touching Room 1.
+    assert!(
+        service
+            .reload_ai_script("return { abi = 2, think = function() while true do end end }")
+            .is_err()
+    );
+    assert_eq!(service.ai_policy_status().unwrap().generation, 1);
+
+    let second_id = [5, 9];
+    let second_ticket = service
+        .open_prepared_practice(
+            second_id,
+            prepare(),
+            player().pop().unwrap(),
+            PlayerCard::default(),
+        )
+        .unwrap();
+    let mut second_driver =
+        Driver::join(Client::new(service.local_addr(), &second_ticket), &schemas);
+
+    let mut first_counts = PeerCounts::default();
+    let mut second_counts = PeerCounts::default();
+    for _ in 0..20 {
+        first_driver.step(&schemas, Some(&mut first_counts));
+        second_driver.step(&schemas, Some(&mut second_counts));
+    }
+    assert!(first_counts.report()["world_packets"].as_u64().unwrap() > 0);
+    assert!(second_counts.report()["world_packets"].as_u64().unwrap() > 0);
+
+    let snap = service.debug_snapshot().unwrap();
+    assert_eq!(snap.rooms.len(), 2);
+    assert_eq!(snap.ai_policy.as_ref().unwrap().generation, 1);
+    assert!(snap.rooms.iter().all(|room| room.ai_generation == Some(1)));
+    service.stop().unwrap();
 }

@@ -5,8 +5,9 @@
 
 use std::{
     collections::{HashMap, VecDeque},
-    io,
+    fs, io,
     net::SocketAddr,
+    path::Path,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -85,6 +86,23 @@ pub struct MatchPlayer {
     pub ranked: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AiReloadReport {
+    pub generation: u64,
+    pub abi_version: u32,
+    pub digest: String,
+    pub active_rooms: usize,
+    pub changed: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AiPolicyStatus {
+    pub generation: u64,
+    pub abi_version: u32,
+    pub digest: String,
+    pub active_rooms: usize,
+}
+
 pub struct GameService {
     address: SocketAddr,
     requests: mpsc::SyncSender<Request>,
@@ -117,6 +135,13 @@ enum Request {
         hero: u64,
         skin: SkinTheme,
         reply: mpsc::SyncSender<()>,
+    },
+    ReloadAiScript {
+        source: String,
+        reply: mpsc::SyncSender<io::Result<AiReloadReport>>,
+    },
+    AiPolicyStatus {
+        reply: mpsc::SyncSender<AiPolicyStatus>,
     },
     #[cfg(any(test, feature = "inspector"))]
     Debug {
@@ -311,6 +336,31 @@ impl GameService {
             skin,
             reply,
         })
+    }
+
+    pub fn reload_ai_script(&self, source: impl Into<String>) -> io::Result<AiReloadReport> {
+        let source = source.into();
+        crate::ai_script::validate_ai_source_bounds(&source).map_err(io::Error::from)?;
+        self.request(|reply| Request::ReloadAiScript { source, reply })?
+    }
+
+    pub fn reload_ai_script_file(&self, path: &Path) -> io::Result<AiReloadReport> {
+        let metadata = fs::metadata(path)?;
+        let max_bytes = crate::ai_script::AI_MAX_SOURCE_BYTES;
+        if metadata.len() > max_bytes as u64 {
+            let bytes = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
+            return Err(crate::ai_script::AiScriptError::SourceTooLarge {
+                bytes,
+                max: max_bytes,
+            }
+            .into());
+        }
+        let source = fs::read_to_string(path)?;
+        self.reload_ai_script(source)
+    }
+
+    pub fn ai_policy_status(&self) -> io::Result<AiPolicyStatus> {
+        self.request(|reply| Request::AiPolicyStatus { reply })
     }
 
     fn seat(&self, handoff: &Handoff, release: bool) -> io::Result<bool> {

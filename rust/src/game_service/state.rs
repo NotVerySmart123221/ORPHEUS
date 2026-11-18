@@ -1,13 +1,17 @@
 //! Shared routing and scheduling. All mutable gameplay belongs to a room.
 
 use super::*;
-use crate::game_egress::SendError;
+use crate::{ai_script::AiScriptError, game_egress::SendError, patrol_script};
+use sha2::{Digest, Sha256};
 
 const MAX_RECENT_FAULTS: usize = 64;
 
 pub(super) struct State {
     pub(super) schemas: Arc<Schemas>,
     pub(super) preloaded_patrol: Option<PatrolScript>,
+    pub(super) active_patrol_source: Arc<str>,
+    pub(super) patrol_policy_digest: [u8; 32],
+    pub(super) patrol_reload_generation: u64,
     pub(super) clock: GameClock,
     pub(super) timing: Option<WorkerTiming>,
     pub(super) links: GameConnections,
@@ -21,9 +25,13 @@ pub(super) struct State {
 
 impl State {
     pub(super) fn new(schemas: Arc<Schemas>, patrol: PatrolScript) -> Self {
+        let patrol_policy_digest = patrol.digest();
         Self {
             schemas,
             preloaded_patrol: Some(patrol),
+            active_patrol_source: Arc::from(patrol_script::DEFAULT_SOURCE),
+            patrol_policy_digest,
+            patrol_reload_generation: 0,
             clock: GameClock::default(),
             timing: None,
             links: GameConnections::default(),
@@ -77,6 +85,8 @@ impl State {
             injection: None,
         };
         let preloaded = world.as_ref().and_then(|_| self.preloaded_patrol.take());
+        let active_source = Arc::clone(&self.active_patrol_source);
+        let patrol_generation = self.patrol_reload_generation;
         let schemas = Arc::clone(&self.schemas);
         let prepared = guard_room(&mut room, RoomStage::Admission, |room| {
             let initial = room.message(0, true)?;
@@ -88,12 +98,13 @@ impl State {
             if let Some(WorldStart { scene, card }) = world {
                 let patrol = match preloaded {
                     Some(patrol) => patrol,
-                    None => PatrolScript::load()?,
+                    None => PatrolScript::from_source(&active_source)?,
                 };
                 room.world = Some(RoomWorld {
                     scene,
                     card,
                     patrol,
+                    patrol_generation,
                 });
             }
             Ok(())
@@ -365,6 +376,13 @@ impl State {
                 }
                 let _ = reply.send(());
             }
+            Request::ReloadAiScript { source, reply } => {
+                let result = self.reload_patrol(&source);
+                let _ = reply.send(result);
+            }
+            Request::AiPolicyStatus { reply } => {
+                let _ = reply.send(self.ai_policy_status());
+            }
             #[cfg(any(test, feature = "inspector"))]
             Request::Debug { reply } => {
                 let result = self.debug_snapshot();
@@ -427,6 +445,7 @@ impl State {
                         name: room.map.name.clone(),
                         actors,
                         encounter: world.scene.encounter_debug(),
+                        ai_generation: Some(world.patrol_generation),
                     },
                     truncated,
                 )))
@@ -452,7 +471,93 @@ impl State {
             rooms: rooms.into_values().collect(),
             truncated,
             timing: self.timing.clone(),
+            ai_policy: Some(game_debug::AiPolicy {
+                generation: self.patrol_reload_generation,
+                abi_version: crate::ai_script::AI_ABI_VERSION,
+                digest: patrol_script::format_digest(&self.patrol_policy_digest),
+            }),
             faults,
+        })
+    }
+
+    pub(super) fn ai_policy_status(&self) -> AiPolicyStatus {
+        let active_rooms = self
+            .rooms
+            .values()
+            .filter(|room| room.world.is_some())
+            .count();
+        AiPolicyStatus {
+            generation: self.patrol_reload_generation,
+            abi_version: crate::ai_script::AI_ABI_VERSION,
+            digest: patrol_script::format_digest(&self.patrol_policy_digest),
+            active_rooms,
+        }
+    }
+
+    pub(super) fn reload_patrol(&mut self, source: &str) -> io::Result<AiReloadReport> {
+        self.reload_patrol_with(source, |_, candidate| {
+            PatrolScript::from_source_checked(candidate)
+        })
+    }
+
+    pub(super) fn reload_patrol_with(
+        &mut self,
+        source: &str,
+        mut compile: impl FnMut(usize, &str) -> Result<PatrolScript, AiScriptError>,
+    ) -> io::Result<AiReloadReport> {
+        // Phase 1: pre-flight source checks, digest calculation, and idempotency.
+        crate::ai_script::validate_ai_source_bounds(source).map_err(io::Error::from)?;
+        let digest: [u8; 32] = Sha256::digest(source.as_bytes()).into();
+        let mut active_ids: Vec<MatchId> = self
+            .rooms
+            .iter()
+            .filter_map(|(&id, room)| room.world.as_ref().map(|_| id))
+            .collect();
+        active_ids.sort_unstable();
+        if digest == self.patrol_policy_digest {
+            return Ok(AiReloadReport {
+                generation: self.patrol_reload_generation,
+                abi_version: crate::ai_script::AI_ABI_VERSION,
+                digest: patrol_script::format_digest(&digest),
+                active_rooms: active_ids.len(),
+                changed: false,
+            });
+        }
+
+        // Phase 2: disposable VM smoke validation (keeps staged VMs at initial Lua state).
+        let smoke = PatrolScript::from_source_checked(source).map_err(io::Error::from)?;
+        smoke.smoke_check().map_err(io::Error::from)?;
+        drop(smoke);
+
+        // Phase 3: stage preloaded + fresh per-room VMs before touching any live state.
+        let next_preloaded = compile(0, source).map_err(io::Error::from)?;
+        let mut staged = Vec::with_capacity(active_ids.len());
+        for (offset, &id) in active_ids.iter().enumerate() {
+            let script = compile(offset + 1, source).map_err(io::Error::from)?;
+            staged.push((id, script));
+        }
+
+        // Phase 4: infallible atomic swap.
+        let active_source: Arc<str> = Arc::from(source);
+        let next_generation = self.patrol_reload_generation + 1;
+        self.active_patrol_source = active_source;
+        self.preloaded_patrol = Some(next_preloaded);
+        self.patrol_policy_digest = digest;
+        self.patrol_reload_generation = next_generation;
+        let mut swapped = 0usize;
+        for (id, script) in staged {
+            if let Some(world) = self.rooms.get_mut(&id).and_then(|room| room.world.as_mut()) {
+                world.patrol = script;
+                world.patrol_generation = next_generation;
+                swapped += 1;
+            }
+        }
+        Ok(AiReloadReport {
+            generation: next_generation,
+            abi_version: crate::ai_script::AI_ABI_VERSION,
+            digest: patrol_script::format_digest(&digest),
+            active_rooms: swapped,
+            changed: true,
         })
     }
 
