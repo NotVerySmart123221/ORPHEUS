@@ -44,7 +44,6 @@ Recent refactors separated portable StateScript execution and broke up server mo
 - **`game_service/`** (`room.rs`, `state.rs`, `tests/isolation.rs`): peer routing, input turn budgets, and room panic/fault retirement.
 
 Remaining boundary cleanups:
-- **Large module splits ([#60](https://github.com/leafall903/ORPHEUS/issues/60)):** split `script_enemy.rs`, `script_expr.rs`, `game_replication.rs`, `script_snapshot_wire.rs`, `script_player.rs`, and `game_service.rs`.
 - **Cross-cutting adapters:** separate shared ticket types in `match_handoff` from lobby messages and move remaining host wire adapters out of the core server crate.
 
 ---
@@ -53,7 +52,7 @@ Remaining boundary cleanups:
 
 | Current Gap | Impact | Tracked Issue |
 | --- | --- | --- |
-| Player bodies (`PlayerBodyState`), Junkenstein gate/encounter state (`GateComponent`, `EncounterComponent`), and Practice Range patrol (`AI_ABI_VERSION = 2` in `rust/src/ai_script.rs`) now live under `RoomSimulation` ECS and the bounded Lua host. | Remaining `#65` follow-up adds safe-boundary hot reload with pre-activation validation and rollback. | [#65](https://github.com/leafall903/ORPHEUS/issues/65) |
+| Player bodies (`PlayerBodyState`), Junkenstein gate/encounter state (`GateComponent`, `EncounterComponent`), Practice Range patrol (`AI_ABI_VERSION = 2` in `rust/src/ai_script.rs`), and safe-boundary Lua hot reload with rollback now live under `RoomSimulation` ECS and the bounded Lua host. | Closed in [#65](https://github.com/leafall903/ORPHEUS/issues/65) and [#120](https://github.com/leafall903/ORPHEUS/pull/120). | [#65](https://github.com/leafall903/ORPHEUS/issues/65) |
 | Navigation relies on Practice Range Lua hints (`patrol.lua`) and Junkenstein searches rather than a general NavMesh. | Maps without cached nav data (e.g. King's Row) lack general AI pathfinding. | [#63](https://github.com/leafall903/ORPHEUS/issues/63) |
 | Combat wall queries use legacy `CollisionScene` while movement uses `ContactWorld`. | Discrepancies between contact bounds and wall rays must be diagnosed via inspector before changing masks. | [#62](https://github.com/leafall903/ORPHEUS/issues/62) |
 
@@ -77,7 +76,7 @@ Remaining boundary cleanups:
 - Each room creates an isolated `!Send` vendored Lua 5.4 VM (`mlua 0.11.6`, `StdLib::NONE`, `ChunkMode::Text`, empty `_ENV` table) on the single-threaded `orpheus-game` worker with filesystem, sockets, dynamic libraries, and wall-clock time disabled.
 - `rust/src/ai_script.rs` defines the versioned `think(snapshot, events) -> commands` bridge (`AI_ABI_VERSION = 2`) with named, documented caps (`AI_MEMORY_LIMIT_BYTES` = 256 KiB, `AI_INSTRUCTION_HOOK_INTERVAL` = 64, `AI_INIT_HOOK_BUDGET` = 32 hooks, `AI_THINK_HOOK_BUDGET` = 64 hooks, `AI_MAX_SNAPSHOT_TARGETS` = 32, `AI_MAX_EVENTS_PER_TICK` = 16, `AI_MAX_COMMANDS_PER_TICK` = 8, `AI_MAX_WAIT_SECONDS` = 60.0) and raw-table validation returning deterministic `AiScriptError` values without panicking or hanging.
 - `validate_player_body_handle` / `query_body_handle` reject stale, zero-generation, and unknown `BodyId` handles against `RoomSimulation`'s Stage 1 generation model without mutating ECS state, and Lua faults disable only the failing bot or faulted room while sibling rooms keep running.
-- `rust/src/patrol_script.rs` adapts `rust/scripts/patrol.lua` onto `AiScript` (`DEFAULT_SOURCE`, `from_source_checked`) to drive Practice Range bot patrol decisions without rewriting authored StateScript graphs; future AI policies can use `AiScript` directly, and safe-boundary hot reload follows in Stage 4 ([#65](https://github.com/leafall903/ORPHEUS/issues/65)).
+- `rust/src/patrol_script.rs` adapts `rust/scripts/patrol.lua` onto `AiScript` (`DEFAULT_SOURCE`, `from_source_checked`) to drive Practice Range bot patrol decisions without rewriting authored StateScript graphs; future AI policies can use `AiScript` directly, and safe-boundary Lua hot reload with pre-activation validation and rollback landed in [#120](https://github.com/leafall903/ORPHEUS/pull/120).
 
 ---
 
