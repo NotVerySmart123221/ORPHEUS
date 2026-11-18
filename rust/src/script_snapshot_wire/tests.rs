@@ -53,7 +53,14 @@ pub(crate) const CODECS: &str = r#"{"classes":{
         "layout":[{"op":"bits","f":"target","n":32}]},
     "96F1DBCF":{"name":"STU_96F1DBCF","codec":"flags13","stec":false,"status":"VERIFIED",
         "layout":[{"op":"bits","f":"low","n":6},{"op":"bits","f":"more","n":1},
-                  {"op":"if","c":"more","then":[{"op":"bits","f":"high","n":7}],"else":[]}]}
+                  {"op":"if","c":"more","then":[{"op":"bits","f":"high","n":7}],"else":[]}]},
+    "77E13026":{"name":"STU_77E13026","codec":"hits","stec":false,"status":"VERIFIED",
+        "layout":[{"op":"w_u16","f":"n"},{"op":"repeat","count":"n","f":"hits","body":[]},
+                  {"op":"bits","n":1,"f":"flag"}]},
+    "41E3C7A7":{"name":"STUStatescriptStateTrackTargets","codec":"targets","stec":false,"status":"VERIFIED",
+        "layout":[{"op":"bits","n":1,"f":"has_list"},{"op":"if","c":"has_list",
+                   "then":[{"op":"w_u16","f":"n"},{"op":"repeat","count":"n","f":"targets","body":[]}],
+                   "else":[]}]}
 }}"#;
 
 fn node(position: u16, class: &str, state: Option<u16>, mut fields: Json) -> Json {
@@ -1896,6 +1903,92 @@ fn initialized_waits_supply_owner_timers_and_remote_frame_targets() {
         151,
         "040000302701b604801f0000004800863d3000",
     );
+}
+
+#[test]
+fn quick_melee_hit_list_projects_empty_hits_payload() {
+    let mut melee = graph(
+        0x0043,
+        vec![
+            node(
+                0,
+                "STUStatescriptEntry",
+                None,
+                json!({
+                    "m_outPlug":{"$":"Plug","links":[[1,"m_inPlug"]],"m_FF3DAF1E":[]}
+                }),
+            ),
+            {
+                let mut stat = node(
+                    1,
+                    "STU_CEBDAF17",
+                    None,
+                    json!({
+                        "m_targets":{"$":"STU_B5A0CAF0","m_EE729DCB":0},
+                        "m_outPlug":{"$":"Plug","links":[[11,"m_beginPlug"]],"m_FF3DAF1E":[]}
+                    }),
+                );
+                stat["fields"]["m_ADEB6E05"] = json!(true);
+                stat
+            },
+            node(
+                11,
+                "STUStatescriptStateTrackTargets",
+                Some(0),
+                json!({
+                    "m_subgraphPlug":{"$":"Plug","links":[[60,"m_beginPlug"]],"m_FF3DAF1E":[1]}
+                }),
+            ),
+            {
+                let mut hits = node(60, "STU_77E13026", Some(1), json!({}));
+                hits["remote"] = json!(0);
+                hits
+            },
+        ],
+        json!([11, 60]),
+        json!([0]),
+        json!([60]),
+        json!([]),
+    );
+    melee["items"] = json!(61);
+    melee["header"]["m_nodesBitCount"] = json!(6);
+    let graphs = GraphStore::from_json(
+        &serde_json::to_vec(&json!({
+            "version":1, "graphs":[melee], "bodies":{}, "missing":[]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let snapshot = initialize(
+        &graphs,
+        ENTITY,
+        Variables::new(),
+        vec![Root::new(1, 0x0043)],
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    assert!(
+        snapshot.initialization_complete(),
+        "{:?}",
+        snapshot.diagnostics
+    );
+    assert_eq!(
+        snapshot.instances[&1].states[&0].kind,
+        StateKind::EmptyTargets
+    );
+    assert_eq!(snapshot.instances[&1].states[&1].kind, StateKind::Plain);
+    let codecs = CodecTable::from_json(CODECS).unwrap();
+    let encoder = SnapshotEncoder::new(&graphs, &codecs);
+    for (view, expected) in [
+        (View::Owner, BTreeSet::from([0, 1])),
+        (View::Observer, BTreeSet::from([1])),
+    ] {
+        let projected = encoder.project(&snapshot, view).unwrap();
+        assert_eq!(projected.instance_states(1).unwrap(), expected);
+        let frame = encoder.full(&projected).unwrap();
+        assert!(frame.bit_len() > 0);
+    }
 }
 
 #[test]

@@ -6,6 +6,12 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-18
 
+#### Support Quick Melee (`0x0043`) on live owner bodies (#121)
+
+- Admitted the remaining `0x0043` Quick Melee nodes in `orpheus-statescript` (`STU_CEBDAF17` self-target stat actions, `STUStatescriptStateTrackTargets` `(0x0043, 11)` as `StateKind::EmptyTargets`, and `0x0043` `STU_23A00A53`, `STUStatescriptStateModifyHealth`, `STU_B5C87F3D`, `STU_54FEB21C`, `STU_77E13026`, `STU_0A6BE10E`, and `STUStatescriptStatePhysicsExplosion` states as `StateKind::Plain`), and projected `(StateKind::Plain, Some("hits"))` in `script_snapshot_wire` for `STU_77E13026` (`state 24`).
+- Pressing Quick Melee (`0x800`) on a live owner body no longer raises `UnsupportedAction` / `UnsupportedState` or cancels the owner StateScript VM and replication stream during play (#121; live `104319` client verification still pending).
+- Added a prepared Soldier Quick Melee (`0x0043`) owner/observer projection test in `rust/src/scene_assets/tests.rs` and a public `hits` snapshot projection test in `rust/src/script_snapshot_wire/tests.rs`.
+
 #### Anchor pre-spawn owner inputs and paired room replays
 
 - Native input admission now uses the initialized owner's body-script frame when a connection has no admitted command yet. Stale movement and aim offers no longer move a newly possessed player or become the owner's acknowledged command. Existing command history still sets the order through hero switches. Offline diagnostics now include each delivered owner's room frame and command acknowledgement.

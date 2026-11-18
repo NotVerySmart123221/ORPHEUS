@@ -457,6 +457,17 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             {
                 self.follow(id, node, "m_outPlug", caller, depth)
             }
+            "STU_CEBDAF17"
+                if self.graph(id).index == 0x0043
+                    && matches!(node.pos, 1 | 40 | 53..=55)
+                    && node.is_action()
+                    && node.remote < 0
+                    && is_self_target(node, "m_targets") =>
+            {
+                // Player stat criteria recording does not alter VM control flow;
+                // preserve continuation along m_outPlug on Quick Melee (0x0043).
+                self.follow(id, node, "m_outPlug", caller, depth)
+            }
             "STU_43B63AD0"
                 if self.graph(id).index == 0x0b8b
                     && matches!(node.pos, 14 | 16)
@@ -1197,10 +1208,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             },
             "STUStatescriptStateMoveTo" => StateKind::MoveTo { movement: None },
             "STU_54FEB21C"
-                if (self.graph(id).index, node.pos) == (0x01f0, 14)
-                    && ["m_7C8AD485", "m_C7A42E2A", "m_F8CE386A", "m_C46403A5"]
-                        .iter()
-                        .all(|name| field(&node.fields, name).is_null())
+                if matches!(
+                    (self.graph(id).index, node.pos),
+                    (0x01f0, 14) | (0x0043, 38)
+                ) && ["m_7C8AD485", "m_C7A42E2A", "m_F8CE386A", "m_C46403A5"]
+                    .iter()
+                    .all(|name| field(&node.fields, name).is_null())
                     && node.links("m_E5790891").next().is_none() =>
             {
                 // With no finish predicate or alternate graph the Python timer
@@ -1208,7 +1221,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::Plain
             }
             "STUStatescriptStatePhysicsExplosion"
-                if (self.graph(id).index, node.pos) == (0x01f0, 34) =>
+                if matches!(
+                    (self.graph(id).index, node.pos),
+                    (0x01f0, 34) | (0x0043, 43 | 64)
+                ) =>
             {
                 // This host has no dynamic map rigid bodies. Preserve the
                 // networked lifecycle; this does not apply actor damage.
@@ -1259,19 +1275,28 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 };
                 self.client_pulse(id, count)
             }
-            // 0257:11 searches only for the post-throw criteria trace.
-            // The field's authoritative recipients are selected separately.
+            // 0043:11 and 0257:11 use unimplemented client/world target tracking
+            // in the Python reference (`world.tracked_targets` returns
+            // NotImplemented / empty targets).
             "STUStatescriptStateTrackTargets"
                 if matches!(
                     (self.graph(id).index, node.pos),
-                    (0x0257, 11) | (0x00ca, 90)
+                    (0x0043, 11) | (0x0257, 11) | (0x00ca, 90)
                 ) =>
             {
                 StateKind::EmptyTargets
             }
             "STU_691BFA55" | "STU_7CA2FBAF" => StateKind::Effect,
+            "STU_23A00A53" if self.graph(id).index == 0x0043 && matches!(node.pos, 0 | 9) => {
+                StateKind::Plain
+            }
             "STU_23A00A53" if (self.graph(id).index, node.pos) == (0x0c89, 49) => {
                 StateKind::ExplosionContact
+            }
+            "STUStatescriptStateModifyHealth"
+                if (self.graph(id).index, node.pos) == (0x0043, 10) =>
+            {
+                StateKind::Plain
             }
             "STUStatescriptStateModifyHealth"
                 if (self.graph(id).index, node.pos) == (0x0033, 5) =>
@@ -1329,7 +1354,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 // This effect tracks player criteria. The NPC caster has no player stats.
                 StateKind::Plain
             }
-            "STU_B5C87F3D" if (self.graph(id).index, node.pos) == (0x022f, 85) => {
+            "STU_B5C87F3D"
+                if matches!(
+                    (self.graph(id).index, node.pos),
+                    (0x0043, 24) | (0x022f, 85)
+                ) =>
+            {
                 // The headless owner has no local combat accumulator.
                 StateKind::Plain
             }
@@ -1340,6 +1370,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 .map_or(StateKind::SendMessage, StateKind::PersistentSend),
             "STUStatescriptStateCosmeticEntity" => StateKind::CosmeticEntity,
             "STUStatescriptStateChaseVar" => StateKind::ChaseVar,
+            "STU_77E13026" if (self.graph(id).index, node.pos) == (0x0043, 60) => StateKind::Plain,
             "STU_77E13026" if (self.graph(id).index, node.pos) == (0x180a, 42) => {
                 StateKind::PhaseScriptList
             }
@@ -1352,6 +1383,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             "STU_2F4E2E3F" => StateKind::Watch,
             "STU_BA2FCDEB" if self.graph(id).index == 0x0cba => StateKind::SpawnSearch,
             "STU_5E805B5A" if self.graph(id).index == 0x0cba => StateKind::RecentInput,
+            "STU_0A6BE10E" if (self.graph(id).index, node.pos) == (0x0043, 63) => StateKind::Plain,
             "STU_0A6BE10E" if (self.graph(id).index, node.pos) == (0x0cba, 6) => {
                 StateKind::LivingBodyArray
             }

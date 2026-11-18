@@ -421,6 +421,197 @@ fn stock_soldier_casts_biotic_field() {
 }
 
 #[test]
+#[ignore = "requires a tagged 104319 Practice Range pack"]
+fn stock_soldier_quick_melee_runs_and_projects_on_owner_and_observer_streams() {
+    use crate::{
+        commands::Command,
+        game_replication::BodyStep,
+        script_init::StateKind,
+        script_snapshot_wire::{View, identity_test_reader::IdentityReader},
+        script_stream::{BodyStream, DeltaKind},
+        script_wire::Value,
+    };
+    use std::collections::BTreeSet;
+
+    let runtime = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let assets = SceneAssets::load(runtime).unwrap();
+    let scene = assets.prepare(GameMap::practice_range()).unwrap();
+    let hero = scene.heroes().get(SOLDIER).unwrap();
+    let mut mover = scene.player_spawn_mover(hero.body, 0).unwrap();
+    let spawn = OwnerBodySpawn {
+        slot: 0,
+        controller: 0xa000_0100,
+        entity: 0xa000_0101,
+        body_filter: team_bit(0).unwrap(),
+        frame: FIRST_TICK,
+        pose: mover.pose(),
+        quanta: RETAIL_QUANTA,
+    };
+    let mut owner = scene.owner_body_runtime(hero, spawn).unwrap().unwrap();
+    let snapshot = owner.snapshot().unwrap();
+    let melee_id = unique_script_instance(snapshot, 0x0043, None);
+    let encoder = owner.encoder();
+    let mut streams = Vec::new();
+    for view in [View::Owner, View::Observer] {
+        let projected = encoder.project(snapshot, view).unwrap();
+        let mut stream = BodyStream::new(spawn.entity);
+        let baseline = encoder.queue_full(&mut stream, &projected).unwrap();
+        stream.create_arrived();
+        let mut wire = IdentityReader::default();
+        wire.apply(
+            baseline.update.chunk.as_ref().unwrap(),
+            true,
+            view == View::Owner,
+        )
+        .unwrap();
+        wire.verify(snapshot, &assets.graphs);
+        stream.arrived(baseline.last);
+        streams.push((stream, projected, wire));
+    }
+
+    let mut melee_owner_sent = 0usize;
+    let mut active_on_press = BTreeSet::new();
+    let mut saw_hit_window_exit = false;
+    let mut saw_ability_stop = false;
+    let mut saw_cooldown_zero = false;
+    let mut owner_cooldown_ticks = Vec::new();
+    for t in 1..=120 {
+        let frame = FIRST_TICK + t;
+        let command = Command {
+            frame,
+            buttons: if t == 20 { 0x800 } else { 0 },
+            ..Command::default()
+        };
+        mover
+            .step(scene.movement_index(), command, 0.016, |_, _| {})
+            .unwrap();
+        owner.advance(command, &mover, BodyStep::Posed).unwrap();
+        if let Some(modifiers) = owner.movement_modifiers() {
+            mover.track_modifiers(frame, modifiers);
+        }
+        owner.take_shots(Some(command), &mover);
+        let snapshot = owner.snapshot().unwrap();
+        assert!(
+            snapshot.diagnostics.is_empty(),
+            "t={t} frame={frame}: {:?}",
+            snapshot.diagnostics
+        );
+        let melee = &snapshot.instances[&melee_id];
+        assert_eq!(melee.graph, 0x0043);
+        let cooldown = snapshot
+            .resolved_bindings
+            .get(&(melee_id, 61))
+            .or_else(|| melee.variables.get(&61));
+        let active: BTreeSet<u16> = melee
+            .states
+            .iter()
+            .filter_map(|(&raw, state)| state.active.then_some(raw))
+            .collect();
+        if t == 20 {
+            assert_eq!(melee.states[&6].kind, StateKind::Ability { flags: 7 });
+            assert_eq!(
+                snapshot.resolved_bindings.get(&(0, 32)),
+                Some(&Value::Bool(true))
+            );
+            assert!(
+                matches!(cooldown, Some(Value::Float(v)) if *v > 0.9 && *v <= 1.0),
+                "{cooldown:?}"
+            );
+            assert!(
+                active.contains(&5),
+                "TrackTargets state 5 missing: {active:?}"
+            );
+            assert!(
+                active.contains(&24),
+                "STU_77E13026 state 24 missing: {active:?}"
+            );
+            active_on_press = active.clone();
+        } else if t == 21 {
+            assert_eq!(melee.states[&6].kind, StateKind::Ability { flags: 3 });
+        } else if t > 20 && !saw_hit_window_exit && !active.contains(&5) && active.contains(&9) {
+            assert!(!active.contains(&8));
+            assert!(!active.contains(&24));
+            assert_eq!(t, 32, "0.2s wait should finish at t=32");
+            saw_hit_window_exit = true;
+        } else if t > 32
+            && !saw_ability_stop
+            && melee.states[&6].kind == (StateKind::Ability { flags: 0 })
+        {
+            assert_eq!(t, 53, "0.53s ability should stop at t=53");
+            saw_ability_stop = true;
+        } else if t > 20 && !saw_cooldown_zero && cooldown == Some(&Value::Float(0.0)) {
+            assert_eq!(melee.states[&6].kind, StateKind::Ability { flags: 0 });
+            saw_cooldown_zero = true;
+        }
+
+        let encoder = owner.encoder();
+        for (stream, initial, wire) in &mut streams {
+            let next = encoder.project_next(snapshot, initial).unwrap();
+            let kind = match initial.view() {
+                View::Owner => stream.owner_kind(frame, false, false).unwrap(),
+                View::Observer => Some(DeltaKind::Observer { resend: false }),
+            };
+            let Some(kind) = kind else { continue };
+            if next.view() == View::Owner {
+                if t >= 20 {
+                    melee_owner_sent += 1;
+                }
+                if let Some(Value::Float(value)) =
+                    next.instance_variables(melee_id).unwrap().get(&61)
+                {
+                    if owner_cooldown_ticks
+                        .last()
+                        .is_none_or(|&(_, last): &(u32, f64)| last != *value)
+                    {
+                        owner_cooldown_ticks.push((t, *value));
+                    }
+                }
+            }
+            let delta = encoder
+                .queue_delta(stream, &next, kind, owner.frame_ms())
+                .unwrap();
+            if let Some(chunk) = delta {
+                stream.sent(chunk.last);
+                wire.apply(
+                    chunk.update.chunk.as_ref().unwrap(),
+                    false,
+                    next.view() == View::Owner,
+                )
+                .unwrap();
+                wire.verify(snapshot, &assets.graphs);
+                stream.arrived(chunk.last);
+            }
+        }
+    }
+    assert_eq!(melee_owner_sent, 101);
+    assert_eq!(
+        active_on_press,
+        BTreeSet::from([
+            2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 26
+        ])
+    );
+    assert!(
+        saw_hit_window_exit,
+        "did not observe 0.2s TrackTargets window exit"
+    );
+    assert!(saw_ability_stop, "did not observe 0.53s Ability stop");
+    assert!(
+        saw_cooldown_zero,
+        "did not observe cooldown returning to 0.0"
+    );
+    assert!(
+        owner_cooldown_ticks
+            .iter()
+            .any(|&(tick, v)| tick == 20 && v > 0.9 && v <= 1.0),
+        "owner_cooldown_ticks={owner_cooldown_ticks:?}"
+    );
+    assert!(
+        owner_cooldown_ticks.iter().any(|&(_, v)| v == 0.0),
+        "owner_cooldown_ticks={owner_cooldown_ticks:?}"
+    );
+}
+
+#[test]
 #[ignore = "requires a prepared 104319 Practice Range pack"]
 fn elevated_practice_patrols_reach_their_hints_without_crossing_walls() {
     let runtime = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
