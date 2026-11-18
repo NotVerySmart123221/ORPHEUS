@@ -29,6 +29,8 @@ pub(crate) struct CountdownFrame {
 }
 
 mod encode;
+#[cfg(test)]
+pub(crate) mod identity_test_reader;
 mod projection;
 #[cfg(test)]
 mod tests;
