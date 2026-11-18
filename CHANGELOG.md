@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-18
 
+- Add the offline `compare_golden` command for semantic Soldier traces. It checks input and runtime fingerprints, validates complete records and reports the first differing command acceptance, state field or owner effect. The public tests exercise an invented scenario with a bot respawn. [Comparison guide](docs/GOLDEN_COMPARISON.md)
+
 #### Add safe-boundary Lua AI hot reload with pre-activation validation and rollback
 
 - Added opt-in safe-boundary Lua AI hot reload handled in `State::handle_request` between worker ticks (`GameService::reload_ai_script`, `GameService::reload_ai_script_file`, `GameService::ai_policy_status`, `ServerConfig::ai_script`, `Server::reload_ai_script`, and opt-in `--ai-script` / `'reload'` stdin command in `orpheus_server`) without altering the public wire protocol or weakening the `!Send` Lua sandbox (`debug_http.rs` remains read-only).

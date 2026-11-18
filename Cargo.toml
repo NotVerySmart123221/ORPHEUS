@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "rust/crates/collision",
+    "rust/crates/golden-trace",
     "rust/crates/runtime",
     "rust/crates/statescript",
     "rust/crates/wire",
@@ -8,6 +9,7 @@ members = [
 default-members = [
     ".",
     "rust/crates/collision",
+    "rust/crates/golden-trace",
     "rust/crates/runtime",
     "rust/crates/statescript",
     "rust/crates/wire",

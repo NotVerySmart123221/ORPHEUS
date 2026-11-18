@@ -1065,6 +1065,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "orpheus-golden-trace"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+]
+
+[[package]]
 name = "orpheus-runtime"
 version = "0.0.0"
 dependencies = [
