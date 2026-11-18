@@ -2,7 +2,7 @@
 
 Tracks implemented capabilities, Python-vs-Rust parity, verified baselines, and remaining gaps on `rust` targeting **Overwatch 1.74.0.0.104319**. For crate boundaries and contribution rules, see [NATIVE_SERVER_ARCHITECTURE.md](NATIVE_SERVER_ARCHITECTURE.md); for open milestones, see [ROADMAP.md](ROADMAP.md).
 
-The [pinned Python → Rust parity matrix](https://github.com/leafall903/ORPHEUS/blob/3cf5147bf77a7810aefa634dbfcae91eecc56038/docs/PARITY.md) records 24 behaviors, their evidence and the next acceptance check for each. After the Python archive freezes, use that snapshot as the comparison baseline and record new Rust test and original-client results here. Earlier Python observations remain available at revision `9f8f3bcb`.
+The [pinned Python → Rust parity matrix](https://github.com/leafall903/ORPHEUS/blob/232486a430b11cb105585ec5c0bfa6c47ee2a6d7/docs/PARITY.md) records 24 behaviors, their evidence and the next acceptance check for each. Use that revision to reproduce a comparison. For later results record the implementation, commit, runtime and kind of evidence, as Python on `main` and Rust on `rust` can both advance. Earlier Python observations remain available at revision `9f8f3bcb`.
 
 ---
 

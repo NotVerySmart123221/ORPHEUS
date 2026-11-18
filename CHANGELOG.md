@@ -9,6 +9,7 @@ This log records tested changes and their acceptance status. Entries are grouped
 #### Document the planned GitHub default branch change
 
 - Scheduled the repository default to switch to the existing `rust` branch on November 19 at 12:00 UTC. Documented contribution targets and verification steps for maintainers. Rust development continues on `rust` and Python development on `main`. [Branch guide](docs/BRANCH_TRANSITION.md)
+- Added an original-client verification day issue form for both implementations, linked the pinned Python parity matrix from the [Rust status page](docs/STATE.md), and documented a [design for comparing private gameplay traces](docs/GOLDEN_TRACE.md).
 
 #### Add safe-boundary Lua AI hot reload with pre-activation validation and rollback
 

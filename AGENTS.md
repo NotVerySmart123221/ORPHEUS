@@ -7,3 +7,4 @@
 - **Behavior contracts:** Supply or update synthetic JSON fixtures under `fixtures/behavior/` for behavior changes ([docs/BEHAVIOR_CONTRACTS.md](docs/BEHAVIOR_CONTRACTS.md)) and separate headless evidence from original-client acceptance.
 - **Commits & hygiene:** Keep commits focused, use Conventional Commits (`fix: ...`, adding `Assisted-by:` trailers when AI-assisted), update `CHANGELOG.md` for user-visible fixes, keep upstream license notices in [LICENSE](LICENSE) and credits in [CREDITS.md](CREDITS.md), and never commit game binaries, asset dumps, keys, credentials, profiles, or raw captures.
 - **Protected branches:** Open PRs from topic branches against `rust` and wait for required CI checks.
+- **PR scope:** Use one topic branch and PR per user-visible milestone. Add related fixes and their tests as focused commits to the open topic. Split work when a change can be reviewed and accepted independently.
