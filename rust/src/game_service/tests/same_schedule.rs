@@ -3,6 +3,7 @@ use super::*;
 use crate::commands::{Click, Command, SUBFRAME};
 use crate::game_bots::BotSpawn;
 use crate::game_clock::{FIRST_TICK, SEND_EVERY};
+use crate::game_replication::tests::owner_effects::{script_receipts, selected};
 use crate::game_replication::tests::practice_observation::{prepare_owner, processed, rifle_state};
 use crate::scene_assets::SceneAssets;
 use serde::Deserialize;
@@ -176,12 +177,31 @@ fn same_schedule_practice_room() {
     let room = state.rooms.get_mut(&MATCH).unwrap();
     let peer = room.members[&ticket.conn].peer.as_mut().unwrap();
     let scene = &mut room.world.as_mut().unwrap().scene;
-    let prepared_tick = prepare_owner(scene, &mut peer.world, &mut peer.egress);
+    let initial_bot = scene
+        .simulation()
+        .bodies()
+        .unwrap()
+        .find(|b| Arc::ptr_eq(&b.spawn, &bot.spawn))
+        .unwrap()
+        .entity;
+    let mut names = std::collections::BTreeMap::from([(initial_bot, "bot/0/body/1".to_string())]);
+    let mut bootstrap_effects = Vec::new();
+    let mut bootstrap_scripts = [0; 2];
+    let setup = prepare_owner(scene, &mut peer.world, &mut peer.egress, |receipt, body| {
+        if let Some(wire) = body {
+            let applied = script_receipts(receipt, wire);
+            bootstrap_scripts[0] += applied[0];
+            bootstrap_scripts[1] += applied[1];
+            names.insert(wire, "player/0/body/1".to_string());
+        }
+        bootstrap_effects.extend(selected(receipt, &names));
+    });
     let initial_player = scene
         .simulation()
         .player_body_by_owner(peer.world.owner())
         .unwrap()
         .id;
+    let mut first_scheduled_frame = None;
     let mut ticks = Vec::new();
     let mut bot_deaths = Vec::new();
     let mut unavailable = std::collections::BTreeSet::new();
@@ -205,23 +225,31 @@ fn same_schedule_practice_room() {
         let frame = state.clock.frame();
         state.tick(&server, now, t.missed).unwrap();
         assert_eq!(state.clock.frame(), FIRST_TICK + t.tick + 1);
+        first_scheduled_frame.get_or_insert(state.clock.frame());
         let room = state.rooms.get_mut(&MATCH).expect("room survived the tick");
         let peer = room.members[&ticket.conn].peer.as_mut().unwrap();
+        let mut rows = Vec::new();
+        let scene = &room.world.as_ref().unwrap().scene;
+        bot.observe(scene, &mut rows);
+        if let Some(wire) = bot.wire {
+            names.insert(wire, format!("bot/0/body/{}", bot.generation));
+        }
+        names.insert(initial_player.entity, "player/0/body/1".to_string());
+        let mut effects = Vec::new();
         if state.clock.frame() / SEND_EVERY > frame / SEND_EVERY {
             let sent = client.receive();
             assert!(client.window.accept(sent.seq));
             let receipt = peer
                 .egress
                 .acknowledge(client.window.expected, client.window.bits);
+            effects = selected(&receipt, &names);
             peer.world.acknowledge(receipt, now);
         }
         let accepted = processed(&peer.world);
         row["accepted"] =
             json!(command.is_some_and(|c| accepted == Some(c.frame) && accepted != before));
-        let mut missing = vec!["effects.grouped_delivery"];
-        let mut rows = Vec::new();
-        let scene = &room.world.as_ref().unwrap().scene;
-        bot.observe(scene, &mut rows);
+        row["effects"] = json!(effects);
+        let mut missing = Vec::new();
         if let Some(wire) = bot.wire {
             if let Some((death, deadline)) = scene.simulation().observed_bot_death(wire).unwrap() {
                 if bot_deaths.len() < bot.generation as usize {
@@ -266,10 +294,20 @@ fn same_schedule_practice_room() {
         ticks.push(row);
     }
     assert!(!ticks.is_empty());
+    unavailable.insert("provenance.effective_data_sha256");
+    let vm_seed = (u64::from(initial_player.entity) << 32) | u64::from(setup.component_start_frame);
     let result = json!({"status":"incomplete","scope":"stock Practice Range owner and selected ordinary spawner",
         "quanta_us":RETAIL_QUANTA,"bot_spawner_slot":slot,"bot_spawner":spawn_description,"bot_roster_size":roster_size,
         "transport":"stock identity delivery pre-roll, then loopback worker sends and immediate modeled receipts",
-        "bot_death_timing":bot_deaths,"setup_delivery_ticks":prepared_tick-FIRST_TICK,"initial_room_tick":FIRST_TICK,
+        "bootstrap_effects":bootstrap_effects,"bootstrap_full_body_receipts":bootstrap_scripts[0],"bootstrap_owner_delta_receipts":bootstrap_scripts[1],
+        "bot_death_timing":bot_deaths,"setup_delivery_ticks":setup.delivery_tick-FIRST_TICK,
+        "owner_component_start_frame":setup.component_start_frame,"owner_component_entity":initial_player.entity,
+        "player_vm_random_model":"splitmix64","player_vm_initial_seed":vm_seed,
+        "first_scheduled_room_tick":first_scheduled_frame,"initial_owner_delivery_phase":"after-setup-ack",
+        "host_random_model":"os-entropy-transport-only","host_initial_seed":null,
+        "server_player_slots":1,
+        "input_boundary":"after owner identity, controller data and bound body delivery; before next room tick",
+        "receipt_policy":"immediate successful owner record acknowledgement on scheduled sends","initial_room_tick":FIRST_TICK,
         "missing":unavailable,"ticks":ticks});
     let parent = destination.parent().unwrap();
     let mut file = tempfile::NamedTempFile::new_in(parent).unwrap();

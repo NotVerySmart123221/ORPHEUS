@@ -1,5 +1,35 @@
 use super::*;
+use crate::script_expr::{Scope, Variable, dynamic, truthy};
+use crate::script_graph::Graph;
 use crate::script_wire::Value as ScriptValue;
+
+fn declared_reload_flag(graph: &Graph) -> bool {
+    let reload = Variable {
+        scope: Scope::Instance,
+        id: 51,
+    };
+    let Some(switch) = graph
+        .node(2)
+        .filter(|n| n.class == "STUStatescriptStateBooleanSwitch")
+    else {
+        return false;
+    };
+    let Some(write) = graph
+        .node(5)
+        .filter(|n| n.class == "STUStatescriptActionSetVar")
+    else {
+        return false;
+    };
+    let reads = switch
+        .fields
+        .pointer("/m_condition/m_expression/m_dynamicVars")
+        .and_then(serde_json::Value::as_array);
+    reads.is_some_and(|vars| vars.iter().any(|v| dynamic(v) == Ok(Some(reload))))
+        && write
+            .fields
+            .get("m_out_Var")
+            .is_some_and(|v| dynamic(v) == Ok(Some(reload)))
+}
 
 pub(crate) fn rifle_state(body: &PlayerBodyState) -> (i64, Option<bool>) {
     let snapshot = body.runtime.as_ref().unwrap().snapshot().unwrap();
@@ -20,15 +50,27 @@ pub(crate) fn rifle_state(body: &PlayerBodyState) -> (i64, Option<bool>) {
     let Some(ScriptValue::Integer(ammo)) = value(53) else {
         panic!("stock rifle has no integer magazine value");
     };
-    let reload = match value(51) {
-        // The rifle's eligibility condition reads the flag as a boolean. An
-        // unbound stored Null is false; an absent variable is unobserved.
-        Some(ScriptValue::Null) if snapshot.bindings.get(&(id, 51)).is_none_or(Vec::is_empty) => {
-            Some(false)
+    // Machine::value falls back to shapes::stored for an unbound local. The
+    // native store returns Null before the first write. Establish that the
+    // stock eligibility switch and an authored writer actually use this flag
+    // before applying that lookup to the otherwise sparse snapshot.
+    let graph = body
+        .runtime
+        .as_ref()
+        .unwrap()
+        .encoder()
+        .graphs
+        .graph(rifle.graph)
+        .unwrap();
+    let reload = if declared_reload_flag(graph)
+        && snapshot.bindings.get(&(id, 51)).is_none_or(Vec::is_empty)
+    {
+        match rifle.variables.get(&51).unwrap_or(&ScriptValue::Null) {
+            v @ (ScriptValue::Null | ScriptValue::Bool(_)) => Some(truthy(v)),
+            _ => None,
         }
-        None | Some(ScriptValue::Null) => None,
-        Some(ScriptValue::Bool(active)) => Some(*active),
-        _ => panic!("unexpected stock rifle reload state"),
+    } else {
+        None
     };
     (*ammo, reload)
 }
@@ -38,6 +80,7 @@ fn deliver_until(
     scene: &mut PreparedScene,
     egress: &mut GameEgress<Arc<Record>>,
     tick: &mut u32,
+    observed: &mut impl FnMut(&DeliveryReport<Arc<Record>>, Option<u32>),
     ready: impl Fn(&WorldDelivery) -> bool,
 ) {
     // Receipt is modelled only after the real egress selected the frame and
@@ -54,7 +97,9 @@ fn deliver_until(
             *tick,
             *tick - FIRST_TICK,
         );
-        transport_outcome(world, egress, sent.sequence, true);
+        let receipt = egress.acknowledge(sent.sequence + 1, 1);
+        observed(&receipt, world.spawned_body());
+        world.acknowledge(receipt, Duration::ZERO);
         *tick += 1;
     }
     panic!("owner delivery prerequisite was never reached");
@@ -64,11 +109,17 @@ pub(crate) fn processed(world: &WorldDelivery) -> Option<u32> {
     world.input.processed
 }
 
+pub(crate) struct PreparedOwner {
+    pub(crate) delivery_tick: u32,
+    pub(crate) component_start_frame: u32,
+}
+
 pub(crate) fn prepare_owner(
     scene: &mut PreparedScene,
     world: &mut WorldDelivery,
     egress: &mut GameEgress<Arc<Record>>,
-) -> u32 {
+    mut observed: impl FnMut(&DeliveryReport<Arc<Record>>, Option<u32>),
+) -> PreparedOwner {
     let viewer = PlayerAppearance {
         entity: OWNER,
         slot: 0,
@@ -82,7 +133,7 @@ pub(crate) fn prepare_owner(
     world.queue_game_message(tick, Duration::ZERO, pick_hero(OWNER, SOLDIER));
     assert!(!world.has_input_work());
 
-    deliver_until(world, scene, egress, &mut tick, |world| {
+    deliver_until(world, scene, egress, &mut tick, &mut observed, |world| {
         world.identity_ready(OWNER) && world.controller.latest_data() != 0
     });
     world.queue_game_message(tick, Duration::ZERO, pick_hero(OWNER, SOLDIER));
@@ -94,18 +145,23 @@ pub(crate) fn prepare_owner(
     );
     let body = scene.simulation().player_body_by_owner(OWNER).unwrap();
     let id = body.id;
+    let component_start_frame = world.body_script.as_ref().unwrap().frame;
+    assert_eq!(component_start_frame, tick);
     assert_eq!(body.hero, SOLDIER);
     assert_eq!(
         body.runtime.as_ref().unwrap().vitals().unwrap().total(),
         200.0
     );
     assert_eq!(rifle_state(body).0, 30);
-    deliver_until(world, scene, egress, &mut tick, |world| {
+    deliver_until(world, scene, egress, &mut tick, &mut observed, |world| {
         world.identity_ready(id.entity) && world.bound == Some(id)
     });
     assert_eq!(world.input.processed, None);
 
-    tick
+    PreparedOwner {
+        delivery_tick: tick,
+        component_start_frame,
+    }
 }
 
 #[test]
@@ -117,7 +173,7 @@ fn stock_practice_owner_observes_processed_commands_and_rifle_state() {
     assert!(scene.movement_ready());
     let mut world = WorldDelivery::new(OWNER);
     let mut egress = GameEgress::default();
-    let mut tick = prepare_owner(&mut scene, &mut world, &mut egress);
+    let mut tick = prepare_owner(&mut scene, &mut world, &mut egress, |_, _| {}).delivery_tick;
     let viewer = PlayerAppearance {
         entity: OWNER,
         slot: 0,

@@ -301,7 +301,17 @@ impl<'a> SnapshotEncoder<'a> {
             }
         }
         baseline.callouts.clear();
-        Ok(stream.full(&payload, baseline)?)
+        let chunk = stream.full(&payload, baseline)?;
+        #[cfg(test)]
+        let chunk = {
+            let mut chunk = chunk;
+            if snapshot.view == View::Owner {
+                chunk.owner_rifle_ammo_written =
+                    explicit_rifle_ammo(snapshot.instances.values().map(|i| (i, &i.variables)));
+            }
+            chunk
+        };
+        Ok(chunk)
     }
 
     /// Encode a cumulative projection from the acknowledged baseline. The
@@ -355,7 +365,25 @@ impl<'a> SnapshotEncoder<'a> {
             .max(delivered.callout);
         delta.seed_owner_ammo(&mut delivered);
         let frame = self.delta_frame(snapshot, &delta, kind, frame_ms)?;
-        Ok(Some(stream.delta(&frame, delivered, delta.keys, kind)?))
+        #[cfg(test)]
+        let written = if view == View::Owner {
+            explicit_rifle_ammo(
+                delta
+                    .instances
+                    .values()
+                    .filter_map(|i| i.current.map(|v| (v, &i.variables))),
+            )
+        } else {
+            None
+        };
+        let chunk = stream.delta(&frame, delivered, delta.keys, kind)?;
+        #[cfg(test)]
+        let chunk = {
+            let mut chunk = chunk;
+            chunk.owner_rifle_ammo_written = written;
+            chunk
+        };
+        Ok(Some(chunk))
     }
 
     pub(super) fn differences<'s>(
@@ -926,6 +954,26 @@ pub(super) fn write_mask(out: &mut BitWriter, width: usize, chosen: &BTreeSet<us
             }
         }
     }
+}
+
+/// Test receipt for the explicit integer passed to the variable encoder in this
+/// owner frame. The last acknowledged snapshot can contain values omitted here.
+#[cfg(test)]
+fn explicit_rifle_ammo<'a>(
+    records: impl Iterator<Item = (&'a ProjectedInstance, &'a ProjectedVariables)>,
+) -> Option<i64> {
+    let mut result = None;
+    for (body, variables) in records {
+        if body.graph == 0x0254 && body.parent.is_none() {
+            if let Some(Value::Integer(ammo)) = variables.values.get(&53) {
+                assert!(
+                    result.replace(*ammo).is_none(),
+                    "ambiguous owner rifle write"
+                );
+            }
+        }
+    }
+    result
 }
 
 fn write_delta_variables(

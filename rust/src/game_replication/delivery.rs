@@ -23,6 +23,8 @@ pub(super) enum Delivery {
     Possession(BodyId),
     DestroyBody(BodyId),
     BodyScript {
+        #[cfg(test)]
+        rifle_ammo_written: Option<i64>,
         id: BodyId,
         last: u32,
         delta: bool,
@@ -549,11 +551,12 @@ impl WorldDelivery {
                     Delivery::DestroyBody(_) | Delivery::Script { close: true, .. } if !bound => {
                         return None;
                     }
-                    Delivery::BodyScript { id, last, delta }
-                        if (delta && !bound)
-                            || !self.body_script.as_ref().is_some_and(|script| {
-                                script.id == id && script.stream.ready_to_send(last)
-                            }) =>
+                    Delivery::BodyScript {
+                        id, last, delta, ..
+                    } if (delta && !bound)
+                        || !self.body_script.as_ref().is_some_and(|script| {
+                            script.id == id && script.stream.ready_to_send(last)
+                        }) =>
                     {
                         return None;
                     }
