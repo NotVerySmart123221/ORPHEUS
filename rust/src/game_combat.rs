@@ -44,6 +44,10 @@ pub enum CombatError {
     MissingBot { wire: u32, entity: Entity },
     #[error("bot index {wire:08X} references body with wire ID {actual:08X}")]
     BotIdentity { wire: u32, actual: u32 },
+    #[error("player {wire:08X} references missing ECS body {entity:?}")]
+    MissingPlayerBody { wire: u32, entity: Entity },
+    #[error("player index {wire:08X} references body with wire ID {actual:08X}")]
+    PlayerBodyIdentity { wire: u32, actual: u32 },
     #[error("projectile batch {connection} references missing ECS flight {entity:?}")]
     MissingFlight { connection: u32, entity: Entity },
     #[error(
@@ -214,7 +218,9 @@ pub(crate) struct BotReplacement {
 }
 
 mod enemy;
+mod player;
 use enemy::{BotState, EnemyState};
+pub(crate) use player::{PlayerBodyEvent, PlayerBodyHandle, PlayerBodyState};
 
 #[derive(Component)]
 pub(crate) struct AdmittedFlight {
@@ -237,14 +243,25 @@ struct FlightBatch {
     order: Vec<Entity>,
 }
 
-/// Room-authoritative bot bodies and in-flight projectiles.
+/// Room-authoritative bot bodies, player bodies, and in-flight projectiles.
 pub(crate) struct RoomSimulation {
     world: World,
     // Wire lookup also preserves the authored spawner order across respawns.
     by_wire: IndexMap<u32, Entity>,
+    players_by_wire: IndexMap<u32, Entity>,
+    players_by_owner: IndexMap<u32, PlayerBodyHandle>,
+    // Generation maps live for the room's lifetime so reconnects cannot reset history.
+    player_generations: HashMap<u32, u64>,
+    spawned_player_generations: HashMap<u32, u64>,
+    latest_wire_generations: HashMap<u32, u64>,
     next_bot: u32,
     combat_active: bool,
+    player_targets_active: bool,
+    cassidy_protected: bool,
     created: Vec<EntityUpdate>,
+    player_events: Vec<PlayerBodyEvent>,
+    player_deaths: Vec<player::PlayerDeath>,
+    observer_player_health: Vec<(u32, EntityUpdate)>,
     scene_messages: Vec<crate::script_enemy::SceneMessage>,
     external_targets: Option<Vec<crate::script_enemy::EnemyTarget>>,
     external_enemy_damage: Vec<crate::script_enemy::EnemyDamage>,
@@ -420,6 +437,7 @@ impl RoomSimulation {
     pub(crate) fn queue_scene_message(&mut self, message: crate::script_enemy::SceneMessage) {
         self.scene_messages.push(message);
     }
+    #[cfg(test)]
     pub(crate) fn set_external_targets(
         &mut self,
         mut targets: Vec<crate::script_enemy::EnemyTarget>,
@@ -427,6 +445,7 @@ impl RoomSimulation {
         targets.sort_unstable_by_key(|target| target.entity);
         self.external_targets = Some(targets);
     }
+    #[cfg(test)]
     pub(crate) fn take_external_enemy_damage(&mut self) -> Vec<crate::script_enemy::EnemyDamage> {
         std::mem::take(&mut self.external_enemy_damage)
     }
@@ -528,9 +547,19 @@ impl RoomSimulation {
         Ok(Self {
             world,
             by_wire,
+            players_by_wire: IndexMap::new(),
+            players_by_owner: IndexMap::new(),
+            player_generations: HashMap::new(),
+            spawned_player_generations: HashMap::new(),
+            latest_wire_generations: HashMap::new(),
             next_bot,
             combat_active: false,
+            player_targets_active: false,
+            cassidy_protected: false,
             created: Vec::new(),
+            player_events: Vec::new(),
+            player_deaths: Vec::new(),
+            observer_player_health: Vec::new(),
             scene_messages: Vec::new(),
             external_targets: None,
             external_enemy_damage: Vec::new(),
@@ -741,25 +770,31 @@ impl RoomSimulation {
     #[cfg(any(test, feature = "inspector"))]
     pub(crate) fn debug_actors(&self) -> Result<impl ExactSizeIterator<Item = Actor>, CombatError> {
         let states = self.states().collect::<Result<Vec<_>, _>>()?;
-        Ok(states.into_iter().map(|state| {
-            let bot = &state.bot;
-            Actor {
-                entity: bot.entity,
-                generation: None,
-                kind: ActorKind::Bot,
-                team: bot.spawn.team,
-                position: bot.position,
-                velocity: bot.velocity,
-                alive: !bot.dead,
-                health: Some(if self.combat_active {
-                    state.vitals.total()
-                } else {
-                    bot.spawn.health
-                }),
-                script_active: bot.patrol_active(),
-                last_contact_clip: bot.last_contact_clip(),
-            }
-        }))
+        let players = self.player_debug_actors();
+        Ok(states
+            .into_iter()
+            .map(|state| {
+                let bot = &state.bot;
+                Actor {
+                    entity: bot.entity,
+                    generation: None,
+                    kind: ActorKind::Bot,
+                    team: bot.spawn.team,
+                    position: bot.position,
+                    velocity: bot.velocity,
+                    alive: !bot.dead,
+                    health: Some(if self.combat_active {
+                        state.vitals.total()
+                    } else {
+                        bot.spawn.health
+                    }),
+                    script_active: bot.patrol_active(),
+                    last_contact_clip: bot.last_contact_clip(),
+                }
+            })
+            .chain(players)
+            .collect::<Vec<_>>()
+            .into_iter())
     }
 
     pub(crate) fn set_junkenstein_defenders(&mut self, defenders: Arc<[u32]>) {
@@ -886,6 +921,7 @@ impl RoomSimulation {
                 state.history.record(tick, queries.target(&state.bot));
             }
         }
+        self.record_player_poses(tick);
         Ok(())
     }
 
@@ -899,7 +935,7 @@ impl RoomSimulation {
         let view = ViewFrame::from_command(&shot.command, context.quanta);
         let ray = HitscanShot::with_direction(shot.origin, shot.direction, shot.reach, shot.hit);
         // Scene order breaks exact ray ties.
-        let mut candidates = Vec::with_capacity(self.by_wire.len());
+        let mut candidates = Vec::with_capacity(self.by_wire.len() + self.players_by_wire.len());
         for state in self.states() {
             let state = state?;
             let bot = &state.bot;
@@ -912,19 +948,41 @@ impl RoomSimulation {
                 candidates.push((bot.entity, pose));
             }
         }
+        self.push_player_hitscan_candidates(
+            shot.source,
+            context.team,
+            queries.free_for_all(),
+            view,
+            &visible,
+            &mut candidates,
+        );
         let Some(impact) = ray.resolve(candidates, |origin, direction, reach| {
             queries.hitscan_wall(origin, direction, reach)
         })?
         else {
             return Ok(None);
         };
+        if self.players_by_wire.contains_key(&impact.entity) {
+            return self.apply_player_impact(shot.source, shot.shot_frame, context, &impact);
+        }
         self.apply_bot_impact(shot.source, shot.shot_frame, context, &impact)
     }
 
+    #[cfg(test)]
     pub(crate) fn heal_bots(
         &mut self,
         queries: &BotQueries<'_>,
         team: u8,
+        pulses: &[HealingPulse],
+    ) -> Result<Vec<EntityUpdate>, CombatError> {
+        self.heal_allies(queries, team, None, pulses)
+    }
+
+    pub(crate) fn heal_allies(
+        &mut self,
+        queries: &BotQueries<'_>,
+        team: u8,
+        skip_player_wire: Option<u32>,
         pulses: &[HealingPulse],
     ) -> Result<Vec<EntityUpdate>, CombatError> {
         if queries.free_for_all() || pulses.is_empty() {
@@ -960,6 +1018,13 @@ impl RoomSimulation {
                 ..EntityUpdate::default()
             });
         }
+        self.heal_player_bodies(
+            team,
+            queries.free_for_all(),
+            skip_player_wire,
+            pulses,
+            &mut updates,
+        );
         Ok(updates)
     }
 
@@ -971,6 +1036,9 @@ impl RoomSimulation {
         launches: Vec<AdmittedFlight>,
         context: ShotContext,
     ) -> Result<(Vec<FlightOutcome>, Vec<BotHit>), CombatError> {
+        if !self.player_body_generation_current(owner) {
+            return Ok((Vec::new(), Vec::new()));
+        }
         if let Some(batch) = self.projectiles.get(&connection) {
             // Body generations are monotonic within a live connection. Late
             // work cannot inspect, advance or retire the replacement's batch.
@@ -1017,13 +1085,20 @@ impl RoomSimulation {
         let mut continuing = Vec::with_capacity(order.len());
         for entity in order {
             // An earlier flight may have killed a target in this same tick.
-            let mut candidates = Vec::with_capacity(self.by_wire.len());
+            let mut candidates =
+                Vec::with_capacity(self.by_wire.len() + self.players_by_wire.len());
             for state in self.states() {
                 let bot = &state?.bot;
                 if eligible_bot(bot, owner.entity, context.team, queries.free_for_all()) {
                     candidates.push((bot.entity, queries.target(bot)));
                 }
             }
+            self.push_player_projectile_candidates(
+                owner.entity,
+                context.team,
+                queries.free_for_all(),
+                &mut candidates,
+            );
             let (token, stun, hit_effect, result) = {
                 let mut active = self
                     .world
@@ -1044,6 +1119,17 @@ impl RoomSimulation {
                 }
                 Ok(Some(end)) => {
                     for impact in &end.impacts {
+                        if self.players_by_wire.contains_key(&impact.entity) {
+                            if let Some(hit) = self.apply_player_impact(
+                                owner.entity,
+                                context.tick,
+                                context,
+                                impact,
+                            )? {
+                                hits.push(hit);
+                            }
+                            continue;
+                        }
                         if let Some(hit) =
                             self.apply_bot_impact(owner.entity, context.tick, context, impact)?
                         {
@@ -1233,15 +1319,24 @@ impl RoomSimulation {
         tick: u32,
         now: Duration,
     ) -> Result<Vec<BotReplacement>, CombatError> {
+        self.states().try_for_each(|state| state.map(|_| ()))?;
+        if !self.players_by_wire.is_empty() {
+            let defenders: Arc<[u32]> = Arc::from(self.collect_junkenstein_defenders());
+            self.set_junkenstein_defenders(Arc::clone(&defenders));
+            self.set_player_defenders(defenders);
+        }
         if !self.combat_active {
-            self.states().try_for_each(|state| state.map(|_| ()))?;
             return Ok(Vec::new());
         }
+        let external_and_players = self.collect_player_enemy_targets();
+        let has_roster = self.player_targets_active
+            || !self.players_by_wire.is_empty()
+            || self.external_targets.is_some();
         let states = self.checked_states()?;
         let roster =
-            self.external_targets.as_ref().map(|external| {
+            has_roster.then(|| {
                 Arc::new(
-                    external
+                    external_and_players
                         .iter()
                         .cloned()
                         .chain(states.iter().copied().map(|state| {
@@ -1387,7 +1482,7 @@ impl RoomSimulation {
                     tick,
                     queries,
                     room_pause || stunned || vitals.death().is_some(),
-                    self.external_targets.as_deref().unwrap_or_default(),
+                    &external_and_players,
                 ) {
                     bot.stop_objective(tick);
                     enemy.fault = Some(error.to_string());
@@ -1543,6 +1638,26 @@ impl RoomSimulation {
                         operation: Some(Operation::Update(vec![health])),
                         ..Default::default()
                     });
+                }
+            } else if let Some(id) = self.player_handle_for_wire(hit.target) {
+                if let Some((owner, killed, health)) = self.damage_player_body_by_wire(
+                    id,
+                    hit.amount,
+                    Death {
+                        time: now.as_secs_f64(),
+                        frame: tick,
+                        killer: hit.source,
+                    },
+                ) {
+                    if let Some(health) = health {
+                        self.scripted_health.push(health);
+                    }
+                    if killed {
+                        self.player_deaths.push(player::PlayerDeath {
+                            owner,
+                            source: hit.source,
+                        });
+                    }
                 }
             } else {
                 self.external_enemy_damage.push(hit);

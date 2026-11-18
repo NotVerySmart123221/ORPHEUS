@@ -25,7 +25,7 @@ use crate::{
     world::{GAME_MODE_ENTITY, Movement},
 };
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct DeadeyeScene {
     pub health: Option<std::collections::BTreeMap<u32, f64>>,
     pub targets: Vec<DeadeyeTarget>,
@@ -33,12 +33,14 @@ pub(crate) struct DeadeyeScene {
     pub view_subjects: BTreeMap<u32, ViewSubject>,
 }
 
+#[derive(Clone)]
 pub(crate) struct ViewSubject {
     pub position: Vec3,
     pub forward: Vec3,
     pub tags: crate::script_init::TargetTagSnapshot,
 }
 
+#[derive(Clone)]
 pub(crate) struct DeadeyeTarget {
     pub velocity: Option<[f64; 3]>,
     pub script_state: crate::script_entity_state::EntityScriptState,

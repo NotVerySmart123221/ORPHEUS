@@ -21,7 +21,6 @@ use crate::{
     mover::Mover,
     mover_modifiers::{Modifier, ModifierKey},
     projectile_flight::{ProjectileBallistics, authored_gravity, lifted_direction},
-    scene_assets::PreparedScene,
     script_codecs::CodecTable,
     script_expr::to_float,
     script_graph::GraphStore,
@@ -167,11 +166,12 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         Some(self.world.own_filter_flags())
     }
 
-    fn set_deadeye_scene(&mut self, scene: &PreparedScene, team: u8) -> io::Result<()> {
-        if self.world.has_deadeye() {
-            self.world.deadeye_scene = scene.deadeye_scene(team).map_err(io::Error::other)?;
-        }
-        Ok(())
+    fn has_deadeye(&self) -> bool {
+        self.world.has_deadeye()
+    }
+
+    fn set_deadeye_targets(&mut self, scene: crate::script_player::DeadeyeScene) {
+        self.world.deadeye_scene = scene;
     }
 
     fn set_defenders(&mut self, defenders: Arc<[u32]>) {

@@ -417,25 +417,8 @@ impl State {
                     return Ok(None);
                 };
                 let bots = world.scene.bot_actors()?;
-                let mut truncated = bots.len() > MAX_DEBUG_ACTORS;
+                let truncated = bots.len() > MAX_DEBUG_ACTORS;
                 let mut actors: Vec<_> = bots.take(MAX_DEBUG_ACTORS).collect();
-                for member in room.members.values() {
-                    let player = room
-                        .players
-                        .get(member.slot)
-                        .ok_or(RoomError::Invariant("debug member has invalid roster slot"))?;
-                    if let Some(actor) = member
-                        .peer
-                        .as_ref()
-                        .and_then(|peer| peer.world.debug_actor(player.info.team))
-                    {
-                        if actors.len() == MAX_DEBUG_ACTORS {
-                            truncated = true;
-                        } else {
-                            actors.push(actor);
-                        }
-                    }
-                }
                 actors.sort_unstable_by_key(|actor| actor.entity);
                 Ok(Some((
                     game_debug::Room {
@@ -686,6 +669,7 @@ impl State {
                             self.room_work(id, RoomStage::Drain, None, |room| {
                                 if let Some(world) = &mut room.world {
                                     world.scene.clear_projectiles();
+                                    world.scene.simulation_mut().clear_players();
                                 }
                                 for peer in room
                                     .members
@@ -728,6 +712,8 @@ impl State {
         let mut created = HashMap::new();
         let mut scripted_health = HashMap::new();
         let mut retired_enemies = HashMap::new();
+        let mut player_events = HashMap::new();
+        let mut observer_player_health = HashMap::new();
         if !drain {
             // Preserve the existing global phase order: movement, projectiles,
             // respawn/history, then loading and delivery.
@@ -755,29 +741,43 @@ impl State {
                         };
                         let player = &room.players[slot];
                         if !player.gone && peer.world.world_started() {
-                            world
+                            let encounter_hero = world
                                 .scene
-                                .step_encounter(tick, peer.world.encounter_hero());
+                                .simulation()
+                                .player_body_by_owner(peer.world.owner())
+                                .map(|state| state.hero);
+                            world.scene.step_encounter(tick, encounter_hero);
                             peer.world.queue_encounter_presentation(&world.scene)?;
                         }
-                        peer.world
-                            .set_encounter_active(world.scene.encounter_active());
+                        let active = world.scene.encounter_active();
+                        if let Some(body_id) = peer.world.active_body_id() {
+                            world
+                                .scene
+                                .simulation_mut()
+                                .set_player_encounter_active(body_id, active);
+                        }
                         let context = ShotContext {
                             team: player.info.team,
                             quanta: player.quanta(),
                             tick,
                             now,
                         };
+                        let pulses = peer
+                            .world
+                            .advance_fields(world.scene.simulation_mut(), tick)?;
+                        let skip_wire = peer.world.spawned_body();
                         let (bots, queries) = world.scene.bot_simulation();
-                        for update in bots.heal_bots(
-                            &queries,
-                            context.team,
-                            &peer.world.advance_fields(tick)?,
-                        )? {
+                        for update in
+                            bots.heal_allies(&queries, context.team, skip_wire, &pulses)?
+                        {
                             peer.world.queue_health(update);
                         }
-                        peer.world.advance_biotic_views(tick)?;
-                        let Some((owner, launches)) = peer.world.take_projectile_launches() else {
+                        peer.world
+                            .advance_biotic_views(world.scene.simulation(), tick)?;
+                        let Some((owner, launches)) = peer
+                            .world
+                            .take_projectile_launches(world.scene.simulation_mut())
+                        else {
                             world.scene.retire_projectiles(connection);
                             return Ok(());
                         };
@@ -786,6 +786,8 @@ impl State {
                             .advance_projectiles(&queries, connection, owner, launches, context)?;
                         peer.world.finish_projectiles(owner, tick, outcomes)?;
                         for hit in hits {
+                            simulation
+                                .deliver_applied_damage(peer.world.owner(), hit.damage.clone());
                             peer.bot_hit(hit);
                         }
                         Ok(())
@@ -802,6 +804,8 @@ impl State {
                     created.insert(id, result.created);
                     scripted_health.insert(id, result.health);
                     retired_enemies.insert(id, result.retired);
+                    player_events.insert(id, result.player_events);
+                    observer_player_health.insert(id, result.observer_player_health);
                 }
             }
         }
@@ -823,9 +827,11 @@ impl State {
                             .as_ref()
                             .is_some_and(|world| world.scene.encounter_screens_complete());
                     if !drain && encounter_finished {
-                        peer.clear_world();
                         if let Some(world) = &mut room.world {
+                            peer.clear_world_in_room(world.scene.simulation_mut());
                             world.scene.retire_projectiles(connection);
+                        } else {
+                            peer.clear_world();
                         }
                         peer.loading = MapReadiness::default();
                         leave = true;
@@ -838,9 +844,11 @@ impl State {
                                     eprintln!(
                                         "Game loading for connection {connection} stopped: {error}"
                                     );
-                                    peer.clear_world();
                                     if let Some(world) = &mut room.world {
+                                        peer.clear_world_in_room(world.scene.simulation_mut());
                                         world.scene.retire_projectiles(connection);
+                                    } else {
+                                        peer.clear_world();
                                     }
                                     peer.loading = MapReadiness::default();
                                     leave = true;
@@ -857,6 +865,34 @@ impl State {
                     if let Some(records) = scripted_health.get(&id) {
                         for record in records {
                             peer.world.queue_health(record.clone());
+                        }
+                    }
+                    if let Some(events) = player_events.get(&id) {
+                        for event in events {
+                            match event {
+                                crate::game_combat::PlayerBodyEvent::Created {
+                                    owner,
+                                    id: body_id,
+                                    update,
+                                } if *owner != peer.world.owner() => {
+                                    peer.world
+                                        .create_remote_player(*body_id, update.as_ref().clone());
+                                }
+                                crate::game_combat::PlayerBodyEvent::Retired {
+                                    owner,
+                                    id: body_id,
+                                } if *owner != peer.world.owner() => {
+                                    peer.world.retire_remote_player(*body_id);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    if let Some(records) = observer_player_health.get(&id) {
+                        for (owner, record) in records {
+                            if *owner != peer.world.owner() {
+                                peer.world.queue_health(record.clone());
+                            }
                         }
                     }
                     if let Some(records) = retired_enemies.get(&id) {
@@ -909,10 +945,18 @@ impl State {
                             None => Vec::new(),
                         }
                     };
+                    let simulation = if drain {
+                        None
+                    } else {
+                        room.world
+                            .as_mut()
+                            .map(|world| world.scene.simulation_mut())
+                    };
                     match peer.world.send_frame(
                         tick,
                         movements,
                         drain,
+                        simulation,
                         &mut peer.egress,
                         |payload| {
                             let packet = Packet {
