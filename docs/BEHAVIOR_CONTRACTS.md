@@ -6,6 +6,8 @@ The Rust-only `script-actions-v1.json` adds 15 historical assignment/branch case
 
 Public synthetic fixtures must never contain game binaries, raw captures, signing keys, or private credentials.
 
+For the proposed private, per-tick Python/Rust gameplay comparison and its evidence limits, see [Golden gameplay traces](GOLDEN_TRACE.md).
+
 ---
 
 ## Cross-Language CI (`shared-behavior-contracts`)
