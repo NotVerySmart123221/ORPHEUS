@@ -70,7 +70,6 @@ def record(reference, runtime, schedule, bot_slot):
     sys.path[:0] = [str(ROOT / "scripts"), str(reference / "src"), str(reference)]
 
     from golden_python_room import PythonRoom
-
     from ow174 import paths
 
     if reference != paths.SOURCE_CHECKOUT or runtime != paths.RUNTIME_DIR:

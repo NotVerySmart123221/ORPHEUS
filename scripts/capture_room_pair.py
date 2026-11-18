@@ -6,9 +6,9 @@ import json
 import os
 import platform
 import shutil
-import tempfile
 import subprocess
 import sys
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
@@ -102,6 +102,13 @@ def bind_role(out, validator, role, observation, inputs, revisions, platform_nam
         pending.unlink(missing_ok=True)
 
 
+def recording_environment(runtime, schedule):
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith(("ORPHEUS_", "OW174_")) and key != "PYTHONPATH"}
+    env.update(ORPHEUS_RUNTIME_DIR=str(runtime), ORPHEUS_ROOM_SCHEDULE=str(schedule))
+    return env
+
+
 def capture(args):
     schedule = args.schedule.absolute()
     runtime = args.runtime.absolute()
@@ -113,13 +120,12 @@ def capture(args):
     tracked = [
         (args.python_source, ["src", "tests", "pyproject.toml"]),
         (args.python_adapter, ["scripts"]),
-        (args.rust_source, ["rust", "Cargo.toml", "Cargo.lock", ".cargo", "build.rs"]),
+        (args.rust_source, ["rust", "fixtures", "Cargo.toml", "Cargo.lock", ".cargo", "build.rs"]),
         (ROOT, ["scripts", "rust/crates/golden-trace", "Cargo.toml", "Cargo.lock", ".cargo"]),
     ]
     revisions = [revision(root, paths) for root, paths in tracked]
     inputs = ReplayInputs.read(runtime, schedule)
-    env = {k: v for k, v in os.environ.items() if not k.startswith("ORPHEUS_") and k != "PYTHONPATH"}
-    env.update(ORPHEUS_RUNTIME_DIR=str(runtime), ORPHEUS_ROOM_SCHEDULE=str(schedule))
+    env = recording_environment(runtime, schedule)
     with tempfile.TemporaryDirectory(prefix="orpheus-capture-") as tmp:
         private_dir = Path(tmp)
         native = build_once(args.rust_source, private_dir, out, env, native=True)
@@ -173,10 +179,10 @@ def finish_receipt(out, validator, inputs, revisions, rust_toolchain, receipt):
     validated = {}
     for role, stable in receipt["repeatable"].items():
         if stable:
-            data = json.loads((out / f"{role}-1.json").read_bytes())
-            platform_name = "-".join(data["platform"] if role == "reference" else receipt["platform"]).lower()
-            toolchain = "python-" + data["toolchain"] if role == "reference" else rust_toolchain
             try:
+                data = json.loads((out / f"{role}-1.json").read_bytes())
+                platform_name = "-".join(data["platform"] if role == "reference" else receipt["platform"]).lower()
+                toolchain = "python-" + data["toolchain"] if role == "reference" else rust_toolchain
                 digest = bind_role(out, validator, role, data, inputs, revisions, platform_name, toolchain)
             except (ValueError, TypeError, KeyError, subprocess.CalledProcessError):
                 receipt.setdefault("invalid_roles", []).append(role)
@@ -189,7 +195,7 @@ def finish_receipt(out, validator, inputs, revisions, rust_toolchain, receipt):
         report_path = out / "comparison.json"
         with (out / "comparison.log").open("xb") as log:
             result = subprocess.run([validator, out / "reference.jsonl", out / "candidate.jsonl",
-                                     "--report", report_path], stdout=log, stderr=subprocess.STDOUT)
+                                     "--report", report_path], check=False, stdout=log, stderr=subprocess.STDOUT)
         report = json.loads(report_path.read_bytes())
         status = report["result"]
         if {"match": 0, "mismatch": 1, "incompatible": 2, "incomplete": 2}.get(status) != result.returncode:

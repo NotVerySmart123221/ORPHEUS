@@ -4,14 +4,13 @@ import math
 import struct
 from weakref import WeakKeyDictionary
 
-from tests.runtime.test_game_health import bar
-from tests.runtime.test_game_packet_budget import KEY_IN, KEY_OUT
-
 from ow174.game import world
 from ow174.game.link import LinkCipher
 from ow174.game.match import sends
 from ow174.game.script import decode
 from ow174.game.server import Client, GameServer
+from tests.runtime.test_game_health import bar
+from tests.runtime.test_game_packet_budget import KEY_IN, KEY_OUT
 
 
 def bits(value):

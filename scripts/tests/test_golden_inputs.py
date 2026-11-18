@@ -2,15 +2,22 @@
 import hashlib
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from capture_room_pair import built_artifact, validate_observation
-from golden_reference import write_trace
+from capture_room_pair import (
+    built_artifact,
+    finish_receipt,
+    recording_environment,
+    validate_observation,
+)
 from golden_inputs import ReplayInputs
+from golden_reference import write_trace
 
 
 class InputTests(unittest.TestCase):
@@ -88,17 +95,21 @@ class InputTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "exactly one"):
                 select(*rejected)
 
-    def test_binding_records_distinct_sources_of_randomness_and_checks_every_tick(self):
-        inputs = self.inputs()
-        row = json.loads(self.schedule.read_bytes()) | {"state": [], "effects": [], "missing": []}
-        data = {
+    @staticmethod
+    def observation(inputs, rows):
+        return {
             "missing": ["provenance.effective_data_sha256"], "source_rev": "a"*40, "manifest_sha256": inputs.runtime_sha256,
             "quanta_us": 16000, "bot_spawner_slot": 1, "bot_roster_size": 2,
             "bot_spawner": {"team": 1, "hero": "1"*16, "position_bits": ["0"*16]*3, "yaw": 2},
             "initial_room_tick": 10, "first_scheduled_room_tick": 11, "setup_delivery_ticks": 0,
             "initial_owner_delivery_phase": "before-first-send", "host_random_model": "counter", "host_initial_seed": 0,
-            "player_vm_random_model": "synthetic-vm", "player_vm_initial_seed": 2**64-1, "ticks": [row],
+            "player_vm_random_model": "synthetic-vm", "player_vm_initial_seed": 2**64-1, "ticks": rows,
         }
+
+    def test_binding_records_distinct_sources_of_randomness_and_checks_every_tick(self):
+        inputs = self.inputs()
+        row = json.loads(self.schedule.read_bytes()) | {"state": [], "effects": [], "missing": []}
+        data = self.observation(inputs, [row])
         def encoded(role):
             stream = io.BytesIO()
             write_trace(stream, data, inputs, role=role, source_revision="a"*40 if role=="reference" else "b"*40,
@@ -118,3 +129,32 @@ class InputTests(unittest.TestCase):
         del data["host_initial_seed"]
         with self.assertRaises(KeyError):
             encoded("candidate")
+
+    def test_recording_environment_excludes_inherited_gameplay_switches(self):
+        inherited = {"PATH": "tools", "OW174_NO_COMBAT_NOTICES": "1", "OW174_BODY_TRACE": "1",
+                     "ORPHEUS_GRAPH_BUNDLE": "other", "ORPHEUS_RUNTIME_DIR": "other", "PYTHONPATH": "other"}
+        with patch.dict(os.environ, inherited, clear=True):
+            env = recording_environment(self.pack, self.schedule)
+        self.assertEqual(env, {"PATH": "tools", "ORPHEUS_RUNTIME_DIR": str(self.pack),
+                               "ORPHEUS_ROOM_SCHEDULE": str(self.schedule)})
+
+    def test_bad_reference_metadata_preserves_independently_validated_candidate(self):
+        fixture = Path(__file__).resolve().parents[2] / "rust/crates/golden-trace/tests/fixtures/reference.jsonl"
+        header, *ticks, _ = [json.loads(line) for line in fixture.read_bytes().splitlines()]
+        inputs = ReplayInputs(header["runtime_sha256"], header["profile_sha256"], header["schedule_sha256"], len(ticks))
+        data = self.observation(inputs, [row | {"missing": []} for row in ticks])
+        (self.root / "candidate-1.json").write_text(json.dumps(data))
+        (self.root / "reference-1.json").write_text(json.dumps(data | {"platform": ["test"]}))  # missing toolchain
+        receipt = {"repeatable": {"reference": True, "candidate": True}, "platform": ["test"], "status": "incomplete"}
+        with patch("capture_room_pair.subprocess.run") as validator, patch("sys.stdout", new_callable=io.StringIO) as output:
+            result = finish_receipt(self.root, "validator", inputs, ["a"*40, "b"*40, "c"*40], "test", receipt)
+        self.assertEqual(result, 2)
+        self.assertEqual(output.getvalue(), "incomplete\n")
+        validator.assert_called_once()
+        self.assertEqual(validator.call_args.args[0], ["validator", "--check-candidate", self.root / "candidate.pending.jsonl"])
+        recorded = json.loads((self.root / "receipt.json").read_bytes())
+        self.assertEqual(recorded["status"], "incomplete")
+        self.assertEqual(recorded["invalid_roles"], ["reference"])
+        self.assertNotIn("validated_reference_sha256", recorded)
+        candidate = (self.root / "candidate.jsonl").read_bytes()
+        self.assertEqual(recorded["validated_candidate_sha256"], hashlib.sha256(candidate).hexdigest())

@@ -10,8 +10,6 @@ import random
 from unittest.mock import patch
 
 from golden_python_delivery import OwnerDelivery, bits
-from tests.runtime.test_server_journal import FixedSource
-
 from ow174.game import bots, collision, content
 from ow174.game.commands import Command
 from ow174.game.match import Match
@@ -20,6 +18,7 @@ from ow174.game.script.driver import OWNER_HEALTH
 from ow174.game.script.nodes import WeaponVolley
 from ow174.game.script.runtime import Component
 from ow174.game.server import FIRST_TICK
+from tests.runtime.test_server_journal import FixedSource
 
 
 class RoomClock(FixedSource):
