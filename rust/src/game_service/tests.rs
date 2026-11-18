@@ -60,15 +60,144 @@ fn timing_opt_in_reports_empty_histograms_while_no_world_is_running() {
 }
 
 #[test]
+fn lua_fault_in_one_room_leaves_sibling_room_and_patrol_alive() {
+    use crate::{
+        game_bots::{BOT_ENTITY, Bot},
+        game_service::room::InjectedFault,
+        scene_assets::PreparedScene,
+    };
+
+    for (label, faulty_source) in [
+        (
+            "think_loop",
+            "return { abi = 2, think = function() while true do end end }",
+        ),
+        (
+            "think_oom",
+            r#"return { abi = 2, think = function() local s = "0123456789abcdef"; for i = 1, 16 do s = s .. s end; return {} end }"#,
+        ),
+        (
+            "think_runtime_error",
+            "return { abi = 2, think = function() local x = nil; return x.missing end }",
+        ),
+    ] {
+        let schemas = Arc::new(fixture());
+        let mut state = State::new(schemas, PatrolScript::load().unwrap());
+        let socket = UdpSocket::bind(local()).unwrap();
+        let failed_id = MATCH;
+        let survivor_id = [5, 9];
+
+        state
+            .open_match(
+                failed_id,
+                GameMap::practice_range(),
+                player(),
+                Some(WorldStart {
+                    scene: Box::new(PreparedScene::fixture_for_bots(vec![Bot::fixture_walker(
+                        [0.0, 0.0, 10.0],
+                    )])),
+                    card: PlayerCard::default(),
+                }),
+                Duration::ZERO,
+            )
+            .unwrap();
+        state
+            .rooms
+            .get_mut(&failed_id)
+            .unwrap()
+            .world
+            .as_mut()
+            .unwrap()
+            .patrol = PatrolScript::from_source(faulty_source).unwrap();
+
+        state
+            .open_match(
+                survivor_id,
+                GameMap::practice_range(),
+                player(),
+                Some(WorldStart {
+                    scene: Box::new(PreparedScene::fixture_for_bots(vec![Bot::fixture_walker(
+                        [0.0, 0.0, 10.0],
+                    )])),
+                    card: PlayerCard::default(),
+                }),
+                Duration::ZERO,
+            )
+            .unwrap();
+
+        for _ in 0..220 {
+            state.tick(&socket, Duration::ZERO, 0).unwrap();
+        }
+
+        // Lua faults are contained per-bot inside PreparedScene::step_bots:
+        // neither room is retired, failed room's bot stops cleanly, and survivor advances.
+        assert!(state.rooms.contains_key(&failed_id), "{label}");
+        assert!(state.rooms.contains_key(&survivor_id), "{label}");
+        assert!(state.recent_faults.is_empty(), "{label}");
+        let failed_bot = state.rooms[&failed_id]
+            .world
+            .as_ref()
+            .unwrap()
+            .scene
+            .bots()
+            .unwrap()
+            .find(|bot| bot.entity == BOT_ENTITY)
+            .unwrap();
+        assert!(!failed_bot.patrol_active(), "{label}");
+        assert_eq!(failed_bot.position, [0.0; 3], "{label}");
+
+        let survivor_before = state.rooms[&survivor_id]
+            .world
+            .as_ref()
+            .unwrap()
+            .scene
+            .bots()
+            .unwrap()
+            .find(|bot| bot.entity == BOT_ENTITY)
+            .unwrap()
+            .position;
+        assert_ne!(survivor_before, [0.0; 3], "{label}");
+
+        // A room-level Bots-stage fault retires only the faulted room; survivor keeps patrolling.
+        state.rooms.get_mut(&failed_id).unwrap().injection =
+            Some((RoomStage::Bots, InjectedFault::BrokenBot));
+        state.tick(&socket, Duration::ZERO, 0).unwrap();
+        assert!(!state.rooms.contains_key(&failed_id), "{label}");
+        assert!(state.rooms.contains_key(&survivor_id), "{label}");
+        assert_eq!(state.recent_faults.len(), 1, "{label}");
+        let survivor_after = state.rooms[&survivor_id]
+            .world
+            .as_ref()
+            .unwrap()
+            .scene
+            .bots()
+            .unwrap()
+            .find(|bot| bot.entity == BOT_ENTITY)
+            .unwrap()
+            .position;
+        assert_ne!(survivor_after, survivor_before, "{label}");
+    }
+}
+
+#[test]
 #[ignore = "requires a prepared 104319 Practice Range pack"]
 fn prepared_rooms_keep_patrol_script_state_local() {
-    use crate::{patrol_script::WaitEvent, scene_assets::SceneAssets};
+    use crate::{ai_script::AiActorSnapshot, patrol_script::WaitEvent, scene_assets::SceneAssets};
 
     let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
     let schemas = Arc::new(Schemas::load(runtime.join("data/game_schemas_174.json")).unwrap());
     let assets = SceneAssets::load(runtime).unwrap();
     let stateful = PatrolScript::from_source(
-        "local count = 10; return 1, function() count = count + 1; return count end",
+        r#"
+        local count = 10
+        return {
+            abi = 2,
+            think = function()
+                count = count + 1
+                return { { kind = "wait", seconds = count } }
+            end,
+        }
+        "#,
     )
     .unwrap();
     let mut state = State::new(schemas, stateful);
@@ -95,7 +224,11 @@ fn prepared_rooms_keep_patrol_script_state_local() {
             .as_ref()
             .unwrap()
             .patrol
-            .wait(WaitEvent::Spawn, frame)
+            .wait(
+                AiActorSnapshot::patrol_fixture(0, 1),
+                WaitEvent::Spawn,
+                frame,
+            )
             .unwrap()
     };
     assert_eq!(wait(MATCH, FIRST_TICK), 11.0);

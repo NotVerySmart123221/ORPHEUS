@@ -71,10 +71,12 @@ Remaining boundary cleanups:
 
 ---
 
-## Lua Script Host (`patrol.lua`)
+## Lua Script Host (`ai_script.rs` / `patrol.lua`)
 
-- Each room creates an isolated vendored Lua 5.4 VM (`mlua 0.11.6`) with filesystem, sockets, dynamic libraries, and wall-clock time disabled, plus strict memory and instruction budgets.
-- `rust/scripts/patrol.lua` currently drives stateless Practice Range bot patrol decisions (returning one wait duration or route slot validated by Rust). Expanding hooks to AI `think()` loops and wave orchestration is part of [#65](https://github.com/leafall903/ORPHEUS/issues/65).
+- Each room creates an isolated `!Send` vendored Lua 5.4 VM (`mlua 0.11.6`, `StdLib::NONE`, `ChunkMode::Text`, empty `_ENV` table) on the single-threaded `orpheus-game` worker with filesystem, sockets, dynamic libraries, and wall-clock time disabled.
+- `rust/src/ai_script.rs` defines the versioned `think(snapshot, events) -> commands` bridge (`AI_ABI_VERSION = 2`) with named, documented caps (`AI_MEMORY_LIMIT_BYTES` = 256 KiB, `AI_INSTRUCTION_HOOK_INTERVAL` = 64, `AI_INIT_HOOK_BUDGET` = 32 hooks, `AI_THINK_HOOK_BUDGET` = 64 hooks, `AI_MAX_SNAPSHOT_TARGETS` = 32, `AI_MAX_EVENTS_PER_TICK` = 16, `AI_MAX_COMMANDS_PER_TICK` = 8, `AI_MAX_WAIT_SECONDS` = 60.0) and raw-table validation returning deterministic `AiScriptError` values without panicking or hanging.
+- `validate_player_body_handle` / `query_body_handle` reject stale, zero-generation, and unknown `BodyId` handles against `RoomSimulation`'s Stage 1 generation model without mutating ECS state, and Lua faults disable only the failing bot or faulted room while sibling rooms keep running.
+- `rust/src/patrol_script.rs` adapts `rust/scripts/patrol.lua` onto `AiScript` (`DEFAULT_SOURCE`, `from_source_checked`) to drive Practice Range bot patrol decisions without rewriting authored StateScript graphs; future AI policies can use `AiScript` directly, and safe-boundary hot reload follows in Stage 4 ([#65](https://github.com/leafall903/ORPHEUS/issues/65)).
 
 ---
 
