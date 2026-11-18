@@ -7,13 +7,15 @@ cargo run --locked -p orpheus-golden-trace --bin compare_golden -- reference.jso
 cargo run --locked -p orpheus-golden-trace --bin compare_golden -- reference.jsonl candidate.jsonl --report private-report.json
 cargo test --locked -p orpheus-golden-trace
 cargo run --locked -p orpheus-golden-trace --bin compare_golden -- --check-reference reference.jsonl
+cargo run --locked -p orpheus-golden-trace --bin compare_golden -- --check-candidate candidate.jsonl
 ```
 
 | Exit | Result | Meaning |
 | --- | --- | --- |
 | 0 | `match` | Both complete traces cover the same schedule and agree. |
 | 1 | `mismatch` | Both traces are valid. The local report identifies the first tick, phase, logical actor and field that differ. |
-| 2 | `incomplete` or a command error | The records are incomplete, corrupt or incompatible, or a requested file operation failed. A later bad footer invalidates an earlier apparent mismatch. |
+| 2 | `incompatible` | Both traces passed individual validation. The private report lists the inputs or setup fields that prevent a gameplay comparison. |
+| 2 | `incomplete` or a command error | A record is incomplete or corrupt, or a file operation failed. A bad footer invalidates an earlier apparent mismatch. |
 
 Detailed values go in the optional report. Choose a new file in a private directory. A report distinguishes a missing field from a field whose value is JSON `null`. Keep recordings and reports on the runner or maintainer machine. The repository ignores `local-data/` at the project root.
 
@@ -27,7 +29,9 @@ python scripts/capture_room_pair.py --python-source /path/to/python-reference --
 
 Each process receives the same input schedule and selected spawner. The collector checks the entire runtime tree, manifest and schedule before the first process and after each run. Its receipt records source revisions, observation hashes and whether the two recordings of each implementation agree. A repeatable diagnostic can still contain missing fields or disagree with the other server.
 
-When all Python state and owner-effect observations are available, the collector writes a private reference and validates its checksums, lifecycle and scenario coverage with the Rust reader. `--check-reference` prints `valid-reference` for a complete reference. A Python–Rust match requires a separate complete candidate. Captured references include a `setup` object with the authored bot spawner ordinal, initial room tick and random-source model. Two traces with different setups are incompatible. The original synthetic format remains readable.
+The collector builds the native room test and the validator once, then runs the same private copy of the test executable in a fresh process for each attempt. The receipt records both executable digests. Each repeatable, complete role is encoded and checked through its footer before being saved as `reference.jsonl` or `candidate.jsonl`. The collector exits successfully only on `match`.
+
+Captured `orpheus.golden.v2` headers bind the selected spawner, roster size, initial and first scheduled room frames, setup delivery ticks and owner acknowledgement phase. Host and player VM random models and initial seeds have separate fields. An OS-entropy transport records a null host seed. When setups differ, both validated recordings stay on disk and the receipt identifies the incompatible fields. Synthetic v1 records and historical v1 headers with the smaller setup remain readable.
 
 ## Writing the first format
 
