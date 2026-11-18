@@ -96,6 +96,10 @@ pub struct Mover {
     last_command: Option<Command>,
     last_input: Option<u32>,
     pose: Movement,
+    #[cfg(any(test, feature = "inspector"))]
+    last_ground_probe: Option<crate::game_debug::DebugGroundProbe>,
+    #[cfg(any(test, feature = "inspector"))]
+    last_contact_normals: Vec<crate::game_debug::DebugContactNormal>,
 }
 
 impl Mover {
@@ -124,11 +128,40 @@ impl Mover {
                 gravity: base.gravity_scale,
                 ..Movement::default()
             },
+            #[cfg(any(test, feature = "inspector"))]
+            last_ground_probe: None,
+            #[cfg(any(test, feature = "inspector"))]
+            last_contact_normals: Vec::new(),
         })
     }
 
     pub fn pose(&self) -> Movement {
         self.pose
+    }
+
+    #[cfg(any(test, feature = "inspector"))]
+    pub(crate) fn debug_ground_probe(
+        &self,
+        entity: u32,
+    ) -> Option<crate::game_debug::DebugGroundProbe> {
+        self.last_ground_probe.map(|mut probe| {
+            probe.entity = entity;
+            probe
+        })
+    }
+
+    #[cfg(any(test, feature = "inspector"))]
+    pub(crate) fn debug_contact_normals(
+        &self,
+        entity: u32,
+    ) -> impl Iterator<Item = crate::game_debug::DebugContactNormal> + '_ {
+        self.last_contact_normals
+            .iter()
+            .copied()
+            .map(move |mut contact| {
+                contact.entity = entity;
+                contact
+            })
     }
 
     pub(crate) fn capsule(&self) -> (f64, f64) {
@@ -229,6 +262,19 @@ impl Mover {
             dt,
             self.category,
         )?;
+        #[cfg(any(test, feature = "inspector"))]
+        {
+            let origin = self.pose.position;
+            self.last_ground_probe = Some(crate::game_debug::DebugGroundProbe {
+                tick: command.frame,
+                entity: 0,
+                origin,
+                hit: probe.ground.map(|hit| [origin[0], hit.y, origin[2]]),
+                normal: probe.ground.map(|hit| hit.normal),
+                grounded: probe.ground.is_some(),
+                non_ground_under: probe.non_ground_under,
+            });
+        }
         self.posture.advance(
             PostureStep {
                 command: &command,
@@ -257,7 +303,14 @@ impl Mover {
             self.posture.apply_fall(settings.gravity_scale, dt);
         }
         let normal = probe.ground.map_or([0.0, 1.0, 0.0], |hit| hit.normal);
-        let vertical = self.move_body(rays, velocity, normal, ground == Ground::Standing, dt)?;
+        let vertical = self.move_body(
+            rays,
+            velocity,
+            normal,
+            ground == Ground::Standing,
+            dt,
+            command.frame,
+        )?;
         self.posture.finish_fall(settings.gravity_scale, vertical);
 
         if input.throttles != [0; 2] {
@@ -289,6 +342,7 @@ impl Mover {
         normal: [f64; 3],
         grounded: bool,
         dt: f64,
+        _frame: u32,
     ) -> Result<f64, HullContactError> {
         let [x, y, z] = velocity;
         let velocity = if grounded && (x * x + y * y) + z * z >= EPSILON {
@@ -321,6 +375,23 @@ impl Mover {
         let feet = f64::from(py - lift);
         let floor = rays.lowest() - ABYSS;
         self.pose.position = [f64::from(px), feet.max(floor), f64::from(pz)].map(snap);
+        #[cfg(any(test, feature = "inspector"))]
+        {
+            let point = self.pose.position;
+            self.last_contact_normals.clear();
+            self.last_contact_normals.extend(
+                movement
+                    .planes
+                    .iter()
+                    .take(crate::game_debug::MAX_DEBUG_MOVER_NORMALS)
+                    .map(|plane| crate::game_debug::DebugContactNormal {
+                        tick: _frame,
+                        entity: 0,
+                        point,
+                        normal: plane.normal.map(f64::from),
+                    }),
+            );
+        }
         let [px, py, pz] = self.pose.position;
         self.body
             .teleport([px as f32, (py + f64::from(lift)) as f32, pz as f32]);
@@ -497,6 +568,84 @@ mod tests {
         assert_eq!(sample_movement_flags(&pose), Some(1 | (1 << 3) | (1 << 4)));
         pose.flags |= 0x80;
         assert_eq!(sample_movement_flags(&pose), None);
+    }
+
+    #[test]
+    fn ground_probe_and_contact_normals_are_recorded_read_only() {
+        use crate::{
+            collision_cache::{Mesh, Triangle},
+            collision_index::SceneTriangle,
+            contact_mesh::ContactMesh,
+            contact_world::{StaticGeometry, StaticShape},
+        };
+
+        let floor_tris = [
+            SceneTriangle {
+                vertices: [[-10.0, 0.0, -10.0], [-10.0, 0.0, 10.0], [10.0, 0.0, 10.0]],
+                mask: 0x18,
+                surface: 0,
+            },
+            SceneTriangle {
+                vertices: [[10.0, 0.0, 10.0], [10.0, 0.0, -10.0], [-10.0, 0.0, -10.0]],
+                mask: 0x18,
+                surface: 0,
+            },
+        ];
+        let rays = TriangleIndex::new(floor_tris).unwrap();
+        let wall = Mesh {
+            vertices: vec![
+                [-5.0, 0.0, 1.0],
+                [-5.0, 4.0, 1.0],
+                [5.0, 0.0, 1.0],
+                [5.0, 4.0, 1.0],
+            ],
+            triangles: vec![
+                Triangle {
+                    corners: [0, 1, 2],
+                    wings: [-1, 3, -1],
+                    mask: 0x18,
+                    surface: 0,
+                },
+                Triangle {
+                    corners: [3, 2, 1],
+                    wings: [-1, 0, -1],
+                    mask: 0x18,
+                    surface: 0,
+                },
+            ],
+        };
+        let mesh = ContactMesh::new(wall, [1.0; 3], u16::MAX).unwrap();
+        let shape = StaticShape::new(StaticGeometry::Mesh(Arc::new(mesh)), None).unwrap();
+        let world = Arc::new(ContactWorld::new(vec![shape]).unwrap());
+        let mut mover =
+            Mover::new(MoverSettings::default(), world, [0.0, 0.0, 0.0], 0, 0x18).unwrap();
+        assert!(mover.debug_ground_probe(42).is_none());
+
+        let mut hit_wall = false;
+        let mut last_frame = 0;
+        for frame in 1..=30 {
+            last_frame = frame;
+            let command = Command {
+                frame,
+                forward: 127,
+                ..Command::default()
+            };
+            mover.step(&rays, command, 0.016, |_, _| {}).unwrap();
+            let probe = mover.debug_ground_probe(42).unwrap();
+            assert_eq!(probe.entity, 42);
+            assert_eq!(probe.tick, frame);
+            assert!(probe.grounded);
+            assert_eq!(probe.normal, Some([0.0, 1.0, 0.0]));
+            let normals: Vec<_> = mover.debug_contact_normals(42).collect();
+            assert!(normals.len() <= crate::game_debug::MAX_DEBUG_MOVER_NORMALS);
+            if normals.iter().any(|contact| {
+                contact.entity == 42 && contact.tick == frame && contact.normal[2] < -0.5
+            }) {
+                hit_wall = true;
+            }
+        }
+        assert!(hit_wall, "expected wall contact normal against Z=1 wall");
+        assert!(last_frame == 30);
     }
 
     #[test]

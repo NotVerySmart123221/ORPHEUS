@@ -1274,6 +1274,51 @@ impl RoomSimulation {
         })
     }
 
+    #[cfg(any(test, feature = "inspector"))]
+    pub(super) fn push_encounter_debug_spawn_candidates(
+        &self,
+        out: &mut Vec<crate::game_debug::DebugSpawnCandidate>,
+        truncated: &mut bool,
+    ) {
+        let Some(encounter) = self.encounter_component() else {
+            return;
+        };
+        let (candidates, search_truncated) = encounter.searches.debug_candidates();
+        *truncated |= search_truncated;
+        let remaining = crate::game_debug::MAX_DEBUG_SPAWN_CANDIDATES.saturating_sub(out.len());
+        if candidates.len() > remaining {
+            *truncated = true;
+        }
+        out.extend(candidates.iter().copied().take(remaining));
+    }
+
+    #[cfg(any(test, feature = "inspector"))]
+    pub(super) fn push_encounter_debug_scripts(
+        &self,
+        out: &mut Vec<crate::game_debug::EntityScriptSnapshot>,
+    ) {
+        if let Some(encounter) = self.encounter_component() {
+            if let Some(snapshot) = encounter.script.snapshot() {
+                out.push(crate::game_debug::summarize_script_snapshot(
+                    GAME_MODE_ENTITY,
+                    "encounter",
+                    snapshot,
+                ));
+            }
+        }
+        if let Some(gate) = self.gate_component() {
+            if let Some(runtime) = gate.runtime.as_ref() {
+                if let Some(snapshot) = runtime.script.snapshot() {
+                    out.push(crate::game_debug::summarize_script_snapshot(
+                        gate.definition.entity,
+                        "gate",
+                        snapshot,
+                    ));
+                }
+            }
+        }
+    }
+
     pub(crate) fn step_encounter(
         &mut self,
         collision: &CollisionScene,

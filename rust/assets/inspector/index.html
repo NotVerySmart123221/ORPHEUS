@@ -23,6 +23,8 @@
       <label class="toggle"><input id="triangles" type="checkbox" checked> Probe triangles</label>
       <label class="toggle"><input id="proxies" type="checkbox"> Contact bounds</label>
       <label class="toggle"><input id="actors" type="checkbox" checked> Actors</label>
+      <label class="toggle"><input id="physics" type="checkbox" checked> Rays &amp; probes</label>
+      <label class="toggle"><input id="navigation" type="checkbox" checked> AI routes &amp; spawns</label>
       <span id="tick" class="code"></span>
     </section>
 
@@ -54,8 +56,17 @@
       <span><i class="sample player"></i> Player</span>
       <span><i class="sample bot"></i> Bot</span>
       <span><i class="sample dead"></i> Dead actor</span>
+      <span><i class="sample ray-hit"></i> Hitscan actor ray</span>
+      <span><i class="sample ray-world"></i> Hitscan wall ray</span>
+      <span><i class="sample normal"></i> Contact normal</span>
+      <span><i class="sample probe-hit"></i> Ground probe</span>
+      <span><i class="sample route"></i> AI route</span>
+      <span><i class="sample path"></i> AI target path</span>
+      <span><i class="sample spawn-ok"></i> Spawn accepted</span>
+      <span><i class="sample spawn-no"></i> Spawn rejected</span>
     </div>
     <p id="geometry-info" class="notes"></p>
+    <p id="overlay-info" class="notes"></p>
     <p id="geometry-status" class="notes" role="status"></p>
 
     <section id="timing-panel" class="entity-panel" aria-labelledby="timing-heading" hidden>
@@ -85,6 +96,23 @@
             <tr><th scope="col">Entity / generation</th><th scope="col">Kind</th><th scope="col">Team</th><th scope="col">State</th><th scope="col">Health</th><th scope="col">Script</th><th scope="col">Position (X, Y, Z)</th><th scope="col">Velocity (X, Y, Z)</th><th scope="col">Last sweep clip</th></tr>
           </thead>
           <tbody id="actor-rows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="vm-panel" class="entity-panel" aria-labelledby="vm-heading" hidden>
+      <h2 id="vm-heading">StateScript VM <span id="vm-count" class="code"></span></h2>
+      <div class="vm-controls">
+        <label>Entity <select id="vm-entity" disabled></select></label>
+        <span id="vm-meta" class="code"></span>
+      </div>
+      <p id="vm-entity-vars" class="notes coordinates"></p>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th scope="col">Instance</th><th scope="col">Graph</th><th scope="col">Parent</th><th scope="col">Active states</th><th scope="col">Variables</th></tr>
+          </thead>
+          <tbody id="vm-rows"></tbody>
         </table>
       </div>
     </section>

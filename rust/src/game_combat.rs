@@ -302,6 +302,10 @@ pub(crate) struct RoomSimulation {
     projectiles: HashMap<u32, FlightBatch>,
     enemy_projectiles: Vec<Entity>,
     witch_staff_links: IndexMap<u32, (u32, u16)>,
+    #[cfg(any(test, feature = "inspector"))]
+    debug_rays: std::collections::VecDeque<crate::game_debug::DebugRay>,
+    #[cfg(any(test, feature = "inspector"))]
+    debug_rays_truncated: bool,
 }
 
 impl RoomSimulation {
@@ -606,6 +610,10 @@ impl RoomSimulation {
             projectiles: HashMap::new(),
             enemy_projectiles: Vec::new(),
             witch_staff_links: IndexMap::new(),
+            #[cfg(any(test, feature = "inspector"))]
+            debug_rays: std::collections::VecDeque::new(),
+            #[cfg(any(test, feature = "inspector"))]
+            debug_rays_truncated: false,
         })
     }
 
@@ -818,6 +826,185 @@ impl RoomSimulation {
     }
 
     #[cfg(any(test, feature = "inspector"))]
+    fn record_debug_ray(&mut self, ray: crate::game_debug::DebugRay) {
+        if self.debug_rays.len() == crate::game_debug::MAX_DEBUG_RAYS {
+            self.debug_rays.pop_front();
+            self.debug_rays_truncated = true;
+        }
+        self.debug_rays.push_back(ray);
+    }
+
+    #[cfg(any(test, feature = "inspector"))]
+    pub(crate) fn debug_physics(
+        &self,
+    ) -> Result<Option<crate::game_debug::PhysicsOverlay>, CombatError> {
+        use crate::game_debug::{
+            MAX_DEBUG_CONTACT_NORMALS, MAX_DEBUG_GROUND_PROBES, PhysicsOverlay, PhysicsTruncation,
+        };
+
+        let rays: Vec<_> = self.debug_rays.iter().copied().collect();
+        let mut contact_normals = Vec::new();
+        let mut ground_probes = Vec::new();
+        let mut truncated = PhysicsTruncation {
+            rays: self.debug_rays_truncated,
+            contact_normals: false,
+            ground_probes: false,
+        };
+
+        self.push_player_debug_physics(
+            &mut contact_normals,
+            &mut truncated.contact_normals,
+            &mut ground_probes,
+            &mut truncated.ground_probes,
+        );
+
+        for state in self.states() {
+            let state = state?;
+            for contact in state.bot.debug_contact_normals() {
+                if contact_normals.len() == MAX_DEBUG_CONTACT_NORMALS {
+                    truncated.contact_normals = true;
+                    break;
+                }
+                contact_normals.push(contact);
+            }
+            if let Some(mover) = state
+                .enemy
+                .as_ref()
+                .and_then(|enemy| enemy.reaper_exit.as_ref())
+                .and_then(|exit| exit.debug_mover())
+            {
+                if let Some(probe) = mover.debug_ground_probe(state.bot.entity) {
+                    if ground_probes.len() == MAX_DEBUG_GROUND_PROBES {
+                        truncated.ground_probes = true;
+                    } else {
+                        ground_probes.push(probe);
+                    }
+                }
+                for contact in mover.debug_contact_normals(state.bot.entity) {
+                    if contact_normals.len() == MAX_DEBUG_CONTACT_NORMALS {
+                        truncated.contact_normals = true;
+                        break;
+                    }
+                    contact_normals.push(contact);
+                }
+            }
+        }
+
+        if rays.is_empty()
+            && contact_normals.is_empty()
+            && ground_probes.is_empty()
+            && truncated == PhysicsTruncation::default()
+        {
+            return Ok(None);
+        }
+
+        Ok(Some(PhysicsOverlay {
+            rays,
+            contact_normals,
+            ground_probes,
+            truncated,
+        }))
+    }
+
+    #[cfg(any(test, feature = "inspector"))]
+    pub(crate) fn debug_navigation(
+        &self,
+    ) -> Result<Option<crate::game_debug::NavigationOverlay>, CombatError> {
+        use crate::game_debug::{MAX_DEBUG_ROUTES, NavigationOverlay, NavigationTruncation};
+
+        let mut routes = Vec::new();
+        let mut truncated = NavigationTruncation::default();
+        let push_route =
+            |routes: &mut Vec<_>,
+             truncated: &mut bool,
+             route: Option<crate::game_debug::DebugBotRoute>| {
+                if let Some(route) = route {
+                    if routes.len() == MAX_DEBUG_ROUTES {
+                        *truncated = true;
+                    } else {
+                        routes.push(route);
+                    }
+                }
+            };
+
+        for state in self.states() {
+            let state = state?;
+            push_route(&mut routes, &mut truncated.routes, state.bot.debug_route());
+            if let Some(enemy) = state.enemy.as_ref() {
+                push_route(
+                    &mut routes,
+                    &mut truncated.routes,
+                    enemy
+                        .gate_approach
+                        .as_ref()
+                        .and_then(|approach| approach.debug_route(state.bot.entity)),
+                );
+                push_route(
+                    &mut routes,
+                    &mut truncated.routes,
+                    enemy
+                        .boss_pursuit
+                        .as_ref()
+                        .and_then(|pursuit| pursuit.debug_route(state.bot.entity)),
+                );
+            }
+        }
+
+        let mut spawn_candidates = Vec::new();
+        self.push_encounter_debug_spawn_candidates(
+            &mut spawn_candidates,
+            &mut truncated.spawn_candidates,
+        );
+
+        if routes.is_empty()
+            && spawn_candidates.is_empty()
+            && truncated == NavigationTruncation::default()
+        {
+            return Ok(None);
+        }
+
+        Ok(Some(NavigationOverlay {
+            routes,
+            spawn_candidates,
+            truncated,
+        }))
+    }
+
+    #[cfg(any(test, feature = "inspector"))]
+    pub(crate) fn debug_scripts(
+        &self,
+    ) -> Result<(Vec<crate::game_debug::EntityScriptSnapshot>, bool), CombatError> {
+        use crate::game_debug::{MAX_DEBUG_VM_ENTITIES, summarize_script_snapshot};
+
+        let mut scripts = Vec::new();
+        self.push_player_debug_scripts(&mut scripts);
+        for state in self.states() {
+            let state = state?;
+            if let Some(enemy) = state.enemy.as_ref() {
+                if let Some(snapshot) = enemy.scripts.body.snapshot() {
+                    scripts.push(summarize_script_snapshot(
+                        enemy.binding.body,
+                        "enemy_body",
+                        snapshot,
+                    ));
+                }
+                if let Some(snapshot) = enemy.scripts.controller.snapshot() {
+                    scripts.push(summarize_script_snapshot(
+                        enemy.binding.controller,
+                        "enemy_controller",
+                        snapshot,
+                    ));
+                }
+            }
+        }
+        self.push_encounter_debug_scripts(&mut scripts);
+        scripts.sort_unstable_by(|a, b| a.entity.cmp(&b.entity).then_with(|| a.kind.cmp(b.kind)));
+        let truncated = scripts.len() > MAX_DEBUG_VM_ENTITIES;
+        scripts.truncate(MAX_DEBUG_VM_ENTITIES);
+        Ok((scripts, truncated))
+    }
+
+    #[cfg(any(test, feature = "inspector"))]
     pub(crate) fn debug_actors(&self) -> Result<impl ExactSizeIterator<Item = Actor>, CombatError> {
         let states = self.states().collect::<Result<Vec<_>, _>>()?;
         let players = self.player_debug_actors();
@@ -1011,8 +1198,46 @@ impl RoomSimulation {
             queries.hitscan_wall(origin, direction, reach)
         })?
         else {
+            #[cfg(any(test, feature = "inspector"))]
+            {
+                let (hit, end) = match queries
+                    .hitscan_wall(ray.origin, ray.direction, ray.reach)
+                    .ok()
+                    .flatten()
+                {
+                    Some(distance) => (
+                        "world",
+                        crate::static_ray::along(ray.origin, ray.direction, distance),
+                    ),
+                    None => (
+                        "none",
+                        crate::static_ray::along(ray.origin, ray.direction, ray.reach),
+                    ),
+                };
+                self.record_debug_ray(crate::game_debug::DebugRay {
+                    tick: context.tick,
+                    source: shot.source,
+                    kind: "hitscan",
+                    origin: ray.origin,
+                    end,
+                    hit,
+                    target: None,
+                    critical: false,
+                });
+            }
             return Ok(None);
         };
+        #[cfg(any(test, feature = "inspector"))]
+        self.record_debug_ray(crate::game_debug::DebugRay {
+            tick: context.tick,
+            source: shot.source,
+            kind: "hitscan",
+            origin: ray.origin,
+            end: crate::static_ray::along(ray.origin, ray.direction, impact.distance),
+            hit: "actor",
+            target: Some(impact.entity),
+            critical: impact.critical,
+        });
         if self.players_by_wire.contains_key(&impact.entity) {
             return self.apply_player_impact(shot.source, shot.shot_frame, context, &impact);
         }
@@ -1416,6 +1641,8 @@ impl RoomSimulation {
         let mut retired = Vec::new();
         let mut enemy_damage = Vec::new();
         let mut launched = Vec::new();
+        #[cfg(any(test, feature = "inspector"))]
+        let mut recorded_rays = Vec::new();
         let witch_present = states
             .iter()
             .copied()
@@ -1578,18 +1805,75 @@ impl RoomSimulation {
                                 .flat_map(|targets| targets.iter())
                                 .filter(|target| target.alive && target.team != enemy.binding.team)
                                 .map(|target| (target.entity, target.pose));
-                            if let Ok(Some(impact)) =
-                                pellet.resolve(targets, |origin, direction, reach| {
-                                    queries.hitscan_wall(origin, direction, reach)
-                                })
-                            {
-                                enemy_damage.push(crate::script_enemy::EnemyDamage {
-                                    source: bot.entity,
-                                    target: impact.entity,
-                                    amount: enemy
-                                        .scripts
-                                        .outgoing_damage(impact.damage, &volley.damage_tags),
-                                });
+                            match pellet.resolve(targets, |origin, direction, reach| {
+                                queries.hitscan_wall(origin, direction, reach)
+                            }) {
+                                Ok(Some(impact)) => {
+                                    #[cfg(any(test, feature = "inspector"))]
+                                    recorded_rays.push(crate::game_debug::DebugRay {
+                                        tick,
+                                        source: bot.entity,
+                                        kind: "hitscan",
+                                        origin: pellet.origin,
+                                        end: crate::static_ray::along(
+                                            pellet.origin,
+                                            pellet.direction,
+                                            impact.distance,
+                                        ),
+                                        hit: "actor",
+                                        target: Some(impact.entity),
+                                        critical: impact.critical,
+                                    });
+                                    enemy_damage.push(crate::script_enemy::EnemyDamage {
+                                        source: bot.entity,
+                                        target: impact.entity,
+                                        amount: enemy
+                                            .scripts
+                                            .outgoing_damage(impact.damage, &volley.damage_tags),
+                                    });
+                                }
+                                Ok(None) => {
+                                    #[cfg(any(test, feature = "inspector"))]
+                                    {
+                                        let (hit, end) = match queries
+                                            .hitscan_wall(
+                                                pellet.origin,
+                                                pellet.direction,
+                                                pellet.reach,
+                                            )
+                                            .ok()
+                                            .flatten()
+                                        {
+                                            Some(distance) => (
+                                                "world",
+                                                crate::static_ray::along(
+                                                    pellet.origin,
+                                                    pellet.direction,
+                                                    distance,
+                                                ),
+                                            ),
+                                            None => (
+                                                "none",
+                                                crate::static_ray::along(
+                                                    pellet.origin,
+                                                    pellet.direction,
+                                                    pellet.reach,
+                                                ),
+                                            ),
+                                        };
+                                        recorded_rays.push(crate::game_debug::DebugRay {
+                                            tick,
+                                            source: bot.entity,
+                                            kind: "hitscan",
+                                            origin: pellet.origin,
+                                            end,
+                                            hit,
+                                            target: None,
+                                            critical: false,
+                                        });
+                                    }
+                                }
+                                Err(_) => {}
                             }
                         }
                     }
@@ -1631,6 +1915,10 @@ impl RoomSimulation {
                     }
                 }
             }
+        }
+        #[cfg(any(test, feature = "inspector"))]
+        for ray in recorded_rays {
+            self.record_debug_ray(ray);
         }
         // +80 voice callbacks are a separate phase after all ordinary actor updates.
         // Select through read-only facts before taking a mutable actor reference.
@@ -1982,6 +2270,11 @@ impl RoomSimulation {
         self.defender_messages.clear();
         self.mode_voice_requests.clear();
         self.witch_staff_links.clear();
+        #[cfg(any(test, feature = "inspector"))]
+        {
+            self.debug_rays.clear();
+            self.debug_rays_truncated = false;
+        }
         self.debug_assert_encounter_invariants();
     }
 }
