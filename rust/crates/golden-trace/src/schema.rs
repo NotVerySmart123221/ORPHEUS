@@ -66,8 +66,23 @@ pub(super) fn items(v: &Value, n: usize, predicate: impl Fn(&Value) -> bool) -> 
 }
 
 pub(super) fn check_header(h: &Value, role: &str) -> Invalid<()> {
-    require(
+    // Older synthetic records omit the room setup. A captured setup must compare
+    // exactly, including the spawner and the meaning of the initial seed.
+    let fields_valid = if let Some(setup) = h.get("setup") {
+        exact_fields(
+            setup,
+            &["bot_spawner_slot", "initial_room_tick", "random_model"],
+        ) && uint(&setup["bot_spawner_slot"], u32::MAX.into())
+            && uint(&setup["initial_room_tick"], u32::MAX.into())
+            && token(&setup["random_model"])
+            && h.as_object().is_some_and(|map| {
+                map.len() == HEADER.len() + 1 && HEADER.iter().all(|name| map.contains_key(*name))
+            })
+    } else {
         exact_fields(h, HEADER)
+    };
+    require(
+        fields_valid
             && h["kind"] == "header"
             && h["role"] == role
             && h["schema"] == "orpheus.golden.v1"

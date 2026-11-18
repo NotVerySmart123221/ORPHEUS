@@ -97,6 +97,56 @@ fn accepts_a_python_written_reference_with_a_retirement_gap() {
 }
 
 #[test]
+fn validates_a_standalone_reference_and_preserves_the_setup_boundary() {
+    let add_setup = |rows: &mut [Value]| {
+        rows[0]["setup"] =
+            json!({"bot_spawner_slot": 2, "initial_room_tick": 1000, "random_model": "counter-v1"});
+    };
+    let reference = trace("reference", add_setup);
+    let files = Files::with_traces(&reference, &candidate(add_setup));
+    let check = |name| {
+        Command::new(env!("CARGO_BIN_EXE_compare_golden"))
+            .current_dir(files.0.path())
+            .args(["--check-reference", name])
+            .output()
+            .unwrap()
+    };
+    assert_eq!(check("reference").stdout, b"valid-reference\n");
+    assert_eq!(check("candidate").status.code(), Some(2));
+    assert_eq!(files.compare(&[]).status.code(), Some(0));
+    for (key, value) in [
+        ("bot_spawner_slot", json!(3)),
+        ("initial_room_tick", json!(1010)),
+        ("random_model", json!("different-model")),
+    ] {
+        let changed = candidate(|rows| {
+            add_setup(rows);
+            rows[0]["setup"][key] = value;
+        });
+        assert_eq!(
+            Files::with_traces(&reference, &changed)
+                .compare(&[])
+                .status
+                .code(),
+            Some(2)
+        );
+    }
+    assert_eq!(
+        Files::with_traces(&reference, &candidate(|_| {}))
+            .compare(&[])
+            .status
+            .code(),
+        Some(2)
+    );
+    fs::write(
+        files.0.path().join("reference"),
+        &reference[..reference.len() - 5],
+    )
+    .unwrap();
+    assert_eq!(check("reference").status.code(), Some(2));
+}
+
+#[test]
 fn reports_the_earliest_field_privately_and_preserves_an_existing_report() {
     let files = Files::new(&candidate(|rows| {
         *field_mut(&mut rows[2], "player/0/body/1", "ammo") = json!(1);

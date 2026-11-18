@@ -8,6 +8,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 #### Compare gameplay evidence across languages
 
+- Added a private two-run recorder for each implementation, input fingerprints that cover supplemental files, and standalone validation of complete Python references. The recorded setup identifies the chosen bot spawner and clock origin.
+
 - Add the offline `compare_golden` command for semantic Soldier traces. It checks input and runtime fingerprints, validates complete records and reports the first differing command acceptance, state field or owner effect. The public tests exercise an invented scenario with a bot respawn. [Comparison guide](docs/GOLDEN_COMPARISON.md)
 - Added a prepared-runtime observation of stock Soldier command processing and rifle ammo after possession, firing and reloading. This test drives the headless room.
 

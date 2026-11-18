@@ -6,6 +6,7 @@
 cargo run --locked -p orpheus-golden-trace --bin compare_golden -- reference.jsonl candidate.jsonl
 cargo run --locked -p orpheus-golden-trace --bin compare_golden -- reference.jsonl candidate.jsonl --report private-report.json
 cargo test --locked -p orpheus-golden-trace
+cargo run --locked -p orpheus-golden-trace --bin compare_golden -- --check-reference reference.jsonl
 ```
 
 | Exit | Result | Meaning |
@@ -15,6 +16,18 @@ cargo test --locked -p orpheus-golden-trace
 | 2 | `incomplete` or a command error | The records are incomplete, corrupt or incompatible, or a requested file operation failed. A later bad footer invalidates an earlier apparent mismatch. |
 
 Detailed values go in the optional report. Choose a new file in a private directory. A report distinguishes a missing field from a field whose value is JSON `null`. Keep recordings and reports on the runner or maintainer machine. The repository ignores `local-data/` at the project root.
+
+## Record the same session twice on each server
+
+Use a prepared 104319 runtime and a private canonical input schedule. The Python reference checkout must match the revision pinned by the adapter. Select a Python interpreter with the reference project's dependencies installed. Both adapter checkouts must contain the replay observers.
+
+```sh
+python scripts/capture_room_pair.py --python-source /path/to/python-reference --python-adapter /path/to/rust-checkout --rust-source /path/to/rust-checkout --runtime /private/runtime-data --schedule /private/schedule.jsonl --bot-slot 2 --out /private/new-session --python /path/to/reference-venv/python
+```
+
+Each process receives the same input schedule and selected spawner. The collector checks the entire runtime tree, manifest and schedule before the first process and after each run. Its receipt records source revisions, observation hashes and whether the two recordings of each implementation agree. A repeatable diagnostic can still contain missing fields or disagree with the other server.
+
+When all Python state and owner-effect observations are available, the collector writes a private reference and validates its checksums, lifecycle and scenario coverage with the Rust reader. `--check-reference` prints `valid-reference` for a complete reference. A Python–Rust match requires a separate complete candidate. Captured references include a `setup` object with the authored bot spawner ordinal, initial room tick and random-source model. Two traces with different setups are incompatible. The original synthetic format remains readable.
 
 ## Writing the first format
 

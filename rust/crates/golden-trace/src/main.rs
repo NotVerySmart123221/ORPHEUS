@@ -7,10 +7,10 @@ use std::io::{self, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use orpheus_golden_trace::{Difference, compare};
+use orpheus_golden_trace::{Difference, compare, validate_reference};
 use serde_json::{Value, json};
 
-const USAGE: &str = "Usage: compare_golden REFERENCE.jsonl CANDIDATE.jsonl [--report NEW_FILE]";
+const USAGE: &str = "Usage: compare_golden REFERENCE.jsonl CANDIDATE.jsonl [--report NEW_FILE]\n       compare_golden --check-reference REFERENCE.jsonl";
 
 fn write_report(path: &Path, report: &Value) -> io::Result<()> {
     let parent = path
@@ -43,6 +43,15 @@ fn run(args: &[OsString]) -> Result<u8, &'static str> {
         return Ok(0);
     }
     let (reference, candidate, output) = match args {
+        [flag, path] if flag == "--check-reference" => {
+            let source = File::open(path).map_err(|_| "Cannot open the reference trace.")?;
+            if let Err(error) = validate_reference(BufReader::new(source)) {
+                eprintln!("{error}");
+                return Ok(2);
+            }
+            println!("valid-reference");
+            return Ok(0);
+        }
         [a, b] => (a, b, None),
         [a, b, flag, path] if flag == "--report" => (a, b, Some(PathBuf::from(path))),
         _ => return Err(USAGE),

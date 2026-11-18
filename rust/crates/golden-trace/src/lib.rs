@@ -145,7 +145,7 @@ pub fn compare<R: BufRead, S: BufRead>(
 ) -> Result<Option<Difference>, TraceError> {
     let mut left = Stream::new(reference, "reference")?;
     let mut right = Stream::new(candidate, "candidate")?;
-    for &key in HEADER {
+    for key in HEADER.iter().copied().chain(["setup"]) {
         if !["role", "source_rev", "adapter_rev", "toolchain"].contains(&key)
             && left.header[key] != right.header[key]
         {
@@ -174,4 +174,11 @@ pub fn compare<R: BufRead, S: BufRead>(
             }
         }
     }
+}
+
+/// Validate a standalone Python recording through its footer and scenario coverage.
+pub fn validate_reference<R: BufRead>(source: R) -> Result<(), TraceError> {
+    let mut reference = Stream::new(source, "reference")?;
+    while reference.next()?.is_some() {}
+    Ok(())
 }
