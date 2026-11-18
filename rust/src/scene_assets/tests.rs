@@ -101,6 +101,7 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
     use crate::commands::Command;
     use crate::game_replication::BodyStep;
     use crate::script_init::{Snapshot, StateKind};
+    use crate::script_snapshot_wire::identity_test_reader::IdentityReader;
     use crate::script_snapshot_wire::{View, uncertain_polled_switch};
     use crate::script_stream::{BodyStream, DeltaKind};
     use crate::script_wire::Value;
@@ -141,6 +142,14 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
             let mut stream = BodyStream::new(spawn.entity);
             let baseline = encoder.queue_full(&mut stream, &projected).unwrap();
             stream.create_arrived();
+            let mut wire = IdentityReader::default();
+            wire.apply(
+                baseline.update.chunk.as_ref().unwrap(),
+                true,
+                view == View::Owner,
+            )
+            .unwrap();
+            wire.verify(snapshot, &assets.graphs);
             stream.arrived(baseline.last);
             // Only the unbound table is omitted, as Python omits its None.
             let sent = projected.instance_variables(table_id).unwrap();
@@ -154,7 +163,7 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
                     assert_eq!(sent.get(&variable), Some(value), "{variable}");
                 }
             }
-            streams.push((stream, projected));
+            streams.push((stream, projected, wire));
         }
         // A live session: idle for about 3 s, hold fire for 1.5 s, reload,
         // fire briefly, stand until the idle fidget plays, fire through it,
@@ -210,7 +219,7 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
             (child_0ba4, 0),
         ]);
         assert_eq!(uncertain(snapshot), withheld);
-        for (_, projected) in &streams {
+        for (_, projected, _) in &streams {
             for &(id, raw) in &withheld {
                 assert!(!projected.instance_states(id).unwrap().contains(&raw));
             }
@@ -284,7 +293,7 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
             );
             let excluded = uncertain(snapshot);
             let encoder = runtime.encoder();
-            for (stream, initial) in &mut streams {
+            for (stream, initial, wire) in &mut streams {
                 let next = encoder.project_next(snapshot, initial).unwrap();
                 let kind = match initial.view() {
                     View::Owner => stream.owner_kind(frame, false, false).unwrap(),
@@ -294,6 +303,13 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
                 let delta = encoder.queue_delta(stream, &next, kind, runtime.frame_ms());
                 if let Some(chunk) = delta.unwrap() {
                     stream.sent(chunk.last);
+                    wire.apply(
+                        chunk.update.chunk.as_ref().unwrap(),
+                        false,
+                        next.view() == View::Owner,
+                    )
+                    .unwrap();
+                    wire.verify(snapshot, &assets.graphs);
                     stream.arrived(chunk.last);
                 }
                 if next.view() != View::Owner {

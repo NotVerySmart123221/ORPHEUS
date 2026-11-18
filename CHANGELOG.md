@@ -8,7 +8,7 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 #### Correct prepared Soldier test identities
 
-- Pin the ordered live startup tree and resolve long-session assertions by unique graph and attachment instead of fixed instance IDs. The production filter, encoder, and allocator are unchanged; wire-level identity verification and original-client verification remain open.
+- Pin the ordered live startup tree and resolve long-session assertions by unique graph and attachment instead of fixed instance IDs. Independently decode descriptor sections of the prepared owner/observer frames and exercise synthetic child removal, cumulative delivery and chunk-sequence gaps. The production filter, encoder, and allocator are unchanged; state-link decoding and original-client verification remain open.
 
 #### Compare gameplay evidence across languages
 

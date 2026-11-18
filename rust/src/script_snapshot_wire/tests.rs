@@ -297,6 +297,112 @@ fn baseline_matches_python_for_both_views_and_enters_the_acknowledged_stream() {
 }
 
 #[test]
+fn wire_identity_tracks_child_replacement_and_retirement_in_both_views() {
+    use super::identity_test_reader::{IdentityError, IdentityReader};
+    let (graphs, mut snapshot) = fixture();
+    snapshot.variables.clear();
+    snapshot.bindings.clear();
+    snapshot.resolved_bindings.clear();
+    for instance in snapshot.instances.values_mut() {
+        instance.states.clear();
+        instance.variables.clear();
+    }
+    let codecs = CodecTable::from_json(CODECS).unwrap();
+    let encoder = SnapshotEncoder::new(&graphs, &codecs);
+    for view in [View::Owner, View::Observer] {
+        let mut current = snapshot.clone();
+        let projected = encoder.project(&current, view).unwrap().without_events();
+        let mut stream = BodyStream::new(ENTITY);
+        let baseline = encoder.queue_full(&mut stream, &projected).unwrap();
+        stream.create_arrived();
+        let mut reader = IdentityReader::default();
+        reader
+            .apply(
+                baseline.update.chunk.as_ref().unwrap(),
+                true,
+                view == View::Owner,
+            )
+            .unwrap();
+        reader.verify(&current, &graphs);
+        assert!(stream.arrived(baseline.last).advanced);
+
+        let child = current.instances.shift_remove(&2).unwrap();
+        current.instances.insert(3, child.clone());
+        let next = encoder
+            .project_next(&current, &projected)
+            .unwrap()
+            .without_events();
+        let kind = match view {
+            View::Owner => DeltaKind::InitialOwner(100),
+            View::Observer => DeltaKind::Observer { resend: true },
+        };
+        let chunk = encoder
+            .queue_delta(&mut stream, &next, kind, 16)
+            .unwrap()
+            .unwrap();
+        stream.sent(chunk.last);
+        assert!(stream.lost(chunk.last).retry);
+        reader
+            .apply(
+                chunk.update.chunk.as_ref().unwrap(),
+                false,
+                view == View::Owner,
+            )
+            .unwrap();
+        reader.verify(&current, &graphs);
+        assert!(reader.was_removed(2));
+        assert!(stream.arrived(chunk.last).advanced);
+
+        current.instances.shift_remove(&3).unwrap();
+        let next = encoder
+            .project_next(&current, &projected)
+            .unwrap()
+            .without_events();
+        let kind = match view {
+            View::Owner => DeltaKind::Correction(116),
+            View::Observer => DeltaKind::Observer { resend: true },
+        };
+        let chunk = encoder
+            .queue_delta(&mut stream, &next, kind, 16)
+            .unwrap()
+            .unwrap();
+        reader
+            .apply(
+                chunk.update.chunk.as_ref().unwrap(),
+                false,
+                view == View::Owner,
+            )
+            .unwrap();
+        reader.verify(&current, &graphs);
+        assert!(reader.was_removed(3));
+        assert!(stream.arrived(chunk.last).advanced);
+
+        // A forged snapshot reusing a retired ID must not be accepted by the reader.
+        current.instances.insert(2, child);
+        let next = encoder
+            .project_next(&current, &projected)
+            .unwrap()
+            .without_events();
+        let kind = match view {
+            View::Owner => DeltaKind::Correction(132),
+            View::Observer => DeltaKind::Observer { resend: true },
+        };
+        let chunk = encoder
+            .queue_delta(&mut stream, &next, kind, 16)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            reader.apply(
+                chunk.update.chunk.as_ref().unwrap(),
+                false,
+                view == View::Owner,
+            ),
+            Err(IdentityError::ReintroducedRemoved(2))
+        );
+    }
+}
+
+#[test]
 fn owner_frames_withhold_switches_polled_on_natives_the_client_may_answer_differently() {
     let untrusted = json!({"$":"STU_E95A9C77","m_EE729DCB":0});
     let fixture = graph(
@@ -1459,12 +1565,17 @@ fn a_new_volley_reseeds_ammo_after_an_unacknowledged_stop() {
 
 #[test]
 fn observer_delta_removes_an_instance_introduced_by_an_unacknowledged_chunk() {
+    use super::identity_test_reader::IdentityReader;
     let (graphs, snapshot) = fixture();
     let codecs = CodecTable::from_json(CODECS).unwrap();
     let encoder = SnapshotEncoder::new(&graphs, &codecs);
     let observer = encoder.project(&snapshot, View::Observer).unwrap();
     let mut stream = BodyStream::new(ENTITY);
     let baseline = encoder.queue_full(&mut stream, &observer).unwrap();
+    let mut reader = IdentityReader::default();
+    reader
+        .apply(baseline.update.chunk.as_ref().unwrap(), true, false)
+        .unwrap();
     stream.create_arrived();
     stream.arrived(baseline.last);
     let mut temporary = observer.clone();
@@ -1488,6 +1599,11 @@ fn observer_delta_removes_an_instance_introduced_by_an_unacknowledged_chunk() {
         .unwrap()
         .unwrap();
     check(removed.update.chunk.as_ref().unwrap(), 52, "04000400810900");
+    reader
+        .apply(removed.update.chunk.as_ref().unwrap(), false, false)
+        .unwrap();
+    assert!(reader.was_removed(3));
+    reader.verify(&snapshot, &graphs);
     stream.arrived(removed.last);
     assert!(
         encoder
@@ -1495,6 +1611,135 @@ fn observer_delta_removes_an_instance_introduced_by_an_unacknowledged_chunk() {
             .unwrap()
             .is_none()
     );
+}
+
+#[test]
+fn wire_identity_accepts_cumulative_descriptor_repetition_and_rejects_conflict() {
+    use super::identity_test_reader::{IdentityError, IdentityReader};
+    let (graphs, snapshot) = fixture();
+    let codecs = CodecTable::from_json(CODECS).unwrap();
+    let encoder = SnapshotEncoder::new(&graphs, &codecs);
+    let observer = encoder.project(&snapshot, View::Observer).unwrap();
+    let mut stream = BodyStream::new(ENTITY);
+    let baseline = encoder.queue_full(&mut stream, &observer).unwrap();
+    stream.create_arrived();
+    let mut reader = IdentityReader::default();
+    reader
+        .apply(baseline.update.chunk.as_ref().unwrap(), true, false)
+        .unwrap();
+    let mut fresh_after_baseline = reader.clone();
+    stream.arrived(baseline.last);
+    let mut with_child = observer.clone();
+    with_child
+        .instances
+        .insert(3, with_child.instances[&2].clone());
+    let kind = DeltaKind::Observer { resend: false };
+    let first = encoder
+        .queue_delta(&mut stream, &with_child, kind, 16)
+        .unwrap()
+        .unwrap();
+    stream.sent(first.last);
+    // The packet arrives but its acknowledgement is lost.
+    reader
+        .apply(first.update.chunk.as_ref().unwrap(), false, false)
+        .unwrap();
+    assert!(!stream.lost(first.last).retry);
+    let repeated = encoder
+        .queue_delta(&mut stream, &with_child, kind, 16)
+        .unwrap()
+        .unwrap();
+    reader
+        .apply(repeated.update.chunk.as_ref().unwrap(), false, false)
+        .unwrap();
+    fresh_after_baseline
+        .apply(repeated.update.chunk.as_ref().unwrap(), false, false)
+        .unwrap();
+    let mut expected = snapshot.clone();
+    expected.instances.insert(3, expected.instances[&2].clone());
+    reader.verify(&expected, &graphs);
+    fresh_after_baseline.verify(&expected, &graphs);
+
+    let mut conflicting = with_child.clone();
+    conflicting.instances.get_mut(&3).unwrap().graph = 42;
+    let conflict = encoder
+        .queue_delta(&mut stream, &conflicting, kind, 16)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        reader.apply(conflict.update.chunk.as_ref().unwrap(), false, false),
+        Err(IdentityError::ConflictingDescriptor(3))
+    );
+}
+
+#[test]
+fn wire_identity_rejects_gapped_delta_before_mutating_and_accepts_covering_delta() {
+    use super::identity_test_reader::{IdentityError, IdentityReader};
+    let (graphs, snapshot) = fixture();
+    let codecs = CodecTable::from_json(CODECS).unwrap();
+    let encoder = SnapshotEncoder::new(&graphs, &codecs);
+    let observer = encoder.project(&snapshot, View::Observer).unwrap();
+    let kind = DeltaKind::Observer { resend: false };
+
+    let mut gapped_stream = BodyStream::new(ENTITY);
+    let baseline = encoder.queue_full(&mut gapped_stream, &observer).unwrap();
+    gapped_stream.create_arrived();
+    gapped_stream.arrived(baseline.last);
+
+    let mut reader = IdentityReader::default();
+    reader
+        .apply(baseline.update.chunk.as_ref().unwrap(), true, false)
+        .unwrap();
+    let baseline_state = reader.clone();
+
+    let mut with_three = observer.clone();
+    with_three
+        .instances
+        .insert(3, with_three.instances[&2].clone());
+    let first = encoder
+        .queue_delta(&mut gapped_stream, &with_three, kind, 16)
+        .unwrap()
+        .unwrap();
+    gapped_stream.arrived(first.last);
+
+    let mut with_four = with_three.clone();
+    with_four
+        .instances
+        .insert(4, with_four.instances[&2].clone());
+    let gapped = encoder
+        .queue_delta(&mut gapped_stream, &with_four, kind, 16)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        reader.apply(gapped.update.chunk.as_ref().unwrap(), false, false),
+        Err(IdentityError::OutOfSequence {
+            first: 3,
+            applied: 1,
+        })
+    );
+    assert_eq!(reader, baseline_state);
+
+    let mut covering_stream = BodyStream::new(ENTITY);
+    let covering_baseline = encoder.queue_full(&mut covering_stream, &observer).unwrap();
+    covering_stream.create_arrived();
+    covering_stream.arrived(covering_baseline.last);
+    let lost_first = encoder
+        .queue_delta(&mut covering_stream, &with_three, kind, 16)
+        .unwrap()
+        .unwrap();
+    covering_stream.sent(lost_first.last);
+    covering_stream.lost(lost_first.last);
+    let covering = encoder
+        .queue_delta(&mut covering_stream, &with_four, kind, 16)
+        .unwrap()
+        .unwrap();
+    reader
+        .apply(covering.update.chunk.as_ref().unwrap(), false, false)
+        .unwrap();
+
+    let mut expected = snapshot.clone();
+    expected.instances.insert(3, expected.instances[&2].clone());
+    expected.instances.insert(4, expected.instances[&2].clone());
+    reader.verify(&expected, &graphs);
 }
 
 #[test]
