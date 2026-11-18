@@ -22,6 +22,7 @@ The [pinned Python → Rust parity matrix](https://github.com/leafall903/ORPHEUS
 ## Implementation and prepared-runtime observations
 
 Local integration check (2026-11-16): rifle/reload and controller/training-bot startup prepared tests passed with the target-tagged base pack, as did runtime preflight and headless startup. The longer `scene_assets::tests::stock_soldier_owner_session_idles_fires_reloads_and_sprints` test failed its fixed-instance assertion: instance `24` contained graph `0x0F82`, not `0x05AD`. The message table was present elsewhere; diagnostic inspection also found switch instance `19` versus expected `18`. The original assertions are retained. This prepared acceptance gap needs a reference-backed review of instance identity expectations and is not covered by the public test results above.
+Follow-up (2026-11-18): on the same prepared runtime, the long test passes using unique graph and parent/attachment identities; a separate test pins the ordered live startup tree and the absent IDs 9 and 26. The additional `01CB` child at `004B` attachment 2 precedes `0BA4` and `05AD`. The tests do not decode the wire identity of the prepared frames, state links, variables or startup creation/retirement events, and they do not establish original-client compatibility. The earlier fixed-ID failure remains a historical observation, not a current test result.
 
 | Workflow | Python reference | Rust implementation | Open client or parity gap |
 | --- | --- | --- | --- |
