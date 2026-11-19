@@ -9,6 +9,17 @@ and message scheduling, and direct dispatch. A client-only node does not run
 server actions or start server states. Server-only nodes can execute on the
 server while remaining absent from network projection.
 
+## Declare an ordinary server state
+
+An authored node can opt into the plain state lifecycle with
+`"state_behavior": "plain"`. Set `server_only` to true and `client_only`
+to false. Its `state` must index a slot in the graph's `states` table that
+points back to the node. The loader assigns the plain dispatch class, so a
+graph can link to that state and use its ordinary lifecycle plugs without
+registering the original class or position. These nodes remain outside the
+network projection. Graphs without the declaration still use their existing
+dispatch and diagnostics.
+
 ## Follow an action
 
 1. [`script_graph.rs`](../rust/crates/statescript/src/script_graph.rs) loads authored graph metadata and preserves wire slots and link order.

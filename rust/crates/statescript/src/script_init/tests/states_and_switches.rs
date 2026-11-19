@@ -209,6 +209,66 @@ fn bridge_forwards_input_only_between_begin_and_abort() {
     }
 }
 
+#[test]
+fn declared_plain_nodes_follow_links_and_ordinary_lifecycle() {
+    for (id, class) in [(42, "WarmupWindow"), (43, "QuietInterval")] {
+        let mut state = node(
+            0,
+            class,
+            Some(0),
+            json!({"m_onBeginPlug":plug(&[(2, "m_inPlug")], &[])}),
+        );
+        state["server_only"] = json!(true);
+        state["fields"]["m_2BBEEAB8"] = json!(false);
+        let undeclared = store(vec![graph(id, vec![state.clone()], json!([0]), json!([]))]);
+        let unsupported = initialize(
+            &undeclared,
+            42,
+            Variables::new(),
+            vec![Root::listener(1, id, Some(0))],
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        assert!(matches!(&unsupported.diagnostics[..],
+            [Diagnostic { issue: Issue::UnsupportedState(name), .. }] if name == class
+        ));
+
+        state["state_behavior"] = json!("plain");
+        let entry = node(
+            1,
+            "STUStatescriptEntry",
+            None,
+            json!({"m_outPlug":plug(&[(0, "m_beginPlug")], &[])}),
+        );
+        let assign = node(
+            2,
+            "STUStatescriptActionSetVar",
+            None,
+            json!({"m_out_Var":var(42, true), "m_value":true}),
+        );
+        let graphs = store(vec![graph(
+            id,
+            vec![state, entry, assign],
+            json!([0]),
+            json!([1]),
+        )]);
+        let snapshot = initialize(
+            &graphs,
+            42,
+            Variables::new(),
+            vec![Root::new(1, id)],
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        assert!(snapshot.initialization_complete());
+        assert!(snapshot.instances[&1].states[&0].active);
+        assert_eq!(snapshot.instances[&1].states[&0].kind, StateKind::Plain);
+        assert_eq!(snapshot.variables.get(&42), Some(&Value::Bool(true)));
+    }
+}
+
 fn scoped_dispatch_fixture(
     client_only: bool,
     server_only: bool,

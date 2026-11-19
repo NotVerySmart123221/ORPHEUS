@@ -18,6 +18,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Kept entity destruction behind reliable notices that already reference the entity, including notices waiting for retransmission.
 
+- Added an opt-in declaration for authored server-only plain states. The loader validates the state's slot and routes it to the common lifecycle.
+
 ### 2026-11-18
 
 #### Build shared map-agnostic static navigation queries (#63)

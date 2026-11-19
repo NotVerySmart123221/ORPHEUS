@@ -26,6 +26,12 @@ pub struct Header {
     pub sync_vars_bits: u8,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StateBehavior {
+    Plain,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Node {
     pub pos: u16,
@@ -34,6 +40,7 @@ pub struct Node {
     pub rid: u16,
     pub remote: i32,
     pub state: Option<u16>,
+    state_behavior: Option<StateBehavior>,
     #[serde(deserialize_with = "node_flag")]
     pub client_only: bool,
     #[serde(deserialize_with = "node_flag")]
@@ -52,7 +59,11 @@ impl Node {
     }
 
     pub fn is_state(&self) -> bool {
-        self.fields.get("m_2BBEEAB8").is_some_and(truthy)
+        self.declares_plain_state() || self.fields.get("m_2BBEEAB8").is_some_and(truthy)
+    }
+
+    fn declares_plain_state(&self) -> bool {
+        matches!(self.state_behavior, Some(StateBehavior::Plain))
     }
 
     pub fn is_action(&self) -> bool {
@@ -177,7 +188,26 @@ impl Graph {
         if let Some(max) = self.nodes.iter().map(|node| node.rid).max() {
             self.by_rid = vec![None; usize::from(max) + 1];
         }
-        for (index, node) in self.nodes.iter().enumerate() {
+        for (index, node) in self.nodes.iter_mut().enumerate() {
+            if node.declares_plain_state() {
+                let occupies_state_slot = node
+                    .state
+                    .and_then(|slot| self.states.get(usize::from(slot)))
+                    .is_some_and(|&position| position == Some(node.pos));
+                if !node.server_only
+                    || !node.runs_on_server()
+                    || node.is_action()
+                    || !occupies_state_slot
+                {
+                    return Err(invalid(format!(
+                        "plain state in graph {} at node {} must be server-only and occupy its state slot",
+                        self.index, node.pos
+                    )));
+                }
+                // Ordinary authored states use the one plain lifecycle, including
+                // at class checks outside the main dispatch.
+                node.class = "STUStatescriptState".into();
+            }
             let position = self
                 .by_pos
                 .get_mut(usize::from(node.pos))
@@ -828,6 +858,40 @@ mod tests {
         // Playable boss definitions use the explicit encounter pair instead of an AI association.
         data["junkenstein"]["entities"][body]["ai_association"] = Value::Null;
         assert!(load(&data).is_ok());
+    }
+
+    #[test]
+    fn plain_state_declarations_require_a_server_state_slot() {
+        let mut data = fixture();
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state"] = json!(0);
+        node["server_only"] = json!(true);
+        node["state_behavior"] = json!("plain");
+
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let store = load(&data).unwrap();
+        let graph = store.graph(42).unwrap();
+        let plain = graph.state(0).unwrap();
+        assert!(plain.is_state());
+        assert!(!plain.is_networked());
+        assert!(graph.owner_positions().is_empty());
+
+        for (field, value) in [
+            ("server_only", json!(false)),
+            ("client_only", json!(true)),
+            ("state", json!(1)),
+            ("state", Value::Null),
+            ("state_behavior", json!("unrecognized")),
+        ] {
+            let mut malformed = data.clone();
+            malformed["graphs"][0]["nodes"][0][field] = value;
+            assert_eq!(
+                load(&malformed).unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+        }
+        data["graphs"][0]["nodes"][0]["fields"]["m_ADEB6E05"] = json!(true);
+        assert_eq!(load(&data).unwrap_err().kind(), io::ErrorKind::InvalidData);
     }
 
     #[test]
