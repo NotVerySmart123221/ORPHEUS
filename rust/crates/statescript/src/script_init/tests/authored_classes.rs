@@ -134,6 +134,182 @@ fn authored_class_aliases_apply_across_graphs_without_network_slots() {
 }
 
 #[test]
+fn authored_observer_samples_radius_once_per_frame_until_aborted() {
+    use std::cell::Cell;
+
+    use crate::script_expr::SpatialCandidate;
+
+    const GRAPH: u32 = 94;
+    const INSTANCE: u16 = 1;
+    const ENTITY: u32 = 4242;
+    const OUTPUT: u32 = 81;
+    const FIRED: u32 = 82;
+    const SUBFRAME_MESSAGE: u64 = 13;
+
+    #[derive(Deserialize)]
+    struct Step {
+        frame: u32,
+        candidates: Option<Vec<(u32, [f64; 3])>>,
+        message: Option<u64>,
+        override_output: Option<Vec<u32>>,
+        #[serde(default)]
+        subframe_due_ms: Vec<u64>,
+    }
+
+    #[derive(Deserialize)]
+    struct Input {
+        bundle: Json,
+        steps: Vec<Step>,
+    }
+
+    #[derive(Deserialize)]
+    struct Expected {
+        reads: usize,
+        output: Option<Vec<u32>>,
+        fired: bool,
+        active: bool,
+        unavailable: bool,
+    }
+
+    #[derive(Deserialize)]
+    struct ObservationContract {
+        schema_version: u8,
+        case_id: String,
+        evidence: String,
+        input: Input,
+        expected: Vec<Expected>,
+    }
+
+    #[derive(Default)]
+    struct SpatialWorld {
+        candidates: Option<Vec<SpatialCandidate>>,
+        reads: Cell<usize>,
+    }
+
+    impl World for SpatialWorld {
+        fn entity_variable(&mut self, _: u32, _: u32) -> Option<Value> {
+            None
+        }
+
+        fn position(&mut self, entity: u32) -> Option<[f64; 3]> {
+            (entity == ENTITY).then_some([0.0; 3])
+        }
+
+        fn spatial_candidates(&self) -> Option<&[SpatialCandidate]> {
+            self.reads.set(self.reads.get() + 1);
+            self.candidates.as_deref()
+        }
+    }
+
+    let contract: ObservationContract = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/script-observe-radius-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    assert_eq!(contract.case_id, "script-observe-radius.synthetic.v1");
+    assert_eq!(contract.evidence, "synthetic-rust");
+    assert_eq!(contract.input.steps.len(), contract.expected.len());
+
+    let bundle = serde_json::to_vec(&contract.input.bundle).unwrap();
+    let graphs = Arc::new(GraphStore::from_json(&bundle).unwrap());
+    let node = graphs.graph(GRAPH).unwrap().node(1).unwrap();
+    assert!(node.server_only && !node.is_networked());
+
+    let mut world = SpatialWorld::default();
+    let mut component = Component::start(
+        graphs,
+        ENTITY,
+        Variables::from([(1, Value::Entity(ENTITY))]),
+        vec![Root::new(INSTANCE, GRAPH)],
+        0,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    assert_eq!(world.reads.get(), 0);
+    assert!(component.snapshot().unwrap().diagnostics.is_empty());
+    let entities = |ids: Vec<u32>| Value::Array(ids.into_iter().map(Value::Entity).collect());
+
+    for (step, expected) in contract.input.steps.into_iter().zip(contract.expected) {
+        let before = world.reads.get();
+        world.candidates = step.candidates.map(|rows| {
+            rows.into_iter()
+                .map(|(entity, position)| SpatialCandidate { entity, position })
+                .collect()
+        });
+        component
+            .set_entity_variable(FIRED, Value::Bool(false), &mut world)
+            .unwrap();
+        if let Some(sentinel) = step.override_output {
+            component
+                .set_entity_variable(OUTPUT, entities(sentinel), &mut world)
+                .unwrap();
+        }
+        if let Some(message) = step.message {
+            assert_eq!(
+                component
+                    .queue_frame_message(step.frame, INSTANCE, message, Variables::new())
+                    .unwrap(),
+                1
+            );
+        }
+        for due in step.subframe_due_ms {
+            assert_eq!(
+                component
+                    .queue_message_at(due, INSTANCE, SUBFRAME_MESSAGE, Variables::new())
+                    .unwrap(),
+                1
+            );
+        }
+        component.advance_frame(step.frame, &mut world).unwrap();
+        assert_eq!(
+            world.reads.get() - before,
+            expected.reads,
+            "frame {}",
+            step.frame
+        );
+
+        let snapshot = component.snapshot().unwrap();
+        assert_eq!(
+            snapshot.variables.get(&OUTPUT),
+            expected.output.map(entities).as_ref()
+        );
+        assert_eq!(snapshot.variables[&FIRED], Value::Bool(expected.fired));
+        assert_eq!(
+            snapshot.instances[&INSTANCE].states[&0].active,
+            expected.active
+        );
+        assert!(
+            snapshot.initialization_complete(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        if expected.unavailable {
+            assert_eq!(
+                snapshot.diagnostics,
+                [Diagnostic {
+                    site: Site {
+                        entity: ENTITY,
+                        instance: INSTANCE,
+                        graph: GRAPH,
+                        node: Some(1),
+                    },
+                    issue: Issue::ObservationUnavailable,
+                    registration_rejected: false,
+                }]
+            );
+        } else {
+            assert!(
+                snapshot.diagnostics.is_empty(),
+                "{:?}",
+                snapshot.diagnostics
+            );
+        }
+    }
+}
+
+#[test]
 fn authored_spatial_operands_read_live_world_data_on_each_message() {
     const SUBJECT: u32 = 27;
     const SAMPLE: u64 = 0x29;

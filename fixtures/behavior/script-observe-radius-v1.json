@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "case_id": "script-observe-radius.synthetic.v1",
+  "source": {
+    "basis": "Original synthetic graph and sampled candidates for observing a radius query."
+  },
+  "evidence": "synthetic-rust",
+  "input": {
+    "bundle": {
+      "version": 1,
+      "authored_classes": [{"class": "authored.scan", "behavior": "observe_state"}],
+      "graphs": [
+        {
+          "index": 94,
+          "items": 6,
+          "header": {
+            "m_nodesBitCount": 4,
+            "m_statesBitCount": 4,
+            "m_remoteSyncNodesBitCount": 4,
+            "m_syncVarsBitCount": 4
+          },
+          "fields": {},
+          "containers": {},
+          "nodes": [
+            {
+              "pos": 0, "class": "STUStatescriptEntry",
+              "uid": 0, "rid": 0, "remote": -1, "state": null,
+              "client_only": false, "server_only": false,
+              "fields": {"m_outPlug": {"$": "Plug", "links": [[1, "m_beginPlug"]], "m_FF3DAF1E": []}}
+            },
+            {
+              "pos": 1, "class": "authored.scan",
+              "uid": 1, "rid": 1, "remote": -1, "state": 0,
+              "client_only": false, "server_only": false,
+              "fields": {
+                "value": {
+                  "$": "EntitiesInRadius",
+                  "center": {
+                    "$": "EntityPosition",
+                    "entity": {"$": "STUConfigVarDynamic", "m_identifier": 1, "m_60DB8F99": true}
+                  },
+                  "radius": 5
+                },
+                "output": {"$": "STUConfigVarDynamic", "m_identifier": 81, "m_60DB8F99": true},
+                "on_change": {"$": "Plug", "links": [[2, "m_inPlug"]], "m_FF3DAF1E": []}
+              }
+            },
+            {
+              "pos": 2, "class": "STUStatescriptActionSetVar",
+              "uid": 2, "rid": 2, "remote": -1, "state": null,
+              "client_only": false, "server_only": false,
+              "fields": {
+                "m_ADEB6E05": true,
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 82, "m_60DB8F99": true},
+                "m_value": true
+              }
+            },
+            {
+              "pos": 3, "class": "STUStatescriptEntryGameMessage",
+              "uid": 3, "rid": 3, "remote": -1, "state": null,
+              "client_only": false, "server_only": false,
+              "fields": {
+                "m_gameMessage": {"m_gameMessage": "0x000000000000000B"},
+                "m_outPlug": {"$": "Plug", "links": [[1, "m_F198FD3A"]], "m_FF3DAF1E": []}
+              }
+            },
+            {
+              "pos": 4, "class": "STUStatescriptEntryGameMessage",
+              "uid": 4, "rid": 4, "remote": -1, "state": null,
+              "client_only": false, "server_only": false,
+              "fields": {
+                "m_gameMessage": {"m_gameMessage": "0x000000000000000C"},
+                "m_outPlug": {"$": "Plug", "links": [[1, "m_beginPlug"]], "m_FF3DAF1E": []}
+              }
+            },
+            {
+              "pos": 5, "class": "STUStatescriptEntryGameMessage",
+              "uid": 5, "rid": 5, "remote": -1, "state": null,
+              "client_only": false, "server_only": false,
+              "fields": {"m_gameMessage": {"m_gameMessage": "0x000000000000000D"}}
+            }
+          ],
+          "unknown_nodes": [],
+          "states": [1],
+          "entries": [0, 3, 4, 5],
+          "remote": [],
+          "sync_vars": []
+        }
+      ],
+      "bodies": {},
+      "missing": []
+    },
+    "steps": [
+      {"frame": 0, "candidates": [[17, [0, 0, 1]]]},
+      {"frame": 1, "candidates": [[17, [0, 0, 1]]], "subframe_due_ms": [18, 25]},
+      {"frame": 2, "candidates": [[23, [1, 0, 0]], [17, [0, 0, 1]]]},
+      {"frame": 3, "candidates": [[17, [0, 0, 1]], [23, [1, 0, 0]], [17, [0, 0, 1]]], "override_output": [99]},
+      {"frame": 4, "candidates": null},
+      {"frame": 5, "candidates": [[17, [0, 0, 1]], [23, [1, 0, 0]]]},
+      {"frame": 6, "candidates": [[17, [0, 0, 6]], [23, [1, 0, 0]]]},
+      {"frame": 7, "candidates": []},
+      {"frame": 8, "candidates": [[31, [0, 0, 1]]], "message": 11},
+      {"frame": 9, "candidates": [], "message": 12},
+      {"frame": 10, "candidates": []}
+    ]
+  },
+  "expected": [
+    {"reads": 0, "output": null, "fired": false, "active": true, "unavailable": false},
+    {"reads": 1, "output": [17], "fired": true, "active": true, "unavailable": false},
+    {"reads": 1, "output": [17, 23], "fired": true, "active": true, "unavailable": false},
+    {"reads": 1, "output": [99], "fired": false, "active": true, "unavailable": false},
+    {"reads": 1, "output": [99], "fired": false, "active": true, "unavailable": true},
+    {"reads": 1, "output": [99], "fired": false, "active": true, "unavailable": true},
+    {"reads": 1, "output": [23], "fired": true, "active": true, "unavailable": true},
+    {"reads": 1, "output": [], "fired": true, "active": true, "unavailable": true},
+    {"reads": 0, "output": [], "fired": false, "active": false, "unavailable": true},
+    {"reads": 0, "output": [], "fired": false, "active": true, "unavailable": true},
+    {"reads": 1, "output": [], "fired": true, "active": true, "unavailable": true}
+  ]
+}

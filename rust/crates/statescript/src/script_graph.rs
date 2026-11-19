@@ -30,6 +30,7 @@ pub struct Header {
 #[serde(rename_all = "snake_case")]
 enum StateBehavior {
     Plain,
+    Observe,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -68,12 +69,16 @@ impl Node {
     }
 
     pub fn is_state(&self) -> bool {
-        self.declares_plain_state() || self.fields.get("m_2BBEEAB8").is_some_and(truthy)
+        self.state_behavior.is_some() || self.fields.get("m_2BBEEAB8").is_some_and(truthy)
     }
 
     /// Whether authored metadata opts this node into the ordinary state lifecycle.
     pub fn declares_plain_state(&self) -> bool {
         matches!(self.state_behavior, Some(StateBehavior::Plain))
+    }
+
+    pub(crate) fn declares_observe_state(&self) -> bool {
+        matches!(self.state_behavior, Some(StateBehavior::Observe))
     }
 
     pub fn is_action(&self) -> bool {
@@ -248,14 +253,18 @@ impl Graph {
         if self
             .nodes
             .iter()
-            .any(|node| node.declares_plain_state() || node.action_behavior.is_some())
+            .any(|node| node.state_behavior.is_some() || node.action_behavior.is_some())
         {
             for &position in self.states.iter().flatten() {
                 *authored_state_slots.entry(position).or_insert(0_usize) += 1;
             }
         }
         for (index, node) in self.nodes.iter_mut().enumerate() {
-            if node.declares_plain_state() {
+            if let Some(behavior) = node.state_behavior {
+                let state = match behavior {
+                    StateBehavior::Plain => "plain state",
+                    StateBehavior::Observe => "observe state",
+                };
                 let occupies_state_slot = node
                     .state
                     .and_then(|slot| self.states.get(usize::from(slot)))
@@ -267,7 +276,7 @@ impl Graph {
                     || authored_state_slots.get(&node.pos) != Some(&1)
                 {
                     return Err(invalid(format!(
-                        "plain state in graph {} at node {} must be server-only and occupy its state slot exactly once",
+                        "{state} in graph {} at node {} must be server-only and occupy its state slot exactly once",
                         self.index, node.pos
                     )));
                 }
@@ -276,20 +285,38 @@ impl Graph {
                     "m_onEndPlug",
                     "m_onAbortPlug",
                     "m_onFinishedPlug",
-                ] {
+                ]
+                .into_iter()
+                .chain(node.declares_observe_state().then_some("on_change"))
+                {
                     if node
                         .field(path)
                         .is_some_and(|plug| !plug.is_null() && !valid_output_plug(plug))
                     {
                         return Err(invalid(format!(
-                            "plain state in graph {} at node {} has an invalid {path} output plug",
+                            "{state} in graph {} at node {} has an invalid {path} output plug",
                             self.index, node.pos
                         )));
                     }
                 }
-                // Ordinary authored states use the one plain lifecycle, including
-                // at class checks outside the main dispatch.
-                node.class = "STUStatescriptState".into();
+                node.class = match behavior {
+                    // Class checks outside the main dispatch also use the ordinary state.
+                    StateBehavior::Plain => "STUStatescriptState",
+                    StateBehavior::Observe => {
+                        let has_value = node.field("value").is_some_and(|value| !value.is_null());
+                        let has_output = node
+                            .field("output")
+                            .is_some_and(|output| matches!(crate::script_expr::lvalue(output), Ok(Some(_))));
+                        if !has_value || !has_output {
+                            return Err(invalid(format!(
+                                "observe state in graph {} at node {} requires a value expression and writable output",
+                                self.index, node.pos
+                            )));
+                        }
+                        "StateObserve"
+                    }
+                }
+                .into();
             }
             if let Some(behavior) = node.action_behavior {
                 let (action, outputs): (&str, &[&str]) = match behavior {
@@ -616,6 +643,7 @@ struct AuthoredClass {
 #[serde(rename_all = "snake_case")]
 enum AuthoredClassBehavior {
     PlainState,
+    ObserveState,
     ForwardAction,
     BranchAction,
     LocalMessageAction,
@@ -626,6 +654,7 @@ impl AuthoredClassBehavior {
     fn apply(self, graph: u32, node: &mut Node) -> io::Result<()> {
         let (client_only, state, action) = match self {
             Self::PlainState => (false, Some(StateBehavior::Plain), None),
+            Self::ObserveState => (false, Some(StateBehavior::Observe), None),
             Self::ForwardAction => (false, None, Some(ActionBehavior::Forward)),
             Self::BranchAction => (false, None, Some(ActionBehavior::Branch)),
             Self::LocalMessageAction => (false, None, Some(ActionBehavior::LocalMessage)),
@@ -1458,6 +1487,54 @@ mod tests {
             sample["graphs"][0]["nodes"][0]["fields"][path] = Value::Null;
             assert!(load(&sample).is_ok());
         }
+    }
+
+    #[test]
+    fn observe_state_declarations_require_a_writable_output_and_valid_change_plug() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let mut data = fixture();
+        data["graphs"][0]["states"][3] = Value::Null;
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state"] = json!(0);
+        node["server_only"] = json!(true);
+        node["state_behavior"] = json!("observe");
+        node["fields"] = json!({
+            "value": false,
+            "output": {"$": "STUConfigVarDynamic", "m_identifier": 7, "m_60DB8F99": true},
+            "on_change": {"$": "Plug", "links": [[2, "input"]]},
+        });
+
+        for (field, invalid, message) in [
+            ("value", Value::Null, "value expression"),
+            ("output", json!(3), "writable output"),
+            (
+                "on_change",
+                json!({"$": "Plug", "links": [[2, 3]]}),
+                "on_change",
+            ),
+        ] {
+            let mut sample = data.clone();
+            sample["graphs"][0]["nodes"][0]["fields"][field] = invalid;
+            let error = load(&sample).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(error.to_string().contains("graph 42 at node 0"));
+            assert!(error.to_string().contains(message), "{error}");
+        }
+
+        let graph = load(&data).unwrap();
+        let observe = graph.graph(42).unwrap().state(0).unwrap();
+        assert!(observe.declares_observe_state() && observe.is_state() && !observe.is_networked());
+        assert_eq!(observe.class, "StateObserve");
+
+        data["authored_classes"] = json!([
+            {"class": "authored.sample", "behavior": "observe_state"}
+        ]);
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["class"] = json!("authored.sample");
+        node["state_behavior"] = Value::Null;
+        node["server_only"] = json!(false);
+        node["fields"]["on_change"] = Value::Null;
+        assert!(load(&data).is_ok());
     }
 
     #[test]

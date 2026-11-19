@@ -127,6 +127,9 @@ pub enum StateKind {
     CosmeticEntity,
     ChaseVar,
     Watch,
+    Observe {
+        sampled_frame: u32,
+    },
     SpawnSearch,
     RecentInput,
     LivingBodyArray,
@@ -305,6 +308,7 @@ pub enum Issue {
     EntityCreation(String),
     InvalidSubScript,
     Expression(EvalError),
+    ObservationUnavailable,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -408,7 +412,9 @@ impl Snapshot {
     /// The reached initialization path was supported. This does not check
     /// dormant paths, later input, timers, messages, or gameplay.
     pub fn initialization_complete(&self) -> bool {
-        self.diagnostics.is_empty()
+        self.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.issue == Issue::ObservationUnavailable)
     }
 }
 

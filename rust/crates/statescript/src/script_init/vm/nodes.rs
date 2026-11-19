@@ -1429,6 +1429,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::PhaseTransition
             }
             "STU_2F4E2E3F" => StateKind::Watch,
+            _ if node.declares_observe_state() => StateKind::Observe {
+                sampled_frame: self.machine.frame,
+            },
             "STU_BA2FCDEB" if registration.permits(self.graph(id).index == 0x0cba) => {
                 StateKind::SpawnSearch
             }
@@ -1667,6 +1670,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             StateKind::CosmeticEntity => self.begin_cosmetic(key, node, depth)?,
             StateKind::ChaseVar => self.begin_chase(key, node, depth)?,
+            StateKind::Observe { .. } => self.register_tick(key, self.machine.now_ms),
             StateKind::Watch => {
                 let seen = self.evaluate(id, node, field(&node.fields, "m_B7A3CF78"), Some(key));
                 self.state_mut(key).expect("active Watch").watch_seen = seen;

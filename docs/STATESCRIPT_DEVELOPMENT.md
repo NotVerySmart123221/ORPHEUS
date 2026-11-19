@@ -132,6 +132,26 @@ references.
 
 See the [synthetic radius contract](../fixtures/behavior/statescript-entities-in-radius-v1.json).
 
+## Observe an expression across frames
+
+Declare `"state_behavior": "observe"` on a server-only state or use
+`"observe_state"` in the bundle class catalog. Give it a `value`
+expression and a writable `output` variable. An optional `on_change`
+plug follows the first successful sample and each changed sample after it.
+The state writes the current value before following the plug.
+
+Sampling starts in the VM frame after activation and runs at most once
+per VM frame. That lets a body initialize before the room publishes its
+candidate snapshot. Unavailable scene data records an observation diagnostic
+and preserves the last successful result without failing the runtime.
+The state retries on the next frame. Invalid expressions still report
+regular evaluation errors. Finish and abort stop polling and leave the last written value
+available. The ordinary lifecycle plugs can clear it when needed.
+
+Use `EntitiesInRadius` as the value to follow membership of an area.
+The [synthetic observation contract](../fixtures/behavior/script-observe-radius-v1.json)
+exercises entry, departure, recovery, and state lifetime.
+
 ## Follow an action
 
 1. [`script_graph.rs`](../rust/crates/statescript/src/script_graph.rs) loads authored graph metadata and preserves wire slots and link order.

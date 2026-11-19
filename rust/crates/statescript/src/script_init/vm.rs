@@ -1896,6 +1896,23 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         initial: Value,
         scalar: bool,
     ) -> Option<Value> {
+        match self.evaluate_with_context(site, config, watcher, initial, scalar) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                self.report(site, Issue::Expression(error));
+                None
+            }
+        }
+    }
+
+    fn evaluate_with_context(
+        &mut self,
+        site: Site,
+        config: &Json,
+        watcher: Option<StateKey>,
+        initial: Value,
+        scalar: bool,
+    ) -> Result<Value, script_expr::EvalError> {
         let mut context = InstanceContext {
             machine: self.machine,
             world: self.world,
@@ -1953,13 +1970,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.register_tick(watcher, start);
             }
         }
-        match result {
-            Ok(value) => Some(value),
-            Err(error) => {
-                self.report(site, Issue::Expression(error));
-                None
-            }
-        }
+        result
     }
 
     pub(in crate::script_init) fn watch(&mut self, key: VarKey, watcher: StateKey) {

@@ -152,6 +152,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     Some(StateKind::Ability { .. }) => self.activate_ability(key, 0)?,
                     Some(StateKind::ChaseVar) => self.tick_chase(key)?,
                     Some(StateKind::Watch) => self.check_watch(key)?,
+                    Some(StateKind::Observe { sampled_frame })
+                        if sampled_frame < self.machine.frame =>
+                    {
+                        self.sample_observed_value(key)?;
+                    }
                     Some(StateKind::LivingBodyArray) => self.refresh_living_body_array(key)?,
                     Some(StateKind::AiFacing(Some(record))) => {
                         let node = self
@@ -607,6 +612,77 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn sample_observed_value(&mut self, key: StateKey) -> Result<(), InitFault> {
+        let id = key.instance;
+        let frame = self.machine.frame;
+        let Some(node) = self.graph(id).state(usize::from(key.raw)) else {
+            return Ok(());
+        };
+        let Some(state) = self.state_mut(key) else {
+            return Ok(());
+        };
+        state.kind = StateKind::Observe {
+            sampled_frame: frame,
+        };
+        let site = self.site(id, node);
+        let value = match self.evaluate_with_context(
+            site,
+            field(&node.fields, "value"),
+            None,
+            Value::Null,
+            false,
+        ) {
+            Ok(value) => value,
+            Err(
+                script_expr::EvalError::UnavailableEntityPosition(_)
+                | script_expr::EvalError::UnavailableEntityDirection(_)
+                | script_expr::EvalError::UnavailableEntityVariable { .. }
+                | script_expr::EvalError::UnavailableSpatialCandidates,
+            ) => {
+                // A later sample can succeed as the scene updates.
+                self.report(site, Issue::ObservationUnavailable);
+                return Ok(());
+            }
+            Err(error) => {
+                self.report(site, Issue::Expression(error));
+                return Ok(());
+            }
+        };
+        let Some(state) = self
+            .state_mut(key)
+            .filter(|state| state.active && !state.ending)
+        else {
+            return Ok(());
+        };
+        if state.watch_seen.as_ref() == Some(&value) {
+            return Ok(());
+        }
+        let target = match script_expr::lvalue(field(&node.fields, "output")) {
+            Ok(Some(target)) => target,
+            Ok(None) => {
+                self.report(
+                    self.site(id, node),
+                    Issue::UnsupportedField("observe output"),
+                );
+                return Ok(());
+            }
+            Err(error) => {
+                self.report(self.site(id, node), Issue::Expression(error));
+                return Ok(());
+            }
+        };
+        state.watch_seen = Some(value.clone());
+        self.write(source_key(id, target), value)?;
+        self.follow(id, node, "on_change", Some(key), 0)?;
+        if self
+            .state(key)
+            .is_some_and(|state| state.active && !state.ending)
+        {
+            self.try_complete(key, node, 0)?;
         }
         Ok(())
     }
