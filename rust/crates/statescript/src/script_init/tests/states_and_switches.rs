@@ -1834,54 +1834,71 @@ fn effect_action_continues_its_output_without_server_state() {
 
 #[test]
 fn criteria_actions_continue_their_output() {
-    let fixture = graph(
-        42,
-        vec![
-            node(
+    for (class, graph_id, position) in [
+        ("STUStatescriptActionCriteria", 42, 1),
+        ("STUStatescriptActionCriteria", 0x0257, 9),
+        ("STU_6E5C5F66", 42, 1),
+        ("STU_6E5C5F66", 0x0257, 13),
+        ("STU_6E5C5F66", 0x0cb3, 1),
+        ("STU_D38D0035", 42, 1),
+    ] {
+        for has_output in [false, true] {
+            let targets: &[(u16, &str)] = if has_output { &[(0, "m_inPlug")] } else { &[] };
+            let mut fixture = graph(
+                graph_id,
+                vec![
+                    node(
+                        position,
+                        class,
+                        None,
+                        json!({
+                            "m_identifier":{"$":"unhandled-if-evaluated"},
+                            "m_targets":{"$":"unhandled-if-evaluated"},
+                            "m_outPlug":plug(targets, &[])
+                        }),
+                    ),
+                    node(
+                        0,
+                        "STUStatescriptActionSetVar",
+                        None,
+                        json!({"m_out_Var":var(100, true), "m_value":true}),
+                    ),
+                ],
+                json!([]),
+                json!([]),
+            );
+            fixture["items"] = json!(position + 1);
+            let graphs = Arc::new(store(vec![fixture]));
+            let mut component = Component::start(
+                Arc::clone(&graphs),
+                42,
+                Variables::new(),
+                vec![Root::listener(1, graph_id, None)],
                 0,
-                "STUStatescriptEntry",
-                None,
-                json!({"m_outPlug":plug(&[(1,"m_inPlug")], &[])}),
-            ),
-            node(
-                1,
-                "STUStatescriptActionCriteria",
-                None,
-                json!({
-                    "m_identifier":{"$":"STUConfigVarIdentifier","m_identifier":"0x0D80000000000001"},
-                    "m_targets":{"$":"test-unanswered"},
-                    "m_outPlug":plug(&[(2,"m_inPlug")], &[]),
-                }),
-            ),
-            node(
-                2,
-                "STUStatescriptActionSetVar",
-                None,
-                json!({"m_out_Var":var(100, true), "m_value":true}),
-            ),
-        ],
-        json!([]),
-        json!([0]),
-    );
-    let snapshot = initialize(
-        &store(vec![fixture]),
-        42,
-        Variables::new(),
-        vec![Root::new(1, 42)],
-        &mut EmptyWorld,
-        MAX_INIT_WORK,
-    )
-    .unwrap();
-    assert!(
-        snapshot.initialization_complete(),
-        "{:?}",
-        snapshot.diagnostics
-    );
-    assert_eq!(
-        snapshot.variables,
-        Variables::from([(100, Value::Bool(true))])
-    );
-    assert!(snapshot.instances[&1].states.is_empty());
+                &mut EmptyWorld,
+                MAX_INIT_WORK,
+            )
+            .unwrap();
+            let node = graphs.graph(graph_id).unwrap().node(position).unwrap();
+            component
+                .run(&mut EmptyWorld, |vm| {
+                    assert!(vm.run_node(1, node, None, 0)?);
+                    Ok(())
+                })
+                .unwrap();
+            let snapshot = component.snapshot().unwrap();
+            assert!(
+                snapshot.initialization_complete(),
+                "{:?}",
+                snapshot.diagnostics
+            );
+            assert_eq!(
+                snapshot.variables.get(&100),
+                has_output.then_some(&Value::Bool(true))
+            );
+            assert!(snapshot.instances[&1].states.is_empty());
+        }
+    }
 }
 
 pub(super) fn shared_unbound_loadout_action_contract() {

@@ -106,17 +106,6 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
-            "STU_D38D0035" | "STU_6E5C5F66"
-                if node.class == "STU_D38D0035"
-                    || matches!(
-                        (self.graph(id).index, node.pos),
-                        (0x0cb3, 1) | (0x0cba, 52) | (0x0c95, 16)
-                    ) =>
-            {
-                // These 104319 handlers forward without changing graph state.
-                self.follow(id, node, "m_outPlug", None, depth)?;
-                Ok(true)
-            }
             "STU_147B34C6" if registration.permits((self.graph(id).index, node.pos) == (0x180a, 22)) => {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
@@ -237,11 +226,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
+            // Effects without the dynamic operand already use the base action.
+            // The alternate shape remains limited to the verified placements.
             "STUStatescriptActionEffect"
-                if registration.permits(matches!(
-                    (self.graph(id).index, node.pos),
-                    (0x01c7, 74) | (0x0257, 32) | (0x01c6, 37 | 38)
-                )) && script_expr::native_shape(
+                if field(&node.fields, "m_37B02425").is_null()
+                    || (registration.permits(matches!(
+                        (self.graph(id).index, node.pos),
+                        (0x01c7, 74) | (0x0257, 32) | (0x01c6, 37 | 38)
+                    )) && script_expr::native_shape(
                     field(&node.fields, "m_3E3E203A"),
                     "STU_B5A0CAF0",
                     None,
@@ -253,16 +245,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         _ => 0x0300_0000_0000_330f,
                     })
                     && field(field(&node.fields, "m_effect"), "m_resourceKey").is_null()
-                    && field(&node.fields, "m_dataFlow").is_null() =>
+                    && field(&node.fields, "m_dataFlow").is_null()) =>
             {
-                // The Python reference advances these local effects without
-                // a server-side effect entity or a graph value to replicate.
-                self.follow(id, node, "m_outPlug", None, depth)?;
-                Ok(true)
-            }
-            "STU_6E5C5F66" | "STUStatescriptActionCriteria"
-                if matches!((self.graph(id).index, node.pos), (0x0257, 13 | 9)) =>
-            {
+                // Preserve the graph continuation without a server-side
+                // effect entity or a graph value to replicate.
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
@@ -464,31 +450,18 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
-            // Python's no_op. Networked effects are remote-synced nodes; like
-            // Python, the server never flags their remote slot. The role of a
-            // dynamic m_37B02425 is unknown, so those effects stay unsupported.
-            "STUStatescriptActionEffect" if field(&node.fields, "m_37B02425").is_null() => {
-                self.follow(id, node, "m_outPlug", None, depth)?;
-                Ok(true)
-            }
             "STU_CEBDAF17"
-                if registration.permits(self.graph(id).index == 0x0b8b
+                if ((registration.permits(self.graph(id).index == 0x0b8b
                     && matches!(node.pos, 50 | 51 | 74))
-                    && node.server_only
+                    && node.server_only)
+                    || (registration.permits(self.graph(id).index == 0x0043
+                        && matches!(node.pos, 1 | 40 | 53..=55))
+                        && node.is_action()))
                     && node.remote < 0
                     && is_self_target(node, "m_targets") =>
             {
-                self.follow(id, node, "m_outPlug", caller, depth)
-            }
-            "STU_CEBDAF17"
-                if registration.permits(self.graph(id).index == 0x0043
-                    && matches!(node.pos, 1 | 40 | 53..=55))
-                    && node.is_action()
-                    && node.remote < 0
-                    && is_self_target(node, "m_targets") =>
-            {
-                // Player stat criteria recording does not alter VM control flow;
-                // preserve continuation along m_outPlug on Quick Melee (0x0043).
+                // These player stat continuations preserve the caller and
+                // report whether the output took a transition.
                 self.follow(id, node, "m_outPlug", caller, depth)
             }
             "STU_43B63AD0"
@@ -593,8 +566,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }
-            // Python's no_op for stat criteria.
-            "STUStatescriptActionCriteria" | "STU_6E5C5F66" => {
+            // Base actions and the stat criteria fallback consume the input
+            // and run its output without evaluating an action payload.
+            "STU_D38D0035" | "STUStatescriptActionCriteria" | "STU_6E5C5F66" => {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
