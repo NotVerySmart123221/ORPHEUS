@@ -28,6 +28,22 @@ python3 -I -S -B scripts/check_sprint_wire.py \
 
 Without `ORPHEUS_PYTHON_REFERENCE`, the synthetic test is explicitly skipped; a checkout at the wrong revision or with modified reference sources fails. The prepared check writes private chunks only to a fresh temporary directory, which it removes. It checks the direct owner `BodyStream` rather than queued transport, and does not establish original-client behavior or state-link coverage.
 
+### Synthetic two-instance state-link wire check
+
+[`scripts/tests/test_state_link_wire.py`](../scripts/tests/test_state_link_wire.py) exercises owner and observer two-instance state-link encoding and decoding against the same pinned Python `main` reader checkout (`b28139d4fa230480c0cea147d369724f97569c30`):
+
+```sh
+# Python reader synthetic frames and Rust-to-Python state-link chunks (no runtime pack needed):
+ORPHEUS_PYTHON_REFERENCE=/path/to/pinned-python-checkout ORPHEUS_STATE_LINK_WIRE_RUST=1 \
+  python3 -I -S -B -m unittest discover -s scripts/tests -p test_state_link_wire.py -v
+
+# Without ORPHEUS_PYTHON_REFERENCE (or without ORPHEUS_STATE_LINK_WIRE_RUST=1 for Rust->Python), checks skip cleanly:
+env -u ORPHEUS_PYTHON_REFERENCE \
+  python3 -I -S -B -m unittest discover -s scripts/tests -p test_state_link_wire.py -v
+```
+
+The graphs (`0x0CE0` -> `0x0D03` model) and codec table are synthetic, so no runtime pack is required. Default CI runs only the Rust unit test (`synthetic_two_instance_registered_state_link_encodes_for_owner_and_observer`), while the Python and Rust-to-Python checks are opt-in and skipped without those environment variables. The `ClientCrash` (`0x7FF78AA8385A`) assertions reflect the pinned Python reader model, not a proven original-client crash; the original client was not run.
+
 ---
 
 ## Cross-Language CI (`shared-behavior-contracts`)
