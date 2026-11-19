@@ -435,7 +435,8 @@ fn shared_first_command_anchor_respects_body_and_existing_input_history() {
             let body = body(id);
             let runtime = synthetic_owner(id.entity, frame, Arc::new(AtomicBool::new(false)));
             world.body = Some(body);
-            world.body_script = Some(BodyScript::new(body, frame, &runtime).unwrap());
+            world.body_script =
+                Some(BodyScript::new(body, frame, world.input.processed, &runtime).unwrap());
         }
         for frame in case.offered {
             world.queue_commands(contract.room_frame, &[forward(frame)]);
@@ -952,8 +953,10 @@ fn activate_script(
         .bodies
         .insert(id.entity, (id.generation, Lifetime::Live));
     world.created.remove(&id.entity);
-    let runtime = synthetic_owner(id.entity, 100, failed);
-    world.body_script = Some(BodyScript::new(body, 100, &runtime).unwrap());
+    let frame = world.input.processed.unwrap_or(100);
+    let runtime = synthetic_owner(id.entity, frame, failed);
+    world.body_script =
+        Some(BodyScript::new(body, frame, world.input.processed, &runtime).unwrap());
     let state = PlayerBodyState::new(
         id,
         world.owner,
@@ -962,7 +965,7 @@ fn activate_script(
         hero,
         empty_mover(),
         Some(Box::new(runtime)),
-        100,
+        frame,
         None,
     );
     simulation.spawn_player_body(state).unwrap();
@@ -1317,7 +1320,7 @@ fn owner_health_waits_for_creation_and_discards_superseded_lifetimes() {
         .insert(id.entity, (id.generation, Lifetime::Live));
     let runtime = synthetic_owner(id.entity, 100, Arc::default());
     let pending = Arc::clone(&runtime.health_update);
-    world.body_script = Some(BodyScript::new(body_value, 100, &runtime).unwrap());
+    world.body_script = Some(BodyScript::new(body_value, 100, None, &runtime).unwrap());
     simulation
         .spawn_player_body(PlayerBodyState::new(
             id,
@@ -1509,6 +1512,70 @@ fn read_ack(payload: &[u8]) -> u32 {
     bits.var_a().unwrap();
     assert!(!bits.bit().unwrap());
     bits.var_a().unwrap()
+}
+
+#[test]
+fn command_ack_survives_replacing_a_body_without_a_correction_history() {
+    let tick = 100;
+    let processed = 125;
+    let mut world = WorldDelivery::new(OWNER);
+    let mut simulation = RoomSimulation::new(Vec::new()).unwrap();
+    let mut egress = GameEgress::default();
+    world.started = Some(tick);
+    activate_script(&mut world, &mut simulation, avatar(1, 1), 7, Arc::default());
+    world.input.processed = Some(processed);
+    let (previous, _) = transmit(&mut world, Some(&mut simulation), &mut egress, tick, 0);
+    assert_eq!(read_ack(&previous), processed);
+
+    let replacement = avatar(2, 2);
+    activate_script(
+        &mut world,
+        &mut simulation,
+        replacement,
+        SOLDIER,
+        Arc::default(),
+    );
+    let script = world.body_script.as_ref().unwrap();
+    assert_eq!(script.frame, processed);
+    assert_eq!(script.corrections.as_ref().unwrap().corrected(), None);
+    let (next, sent) = transmit(&mut world, Some(&mut simulation), &mut egress, tick + 1, 1);
+    assert_eq!(read_ack(&next), processed);
+    assert!(sent.records.is_empty());
+
+    let first_new_input = processed + 1;
+    let history = world
+        .body_script
+        .as_mut()
+        .unwrap()
+        .corrections
+        .as_mut()
+        .unwrap();
+    let pose = |frame| Movement {
+        frame: Some(frame),
+        ..Movement::default()
+    };
+    assert!(!history.record(pose(processed - 1)));
+    assert!(history.record(pose(first_new_input)));
+    world.input.processed = Some(first_new_input);
+    world.acknowledge(
+        outcome(
+            Arc::new(record(
+                replacement.entity,
+                Delivery::CreateBody(replacement),
+            )),
+            true,
+        ),
+        Duration::ZERO,
+    );
+    let (next, sent) = transmit(
+        &mut world,
+        Some(&mut simulation),
+        &mut egress,
+        first_new_input,
+        2,
+    );
+    assert_eq!(read_ack(&next), first_new_input);
+    assert!(sent.records.contains(&RecordSource::Movement(0)));
 }
 
 #[test]
@@ -2006,6 +2073,7 @@ fn owner_and_observer_share_one_authoritative_room_body() {
         BodyScript::new(
             body_value,
             100,
+            None,
             state.runtime.as_deref().expect("owner runtime"),
         )
         .unwrap(),

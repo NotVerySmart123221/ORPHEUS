@@ -17,7 +17,12 @@ pub(super) struct BodyScript {
 }
 
 impl BodyScript {
-    pub(super) fn new(body: Body, frame: u32, runtime: &dyn OwnerBodyRuntime) -> io::Result<Self> {
+    pub(super) fn new(
+        body: Body,
+        frame: u32,
+        processed_at_spawn: Option<u32>,
+        runtime: &dyn OwnerBodyRuntime,
+    ) -> io::Result<Self> {
         let snapshot = runtime
             .snapshot()
             .ok_or_else(|| invalid("body VM is unavailable"))?;
@@ -30,7 +35,10 @@ impl BodyScript {
             .map_err(invalid)?;
         let corrections = (matches!(body.hero, SOLDIER | CASSIDY)
             && runtime.movement_modifiers().is_some())
-        .then(|| CorrectionHistory::new(body.id.entity, body.id.generation));
+        .then(|| {
+            CorrectionHistory::new(body.id.entity, body.id.generation)
+                .with_processed_at_spawn(processed_at_spawn)
+        });
         let projectiles = runtime
             .projectile_leases()
             .filter(|leases| !leases.blocks().is_empty())

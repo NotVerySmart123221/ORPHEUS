@@ -46,6 +46,7 @@ pub struct CorrectionHistory {
     body: BodyLifetime,
     poses: VecDeque<Movement>,
     corrected: Option<u32>,
+    processed_at_spawn: Option<u32>,
     impulse_correction: Option<(u32, u32)>,
 }
 
@@ -55,8 +56,15 @@ impl CorrectionHistory {
             body: BodyLifetime { entity, generation },
             poses: VecDeque::with_capacity(HISTORY),
             corrected: None,
+            processed_at_spawn: None,
             impulse_correction: None,
         }
+    }
+
+    /// Commands consumed before this body was created do not belong in its replay window.
+    pub(crate) fn with_processed_at_spawn(mut self, processed: Option<u32>) -> Self {
+        self.processed_at_spawn = processed;
+        self
     }
 
     /// Open or extend the server-only motion correction window through this frame's tail.
@@ -82,11 +90,12 @@ impl CorrectionHistory {
         let Some(frame) = pose.frame else {
             return false;
         };
-        if self
-            .poses
-            .back()
-            .and_then(|pose| pose.frame)
-            .is_some_and(|last| frame <= last)
+        if self.processed_at_spawn.is_some_and(|spawn| frame < spawn)
+            || self
+                .poses
+                .back()
+                .and_then(|pose| pose.frame)
+                .is_some_and(|last| frame <= last)
         {
             return false;
         }
@@ -156,6 +165,9 @@ impl CorrectionHistory {
             .max(self.corrected)
             .or_else(|| self.snapshot_for(tick).map(|(frame, _)| frame))
             .unwrap_or(tick);
+        // A fresh body can have no usable pose yet while the room clock trails
+        // the input stream. Its initial pose already replaces the earlier history.
+        let replay_from = replay_from.max(self.processed_at_spawn.unwrap_or_default());
         newest.min(replay_from.saturating_add(ACK_LEAD))
     }
 
