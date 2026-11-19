@@ -44,6 +44,15 @@ Captured `orpheus.golden.v2` headers bind the selected spawner, roster size, ini
 
 The collector attempts both recordings for each implementation. A local recorder or native build failure is listed under `recording_failures` in the receipt. A valid pair from the other implementation can still produce a checked single trace. Changed runtime inputs or source revisions invalidate the run.
 
+Raw private observations also describe the selected player VM RNG. Rust
+reads the model and seed from the component and records its draw count at
+possession plus the draws during the schedule. It derives counts from
+the generator's existing state. The Python adapter observes whether its
+VM RNG state changed before and during the schedule. An unavailable
+checkpoint is reported as `null`. These observations participate in
+within-role repeatability. The bound trace retains its existing setup
+fields, schema and compatibility rules.
+
 ## What has been recorded
 
 The current recorders wait for the room's map offer, load the map, select Soldier after the initial controller StateScript frame has been acknowledged (`player.script.delivered` / `controller_acked`, aligning `owner_component_start_frame = 1047` and `setup_delivery_ticks = 50`), and advance real room ticks throughout. Recording starts on the next tick after acknowledgements for the selected bot, player body and possession. Each trace retains the actual startup duration, receipt frames and player VM construction frame. The schedule clock starts at zero at this boundary. Submitted command frames remain exactly as supplied. Earlier traces remain readable with their original startup metadata.

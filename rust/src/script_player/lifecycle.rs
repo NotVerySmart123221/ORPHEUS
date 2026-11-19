@@ -248,6 +248,13 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         self.component.snapshot()
     }
 
+    #[cfg(test)]
+    fn random_checkpoint(&self) -> Option<crate::script_init::RandomCheckpoint> {
+        self.component
+            .snapshot()
+            .map(|_| self.component.random_checkpoint())
+    }
+
     fn encoder(&self) -> SnapshotEncoder<'_> {
         SnapshotEncoder::new(&self.world.graphs, &self.codecs)
     }

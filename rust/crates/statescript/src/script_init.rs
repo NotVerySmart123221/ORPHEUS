@@ -170,7 +170,8 @@ mod world;
 
 pub use types::{
     AbilityCooldown, ChasePayload, Diagnostic, InitFault, Instance, Issue, NodeObservations,
-    PendingTimer, ShotEvent, Snapshot, SpawnSearch, SpawnSearchKey, StackBinding, State, StateKind,
+    PendingTimer, RandomCheckpoint, ShotEvent, Snapshot, SpawnSearch, SpawnSearchKey, StackBinding,
+    State, StateKind,
 };
 pub use world::{
     AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, CreationKind,
@@ -294,6 +295,11 @@ impl Component {
 
     pub fn snapshot(&self) -> Option<&Snapshot> {
         (!self.halted).then_some(&self.machine.snapshot)
+    }
+
+    /// Inspect the component's random stream without drawing from it.
+    pub fn random_checkpoint(&self) -> RandomCheckpoint {
+        self.machine.random_checkpoint()
     }
 
     pub fn graph_store(&self) -> &GraphStore {

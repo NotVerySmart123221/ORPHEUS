@@ -123,6 +123,7 @@ def record(reference, runtime, schedule, bot_slot):
         "host_random_model": "fixed-counter-v1",
         "player_vm_initial_seed": room.vm_seed,
         "player_vm_random_model": "cpython-mt19937",
+        "player_vm_rng_observation": room.player_vm_rng_observation(),
         "initial_room_tick": room.start_tick,
         "first_scheduled_room_tick": first_room_tick,
         "initial_owner_delivery_phase": "after-possession-ack",

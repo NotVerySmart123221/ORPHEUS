@@ -123,6 +123,10 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
     }
 
     fn snapshot(&self) -> Option<&Snapshot>;
+    #[cfg(test)]
+    fn random_checkpoint(&self) -> Option<crate::script_init::RandomCheckpoint> {
+        None
+    }
     fn encoder(&self) -> SnapshotEncoder<'_>;
     fn advance(&mut self, command: Command, mover: &Mover, step: BodyStep) -> io::Result<()>;
     fn frame_ms(&self) -> u32;

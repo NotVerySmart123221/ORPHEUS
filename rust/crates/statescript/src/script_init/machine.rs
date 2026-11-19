@@ -22,7 +22,8 @@ use super::{
     MAX_PENDING_EVENTS,
     shapes::stored,
     types::{
-        InitFault, PendingTimer, ShotEvent, Snapshot, SpawnSearchKey, StackBinding, StateKind,
+        InitFault, PendingTimer, RandomCheckpoint, ShotEvent, Snapshot, SpawnSearchKey,
+        StackBinding, StateKind,
     },
 };
 
@@ -173,6 +174,10 @@ impl Event {
     }
 }
 
+const SPLITMIX_STEP: u64 = 0x9e37_79b9_7f4a_7c15;
+const SPLITMIX_STEP_INVERSE: u64 = 0xf1de_83e1_9937_733d;
+const _: () = assert!(SPLITMIX_STEP.wrapping_mul(SPLITMIX_STEP_INVERSE) == 1);
+
 pub(super) struct Machine {
     pub(super) public_schemas: bool,
     pub(super) code_states: Vec<StateKey>,
@@ -196,6 +201,7 @@ pub(super) struct Machine {
     pub(super) max_work: usize,
     pub(super) frame: u32,
     pub(super) now_ms: u64,
+    random_initial_seed: u64,
     pub(super) random_state: AtomicU64,
     pub(super) command_buttons: u32,
     pub(super) held_buttons: Vec<u8>,
@@ -230,6 +236,7 @@ impl Clone for Machine {
             max_work: self.max_work,
             frame: self.frame,
             now_ms: self.now_ms,
+            random_initial_seed: self.random_initial_seed,
             random_state: AtomicU64::new(self.random_state.load(Ordering::Relaxed)),
             command_buttons: self.command_buttons,
             held_buttons: self.held_buttons.clone(),
@@ -246,12 +253,26 @@ impl Machine {
         // SplitMix64 keeps the component's stream reproducible across graph calls.
         let state = self
             .random_state
-            .fetch_add(0x9e37_79b9_7f4a_7c15, Ordering::Relaxed)
-            .wrapping_add(0x9e37_79b9_7f4a_7c15);
+            .fetch_add(SPLITMIX_STEP, Ordering::Relaxed)
+            .wrapping_add(SPLITMIX_STEP);
         let mixed = (state ^ (state >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
         let mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
         mixed ^ (mixed >> 31)
     }
+
+    pub(super) fn random_checkpoint(&self) -> RandomCheckpoint {
+        // The stream advances by a fixed odd step. Invert that step in
+        // wrapping arithmetic to recover the count without a second counter.
+        let state = self.random_state.load(Ordering::Relaxed);
+        RandomCheckpoint {
+            model: "splitmix64",
+            initial_seed: self.random_initial_seed,
+            draws: state
+                .wrapping_sub(self.random_initial_seed)
+                .wrapping_mul(SPLITMIX_STEP_INVERSE),
+        }
+    }
+
     pub(super) fn new(
         entity: u32,
         variables: Variables,
@@ -261,6 +282,7 @@ impl Machine {
         if max_work == 0 {
             return Err(InitFault::InvalidBudget);
         }
+        let random_initial_seed = (u64::from(entity) << 32) | u64::from(frame);
         Ok(Self {
             code_states: Vec::new(),
             code_pending: Default::default(),
@@ -294,7 +316,8 @@ impl Machine {
             max_work,
             frame,
             now_ms: frame_start(frame),
-            random_state: AtomicU64::new(u64::from(entity) << 32 | u64::from(frame)),
+            random_initial_seed,
+            random_state: AtomicU64::new(random_initial_seed),
             command_buttons: 0,
             held_buttons: Vec::new(),
             button_blocks: [0; 256],

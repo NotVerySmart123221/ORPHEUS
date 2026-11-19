@@ -315,6 +315,15 @@ pub struct Diagnostic {
     pub registration_rejected: bool,
 }
 
+/// A read-only checkpoint of a component's random stream.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RandomCheckpoint {
+    pub model: &'static str,
+    pub initial_seed: u64,
+    /// Draws since construction, modulo 2^64.
+    pub draws: u64,
+}
+
 /// Bounded evidence of node targets encountered by the VM.
 #[derive(Clone, Debug, Default)]
 pub struct NodeObservations {
