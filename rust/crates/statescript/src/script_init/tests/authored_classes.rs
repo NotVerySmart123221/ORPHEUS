@@ -133,6 +133,99 @@ fn authored_class_aliases_apply_across_graphs_without_network_slots() {
     }
 }
 
+#[test]
+fn authored_spatial_operands_read_live_world_data_on_each_message() {
+    const SUBJECT: u32 = 27;
+    const SAMPLE: u64 = 0x29;
+
+    struct PoseWorld {
+        position: [f64; 3],
+        direction: [f64; 3],
+    }
+
+    impl World for PoseWorld {
+        fn entity_variable(&mut self, _entity: u32, _id: u32) -> Option<Value> {
+            None
+        }
+
+        fn position(&mut self, entity: u32) -> Option<[f64; 3]> {
+            (entity == SUBJECT).then_some(self.position)
+        }
+
+        fn forward(&self, entity: u32) -> Option<[f64; 3]> {
+            (entity == SUBJECT).then_some(self.direction)
+        }
+    }
+
+    let write_sample = |position, class, destination| {
+        node(
+            position,
+            "STUStatescriptActionSetVar",
+            None,
+            json!({
+                "m_out_Var": var(destination, true),
+                "m_value": {"$": class, "entity": var(1, true)},
+            }),
+        )
+    };
+    let fixture = graph(
+        42,
+        vec![
+            node(
+                0,
+                "STUStatescriptEntryGameMessage",
+                None,
+                json!({
+                    "m_gameMessage": {"m_gameMessage": format!("0x{SAMPLE:016X}")},
+                    "m_outPlug": plug(&[(1, "m_inPlug"), (2, "m_inPlug")], &[]),
+                }),
+            ),
+            write_sample(1, "EntityPosition", 2),
+            write_sample(2, "EntityDirection", 3),
+        ],
+        json!([]),
+        json!([0]),
+    );
+    let mut world = PoseWorld {
+        position: [0.0; 3],
+        direction: [0.0, 0.0, 1.0],
+    };
+    let mut component = Component::start(
+        Arc::new(store(vec![fixture])),
+        4242,
+        Variables::from([(1, Value::Entity(SUBJECT))]),
+        vec![Root::listener(1, 42, None)],
+        0,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+
+    for (position, direction) in [
+        ([0.0; 3], [0.0, 0.0, 1.0]),
+        ([2.0, -3.0, 5.0], [1.0, 0.0, 0.0]),
+    ] {
+        world.position = position;
+        world.direction = direction;
+        assert_eq!(
+            component
+                .queue_message(1, SAMPLE, Variables::new())
+                .unwrap(),
+            1
+        );
+        component.run_now(&mut world).unwrap();
+
+        let snapshot = component.snapshot().unwrap();
+        assert_eq!(snapshot.variables.get(&2), Some(&Value::Vector(position)));
+        assert_eq!(snapshot.variables.get(&3), Some(&Value::Vector(direction)));
+        assert!(
+            snapshot.diagnostics.is_empty(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+    }
+}
+
 #[cfg(feature = "node-observations")]
 #[test]
 fn node_observation_limit_counts_only_distinct_sites() {

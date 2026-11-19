@@ -328,7 +328,9 @@ pub(super) fn reference_native_class(config: &Json) -> Option<&str> {
         | "STU_3ACE35FB"
         | "STU_7197C080"
         | "STU_BE0BD267"
-        | "STUConfigVarVec3" => false,
+        | "STUConfigVarVec3"
+        | "EntityPosition"
+        | "EntityDirection" => false,
         "STU_B40ACFBA" | "STU_4BD39CFD" => false,
         "STU_45EDF12D" if child(config, "m_key").is_null() => false,
         "STUConfigVarTexture" | "STU_08305297" if child(config, "m_resourceKey").is_null() => false,

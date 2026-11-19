@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "case_id": "statescript-entity-spatial.synthetic.v1",
+  "source": {
+    "basis": "Original synthetic entity and spatial samples for explicit authored position and direction operands."
+  },
+  "evidence": "synthetic-rust",
+  "input": {
+    "entity": 17,
+    "position": {
+      "$": "EntityPosition",
+      "entity": {"$": "STUConfigVarDynamic", "m_identifier": 61, "m_60DB8F99": false}
+    },
+    "direction": {
+      "$": "EntityDirection",
+      "entity": {"$": "STUConfigVarDynamic", "m_identifier": 61, "m_60DB8F99": false}
+    },
+    "samples": [
+      {"position": [0.0, 0.0, 0.0], "direction": [0.25, -2.0, 3.5]},
+      {"position": [10.25, -0.5, 3.0], "direction": [-4.0, 0.75, 1.0]}
+    ]
+  },
+  "expected": [
+    {"position": [0.0, 0.0, 0.0], "direction": [0.25, -2.0, 3.5]},
+    {"position": [10.25, -0.5, 3.0], "direction": [-4.0, 0.75, 1.0]}
+  ]
+}

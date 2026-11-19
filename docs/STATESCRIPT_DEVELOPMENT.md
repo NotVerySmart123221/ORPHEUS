@@ -98,6 +98,19 @@ the enclosing operand. Without a fallback, the evaluator retains the
 caller's initial value. Wrappers still consume work and nesting budget.
 Ordinary unknown operands continue to produce diagnostics.
 
+## Read an entity's position or direction
+
+Use `EntityPosition` or `EntityDirection` as the `$` tag of an authored
+operand with one `entity` field. The field must evaluate to a bound
+entity reference. The VM reads the current position or forward vector
+from the host on each evaluation and returns its finite components
+verbatim. A missing or nonfinite response is an unavailable-entity
+query error. The origin is a valid position. These reads use the
+ordinary expression budget and the host's existing data sources.
+
+The [synthetic spatial contract](../fixtures/behavior/statescript-entity-spatial-v1.json)
+shows both operands applied to the same entity at two points in time.
+
 ## Follow an action
 
 1. [`script_graph.rs`](../rust/crates/statescript/src/script_graph.rs) loads authored graph metadata and preserves wire slots and link order.

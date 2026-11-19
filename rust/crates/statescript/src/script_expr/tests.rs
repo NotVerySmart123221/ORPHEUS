@@ -1634,6 +1634,147 @@ fn short_circuit_preserves_the_deciding_operand_and_scope_reads() {
 }
 
 #[test]
+fn authored_spatial_queries_read_current_entity_vectors() {
+    #[derive(serde::Deserialize)]
+    struct Sample {
+        position: [f64; 3],
+        direction: [f64; 3],
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        entity: u32,
+        position: Json,
+        direction: Json,
+        samples: [Sample; 2],
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Contract {
+        schema_version: u8,
+        case_id: String,
+        evidence: String,
+        input: Input,
+        expected: [Sample; 2],
+    }
+
+    struct Host {
+        operand: Value,
+        position: Option<[f64; 3]>,
+        direction: Option<[f64; 3]>,
+        reads: Vec<(&'static str, u32)>,
+    }
+
+    impl Context for Host {
+        fn variable(&mut self, variable: Variable) -> Value {
+            assert_eq!(variable.scope, Scope::Instance);
+            assert_eq!(variable.id, 61);
+            self.operand.clone()
+        }
+
+        fn position(&mut self, entity: u32) -> Option<[f64; 3]> {
+            self.reads.push(("position", entity));
+            self.position
+        }
+
+        fn forward(&mut self, entity: u32) -> Option<[f64; 3]> {
+            self.reads.push(("direction", entity));
+            self.direction
+        }
+
+        fn known_position(&mut self, _: u32) -> Option<[f64; 3]> {
+            panic!("authored position uses the ordinary position query");
+        }
+    }
+
+    let contract: Contract = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/statescript-entity-spatial-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    assert_eq!(contract.case_id, "statescript-entity-spatial.synthetic.v1");
+    assert_eq!(contract.evidence, "synthetic-rust");
+
+    let Input {
+        entity,
+        position,
+        direction,
+        samples,
+    } = contract.input;
+    let mut host = Host {
+        operand: Value::Entity(entity),
+        position: None,
+        direction: None,
+        reads: Vec::new(),
+    };
+    let expected_reads = [("position", entity), ("direction", entity)];
+    for (sample, expected) in samples.into_iter().zip(contract.expected) {
+        host.position = Some(sample.position);
+        host.direction = Some(sample.direction);
+        assert_eq!(
+            evaluate(&position, &mut host),
+            Ok(Value::Vector(expected.position))
+        );
+        assert_eq!(
+            evaluate(&direction, &mut host),
+            Ok(Value::Vector(expected.direction))
+        );
+        assert_eq!(std::mem::take(&mut host.reads), expected_reads);
+    }
+
+    for (host_position, host_direction) in [
+        (None, None),
+        (Some([f64::NAN, 0.0, 0.0]), Some([0.0, f64::INFINITY, 0.0])),
+    ] {
+        host.position = host_position;
+        host.direction = host_direction;
+        assert_eq!(
+            evaluate(&position, &mut host),
+            Err(EvalError::UnavailableEntityPosition(entity))
+        );
+        assert_eq!(
+            evaluate(&direction, &mut host),
+            Err(EvalError::UnavailableEntityDirection(entity))
+        );
+        assert_eq!(std::mem::take(&mut host.reads), expected_reads);
+    }
+
+    for config in [&position, &direction] {
+        host.operand = Value::Entity(entity);
+        for malformed in [
+            json!({"$": &config["$"]}),
+            json!({"$": &config["$"], "entity": &config["entity"], "extra": null}),
+        ] {
+            assert!(matches!(
+                evaluate(&malformed, &mut host),
+                Err(EvalError::MalformedConfig(_))
+            ));
+        }
+        for invalid_entity in [Value::Entity(0), Value::Integer(i64::from(entity))] {
+            host.operand = invalid_entity;
+            assert!(matches!(
+                evaluate(config, &mut host),
+                Err(EvalError::MalformedConfig(_))
+            ));
+        }
+        host.operand = Value::Entity(entity);
+        let limited = json!({
+            "$": &config["$"],
+            "entity": {"$": "ClientOnly", "value": null, "server_fallback": &config["entity"]}
+        });
+        assert_eq!(
+            evaluate_with_budget(&limited, &mut host, 1),
+            Err(EvalError::BudgetExceeded {
+                offset: 0,
+                limit: 1
+            })
+        );
+        assert!(host.reads.is_empty());
+    }
+}
+
+#[test]
 fn client_only_operand_reads_only_the_selected_server_fallback() {
     struct NoClientReads;
 

@@ -359,6 +359,7 @@ pub enum EvalError {
     BudgetExceeded { offset: usize, limit: usize },
     UnavailableEntityVariable { entity: u32, id: u32 },
     UnavailableEntityPosition(u32),
+    UnavailableEntityDirection(u32),
     NestingExceeded,
 }
 
@@ -390,6 +391,9 @@ impl fmt::Display for EvalError {
             }
             Self::UnavailableEntityPosition(entity) => {
                 write!(f, "unavailable entity position {entity:08X}")
+            }
+            Self::UnavailableEntityDirection(entity) => {
+                write!(f, "unavailable entity direction {entity:08X}")
             }
             Self::NestingExceeded => f.write_str("statescript config nesting limit exceeded"),
         }

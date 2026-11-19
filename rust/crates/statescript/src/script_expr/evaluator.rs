@@ -551,6 +551,32 @@ impl Evaluator {
                     .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?;
                 Value::Entity(entity)
             }
+            "EntityPosition" | "EntityDirection" => {
+                let operand = fields
+                    .get("entity")
+                    .filter(|_| fields.len() == 2)
+                    .ok_or(EvalError::MalformedConfig("expected one entity operand"))?;
+                self.charge()?;
+                let Value::Entity(entity @ 1..) = self.config(operand, context, nested)? else {
+                    return Err(EvalError::MalformedConfig("expected a bound entity"));
+                };
+                let (value, unavailable) = if class == "EntityPosition" {
+                    (
+                        context.position(entity),
+                        EvalError::UnavailableEntityPosition(entity),
+                    )
+                } else {
+                    (
+                        context.forward(entity),
+                        EvalError::UnavailableEntityDirection(entity),
+                    )
+                };
+                Value::Vector(
+                    value
+                        .filter(|parts| parts.iter().all(|part| part.is_finite()))
+                        .ok_or(unavailable)?,
+                )
+            }
             "STU_71A87E92" if native_shape(config, class, Some("m_entity")) => {
                 if let Some(value) = context.native(config) {
                     return Ok(value);
