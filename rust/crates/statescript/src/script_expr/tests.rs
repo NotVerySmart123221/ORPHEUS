@@ -1634,6 +1634,88 @@ fn short_circuit_preserves_the_deciding_operand_and_scope_reads() {
 }
 
 #[test]
+fn client_only_operand_reads_only_the_selected_server_fallback() {
+    struct NoClientReads;
+
+    impl Context for NoClientReads {
+        fn watches_natives(&self) -> bool {
+            true
+        }
+
+        fn reference_native(&mut self, _: &str) {
+            panic!("the skipped operand must not register a native read");
+        }
+
+        fn variable(&mut self, _: Variable) -> Value {
+            panic!("the skipped operand must not read variables");
+        }
+
+        fn random_u64(&mut self) -> Option<u64> {
+            panic!("the skipped operand must not consume randomness");
+        }
+    }
+
+    let opaque = json!({"$":"ClientOnly", "value":variable(4, Scope::Instance)});
+    let mut ctx = NoClientReads;
+    assert_eq!(evaluate(&opaque, &mut ctx), Ok(Value::Null));
+    assert_eq!(
+        evaluate_with_initial(&opaque, &mut ctx, Value::Integer(16)),
+        Ok(Value::Integer(16))
+    );
+    let group =
+        |first| json!({"$":"STU_06610EBC", "m_configVars":[first, {"$":"ClientPresentation"}]});
+    assert_eq!(
+        evaluate_scalar_with_initial(&group(opaque.clone()), &mut ctx, Value::Integer(16)),
+        Ok(Value::Integer(16))
+    );
+    let mut explicit = opaque;
+    explicit["server_fallback"] = json!(8);
+    assert_eq!(evaluate(&explicit, &mut ctx), Ok(Value::Integer(8)));
+    explicit["server_fallback"] = group(json!(9));
+    assert_eq!(
+        evaluate_scalar_with_initial(&explicit, &mut ctx, Value::Integer(16)),
+        Ok(Value::Integer(9))
+    );
+}
+
+#[test]
+fn client_only_operand_is_an_explicit_budgeted_declaration() {
+    let wrapper = |value| json!({"$":"ClientOnly", "value":false, "server_fallback": value});
+    let nested = wrapper(wrapper(json!(8)));
+    assert!(matches!(
+        evaluate_with_budget(&nested, &mut EmptyContext, 1),
+        Err(EvalError::BudgetExceeded { .. })
+    ));
+    assert_eq!(
+        evaluate_with_budget(&nested, &mut EmptyContext, 2),
+        Ok(Value::Integer(8))
+    );
+    let too_deep = (0..=MAX_CONFIG_DEPTH).fold(json!(8), |value, _| wrapper(value));
+    assert_eq!(
+        evaluate(&too_deep, &mut EmptyContext),
+        Err(EvalError::NestingExceeded)
+    );
+    for malformed in [
+        json!({"$":"ClientOnly", "server_fallback":8}),
+        json!({"$":"ClientOnly", "value":false, "serverFallback":8}),
+    ] {
+        assert_eq!(
+            evaluate(&malformed, &mut EmptyContext),
+            Err(EvalError::MalformedConfig("invalid client-only operand"))
+        );
+    }
+    let unknown = json!({"$":"ClientPresentation"});
+    assert_eq!(
+        evaluate(&wrapper(unknown.clone()), &mut EmptyContext),
+        evaluate(&unknown, &mut EmptyContext)
+    );
+    assert!(matches!(
+        evaluate(&unknown, &mut EmptyContext),
+        Err(EvalError::UnsupportedConfig(_))
+    ));
+}
+
+#[test]
 fn executes_only_the_selected_path_and_bounds_nested_expressions() {
     let untaken = expression(json!([6, 0, 2, 255, 6, 1, 0]), &[], &[1.0, 7.0], &[]);
     assert_eq!(

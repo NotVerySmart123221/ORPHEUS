@@ -33,6 +33,15 @@ action out of the state table. Links run in their declared order with the
 regular VM budgets. An empty plug does not take a transition. The action
 requires no registration by class or graph position.
 
+## Declare a client-only operand
+
+Use `{"$": "ClientOnly", "value": ...}` for an authored operand that the
+server must skip. Its `value` is opaque to the server. An optional
+`server_fallback` is evaluated in the same scalar or ordinary context as
+the enclosing operand. Without a fallback, the evaluator retains the
+caller's initial value. Wrappers still consume work and nesting budget.
+Ordinary unknown operands continue to produce diagnostics.
+
 ## Follow an action
 
 1. [`script_graph.rs`](../rust/crates/statescript/src/script_graph.rs) loads authored graph metadata and preserves wire slots and link order.

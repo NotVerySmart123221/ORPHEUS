@@ -24,6 +24,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Reject ambiguous graph IDs and node positions at load time. Queued StateScript messages also enforce the resolved node's execution scope before any writes.
 
+- Added authored client-only operands with an optional server fallback. Skipped operands do not access the server context or register native reads.
+
 ### 2026-11-18
 
 #### Build shared map-agnostic static navigation queries (#63)

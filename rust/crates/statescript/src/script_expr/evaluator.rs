@@ -210,31 +210,12 @@ impl Evaluator {
     /// The native +20 selector path reads only the first config of a group.
     pub(super) fn scalar_config(
         &mut self,
-        mut config: &Json,
+        config: &Json,
         context: &mut impl Context,
-        mut depth: usize,
+        depth: usize,
         initial: Value,
     ) -> Result<Value, EvalError> {
-        loop {
-            if depth >= MAX_CONFIG_DEPTH {
-                return Err(EvalError::NestingExceeded);
-            }
-            if config.is_null() {
-                return Ok(initial);
-            }
-            if class(config) != Some("STU_06610EBC") {
-                return self.config_with_initial(config, context, depth, initial);
-            }
-            if !native_shape(config, "STU_06610EBC", Some("m_configVars")) {
-                return Err(EvalError::UnsupportedConfig("STU_06610EBC".into()));
-            }
-            self.charge()?;
-            let Some(first) = array_field(config, "m_configVars")?.first() else {
-                return Ok(initial);
-            };
-            config = first;
-            depth += 1;
-        }
+        self.config_in_mode(config, context, depth, initial, true)
     }
 
     pub(super) fn config_with_initial(
@@ -244,6 +225,61 @@ impl Evaluator {
         depth: usize,
         initial: Value,
     ) -> Result<Value, EvalError> {
+        self.config_in_mode(config, context, depth, initial, false)
+    }
+
+    fn config_in_mode(
+        &mut self,
+        mut config: &Json,
+        context: &mut impl Context,
+        mut depth: usize,
+        initial: Value,
+        scalar: bool,
+    ) -> Result<Value, EvalError> {
+        loop {
+            let selected = match class(config) {
+                Some("ClientOnly") => {
+                    if depth >= MAX_CONFIG_DEPTH {
+                        return Err(EvalError::NestingExceeded);
+                    }
+                    let fields = config
+                        .as_object()
+                        .filter(|fields| {
+                            fields.contains_key("value")
+                                && fields.keys().all(|key| {
+                                    matches!(key.as_str(), "$" | "value" | "server_fallback")
+                                })
+                        })
+                        .ok_or(EvalError::MalformedConfig("invalid client-only operand"))?;
+                    self.charge()?;
+                    fields.get("server_fallback")
+                }
+                Some("STU_06610EBC") if scalar => {
+                    if depth >= MAX_CONFIG_DEPTH {
+                        return Err(EvalError::NestingExceeded);
+                    }
+                    if !native_shape(config, "STU_06610EBC", Some("m_configVars")) {
+                        return Err(EvalError::UnsupportedConfig("STU_06610EBC".into()));
+                    }
+                    self.charge()?;
+                    array_field(config, "m_configVars")?.first()
+                }
+                _ => break,
+            };
+            let Some(next) = selected else {
+                return Ok(initial);
+            };
+            config = next;
+            depth += 1;
+        }
+        if scalar {
+            if depth >= MAX_CONFIG_DEPTH {
+                return Err(EvalError::NestingExceeded);
+            }
+            if config.is_null() {
+                return Ok(initial);
+            }
+        }
         let Some(class) = (!self.in_native)
             .then(|| reference_native_class(config))
             .flatten()
