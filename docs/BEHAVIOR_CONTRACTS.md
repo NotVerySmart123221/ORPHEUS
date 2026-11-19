@@ -8,6 +8,26 @@ Public synthetic fixtures must never contain game binaries, raw captures, signin
 
 For the proposed private, per-tick Python/Rust gameplay comparison and its evidence limits, see [Golden gameplay traces](GOLDEN_TRACE.md).
 
+## Opt-in Soldier wire reader check
+
+The Sprint HUD variable check reads Rust-produced prepared Soldier chunks with the Python client-reader model at the same pinned commit as `shared-behavior-contracts`. Supply a clean Python `main` checkout at `b28139d4fa230480c0cea147d369724f97569c30` explicitly; the scripts verify its contents before import and do not download it. These commands use isolated Python and do not require changes to CI:
+
+```sh
+# From an existing Python repository containing the pinned commit:
+git -C /path/to/python-repository worktree add --detach \
+  /path/to/pinned-python-checkout b28139d4fa230480c0cea147d369724f97569c30
+
+# Invented frames only; no prepared runtime needed.
+ORPHEUS_PYTHON_REFERENCE=/path/to/pinned-python-checkout \
+  python3 -I -S -B -m unittest discover -s scripts/tests -p test_sprint_wire.py -v
+
+# Separately prepared target-tagged 104319 Practice Range runtime required.
+python3 -I -S -B scripts/check_sprint_wire.py \
+  --python-reference /path/to/pinned-python-checkout --runtime /path/to/runtime
+```
+
+Without `ORPHEUS_PYTHON_REFERENCE`, the synthetic test is explicitly skipped; a checkout at the wrong revision or with modified reference sources fails. The prepared check writes private chunks only to a fresh temporary directory, which it removes. It checks the direct owner `BodyStream` rather than queued transport, and does not establish original-client behavior or state-link coverage.
+
 ---
 
 ## Cross-Language CI (`shared-behavior-contracts`)
