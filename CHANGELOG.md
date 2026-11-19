@@ -20,6 +20,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Added an opt-in declaration for authored server-only plain states. The loader validates the state's slot and routes it to the common lifecycle.
 
+- Added opt-in forwarding actions for authored server-only graphs. The VM follows their configured output with the existing transition and work-budget rules.
+
 ### 2026-11-18
 
 #### Build shared map-agnostic static navigation queries (#63)

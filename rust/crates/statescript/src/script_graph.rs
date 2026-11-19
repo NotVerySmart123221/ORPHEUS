@@ -32,6 +32,12 @@ enum StateBehavior {
     Plain,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ActionBehavior {
+    Forward,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Node {
     pub pos: u16,
@@ -41,6 +47,7 @@ pub struct Node {
     pub remote: i32,
     pub state: Option<u16>,
     state_behavior: Option<StateBehavior>,
+    action_behavior: Option<ActionBehavior>,
     #[serde(deserialize_with = "node_flag")]
     pub client_only: bool,
     #[serde(deserialize_with = "node_flag")]
@@ -67,7 +74,11 @@ impl Node {
     }
 
     pub fn is_action(&self) -> bool {
-        self.fields.get("m_ADEB6E05").is_some_and(truthy)
+        self.declares_forward_action() || self.fields.get("m_ADEB6E05").is_some_and(truthy)
+    }
+
+    pub(crate) fn declares_forward_action(&self) -> bool {
+        matches!(self.action_behavior, Some(ActionBehavior::Forward))
     }
 
     pub fn field(&self, path: &str) -> Option<&Value> {
@@ -188,6 +199,17 @@ impl Graph {
         if let Some(max) = self.nodes.iter().map(|node| node.rid).max() {
             self.by_rid = vec![None; usize::from(max) + 1];
         }
+        let authored_state_positions =
+            self.nodes
+                .iter()
+                .any(Node::declares_forward_action)
+                .then(|| {
+                    self.states
+                        .iter()
+                        .copied()
+                        .flatten()
+                        .collect::<BTreeSet<_>>()
+                });
         for (index, node) in self.nodes.iter_mut().enumerate() {
             if node.declares_plain_state() {
                 let occupies_state_slot = node
@@ -207,6 +229,35 @@ impl Graph {
                 // Ordinary authored states use the one plain lifecycle, including
                 // at class checks outside the main dispatch.
                 node.class = "STUStatescriptState".into();
+            }
+            if node.declares_forward_action() {
+                let state_slot = authored_state_positions
+                    .as_ref()
+                    .is_some_and(|positions| positions.contains(&node.pos));
+                let has_valid_output = node.field("m_outPlug").is_some_and(|plug| {
+                    plug.get("$").and_then(Value::as_str).is_some()
+                        && plug
+                            .get("links")
+                            .and_then(Value::as_array)
+                            .is_some_and(|links| {
+                                links.iter().all(|link| decode_link(link).is_some())
+                            })
+                });
+                if !node.server_only
+                    || !node.runs_on_server()
+                    || node.is_state()
+                    || node.state.is_some()
+                    || state_slot
+                    || !has_valid_output
+                {
+                    return Err(invalid(format!(
+                        "forward action in graph {} at node {} must be server-only with an output plug and no state slot",
+                        self.index, node.pos
+                    )));
+                }
+                // The declaration supplies dispatch. An authored name that
+                // matches an entry or another special class cannot activate it.
+                node.class = "ActionForward".into();
             }
             let position = self
                 .by_pos
@@ -858,6 +909,43 @@ mod tests {
         // Playable boss definitions use the explicit encounter pair instead of an AI association.
         data["junkenstein"]["entities"][body]["ai_association"] = Value::Null;
         assert!(load(&data).is_ok());
+    }
+
+    #[test]
+    fn forward_action_declarations_require_a_server_action_and_valid_output() {
+        let mut data = fixture();
+        let node = &mut data["graphs"][0]["nodes"][2];
+        node["action_behavior"] = json!("forward");
+        node["server_only"] = json!(true);
+        node["fields"] = json!({"m_outPlug": {"$": "Plug", "links": [[null, "input"]]}});
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let store = load(&data).unwrap();
+        let forward = store.graph(42).unwrap().node(2).unwrap();
+        assert!(forward.is_action());
+        assert!(!forward.is_state());
+        assert!(!forward.is_networked());
+
+        for (field, value) in [
+            ("server_only", json!(false)),
+            ("client_only", json!(true)),
+            ("state", json!(0)),
+            ("state_behavior", json!("plain")),
+            ("action_behavior", json!("unknown")),
+            ("fields", json!({"m_outPlug": {"links": []}})),
+            (
+                "fields",
+                json!({"m_outPlug": {"$": "Plug", "links": [[3, false]]}}),
+            ),
+        ] {
+            let mut malformed = data.clone();
+            malformed["graphs"][0]["nodes"][2][field] = value;
+            assert_eq!(
+                load(&malformed).unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+        }
+        data["graphs"][0]["states"][2] = json!(2);
+        assert_eq!(load(&data).unwrap_err().kind(), io::ErrorKind::InvalidData);
     }
 
     #[test]

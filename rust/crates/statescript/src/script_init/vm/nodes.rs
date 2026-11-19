@@ -38,7 +38,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         }
         self.spend("node execution")?;
         match node.class.as_str() {
-            _ if is_entry(node) => self.follow(id, node, "m_outPlug", None, depth),
+            _ if is_entry(node) || node.declares_forward_action() => {
+                self.follow(id, node, "m_outPlug", None, depth)
+            }
             "STU_BB4AC733" => self.follow(id, node, "m_outPlug", None, depth),
             "STUStatescriptActionCreateEntity" => self.create_entity(id, node, depth),
             "STU_6E18DEA0"

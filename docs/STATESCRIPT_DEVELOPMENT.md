@@ -20,6 +20,14 @@ registering the original class or position. These nodes remain outside the
 network projection. Graphs without the declaration still use their existing
 dispatch and diagnostics.
 
+## Declare a forwarding action
+
+Set `"action_behavior": "forward"` on an authored server-only action whose
+job is to follow its `m_outPlug`. Supply a plug with a link list and leave the
+action out of the state table. Links run in their declared order with the
+regular VM budgets. An empty plug does not take a transition. The action
+requires no registration by class or graph position.
+
 ## Follow an action
 
 1. [`script_graph.rs`](../rust/crates/statescript/src/script_graph.rs) loads authored graph metadata and preserves wire slots and link order.

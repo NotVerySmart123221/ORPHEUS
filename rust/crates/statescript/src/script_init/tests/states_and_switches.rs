@@ -210,6 +210,77 @@ fn bridge_forwards_input_only_between_begin_and_abort() {
 }
 
 #[test]
+fn declared_forward_actions_keep_output_order_and_transition_results() {
+    for (id, declared, connected) in [(42, true, true), (77, true, false), (90, false, true)] {
+        let targets: &[(u16, &str)] = if connected {
+            &[(2, "m_inPlug"), (3, "m_inPlug")]
+        } else {
+            &[]
+        };
+        let mut forward = node(
+            1,
+            "MilestoneGate",
+            None,
+            json!({"m_outPlug":plug(targets, &[])}),
+        );
+        forward["server_only"] = json!(true);
+        if declared {
+            forward["action_behavior"] = json!("forward");
+        }
+        let graphs = store(vec![graph(
+            id,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptState",
+                    Some(0),
+                    json!({
+                        "m_transitionPlug":[plug(&[(1, "m_inPlug")], &[])]
+                    }),
+                ),
+                forward,
+                node(
+                    2,
+                    "STUStatescriptActionSetVar",
+                    None,
+                    json!({"m_out_Var":var(33, true), "m_value":true}),
+                ),
+                node(
+                    3,
+                    "STUStatescriptActionSetVar",
+                    None,
+                    json!({"m_out_Var":var(33, true), "m_value":false}),
+                ),
+            ],
+            json!([0]),
+            json!([]),
+        )]);
+        let snapshot = initialize(
+            &graphs,
+            42,
+            Variables::new(),
+            vec![Root::listener(1, id, Some(0))],
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        let taken = declared && connected;
+        assert_eq!(
+            snapshot.variables.get(&33),
+            taken.then_some(&Value::Bool(false))
+        );
+        assert_eq!(snapshot.instances[&1].states[&0].active, !taken);
+        if declared {
+            assert!(snapshot.initialization_complete());
+        } else {
+            assert!(matches!(&snapshot.diagnostics[..],
+                [Diagnostic { issue: Issue::UnsupportedAction(name), .. }] if name == "MilestoneGate"
+            ));
+        }
+    }
+}
+
+#[test]
 fn declared_plain_nodes_follow_links_and_ordinary_lifecycle() {
     for (id, class) in [(42, "WarmupWindow"), (43, "QuietInterval")] {
         let mut state = node(
