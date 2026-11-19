@@ -281,6 +281,96 @@ mod tests {
     }
 
     #[test]
+    fn rejects_every_single_bit_change() {
+        let (server, client) = link_pair();
+        let packet = Packet {
+            conn: 0x0123_4567,
+            kind: KIND_FRAME,
+            seq: 42,
+            ack: 17,
+            ack_bits: 0x1234_5678_9abc_def0,
+            flags: ACK,
+            payload: b"synthetic payload".to_vec(),
+        };
+        let mut datagram = client.seal(&packet).unwrap();
+        assert_eq!(server.open(&datagram), Some(packet.clone()));
+        for offset in 0..datagram.len() {
+            for bit in 0..8 {
+                datagram[offset] ^= 1 << bit;
+                assert_eq!(server.open(&datagram), None, "offset {offset}, bit {bit}");
+                datagram[offset] ^= 1 << bit;
+            }
+        }
+        datagram[TAG_SIZE] ^= 0x10;
+        assert_eq!(peek_connection(&datagram), Some(packet.conn ^ 1));
+        assert_eq!(server.open(&datagram), None);
+    }
+
+    #[test]
+    fn rejects_all_truncations_of_maximum_datagram() {
+        let (server, client) = link_pair();
+        let packet = Packet {
+            conn: 23,
+            seq: 123,
+            payload: vec![0x5a; MAX_DATAGRAM - HEADER_SIZE],
+            ..Packet::default()
+        };
+        let datagram = client.seal(&packet).unwrap();
+        assert_eq!(datagram.len(), MAX_DATAGRAM);
+        assert_eq!(server.open(&datagram), Some(packet.clone()));
+        for len in 0..datagram.len() {
+            let truncated = &datagram[..len];
+            assert_eq!(server.open(truncated), None, "length {len}");
+            assert_eq!(
+                peek_connection(truncated),
+                (len >= HEADER_SIZE).then_some(packet.conn),
+                "length {len}"
+            );
+        }
+    }
+
+    #[test]
+    fn handles_bounded_deterministic_malformed_datagrams() {
+        let (server, _) = link_pair();
+        let mut state = 0x1234_5678_u32;
+        for len in (0..=HEADER_SIZE + 2).chain([
+            64,
+            255,
+            MAX_DATAGRAM - 1,
+            MAX_DATAGRAM,
+            MAX_DATAGRAM + 1,
+            MAX_DATAGRAM + 64,
+        ]) {
+            for valid_magic in [false, true] {
+                let mut datagram = vec![0; len];
+                for byte in &mut datagram {
+                    state ^= state << 13;
+                    state ^= state >> 17;
+                    state ^= state << 5;
+                    *byte = state as u8;
+                }
+                if len >= HEADER_SIZE {
+                    datagram[HEADER_SIZE - 1] = if valid_magic { MAGIC } else { MAGIC ^ 1 };
+                }
+                let hint = if len >= HEADER_SIZE && valid_magic {
+                    Some(
+                        u32::from_le_bytes(datagram[TAG_SIZE..TAG_SIZE + 4].try_into().unwrap())
+                            >> 4,
+                    )
+                } else {
+                    None
+                };
+                assert_eq!(peek_connection(&datagram), hint, "length {len}");
+                assert_eq!(
+                    server.open(&datagram),
+                    None,
+                    "length {len}, magic {valid_magic}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn acknowledges_arrivals_but_drops_late_packets() {
         let mut window = ReceiveWindow::default();
         for seq in [0, 1, 3] {
