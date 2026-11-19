@@ -33,6 +33,17 @@ action out of the state table. Links run in their declared order with the
 regular VM budgets. An empty plug does not take a transition. The action
 requires no registration by class or graph position.
 
+## Route an authored action by a condition
+
+Set `"action_behavior": "branch"` on a server-only action, or declare
+`"branch_action"` for an authored class. Supply `m_condition` and valid
+`m_truePlug` and `m_falsePlug` outputs. The VM evaluates the condition
+once at dispatch and uses the ordinary expression truthiness rules. It
+follows the selected output in link order. An empty selected plug takes
+no transition. Evaluation errors are reported at the node and take no
+output. Use a client-only operand with a server fallback when an
+authored condition needs a different value on the server.
+
 ## Share class behavior across a graph bundle
 
 Add `authored_classes` to a version 1 bundle and use those names in the

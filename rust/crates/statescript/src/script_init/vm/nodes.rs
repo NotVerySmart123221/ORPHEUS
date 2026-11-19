@@ -59,6 +59,18 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             _ if is_entry(node) || node.declares_forward_action() => {
                 self.follow(id, node, "m_outPlug", None, depth)
             }
+            _ if node.declares_branch_action() => {
+                let Some(value) = self.evaluate(id, node, field(&node.fields, "m_condition"), caller)
+                else {
+                    return Ok(false);
+                };
+                let output = if truthy(&value) {
+                    "m_truePlug"
+                } else {
+                    "m_falsePlug"
+                };
+                self.follow(id, node, output, caller, depth)
+            }
             "STU_BB4AC733" => self.follow(id, node, "m_outPlug", None, depth),
             "STUStatescriptActionCreateEntity" => self.create_entity(id, node, depth),
             "STU_6E18DEA0"

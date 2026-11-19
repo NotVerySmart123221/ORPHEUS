@@ -36,6 +36,7 @@ enum StateBehavior {
 #[serde(rename_all = "snake_case")]
 enum ActionBehavior {
     Forward,
+    Branch,
     LocalMessage,
 }
 
@@ -81,6 +82,10 @@ impl Node {
 
     pub(crate) fn declares_forward_action(&self) -> bool {
         matches!(self.action_behavior, Some(ActionBehavior::Forward))
+    }
+
+    pub(crate) fn declares_branch_action(&self) -> bool {
+        matches!(self.action_behavior, Some(ActionBehavior::Branch))
     }
 
     pub(crate) fn game_message_id(&self) -> Option<u64> {
@@ -287,28 +292,44 @@ impl Graph {
                 node.class = "STUStatescriptState".into();
             }
             if let Some(behavior) = node.action_behavior {
-                let action = match behavior {
-                    ActionBehavior::Forward => "forward action",
-                    ActionBehavior::LocalMessage => "local message action",
+                let (action, outputs): (&str, &[&str]) = match behavior {
+                    ActionBehavior::Forward => ("forward action", &["m_outPlug"]),
+                    ActionBehavior::Branch => ("branch action", &["m_truePlug", "m_falsePlug"]),
+                    ActionBehavior::LocalMessage => ("local message action", &["m_outPlug"]),
                 };
                 let state_slot = authored_state_slots.contains_key(&node.pos);
-                let has_valid_output = node.field("m_outPlug").is_some_and(valid_output_plug);
                 if !node.server_only
                     || !node.runs_on_server()
                     || node.is_state()
                     || node.state.is_some()
                     || state_slot
-                    || !has_valid_output
                 {
                     return Err(invalid(format!(
-                        "{action} in graph {} at node {} must be server-only with an output plug and no state slot",
+                        "{action} in graph {} at node {} must be server-only with no state slot",
                         self.index, node.pos
                     )));
+                }
+                for &path in outputs {
+                    if !node.field(path).is_some_and(valid_output_plug) {
+                        return Err(invalid(format!(
+                            "{action} in graph {} at node {} requires a valid {path} output plug",
+                            self.index, node.pos
+                        )));
+                    }
                 }
                 // The declaration supplies dispatch. An authored name that
                 // matches an entry or another special class cannot activate it.
                 node.class = match behavior {
                     ActionBehavior::Forward => "ActionForward".into(),
+                    ActionBehavior::Branch => {
+                        if node.field("m_condition").is_none_or(Value::is_null) {
+                            return Err(invalid(format!(
+                                "{action} in graph {} at node {} requires m_condition",
+                                self.index, node.pos
+                            )));
+                        }
+                        "ActionBranch".into()
+                    }
                     ActionBehavior::LocalMessage => {
                         if !node.valid_local_message() {
                             return Err(invalid(format!(
@@ -596,6 +617,7 @@ struct AuthoredClass {
 enum AuthoredClassBehavior {
     PlainState,
     ForwardAction,
+    BranchAction,
     LocalMessageAction,
     ClientOnly,
 }
@@ -605,6 +627,7 @@ impl AuthoredClassBehavior {
         let (client_only, state, action) = match self {
             Self::PlainState => (false, Some(StateBehavior::Plain), None),
             Self::ForwardAction => (false, None, Some(ActionBehavior::Forward)),
+            Self::BranchAction => (false, None, Some(ActionBehavior::Branch)),
             Self::LocalMessageAction => (false, None, Some(ActionBehavior::LocalMessage)),
             Self::ClientOnly => (true, None, None),
         };
@@ -1278,6 +1301,36 @@ mod tests {
         }
         data["graphs"][0]["states"][2] = json!(2);
         assert_eq!(load(&data).unwrap_err().kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn branch_action_declarations_require_a_condition_and_both_outputs() {
+        let mut data = fixture();
+        let node = &mut data["graphs"][0]["nodes"][2];
+        node["action_behavior"] = json!("branch");
+        node["server_only"] = json!(true);
+        node["fields"] = json!({
+            "m_condition": false,
+            "m_truePlug": {"$": "Plug", "links": [[null, "input"]]},
+            "m_falsePlug": {"$": "Plug", "links": []},
+        });
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let store = load(&data).unwrap();
+        let branch = store.graph(42).unwrap().node(2).unwrap();
+        assert!(branch.declares_branch_action() && branch.is_action() && !branch.is_networked());
+        assert!(!branch.is_state());
+        for field in ["m_condition", "m_truePlug", "m_falsePlug"] {
+            let mut invalid = data.clone();
+            invalid["graphs"][0]["nodes"][2]["fields"][field] = Value::Null;
+            let result = load(&invalid).unwrap_err();
+            assert_eq!(result.kind(), io::ErrorKind::InvalidData);
+            assert!(
+                result
+                    .to_string()
+                    .contains("branch action in graph 42 at node 2")
+            );
+            assert!(result.to_string().contains(field));
+        }
     }
 
     #[test]

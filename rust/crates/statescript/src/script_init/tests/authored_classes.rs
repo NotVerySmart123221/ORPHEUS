@@ -16,6 +16,7 @@ struct ExpectedGraph {
     graph: u32,
     instance: u16,
     active_state: u16,
+    empty_branch: Option<u16>,
     server_targets: Vec<u16>,
     owner_positions: Vec<u16>,
     remote_positions: Vec<u16>,
@@ -37,21 +38,34 @@ fn authored_class_aliases_apply_across_graphs_without_network_slots() {
     assert_eq!(contract.evidence, "synthetic-rust");
 
     let bundle = serde_json::to_vec(&contract.input).unwrap();
-    let graphs = GraphStore::from_json(&bundle).unwrap();
+    let graphs = Arc::new(GraphStore::from_json(&bundle).unwrap());
     let roots = contract
         .expected
         .iter()
         .map(|expected| Root::new(expected.instance, expected.graph))
         .collect();
-    let snapshot = initialize(
-        &graphs,
+    let mut component = Component::start(
+        Arc::clone(&graphs),
         4242,
         Variables::new(),
         roots,
+        0,
         &mut EmptyWorld,
         MAX_INIT_WORK,
     )
     .unwrap();
+    for expected in &contract.expected {
+        if let Some(position) = expected.empty_branch {
+            component
+                .run(&mut EmptyWorld, |vm| {
+                    let branch = vm.graph(expected.instance).node(position).unwrap();
+                    assert!(!vm.run_node(expected.instance, branch, None, 0)?);
+                    vm.run()
+                })
+                .unwrap();
+        }
+    }
+    let snapshot = component.snapshot().unwrap();
 
     assert!(
         snapshot.initialization_complete(),
@@ -97,16 +111,13 @@ fn authored_class_aliases_apply_across_graphs_without_network_slots() {
 
         let instance = &snapshot.instances[&expected.instance];
         assert_eq!(instance.graph, expected.graph);
-        assert_eq!(
-            active(&snapshot, expected.instance),
-            [expected.active_state]
-        );
+        assert_eq!(active(snapshot, expected.instance), [expected.active_state]);
         let state = &instance.states[&expected.active_state];
         assert_eq!(state.kind, StateKind::Plain);
         assert_eq!(state.activation, 1);
 
-        // The second output reads the first output's write. Reversing the
-        // authored links would change its value even if both actions ran.
+        // Each chosen branch reads the value left by the preceding outputs.
+        // Reversing the authored links would change the value even if all ran.
         for (variable, value) in expected.variables {
             assert_eq!(
                 instance.variables.get(&variable),

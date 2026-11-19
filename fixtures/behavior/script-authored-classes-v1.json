@@ -10,12 +10,13 @@
     "authored_classes": [
       {"class": "authored.window", "behavior": "plain_state"},
       {"class": "authored.sequence", "behavior": "forward_action"},
+      {"class": "authored.choose", "behavior": "branch_action"},
       {"class": "authored.decoration", "behavior": "client_only"}
     ],
     "graphs": [
       {
         "index": 42,
-        "items": 8,
+        "items": 10,
         "header": {
           "m_nodesBitCount": 4,
           "m_statesBitCount": 4,
@@ -62,7 +63,7 @@
             "client_only": false,
             "server_only": false,
             "fields": {
-              "m_outPlug": {"$": "Plug", "links": [[3, "m_inPlug"], [4, "m_inPlug"]], "m_FF3DAF1E": []}
+              "m_outPlug": {"$": "Plug", "links": [[3, "m_inPlug"], [4, "m_inPlug"], [8, "m_inPlug"]], "m_FF3DAF1E": []}
             }
           },
           {
@@ -118,7 +119,7 @@
             "fields": {
               "m_ADEB6E05": true,
               "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 300, "m_60DB8F99": false},
-              "m_value": true
+              "m_value": {"$": "invented.unchosen"}
             }
           },
           {
@@ -131,6 +132,36 @@
             "client_only": false,
             "server_only": false,
             "fields": {"m_2BBEEAB8": true}
+          },
+          {
+            "pos": 8,
+            "class": "authored.choose",
+            "uid": 8,
+            "rid": 8,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_condition": {"$": "STUConfigVarDynamic", "m_identifier": 200, "m_60DB8F99": false},
+              "m_truePlug": {"$": "Plug", "links": [[9, "m_inPlug"]], "m_FF3DAF1E": []},
+              "m_falsePlug": {"$": "Plug", "links": [[6, "m_inPlug"]], "m_FF3DAF1E": []}
+            }
+          },
+          {
+            "pos": 9,
+            "class": "STUStatescriptActionSetVar",
+            "uid": 9,
+            "rid": 9,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_ADEB6E05": true,
+              "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 400, "m_60DB8F99": false},
+              "m_value": {"$": "STUConfigVarDynamic", "m_identifier": 200, "m_60DB8F99": false}
+            }
           }
         ],
         "unknown_nodes": [],
@@ -141,7 +172,7 @@
       },
       {
         "index": 77,
-        "items": 8,
+        "items": 11,
         "header": {
           "m_nodesBitCount": 4,
           "m_statesBitCount": 4,
@@ -163,7 +194,7 @@
             "fields": {
               "m_ADEB6E05": true,
               "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 300, "m_60DB8F99": false},
-              "m_value": true
+              "m_value": {"$": "invented.unchosen"}
             }
           },
           {
@@ -213,7 +244,7 @@
             "client_only": false,
             "server_only": true,
             "fields": {
-              "m_outPlug": {"$": "Plug", "links": [[6, "m_inPlug"], [3, "m_inPlug"]], "m_FF3DAF1E": []}
+              "m_outPlug": {"$": "Plug", "links": [[6, "m_inPlug"], [3, "m_inPlug"], [10, "m_inPlug"]], "m_FF3DAF1E": []}
             }
           },
           {
@@ -257,6 +288,51 @@
               "m_onBeginPlug": {"$": "Plug", "links": [[4, "m_inPlug"]], "m_FF3DAF1E": []},
               "m_2BBEEAB8": true
             }
+          },
+          {
+            "pos": 8,
+            "class": "STUStatescriptActionSetVar",
+            "uid": 8,
+            "rid": 8,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_ADEB6E05": true,
+              "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 400, "m_60DB8F99": false},
+              "m_value": {"$": "STUConfigVarDynamic", "m_identifier": 200, "m_60DB8F99": false}
+            }
+          },
+          {
+            "pos": 9,
+            "class": "authored.choose",
+            "uid": 9,
+            "rid": 9,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_condition": true,
+              "m_truePlug": {"$": "Plug", "links": [], "m_FF3DAF1E": []},
+              "m_falsePlug": {"$": "Plug", "links": [[0, "m_inPlug"]], "m_FF3DAF1E": []}
+            }
+          },
+          {
+            "pos": 10,
+            "class": "authored.choose",
+            "uid": 10,
+            "rid": 10,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_condition": {"$": "ClientOnly", "value": {"$": "invented.ignored"}, "server_fallback": false},
+              "m_truePlug": {"$": "Plug", "links": [[0, "m_inPlug"]], "m_FF3DAF1E": []},
+              "m_falsePlug": {"$": "Plug", "links": [[8, "m_inPlug"]], "m_FF3DAF1E": []}
+            }
           }
         ],
         "unknown_nodes": [],
@@ -274,24 +350,25 @@
       "graph": 42,
       "instance": 11,
       "active_state": 0,
-      "server_targets": [0, 1, 2, 3, 4],
+      "server_targets": [0, 1, 2, 3, 4, 8, 9],
       "owner_positions": [7],
       "remote_positions": [7],
-      "server_only_nodes": [1,2],
+      "server_only_nodes": [1,2,8],
       "client_only_nodes": [5],
-      "variables": {"100": 17, "200": 17},
+      "variables": {"100": 17, "200": 17, "400": 17},
       "absent_variables": [300]
     },
     {
       "graph": 77,
       "instance": 22,
       "active_state": 1,
-      "server_targets": [3, 4, 5, 6, 7],
+      "empty_branch": 9,
+      "server_targets": [3, 4, 5, 6, 7, 8, 9, 10],
       "owner_positions": [1],
       "remote_positions": [1],
-      "server_only_nodes": [7,4],
+      "server_only_nodes": [7,4,9,10],
       "client_only_nodes": [2],
-      "variables": {"100": 23, "200": 23},
+      "variables": {"100": 23, "200": 23, "400": 23},
       "absent_variables": [300]
     }
   ]
