@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Validated unique state slots and optional lifecycle plug shapes for authored plain states at graph load. Inspector startup now counts authored plain and client-only nodes separately. Verified with the default and Inspector locked workspace checks, the Rust 1.85 check, and the prepared 900-frame regression.
+
 - Added read-only player VM RNG observations to private paired captures. Rust records draw counts from the actual component and Python records whether the observed stream state changed.
 
 - Added a private paired-trace diagnostic for RNG-only setup differences. Fully validated recordings can show the first observed tick difference while retaining the incompatible result.

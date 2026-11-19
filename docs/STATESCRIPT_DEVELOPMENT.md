@@ -10,20 +10,20 @@ server actions or start server states. Server-only nodes can execute on the
 server while remaining absent from network projection.
 
 Graph IDs within a bundle and node positions within a graph must be unique.
-Repeated references in entry, state and synchronization tables keep their
-original order. Queued messages check the resolved node's execution scope
-before binding parameters or following its output.
+Repeated references in legacy entry, state and synchronization tables
+keep their original order. Queued messages check the resolved node's
+execution scope before binding parameters or following its output.
 
 ## Declare an ordinary server state
 
 An authored node can opt into the plain state lifecycle with
 `"state_behavior": "plain"`. Set `server_only` to true and `client_only`
 to false. Its `state` must index a slot in the graph's `states` table that
-points back to the node. The loader assigns the plain dispatch class, so a
-graph can link to that state and use its ordinary lifecycle plugs without
-registering the original class or position. These nodes remain outside the
-network projection. Graphs without the declaration still use their existing
-dispatch and diagnostics.
+points back to the node exactly once. The loader checks the link shape
+of the optional begin, end, abort and finished output plugs. Omit a plug
+or set it to null when it is unused. The loader assigns the common plain
+dispatch class, so graphs can use the ordinary lifecycle without class or
+position registration. These nodes remain outside the network projection.
 
 ## Declare a forwarding action
 
@@ -104,9 +104,10 @@ also inspect links through `GraphStore::dangling_links`. Explicit null targets
 and declared containers are valid. The report is read-only and continues to
 show structural problems even if the VM never reaches the source node.
 
-Startup also counts nodes declared client-only by the loaded graph data. The
-live Inspector reports active plain states under `active_states` and separates
-known registration rejections from other unsupported nodes. The first 16
+Startup also counts nodes declared client-only and nodes explicitly
+declared as authored plain states. Those counts include unreached nodes.
+The live Inspector reports active plain states under `active_states` and
+separates known registration rejections from other unsupported nodes. The first 16
 rejected graph and node locations appear in `registration_rejection_sites`.
 The registration category covers explicit placement checks in action and
 state dispatch and the shared guarded state registration path. An accepted

@@ -205,13 +205,18 @@ impl Server {
                 );
             }
             let graphs = assets.graphs();
-            let client_only = graphs
+            let (client_only, plain_states) = graphs
                 .graph_indexes()
                 .filter_map(|index| graphs.graph(index))
                 .flat_map(|graph| &graph.nodes)
-                .filter(|node| node.client_only)
-                .count();
+                .fold((0, 0), |(client_only, plain_states), node| {
+                    (
+                        client_only + usize::from(node.client_only),
+                        plain_states + usize::from(node.declares_plain_state()),
+                    )
+                });
             eprintln!("[script] {client_only} nodes declared client-only");
+            eprintln!("[script] {plain_states} nodes declared as authored plain states");
             let geometry = scene.debug_geometry();
             let worker = Arc::clone(&game);
             if config.debug_control {

@@ -70,7 +70,8 @@ impl Node {
         self.declares_plain_state() || self.fields.get("m_2BBEEAB8").is_some_and(truthy)
     }
 
-    fn declares_plain_state(&self) -> bool {
+    /// Whether authored metadata opts this node into the ordinary state lifecycle.
+    pub fn declares_plain_state(&self) -> bool {
         matches!(self.state_behavior, Some(StateBehavior::Plain))
     }
 
@@ -135,6 +136,14 @@ fn raw_plug_links(field: &Value) -> impl Iterator<Item = &Value> {
         .and_then(|_| field.get("links")?.as_array())
         .into_iter()
         .flatten()
+}
+
+fn valid_output_plug(plug: &Value) -> bool {
+    plug.get("$").and_then(Value::as_str).is_some()
+        && plug
+            .get("links")
+            .and_then(Value::as_array)
+            .is_some_and(|links| links.iter().all(|link| decode_link(link).is_some()))
 }
 
 fn decode_link(link: &Value) -> Option<(Option<u16>, &str)> {
@@ -230,17 +239,16 @@ impl Graph {
         if let Some(max) = self.nodes.iter().map(|node| node.rid).max() {
             self.by_rid = vec![None; usize::from(max) + 1];
         }
-        let authored_state_positions = self
+        let mut authored_state_slots = BTreeMap::new();
+        if self
             .nodes
             .iter()
-            .any(|node| node.action_behavior.is_some())
-            .then(|| {
-                self.states
-                    .iter()
-                    .copied()
-                    .flatten()
-                    .collect::<BTreeSet<_>>()
-            });
+            .any(|node| node.declares_plain_state() || node.action_behavior.is_some())
+        {
+            for &position in self.states.iter().flatten() {
+                *authored_state_slots.entry(position).or_insert(0_usize) += 1;
+            }
+        }
         for (index, node) in self.nodes.iter_mut().enumerate() {
             if node.declares_plain_state() {
                 let occupies_state_slot = node
@@ -251,11 +259,28 @@ impl Graph {
                     || !node.runs_on_server()
                     || node.is_action()
                     || !occupies_state_slot
+                    || authored_state_slots.get(&node.pos) != Some(&1)
                 {
                     return Err(invalid(format!(
-                        "plain state in graph {} at node {} must be server-only and occupy its state slot",
+                        "plain state in graph {} at node {} must be server-only and occupy its state slot exactly once",
                         self.index, node.pos
                     )));
+                }
+                for path in [
+                    "m_onBeginPlug",
+                    "m_onEndPlug",
+                    "m_onAbortPlug",
+                    "m_onFinishedPlug",
+                ] {
+                    if node
+                        .field(path)
+                        .is_some_and(|plug| !plug.is_null() && !valid_output_plug(plug))
+                    {
+                        return Err(invalid(format!(
+                            "plain state in graph {} at node {} has an invalid {path} output plug",
+                            self.index, node.pos
+                        )));
+                    }
                 }
                 // Ordinary authored states use the one plain lifecycle, including
                 // at class checks outside the main dispatch.
@@ -266,18 +291,8 @@ impl Graph {
                     ActionBehavior::Forward => "forward action",
                     ActionBehavior::LocalMessage => "local message action",
                 };
-                let state_slot = authored_state_positions
-                    .as_ref()
-                    .is_some_and(|positions| positions.contains(&node.pos));
-                let has_valid_output = node.field("m_outPlug").is_some_and(|plug| {
-                    plug.get("$").and_then(Value::as_str).is_some()
-                        && plug
-                            .get("links")
-                            .and_then(Value::as_array)
-                            .is_some_and(|links| {
-                                links.iter().all(|link| decode_link(link).is_some())
-                            })
-                });
+                let state_slot = authored_state_slots.contains_key(&node.pos);
+                let has_valid_output = node.field("m_outPlug").is_some_and(valid_output_plug);
                 if !node.server_only
                     || !node.runs_on_server()
                     || node.is_state()
@@ -1136,6 +1151,13 @@ mod tests {
         nodes[1]["class"] = json!("authored.overlay");
         nodes[2]["class"] = json!("authored.forward");
         nodes[2]["fields"]["m_outPlug"] = json!({"$":"Plug","links":[]});
+        let error = load(&data).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("occupy its state slot exactly once")
+        );
+        data["graphs"][0]["states"][3] = Value::Null;
 
         let store = load(&data).unwrap();
         let graph = store.graph(42).unwrap();
@@ -1259,14 +1281,27 @@ mod tests {
     }
 
     #[test]
-    fn plain_state_declarations_require_a_server_state_slot() {
+    fn plain_state_declarations_require_a_unique_server_state_slot() {
         let mut data = fixture();
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let legacy = load(&data).unwrap();
+        let graph = legacy.graph(42).unwrap();
+        assert_eq!(graph.state(0).unwrap().pos, graph.state(3).unwrap().pos);
+
         let node = &mut data["graphs"][0]["nodes"][0];
         node["state"] = json!(0);
         node["server_only"] = json!(true);
         node["state_behavior"] = json!("plain");
+        let error = load(&data).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("graph 42 at node 0"));
+        assert!(
+            error
+                .to_string()
+                .contains("occupy its state slot exactly once")
+        );
+        data["graphs"][0]["states"][3] = Value::Null;
 
-        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
         let store = load(&data).unwrap();
         let graph = store.graph(42).unwrap();
         let plain = graph.state(0).unwrap();
@@ -1290,6 +1325,47 @@ mod tests {
         }
         data["graphs"][0]["nodes"][0]["fields"]["m_ADEB6E05"] = json!(true);
         assert_eq!(load(&data).unwrap_err().kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn plain_state_declarations_validate_optional_lifecycle_plugs() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let mut data = fixture();
+        data["graphs"][0]["states"][3] = Value::Null;
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state"] = json!(0);
+        node["server_only"] = json!(true);
+        node["state_behavior"] = json!("plain");
+
+        for path in [
+            "m_onBeginPlug",
+            "m_onEndPlug",
+            "m_onAbortPlug",
+            "m_onFinishedPlug",
+        ] {
+            let mut sample = data.clone();
+            sample["graphs"][0]["nodes"][0]["fields"][path] =
+                json!({"$": "Plug", "links": [[2, "input"], [null, "unresolved"]]});
+            assert!(load(&sample).is_ok());
+
+            for malformed in [
+                json!({"$": "Plug"}),
+                json!({"$": 1, "links": []}),
+                json!({"$": "Plug", "links": [[2, 3]]}),
+            ] {
+                sample["graphs"][0]["nodes"][0]["fields"][path] = malformed;
+                let error = load(&sample).unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+                assert!(error.to_string().contains("graph 42 at node 0"));
+                assert!(error.to_string().contains(path));
+
+                sample["graphs"][0]["nodes"][0]["state_behavior"] = Value::Null;
+                assert!(load(&sample).is_ok());
+                sample["graphs"][0]["nodes"][0]["state_behavior"] = json!("plain");
+            }
+            sample["graphs"][0]["nodes"][0]["fields"][path] = Value::Null;
+            assert!(load(&sample).is_ok());
+        }
     }
 
     #[test]
