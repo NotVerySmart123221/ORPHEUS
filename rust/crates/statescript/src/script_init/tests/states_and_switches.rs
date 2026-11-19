@@ -1669,7 +1669,7 @@ fn unsupported_branches_are_reported_and_cyclic_actions_are_bounded() {
                 "STUStatescriptEntry",
                 None,
                 json!({
-                    "m_outPlug":plug(&[(1,"m_inPlug"),(2,"m_beginPlug"),(4,"m_beginPlug"),(5,"m_beginPlug")], &[])
+                    "m_outPlug":plug(&[(1,"m_inPlug"),(2,"m_beginPlug"),(4,"m_beginPlug"),(5,"m_beginPlug"),(7,"m_beginPlug")], &[])
                 }),
             ),
             node(
@@ -1690,8 +1690,9 @@ fn unsupported_branches_are_reported_and_cyclic_actions_are_bounded() {
             node(4, "STUStatescriptStateAnimatedCamera", Some(1), json!({})),
             node(5, "UnknownState", Some(2), json!({})),
             node(6, "UnreachedState", Some(3), json!({})),
+            node(7, "STUStatescriptStateTrackTargets", Some(4), json!({})),
         ],
-        json!([2, 4, 5, 6]),
+        json!([2, 4, 5, 6, 7]),
         json!([0]),
     );
     let cycle = graph(
@@ -1730,6 +1731,7 @@ fn unsupported_branches_are_reported_and_cyclic_actions_are_bounded() {
     assert!(!snapshot.initialization_complete());
     let states = &snapshot.instances[&1].states;
     assert!(states[&0].active);
+    assert!(!states.contains_key(&4));
     assert_eq!(states[&0].kind, StateKind::Plain);
     assert!(!snapshot.variables.contains_key(&42));
     assert_eq!(
@@ -1738,7 +1740,12 @@ fn unsupported_branches_are_reported_and_cyclic_actions_are_bounded() {
             .iter()
             .map(|diagnostic| (diagnostic.site.node, diagnostic.registration_rejected))
             .collect::<Vec<_>>(),
-        [(Some(1), false), (Some(4), true), (Some(5), false)]
+        [
+            (Some(1), false),
+            (Some(4), true),
+            (Some(5), false),
+            (Some(7), true)
+        ]
     );
     assert_eq!(snapshot.diagnostics[0].site.node, Some(1));
     assert_eq!(
@@ -1754,18 +1761,18 @@ fn unsupported_branches_are_reported_and_cyclic_actions_are_bounded() {
 
 #[test]
 fn effect_action_continues_its_output_without_server_state() {
-    let run = |dynamic: Json| {
-        let fixture = graph(
-            42,
+    let run = |graph_id, position, dynamic: Json| {
+        let mut fixture = graph(
+            graph_id,
             vec![
                 node(
                     0,
                     "STUStatescriptEntry",
                     None,
-                    json!({"m_outPlug":plug(&[(1,"m_inPlug")], &[])}),
+                    json!({"m_outPlug":plug(&[(position,"m_inPlug")], &[])}),
                 ),
                 node(
-                    1,
+                    position,
                     "STUStatescriptActionEffect",
                     None,
                     json!({
@@ -1785,17 +1792,18 @@ fn effect_action_continues_its_output_without_server_state() {
             json!([]),
             json!([0]),
         );
+        fixture["items"] = json!(position.max(2) + 1);
         initialize(
             &store(vec![fixture]),
             42,
             Variables::new(),
-            vec![Root::new(1, 42)],
+            vec![Root::new(1, graph_id)],
             &mut EmptyWorld,
             MAX_INIT_WORK,
         )
         .unwrap()
     };
-    let snapshot = run(Json::Null);
+    let snapshot = run(42, 1, Json::Null);
     assert!(snapshot.initialization_complete());
     assert_eq!(
         snapshot.variables,
@@ -1804,14 +1812,18 @@ fn effect_action_continues_its_output_without_server_state() {
     assert!(snapshot.instances[&1].variables.is_empty());
     assert!(snapshot.instances[&1].states.is_empty());
 
-    let snapshot = run(var(9, true));
-    assert!(snapshot.variables.is_empty());
-    assert_eq!(snapshot.diagnostics.len(), 1);
-    assert_eq!(snapshot.diagnostics[0].site.node, Some(1));
-    assert_eq!(
-        snapshot.diagnostics[0].issue,
-        Issue::UnsupportedAction("STUStatescriptActionEffect".into())
-    );
+    for (graph_id, position, rejected) in [(42, 1, true), (0x01c7, 74, false)] {
+        let snapshot = run(graph_id, position, var(9, true));
+        assert!(snapshot.variables.is_empty());
+        assert_eq!(snapshot.diagnostics.len(), 1);
+        let diagnostic = &snapshot.diagnostics[0];
+        assert_eq!(diagnostic.site.node, Some(position));
+        assert_eq!(diagnostic.registration_rejected, rejected);
+        assert_eq!(
+            diagnostic.issue,
+            Issue::UnsupportedAction("STUStatescriptActionEffect".into())
+        );
+    }
 }
 
 #[test]

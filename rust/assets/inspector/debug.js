@@ -318,11 +318,24 @@ function renderScripts(room) {
   vmEntitySelect.disabled = false;
 
   const selected = scripts.find((entry) => keyOf(entry) === vmEntitySelect.value) ?? scripts[0];
-  setText(
-    byId("vm-meta"),
-    "now " + selected.now_ms + " ms · " + selected.diagnostics + " diagnostics"
-      + (selected.instances_truncated ? " · instances capped" : ""),
-  );
+  const details = ["now " + selected.now_ms + " ms", selected.diagnostics + " diagnostics"];
+  const rejected = selected.registration_rejections ?? 0;
+  if (rejected > 0) {
+    const sites = selected.registration_rejection_sites ?? [];
+    const positions = sites.map(({ graph, node }) =>
+      "graph 0x" + graph.toString(16) + (node == null ? "" : " node " + node));
+    if (rejected > sites.length && sites.length > 0) {
+      positions.push("+" + (rejected - sites.length) + " more");
+    }
+    const where = positions.length > 0 ? " (" + positions.join(", ") + ")" : "";
+    details.push(rejected + " registration policy " + (rejected === 1 ? "rejection" : "rejections") + where);
+  }
+  const unsupported = selected.unsupported_nodes ?? 0;
+  if (unsupported > 0) {
+    details.push(unsupported + (unsupported === 1 ? " unsupported node" : " unsupported nodes"));
+  }
+  if (selected.instances_truncated) details.push("instances capped");
+  setText(byId("vm-meta"), details.join(" · "));
   setText(
     byId("vm-entity-vars"),
     "Entity vars: " + formatVarList(selected.variables, selected.variables_truncated),

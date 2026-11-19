@@ -25,6 +25,23 @@ use super::super::{
 };
 use super::Vm;
 
+#[derive(Default)]
+struct RegistrationChecks {
+    admitted: Option<bool>,
+}
+
+impl RegistrationChecks {
+    fn permits(&mut self, allowed: bool) -> bool {
+        self.admitted = Some(self.admitted.unwrap_or(false) || allowed);
+        allowed
+    }
+
+    fn rejected(&self) -> bool {
+        // A compatible placement can still fail independent field checks.
+        self.admitted == Some(false)
+    }
+}
+
 impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
     pub(in crate::script_init) fn run_node(
         &mut self,
@@ -37,6 +54,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             return Ok(false);
         }
         self.spend("node execution")?;
+        let mut registration = RegistrationChecks::default();
         match node.class.as_str() {
             _ if is_entry(node) || node.declares_forward_action() => {
                 self.follow(id, node, "m_outPlug", None, depth)
@@ -44,7 +62,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             "STU_BB4AC733" => self.follow(id, node, "m_outPlug", None, depth),
             "STUStatescriptActionCreateEntity" => self.create_entity(id, node, depth),
             "STU_6E18DEA0"
-                if self.graph(id).index == 0x0ca7
+                if registration.permits(self.graph(id).index == 0x0ca7)
                     && field(&node.fields, "m_A9220BE5").is_null() =>
             {
                 let handle =
@@ -60,10 +78,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             "STU_523EE38D"
-                if matches!(
+                if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
                     (0x0c89, 43) | (0x0c93, 11) | (0x0cbc, 36 | 38 | 57 | 58)
-                ) =>
+                )) =>
             {
                 let Some(Value::Entity(entity)) =
                     self.creation_scalar(id, node, field(&node.fields, "m_entity"), Value::Null)?
@@ -99,11 +117,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
-            "STU_147B34C6" if (self.graph(id).index, node.pos) == (0x180a, 22) => {
+            "STU_147B34C6" if registration.permits((self.graph(id).index, node.pos) == (0x180a, 22)) => {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
-            "STU_88DE7AD3" if (self.graph(id).index, node.pos) == (0x0c8c, 72) => {
+            "STU_88DE7AD3" if registration.permits((self.graph(id).index, node.pos) == (0x0c8c, 72)) => {
                 // In 104319 this base action forwards the authored phase handoff.
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
@@ -211,7 +229,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             "STU_42578342"
                 if node.is_action()
                     && (participant_filter(node).is_some()
-                        || (self.graph(id).index, node.pos) == (0x0c95, 9)) =>
+                        || registration.permits((self.graph(id).index, node.pos) == (0x0c95, 9))) =>
             {
                 if !self.collect_targets(id, node)? {
                     return Ok(false);
@@ -220,10 +238,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             "STUStatescriptActionEffect"
-                if matches!(
+                if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
                     (0x01c7, 74) | (0x0257, 32) | (0x01c6, 37 | 38)
-                ) && script_expr::native_shape(
+                )) && script_expr::native_shape(
                     field(&node.fields, "m_3E3E203A"),
                     "STU_B5A0CAF0",
                     None,
@@ -310,7 +328,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
-            "STU_C43F9944" if (self.graph(id).index, node.pos) == (0x180a, 28) => {
+            "STU_C43F9944" if registration.permits((self.graph(id).index, node.pos) == (0x180a, 28)) => {
                 let site = self.site(id, node);
                 let message = POST_MATCH_COMPLETE;
                 if node
@@ -329,7 +347,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             "STU_100EF8C2"
-                if (self.graph(id).index, node.pos) == (0x0cec, 11)
+                if registration.permits((self.graph(id).index, node.pos) == (0x0cec, 11))
                     && node
                         .field("m_gameMessage.m_gameMessage")
                         .and_then(asset_guid)
@@ -344,8 +362,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             "STU_100EF8C2"
-                if self.graph(id).index == 0x1188
-                    && matches!(node.pos, 58 | 59)
+                if registration.permits(self.graph(id).index == 0x1188
+                    && matches!(node.pos, 58 | 59))
                     && node.is_action()
                     && node.is_networked()
                     && node
@@ -365,8 +383,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             "STU_100EF8C2"
-                if self.graph(id).index == 0x0019
-                    && matches!(node.pos, 48 | 50)
+                if registration.permits(self.graph(id).index == 0x0019
+                    && matches!(node.pos, 48 | 50))
                     && is_self_target(node, "m_targets")
                     && node
                         .field("m_gameMessage.m_gameMessage")
@@ -379,7 +397,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             "STU_100EF8C2"
-                if self.graph(id).index == 0x0c8c
+                if registration.permits(self.graph(id).index == 0x0c8c)
                     && node.is_action()
                     && node.is_networked()
                     && node.remote >= 0
@@ -404,21 +422,21 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             // These placements resolve to the 104319 base action.
-            "STU_0FC6DAEA" if self.graph(id).index == 0x0ca5 && matches!(node.pos, 66..=69) => {
+            "STU_0FC6DAEA" if registration.permits(self.graph(id).index == 0x0ca5 && matches!(node.pos, 66..=69)) => {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
             "STU_9F3FE778"
-                if matches!(
+                if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
                     (0x0ce2, 7) | (0x0019, 38) | (0x0079, 8 | 14)
-                ) =>
+                )) =>
             {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
             "STU_C43F9944"
-                if (self.graph(id).index, node.pos) == (0x0c8c, 236)
+                if registration.permits((self.graph(id).index, node.pos) == (0x0c8c, 236))
                     && field(&node.fields, "m_condition").is_null()
                     && field(&node.fields, "m_params").is_null()
                     && node
@@ -429,7 +447,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", caller, depth)
             }
             "STU_C43F9944"
-                if self.graph(id).index == 0x0ce0
+                if registration.permits(self.graph(id).index == 0x0ce0)
                     && node.is_action()
                     && field(&node.fields, "m_condition").is_null()
                     && field(&node.fields, "m_params").is_null()
@@ -454,8 +472,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             "STU_CEBDAF17"
-                if self.graph(id).index == 0x0b8b
-                    && matches!(node.pos, 50 | 51 | 74)
+                if registration.permits(self.graph(id).index == 0x0b8b
+                    && matches!(node.pos, 50 | 51 | 74))
                     && node.server_only
                     && node.remote < 0
                     && is_self_target(node, "m_targets") =>
@@ -463,8 +481,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", caller, depth)
             }
             "STU_CEBDAF17"
-                if self.graph(id).index == 0x0043
-                    && matches!(node.pos, 1 | 40 | 53..=55)
+                if registration.permits(self.graph(id).index == 0x0043
+                    && matches!(node.pos, 1 | 40 | 53..=55))
                     && node.is_action()
                     && node.remote < 0
                     && is_self_target(node, "m_targets") =>
@@ -474,14 +492,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", caller, depth)
             }
             "STU_43B63AD0"
-                if self.graph(id).index == 0x0b8b
-                    && matches!(node.pos, 14 | 16)
+                if registration.permits(self.graph(id).index == 0x0b8b
+                    && matches!(node.pos, 14 | 16))
                     && node.is_action()
                     && node.remote < 0 =>
             {
                 self.follow(id, node, "m_outPlug", caller, depth)
             }
-            "STU_FF3471E9" if (self.graph(id).index, node.pos) == (0x224e, 31) => {
+            "STU_FF3471E9" if registration.permits((self.graph(id).index, node.pos) == (0x224e, 31)) => {
                 let [row] = array_field(&node.fields, "m_BC5E91CF") else {
                     return Ok(false);
                 };
@@ -514,7 +532,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 }
                 self.follow(id, node, "m_outPlug", caller, depth)
             }
-            "STU_FF3471E9" if self.graph(id).index == 0x01f0 && matches!(node.pos, 8 | 11 | 17) => {
+            "STU_FF3471E9" if registration.permits(self.graph(id).index == 0x01f0 && matches!(node.pos, 8 | 11 | 17)) => {
                 let rows = array_field(&node.fields, "m_BC5E91CF");
                 let [row] = rows else { return Ok(false) };
                 let cap = node.pos == 17;
@@ -541,10 +559,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", caller, depth)
             }
             "STU_D087B558"
-                if matches!(
+                if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
                     (0x022f, 121) | (0x01f0, 43)
-                ) && is_self_target(node, "m_target")
+                )) && is_self_target(node, "m_target")
                     && field(&node.fields, "m_instigator").is_null()
                     && node.field("m_D7DDEEAD.m_value").and_then(Json::as_u64)
                         == Some(if self.graph(id).index == 0x01f0 {
@@ -558,7 +576,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             "STU_6FEE499E"
-                if (self.graph(id).index, node.pos) == (0x01f0, 31)
+                if registration.permits((self.graph(id).index, node.pos) == (0x01f0, 31))
                     && field(&node.fields, "m_93CDFD2F").as_u64() == Some(1) =>
             {
                 // Pinned Python Roll fallback; the native service remains unverified.
@@ -566,10 +584,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             "STU_CEBDAF17"
-                if matches!(
+                if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
                     (0x0079, 22) | (0x157c, 44 | 134 | 137 | 148..=150 | 153..=155 | 192 | 193 | 196)
-                ) =>
+                )) =>
             {
                 // The healer is a scene NPC with no player stats record.
                 self.follow(id, node, "m_outPlug", caller, depth)?;
@@ -722,9 +740,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             _ => {
-                self.report(
+                self.report_diagnostic(
                     self.site(id, node),
                     Issue::UnsupportedAction(node.class.clone()),
+                    registration.rejected(),
                 );
                 Ok(false)
             }
@@ -988,11 +1007,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             return Ok(());
         }
-        let mut registration_rejected = false;
-        let mut checked_registration = |allowed: bool| {
-            registration_rejected |= !allowed;
-            allowed
-        };
+        let mut registration = RegistrationChecks::default();
         let kind = match node.class.as_str() {
             // These client presentation states use the base state lifecycle on the server.
             "STUStatescriptState"
@@ -1006,15 +1021,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             // registration 160, constructor AA826B0, vtable 8B6BC800.
             "STU_E9485CAF" => StateKind::Plain,
             "STUStatescriptStateAnimatedCamera"
-                if checked_registration((self.graph(id).index, node.pos) == (0x0ca5, 43)) =>
+                if registration.permits((self.graph(id).index, node.pos) == (0x0ca5, 43)) =>
             {
                 StateKind::Plain
             }
             "STU_96333BBE" | "STU_E8D976BE"
-                if matches!(
+                if registration.permits(matches!(
                     (self.graph(id).index, node.pos, node.class.as_str()),
                     (0x0ced, 0 | 4, "STU_96333BBE") | (0x0ced, 6, "STU_E8D976BE")
-                ) && self
+                )) && self
                     .world
                     .spatial_binding_owner_available(self.site(id, node))
                     == Some(false) =>
@@ -1024,15 +1039,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::Plain
             }
             "STU_33A46033" | "STU_9028E035" | "STU_43994F1B" | "STU_93B8758C" | "STU_9935FBC8"
-                if checked_registration(registered_state(self.graph(id).index, node).is_some()) =>
+                if registration.permits(registered_state(self.graph(id).index, node).is_some()) =>
             {
                 StateKind::Registered { next: None }
             }
             "STU_F08E1453"
-                if matches!(
+                if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
                     (0x01cb, 85) | (0x0ce0, 39) | (0x0d03, 3)
-                ) && is_self_target(node, "m_64C3E07E") =>
+                )) && is_self_target(node, "m_64C3E07E") =>
             {
                 StateKind::Plain
             }
@@ -1075,11 +1090,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             "STU_7B9E8909" => StateKind::Plain,
             "STU_6A6BBB8D" | "STU_918B3FA9" | "STU_14611C1B" | "STU_200B27C5" | "STU_D52B9026"
             | "STU_4531992F" | "STU_55F72184" | "STU_632B74B9"
-                if self.graph(id).index == 0x0c87 =>
+                if registration.permits(self.graph(id).index == 0x0c87) =>
             {
                 StateKind::Plain
             }
-            "STU_724DFBC6" | "STU_531AA630" if self.graph(id).index == 0x0cf3 => StateKind::Plain,
+            "STU_724DFBC6" | "STU_531AA630"
+                if registration.permits(self.graph(id).index == 0x0cf3) =>
+            {
+                StateKind::Plain
+            }
             _ if is_encounter_base_state(self.graph(id).index, node) => StateKind::Plain,
             "STU_B5C87F3D"
                 if self
@@ -1090,13 +1109,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::Plain
             }
             "STU_76F3EAEF"
-                if self.graph(id).index == 0x0cbc
-                    && matches!(node.pos, 60 | 61 | 62 | 63 | 64 | 110) =>
+                if registration.permits(
+                    self.graph(id).index == 0x0cbc
+                        && matches!(node.pos, 60 | 61 | 62 | 63 | 64 | 110),
+                ) =>
             {
                 StateKind::Plain
             }
             "STU_6CC90892"
-                if (self.graph(id).index, node.pos) == (0x0cbc, 129)
+                if registration.permits((self.graph(id).index, node.pos) == (0x0cbc, 129))
                     && is_self_target(node, "m_D7AC2990") =>
             {
                 StateKind::SameTeamContact { registered: false }
@@ -1132,7 +1153,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::Plain
             }
             "STU_441B50E4"
-                if self.graph(id).index == 0x0b8b
+                if registration.permits(self.graph(id).index == 0x0b8b)
                     && matches!(
                         (node.pos, node.field("m_stat").and_then(asset_guid)),
                         (52, Some(0x0860_0000_0000_0466)) | (66, Some(0x0860_0000_0000_05bf))
@@ -1146,7 +1167,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::Plain
             }
             "STU_441B50E4"
-                if (self.graph(id).index, node.pos) == (0x01a3, 14)
+                if registration.permits((self.graph(id).index, node.pos) == (0x01a3, 14))
                     && !node.server_only
                     && field(&node.fields, "m_stat").is_null()
                     && field(&node.fields, "m_stats").is_null()
@@ -1160,12 +1181,17 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             {
                 StateKind::Plain
             }
-            "STU_97B1B3EC" if (self.graph(id).index, node.pos) == (0x0c93, 26) => {
+            "STU_97B1B3EC"
+                if registration.permits((self.graph(id).index, node.pos) == (0x0c93, 26)) =>
+            {
                 StateKind::AiControlSetting
             }
             "STU_473549CA" | "STU_CF8C7CC5" => StateKind::AiControlOverride { record: None },
             "STU_FC16FF45"
-                if matches!((self.graph(id).index, node.pos), (0x0c95, 5) | (0x185d, 57)) =>
+                if registration.permits(matches!(
+                    (self.graph(id).index, node.pos),
+                    (0x0c95, 5) | (0x185d, 57)
+                )) =>
             {
                 StateKind::AiFacing(None)
             }
@@ -1221,10 +1247,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             },
             "STUStatescriptStateMoveTo" => StateKind::MoveTo { movement: None },
             "STU_54FEB21C"
-                if matches!(
+                if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
                     (0x01f0, 14) | (0x0043, 38)
-                ) && ["m_7C8AD485", "m_C7A42E2A", "m_F8CE386A", "m_C46403A5"]
+                )) && ["m_7C8AD485", "m_C7A42E2A", "m_F8CE386A", "m_C46403A5"]
                     .iter()
                     .all(|name| field(&node.fields, name).is_null())
                     && node.links("m_E5790891").next().is_none() =>
@@ -1234,10 +1260,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::Plain
             }
             "STUStatescriptStatePhysicsExplosion"
-                if matches!(
+                if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
                     (0x01f0, 34) | (0x0043, 43 | 64)
-                ) =>
+                )) =>
             {
                 // This host has no dynamic map rigid bodies. Preserve the
                 // networked lifecycle; this does not apply actor damage.
@@ -1245,10 +1271,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             "STU_D74D4F47" => StateKind::WaitFrames { target: 0 },
             "STU_2F07848F"
-                if matches!(
+                if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
                     (0x0cec, 6) | (0x0ce0, 3) | (0x181e, 0)
-                ) =>
+                )) =>
             {
                 StateKind::CinematicTimeScale { boundary_frame: 0 }
             }
@@ -1263,8 +1289,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             "STU_316CFEF2" => StateKind::MovementMod,
             "STU_9C9A422A" => StateKind::Defer,
             "STU_75D1C308"
-                if self.graph(id).index == 0x01f0
-                    && matches!(node.pos, 18 | 22)
+                if registration
+                    .permits(self.graph(id).index == 0x01f0 && matches!(node.pos, 18 | 22))
                     && field(&node.fields, "m_069C6F7E").as_u64() == Some(1)
                     && field(&node.fields, "m_54613F6A").as_u64()
                         == Some(u64::from(node.pos == 22)) =>
@@ -1292,112 +1318,145 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             // in the Python reference (`world.tracked_targets` returns
             // NotImplemented / empty targets).
             "STUStatescriptStateTrackTargets"
-                if matches!(
+                if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
                     (0x0043, 11) | (0x0257, 11) | (0x00ca, 90)
-                ) =>
+                )) =>
             {
                 StateKind::EmptyTargets
             }
             "STU_691BFA55" | "STU_7CA2FBAF" => StateKind::Effect,
-            "STU_23A00A53" if self.graph(id).index == 0x0043 && matches!(node.pos, 0 | 9) => {
+            "STU_23A00A53"
+                if registration
+                    .permits(self.graph(id).index == 0x0043 && matches!(node.pos, 0 | 9)) =>
+            {
                 StateKind::Plain
             }
-            "STU_23A00A53" if (self.graph(id).index, node.pos) == (0x0c89, 49) => {
+            "STU_23A00A53"
+                if registration.permits((self.graph(id).index, node.pos) == (0x0c89, 49)) =>
+            {
                 StateKind::ExplosionContact
             }
             "STUStatescriptStateModifyHealth"
-                if (self.graph(id).index, node.pos) == (0x0043, 10) =>
+                if registration.permits((self.graph(id).index, node.pos) == (0x0043, 10)) =>
             {
                 StateKind::Plain
             }
             "STUStatescriptStateModifyHealth"
-                if (self.graph(id).index, node.pos) == (0x0033, 5) =>
+                if registration.permits((self.graph(id).index, node.pos) == (0x0033, 5)) =>
             {
                 StateKind::ShieldRecharge
             }
             "STUStatescriptStateModifyHealth"
-                if matches!(
+                if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
                     (0x0c89, 38 | 46 | 48) | (0x0cbc, 69) | (0x0b27, 93)
-                ) =>
+                )) =>
             {
                 StateKind::ModifyHealth
             }
             "STUStatescriptStateTrackTargets"
-                if matches!(
+                if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
                     (0x0c89, 47 | 52) | (0x022f, 26 | 86) | (0x006b, 6 | 7 | 121)
-                ) =>
+                )) =>
             {
                 StateKind::TrackedTargets
             }
-            "STU_431F3FCC" if (self.graph(id).index, node.pos) == (0x022f, 11) => {
+            "STU_431F3FCC"
+                if registration.permits((self.graph(id).index, node.pos) == (0x022f, 11)) =>
+            {
                 StateKind::DeadeyeEffects
             }
-            "STU_431F3FCC" if (self.graph(id).index, node.pos) == (0x006b, 62) => {
+            "STU_431F3FCC"
+                if registration.permits((self.graph(id).index, node.pos) == (0x006b, 62)) =>
+            {
                 StateKind::WitchStaffEffect
             }
             "STUStatescriptStateModifyHealth"
-                if (self.graph(id).index, node.pos) == (0x0079, 0) =>
+                if registration.permits((self.graph(id).index, node.pos) == (0x0079, 0)) =>
             {
                 StateKind::WitchStaffHealing
             }
             "STUStatescriptStateTrackRay"
-                if self.graph(id).index == 0x157c
-                    && matches!(node.pos, 202 | 203)
+                if registration
+                    .permits(self.graph(id).index == 0x157c && matches!(node.pos, 202 | 203))
                     && node.server_only =>
             {
                 StateKind::SummonerBeamRay
             }
             "STUStatescriptStateModifyHealth"
-                if (self.graph(id).index, node.pos) == (0x157c, 170) && node.server_only =>
+                if registration.permits((self.graph(id).index, node.pos) == (0x157c, 170))
+                    && node.server_only =>
             {
                 StateKind::SummonerBeamDamage
             }
             "STU_BA4C2296"
-                if (self.graph(id).index, node.pos) == (0x157c, 143)
+                if registration.permits((self.graph(id).index, node.pos) == (0x157c, 143))
                     && self.world.outline_context_available(self.site(id, node)) == Some(false) =>
             {
                 StateKind::Plain
             }
             "STU_431F3FCC"
-                if (self.graph(id).index, node.pos) == (0x157c, 200) && node.server_only =>
+                if registration.permits((self.graph(id).index, node.pos) == (0x157c, 200))
+                    && node.server_only =>
             {
                 // This effect tracks player criteria. The NPC caster has no player stats.
                 StateKind::Plain
             }
             "STU_B5C87F3D"
-                if matches!(
+                if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
                     (0x0043, 24) | (0x022f, 85)
-                ) =>
+                )) =>
             {
                 // The headless owner has no local combat accumulator.
                 StateKind::Plain
             }
-            "STU_E3CEF6B9" if (self.graph(id).index, node.pos) == (0x022f, 116) => {
+            "STU_E3CEF6B9"
+                if registration.permits((self.graph(id).index, node.pos) == (0x022f, 116)) =>
+            {
                 StateKind::WaitFrames { target: 0 }
             }
             "STU_38EE1100" => persistent_message(self.graph(id).index, node)
                 .map_or(StateKind::SendMessage, StateKind::PersistentSend),
             "STUStatescriptStateCosmeticEntity" => StateKind::CosmeticEntity,
             "STUStatescriptStateChaseVar" => StateKind::ChaseVar,
-            "STU_77E13026" if (self.graph(id).index, node.pos) == (0x0043, 60) => StateKind::Plain,
-            "STU_77E13026" if (self.graph(id).index, node.pos) == (0x180a, 42) => {
+            "STU_77E13026"
+                if registration.permits((self.graph(id).index, node.pos) == (0x0043, 60)) =>
+            {
+                StateKind::Plain
+            }
+            "STU_77E13026"
+                if registration.permits((self.graph(id).index, node.pos) == (0x180a, 42)) =>
+            {
                 StateKind::PhaseScriptList
             }
-            "STU_CB4905E9" if (self.graph(id).index, node.pos) == (0x180a, 41) => {
+            "STU_CB4905E9"
+                if registration.permits((self.graph(id).index, node.pos) == (0x180a, 41)) =>
+            {
                 StateKind::PhaseScript
             }
-            "STU_4BD2E886" if (self.graph(id).index, node.pos) == (0x180a, 46) => {
+            "STU_4BD2E886"
+                if registration.permits((self.graph(id).index, node.pos) == (0x180a, 46)) =>
+            {
                 StateKind::PhaseTransition
             }
             "STU_2F4E2E3F" => StateKind::Watch,
-            "STU_BA2FCDEB" if self.graph(id).index == 0x0cba => StateKind::SpawnSearch,
-            "STU_5E805B5A" if self.graph(id).index == 0x0cba => StateKind::RecentInput,
-            "STU_0A6BE10E" if (self.graph(id).index, node.pos) == (0x0043, 63) => StateKind::Plain,
-            "STU_0A6BE10E" if (self.graph(id).index, node.pos) == (0x0cba, 6) => {
+            "STU_BA2FCDEB" if registration.permits(self.graph(id).index == 0x0cba) => {
+                StateKind::SpawnSearch
+            }
+            "STU_5E805B5A" if registration.permits(self.graph(id).index == 0x0cba) => {
+                StateKind::RecentInput
+            }
+            "STU_0A6BE10E"
+                if registration.permits((self.graph(id).index, node.pos) == (0x0043, 63)) =>
+            {
+                StateKind::Plain
+            }
+            "STU_0A6BE10E"
+                if registration.permits((self.graph(id).index, node.pos) == (0x0cba, 6)) =>
+            {
                 StateKind::LivingBodyArray
             }
             "STUStatescriptStateWeaponVolley" => StateKind::WeaponVolley {
@@ -1410,7 +1469,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.report_diagnostic(
                     self.site(id, node),
                     Issue::UnsupportedState(node.class.clone()),
-                    registration_rejected,
+                    registration.rejected(),
                 );
                 return Ok(());
             }

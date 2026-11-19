@@ -26,6 +26,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Added authored client-only operands with an optional server fallback. Skipped operands do not access the server context or register native reads.
 
+- StateScript diagnostics now identify registration policy rejections in guarded action and state dispatch. The Inspector shows those separately from unsupported nodes and lists the rejected locations.
+
 ### 2026-11-18
 
 #### Build shared map-agnostic static navigation queries (#63)
