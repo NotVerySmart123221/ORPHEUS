@@ -10,6 +10,24 @@ Use the current `rust` module boundaries when extending the VM. This guide integ
 4. [`script_expr.rs`](../rust/crates/statescript/src/script_expr.rs) evaluates live operands, while [`world.rs`](../rust/crates/statescript/src/script_init/world.rs) supplies host queries. Values, World reads and random draws must retain their event-time semantics.
 5. [`script_snapshot_wire.rs`](../rust/src/script_snapshot_wire.rs) encodes the resulting state. Fixture agreement and original-client presentation are separate acceptance categories.
 
+## Check graph links
+
+With the Inspector enabled, startup logs show up to 16 decoded links whose
+target position is absent from both the node and container tables. Each warning
+identifies the graph, source node, plug path, and zero-based link index. You can
+also inspect links through `GraphStore::dangling_links`. Explicit null targets
+and declared containers are valid. The report is read-only and continues to
+show structural problems even if the VM never reaches the source node.
+
+Startup also counts nodes declared client-only by the loaded graph data. The
+live Inspector reports active plain states under `active_states` and separates
+known registration rejections from other unsupported nodes. The first 16
+rejected graph and node locations appear in `registration_rejection_sites`.
+The registration category covers the explicit camera placement guard and the shared guarded
+state registration path. It records a rejection only if execution reaches the
+guard and no handler accepts the node. An inactive or absent node in a single
+snapshot gives no evidence about whether a run reached it.
+
 ## Pinned action contract
 
 The [synthetic fixture](../fixtures/behavior/script-actions-v1.json) records 15 cases against Rust `f763beb9d7017b9364a3c8fc79ae6192df590043`. Its expected values were checked against that old executor before integration. The [consumer](../rust/crates/statescript/src/script_init/tests/actions_contract.rs) uses the current production loader and VM, checking scoped writes, dynamic values, error sites, RNG consumption, index behavior, work budgets and ordered links.

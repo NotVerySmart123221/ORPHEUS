@@ -311,6 +311,8 @@ pub enum Issue {
 pub struct Diagnostic {
     pub site: Site,
     pub issue: Issue,
+    /// An existing placement or registration guard rejected this node.
+    pub registration_rejected: bool,
 }
 
 #[derive(Clone, Debug)]

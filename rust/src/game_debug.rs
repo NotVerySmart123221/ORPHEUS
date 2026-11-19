@@ -10,7 +10,7 @@ use serde::Serialize;
 #[cfg(any(test, feature = "inspector"))]
 use crate::{
     game_timing::WorkerTiming,
-    script_init::{Snapshot as ScriptSnapshot, StateKind},
+    script_init::{Issue as ScriptIssue, Snapshot as ScriptSnapshot, StateKind},
     script_wire::{Value as ScriptValue, Variables},
 };
 
@@ -36,6 +36,8 @@ pub(crate) const MAX_DEBUG_VM_INSTANCES: usize = 32;
 pub(crate) const MAX_DEBUG_VM_STATES: usize = 64;
 #[cfg(any(test, feature = "inspector"))]
 pub(crate) const MAX_DEBUG_VM_VARS: usize = 32;
+#[cfg(any(test, feature = "inspector"))]
+const MAX_DEBUG_VM_REJECTION_SITES: usize = 16;
 #[cfg(any(test, feature = "inspector"))]
 pub(crate) const MAX_DEBUG_STEP_BUDGET: u32 = 60;
 #[cfg(any(test, feature = "inspector"))]
@@ -230,10 +232,20 @@ pub(crate) struct EntityScriptSnapshot {
     pub kind: &'static str,
     pub now_ms: u64,
     pub diagnostics: usize,
+    pub registration_rejections: usize,
+    pub registration_rejection_sites: Vec<ScriptDiagnosticSite>,
+    pub unsupported_nodes: usize,
     pub instances: Vec<ScriptInstanceSummary>,
     pub instances_truncated: bool,
     pub variables: Vec<ScriptVarSummary>,
     pub variables_truncated: bool,
+}
+
+#[cfg(any(test, feature = "inspector"))]
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct ScriptDiagnosticSite {
+    pub graph: u32,
+    pub node: Option<u16>,
 }
 
 #[cfg(any(test, feature = "inspector"))]
@@ -352,11 +364,33 @@ pub(crate) fn summarize_script_snapshot(
         .collect();
     let (variables, variables_truncated) =
         collect_variables(&snapshot.variables, &snapshot.resolved_bindings, 0);
+    let mut registration_rejections = 0;
+    let mut registration_rejection_sites = Vec::new();
+    let mut unsupported_nodes = 0;
+    for diagnostic in &snapshot.diagnostics {
+        if diagnostic.registration_rejected {
+            registration_rejections += 1;
+            if registration_rejection_sites.len() < MAX_DEBUG_VM_REJECTION_SITES {
+                registration_rejection_sites.push(ScriptDiagnosticSite {
+                    graph: diagnostic.site.graph,
+                    node: diagnostic.site.node,
+                });
+            }
+        } else if matches!(
+            &diagnostic.issue,
+            ScriptIssue::UnsupportedAction(_) | ScriptIssue::UnsupportedState(_)
+        ) {
+            unsupported_nodes += 1;
+        }
+    }
     EntityScriptSnapshot {
         entity,
         kind,
         now_ms: snapshot.now_ms,
         diagnostics: snapshot.diagnostics.len(),
+        registration_rejections,
+        registration_rejection_sites,
+        unsupported_nodes,
         instances,
         instances_truncated,
         variables,

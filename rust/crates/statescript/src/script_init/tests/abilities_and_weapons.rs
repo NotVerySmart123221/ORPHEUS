@@ -1641,6 +1641,7 @@ fn missing_world_queries_report_expression_sites_without_writing_guessed_values(
                     node: Some(1),
                 },
                 issue: Issue::Expression(expected),
+                registration_rejected: false,
             }],
         );
     }

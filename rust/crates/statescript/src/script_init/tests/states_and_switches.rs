@@ -1411,7 +1411,7 @@ fn unsupported_branches_are_reported_and_cyclic_actions_are_bounded() {
                 "STUStatescriptEntry",
                 None,
                 json!({
-                    "m_outPlug":plug(&[(1,"m_inPlug"),(2,"m_beginPlug")], &[])
+                    "m_outPlug":plug(&[(1,"m_inPlug"),(2,"m_beginPlug"),(4,"m_beginPlug"),(5,"m_beginPlug")], &[])
                 }),
             ),
             node(
@@ -1429,8 +1429,11 @@ fn unsupported_branches_are_reported_and_cyclic_actions_are_bounded() {
                     "m_out_Var":var(42, true), "m_value":true
                 }),
             ),
+            node(4, "STUStatescriptStateAnimatedCamera", Some(1), json!({})),
+            node(5, "UnknownState", Some(2), json!({})),
+            node(6, "UnreachedState", Some(3), json!({})),
         ],
-        json!([2]),
+        json!([2, 4, 5, 6]),
         json!([0]),
     );
     let cycle = graph(
@@ -1467,8 +1470,18 @@ fn unsupported_branches_are_reported_and_cyclic_actions_are_bounded() {
     };
     let snapshot = run(42, MAX_INIT_WORK).unwrap();
     assert!(!snapshot.initialization_complete());
-    assert!(snapshot.instances[&1].states[&0].active);
+    let states = &snapshot.instances[&1].states;
+    assert!(states[&0].active);
+    assert_eq!(states[&0].kind, StateKind::Plain);
     assert!(!snapshot.variables.contains_key(&42));
+    assert_eq!(
+        snapshot
+            .diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.site.node, diagnostic.registration_rejected))
+            .collect::<Vec<_>>(),
+        [(Some(1), false), (Some(4), true), (Some(5), false)]
+    );
     assert_eq!(snapshot.diagnostics[0].site.node, Some(1));
     assert_eq!(
         snapshot.diagnostics[0].issue,

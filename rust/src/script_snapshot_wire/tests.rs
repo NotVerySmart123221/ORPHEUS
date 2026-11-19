@@ -639,6 +639,7 @@ fn unsupported_active_states_and_initialization_diagnostics_are_explicit() {
             node: None,
         },
         issue: Issue::UnsupportedAction("fixture".into()),
+        registration_rejected: false,
     });
     snapshot.diagnostics.push(Diagnostic {
         site: Site {
@@ -648,6 +649,7 @@ fn unsupported_active_states_and_initialization_diagnostics_are_explicit() {
             node: Some(7),
         },
         issue: Issue::UnsupportedState("later".into()),
+        registration_rejected: false,
     });
     let error = encoder.project(&snapshot, View::Observer).unwrap_err();
     assert_eq!(

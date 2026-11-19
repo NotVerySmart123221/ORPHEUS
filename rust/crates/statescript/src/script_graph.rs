@@ -61,18 +61,9 @@ impl Node {
     /// The plug's targets in data order, including unresolved targets.
     pub fn links(&self, path: &str) -> impl Iterator<Item = (Option<u16>, &str)> {
         self.field(path)
-            .filter(|field| field.get("$").is_some())
-            .and_then(|field| field.get("links")?.as_array())
             .into_iter()
-            .flatten()
-            .filter_map(|link| {
-                let pair = link.as_array()?;
-                let position = match pair.first()? {
-                    Value::Null => None,
-                    value => Some(u16::try_from(value.as_u64()?).ok()?),
-                };
-                Some((position, pair.get(1)?.as_str()?))
-            })
+            .flat_map(raw_plug_links)
+            .filter_map(decode_link)
     }
 
     pub fn plugs(&self) -> BTreeMap<String, &Value> {
@@ -80,6 +71,34 @@ impl Node {
         collect_plugs(&self.fields, "", &mut found);
         found
     }
+}
+
+fn raw_plug_links(field: &Value) -> impl Iterator<Item = &Value> {
+    field
+        .get("$")
+        .and_then(|_| field.get("links")?.as_array())
+        .into_iter()
+        .flatten()
+}
+
+fn decode_link(link: &Value) -> Option<(Option<u16>, &str)> {
+    let pair = link.as_array()?;
+    let position = match pair.first()? {
+        Value::Null => None,
+        value => Some(u16::try_from(value.as_u64()?).ok()?),
+    };
+    Some((position, pair.get(1)?.as_str()?))
+}
+
+/// A decoded link to a position absent from both the node and container tables.
+#[derive(Debug, Eq, PartialEq)]
+pub struct DanglingLink {
+    pub graph: u32,
+    pub source: u16,
+    pub plug: String,
+    /// Zero-based position in the plug's original link list.
+    pub link_index: usize,
+    pub target: u16,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -217,6 +236,29 @@ impl Graph {
     pub fn presence_bit(&self, var: u32) -> Option<usize> {
         self.presence_vars()
             .position(|(_, entry)| entry.0 == Some(var))
+    }
+
+    fn dangling_links(&self) -> impl Iterator<Item = DanglingLink> + '_ {
+        self.nodes.iter().flat_map(move |node| {
+            node.plugs().into_iter().flat_map(move |(path, plug)| {
+                raw_plug_links(plug)
+                    .enumerate()
+                    .filter_map(move |(link_index, link)| {
+                        let (target, _) = decode_link(link)?;
+                        let target = target?;
+                        if self.node(target).is_some() || self.containers.contains_key(&target) {
+                            return None;
+                        }
+                        Some(DanglingLink {
+                            graph: self.index,
+                            source: node.pos,
+                            plug: path.clone(),
+                            link_index,
+                            target,
+                        })
+                    })
+            })
+        })
     }
 
     pub fn graph_refs(&self) -> BTreeSet<u64> {
@@ -449,6 +491,12 @@ impl GraphStore {
 
     pub fn graph(&self, index: u32) -> Option<&Graph> {
         self.graphs.get(&index)
+    }
+
+    /// Inspect local graph structure on demand. Unresolved null links and links
+    /// to declared containers are valid and do not appear in this report.
+    pub fn dangling_links(&self) -> impl Iterator<Item = DanglingLink> + '_ {
+        self.graphs.values().flat_map(Graph::dangling_links)
     }
 
     pub fn graph_indexes(&self) -> impl Iterator<Item = u32> + '_ {
@@ -775,6 +823,43 @@ mod tests {
         // Playable boss definitions use the explicit encounter pair instead of an AI association.
         data["junkenstein"]["entities"][body]["ai_association"] = Value::Null;
         assert!(load(&data).is_ok());
+    }
+
+    #[test]
+    fn dangling_link_report_preserves_unresolved_links_and_data_order() {
+        let mut data = fixture();
+        let links = &mut data["graphs"][0]["nodes"][0]["fields"]["entries"][0]["trigger"]["links"];
+        *links = json!([
+            [2, "input"],
+            [null, "unresolved"],
+            [3, "container"],
+            [4, "empty slot"],
+            [9, "outside table"],
+        ]);
+        let store = GraphStore::from_json(&serde_json::to_vec(&data).unwrap()).unwrap();
+        let plug = "entries[0].trigger";
+        assert_eq!(
+            store.dangling_links().collect::<Vec<_>>(),
+            [(3, 4), (4, 9)].map(|(link_index, target)| DanglingLink {
+                graph: 42,
+                source: 0,
+                plug: plug.into(),
+                link_index,
+                target,
+            })
+        );
+        let graph = store.graph(42).unwrap();
+        assert_eq!(
+            graph.node(0).unwrap().links(plug).collect::<Vec<_>>(),
+            [
+                (Some(2), "input"),
+                (None, "unresolved"),
+                (Some(3), "container"),
+                (Some(4), "empty slot"),
+                (Some(9), "outside table"),
+            ]
+        );
+        assert_eq!(graph.owner_positions(), [0, 0]);
     }
 
     #[test]
