@@ -137,10 +137,18 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
         assert_eq!(table.graph, 0x05ad);
         assert!(matches!(&table.variables[&29859], Value::Map(entries) if entries.len() == 20));
         let mut streams = Vec::new();
+        let probe_path = std::env::var_os("ORPHEUS_SPRINT_WIRE_PROBE");
+        let mut probe = Vec::new();
         for view in [View::Owner, View::Observer] {
             let projected = encoder.project(snapshot, view).unwrap();
             let mut stream = BodyStream::new(spawn.entity);
             let baseline = encoder.queue_full(&mut stream, &projected).unwrap();
+            if probe_path.is_some() && view == View::Owner {
+                let bits = baseline.update.chunk.as_ref().unwrap();
+                probe.push(
+                    serde_json::json!({"t": 0, "bits": bits.bit_len(), "data": bits.as_bytes()}),
+                );
+            }
             stream.create_arrived();
             let mut wire = IdentityReader::default();
             wire.apply(
@@ -302,6 +310,10 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
                 let Some(kind) = kind else { continue };
                 let delta = encoder.queue_delta(stream, &next, kind, runtime.frame_ms());
                 if let Some(chunk) = delta.unwrap() {
+                    if probe_path.is_some() && next.view() == View::Owner {
+                        let bits = chunk.update.chunk.as_ref().unwrap();
+                        probe.push(serde_json::json!({"t": t, "bits": bits.bit_len(), "data": bits.as_bytes()}));
+                    }
                     stream.sent(chunk.last);
                     wire.apply(
                         chunk.update.chunk.as_ref().unwrap(),
@@ -361,7 +373,14 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
             (634, (Some(20), Some(false))),
         ]);
         assert_eq!(owner, expected);
+        if let Some(path) = probe_path {
+            std::fs::write(path, serde_json::to_vec(&probe).unwrap()).unwrap();
+        }
     } else {
+        assert!(
+            std::env::var_os("ORPHEUS_SPRINT_WIRE_PROBE").is_none(),
+            "Sprint wire probe requires a target-tagged pack"
+        );
         let Err(blocked) = scene.owner_body_runtime(hero, spawn) else {
             panic!("the untagged stock owner body was expected to stop before attach");
         };
