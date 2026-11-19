@@ -209,6 +209,80 @@ fn bridge_forwards_input_only_between_begin_and_abort() {
     }
 }
 
+fn scoped_dispatch_fixture(
+    client_only: bool,
+    server_only: bool,
+    initial_state: Option<u16>,
+) -> Component {
+    let output = json!({"m_outPlug":plug(&[(2, "m_inPlug")], &[])});
+    let mut state = node(
+        0,
+        "STUStatescriptState",
+        Some(0),
+        json!({"m_onBeginPlug":plug(&[(2, "m_inPlug")], &[])}),
+    );
+    let mut entry = node(1, "STUStatescriptEntry", None, output);
+    for node in [&mut state, &mut entry] {
+        node["client_only"] = json!(client_only);
+        node["server_only"] = json!(server_only);
+    }
+    let assign = node(
+        2,
+        "STUStatescriptActionSetVar",
+        None,
+        json!({"m_out_Var":var(42, true), "m_value":true}),
+    );
+    Component::start(
+        Arc::new(store(vec![graph(
+            42,
+            vec![state, entry, assign],
+            json!([0]),
+            json!([1]),
+        )])),
+        42,
+        Variables::new(),
+        vec![Root::listener(1, 42, initial_state)],
+        0,
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap()
+}
+
+#[test]
+fn direct_state_start_respects_node_scope() {
+    for (client_only, server_only) in [(true, false), (false, true), (false, false)] {
+        let component = scoped_dispatch_fixture(client_only, server_only, Some(0));
+        let snapshot = component.snapshot().unwrap();
+        assert!(snapshot.initialization_complete());
+        assert_eq!(snapshot.instances[&1].states.contains_key(&0), !client_only);
+        assert_eq!(
+            snapshot.variables.get(&42),
+            (!client_only).then_some(&Value::Bool(true))
+        );
+    }
+}
+
+#[test]
+fn direct_queued_entry_respects_node_scope() {
+    for (client_only, server_only) in [(true, false), (false, true), (false, false)] {
+        let mut component = scoped_dispatch_fixture(client_only, server_only, None);
+        assert!(!component.snapshot().unwrap().variables.contains_key(&42));
+        component
+            .machine
+            .queues
+            .push(1, 0, Event::Entry(1))
+            .unwrap();
+        component.run_now(&mut EmptyWorld).unwrap();
+        let snapshot = component.snapshot().unwrap();
+        assert!(snapshot.initialization_complete());
+        assert_eq!(
+            snapshot.variables.get(&42),
+            (!client_only).then_some(&Value::Bool(true))
+        );
+    }
+}
+
 #[test]
 fn client_subgraph_controller_keeps_its_branch_off_the_server() {
     for client_only in [true, false] {

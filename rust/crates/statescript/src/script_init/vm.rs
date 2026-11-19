@@ -204,7 +204,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             for position in definition.entries.iter().flatten() {
                 if definition
                     .node(*position)
-                    .is_some_and(|node| !node.client_only && is_entry(node))
+                    .is_some_and(|node| node.runs_on_server() && is_entry(node))
                 {
                     self.post(id, Event::Entry(*position))?;
                 }
@@ -304,7 +304,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             let Some(node) = graph.state(usize::from(raw)) else {
                 continue;
             };
-            if node.client_only {
+            if !node.runs_on_server() {
                 continue;
             }
             let key = StateKey { instance: id, raw };
@@ -1413,7 +1413,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             for position in definition.entries.iter().flatten() {
                 if definition
                     .node(*position)
-                    .is_some_and(|node| !node.client_only && is_entry(node))
+                    .is_some_and(|node| node.runs_on_server() && is_entry(node))
                 {
                     self.post(id, Event::Entry(*position))?;
                 }
@@ -1496,7 +1496,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let definition = self.graphs.graph(graph).expect("created played graph");
         for position in definition.entries.iter().flatten() {
             let Some(node) = definition.node(*position).filter(|node| {
-                !node.client_only && node.class == "STU_BB4AC733" && !configured(node, "m_5AEA0A51")
+                node.runs_on_server()
+                    && node.class == "STU_BB4AC733"
+                    && !configured(node, "m_5AEA0A51")
             }) else {
                 continue;
             };
@@ -2064,7 +2066,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 taken = true;
                 continue;
             };
-            if target.client_only {
+            if !target.runs_on_server() {
                 continue;
             }
             if target.is_state() {

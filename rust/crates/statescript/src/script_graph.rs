@@ -42,6 +42,11 @@ pub struct Node {
 }
 
 impl Node {
+    /// Whether the node's declared execution scope includes the server.
+    pub(crate) fn runs_on_server(&self) -> bool {
+        !self.client_only
+    }
+
     pub fn is_networked(&self) -> bool {
         !self.client_only && !self.server_only
     }
