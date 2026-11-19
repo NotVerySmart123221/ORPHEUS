@@ -12,6 +12,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Removed redundant placement checks for stat criteria actions and consolidated equivalent effect and stat continuation paths.
 
+- Recorded the ARM64 paired replay results for idle and reload schedules, the missing-reference control, and the 900-frame prepared regression.
+
 ### 2026-11-19
 
 - Added Inspector startup diagnostics for StateScript links to missing nodes and a count of declared client-only nodes. Live VM summaries distinguish rejected registrations from other unsupported nodes.
