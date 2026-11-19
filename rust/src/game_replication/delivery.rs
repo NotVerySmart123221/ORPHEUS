@@ -1535,9 +1535,9 @@ impl WorldDelivery {
             )
             .ok()
             .flatten();
-        let script = runtime
-            .as_deref()
-            .and_then(|runtime| BodyScript::new(body, start_frame, runtime).ok());
+        let script = runtime.as_deref().and_then(|runtime| {
+            BodyScript::new(body, start_frame, self.input.processed, runtime).ok()
+        });
         if script.is_none() {
             runtime = None;
         }
