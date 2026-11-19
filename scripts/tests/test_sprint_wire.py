@@ -74,5 +74,17 @@ class SprintWireTests(unittest.TestCase):
             self.read_frame(1, True, truncated=True)
 
 
+class ValidateWritesTests(unittest.TestCase):
+    def test_boolean_value_is_rejected(self):
+        observed = [(1, 37, (True, ()), 0)]
+        with self.assertRaisesRegex(ValueError, "^699 type or bindings$"):
+            validate_writes(observed, 1, 37, [(1, ())])
+
+    def test_non_empty_bindings_are_rejected(self):
+        observed = [(1, 37, (1, (1,)), 0)]
+        with self.assertRaisesRegex(ValueError, "^699 type or bindings$"):
+            validate_writes(observed, 1, 37, [(1, (1,))])
+
+
 if __name__ == "__main__":
     unittest.main()
