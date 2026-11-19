@@ -218,6 +218,8 @@ pub(crate) struct WorldDelivery {
     bots: HashMap<u32, BotLifetime>,
     health_updates: HashMap<u32, u64>,
     health_revision: u64,
+    // These barriers belong to the peer's reliable stream and survive world clears.
+    entity_notice_ordinals: HashMap<u32, u32>,
     started: Option<u32>,
     pub(crate) presentation_due: bool,
     controller: Stream,

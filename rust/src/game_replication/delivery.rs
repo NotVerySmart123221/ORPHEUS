@@ -68,6 +68,7 @@ impl WorldDelivery {
             bots: HashMap::new(),
             health_updates: HashMap::new(),
             health_revision: 0,
+            entity_notice_ordinals: HashMap::new(),
             started: None,
             presentation_due: false,
             controller: Stream::new(owner),
@@ -151,6 +152,20 @@ impl WorldDelivery {
 
     pub(crate) fn identity_ready(&self, entity: u32) -> bool {
         self.world_started() && self.created.contains(&entity)
+    }
+
+    pub(crate) fn track_entity_notice(&mut self, entity: u32, ordinal: u32) {
+        self.entity_notice_ordinals.insert(entity, ordinal);
+    }
+
+    pub(crate) fn pending_entity_notice(
+        &self,
+        entity: u32,
+        egress: &GameEgress<Arc<Record>>,
+    ) -> bool {
+        self.entity_notice_ordinals
+            .get(&entity)
+            .is_some_and(|&ordinal| !egress.delivered_through(ordinal))
     }
 
     pub(crate) fn mode_ready(&self) -> bool {
@@ -511,6 +526,13 @@ impl WorldDelivery {
             .iter()
             .enumerate()
             .filter_map(|(index, record)| {
+                if matches!(record.update.operation, Some(Operation::Destroy))
+                    && self
+                        .entity_notice_ordinals
+                        .contains_key(&record.update.entity)
+                {
+                    return None;
+                }
                 match record.delivery {
                     Delivery::SceneScript { last }
                         if !self
@@ -630,6 +652,11 @@ impl WorldDelivery {
         egress: &mut GameEgress<Arc<Record>>,
         send: impl FnOnce(Vec<u8>) -> Result<u32, E>,
     ) -> Result<SentFrame, SendError<E>> {
+        // Numbered notices can still be retransmitted after an entity starts
+        // retiring. Keep its destroy behind the acknowledged reliable prefix.
+        let pending = egress.oldest_pending_reliable();
+        self.entity_notice_ordinals
+            .retain(|_, ordinal| u64::from(*ordinal) >= pending);
         if !reliable_only {
             if let Some(simulation) = simulation {
                 self.prepare_body_updates(simulation);

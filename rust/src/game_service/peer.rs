@@ -19,7 +19,6 @@ pub(super) struct Peer {
 #[derive(Default)]
 pub(super) struct CombatUi {
     pub(super) notices: VecDeque<CombatNotice>,
-    pub(super) last_notice_by_entity: HashMap<u32, u32>,
     pub(super) replacements: VecDeque<(Duration, BotReplacement)>,
 }
 
@@ -114,8 +113,9 @@ impl Peer {
                     continue;
                 }
             }
-            let entity = notice.required_identity();
-            if entity.is_some_and(|entity| !self.world.identity_ready(entity))
+            if notice
+                .required_identity()
+                .is_some_and(|entity| !self.world.identity_ready(entity))
                 || (notice.needs_mode_ui() && !self.world.mode_ready())
             {
                 self.combat_ui.notices.push_back(notice);
@@ -123,8 +123,8 @@ impl Peer {
             }
             let bytes = notice.encode(schemas)?;
             let ordinal = self.egress.queue_reliable(bytes)?;
-            if let Some(entity) = entity {
-                self.combat_ui.last_notice_by_entity.insert(entity, ordinal);
+            for entity in notice.referenced_entities() {
+                self.world.track_entity_notice(entity, ordinal);
             }
         }
         for _ in 0..self.combat_ui.replacements.len() {
@@ -139,11 +139,7 @@ impl Peer {
                 .notices
                 .iter()
                 .any(|notice| notice.required_identity() == Some(entity));
-            let waiting_for_reliable = self
-                .combat_ui
-                .last_notice_by_entity
-                .get(&entity)
-                .is_some_and(|&ordinal| !self.egress.delivered_through(ordinal));
+            let waiting_for_reliable = self.world.pending_entity_notice(entity, &self.egress);
             if now < expires
                 && (has_notice || waiting_for_reliable || self.world.health_pending(entity))
             {
@@ -154,7 +150,6 @@ impl Peer {
                 self.combat_ui
                     .notices
                     .retain(|notice| notice.required_identity() != Some(entity));
-                self.combat_ui.last_notice_by_entity.remove(&entity);
                 self.world.replace_bot(replacement);
             }
         }

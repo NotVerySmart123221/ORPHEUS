@@ -53,6 +53,24 @@ impl CombatNotice {
         }
     }
 
+    pub(crate) fn referenced_entities(self) -> impl Iterator<Item = u32> {
+        let references = match self {
+            Self::Hit { target, .. } => [Some(target), None, None],
+            Self::Death { source, killed_by } => [killed_by.then_some(source), None, None],
+            Self::Elimination { killer, victim } => [Some(killer), Some(victim), None],
+            Self::Voice {
+                anchor,
+                speaker,
+                listener,
+                ..
+            } => [Some(anchor), Some(speaker), Some(listener)],
+        };
+        references
+            .into_iter()
+            .flatten()
+            .filter(|&entity| entity != 0 && entity != u32::MAX)
+    }
+
     pub fn encode(self, schemas: &Schemas) -> Result<Vec<u8>, ChannelError> {
         let entity = |id: u32| Value::Struct(Fields::from([(0, Value::Unsigned(u64::from(id)))]));
         let (id, fields) = match self {

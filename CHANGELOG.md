@@ -16,6 +16,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Applied the same StateScript execution scope to direct state starts and queued entries. Client-only nodes now skip these paths before they can change server state.
 
+- Kept entity destruction behind reliable notices that already reference the entity, including notices waiting for retransmission.
+
 ### 2026-11-18
 
 #### Build shared map-agnostic static navigation queries (#63)

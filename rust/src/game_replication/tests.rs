@@ -1515,6 +1515,47 @@ fn read_ack(payload: &[u8]) -> u32 {
 }
 
 #[test]
+fn retirement_waits_for_the_reliable_notice_across_retransmission() {
+    let body = avatar(1, 1);
+    let other = avatar(2, 1);
+    let mut world = WorldDelivery::new(OWNER);
+    let mut egress = GameEgress::default();
+    world.started = Some(100);
+    for id in [body, other] {
+        world
+            .bodies
+            .insert(id.entity, (id.generation, Lifetime::Live));
+        world.created.insert(id.entity);
+    }
+    let notice = egress.queue_reliable(vec![0x42]).unwrap();
+    world.track_entity_notice(body.entity, notice);
+
+    world.retire_body(body);
+    world.retire_body(other);
+    assert!(world.pending_entity_notice(body.entity, &egress));
+    let (_, first) = transmit(&mut world, None, &mut egress, 100, 0);
+    // The other entity can retire in the same packet that carries the notice.
+    assert_eq!(first.records, [RecordSource::Queued(0)]);
+    assert_eq!(world.queued.len(), 1);
+    assert_eq!(world.queued[0].update.entity, body.entity);
+
+    // Assume the retirement's datagram was lost. Its reliable ordinal is
+    // still owed after retransmission, and only the unrelated destroy may retry.
+    transport_outcome(&mut world, &mut egress, first.sequence, false);
+    let (_, retry) = transmit(&mut world, None, &mut egress, 101, 1);
+    assert_eq!(retry.records, [RecordSource::Queued(0)]);
+    assert_eq!(world.queued.len(), 1);
+    assert_eq!(world.queued[0].update.entity, body.entity);
+    assert!(!egress.delivered_through(notice));
+
+    transport_outcome(&mut world, &mut egress, retry.sequence, true);
+    assert!(egress.delivered_through(notice));
+    let (_, last) = transmit(&mut world, None, &mut egress, 102, 2);
+    assert_eq!(last.records, [RecordSource::Queued(0)]);
+    assert!(world.queued.is_empty());
+}
+
+#[test]
 fn command_ack_survives_replacing_a_body_without_a_correction_history() {
     let tick = 100;
     let processed = 125;
