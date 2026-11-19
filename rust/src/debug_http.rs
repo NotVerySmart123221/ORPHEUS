@@ -754,8 +754,8 @@ mod tests {
         use crate::game_debug::{
             Actor, ActorKind, DebugBotRoute, DebugContactNormal, DebugGroundProbe, DebugRay,
             DebugSpawnCandidate, EntityScriptSnapshot, NavigationOverlay, NavigationTruncation,
-            PhysicsOverlay, PhysicsTruncation, Room, ScriptInstanceSummary, ScriptStateSummary,
-            ScriptVarSummary,
+            PhysicsOverlay, PhysicsTruncation, Room, ScriptDiagnosticSite, ScriptInstanceSummary,
+            ScriptStateSummary, ScriptVarSummary,
         };
 
         let http = DebugHttp::bind(0, fixture_geometry(), || {
@@ -834,7 +834,13 @@ mod tests {
                         entity: 0xa000_0001,
                         kind: "player",
                         now_ms: 1584,
-                        diagnostics: 0,
+                        diagnostics: 6,
+                        registration_rejections: 1,
+                        registration_rejection_sites: vec![ScriptDiagnosticSite {
+                            graph: 42,
+                            node: Some(3),
+                        }],
+                        unsupported_nodes: 2,
                         instances: vec![ScriptInstanceSummary {
                             id: 1,
                             graph: "0x0043".into(),
@@ -900,6 +906,14 @@ mod tests {
             state_json["rooms"][0]["scripts"][0]["instances"][0]["active_states"][0]["flags"],
             7
         );
+        let script = &state_json["rooms"][0]["scripts"][0];
+        assert_eq!(script["diagnostics"], 6);
+        assert_eq!(script["registration_rejections"], 1);
+        assert_eq!(
+            script["registration_rejection_sites"],
+            serde_json::json!([{"graph": 42, "node": 3}])
+        );
+        assert_eq!(script["unsupported_nodes"], 2);
         assert_eq!(state_json["rooms"][0]["scripts_truncated"], true);
 
         let denied = request(

@@ -6,7 +6,7 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-19
 
-- Added Inspector startup diagnostics for StateScript links to missing nodes. The report identifies the source plug and link index while preserving unresolved links, declared containers, and VM execution.
+- Added Inspector startup diagnostics for StateScript links to missing nodes and a count of declared client-only nodes. Live VM summaries distinguish rejected registrations from other unsupported nodes.
 
 #### Align paired Soldier golden-trace hero selection with controller delivery ack (#131) and close #72 docs
 

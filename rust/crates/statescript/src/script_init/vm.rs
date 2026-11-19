@@ -1053,8 +1053,22 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
     }
 
     pub(in crate::script_init) fn report(&mut self, site: Site, issue: Issue) {
-        let diagnostic = Diagnostic { site, issue };
-        if !self.machine.snapshot.diagnostics.contains(&diagnostic) {
+        self.report_diagnostic(site, issue, false);
+    }
+
+    fn report_diagnostic(&mut self, site: Site, issue: Issue, registration_rejected: bool) {
+        let diagnostic = Diagnostic {
+            site,
+            issue,
+            registration_rejected,
+        };
+        if !self
+            .machine
+            .snapshot
+            .diagnostics
+            .iter()
+            .any(|existing| existing.site == diagnostic.site && existing.issue == diagnostic.issue)
+        {
             self.machine.snapshot.diagnostics.push(diagnostic);
         }
     }

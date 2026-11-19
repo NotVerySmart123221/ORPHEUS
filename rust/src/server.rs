@@ -204,6 +204,14 @@ impl Server {
                     link.graph, link.source, plug, link.link_index, link.target
                 );
             }
+            let graphs = assets.graphs();
+            let client_only = graphs
+                .graph_indexes()
+                .filter_map(|index| graphs.graph(index))
+                .flat_map(|graph| &graph.nodes)
+                .filter(|node| node.client_only)
+                .count();
+            eprintln!("[script] {client_only} nodes declared client-only");
             let geometry = scene.debug_geometry();
             let worker = Arc::clone(&game);
             if config.debug_control {

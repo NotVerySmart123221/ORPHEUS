@@ -19,6 +19,15 @@ also inspect links through `GraphStore::dangling_links`. Explicit null targets
 and declared containers are valid. The report is read-only and continues to
 show structural problems even if the VM never reaches the source node.
 
+Startup also counts nodes declared client-only by the loaded graph data. The
+live Inspector reports active plain states under `active_states` and separates
+known registration rejections from other unsupported nodes. The first 16
+rejected graph and node locations appear in `registration_rejection_sites`.
+The registration category covers the explicit camera placement guard and the shared guarded
+state registration path. It records a rejection only if execution reaches the
+guard and no handler accepts the node. An inactive or absent node in a single
+snapshot gives no evidence about whether a run reached it.
+
 ## Pinned action contract
 
 The [synthetic fixture](../fixtures/behavior/script-actions-v1.json) records 15 cases against Rust `f763beb9d7017b9364a3c8fc79ae6192df590043`. Its expected values were checked against that old executor before integration. The [consumer](../rust/crates/statescript/src/script_init/tests/actions_contract.rs) uses the current production loader and VM, checking scoped writes, dynamic values, error sites, RNG consumption, index behavior, work budgets and ordered links.

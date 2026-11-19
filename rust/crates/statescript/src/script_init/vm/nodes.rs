@@ -980,6 +980,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             return Ok(());
         }
+        let mut registration_rejected = false;
+        let mut checked_registration = |allowed: bool| {
+            registration_rejected |= !allowed;
+            allowed
+        };
         let kind = match node.class.as_str() {
             // These client presentation states use the base state lifecycle on the server.
             "STUStatescriptState"
@@ -993,7 +998,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             // registration 160, constructor AA826B0, vtable 8B6BC800.
             "STU_E9485CAF" => StateKind::Plain,
             "STUStatescriptStateAnimatedCamera"
-                if (self.graph(id).index, node.pos) == (0x0ca5, 43) =>
+                if checked_registration((self.graph(id).index, node.pos) == (0x0ca5, 43)) =>
             {
                 StateKind::Plain
             }
@@ -1011,7 +1016,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::Plain
             }
             "STU_33A46033" | "STU_9028E035" | "STU_43994F1B" | "STU_93B8758C" | "STU_9935FBC8"
-                if registered_state(self.graph(id).index, node).is_some() =>
+                if checked_registration(registered_state(self.graph(id).index, node).is_some()) =>
             {
                 StateKind::Registered { next: None }
             }
@@ -1394,9 +1399,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 ammo_var: None,
             },
             _ => {
-                self.report(
+                self.report_diagnostic(
                     self.site(id, node),
                     Issue::UnsupportedState(node.class.clone()),
+                    registration_rejected,
                 );
                 return Ok(());
             }
