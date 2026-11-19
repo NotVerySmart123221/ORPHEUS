@@ -610,6 +610,7 @@ impl Room {
                 tick,
                 now,
             };
+            world.scene.simulation_mut().prepare_spatial_frame(tick)?;
             // Movement/input failure previously closes this member. Keep that
             // scope and report the cause; body-script failures are handled locally.
             let active = world.scene.simulation().encounter_active();
@@ -678,6 +679,7 @@ impl Room {
         let Some(world) = &mut self.world else {
             return Ok(RoomUpdates::default());
         };
+        world.scene.simulation_mut().prepare_spatial_frame(tick)?;
         let junkenstein = world.scene.map().is_junkenstein();
         let active = world.scene.simulation().encounter_active();
         world.scene.simulation_mut().sync_player_encounter(active);

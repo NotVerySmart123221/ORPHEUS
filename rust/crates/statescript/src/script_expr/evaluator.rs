@@ -577,6 +577,50 @@ impl Evaluator {
                         .ok_or(unavailable)?,
                 )
             }
+            "EntitiesInRadius" => {
+                let Some((center, radius)) = fields
+                    .get("center")
+                    .zip(fields.get("radius"))
+                    .filter(|_| fields.len() == 3)
+                else {
+                    return Err(EvalError::MalformedConfig("expected a center and radius"));
+                };
+                self.charge()?;
+                let center = match self.config(center, context, nested)? {
+                    Value::Vector(center) if center.iter().all(|axis| axis.is_finite()) => center,
+                    _ => {
+                        return Err(EvalError::MalformedConfig(
+                            "expected a finite center vector",
+                        ));
+                    }
+                };
+                let radius = match self.config(radius, context, nested)? {
+                    Value::Integer(value) if value >= 0 => value as f64,
+                    Value::Float(value) if value.is_finite() && value >= 0.0 => value,
+                    _ => {
+                        return Err(EvalError::MalformedConfig(
+                            "expected a finite nonnegative radius",
+                        ));
+                    }
+                };
+                let candidates = context
+                    .spatial_candidates()
+                    .ok_or(EvalError::UnavailableSpatialCandidates)?;
+                let mut matches = Vec::new();
+                for &SpatialCandidate { entity, position } in candidates {
+                    self.charge()?;
+                    if !valid_entity(entity) || !position.iter().all(|axis| axis.is_finite()) {
+                        return Err(EvalError::UnavailableSpatialCandidates);
+                    }
+                    let [dx, dy, dz] = std::array::from_fn(|axis| position[axis] - center[axis]);
+                    if dx.hypot(dy).hypot(dz) <= radius {
+                        matches.push(entity);
+                    }
+                }
+                matches.sort_unstable();
+                matches.dedup();
+                Value::Array(matches.into_iter().map(Value::Entity).collect())
+            }
             "STU_71A87E92" if native_shape(config, class, Some("m_entity")) => {
                 if let Some(value) = context.native(config) {
                     return Ok(value);

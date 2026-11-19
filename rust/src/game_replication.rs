@@ -88,6 +88,8 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
     fn take_velocity_changes(&mut self) -> Vec<(u32, crate::mover::VelocityChange)> {
         Vec::new()
     }
+    fn set_spatial_candidates(&mut self, _candidates: Arc<[crate::script_expr::SpatialCandidate]>) {
+    }
     fn set_defenders(&mut self, _defenders: Arc<[u32]>) {}
     fn take_sightings(&mut self) -> Vec<crate::junkenstein_messages::DefenderSighting> {
         Vec::new()

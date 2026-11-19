@@ -62,6 +62,12 @@ pub enum VelocityQuery {
     Present([f64; 3]),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpatialCandidate {
+    pub entity: u32,
+    pub position: [f64; 3],
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BodyAngle {
     Yaw,
@@ -226,6 +232,11 @@ pub trait Context {
         None
     }
 
+    /// None means the current candidate snapshot is unavailable.
+    fn spatial_candidates(&mut self) -> Option<&[SpatialCandidate]> {
+        None
+    }
+
     /// Ordered, still-bound combat bodies; None means the scene roster is unavailable.
     fn combat_targets(&mut self, _config: &Json) -> Option<Vec<u32>> {
         None
@@ -360,6 +371,7 @@ pub enum EvalError {
     UnavailableEntityVariable { entity: u32, id: u32 },
     UnavailableEntityPosition(u32),
     UnavailableEntityDirection(u32),
+    UnavailableSpatialCandidates,
     NestingExceeded,
 }
 
@@ -395,6 +407,7 @@ impl fmt::Display for EvalError {
             Self::UnavailableEntityDirection(entity) => {
                 write!(f, "unavailable entity direction {entity:08X}")
             }
+            Self::UnavailableSpatialCandidates => f.write_str("unavailable spatial candidates"),
             Self::NestingExceeded => f.write_str("statescript config nesting limit exceeded"),
         }
     }

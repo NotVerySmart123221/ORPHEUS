@@ -132,6 +132,7 @@ pub(super) fn target_delta(origin: Vec3, target: TargetPose) -> Vec3 {
 pub(super) struct BodyWorld {
     pub(super) damage_credit: Option<crate::game_combat::AppliedDamage>,
     pub(super) graphs: Arc<GraphStore>,
+    pub(super) spatial_candidates: Option<Arc<[crate::script_expr::SpatialCandidate]>>,
     pub(super) controller: u32,
     pub(super) entity: u32,
     pub(super) body_filter: u64,
@@ -324,6 +325,10 @@ impl World for BodyWorld {
             .find(|target| target.entity == entity)
             .and_then(|target| target.velocity)
             .map_or(VelocityQuery::Unavailable, VelocityQuery::Present)
+    }
+
+    fn spatial_candidates(&self) -> Option<&[crate::script_expr::SpatialCandidate]> {
+        self.spatial_candidates.as_deref()
     }
 
     fn position(&mut self, entity: u32) -> Option<[f64; 3]> {

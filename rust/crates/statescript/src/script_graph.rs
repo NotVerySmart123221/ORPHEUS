@@ -667,9 +667,21 @@ struct Bundle {
     missing: Vec<u32>,
 }
 
+fn uses_radius_query(value: &Value) -> bool {
+    match value {
+        Value::Object(fields) => {
+            fields.get("$").and_then(Value::as_str) == Some("EntitiesInRadius")
+                || fields.values().any(uses_radius_query)
+        }
+        Value::Array(values) => values.iter().any(uses_radius_query),
+        _ => false,
+    }
+}
+
 #[derive(Debug)]
 pub struct GraphStore {
     graphs: BTreeMap<u32, Graph>,
+    uses_spatial_queries: bool,
     bodies: BTreeMap<u64, Body>,
     entities: BTreeMap<u64, Body>,
     mode_variables: BTreeMap<u64, BTreeMap<u32, ModeValue>>,
@@ -734,8 +746,15 @@ impl GraphStore {
                 )));
             }
         }
+        let uses_spatial_queries = graphs.values().any(|graph| {
+            graph
+                .nodes
+                .iter()
+                .any(|node| node.runs_on_server() && uses_radius_query(&node.fields))
+        });
         Ok(Self {
             graphs,
+            uses_spatial_queries,
             bodies: keyed_by_guid(bundle.bodies)?,
             entities: keyed_by_guid(bundle.entities)?,
             mode_variables: keyed_by_guid(bundle.mode_variables)?
@@ -752,6 +771,11 @@ impl GraphStore {
             enemies: bundle.junkenstein.validate()?,
             missing: bundle.missing,
         })
+    }
+
+    /// Whether server graph data contains a request for the shared room candidate frame.
+    pub fn uses_spatial_queries(&self) -> bool {
+        self.uses_spatial_queries
     }
 
     pub fn graph(&self, index: u32) -> Option<&Graph> {
@@ -1301,6 +1325,21 @@ mod tests {
         }
         data["graphs"][0]["states"][2] = json!(2);
         assert_eq!(load(&data).unwrap_err().kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn room_spatial_service_is_requested_by_server_graph_operands() {
+        let mut data = fixture();
+        let load =
+            |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap()).unwrap();
+        assert!(!load(&data).uses_spatial_queries());
+
+        data["graphs"][0]["nodes"][0]["fields"]["nested"] =
+            json!([{"value":{"$":"EntitiesInRadius","center":null,"radius":1}}]);
+        assert!(load(&data).uses_spatial_queries());
+
+        data["graphs"][0]["nodes"][0]["client_only"] = json!(true);
+        assert!(!load(&data).uses_spatial_queries());
     }
 
     #[test]

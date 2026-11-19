@@ -291,6 +291,11 @@ impl RoomSimulation {
         self.spawned_player_generations.insert(owner, id.generation);
         self.latest_wire_generations
             .insert(id.entity, id.generation);
+        if let Some((_, candidates)) = &self.spatial_frame {
+            if let Some(runtime) = state.runtime.as_mut() {
+                runtime.set_spatial_candidates(Arc::clone(candidates));
+            }
+        }
         let observer_create = state.observer_create.take();
         let entity = self.world.spawn(state).id();
         let handle = PlayerBodyHandle { entity, id };

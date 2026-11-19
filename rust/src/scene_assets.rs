@@ -431,6 +431,9 @@ impl SceneAssets {
                 .component(&PlayerStats::default(), map.mode_guid, None, None);
         let junkenstein_anchors = Arc::new(junkenstein_anchors);
         let mut simulation = RoomSimulation::new(bots).map_err(io::Error::other)?;
+        if self.graphs.uses_spatial_queries() {
+            simulation.enable_spatial_queries();
+        }
         if let Some(gate) = junkenstein_gate {
             simulation
                 .register_junkenstein_gate(gate, Arc::clone(&junkenstein_anchors))

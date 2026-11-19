@@ -1066,6 +1066,7 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
     let health = pools.total();
     let variables = crate::script_init::player_entity_variables(body, health, health);
     let mut world = BodyWorld {
+        spatial_candidates: None,
         graphs: Arc::clone(&graphs),
         controller: 0xa000_0100,
         entity: 0xa000_0101,
@@ -1483,6 +1484,7 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             .collect();
         let health = pools.total();
         let mut world = BodyWorld {
+            spatial_candidates: None,
             graphs: Arc::clone(&graphs),
             controller: 0xa000_0100,
             entity: 0xa000_0101,

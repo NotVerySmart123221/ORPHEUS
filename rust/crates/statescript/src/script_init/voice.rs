@@ -479,6 +479,11 @@ impl<W: World> Context for InstanceContext<'_, W> {
         self.world.forward(entity)
     }
 
+    fn spatial_candidates(&mut self) -> Option<&[script_expr::SpatialCandidate]> {
+        self.read_native = true;
+        self.world.spatial_candidates()
+    }
+
     fn combat_targets(&mut self, config: &Json) -> Option<Vec<u32>> {
         self.read_native = true;
         self.world.combat_targets(self.site, config)

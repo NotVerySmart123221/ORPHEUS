@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use serde_json::Value as Json;
 
 use crate::{
-    script_expr::{self, EntityRelation, OnFire, StackPriority},
+    script_expr::{self, EntityRelation, OnFire, SpatialCandidate, StackPriority},
     script_graph::Node,
     script_runtime::PoolKind,
     script_voice::IntroCue,
@@ -464,6 +464,11 @@ pub trait World {
     fn position(&mut self, entity: u32) -> Option<[f64; 3]>;
 
     fn forward(&self, _entity: u32) -> Option<[f64; 3]> {
+        None
+    }
+
+    /// None means the current candidate snapshot is unavailable.
+    fn spatial_candidates(&self) -> Option<&[SpatialCandidate]> {
         None
     }
 

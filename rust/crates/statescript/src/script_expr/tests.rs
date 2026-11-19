@@ -1775,6 +1775,138 @@ fn authored_spatial_queries_read_current_entity_vectors() {
 }
 
 #[test]
+fn authored_radius_query_filters_and_bounds_spatial_candidates() {
+    type CandidateRows = Vec<(u32, [f64; 3])>;
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        config: Json,
+        center: [f64; 3],
+        candidates: CandidateRows,
+        budget_after_first_candidate: usize,
+        large_radius: Json,
+        large_candidates: CandidateRows,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Expected {
+        matches: Vec<u32>,
+        large_matches: Vec<u32>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Contract {
+        schema_version: u8,
+        case_id: String,
+        evidence: String,
+        input: Input,
+        expected: Expected,
+    }
+
+    struct Host {
+        center: [f64; 3],
+        candidates: Option<Vec<SpatialCandidate>>,
+    }
+
+    impl Context for Host {
+        fn variable(&mut self, variable: Variable) -> Value {
+            assert_eq!(variable.scope, Scope::Instance);
+            assert_eq!(variable.id, 61);
+            Value::Vector(self.center)
+        }
+
+        fn spatial_candidates(&mut self) -> Option<&[SpatialCandidate]> {
+            self.candidates.as_deref()
+        }
+    }
+
+    let contract: Contract = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/statescript-entities-in-radius-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    assert_eq!(
+        contract.case_id,
+        "statescript-entities-in-radius.synthetic.v1"
+    );
+    assert_eq!(contract.evidence, "synthetic-rust");
+
+    let Input {
+        config,
+        center,
+        candidates,
+        budget_after_first_candidate,
+        large_radius,
+        large_candidates,
+    } = contract.input;
+    let spatial_candidates = |rows: CandidateRows| {
+        rows.into_iter()
+            .map(|(entity, position)| SpatialCandidate { entity, position })
+            .collect()
+    };
+    let entities =
+        |matches: Vec<u32>| Value::Array(matches.into_iter().map(Value::Entity).collect());
+    let mut host = Host {
+        center,
+        candidates: Some(spatial_candidates(candidates)),
+    };
+    assert_eq!(
+        evaluate(&config, &mut host),
+        Ok(entities(contract.expected.matches))
+    );
+    assert_eq!(
+        evaluate_with_budget(&config, &mut host, budget_after_first_candidate),
+        Err(EvalError::BudgetExceeded {
+            offset: 0,
+            limit: budget_after_first_candidate
+        })
+    );
+
+    host.candidates = Some(Vec::new());
+    assert_eq!(
+        evaluate_with_budget(&config, &mut host, 1),
+        Ok(Value::Array(Vec::new()))
+    );
+    host.candidates = None;
+    assert_eq!(
+        evaluate(&config, &mut host),
+        Err(EvalError::UnavailableSpatialCandidates)
+    );
+
+    host.candidates = Some(spatial_candidates(large_candidates));
+    let mut large_config = config.clone();
+    large_config["radius"] = large_radius;
+    assert_eq!(
+        evaluate(&large_config, &mut host),
+        Ok(entities(contract.expected.large_matches))
+    );
+
+    for invalid in [
+        SpatialCandidate {
+            entity: 0,
+            position: center,
+        },
+        SpatialCandidate {
+            entity: 42,
+            position: [0.0, f64::NAN, 0.0],
+        },
+    ] {
+        host.candidates = Some(vec![
+            SpatialCandidate {
+                entity: 17,
+                position: center,
+            },
+            invalid,
+        ]);
+        assert_eq!(
+            evaluate(&config, &mut host),
+            Err(EvalError::UnavailableSpatialCandidates)
+        );
+    }
+}
+
+#[test]
 fn client_only_operand_reads_only_the_selected_server_fallback() {
     struct NoClientReads;
 

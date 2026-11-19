@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added a bounded authored StateScript radius query backed by one living-body position sample shared by player and AI scripts per room frame. Passed both locked workspace lanes, the Rust 1.85 check, pinned Python public contracts, and the prepared 900-frame regression.
+
 - Added authored StateScript position and direction expressions. They share the existing World position and forward queries, report unavailable data explicitly, and read live vectors on evaluation. Both workspace lanes, Rust 1.85, the pinned Python public contracts, and the prepared 900-frame regression passed.
 
 - Shared combat target admission across player and AI hitscan and projectile paths. The rule covers living targets, self exclusion, team play, and free-for-all. Both workspace lanes, Rust 1.85, and the prepared 900-frame regression passed.

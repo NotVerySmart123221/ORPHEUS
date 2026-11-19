@@ -111,6 +111,27 @@ ordinary expression budget and the host's existing data sources.
 The [synthetic spatial contract](../fixtures/behavior/statescript-entity-spatial-v1.json)
 shows both operands applied to the same entity at two points in time.
 
+## Find room entities within a radius
+
+Use `EntitiesInRadius` as the `$` tag, with a `center` expression
+that returns a finite vector and a `radius` expression that returns a
+finite nonnegative number. The result is an array of unique entity
+references ordered by ID. The boundary is inclusive in three dimensions.
+A query spends expression budget on each examined candidate and yields an
+error if it runs out of budget or the room sample is unavailable. An
+available sample can return an empty array.
+
+Prepared rooms enable the candidate service when a server graph contains
+this expression. Player and AI scripts share the living body positions
+captured at the first input or simulation work of the room frame. Position
+and membership updates appear in the following frame's sample. The sample
+contains player and bot bodies and is supplied during room runtime events.
+A component initialized before it joins the room has no candidate sample.
+Graphs can apply their own relationship rules to the resulting entity
+references.
+
+See the [synthetic radius contract](../fixtures/behavior/statescript-entities-in-radius-v1.json).
+
 ## Follow an action
 
 1. [`script_graph.rs`](../rust/crates/statescript/src/script_graph.rs) loads authored graph metadata and preserves wire slots and link order.

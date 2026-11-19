@@ -25,6 +25,7 @@ use crate::{
     match_scene::bot_create,
     projectile_flight::{ProjectileBallistics, ProjectileFlight},
     scene_assets::BotQueries,
+    script_expr::SpatialCandidate,
     script_init::ShotEvent,
     static_ray::{Vec3, norm, segment_separation},
     vitals::Death,
@@ -273,6 +274,8 @@ pub(crate) struct RoomSimulation {
     by_wire: IndexMap<u32, Entity>,
     players_by_wire: IndexMap<u32, Entity>,
     players_by_owner: IndexMap<u32, PlayerBodyHandle>,
+    spatial_queries_enabled: bool,
+    spatial_frame: Option<(u32, Arc<[SpatialCandidate]>)>,
     // Generation maps live for the room's lifetime so reconnects cannot reset history.
     player_generations: HashMap<u32, u64>,
     spawned_player_generations: HashMap<u32, u64>,
@@ -393,6 +396,10 @@ impl RoomSimulation {
             pose: bot.movement(tick),
             gate,
             roster: None,
+            spatial_candidates: self
+                .spatial_frame
+                .as_ref()
+                .map(|(_, rows)| Arc::clone(rows)),
             retired_entities: Arc::clone(&self.retired_entity_ids),
             frame: tick,
             now_secs: 0.0,
@@ -583,6 +590,8 @@ impl RoomSimulation {
             by_wire,
             players_by_wire: IndexMap::new(),
             players_by_owner: IndexMap::new(),
+            spatial_queries_enabled: false,
+            spatial_frame: None,
             player_generations: HashMap::new(),
             spawned_player_generations: HashMap::new(),
             latest_wire_generations: HashMap::new(),
@@ -624,6 +633,69 @@ impl RoomSimulation {
 
     pub(crate) fn spawn_anchors(&self) -> Option<&Arc<crate::scene_assets::SpawnAnchors>> {
         self.spawn_anchors.as_ref()
+    }
+
+    pub(crate) fn enable_spatial_queries(&mut self) {
+        self.spatial_queries_enabled = true;
+    }
+
+    /// Capture the living room bodies on the first use of this room frame.
+    pub(crate) fn prepare_spatial_frame(&mut self, frame: u32) -> Result<(), CombatError> {
+        if !self.spatial_queries_enabled
+            || self
+                .spatial_frame
+                .as_ref()
+                .is_some_and(|(previous, _)| *previous == frame)
+        {
+            return Ok(());
+        }
+
+        let mut candidates = Vec::with_capacity(self.players_by_wire.len() + self.by_wire.len());
+        for state in self.states() {
+            let bot = &state?.bot;
+            if !bot.dead {
+                candidates.push(SpatialCandidate {
+                    entity: bot.entity,
+                    position: bot.position,
+                });
+            }
+        }
+        for (&wire, &entity) in &self.players_by_wire {
+            let state = self
+                .world
+                .get::<PlayerBodyState>(entity)
+                .ok_or(CombatError::MissingPlayerBody { wire, entity })?;
+            if state.id.entity != wire {
+                return Err(CombatError::PlayerBodyIdentity {
+                    wire,
+                    actual: state.id.entity,
+                });
+            }
+            if state.alive() {
+                candidates.push(SpatialCandidate {
+                    entity: wire,
+                    position: state.mover.pose().position,
+                });
+            }
+        }
+
+        let candidates = Arc::<[SpatialCandidate]>::from(candidates);
+        for &entity in self.players_by_wire.values() {
+            if let Some(mut state) = self.world.get_mut::<PlayerBodyState>(entity) {
+                if let Some(runtime) = state.runtime.as_mut() {
+                    runtime.set_spatial_candidates(Arc::clone(&candidates));
+                }
+            }
+        }
+        for &entity in self.by_wire.values() {
+            if let Some(mut state) = self.world.get_mut::<BotState>(entity) {
+                if let Some(enemy) = state.enemy.as_mut() {
+                    enemy.binding.spatial_candidates = Some(Arc::clone(&candidates));
+                }
+            }
+        }
+        self.spatial_frame = Some((frame, candidates));
+        Ok(())
     }
 
     fn states(&self) -> impl ExactSizeIterator<Item = Result<&BotState, CombatError>> {
@@ -1614,6 +1686,7 @@ impl RoomSimulation {
         tick: u32,
         now: Duration,
     ) -> Result<Vec<BotReplacement>, CombatError> {
+        self.prepare_spatial_frame(tick)?;
         self.states().try_for_each(|state| state.map(|_| ()))?;
         self.validate_gate_and_encounter_handles()?;
         if !self.players_by_wire.is_empty() {

@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "case_id": "statescript-entities-in-radius.synthetic.v1",
+  "source": {
+    "basis": "Original synthetic geometry and unordered entity candidates."
+  },
+  "evidence": "synthetic-rust",
+  "input": {
+    "config": {
+      "$": "EntitiesInRadius",
+      "center": {"$": "STUConfigVarDynamic", "m_identifier": 61, "m_60DB8F99": false},
+      "radius": 5
+    },
+    "center": [0.0, 0.0, 0.0],
+    "candidates": [
+      [23, [3.0, 4.0, 0.0]],
+      [17, [0.0, 0.0, 0.0]],
+      [4, [0.0, 5.25, 0.0]],
+      [19, [1.0, 2.0, 3.0]],
+      [23, [3.0, 4.0, 0.0]]
+    ],
+    "budget_after_first_candidate": 2,
+    "large_radius": 1e308,
+    "large_candidates": [
+      [41, [9e307, 9e307, 0.0]],
+      [31, [6e307, 6e307, 0.0]]
+    ]
+  },
+  "expected": {
+    "matches": [17, 19, 23],
+    "large_matches": [31]
+  }
+}

@@ -34,6 +34,82 @@ fn combat_target_admission_applies_team_and_liveness_rules_to_bots() {
 }
 
 #[test]
+fn spatial_candidates_capture_living_room_bodies_once_per_frame() {
+    use crate::{contact_world::ContactWorld, mover::Mover, mover_settings::MoverSettings};
+
+    let bots = fixture_bots();
+    let moving_bot = bots[0].entity;
+    let initial_bot_position = bots[0].position;
+    let dying_bot = bots[1].entity;
+    let mut room = RoomSimulation::new(bots).unwrap();
+    let frame = FIXTURE_CONTEXT.tick;
+    let player = BodyId {
+        entity: 9,
+        generation: 1,
+    };
+    let player_position = [4.0, 0.0, 2.0];
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        player_position,
+        0,
+        0x08,
+    )
+    .unwrap();
+    room.spawn_player_body(PlayerBodyState::new(
+        player, 8, 0, 0, 1, mover, None, frame, None,
+    ))
+    .unwrap();
+
+    room.prepare_spatial_frame(frame).unwrap();
+    assert!(room.spatial_frame.is_none());
+
+    room.enable_spatial_queries();
+    room.prepare_spatial_frame(frame).unwrap();
+    let (captured, initial) = room.spatial_frame.as_ref().unwrap();
+    assert_eq!(*captured, frame);
+    assert_eq!(initial.len(), 3);
+    assert!(initial.iter().any(|row| row.entity == dying_bot));
+    let initial_bot = SpatialCandidate {
+        entity: moving_bot,
+        position: initial_bot_position,
+    };
+    assert!(initial.contains(&initial_bot));
+    assert!(initial.contains(&SpatialCandidate {
+        entity: player.entity,
+        position: player_position,
+    }));
+    let initial = Arc::clone(initial);
+
+    let new_position = [10.0, 0.0, -2.0];
+    room.body_mut(moving_bot).unwrap().position = new_position;
+    room.apply_bot_impact(
+        7,
+        frame,
+        FIXTURE_CONTEXT,
+        &fixture_impact(dying_bot, 10000.0),
+    )
+    .unwrap()
+    .unwrap();
+    assert!(room.retire_player_body(player));
+    room.prepare_spatial_frame(frame).unwrap();
+    let (_, same_frame) = room.spatial_frame.as_ref().unwrap();
+    assert!(Arc::ptr_eq(same_frame, &initial));
+
+    room.prepare_spatial_frame(frame + 1).unwrap();
+    let (captured, next) = room.spatial_frame.as_ref().unwrap();
+    assert_eq!(*captured, frame + 1);
+    assert_eq!(
+        next.as_ref(),
+        &[SpatialCandidate {
+            entity: moving_bot,
+            position: new_position,
+        }]
+    );
+    assert!(initial.contains(&initial_bot));
+}
+
+#[test]
 fn corpse_health_is_available_after_live_target_selection_excludes_it() {
     let mut room = RoomSimulation::new(fixture_bots()).unwrap();
     let victim = room.living_enemies(0).unwrap().next().unwrap().0.entity;
