@@ -28,6 +28,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - StateScript diagnostics now identify registration policy rejections in guarded action and state dispatch. The Inspector shows those separately from unsupported nodes and lists the rejected locations.
 
+- StateScript bundles can declare authored plain states, forwarding actions and client-only scope once per class. The loader rejects conflicting declarations and checks each node before execution.
+
 ### 2026-11-18
 
 #### Build shared map-agnostic static navigation queries (#63)

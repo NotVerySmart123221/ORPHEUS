@@ -33,6 +33,35 @@ action out of the state table. Links run in their declared order with the
 regular VM budgets. An empty plug does not take a transition. The action
 requires no registration by class or graph position.
 
+## Share class behavior across a graph bundle
+
+Add `authored_classes` to a version 1 bundle and use those names in the
+`class` field of any node in the bundle.
+
+```json
+{
+  "authored_classes": [
+    {"class": "authored.latch", "behavior": "plain_state"},
+    {"class": "authored.continue", "behavior": "forward_action"},
+    {"class": "authored.indicator", "behavior": "client_only"}
+  ]
+}
+```
+
+Each name starts with `authored.` and has a nonempty suffix of ASCII
+letters, digits, underscores or hyphens. Duplicate names are rejected.
+The scope flags are still required. Set both to false to inherit a
+declared class's scope, or set only the matching flag to true. Plain
+states and forwarding actions inherit server-only scope. Client-only
+nodes skip server execution and wire projection. Conflicting flags or
+per-node behavior fail at load time with the graph and node positions.
+
+The loader applies these declarations before checking state slots and
+output plugs and building the wire tables. Nodes outside the catalog
+follow the ordinary rules. The
+[synthetic class contract](../fixtures/behavior/script-authored-classes-v1.json)
+exercises the same declarations across two graphs.
+
 ## Declare a client-only operand
 
 Use `{"$": "ClientOnly", "value": ...}` for an authored operand that the

@@ -26,13 +26,13 @@ pub struct Header {
     pub sync_vars_bits: u8,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 enum StateBehavior {
     Plain,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 enum ActionBehavior {
     Forward,
@@ -507,8 +507,50 @@ impl EnemyCatalog {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredClass {
+    class: String,
+    behavior: AuthoredClassBehavior,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum AuthoredClassBehavior {
+    PlainState,
+    ForwardAction,
+    ClientOnly,
+}
+
+impl AuthoredClassBehavior {
+    fn apply(self, graph: u32, node: &mut Node) -> io::Result<()> {
+        let (client_only, state, action) = match self {
+            Self::PlainState => (false, Some(StateBehavior::Plain), None),
+            Self::ForwardAction => (false, None, Some(ActionBehavior::Forward)),
+            Self::ClientOnly => (true, None, None),
+        };
+        if (node.client_only && !client_only)
+            || (node.server_only && client_only)
+            || (node.state_behavior.is_some() && node.state_behavior != state)
+            || (node.action_behavior.is_some() && node.action_behavior != action)
+        {
+            return Err(invalid(format!(
+                "authored class {} conflicts with scope or behavior in graph {graph} at node {}",
+                node.class, node.pos
+            )));
+        }
+        node.client_only = client_only;
+        node.server_only = !client_only;
+        node.state_behavior = state;
+        node.action_behavior = action;
+        Ok(())
+    }
+}
+
+#[derive(Deserialize)]
 struct Bundle {
     version: u32,
+    #[serde(default)]
+    authored_classes: Vec<AuthoredClass>,
     graphs: Vec<Graph>,
     bodies: BTreeMap<String, Body>,
     #[serde(default)]
@@ -555,8 +597,32 @@ impl GraphStore {
         if bundle.version != 1 {
             return Err(invalid("unsupported state graph bundle version"));
         }
+        let mut authored_classes = BTreeMap::new();
+        for AuthoredClass { class, behavior } in bundle.authored_classes {
+            let valid_name = class.strip_prefix("authored.").is_some_and(|name| {
+                !name.is_empty()
+                    && name
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+            });
+            if !valid_name {
+                return Err(invalid(format!(
+                    "class {class:?} must use an authored. name with letters, digits, underscores or hyphens"
+                )));
+            }
+            if authored_classes.insert(class.clone(), behavior).is_some() {
+                return Err(invalid(format!("duplicate authored class {class}")));
+            }
+        }
         let mut graphs = BTreeMap::new();
         for mut graph in bundle.graphs {
+            if !authored_classes.is_empty() {
+                for node in &mut graph.nodes {
+                    if let Some(behavior) = authored_classes.get(&node.class) {
+                        behavior.apply(graph.index, node)?;
+                    }
+                }
+            }
             graph.compile()?;
             let index = graph.index;
             if graphs.insert(index, graph).is_some() {
@@ -940,6 +1006,89 @@ mod tests {
         let error = load(&duplicate_graph).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("graph 42"));
+    }
+
+    #[test]
+    fn authored_class_catalog_rejects_ambiguous_declarations() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let mut data = fixture();
+        assert_eq!(
+            load(&data).unwrap().graph(42).unwrap().owner_positions(),
+            [0, 0]
+        );
+
+        for (declarations, message) in [
+            (
+                json!([{"class":"authored.latch","behavior":"plain_state"},
+                       {"class":"authored.latch","behavior":"client_only"}]),
+                "duplicate authored class",
+            ),
+            (
+                json!([{"class":"STUStatescriptState","behavior":"client_only"}]),
+                "must use an authored.",
+            ),
+            (
+                json!([{"class":"authored.","behavior":"client_only"}]),
+                "must use an authored.",
+            ),
+            (
+                json!([{"class":"authored.latch","behavior":"unknown"}]),
+                "unknown variant",
+            ),
+            (
+                json!([{"class":"authored.latch","behavior":"plain_state","typo":true}]),
+                "unknown field",
+            ),
+        ] {
+            data["authored_classes"] = declarations;
+            let error = load(&data).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(error.to_string().contains(message), "{error}");
+        }
+    }
+
+    #[test]
+    fn authored_class_catalog_reuses_node_validation() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let mut data = fixture();
+        data["authored_classes"] = json!([
+            {"class":"authored.latch","behavior":"plain_state"},
+            {"class":"authored.overlay","behavior":"client_only"},
+            {"class":"authored.forward","behavior":"forward_action"}
+        ]);
+        let nodes = &mut data["graphs"][0]["nodes"];
+        nodes[0]["class"] = json!("authored.latch");
+        nodes[0]["state"] = json!(0);
+        nodes[0]["state_behavior"] = json!("plain");
+        nodes[0]["server_only"] = json!(true);
+        nodes[1]["class"] = json!("authored.overlay");
+        nodes[2]["class"] = json!("authored.forward");
+        nodes[2]["fields"]["m_outPlug"] = json!({"$":"Plug","links":[]});
+
+        let store = load(&data).unwrap();
+        let graph = store.graph(42).unwrap();
+        assert!(graph.owner_positions().is_empty());
+        assert!(graph.remote_positions().is_empty());
+        assert!(graph.node(1).unwrap().client_only);
+
+        for (position, field, value, message) in [
+            (0, "client_only", json!(true), "graph 42 at node 0"),
+            (0, "action_behavior", json!("forward"), "graph 42 at node 0"),
+            (0, "state", json!(1), "occupy its state slot"),
+            (1, "server_only", json!(true), "graph 42 at node 1"),
+            (1, "state_behavior", json!("plain"), "graph 42 at node 1"),
+            (2, "fields", json!({}), "output plug"),
+        ] {
+            let mut malformed = data.clone();
+            malformed["graphs"][0]["nodes"][position][field] = value;
+            let error = load(&malformed).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(error.to_string().contains(message), "{error}");
+        }
+
+        data["graphs"][0]["states"][2] = json!(2);
+        let error = load(&data).unwrap_err();
+        assert!(error.to_string().contains("no state slot"), "{error}");
     }
 
     #[test]
