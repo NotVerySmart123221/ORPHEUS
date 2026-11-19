@@ -4,7 +4,7 @@ use serde_json::Value as Json;
 
 use crate::{
     script_expr::{self, Scope, Variable},
-    script_graph::{Graph, Node, asset_guid},
+    script_graph::{Graph, Node, asset_guid, message_parameter_id},
     script_runtime::{
         BOSS_CAMERA, BOSS_PAUSE, POST_MATCH_PHASE, POST_MATCH_SIGNAL, PoolKind, RESULT_SUMMARY,
     },
@@ -53,10 +53,6 @@ pub(super) fn static_target_operand(node: &Node) -> Option<&Json> {
 
 pub(super) fn is_entry(node: &Node) -> bool {
     matches!(node.class.as_str(), "STUStatescriptEntry" | "STU_571CC72E")
-}
-
-pub(super) fn is_message_entry(node: &Node) -> bool {
-    node.class == "STUStatescriptEntryGameMessage"
 }
 
 pub(super) fn registered_state(graph: u32, node: &Node) -> Option<RegisteredState> {
@@ -217,9 +213,9 @@ pub(super) fn persistent_message(graph: u32, node: &Node) -> Option<u64> {
             let [focus, bone] = array_field(fields, "m_params") else {
                 return None;
             };
-            if parameter_id(focus) != 8
+            if message_parameter_id(focus) != 8
                 || !script_expr::native_shape(field(focus, "m_value"), "STU_B5A0CAF0", None)
-                || parameter_id(bone) != 0x3b6
+                || message_parameter_id(bone) != 0x3b6
                 || !matches!(script_expr::dynamic(field(bone, "m_value")), Ok(Some(variable)) if variable.id == 8695)
             {
                 return None;
@@ -525,13 +521,6 @@ pub(super) fn configured(node: &Node, name: &str) -> bool {
         Json::Object(value) => !value.is_empty(),
         Json::Bool(true) => true,
     }
-}
-
-pub(super) fn parameter_id(config: &Json) -> u32 {
-    config
-        .get("m_B5051BCE")
-        .and_then(asset_guid)
-        .map_or(0, |guid| u32::from(guid as u16))
 }
 
 pub(super) fn field<'a>(fields: &'a Json, name: &str) -> &'a Json {

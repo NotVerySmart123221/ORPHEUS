@@ -12,7 +12,7 @@ use serde_json::Value as Json;
 
 use crate::{
     script_expr::{self, Scope, StackPriority, truthy},
-    script_graph::{Graph, GraphStore, Node, asset_guid},
+    script_graph::{Graph, GraphStore, Node, asset_guid, message_parameter_id},
     script_runtime::{ButtonEdge, FRAME_MS, button_edges, frame_start},
     script_wire::{Value, Variables},
 };
@@ -22,8 +22,8 @@ use super::{
     MAX_PLAY_INSTANCES, MAX_PLUG_DEPTH, Root, SCRIPT_SOURCE,
     machine::{AbilityPress, Event, LinkValue, Machine, Startup, StateKey, VarKey, VariableLink},
     shapes::{
-        ability_is_stacked, array_field, configured, field, is_entry, is_message_entry,
-        is_self_target, parameter_id, raw_indices, same, source_key, stored,
+        ability_is_stacked, array_field, configured, field, is_entry, is_self_target, raw_indices,
+        same, source_key, stored,
     },
     types::{
         AbilityCooldown, BufferedPress, Diagnostic, InitFault, Instance, Issue, State, StateKind,
@@ -1168,7 +1168,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     return Ok(());
                 }
             };
-            let key = parameter_id(field);
+            let key = message_parameter_id(field);
             let value = self
                 .parameters
                 .as_deref()
@@ -1746,7 +1746,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .filter_map(|position| graph.node(*position))
         {
             self.spend("PlayScript retirement entry")?;
-            if !is_message_entry(node)
+            if !node.is_message_entry()
                 && !matches!(node.class.as_str(), "STU_BB4AC733" | "STU_8A7E9DA8")
             {
                 return Ok(());
@@ -1760,11 +1760,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         id: u16,
         node: &Node,
     ) -> Result<bool, InitFault> {
-        let Some(message) = node
-            .field("m_gameMessage.m_gameMessage")
-            .and_then(asset_guid)
-            .filter(|&id| id != 0)
-        else {
+        let Some(message) = node.game_message_id().filter(|&id| id != 0) else {
             return Ok(true);
         };
         let site = self.site(id, node);
@@ -1839,7 +1835,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             let Some(value) = self.evaluate(id, node, field(parameter, "m_value"), None) else {
                 return Ok(None);
             };
-            parameters.insert(parameter_id(parameter), value);
+            parameters.insert(message_parameter_id(parameter), value);
         }
         Ok(Some(parameters))
     }

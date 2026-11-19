@@ -36,6 +36,7 @@ enum StateBehavior {
 #[serde(rename_all = "snake_case")]
 enum ActionBehavior {
     Forward,
+    LocalMessage,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,11 +75,39 @@ impl Node {
     }
 
     pub fn is_action(&self) -> bool {
-        self.declares_forward_action() || self.fields.get("m_ADEB6E05").is_some_and(truthy)
+        self.action_behavior.is_some() || self.fields.get("m_ADEB6E05").is_some_and(truthy)
     }
 
     pub(crate) fn declares_forward_action(&self) -> bool {
         matches!(self.action_behavior, Some(ActionBehavior::Forward))
+    }
+
+    pub(crate) fn game_message_id(&self) -> Option<u64> {
+        self.field("m_gameMessage.m_gameMessage")
+            .and_then(asset_guid)
+    }
+
+    pub(crate) fn is_message_entry(&self) -> bool {
+        self.class == "STUStatescriptEntryGameMessage"
+    }
+
+    fn valid_local_message(&self) -> bool {
+        if !self.game_message_id().is_some_and(|message| message != 0)
+            || !self.fields.get("m_targets").is_none_or(Value::is_null)
+            || !self.fields.get("m_target").is_none_or(Value::is_null)
+        {
+            return false;
+        }
+        let Some(parameters) = self.fields.get("m_params").filter(|value| !value.is_null()) else {
+            return true;
+        };
+        let mut slots = BTreeSet::new();
+        parameters.as_array().is_some_and(|parameters| {
+            parameters.iter().all(|parameter| {
+                let slot = message_parameter_id(parameter);
+                slot != 0 && parameter.get("m_value").is_some() && slots.insert(slot)
+            })
+        })
     }
 
     pub fn field(&self, path: &str) -> Option<&Value> {
@@ -186,6 +215,8 @@ pub struct Graph {
     #[serde(skip)]
     by_rid: Vec<Option<usize>>,
     #[serde(skip)]
+    message_handlers: BTreeMap<u64, Vec<usize>>,
+    #[serde(skip)]
     owner: WireSlots,
     #[serde(skip)]
     remote: WireSlots,
@@ -199,17 +230,17 @@ impl Graph {
         if let Some(max) = self.nodes.iter().map(|node| node.rid).max() {
             self.by_rid = vec![None; usize::from(max) + 1];
         }
-        let authored_state_positions =
-            self.nodes
-                .iter()
-                .any(Node::declares_forward_action)
-                .then(|| {
-                    self.states
-                        .iter()
-                        .copied()
-                        .flatten()
-                        .collect::<BTreeSet<_>>()
-                });
+        let authored_state_positions = self
+            .nodes
+            .iter()
+            .any(|node| node.action_behavior.is_some())
+            .then(|| {
+                self.states
+                    .iter()
+                    .copied()
+                    .flatten()
+                    .collect::<BTreeSet<_>>()
+            });
         for (index, node) in self.nodes.iter_mut().enumerate() {
             if node.declares_plain_state() {
                 let occupies_state_slot = node
@@ -230,7 +261,11 @@ impl Graph {
                 // at class checks outside the main dispatch.
                 node.class = "STUStatescriptState".into();
             }
-            if node.declares_forward_action() {
+            if let Some(behavior) = node.action_behavior {
+                let action = match behavior {
+                    ActionBehavior::Forward => "forward action",
+                    ActionBehavior::LocalMessage => "local message action",
+                };
                 let state_slot = authored_state_positions
                     .as_ref()
                     .is_some_and(|positions| positions.contains(&node.pos));
@@ -251,13 +286,24 @@ impl Graph {
                     || !has_valid_output
                 {
                     return Err(invalid(format!(
-                        "forward action in graph {} at node {} must be server-only with an output plug and no state slot",
+                        "{action} in graph {} at node {} must be server-only with an output plug and no state slot",
                         self.index, node.pos
                     )));
                 }
                 // The declaration supplies dispatch. An authored name that
                 // matches an entry or another special class cannot activate it.
-                node.class = "ActionForward".into();
+                node.class = match behavior {
+                    ActionBehavior::Forward => "ActionForward".into(),
+                    ActionBehavior::LocalMessage => {
+                        if !node.valid_local_message() {
+                            return Err(invalid(format!(
+                                "{action} in graph {} at node {} requires a nonzero message, unique parameter slots and no external target",
+                                self.index, node.pos
+                            )));
+                        }
+                        "STUStatescriptActionSendGameMessage".into()
+                    }
+                };
             }
             let position = self
                 .by_pos
@@ -270,6 +316,15 @@ impl Graph {
                 )));
             }
             self.by_rid[usize::from(node.rid)] = Some(index);
+            if let Some(message) = node.game_message_id().filter(|_| {
+                node.runs_on_server()
+                    && (node.is_message_entry() || (node.is_state() && node.state.is_some()))
+            }) {
+                self.message_handlers
+                    .entry(message)
+                    .or_default()
+                    .push(index);
+            }
         }
         self.owner = WireSlots::build(&self.states, self, false);
         self.remote = WireSlots::build(&self.remote_nodes, self, true);
@@ -280,6 +335,14 @@ impl Graph {
             .filter_map(|(index, var)| var.has_presence_bit().then_some(index))
             .collect();
         Ok(())
+    }
+
+    pub(crate) fn message_handlers(&self, message: u64) -> impl Iterator<Item = &Node> {
+        self.message_handlers
+            .get(&message)
+            .into_iter()
+            .flatten()
+            .map(|&index| &self.nodes[index])
     }
 
     pub fn node(&self, pos: u16) -> Option<&Node> {
@@ -518,6 +581,7 @@ struct AuthoredClass {
 enum AuthoredClassBehavior {
     PlainState,
     ForwardAction,
+    LocalMessageAction,
     ClientOnly,
 }
 
@@ -526,6 +590,7 @@ impl AuthoredClassBehavior {
         let (client_only, state, action) = match self {
             Self::PlainState => (false, Some(StateBehavior::Plain), None),
             Self::ForwardAction => (false, None, Some(ActionBehavior::Forward)),
+            Self::LocalMessageAction => (false, None, Some(ActionBehavior::LocalMessage)),
             Self::ClientOnly => (true, None, None),
         };
         if (node.client_only && !client_only)
@@ -712,6 +777,13 @@ pub fn asset_guid(value: &Value) -> Option<u64> {
     } else {
         None
     }
+}
+
+pub(crate) fn message_parameter_id(config: &Value) -> u32 {
+    config
+        .get("m_B5051BCE")
+        .and_then(asset_guid)
+        .map_or(0, |guid| u32::from(guid as u16))
 }
 
 pub fn target_tag_guid(value: &Value) -> Option<u64> {
@@ -1089,6 +1161,64 @@ mod tests {
         data["graphs"][0]["states"][2] = json!(2);
         let error = load(&data).unwrap_err();
         assert!(error.to_string().contains("no state slot"), "{error}");
+    }
+
+    #[test]
+    fn local_message_action_rejects_invalid_routes_and_parameter_slots() {
+        let mut data = fixture();
+        let node = &mut data["graphs"][0]["nodes"][2];
+        node["server_only"] = json!(true);
+        node["action_behavior"] = json!("local_message");
+        node["fields"] = json!({
+            "m_gameMessage": {"m_gameMessage":"0xF100000000000001"},
+            "m_params": [{"m_B5051BCE":"0xF200000000000007", "m_value":12}],
+            "m_outPlug": {"$":"Plug", "links":[]}
+        });
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let valid = load(&data).unwrap();
+        assert_eq!(
+            valid.graph(42).unwrap().node(2).unwrap().game_message_id(),
+            Some(0xf100_0000_0000_0001)
+        );
+        for (field, invalid_value) in [
+            (
+                "m_gameMessage",
+                json!({"m_gameMessage":"0x0000000000000000"}),
+            ),
+            ("m_gameMessage", json!({})),
+            ("m_target", json!(12)),
+            ("m_targets", json!([])),
+            ("m_params", json!(false)),
+            ("m_params", json!([{"m_B5051BCE":"0xF200000000000007"}])),
+            (
+                "m_params",
+                json!([{"m_B5051BCE":"0xF200000000000000","m_value":12}]),
+            ),
+            (
+                "m_params",
+                json!([
+                    {"m_B5051BCE":"0xF100000000000007","m_value":12},
+                    {"m_B5051BCE":"0xF200000000000007","m_value":13}
+                ]),
+            ),
+        ] {
+            let mut malformed = data.clone();
+            malformed["graphs"][0]["nodes"][2]["fields"][field] = invalid_value;
+            let error = load(&malformed).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(
+                error
+                    .to_string()
+                    .contains("local message action in graph 42 at node 2")
+            );
+        }
+        data["graphs"][0]["nodes"][2]["client_only"] = json!(true);
+        assert!(
+            load(&data)
+                .unwrap_err()
+                .to_string()
+                .contains("must be server-only")
+        );
     }
 
     #[test]

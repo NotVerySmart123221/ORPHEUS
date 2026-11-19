@@ -62,6 +62,22 @@ follow the ordinary rules. The
 [synthetic class contract](../fixtures/behavior/script-authored-classes-v1.json)
 exercises the same declarations across two graphs.
 
+## Send a message within a component
+
+Set `action_behavior` to `"local_message"` on a server-only action, or
+declare `"local_message_action"` for an authored class. Supply a nonzero
+canonical message ID in `m_gameMessage.m_gameMessage`, an output plug,
+and optionally `m_params` entries with `m_B5051BCE` and `m_value`.
+Parameter IDs must resolve to distinct nonzero low-16-bit slots.
+Leave `m_target` and `m_targets` unset.
+
+The action uses the component's existing message queue and delivery rules.
+It captures parameter values when the action runs and follows its output
+plug. Message entries are indexed at graph load in their original order.
+State listeners still need to be active when the message is queued and
+delivered. Client-only listeners remain outside the server route.
+See the [synthetic local message contract](../fixtures/behavior/script-local-message-v1.json).
+
 ## Declare a client-only operand
 
 Use `{"$": "ClientOnly", "value": ...}` for an authored operand that the

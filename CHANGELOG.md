@@ -32,6 +32,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Added bounded node-target observations to the StateScript Inspector. They record whether a reached target was skipped by client-only scope. Default builds do not collect observations.
 
+- Added authored local message actions using the existing component queue. The loader indexes eligible listeners in graph order and rejects malformed parameters and external targets for these actions.
+
 ### 2026-11-18
 
 #### Build shared map-agnostic static navigation queries (#63)

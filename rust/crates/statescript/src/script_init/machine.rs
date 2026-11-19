@@ -12,7 +12,7 @@ use indexmap::IndexMap;
 
 use crate::{
     script_expr::StackPriority,
-    script_graph::{GraphStore, asset_guid},
+    script_graph::GraphStore,
     script_modifiers::{Modifier, ModifierKey},
     script_runtime::{ButtonEdge, Timeline, frame_start},
     script_wire::{Value, Variables},
@@ -20,7 +20,7 @@ use crate::{
 
 use super::{
     MAX_PENDING_EVENTS,
-    shapes::{is_message_entry, stored},
+    shapes::stored,
     types::{
         InitFault, PendingTimer, ShotEvent, Snapshot, SpawnSearchKey, StackBinding, StateKind,
     },
@@ -384,21 +384,14 @@ impl Machine {
             let graph = graphs.graph(item.graph).expect("registered graph");
             entries.extend(
                 graph
-                    .nodes
-                    .iter()
+                    .message_handlers(message)
                     .filter(|node| {
-                        node.runs_on_server()
-                            && node
-                                .field("m_gameMessage.m_gameMessage")
-                                .and_then(asset_guid)
-                                == Some(message)
-                            && (is_message_entry(node)
-                                || (node.is_state()
-                                    && node.state.is_some_and(|raw| {
-                                        item.states.get(&raw).is_some_and(|state| {
-                                            state.active && state.kind == StateKind::MessageIdle
-                                        })
-                                    })))
+                        node.is_message_entry()
+                            || node.state.is_some_and(|raw| {
+                                item.states.get(&raw).is_some_and(|state| {
+                                    state.active && state.kind == StateKind::MessageIdle
+                                })
+                            })
                     })
                     .map(|node| (id, node.pos)),
             );
