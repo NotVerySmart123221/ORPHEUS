@@ -33,6 +33,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         caller: Option<StateKey>,
         depth: usize,
     ) -> Result<bool, InitFault> {
+        if !node.runs_on_server() {
+            return Ok(false);
+        }
         self.spend("node execution")?;
         match node.class.as_str() {
             _ if is_entry(node) => self.follow(id, node, "m_outPlug", None, depth),
@@ -946,6 +949,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             );
             return Ok(());
         };
+        if !node.runs_on_server() {
+            return Ok(());
+        }
         if let Some(state) = self.state(key).filter(|state| state.active) {
             let kind = state.kind;
             if kind == StateKind::ForCode {

@@ -14,6 +14,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 - Preserved cumulative command acknowledgements when a replacement body has no movement history and the room clock trails already processed input. The new correction history starts at the body's actual input baseline.
 - Updated `docs/STATE.md` to close out engineering issue `#72` (root cause and semantic-identity + wire-descriptor fixes landed in `#149` / `#150` / `#153`, while live-client verification of the `08B6` / `004B -> 01CB` startup tree differences remains tracked under Practice Range acceptance `#3` / `#121`).
 
+- Applied the same StateScript execution scope to direct state starts and queued entries. Client-only nodes now skip these paths before they can change server state.
+
 ### 2026-11-18
 
 #### Build shared map-agnostic static navigation queries (#63)

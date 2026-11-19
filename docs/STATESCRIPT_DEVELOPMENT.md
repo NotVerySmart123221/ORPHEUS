@@ -2,6 +2,13 @@
 
 Use the current `rust` module boundaries when extending the VM. This guide integrates useful verification work from the older local foundation experiment without replacing the subsequently merged implementation.
 
+## Execution scope
+
+The VM uses each node's declared execution scope for graph traversal, startup
+and message scheduling, and direct dispatch. A client-only node does not run
+server actions or start server states. Server-only nodes can execute on the
+server while remaining absent from network projection.
+
 ## Follow an action
 
 1. [`script_graph.rs`](../rust/crates/statescript/src/script_graph.rs) loads authored graph metadata and preserves wire slots and link order.

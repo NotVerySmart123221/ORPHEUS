@@ -385,7 +385,7 @@ impl Machine {
                     .nodes
                     .iter()
                     .filter(|node| {
-                        !node.client_only
+                        node.runs_on_server()
                             && node
                                 .field("m_gameMessage.m_gameMessage")
                                 .and_then(asset_guid)
