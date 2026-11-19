@@ -235,6 +235,7 @@ pub(crate) struct EntityScriptSnapshot {
     pub registration_rejections: usize,
     pub registration_rejection_sites: Vec<ScriptDiagnosticSite>,
     pub unsupported_nodes: usize,
+    pub node_observations: Option<ScriptNodeObservations>,
     pub instances: Vec<ScriptInstanceSummary>,
     pub instances_truncated: bool,
     pub variables: Vec<ScriptVarSummary>,
@@ -246,6 +247,21 @@ pub(crate) struct EntityScriptSnapshot {
 pub(crate) struct ScriptDiagnosticSite {
     pub graph: u32,
     pub node: Option<u16>,
+}
+
+#[cfg(any(test, feature = "inspector"))]
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct ScriptNodeObservations {
+    pub sites: Vec<ScriptNodeObservation>,
+    pub truncated: bool,
+}
+
+#[cfg(any(test, feature = "inspector"))]
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct ScriptNodeObservation {
+    pub graph: u32,
+    pub node: u16,
+    pub client_scope_skipped: bool,
 }
 
 #[cfg(any(test, feature = "inspector"))]
@@ -383,6 +399,22 @@ pub(crate) fn summarize_script_snapshot(
             unsupported_nodes += 1;
         }
     }
+    let node_observations =
+        snapshot
+            .node_observations()
+            .map(|observations| ScriptNodeObservations {
+                sites: observations
+                    .sites()
+                    .map(
+                        |(graph, node, client_scope_skipped)| ScriptNodeObservation {
+                            graph,
+                            node,
+                            client_scope_skipped,
+                        },
+                    )
+                    .collect(),
+                truncated: observations.truncated(),
+            });
     EntityScriptSnapshot {
         entity,
         kind,
@@ -391,6 +423,7 @@ pub(crate) fn summarize_script_snapshot(
         registration_rejections,
         registration_rejection_sites,
         unsupported_nodes,
+        node_observations,
         instances,
         instances_truncated,
         variables,

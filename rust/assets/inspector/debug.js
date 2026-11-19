@@ -334,6 +334,14 @@ function renderScripts(room) {
   if (unsupported > 0) {
     details.push(unsupported + (unsupported === 1 ? " unsupported node" : " unsupported nodes"));
   }
+  const observations = selected.node_observations;
+  if (observations == null) {
+    details.push("node observation disabled");
+  } else {
+    const count = observations.sites.length;
+    const label = count === 1 ? " observed node site" : " observed node sites";
+    details.push(count + label + (observations.truncated ? " (capped)" : ""));
+  }
   if (selected.instances_truncated) details.push("instances capped");
   setText(byId("vm-meta"), details.join(" · "));
   setText(

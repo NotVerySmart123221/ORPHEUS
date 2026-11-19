@@ -50,7 +50,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         caller: Option<StateKey>,
         depth: usize,
     ) -> Result<bool, InitFault> {
-        if !node.runs_on_server() {
+        if !self.observed_server_path(id, node) {
             return Ok(false);
         }
         self.spend("node execution")?;
@@ -970,7 +970,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             );
             return Ok(());
         };
-        if !node.runs_on_server() {
+        if !self.observed_server_path(id, node) {
             return Ok(());
         }
         if let Some(state) = self.state(key).filter(|state| state.active) {

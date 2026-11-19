@@ -1052,6 +1052,29 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         }
     }
 
+    #[inline]
+    #[cfg_attr(
+        not(feature = "node-observations"),
+        allow(
+            clippy::needless_pass_by_ref_mut,
+            reason = "Inspector builds record the target"
+        )
+    )]
+    fn observed_server_path(&mut self, id: u16, node: &Node) -> bool {
+        let runs_on_server = node.runs_on_server();
+        #[cfg(feature = "node-observations")]
+        {
+            let graph = self.graph(id).index;
+            self.machine
+                .snapshot
+                .node_observations
+                .record(graph, node.pos, !runs_on_server);
+        }
+        #[cfg(not(feature = "node-observations"))]
+        let _ = id;
+        runs_on_server
+    }
+
     pub(in crate::script_init) fn report(&mut self, site: Site, issue: Issue) {
         self.report_diagnostic(site, issue, false);
     }
@@ -1096,13 +1119,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         sender: Option<u32>,
         parameters: Arc<Variables>,
     ) -> Result<(), InitFault> {
-        let Some(node) = self
-            .graph(id)
-            .node(position)
-            .filter(|node| node.runs_on_server())
-        else {
+        let Some(node) = self.graph(id).node(position) else {
             return Ok(());
         };
+        if !self.observed_server_path(id, node) {
+            return Ok(());
+        }
         self.parameters = Some(parameters);
         let result = self.deliver_entry(id, node, sender);
         self.parameters = None;
@@ -2070,7 +2092,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 taken = true;
                 continue;
             };
-            if !target.runs_on_server() {
+            if !self.observed_server_path(id, target) {
                 continue;
             }
             if target.is_state() {

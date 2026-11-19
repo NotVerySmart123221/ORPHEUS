@@ -30,6 +30,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - StateScript bundles can declare authored plain states, forwarding actions and client-only scope once per class. The loader rejects conflicting declarations and checks each node before execution.
 
+- Added bounded node-target observations to the StateScript Inspector. They record whether a reached target was skipped by client-only scope. Default builds do not collect observations.
+
 ### 2026-11-18
 
 #### Build shared map-agnostic static navigation queries (#63)

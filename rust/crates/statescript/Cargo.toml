@@ -10,6 +10,9 @@ description = "Portable StateScript graph loader, expression evaluator, and VM f
 [lints]
 workspace = true
 
+[features]
+node-observations = []
+
 [dependencies]
 flate2 = "1.1"
 indexmap = { version = "2", features = ["serde"] }

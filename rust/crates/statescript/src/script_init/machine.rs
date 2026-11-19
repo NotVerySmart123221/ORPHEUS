@@ -274,6 +274,8 @@ impl Machine {
                 bindings: IndexMap::new(),
                 resolved_bindings: IndexMap::new(),
                 diagnostics: Vec::new(),
+                #[cfg(feature = "node-observations")]
+                node_observations: Default::default(),
             },
             queues: Timeline::new(MAX_PENDING_EVENTS),
             registered: IndexMap::new(),

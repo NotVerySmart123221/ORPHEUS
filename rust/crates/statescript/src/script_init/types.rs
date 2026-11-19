@@ -315,6 +315,42 @@ pub struct Diagnostic {
     pub registration_rejected: bool,
 }
 
+/// Bounded evidence of node targets encountered by the VM.
+#[derive(Clone, Debug, Default)]
+pub struct NodeObservations {
+    sites: BTreeMap<(u32, u16), bool>,
+    truncated: bool,
+}
+
+impl NodeObservations {
+    /// Each graph and node location, with whether its client scope skipped it.
+    pub fn sites(&self) -> impl Iterator<Item = (u32, u16, bool)> + '_ {
+        self.sites
+            .iter()
+            .map(|(&(graph, node), &client_scope_skipped)| (graph, node, client_scope_skipped))
+    }
+
+    pub fn truncated(&self) -> bool {
+        self.truncated
+    }
+
+    #[cfg(feature = "node-observations")]
+    pub(super) fn record(&mut self, graph: u32, node: u16, client_scope_skipped: bool) {
+        const MAX_SITES: usize = 128;
+        if self.truncated {
+            return;
+        }
+        let full = self.sites.len() == MAX_SITES;
+        if let std::collections::btree_map::Entry::Vacant(site) = self.sites.entry((graph, node)) {
+            if full {
+                self.truncated = true;
+            } else {
+                site.insert(client_scope_skipped);
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Snapshot {
     pub entity: u32,
@@ -328,9 +364,23 @@ pub struct Snapshot {
     /// Effective linked values, separate from their stored bases.
     pub resolved_bindings: IndexMap<(u16, u32), Value>,
     pub diagnostics: Vec<Diagnostic>,
+    #[cfg(feature = "node-observations")]
+    pub(super) node_observations: NodeObservations,
 }
 
 impl Snapshot {
+    /// Dispatch-target evidence, when compiled with node observations enabled.
+    pub fn node_observations(&self) -> Option<&NodeObservations> {
+        #[cfg(feature = "node-observations")]
+        {
+            Some(&self.node_observations)
+        }
+        #[cfg(not(feature = "node-observations"))]
+        {
+            None
+        }
+    }
+
     pub fn boss_pause_active(&self) -> bool {
         self.instances.values().any(|instance| {
             let senders: &[u16] = match instance.graph {

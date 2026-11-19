@@ -16,6 +16,7 @@ struct ExpectedGraph {
     graph: u32,
     instance: u16,
     active_state: u16,
+    server_targets: Vec<u16>,
     owner_positions: Vec<u16>,
     remote_positions: Vec<u16>,
     server_only_nodes: Vec<u16>,
@@ -62,7 +63,26 @@ fn authored_class_aliases_apply_across_graphs_without_network_slots() {
         snapshot.variables.is_empty(),
         "writes must stay instance-local"
     );
+    let observations = snapshot.node_observations();
+    assert_eq!(observations.is_some(), cfg!(feature = "node-observations"));
+    let mut matched_sites = 0;
     for expected in contract.expected {
+        if let Some(observations) = observations {
+            assert!(!observations.truncated());
+            let (server_targets, client_targets): (Vec<_>, Vec<_>) = observations
+                .sites()
+                .filter(|(graph, _, _)| *graph == expected.graph)
+                .partition(|(_, _, client_scope_skipped)| !client_scope_skipped);
+            let positions = |sites: Vec<(u32, u16, bool)>| {
+                sites
+                    .into_iter()
+                    .map(|(_, node, _)| node)
+                    .collect::<Vec<_>>()
+            };
+            matched_sites += server_targets.len() + client_targets.len();
+            assert_eq!(positions(server_targets), expected.server_targets);
+            assert_eq!(positions(client_targets), expected.client_only_nodes);
+        }
         let graph = graphs.graph(expected.graph).unwrap();
         assert_eq!(graph.owner_positions(), expected.owner_positions);
         assert_eq!(graph.remote_positions(), expected.remote_positions);
@@ -97,4 +117,28 @@ fn authored_class_aliases_apply_across_graphs_without_network_slots() {
             assert!(!instance.variables.contains_key(&variable));
         }
     }
+    if let Some(observations) = observations {
+        assert_eq!(observations.sites().count(), matched_sites);
+    }
+}
+
+#[cfg(feature = "node-observations")]
+#[test]
+fn node_observation_limit_counts_only_distinct_sites() {
+    let mut observations = NodeObservations::default();
+    for node in 0..128 {
+        observations.record(42, node, false);
+    }
+    observations.record(42, 0, false);
+    assert!(!observations.truncated());
+    assert_eq!(observations.sites().count(), 128);
+
+    observations.record(77, 0, true);
+    assert!(observations.truncated());
+    assert_eq!(observations.sites().count(), 128);
+    assert!(
+        observations
+            .sites()
+            .all(|(graph, _, skipped)| graph == 42 && !skipped)
+    );
 }

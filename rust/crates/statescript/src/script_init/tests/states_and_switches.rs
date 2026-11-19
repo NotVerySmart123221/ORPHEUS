@@ -260,6 +260,12 @@ fn message_dispatch_rechecks_the_resolved_nodes_execution_scope() {
     assert!(snapshot.initialization_complete());
     assert!(!snapshot.variables.contains_key(&20));
     assert_eq!(snapshot.variables.get(&21), Some(&Value::Entity(35)));
+    if let Some(observations) = snapshot.node_observations() {
+        assert_eq!(
+            observations.sites().collect::<Vec<_>>(),
+            [(42, 0, true), (42, 1, false)]
+        );
+    }
 }
 
 #[test]

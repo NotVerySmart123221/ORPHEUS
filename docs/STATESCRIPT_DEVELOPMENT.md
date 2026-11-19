@@ -102,6 +102,22 @@ A node's absence from a snapshot gives no evidence that execution reached it.
 The Inspector VM summary displays counts by category and the bounded list
 of rejected graph and node locations.
 
+## Inspect observed node targets
+
+Inspector builds collect up to 128 distinct graph and node positions per
+script component. The VM panel shows the count and flags any observations
+omitted after the list fills. The existing `/api/debug/v1/state` response includes each component's
+`node_observations` with the positions and the `client_scope_skipped` flag.
+A false flag means the target passed the server scope check. Other
+diagnostics can still describe why its dispatch failed.
+
+This records resolved link targets, action dispatch, state starts and
+delivery of queued messages. It does not record every callback or
+candidates filtered before those routes. An absent position was not
+observed at the instrumented points, and a capped list can also omit later
+positions. The observations are local to the component and copied with a
+cloned VM snapshot. Default builds do not collect them.
+
 ## Pinned action contract
 
 The [synthetic fixture](../fixtures/behavior/script-actions-v1.json) records 15 cases against Rust `f763beb9d7017b9364a3c8fc79ae6192df590043`. Its expected values were checked against that old executor before integration. The [consumer](../rust/crates/statescript/src/script_init/tests/actions_contract.rs) uses the current production loader and VM, checking scoped writes, dynamic values, error sites, RNG consumption, index behavior, work budgets and ordered links.

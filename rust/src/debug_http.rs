@@ -755,7 +755,7 @@ mod tests {
             Actor, ActorKind, DebugBotRoute, DebugContactNormal, DebugGroundProbe, DebugRay,
             DebugSpawnCandidate, EntityScriptSnapshot, NavigationOverlay, NavigationTruncation,
             PhysicsOverlay, PhysicsTruncation, Room, ScriptDiagnosticSite, ScriptInstanceSummary,
-            ScriptStateSummary, ScriptVarSummary,
+            ScriptNodeObservation, ScriptNodeObservations, ScriptStateSummary, ScriptVarSummary,
         };
 
         let http = DebugHttp::bind(0, fixture_geometry(), || {
@@ -830,8 +830,32 @@ mod tests {
                         }],
                         truncated: NavigationTruncation::default(),
                     }),
-                    scripts: vec![EntityScriptSnapshot {
-                        entity: 0xa000_0001,
+                    scripts: [
+                        Some(ScriptNodeObservations {
+                            sites: vec![
+                                ScriptNodeObservation {
+                                    graph: 42,
+                                    node: 0,
+                                    client_scope_skipped: false,
+                                },
+                                ScriptNodeObservation {
+                                    graph: 42,
+                                    node: 3,
+                                    client_scope_skipped: true,
+                                },
+                            ],
+                            truncated: true,
+                        }),
+                        Some(ScriptNodeObservations {
+                            sites: Vec::new(),
+                            truncated: false,
+                        }),
+                        None,
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, node_observations)| EntityScriptSnapshot {
+                        entity: 0xa000_0001 + index as u32,
                         kind: "player",
                         now_ms: 1584,
                         diagnostics: 6,
@@ -841,6 +865,7 @@ mod tests {
                             node: Some(3),
                         }],
                         unsupported_nodes: 2,
+                        node_observations,
                         instances: vec![ScriptInstanceSummary {
                             id: 1,
                             graph: "0x0043".into(),
@@ -863,7 +888,8 @@ mod tests {
                         instances_truncated: false,
                         variables: Vec::new(),
                         variables_truncated: false,
-                    }],
+                    })
+                    .collect(),
                     scripts_truncated: true,
                 }],
                 truncated: false,
@@ -914,6 +940,22 @@ mod tests {
             serde_json::json!([{"graph": 42, "node": 3}])
         );
         assert_eq!(script["unsupported_nodes"], 2);
+        assert_eq!(
+            script["node_observations"],
+            serde_json::json!({
+                "sites": [
+                    {"graph": 42, "node": 0, "client_scope_skipped": false},
+                    {"graph": 42, "node": 3, "client_scope_skipped": true}
+                ],
+                "truncated": true
+            })
+        );
+        let scripts = &state_json["rooms"][0]["scripts"];
+        assert_eq!(
+            scripts[1]["node_observations"],
+            serde_json::json!({"sites": [], "truncated": false})
+        );
+        assert_eq!(scripts[2].get("node_observations"), Some(&Value::Null));
         assert_eq!(state_json["rooms"][0]["scripts_truncated"], true);
 
         let denied = request(
