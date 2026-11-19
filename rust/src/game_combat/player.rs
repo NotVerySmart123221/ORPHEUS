@@ -7,7 +7,7 @@ use bevy_ecs::component::Component;
 use crate::{
     game_combat::{
         AdmittedFlight, AppliedDamage, BioticField, BotHit, CombatError, HealingPulse,
-        PosedHitscan, RoomSimulation, eye_height,
+        PosedHitscan, RoomSimulation, eligible_target, eye_height,
     },
     game_combat_messages::CombatNotice,
     game_hitscan::{Impact, TargetHistory, TargetPose, ViewFrame},
@@ -986,17 +986,6 @@ impl RoomSimulation {
             }
         }
     }
-}
-
-pub(super) fn eligible_target(
-    entity: u32,
-    alive: bool,
-    target_team: u8,
-    source: u32,
-    source_team: u8,
-    free_for_all: bool,
-) -> bool {
-    alive && entity != source && (free_for_all || target_team != source_team)
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {

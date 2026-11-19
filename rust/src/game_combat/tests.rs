@@ -16,6 +16,24 @@ pub(super) fn fixture_bots() -> Vec<Bot> {
 }
 
 #[test]
+fn combat_target_admission_applies_team_and_liveness_rules_to_bots() {
+    let mut bot = fixture_bots().remove(0);
+    let shooter = bot.entity + 1;
+    let allied_team = bot.spawn.team;
+    let hostile_team = 0;
+    assert_ne!(allied_team, hostile_team);
+
+    assert!(eligible_bot(&bot, shooter, hostile_team, false));
+    assert!(!eligible_bot(&bot, shooter, allied_team, false));
+    assert!(eligible_bot(&bot, shooter, allied_team, true));
+    assert!(!eligible_bot(&bot, bot.entity, allied_team, true));
+
+    bot.dead = true;
+    assert!(!eligible_bot(&bot, shooter, hostile_team, false));
+    assert!(!eligible_bot(&bot, shooter, hostile_team, true));
+}
+
+#[test]
 fn corpse_health_is_available_after_live_target_selection_excludes_it() {
     let mut room = RoomSimulation::new(fixture_bots()).unwrap();
     let victim = room.living_enemies(0).unwrap().next().unwrap().0.entity;

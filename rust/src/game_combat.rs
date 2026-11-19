@@ -2308,8 +2308,26 @@ fn check_bot_identity(wire: u32, state: &BotState) -> Result<(), CombatError> {
     Ok(())
 }
 
+fn eligible_target(
+    entity: u32,
+    alive: bool,
+    target_team: u8,
+    source: u32,
+    source_team: u8,
+    free_for_all: bool,
+) -> bool {
+    alive && entity != source && (free_for_all || target_team != source_team)
+}
+
 fn eligible_bot(bot: &Bot, source: u32, team: u8, free_for_all: bool) -> bool {
-    !bot.dead && bot.entity != source && (free_for_all || bot.spawn.team != team)
+    eligible_target(
+        bot.entity,
+        !bot.dead,
+        bot.spawn.team,
+        source,
+        team,
+        free_for_all,
+    )
 }
 
 #[cfg(test)]
