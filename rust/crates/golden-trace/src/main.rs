@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use orpheus_golden_trace::{
-    Comparison, Difference, compare_bound, validate_candidate, validate_reference,
+    Comparison, Difference, compare_bound, compare_with_rng_setup_diagnostic, validate_candidate,
+    validate_reference,
 };
 use serde_json::{Value, json};
 
@@ -29,7 +30,6 @@ fn write_report(path: &Path, report: &Value) -> io::Result<()> {
 
 fn difference_report(diff: Difference) -> Value {
     json!({
-        "result": "mismatch",
         "tick": diff.tick,
         "phase": diff.phase,
         "entity": diff.entity,
@@ -65,21 +65,36 @@ fn run(args: &[OsString]) -> Result<u8, &'static str> {
     };
     let reference = File::open(reference).map_err(|_| "Cannot open the reference trace.")?;
     let candidate = File::open(candidate).map_err(|_| "Cannot open the candidate trace.")?;
-    let (code, status, report) =
-        match compare_bound(BufReader::new(reference), BufReader::new(candidate)) {
-            Ok(Comparison::Match) => (0, "match", json!({"result": "match"})),
-            Ok(Comparison::Mismatch(diff)) => (1, "mismatch", difference_report(diff)),
-            Ok(Comparison::Incompatible(fields)) => (
-                2,
-                "incompatible",
-                json!({"result":"incompatible","fields":fields}),
-            ),
-            Err(error) => (
-                2,
-                "incomplete",
-                json!({"result": "incomplete", "reason": error.to_string()}),
-            ),
-        };
+    let reference = BufReader::new(reference);
+    let candidate = BufReader::new(candidate);
+    let comparison = if output.is_some() {
+        compare_with_rng_setup_diagnostic(reference, candidate)
+    } else {
+        compare_bound(reference, candidate).map(|result| (result, None))
+    };
+    let (code, status, report) = match comparison {
+        Ok((Comparison::Match, _)) => (0, "match", json!({"result": "match"})),
+        Ok((Comparison::Mismatch(diff), _)) => {
+            let mut report = difference_report(diff);
+            report["result"] = json!("mismatch");
+            (1, "mismatch", report)
+        }
+        Ok((Comparison::Incompatible(fields), diagnostic)) => {
+            let mut report = json!({"result":"incompatible","fields":fields});
+            if let Some(diagnostic) = diagnostic {
+                report["rng_setup_diagnostic"] = json!({
+                    "compared_ticks": diagnostic.compared_ticks,
+                    "first_observed_difference": diagnostic.first_observed_difference.map(difference_report),
+                });
+            }
+            (2, "incompatible", report)
+        }
+        Err(error) => (
+            2,
+            "incomplete",
+            json!({"result": "incomplete", "reason": error.to_string()}),
+        ),
+    };
     if let Some(path) = output {
         write_report(&path, &report)
             .map_err(|_| "Could not create the requested private report.")?;

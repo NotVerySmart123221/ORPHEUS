@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added a private paired-trace diagnostic for RNG-only setup differences. Fully validated recordings can show the first observed tick difference while retaining the incompatible result.
+
 - Removed redundant placement checks for stat criteria actions and consolidated equivalent effect and stat continuation paths.
 
 ### 2026-11-19

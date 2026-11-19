@@ -356,18 +356,134 @@ fn captured(rows: &mut [Value]) {
     });
 }
 
+fn captured_with_different_rng(rows: &mut [Value]) {
+    captured(rows);
+    let setup = &mut rows[0]["setup"];
+    setup["host_random_model"] = json!("os-entropy-transport-only");
+    setup["host_initial_seed"] = Value::Null;
+    setup["player_vm_random_model"] = json!("splitmix64");
+    setup["player_vm_initial_seed"] = json!(u64::MAX);
+}
+
+#[test]
+fn reports_observed_tick_comparison_without_overriding_rng_incompatibility() {
+    let reference = trace("reference", captured);
+    for changed in [false, true] {
+        let cand = candidate(|rows| {
+            captured_with_different_rng(rows);
+            if changed {
+                *field_mut(&mut rows[4], "player/0/body/1", "ammo") = json!(1);
+            }
+        });
+        let files = Files::with_traces(&reference, &cand);
+        let result = files.compare(&["--report", "report.json"]);
+        assert_eq!(result.stdout, b"incompatible\n");
+        assert_eq!(result.status.code(), Some(2));
+
+        let first_observed_difference = if changed {
+            json!({
+                "tick": 3,
+                "phase": "state",
+                "entity": "player/0/body/1",
+                "field": "ammo",
+                "expected": {"present": true, "value": 2},
+                "actual": {"present": true, "value": 1}
+            })
+        } else {
+            Value::Null
+        };
+        assert_eq!(
+            files.report(),
+            json!({
+                "result": "incompatible",
+                "fields": [
+                    "setup.host_initial_seed",
+                    "setup.host_random_model",
+                    "setup.player_vm_initial_seed",
+                    "setup.player_vm_random_model"
+                ],
+                "rng_setup_diagnostic": {
+                    "compared_ticks": 4,
+                    "first_observed_difference": first_observed_difference
+                }
+            })
+        );
+    }
+}
+
+#[test]
+fn rng_setup_diagnostic_is_absent_if_other_metadata_differs() {
+    let reference = trace("reference", captured);
+    let cases = [
+        (
+            "platform",
+            candidate(|rows| {
+                captured_with_different_rng(rows);
+                rows[0]["platform"] = json!("windows-amd64");
+            }),
+        ),
+        (
+            "setup.bot_spawner_slot",
+            candidate(|rows| {
+                captured_with_different_rng(rows);
+                rows[0]["setup"]["bot_spawner_slot"] = json!(1);
+            }),
+        ),
+    ];
+    for (field, cand) in cases {
+        let files = Files::with_traces(&reference, &cand);
+        let result = files.compare(&["--report", "report.json"]);
+        assert_eq!(result.stdout, b"incompatible\n");
+        assert_eq!(result.status.code(), Some(2));
+
+        let report = files.report();
+        assert_eq!(report["result"], "incompatible");
+        assert!(report["fields"].as_array().unwrap().contains(&json!(field)));
+        assert!(report.get("rng_setup_diagnostic").is_none());
+    }
+}
+
+#[test]
+fn rng_setup_diagnostic_requires_a_valid_footer_before_exposing_differences() {
+    let reference = trace("reference", captured);
+    let mut cand = candidate(|rows| {
+        captured_with_different_rng(rows);
+        *field_mut(&mut rows[2], "player/0/body/1", "ammo") = json!(1);
+    });
+    let footer_start = cand[..cand.len() - 1]
+        .iter()
+        .rposition(|&byte| byte == b'\n')
+        .unwrap()
+        + 1;
+    let mut footer: Value = serde_json::from_slice(&cand[footer_start..]).unwrap();
+    footer["sha256"] = json!("0".repeat(64));
+    cand.truncate(footer_start);
+    cand.extend(line(&footer));
+
+    let files = Files::with_traces(&reference, &cand);
+    let result = files.compare(&["--report", "report.json"]);
+    assert_eq!(result.stdout, b"incomplete\n");
+    assert_eq!(result.status.code(), Some(2));
+
+    let report = files.report();
+    assert_eq!(report["result"], "incomplete");
+    assert!(
+        report["reason"]
+            .as_str()
+            .unwrap()
+            .contains("file checksum mismatch")
+    );
+    assert!(report.get("rng_setup_diagnostic").is_none());
+}
+
 #[test]
 fn both_captured_roles_validate_even_when_delivery_and_randomness_differ() {
     let reference = trace("reference", captured);
     let cand = candidate(|rows| {
-        captured(rows);
+        captured_with_different_rng(rows);
         let s = &mut rows[0]["setup"];
         s["setup_delivery_ticks"] = json!(3);
         s["initial_owner_delivery_phase"] = json!("after-setup-ack");
-        s["host_random_model"] = json!("os-entropy-transport-only");
-        s["host_initial_seed"] = Value::Null;
-        s["player_vm_random_model"] = json!("splitmix64");
-        s["player_vm_initial_seed"] = json!(u64::MAX);
     });
     let files = Files::with_traces(&reference, &cand);
     for role in ["reference", "candidate"] {

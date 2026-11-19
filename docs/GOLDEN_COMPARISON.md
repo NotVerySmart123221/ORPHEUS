@@ -19,6 +19,15 @@ cargo run --locked -p orpheus-golden-trace --bin compare_golden -- --check-candi
 
 Detailed values go in the optional report. Choose a new file in a private directory. A report distinguishes a missing field from a field whose value is JSON `null`. Keep recordings and reports on the runner or maintainer machine. The repository ignores `local-data/` at the project root.
 
+When the RNG model and seed fields are the only header differences,
+`--report` also includes `rng_setup_diagnostic`. It records how many ticks
+were inspected and the first observed difference in recorded fields, or
+`null` when those fields had no observed difference. Both trace footers
+and schedules must validate before the report includes this diagnostic.
+The result stays `incompatible` with exit code 2, including when the
+recorded fields agree. The diagnostic does not establish random-stream
+equivalence or behavior outside that recording.
+
 ## Record the same session twice on each server
 
 Use a prepared 104319 runtime and a private canonical input schedule. The Python reference checkout must match the revision pinned by the adapter. Select a Python interpreter with the reference project's dependencies installed. Both adapter checkouts must contain the replay observers.
