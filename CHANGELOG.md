@@ -22,6 +22,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Added opt-in forwarding actions for authored server-only graphs. The VM follows their configured output with the existing transition and work-budget rules.
 
+- Reject ambiguous graph IDs and node positions at load time. Queued StateScript messages also enforce the resolved node's execution scope before any writes.
+
 ### 2026-11-18
 
 #### Build shared map-agnostic static navigation queries (#63)

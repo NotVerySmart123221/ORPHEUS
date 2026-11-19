@@ -9,6 +9,11 @@ and message scheduling, and direct dispatch. A client-only node does not run
 server actions or start server states. Server-only nodes can execute on the
 server while remaining absent from network projection.
 
+Graph IDs within a bundle and node positions within a graph must be unique.
+Repeated references in entry, state and synchronization tables keep their
+original order. Queued messages check the resolved node's execution scope
+before binding parameters or following its output.
+
 ## Declare an ordinary server state
 
 An authored node can opt into the plain state lifecycle with

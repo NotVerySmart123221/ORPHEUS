@@ -210,6 +210,59 @@ fn bridge_forwards_input_only_between_begin_and_abort() {
 }
 
 #[test]
+fn message_dispatch_rechecks_the_resolved_nodes_execution_scope() {
+    const MESSAGE: u64 = 0x0240_0000_0000_0042;
+    let handler = |pos, variable, client_only| {
+        let mut node = node(
+            pos,
+            "STUStatescriptEntryGameMessage",
+            None,
+            json!({
+                "m_gameMessage":{"m_gameMessage":format!("0x{MESSAGE:016X}")},
+                "m_B60ABDA4":var(variable, true)
+            }),
+        );
+        node["client_only"] = json!(client_only);
+        node
+    };
+    let graphs = Arc::new(store(vec![graph(
+        42,
+        vec![handler(0, 20, true), handler(1, 21, false)],
+        json!([]),
+        json!([0, 1]),
+    )]));
+    let mut component = Component::start(
+        graphs,
+        42,
+        Variables::new(),
+        vec![Root::listener(1, 42, None)],
+        0,
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let queue = &mut component.machine.queues;
+    for (position, sender) in [(0, 34), (1, 35)] {
+        queue
+            .push(
+                1,
+                0,
+                Event::Message {
+                    position,
+                    sender: Some(sender),
+                    parameters: Arc::new(Variables::new()),
+                },
+            )
+            .unwrap();
+    }
+    component.run_now(&mut EmptyWorld).unwrap();
+    let snapshot = component.snapshot().unwrap();
+    assert!(snapshot.initialization_complete());
+    assert!(!snapshot.variables.contains_key(&20));
+    assert_eq!(snapshot.variables.get(&21), Some(&Value::Entity(35)));
+}
+
+#[test]
 fn declared_forward_actions_keep_output_order_and_transition_results() {
     for (id, declared, connected) in [(42, true, true), (77, true, false), (90, false, true)] {
         let targets: &[(u16, &str)] = if connected {

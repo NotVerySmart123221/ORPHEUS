@@ -1096,7 +1096,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         sender: Option<u32>,
         parameters: Arc<Variables>,
     ) -> Result<(), InitFault> {
-        let Some(node) = self.graph(id).node(position) else {
+        let Some(node) = self
+            .graph(id)
+            .node(position)
+            .filter(|node| node.runs_on_server())
+        else {
             return Ok(());
         };
         self.parameters = Some(parameters);

@@ -263,7 +263,12 @@ impl Graph {
                 .by_pos
                 .get_mut(usize::from(node.pos))
                 .ok_or_else(|| invalid("graph node outside the item table"))?;
-            *position = Some(index);
+            if position.replace(index).is_some() {
+                return Err(invalid(format!(
+                    "graph {} defines node position {} more than once",
+                    self.index, node.pos
+                )));
+            }
             self.by_rid[usize::from(node.rid)] = Some(index);
         }
         self.owner = WireSlots::build(&self.states, self, false);
@@ -553,7 +558,12 @@ impl GraphStore {
         let mut graphs = BTreeMap::new();
         for mut graph in bundle.graphs {
             graph.compile()?;
-            graphs.insert(graph.index, graph);
+            let index = graph.index;
+            if graphs.insert(index, graph).is_some() {
+                return Err(invalid(format!(
+                    "bundle defines graph {index} more than once"
+                )));
+            }
         }
         Ok(Self {
             graphs,
@@ -909,6 +919,27 @@ mod tests {
         // Playable boss definitions use the explicit encounter pair instead of an AI association.
         data["junkenstein"]["entities"][body]["ai_association"] = Value::Null;
         assert!(load(&data).is_ok());
+    }
+
+    #[test]
+    fn duplicate_graph_identities_are_rejected() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+
+        let mut duplicate_position = fixture();
+        duplicate_position["graphs"][0]["nodes"][2]["pos"] = json!(0);
+        let error = load(&duplicate_position).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("node position 0"));
+
+        let mut duplicate_graph = fixture();
+        let duplicate = duplicate_graph["graphs"][0].clone();
+        duplicate_graph["graphs"]
+            .as_array_mut()
+            .unwrap()
+            .push(duplicate);
+        let error = load(&duplicate_graph).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("graph 42"));
     }
 
     #[test]
