@@ -142,6 +142,29 @@ independent passes, **one** ordinary Practice Range attachment, and
 across 900 frames. Original ability mappings and client zoom acceptance
 remain open.
 
+At `3331f0f0`, fresh observation callbacks restored their own sample
+when another state or plug reused the output. A higher-priority binding
+suppressed the callback while it hid the sample. Portable tests verified
+recovery on release, and the native aiming fixture verified that an
+intervening write could not change the target of the sampled effect.
+
+At `3482c7b9`, explicit owner-only instance variables projected through
+the existing wire codec. Synthetic wire tests covered owner updates,
+correction before acknowledgement, release, and child instances.
+Observer full bytes stayed identical and no observer delta was queued
+when only private instance values changed. Same-ID shared entity values
+and explicit public copies retained their visibility.
+
+Formatting, Clippy, and all public workspace tests passed for both
+configurations. The default build passed 368 native server tests and
+217 StateScript tests. Inspector passed 374 native server tests and
+218 StateScript tests. The repeated 104319 startup reports were
+byte-identical and matched the preceding report apart from source
+revision at **11 of 32** independent passes, **one** ordinary Practice
+Range attachment, and **47** blocking sites. The #72 replay matched all
+476 observation sites across 900 frames. Original ability mappings
+and client zoom acceptance remain open.
+
 Seven actor probes have one blocking site each. Mercy's tag query needs
 the tagged placement inventory and live actor tags. Orisa and Sigma
 still hit persistent message registration. Baptiste cannot read a
