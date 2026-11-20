@@ -169,6 +169,14 @@ still need their own acceptance. Run the ignored
 `prepared_practice_catalog_observes_input_survival_and_owner_egress` test
 with the prepared runtime to reproduce the matrix.
 
+The 11 admitted actors in the startup matrix all declared a weapon
+manager and one populated weapon slot. The direct graph references
+resolved and the startup snapshot recorded activity in both roots.
+The manager had 29 visited sites for each actor. The weapon had 55
+for Soldier: 76 and 20–54 for the other actors. These measurements
+cover startup. The conditions that enable weapon actions after startup
+need separate verification.
+
 The tagged 104319 encrypted loopback also covered an attempted Tracer
 selection followed by a Reaper selection. The rejected selection retained
 the current body and generation. The next selection published the controller

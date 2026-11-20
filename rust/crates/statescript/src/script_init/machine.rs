@@ -148,6 +148,11 @@ pub(super) enum Event {
     Reevaluate(u16),
     Timer(u16, u16),
     Button(ButtonEdge),
+    LogicalButtonBranch {
+        state: u16,
+        activation: u16,
+        down: bool,
+    },
     AbilityCheck(u16),
     CheckTransitions(u16),
     WatchChanged(u16),
@@ -172,6 +177,7 @@ impl Event {
     pub(super) fn state(&self) -> Option<u16> {
         match *self {
             Self::SpawnResult { key, .. } => Some(key.raw),
+            Self::LogicalButtonBranch { state, .. } => Some(state),
             Self::Entry(_)
             | Self::Assign(..)
             | Self::ExitInstance

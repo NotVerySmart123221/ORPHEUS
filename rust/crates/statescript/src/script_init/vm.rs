@@ -521,17 +521,52 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         down: bool,
         depth: usize,
     ) -> Result<(), InitFault> {
-        self.state_mut(key).expect("active logical button").kind =
-            StateKind::LogicalButton { down };
-        let (previous, edge, next) = if down {
-            ("m_1C9EF058", "m_onGoingDownPlug", "m_80AF45FB")
+        let state = self.state_mut(key).expect("active logical button");
+        state.kind = StateKind::LogicalButton { down };
+        let activation = state.activation;
+        let (previous, edge) = if down {
+            ("m_1C9EF058", "m_onGoingDownPlug")
         } else {
-            ("m_80AF45FB", "m_onComingUpPlug", "m_1C9EF058")
+            ("m_80AF45FB", "m_onComingUpPlug")
         };
         self.exit_subgraph(key.instance, node, previous, depth + 1)?;
+        if !self.logical_button_is_current(key, activation, down) {
+            return Ok(());
+        }
         self.follow(key.instance, node, edge, Some(key), depth)?;
-        if self.state(key).is_some_and(|state| state.active) {
-            self.follow(key.instance, node, next, Some(key), depth)?;
+        // Edge callbacks can schedule state changes for this same instant.
+        self.post(
+            key.instance,
+            Event::LogicalButtonBranch {
+                state: key.raw,
+                activation,
+                down,
+            },
+        )
+    }
+
+    fn logical_button_is_current(&self, key: StateKey, activation: u16, down: bool) -> bool {
+        self.state(key).is_some_and(|state| {
+            state.active
+                && !state.ending
+                && state.activation == activation
+                && matches!(state.kind, StateKind::LogicalButton { down: current } if current == down)
+        })
+    }
+
+    fn follow_logical_button_branch(
+        &mut self,
+        key: StateKey,
+        activation: u16,
+        down: bool,
+    ) -> Result<(), InitFault> {
+        if self.logical_button_is_current(key, activation, down) {
+            let node = self
+                .graph(key.instance)
+                .state(usize::from(key.raw))
+                .expect("logical button state");
+            let path = if down { "m_80AF45FB" } else { "m_1C9EF058" };
+            self.follow(key.instance, node, path, Some(key), 0)?;
         }
         Ok(())
     }
@@ -1008,7 +1043,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 if !self.machine.snapshot.instances.contains_key(&id) {
                     break;
                 }
-                while let Some(event) = self.machine.queues.pop_due(id, self.machine.now_ms) {
+                // Settle script work before the next input edge at this instant.
+                // A press and release can share a timestamp.
+                while let Some(event) =
+                    self.machine
+                        .queues
+                        .pop_due(id, self.machine.now_ms, |event| {
+                            !matches!(event, Event::Button(_))
+                        })
+                {
                     if events == MAX_EVENTS_PER_UPDATE {
                         return Err(InitFault::EventBudget { instance: id });
                     }
@@ -1030,6 +1073,18 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         Event::Reevaluate(raw) => self.reevaluate(key(raw), 0)?,
                         Event::Timer(raw, parameter) => self.timer(key(raw), parameter)?,
                         Event::Button(edge) => self.button_edge(id, edge)?,
+                        Event::LogicalButtonBranch {
+                            state,
+                            activation,
+                            down,
+                        } => self.follow_logical_button_branch(
+                            StateKey {
+                                instance: id,
+                                raw: state,
+                            },
+                            activation,
+                            down,
+                        )?,
                         Event::AbilityCheck(raw) => self.timer(key(raw), 1)?,
                         Event::CheckTransitions(raw) => {
                             if self.state(key(raw)).is_some_and(|state| state.active) {

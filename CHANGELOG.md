@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Fixed logical button transitions that continued into a stale branch after a callback changed the state. A press that acquires its own lock now preserves the nested release and skips the down branch. The synthetic regression reproduced the stale branch on the previous VM and verifies that a same-frame pulse still runs both edges. The script-coverage workspace suite, the prepared input tests, and Clippy passed.
+
 - Verified rejected and accepted catalog selections in the tagged 104319 encrypted loopback. A rejected scripted body preserves the previous generation. The next valid selection and its reskin both complete. A separate longer input probe reproduced the same volley counts and showed that Zarya's runtime stop also occurs before attack input.
 
 - Exercised primary and secondary input after queued selection and owner acknowledgements for the prepared actor catalog. Eleven bodies attached, ten completed the 100-frame schedule, and Zarya's runtime stopped during held secondary input at an unsupported dispatch site. Only Soldier: 76 emitted weapon volley events. Both prepared input tests, the locked all-targets workspace tests with script coverage, and Clippy passed.
