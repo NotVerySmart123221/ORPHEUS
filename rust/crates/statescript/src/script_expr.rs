@@ -132,6 +132,8 @@ pub struct SpatialRayHit {
 pub struct SpatialActorRayHit {
     pub entity: u32,
     pub distance: f64,
+    /// Unit surface normal for the selected capsule contact.
+    pub normal: [f64; 3],
 }
 
 /// Authored query facts for a body in the current room snapshot.

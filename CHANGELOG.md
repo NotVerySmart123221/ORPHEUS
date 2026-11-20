@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Carry capsule contact normals through native actor ray queries. Added a synthetic surface contract for boundary contacts and contained starts, with room assertions for the selected contact. The authored ray action still needs a verified filter policy.
+
 - Separate NPC StateScript chunks from reliable messages under contention. A peer alternates sends so delayed or lost NPC chunks and sustained combat notices can both make progress. Added synthetic coverage for the wire payload and retry order. Original-client verification is pending.
 
 - Add an authored point relocation action with destination capsule clearance for players and NPCs. It shares the motion queue and owner corrections with swept displacement. Added original fixtures for placement, queue admission, and correction. Shared-branch verification is pending.

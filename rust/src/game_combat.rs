@@ -35,7 +35,7 @@ use crate::{
     script_expr::{RoomEntityFacts, SpatialCandidate},
     script_graph::RoomSpatialNeeds,
     script_init::{HealthTargetFacts, ShotEvent},
-    static_ray::{Vec3, capsule_entry_distance, norm, segment_separation},
+    static_ray::{Vec3, capsule_entry_hit, norm, segment_separation},
     vitals::{Death, NamedPoolLoss},
     world::{EntityUpdate, Operation},
 };
@@ -425,16 +425,12 @@ impl RoomSpatialFrame {
                 if !bottom.into_iter().chain(top).all(f64::is_finite) {
                     return None;
                 }
-                let Some(distance) = capsule_entry_distance(
-                    origin,
-                    direction,
-                    max_distance,
-                    bottom,
-                    top,
-                    pose.radius,
-                ) else {
+                let Some(hit) =
+                    capsule_entry_hit(origin, direction, max_distance, bottom, top, pose.radius)
+                else {
                     continue;
                 };
+                let distance = hit.distance;
                 if wall.is_some_and(|wall| wall.distance < distance) {
                     #[cfg(any(test, feature = "inspector"))]
                     {
@@ -445,7 +441,11 @@ impl RoomSpatialFrame {
                 if nearest.as_ref().is_none_or(|hit| {
                     distance < hit.distance || (distance == hit.distance && entity < hit.entity)
                 }) {
-                    nearest = Some(crate::script_expr::SpatialActorRayHit { entity, distance });
+                    nearest = Some(crate::script_expr::SpatialActorRayHit {
+                        entity,
+                        distance,
+                        normal: hit.normal,
+                    });
                 }
             }
             Some(nearest)

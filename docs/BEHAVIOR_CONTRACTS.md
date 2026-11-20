@@ -143,6 +143,8 @@ The Rust-only [static ray fixture](../fixtures/behavior/statescript-ray-cast-v1.
 
 The Rust-only [actor ray fixture](../fixtures/behavior/statescript-entity-ray-cast-v1.json) checks team and tag selection, stable candidate IDs, budget exhaustion, a zero-distance hit, and unavailable geometry. Native room tests exercise frozen capsules and static occlusion. The Inspector rows verify room and VM frames, source node, actor and wall outcomes, and a temporary outage during held targeting.
 
+The [capsule entry surface fixture](../fixtures/behavior/actor-capsule-entry-surface-v1.json) checks side and cap normals, contained starts, bounded misses and exact endpoint hits. The room actor query carries the selected contact normal from that kernel. The existing expression contract still returns entity, distance and point.
+
 The Rust-only observation sample contract checks repeated successful values,
 unavailable geometry, known misses, failure callbacks, and retirement before
 callback dispatch.

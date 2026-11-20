@@ -135,7 +135,11 @@ fn entity_ray_queries_frozen_candidates_and_distinguishes_an_unavailable_service
     };
     let length = query["max_distance"].as_f64().unwrap();
     for (entity, distance, point) in [hit, inside_hit] {
-        host.hit = Some(Some(SpatialActorRayHit { entity, distance }));
+        host.hit = Some(Some(SpatialActorRayHit {
+            entity,
+            distance,
+            normal: [0.0, 0.0, -1.0],
+        }));
         assert_eq!(
             evaluate(&query, &mut host),
             Ok(Value::Array(vec![
@@ -155,14 +159,17 @@ fn entity_ray_queries_frozen_candidates_and_distinguishes_an_unavailable_service
         Some(SpatialActorRayHit {
             entity: excluded_by_tag,
             distance: 2.0,
+            normal: [0.0, 0.0, -1.0],
         }),
         Some(SpatialActorRayHit {
             entity: eligible[0],
             distance: -1.0,
+            normal: [0.0, 0.0, -1.0],
         }),
         Some(SpatialActorRayHit {
             entity: eligible[0],
             distance: length + 1.0,
+            normal: [0.0, 0.0, -1.0],
         }),
     ] {
         host.hit = hit.map(Some);

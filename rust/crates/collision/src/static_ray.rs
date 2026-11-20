@@ -177,6 +177,48 @@ pub fn capsule_entry_distance(
     b: Vec3,
     radius: f64,
 ) -> Option<f64> {
+    match capsule_entry(origin, direction, length, a, b, radius)? {
+        CapsuleEntry::Inside(_) => Some(0.0),
+        CapsuleEntry::Surface(hit) => Some(hit.distance),
+    }
+}
+
+/// First contact with a target capsule and the corresponding surface normal.
+/// A contained start has zero distance and uses the direction away from the axis.
+/// A start on the axis uses the reverse ray direction.
+pub fn capsule_entry_hit(
+    origin: Vec3,
+    direction: Vec3,
+    length: f64,
+    a: Vec3,
+    b: Vec3,
+    radius: f64,
+) -> Option<SurfaceHit> {
+    match capsule_entry(origin, direction, length, a, b, radius)? {
+        CapsuleEntry::Surface(hit) => Some(hit),
+        CapsuleEntry::Inside(separation) => {
+            let normal = unit(separation).or_else(|| unit(direction.map(|value| -value)))?;
+            Some(SurfaceHit {
+                distance: 0.0,
+                normal,
+            })
+        }
+    }
+}
+
+enum CapsuleEntry {
+    Inside(Vec3),
+    Surface(SurfaceHit),
+}
+
+fn capsule_entry(
+    origin: Vec3,
+    direction: Vec3,
+    length: f64,
+    a: Vec3,
+    b: Vec3,
+    radius: f64,
+) -> Option<CapsuleEntry> {
     if !valid_ray(origin, direction, length)
         || radius <= 0.0
         || !radius.is_finite()
@@ -186,9 +228,19 @@ pub fn capsule_entry_distance(
     }
     let separation = segment_separation(origin, a, b);
     if dot(separation, separation) <= radius * radius {
-        return Some(0.0);
+        return Some(CapsuleEntry::Inside(separation));
     }
-    round_surface(origin, direction, length, [a, b], radius, 0.0).map(|hit| hit.distance)
+    round_surface(origin, direction, length, [a, b], radius, 0.0).map(CapsuleEntry::Surface)
+}
+
+fn unit(vector: Vec3) -> Option<Vec3> {
+    let scale = vector.into_iter().map(f64::abs).fold(0.0, f64::max);
+    if scale == 0.0 || !scale.is_finite() {
+        return None;
+    }
+    let scaled = vector.map(|value| value / scale);
+    let length = norm(scaled);
+    (length.is_finite() && length > 0.0).then(|| scaled.map(|value| value / length))
 }
 
 pub fn segment_distance(point: Vec3, a: Vec3, b: Vec3) -> f64 {
@@ -336,6 +388,39 @@ mod tests {
             BACK,
         );
         assert!(round_hit([0.0, 2.01, 0.0], FORWARD, 8.0, a, b, 1.0).is_none());
+    }
+
+    #[test]
+    fn capsule_entry_surface_matches_distance_and_reports_contained_starts() {
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../fixtures/behavior/actor-capsule-entry-surface-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(contract["schema_version"], 1);
+        assert_eq!(contract["case_id"], "actor-capsule-entry-surface-v1");
+        let input = &contract["input"];
+        let [a, b]: [Vec3; 2] = serde_json::from_value(input["axis"].clone()).unwrap();
+        let radius = input["radius"].as_f64().unwrap();
+        let rays = input["rays"].as_array().unwrap();
+        let expected = contract["expected"].as_array().unwrap();
+        assert_eq!(rays.len(), expected.len());
+        for (ray, expected) in rays.iter().zip(expected) {
+            let origin = serde_json::from_value(ray["origin"].clone()).unwrap();
+            let direction = serde_json::from_value(ray["direction"].clone()).unwrap();
+            let length = ray["length"].as_f64().unwrap();
+            let hit = capsule_entry_hit(origin, direction, length, a, b, radius);
+            assert_eq!(
+                hit.map(|hit| hit.distance),
+                capsule_entry_distance(origin, direction, length, a, b, radius)
+            );
+            if let Some(distance) = expected["distance"].as_f64() {
+                let normal = serde_json::from_value(expected["normal"].clone()).unwrap();
+                assert_hit(hit, distance, normal);
+            } else {
+                assert!(expected.is_null());
+                assert!(hit.is_none());
+            }
+        }
     }
 
     #[test]
