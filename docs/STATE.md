@@ -106,6 +106,16 @@ apart from its source revision, with **11 of 32** independent passes,
 All 476 #72 observation sites matched. Dynamic actor ray hits and
 ability-state integration remain open.
 
+At `7510ba31`, the authored actor ray query passed the shared filter
+contract and the native frozen-frame collision test. The native test
+checks wall occlusion, equal-distance hits, crouch dimensions, and
+exclusion of retired bodies from replacement startup views. The default
+and script-coverage 104319 startup reports matched their respective
+baselines apart from the source revision. The matrix recorded **11 of 32**
+independent passes, **one** ordinary Practice Range attachment, and
+**47** blocking sites. All 476 #72 observation sites matched.
+The Phase 3A ability states still require integration and acceptance.
+
 Seven actor probes have one blocking site each. Mercy's tag query needs
 the tagged placement inventory and live actor tags. Orisa and Sigma
 still hit persistent message registration. Baptiste cannot read a
