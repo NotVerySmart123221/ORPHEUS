@@ -68,6 +68,22 @@ and discards the due timer. The two same-pack actor reports retained
 49 blocking sites, 10 independent passes, and one ordinary Practice
 Range attachment. The #72 capture matched all 476 observed sites.
 
+At `ad2d1b42`, synthetic startup tests verified that a one-shot player
+query can read the frozen room frame before body attachment, and that
+replacing a body twice in one frame keeps the old body out of both startup
+views. The existing 104319 Practice Range pack reported no startup spatial
+frame. Two same-pack reports matched byte for byte. Apart from the revision
+and the added spatial-context field, the reports retained the previous
+32 actor results and 49 blocking sites, with 10 independent passes and
+one ordinary Practice Range attachment. The #72 capture matched all 476
+observed sites.
+
+The Windows #131 idle and single-shot reload schedules each produced 339
+ticks. Both implementations repeated their observations and passed
+individual trace validation. Every tick matched its preceding Windows
+capture. Strict comparison still reports the same four RNG model and
+seed differences between the implementations.
+
 Seven actor probes have one blocking site each. Mercy's tag query needs
 the tagged placement inventory and live actor tags. Orisa and Sigma
 still hit persistent message registration. Baptiste cannot read a
