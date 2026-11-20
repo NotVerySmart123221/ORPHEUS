@@ -35,6 +35,24 @@ observations across 900 frames. Phase 3A also matched that replay on its
 standalone `055adca3` checkpoint. Original-client skill, aiming, and
 audio acceptance remain open.
 
+### Phase 3A ray diagnostics
+
+The combined checkpoint `05ab525e` includes the synced `131dfdae`
+baseline, the held-input changes, and the Inspector ray overlay. Native
+tests exercised captured-frame and VM-frame provenance, actor and wall
+hits, misses, unavailable queries, source retirement, and the 64-entry
+history shared with weapon rays. The Inspector JavaScript syntax,
+workspace formatting, and both Clippy configurations passed.
+
+The locked all-target suites passed **768** default tests and **775**
+Inspector tests, with 137 opt-in cases skipped per suite. Two separate
+104319 actor matrices matched each other byte for byte and matched
+`79e8a5b9` apart from the source revision. Both independent startup and
+ordinary admission passed for **12 of 32** actors, with **46** blocking
+sites. The transactional admission test also passed at 12 of 32. The #72
+900-frame capture matched all 476 observation sites. Original-client
+aiming and ability acceptance remain open.
+
 ### Weapon readiness comparison
 
 Checkpoint `79e8a5b9` ran the same prepared owner-input schedule twice
