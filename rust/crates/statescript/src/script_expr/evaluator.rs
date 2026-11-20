@@ -87,6 +87,17 @@ pub(super) struct Evaluator {
 }
 
 impl Evaluator {
+    pub(super) fn new(limit: usize, context: &impl Context) -> Self {
+        Self {
+            limit,
+            steps: 0,
+            folds: Vec::new(),
+            scoped_parameters: Vec::new(),
+            // An unwatched evaluation has no use for the record.
+            in_native: !context.watches_natives(),
+        }
+    }
+
     fn collect_group(
         &mut self,
         config: &Json,
@@ -1602,6 +1613,74 @@ impl Evaluator {
         context: &mut impl Context,
         depth: usize,
     ) -> Result<Value, EvalError> {
+        self.select_in_radius(fields, context, depth, false, |entity, _, _| {
+            Value::Entity(entity)
+        })
+        .map(Value::Array)
+    }
+
+    pub(super) fn radial_health_changes(
+        &mut self,
+        area: &Json,
+        delta: &Json,
+        edge_scale: Option<&Json>,
+        context: &mut impl Context,
+    ) -> Result<Vec<(u32, f64)>, EvalError> {
+        let area = area
+            .as_object()
+            .filter(|fields| fields.get("$").and_then(Json::as_str) == Some("EntitiesInRadius"))
+            .ok_or(EvalError::MalformedConfig(
+                "expected an EntitiesInRadius area",
+            ))?;
+        let delta = self
+            .finite_operand(delta, context)?
+            .filter(|delta| *delta != 0.0)
+            .ok_or(EvalError::MalformedConfig(
+                "expected a finite nonzero radial health delta",
+            ))?;
+        let edge_scale = match edge_scale {
+            Some(operand) => self
+                .finite_operand(operand, context)?
+                .filter(|edge| (0.0..=1.0).contains(edge))
+                .ok_or(EvalError::MalformedConfig(
+                    "expected a radial health edge scale from zero to one",
+                ))?,
+            None => 1.0,
+        };
+        let mut changes =
+            self.select_in_radius(area, context, 1, true, |entity, distance, radius| {
+                let scale = if radius == 0.0 {
+                    1.0
+                } else {
+                    let fraction = distance / radius;
+                    (1.0 - fraction) + fraction * edge_scale
+                };
+                (entity, delta * scale)
+            })?;
+        changes.retain(|&(_, change)| change != 0.0);
+        Ok(changes)
+    }
+
+    fn finite_operand(
+        &mut self,
+        operand: &Json,
+        context: &mut impl Context,
+    ) -> Result<Option<f64>, EvalError> {
+        Ok(match self.config(operand, context, 0)? {
+            Value::Integer(value) => Some(value as f64),
+            Value::Float(value) if value.is_finite() => Some(value),
+            _ => None,
+        })
+    }
+
+    fn select_in_radius<T>(
+        &mut self,
+        fields: &serde_json::Map<String, Json>,
+        context: &mut impl Context,
+        depth: usize,
+        require_consistent_distance: bool,
+        mut project: impl FnMut(u32, f64, f64) -> T,
+    ) -> Result<Vec<T>, EvalError> {
         let filter = fields.get("filter");
         let cone = fields.get("cone");
         let visibility = fields.get("line_of_sight");
@@ -1675,19 +1754,21 @@ impl Evaluator {
             }
             let offset = std::array::from_fn(|axis| position[axis] - center[axis]);
             let [dx, dy, dz] = offset;
-            if dx.hypot(dy).hypot(dz) <= radius
-                && cone.as_ref().is_none_or(|cone| cone.contains(offset))
-            {
-                matches.push(candidate);
+            let distance = dx.hypot(dy).hypot(dz);
+            if distance <= radius && cone.as_ref().is_none_or(|cone| cone.contains(offset)) {
+                matches.push((candidate, distance));
             }
         }
         if let Some((_, relation)) = filter.relation {
             let source_team = source_team.ok_or(EvalError::UnavailableSpatialCandidates)?;
-            matches.retain(|candidate| relation.matches(source_team, candidate.team));
+            matches.retain(|(candidate, _)| relation.matches(source_team, candidate.team));
         }
         if filter.needs_facts() {
             // Copy only this query's survivors before borrowing the host again.
-            room_matches = matches.into_iter().copied().collect::<Vec<_>>();
+            room_matches = matches
+                .into_iter()
+                .map(|(candidate, distance)| (*candidate, distance))
+                .collect::<Vec<_>>();
             let entities = context
                 .room_entities()
                 .ok_or(EvalError::UnavailableRoomEntityFacts)?;
@@ -1698,46 +1779,55 @@ impl Evaluator {
                 return Err(EvalError::UnavailableRoomEntityFacts);
             }
             matches = Vec::with_capacity(room_matches.len());
-            for candidate in &room_matches {
+            for (candidate, distance) in &room_matches {
                 let facts = entities
                     .get(&candidate.entity)
                     .ok_or(EvalError::UnavailableRoomEntityFacts)?;
                 if facts.alive && self.room_facts_match(&filter, facts)? {
-                    matches.push(candidate);
+                    matches.push((candidate, *distance));
                 }
             }
         }
-        matches.sort_unstable_by_key(|candidate| candidate.entity);
+        matches.sort_unstable_by_key(|(candidate, _)| candidate.entity);
         if !line_of_sight {
-            matches.dedup_by_key(|candidate| candidate.entity);
-            return Ok(Value::Array(
-                matches
-                    .into_iter()
-                    .map(|candidate| Value::Entity(candidate.entity))
-                    .collect(),
-            ));
+            if require_consistent_distance {
+                for group in matches.chunk_by(|a, b| a.0.entity == b.0.entity) {
+                    let distance = group[0].1;
+                    if group.iter().any(|(_, other)| *other != distance) {
+                        return Err(EvalError::UnavailableSpatialCandidates);
+                    }
+                }
+            }
+            matches.dedup_by_key(|(candidate, _)| candidate.entity);
+            return Ok(matches
+                .into_iter()
+                .map(|(candidate, distance)| project(candidate.entity, distance, radius))
+                .collect());
         }
 
         // Own only the surviving segments before calling into the host again.
         let mut segments = Vec::new();
-        for group in matches.chunk_by(|a, b| a.entity == b.entity) {
-            let candidate = group[0];
-            if group.iter().any(|row| row.position != candidate.position) {
+        for group in matches.chunk_by(|a, b| a.0.entity == b.0.entity) {
+            let (candidate, distance) = group[0];
+            if group
+                .iter()
+                .any(|(row, _)| row.position != candidate.position)
+            {
                 return Err(EvalError::UnavailableSpatialVisibility);
             }
-            segments.push((candidate.entity, candidate.position));
+            segments.push((candidate.entity, candidate.position, distance));
         }
-        let mut entities = Vec::new();
-        for (entity, position) in segments {
+        let mut hits = Vec::new();
+        for (entity, position, distance) in segments {
             self.charge()?;
             if context
                 .spatial_line_clear(center, position)
                 .ok_or(EvalError::UnavailableSpatialVisibility)?
             {
-                entities.push(Value::Entity(entity));
+                hits.push(project(entity, distance, radius));
             }
         }
-        Ok(Value::Array(entities))
+        Ok(hits)
     }
 
     fn spatial_cone(

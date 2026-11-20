@@ -131,6 +131,29 @@ body snapshot in bundles that use no spatial expressions.
 
 See the [synthetic health contract](../fixtures/behavior/script-health-change-v1.json).
 
+## Apply a radial health change
+
+Set `action_behavior` to `"radial_health"` on a server-only action, or
+declare `"radial_health_action"` for an authored class. Supply an `area`
+object using the ordinary `EntitiesInRadius` expression, a finite nonzero
+numeric `delta` expression, and a valid `m_outPlug`. Team and tag filters,
+cones and static line of sight follow the same query rules. Distances
+come from the room's position sample used for membership.
+
+An optional numeric `edge_scale` expression ranges from zero to one
+and defaults to one. The action scales `delta` linearly from its full
+value at the center to the specified fraction at the edge. A zero-radius
+query applies the full value at the center. A target contributes at most
+one change, and zero changes use no request slots.
+
+The room admits the whole ordered batch against the body's shared request
+limit. The output continues after acceptance or an empty selection.
+Each target's binding is checked again when the room settles its request.
+A target that retires before settlement can expire independently of the
+other requests in that batch.
+
+See the [synthetic radial health contract](../fixtures/behavior/script-radial-health-v1.json).
+
 ## Run an output at a frame interval
 
 Set `state_behavior` to `"interval"` on a server-only state, or

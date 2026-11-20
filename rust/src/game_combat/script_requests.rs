@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{script_init::RoomMessage, vitals::Death};
 use bevy_ecs::entity::Entity;
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 pub(super) const MAX_BODY_SCRIPT_REQUESTS: usize = 64;
 
@@ -21,6 +21,21 @@ pub(crate) struct RoomScriptRequest {
     effect: ScriptEffect,
 }
 
+impl RoomScriptRequest {
+    fn for_target(frame: &RoomSpatialFrame, wire: u32, effect: ScriptEffect) -> Option<Self> {
+        let target = frame.script_targets.get(&wire)?;
+        let supported = match &effect {
+            ScriptEffect::Health(_) => target.health,
+            ScriptEffect::Message(_) => target.messages,
+        };
+        supported.then_some(Self {
+            wire,
+            entity: target.entity,
+            effect,
+        })
+    }
+}
+
 enum ScriptEffect {
     Health(HealthEffect),
     Message(RoomMessage),
@@ -31,15 +46,42 @@ pub(crate) struct RoomScriptRequests(Vec<RoomScriptRequest>);
 
 impl RoomScriptRequests {
     pub(crate) fn queue_health(&mut self, frame: &RoomSpatialFrame, wire: u32, delta: f64) -> bool {
-        if !delta.is_finite() || delta == 0.0 {
+        let Some(effect) = HealthEffect::from_delta(delta) else {
             return false;
-        }
-        let effect = if delta < 0.0 {
-            HealthEffect::Damage(-delta)
-        } else {
-            HealthEffect::Heal(delta)
         };
         self.queue(frame, wire, ScriptEffect::Health(effect))
+    }
+
+    /// Admit every target into the body outbox, or leave existing work intact.
+    pub(crate) fn queue_health_changes(
+        &mut self,
+        frame: &RoomSpatialFrame,
+        changes: &[(u32, f64)],
+    ) -> bool {
+        if changes.is_empty() {
+            return true;
+        }
+        if changes.len() > MAX_BODY_SCRIPT_REQUESTS.saturating_sub(self.0.len()) {
+            return false;
+        }
+        let mut targets = HashSet::with_capacity(changes.len());
+        let mut staged = Vec::with_capacity(changes.len());
+        for &(wire, delta) in changes {
+            if !targets.insert(wire) {
+                return false;
+            }
+            let Some(effect) = HealthEffect::from_delta(delta) else {
+                return false;
+            };
+            let Some(request) =
+                RoomScriptRequest::for_target(frame, wire, ScriptEffect::Health(effect))
+            else {
+                return false;
+            };
+            staged.push(request);
+        }
+        self.0.extend(staged);
+        true
     }
 
     pub(crate) fn queue_message(
@@ -58,21 +100,10 @@ impl RoomScriptRequests {
         if self.0.len() >= MAX_BODY_SCRIPT_REQUESTS {
             return false;
         }
-        let Some(target) = frame.script_targets.get(&wire) else {
+        let Some(request) = RoomScriptRequest::for_target(frame, wire, effect) else {
             return false;
         };
-        let supported = match &effect {
-            ScriptEffect::Health(_) => target.health,
-            ScriptEffect::Message(_) => target.messages,
-        };
-        if !supported {
-            return false;
-        }
-        self.0.push(RoomScriptRequest {
-            wire,
-            entity: target.entity,
-            effect,
-        });
+        self.0.push(request);
         true
     }
 
@@ -177,5 +208,56 @@ impl RoomSimulation {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, sync::Arc};
+
+    use super::*;
+    use crate::game_combat::tests::fixture_ground;
+
+    #[test]
+    fn invalid_batches_leave_mixed_outbox_work_and_capacity_intact() {
+        let mut world = bevy_ecs::world::World::new();
+        let mut target = |health, messages| RoomScriptTarget {
+            entity: world.spawn_empty().id(),
+            health,
+            messages,
+        };
+        let frame = RoomSpatialFrame {
+            candidates: Box::default(),
+            entity_facts: None,
+            script_targets: HashMap::from([
+                (1, target(true, false)),
+                (2, target(true, false)),
+                (3, target(false, true)),
+            ]),
+            ground: Arc::new(fixture_ground()),
+        };
+        let mut outbox = RoomScriptRequests::default();
+        let message = RoomMessage {
+            id: 71,
+            parameters: Default::default(),
+        };
+        assert!(outbox.queue_message(&frame, 3, message));
+
+        for invalid in [(0, -2.0), (3, -2.0), (2, f64::NAN), (2, 0.0), (1, 2.0)] {
+            assert!(!outbox.queue_health_changes(&frame, &[(1, -1.0), invalid]));
+            assert_eq!(outbox.0.len(), 1);
+        }
+        for _ in 0..MAX_BODY_SCRIPT_REQUESTS - 2 {
+            assert!(outbox.queue_health(&frame, 1, -1.0));
+        }
+        assert!(!outbox.queue_health_changes(&frame, &[(1, -1.0), (2, 2.0)]));
+        assert_eq!(outbox.0.len(), MAX_BODY_SCRIPT_REQUESTS - 1);
+        assert!(outbox.queue_health_changes(&frame, &[(2, 2.0)]));
+        assert!(outbox.queue_health_changes(&frame, &[]));
+
+        let queued = outbox.take();
+        assert_eq!(queued.len(), MAX_BODY_SCRIPT_REQUESTS);
+        assert!(matches!(queued[0].effect, ScriptEffect::Message(_)));
+        assert_eq!(queued.last().unwrap().wire, 2);
     }
 }

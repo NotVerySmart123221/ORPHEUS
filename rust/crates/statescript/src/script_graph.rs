@@ -45,6 +45,7 @@ enum ActionBehavior {
     LocalMessage,
     RoomMessage,
     HealthChange,
+    RadialHealth,
 }
 
 #[derive(Debug, Deserialize)]
@@ -128,6 +129,10 @@ impl Node {
 
     pub(crate) fn declares_health_change_action(&self) -> bool {
         matches!(self.action_behavior, Some(ActionBehavior::HealthChange))
+    }
+
+    pub(crate) fn declares_radial_health_action(&self) -> bool {
+        matches!(self.action_behavior, Some(ActionBehavior::RadialHealth))
     }
 
     pub(crate) fn game_message_id(&self) -> Option<u64> {
@@ -406,6 +411,7 @@ impl Graph {
                     ActionBehavior::LocalMessage => ("local message action", &["m_outPlug"]),
                     ActionBehavior::RoomMessage => ("room message action", &["m_outPlug"]),
                     ActionBehavior::HealthChange => ("health change action", &["m_outPlug"]),
+                    ActionBehavior::RadialHealth => ("radial health action", &["m_outPlug"]),
                 };
                 let state_slot = authored_state_slots.contains_key(&node.pos);
                 if !node.server_only
@@ -468,6 +474,22 @@ impl Graph {
                             }
                         }
                         "ActionHealthChange".into()
+                    }
+                    ActionBehavior::RadialHealth => {
+                        if node
+                            .field("area")
+                            .and_then(|area| area.get("$"))
+                            .and_then(Value::as_str)
+                            != Some("EntitiesInRadius")
+                            || node.field("delta").is_none_or(Value::is_null)
+                            || node.field("edge_scale").is_some_and(Value::is_null)
+                        {
+                            return Err(invalid(format!(
+                                "{action} in graph {} at node {} requires an EntitiesInRadius area and a delta expression, with an optional edge_scale expression",
+                                self.index, node.pos
+                            )));
+                        }
+                        "ActionRadialHealth".into()
                     }
                 };
             }
@@ -770,6 +792,7 @@ enum AuthoredClassBehavior {
     LocalMessageAction,
     RoomMessageAction,
     HealthChangeAction,
+    RadialHealthAction,
     ClientOnly,
 }
 
@@ -785,6 +808,7 @@ impl AuthoredClassBehavior {
             Self::LocalMessageAction => (false, None, Some(ActionBehavior::LocalMessage)),
             Self::RoomMessageAction => (false, None, Some(ActionBehavior::RoomMessage)),
             Self::HealthChangeAction => (false, None, Some(ActionBehavior::HealthChange)),
+            Self::RadialHealthAction => (false, None, Some(ActionBehavior::RadialHealth)),
             Self::ClientOnly => (true, None, None),
         };
         if (node.client_only && !client_only)
@@ -1656,6 +1680,36 @@ mod tests {
                 .to_string()
                 .contains("must be server-only with no state slot")
         );
+    }
+
+    #[test]
+    fn radial_health_action_requires_a_server_radius_and_delta() {
+        let mut data = fixture();
+        let node = &mut data["graphs"][0]["nodes"][2];
+        node["action_behavior"] = json!("radial_health");
+        node["server_only"] = json!(true);
+        node["fields"] = json!({
+            "area": {"$":"EntitiesInRadius","center":{"$":"EntityPosition","entity":null},"radius":4},
+            "delta": -5,
+            "m_outPlug": {"$":"Plug","links":[]},
+        });
+
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let store = load(&data).unwrap();
+        assert_eq!(store.room_spatial_needs(), RoomSpatialNeeds::Queries);
+        let action = store.graph(42).unwrap().node(2).unwrap();
+        assert!(action.declares_radial_health_action() && action.is_action());
+        assert!(!action.is_networked() && !action.is_state());
+
+        for field in ["area", "delta", "edge_scale", "m_outPlug"] {
+            let mut invalid = data.clone();
+            invalid["graphs"][0]["nodes"][2]["fields"][field] = Value::Null;
+            let error = load(&invalid).unwrap_err().to_string();
+            assert!(error.contains("radial health action in graph 42 at node 2"));
+        }
+        data["graphs"][0]["nodes"][2]["server_only"] = json!(false);
+        let error = load(&data).unwrap_err().to_string();
+        assert!(error.contains("must be server-only with no state slot"));
     }
 
     #[test]

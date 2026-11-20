@@ -472,15 +472,7 @@ fn evaluate_with_budget_and_initial(
             "instruction budget must be positive",
         ));
     }
-    Evaluator {
-        limit: max_steps,
-        steps: 0,
-        folds: Vec::new(),
-        scoped_parameters: Vec::new(),
-        // An unwatched evaluation has no use for the record.
-        in_native: !context.watches_natives(),
-    }
-    .config_with_initial(config, context, 0, initial)
+    Evaluator::new(max_steps, context).config_with_initial(config, context, 0, initial)
 }
 
 /// Native first-config scalar selection with an explicit caller-initial value.
@@ -489,14 +481,18 @@ pub fn evaluate_scalar_with_initial(
     context: &mut impl Context,
     initial: Value,
 ) -> Result<Value, EvalError> {
-    Evaluator {
-        limit: MAX_EXPRESSION_STEPS,
-        steps: 0,
-        folds: Vec::new(),
-        scoped_parameters: Vec::new(),
-        in_native: !context.watches_natives(),
-    }
-    .scalar_config(config, context, 0, initial)
+    Evaluator::new(MAX_EXPRESSION_STEPS, context).scalar_config(config, context, 0, initial)
+}
+
+/// Resolve a radial batch before the caller can admit any health requests.
+pub(crate) fn radial_health_changes(
+    area: &Json,
+    delta: &Json,
+    edge_scale: Option<&Json>,
+    context: &mut impl Context,
+) -> Result<Vec<(u32, f64)>, EvalError> {
+    Evaluator::new(MAX_EXPRESSION_STEPS, context)
+        .radial_health_changes(area, delta, edge_scale, context)
 }
 
 pub fn dynamic(config: &Json) -> Result<Option<Variable>, EvalError> {

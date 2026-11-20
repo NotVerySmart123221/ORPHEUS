@@ -729,6 +729,258 @@ fn authored_health_change_admits_live_operands_before_continuing() {
 }
 
 #[test]
+fn authored_radial_health_queues_one_validated_batch_before_continuing() {
+    use crate::script_expr::SpatialCandidate;
+    use std::cell::RefCell;
+
+    const GRAPH: u32 = 127;
+    const INSTANCE: u16 = 1;
+    const ENTITY: u32 = 4242;
+    const MESSAGE: u64 = 0x91;
+    const CONTINUED: u32 = 5;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Number {
+        Integer(i64),
+        Float(f64),
+        Bool(bool),
+        Nonfinite(String),
+    }
+
+    impl From<Number> for Value {
+        fn from(value: Number) -> Self {
+            match value {
+                Number::Integer(value) => Self::Integer(value),
+                Number::Float(value) => Self::Float(value),
+                Number::Bool(value) => Self::Bool(value),
+                Number::Nonfinite(value) => Self::Float(match value.as_str() {
+                    "infinity" => f64::INFINITY,
+                    "nan" => f64::NAN,
+                    _ => panic!("unknown nonfinite fixture value {value}"),
+                }),
+            }
+        }
+    }
+
+    type Candidate = (u32, [f64; 3], Option<u8>);
+    type Batch = Vec<(u32, f64)>;
+
+    #[derive(Deserialize)]
+    struct Step {
+        name: String,
+        center: [f64; 3],
+        radius: Number,
+        delta: Number,
+        edge_scale: Option<Number>,
+        accept: Option<bool>,
+        #[serde(default)]
+        extra_candidates: Vec<Candidate>,
+        unavailable_ray: Option<[f64; 3]>,
+    }
+
+    #[derive(Deserialize)]
+    struct Input {
+        bundle: Json,
+        candidates: Vec<Candidate>,
+        blocked: [f64; 3],
+        steps: Vec<Step>,
+    }
+
+    #[derive(Deserialize)]
+    struct Expected {
+        batch: Option<Batch>,
+        continued: bool,
+    }
+
+    #[derive(Deserialize)]
+    struct RadialHealthContract {
+        schema_version: u8,
+        case_id: String,
+        evidence: String,
+        input: Input,
+        expected: Vec<Expected>,
+    }
+
+    #[derive(Default)]
+    struct RadialHealthWorld {
+        center: [f64; 3],
+        center_reads: usize,
+        candidates: Vec<SpatialCandidate>,
+        blocked: [f64; 3],
+        unavailable_ray: Option<[f64; 3]>,
+        rays: RefCell<Vec<[f64; 3]>>,
+        accept: bool,
+        attempts: Vec<(Site, Batch)>,
+        accepted: Vec<(Site, Batch)>,
+    }
+
+    impl World for RadialHealthWorld {
+        fn entity_variable(&mut self, _: u32, _: u32) -> Option<Value> {
+            None
+        }
+
+        fn position(&mut self, entity: u32) -> Option<[f64; 3]> {
+            // The area origin is live. Recipient positions must come from the room snapshot.
+            assert_eq!(entity, ENTITY);
+            self.center_reads += 1;
+            Some(self.center)
+        }
+
+        fn spatial_candidates(&self) -> Option<&[SpatialCandidate]> {
+            Some(&self.candidates)
+        }
+
+        fn spatial_line_clear(&self, origin: [f64; 3], target: [f64; 3]) -> Option<bool> {
+            assert_eq!(origin, self.center);
+            assert_ne!(
+                target,
+                [0.0, 0.0, -1.0],
+                "ally must be filtered before tracing"
+            );
+            self.rays.borrow_mut().push(target);
+            (self.unavailable_ray != Some(target)).then_some(target != self.blocked)
+        }
+
+        fn queue_health_change(&mut self, _: Site, _: u32, _: f64) -> bool {
+            panic!("radial requests must use the batch path");
+        }
+
+        fn queue_health_changes(&mut self, site: Site, changes: &[(u32, f64)]) -> bool {
+            let batch = (site, changes.to_vec());
+            if self.accept {
+                self.accepted.push(batch.clone());
+            }
+            self.attempts.push(batch);
+            self.accept
+        }
+    }
+
+    let contract: RadialHealthContract = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/script-radial-health-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    assert_eq!(contract.case_id, "script-radial-health.synthetic.v1");
+    assert_eq!(contract.evidence, "synthetic-rust");
+    let Input {
+        bundle,
+        candidates,
+        blocked,
+        steps,
+    } = contract.input;
+    assert_eq!(steps.len(), contract.expected.len());
+
+    let mut inline = bundle.clone();
+    inline.as_object_mut().unwrap().remove("authored_classes");
+    let node = &mut inline["graphs"][0]["nodes"][1];
+    node["class"] = json!("authored.radial_inline");
+    node["server_only"] = json!(true);
+    node["action_behavior"] = json!("radial_health");
+    node["fields"].as_object_mut().unwrap().remove("edge_scale");
+
+    let mut world = RadialHealthWorld {
+        blocked,
+        ..Default::default()
+    };
+    let mut start = |bundle: Json| {
+        let graphs =
+            Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+        let node = graphs.graph(GRAPH).unwrap().node(1).unwrap();
+        assert!(node.server_only && !node.is_networked());
+        Component::start(
+            graphs,
+            ENTITY,
+            Variables::from([(1, Value::Entity(ENTITY))]),
+            vec![Root::listener(INSTANCE, GRAPH, None)],
+            0,
+            &mut world,
+            MAX_INIT_WORK,
+        )
+        .unwrap()
+    };
+    let mut declared = start(bundle);
+    let mut default_scale = start(inline);
+    assert!(world.attempts.is_empty());
+
+    let site = Site {
+        entity: ENTITY,
+        instance: INSTANCE,
+        graph: GRAPH,
+        node: Some(1),
+    };
+    for (step, expected) in steps.into_iter().zip(contract.expected) {
+        world.center = step.center;
+        world.center_reads = 0;
+        world.accept = step.accept.unwrap_or(true);
+        world.unavailable_ray = step.unavailable_ray;
+        world.candidates = candidates
+            .iter()
+            .copied()
+            .chain(step.extra_candidates)
+            .map(|(entity, position, team)| SpatialCandidate {
+                entity,
+                position,
+                team,
+            })
+            .collect();
+        let component = if step.edge_scale.is_some() {
+            &mut declared
+        } else {
+            &mut default_scale
+        };
+        for (id, value) in [
+            (2, step.radius.into()),
+            (3, step.delta.into()),
+            (4, step.edge_scale.map_or(Value::Null, Into::into)),
+            (CONTINUED, Value::Bool(false)),
+        ] {
+            component
+                .set_entity_variable(id, value, &mut world)
+                .unwrap();
+        }
+        assert_eq!(
+            component
+                .queue_message(INSTANCE, MESSAGE, Variables::new())
+                .unwrap(),
+            1
+        );
+        component.run_now(&mut world).unwrap();
+
+        let expected_batch = expected.batch.map(|batch| (site, batch));
+        assert_eq!(
+            std::mem::take(&mut world.attempts).as_slice(),
+            expected_batch.as_slice(),
+            "{}",
+            step.name
+        );
+        let expected_accepted = expected_batch.filter(|_| world.accept);
+        assert_eq!(
+            std::mem::take(&mut world.accepted).as_slice(),
+            expected_accepted.as_slice(),
+            "{}",
+            step.name
+        );
+        let snapshot = component.snapshot().unwrap();
+        assert_eq!(
+            snapshot.variables[&CONTINUED],
+            Value::Bool(expected.continued),
+            "{}",
+            step.name
+        );
+
+        if expected.continued || expected_accepted.is_some() {
+            assert_eq!(world.center_reads, 1, "{}", step.name);
+        }
+        let rays = std::mem::take(world.rays.get_mut());
+        if let Some(unavailable) = step.unavailable_ray {
+            assert!(rays.contains(&unavailable), "{}", step.name);
+        }
+    }
+}
+
+#[test]
 fn authored_interval_composes_with_live_health_requests_until_aborted() {
     const GRAPH: u32 = 113;
     const INSTANCE: u16 = 1;

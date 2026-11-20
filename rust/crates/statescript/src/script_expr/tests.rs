@@ -2063,6 +2063,69 @@ fn authored_room_predicates_share_radius_relation_and_tag_checks() {
 }
 
 #[test]
+fn radial_health_uses_measured_distance_and_preserves_ordinary_duplicate_rules() {
+    struct Host(Vec<SpatialCandidate>);
+
+    impl Context for Host {
+        fn variable(&mut self, _: Variable) -> Value {
+            Value::Vector([0.0; 3])
+        }
+
+        fn spatial_candidates(&mut self) -> Option<&[SpatialCandidate]> {
+            Some(&self.0)
+        }
+    }
+
+    let candidate = |entity, x| SpatialCandidate {
+        entity,
+        position: [x, 0.0, 0.0],
+        team: None,
+    };
+    let mut host = Host(vec![
+        candidate(29, 8.0),
+        candidate(19, 4.0),
+        candidate(13, 0.0),
+        candidate(19, 4.0),
+    ]);
+    let mut area = json!({
+        "$":"EntitiesInRadius",
+        "center":variable(1, Scope::Instance),
+        "radius":8,
+    });
+    assert_eq!(
+        radial_health_changes(&area, &json!(-32), Some(&json!(0.25)), &mut host),
+        Ok(vec![(13, -32.0), (19, -20.0), (29, -8.0)])
+    );
+    assert_eq!(
+        radial_health_changes(&area, &json!(3.5), Some(&json!(0)), &mut host),
+        Ok(vec![(13, 3.5), (19, 1.75)])
+    );
+    assert_eq!(
+        radial_health_changes(&area, &json!(1), None, &mut host),
+        Ok(vec![(13, 1.0), (19, 1.0), (29, 1.0)])
+    );
+    area["radius"] = json!(0);
+    assert_eq!(
+        radial_health_changes(&area, &json!(1), Some(&json!(0)), &mut host),
+        Ok(vec![(13, 1.0)])
+    );
+    area["radius"] = json!(8);
+    host.0.push(candidate(19, 5.0));
+    assert_eq!(
+        radial_health_changes(&area, &json!(1), None, &mut host),
+        Err(EvalError::UnavailableSpatialCandidates)
+    );
+    assert_eq!(
+        evaluate(&area, &mut host),
+        Ok(Value::Array(vec![
+            Value::Entity(13),
+            Value::Entity(19),
+            Value::Entity(29)
+        ]))
+    );
+}
+
+#[test]
 fn authored_radius_query_filters_and_bounds_spatial_candidates() {
     type CandidateRows = Vec<(u32, [f64; 3])>;
     type RelationRows = Vec<(u32, [f64; 3], Option<u8>)>;

@@ -12,6 +12,18 @@ pub(super) enum HealthEffect {
     Heal(f64),
 }
 
+impl HealthEffect {
+    pub(super) fn from_delta(delta: f64) -> Option<Self> {
+        if !delta.is_finite() || delta == 0.0 {
+            None
+        } else if delta < 0.0 {
+            Some(Self::Damage(-delta))
+        } else {
+            Some(Self::Heal(delta))
+        }
+    }
+}
+
 impl RoomSimulation {
     /// Return whether this room owns the target, including a dead or immune body.
     pub(super) fn settle_health(
@@ -148,5 +160,58 @@ mod tests {
         assert!(!requests.queue_health(frame, target, -1.0));
         assert_eq!(requests.take().len(), MAX_BODY_SCRIPT_REQUESTS);
         assert!(requests.queue_health(frame, target, -1.0));
+    }
+
+    #[test]
+    fn admitted_health_batches_keep_order_and_skip_replaced_targets_at_settlement() {
+        use crate::game_combat::BotState;
+
+        let bots = fixture_bots();
+        let first = bots[0].entity;
+        let second = bots[1].entity;
+        let mut room = RoomSimulation::new(bots).unwrap();
+        room.enable_spatial_queries(
+            false,
+            Arc::new(fixture_ground()),
+            crate::script_graph::RoomSpatialNeeds::Queries,
+        );
+        let mut requests = RoomScriptRequests::default();
+        let tick = 3;
+        let now = Duration::from_millis(48);
+        room.prepare_spatial_frame(tick).unwrap();
+        let frame = &room.spatial_frame.as_ref().unwrap().1;
+        assert!(requests.queue_health_changes(frame, &[(second, -20.0), (first, -10.0)]));
+        assert_eq!(room.body_healths().unwrap()[&first], 100.0);
+        assert_eq!(room.body_healths().unwrap()[&second], 100.0);
+        for request in requests.take() {
+            room.settle_script_request(request, 7, tick, now).unwrap();
+        }
+        assert_eq!(
+            room.take_scripted_health()
+                .into_iter()
+                .map(|update| update.entity)
+                .collect::<Vec<_>>(),
+            [second, first],
+        );
+
+        room.prepare_spatial_frame(tick + 1).unwrap();
+        let frame = &room.spatial_frame.as_ref().unwrap().1;
+        assert!(requests.queue_health_changes(frame, &[(second, 10.0), (first, -5.0)]));
+        // Model replacement between admission and settlement while keeping the public ID.
+        let previous = room.by_wire[&second];
+        let body = room.world.entity_mut(previous).take::<BotState>().unwrap();
+        assert!(room.world.despawn(previous));
+        let replacement = room.world.spawn(body).id();
+        assert_ne!(previous, replacement);
+        assert_eq!(room.by_wire.insert(second, replacement), Some(previous));
+        for request in requests.take() {
+            room.settle_script_request(request, 7, tick + 1, now)
+                .unwrap();
+        }
+        assert_eq!(room.body_healths().unwrap()[&first], 85.0);
+        assert_eq!(room.body_healths().unwrap()[&second], 80.0);
+        let updates = room.take_scripted_health();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].entity, first);
     }
 }

@@ -1905,6 +1905,31 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         Ok(true)
     }
 
+    fn request_radial_health(&mut self, id: u16, node: &Node, caller: Option<StateKey>) -> bool {
+        let site = self.site(id, node);
+        let result = self.with_instance_context(site, caller, |context| {
+            script_expr::radial_health_changes(
+                field(&node.fields, "area"),
+                field(&node.fields, "delta"),
+                node.field("edge_scale"),
+                context,
+            )
+        });
+        let changes = match result {
+            Ok(changes) => changes,
+            Err(error) => {
+                self.report(site, Issue::Expression(error));
+                return false;
+            }
+        };
+        if changes.is_empty() || self.world.queue_health_changes(site, &changes) {
+            true
+        } else {
+            self.report(site, Issue::UnsupportedField("radial health request"));
+            false
+        }
+    }
+
     pub(in crate::script_init) fn game_message_parameters(
         &mut self,
         id: u16,
@@ -2005,7 +2030,22 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         watcher: Option<StateKey>,
         initial: Value,
         scalar: bool,
-    ) -> Result<Value, script_expr::EvalError> {
+    ) -> Result<Value, EvalError> {
+        self.with_instance_context(site, watcher, |context| {
+            if scalar {
+                script_expr::evaluate_scalar_with_initial(config, context, initial)
+            } else {
+                script_expr::evaluate_with_initial(config, context, initial)
+            }
+        })
+    }
+
+    fn with_instance_context<T>(
+        &mut self,
+        site: Site,
+        watcher: Option<StateKey>,
+        evaluate: impl FnOnce(&mut InstanceContext<'_, W>) -> Result<T, EvalError>,
+    ) -> Result<T, EvalError> {
         let mut context = InstanceContext {
             machine: self.machine,
             world: self.world,
@@ -2017,11 +2057,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             read_native: false,
             untrusted_native: false,
         };
-        let result = if scalar {
-            script_expr::evaluate_scalar_with_initial(config, &mut context, initial)
-        } else {
-            script_expr::evaluate_with_initial(config, &mut context, initial)
-        };
+        let result = evaluate(&mut context);
         let reads = context.reads;
         let foreign_reads = context.foreign_reads;
         let read_native = context.read_native;

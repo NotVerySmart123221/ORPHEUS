@@ -285,6 +285,10 @@ pub trait World {
     fn queue_health_change(&mut self, _site: Site, _target: u32, _delta: f64) -> bool {
         false
     }
+    /// Admit every signed change together or leave the host queue unchanged.
+    fn queue_health_changes(&mut self, _site: Site, _changes: &[(u32, f64)]) -> bool {
+        false
+    }
     fn recharge_shields(&mut self, _site: Site, _amount: f64) -> bool {
         false
     }

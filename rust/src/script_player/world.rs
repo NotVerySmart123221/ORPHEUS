@@ -337,6 +337,15 @@ impl World for BodyWorld {
             .is_some_and(|frame| self.script_requests.queue_health(frame, target, delta))
     }
 
+    fn queue_health_changes(&mut self, site: Site, changes: &[(u32, f64)]) -> bool {
+        if !self.is_player_site(site) {
+            return false;
+        }
+        self.spatial_frame
+            .as_deref()
+            .is_some_and(|frame| self.script_requests.queue_health_changes(frame, changes))
+    }
+
     fn queue_room_message(&mut self, site: Site, target: u32, message: RoomMessage) -> bool {
         if !self.is_player_site(site) {
             return false;

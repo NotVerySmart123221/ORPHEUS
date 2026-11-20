@@ -952,6 +952,17 @@ impl World for EnemyWorld<'_> {
         })
     }
 
+    fn queue_health_changes(&mut self, site: Site, changes: &[(u32, f64)]) -> bool {
+        if site.entity != self.binding.body {
+            return false;
+        }
+        self.binding.spatial_frame.as_deref().is_some_and(|frame| {
+            self.control_records
+                .script_requests
+                .queue_health_changes(frame, changes)
+        })
+    }
+
     fn queue_room_message(&mut self, site: Site, target: u32, message: RoomMessage) -> bool {
         if site.entity != self.binding.body {
             return false;
