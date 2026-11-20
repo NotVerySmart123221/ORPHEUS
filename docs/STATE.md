@@ -62,6 +62,19 @@ Both 339-tick Windows schedules matched the preceding input and
 observation hashes, with the same four RNG differences in strict
 comparison.
 
+At `c0fe55ad`, the synthetic fault regression confirmed that a halted
+target tracker releases its child's registered host effect exactly once
+and discards the due timer. The two same-pack actor reports retained
+49 blocking sites, 10 independent passes, and one ordinary Practice
+Range attachment. The #72 capture matched all 476 observed sites.
+
+Seven actor probes have one blocking site each. Mercy's tag query needs
+the tagged placement inventory and live actor tags. Orisa and Sigma
+still hit persistent message registration. Baptiste cannot read a
+controller variable. Zarya's deployable count, Torbjörn's hardpoint
+query, and Moira's voice stimulus each lack their supporting host
+service or context.
+
 | Workflow | Python reference | Rust implementation | Open client or parity gap |
 | --- | --- | --- | --- |
 | **Login, Profiles & Lobby** | Battle.net/JAM auth, profiles, settings (`22200`–`22204`), queues, Windows launcher + TLS relay. | Native BNet/JAM lobby, `profile-settings-v1` (CI verified), encrypted UDP seat handoff. | Standalone Rust launcher & public client connection flow open. |

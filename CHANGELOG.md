@@ -6,7 +6,7 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
-- Allowed a halted StateScript component to tear down its registered effects within the existing work budget. The synthetic target-tracking regression reproduces a work-budget fault with a live child, then checks effect removal, cancellation of a due timer, and idempotent teardown.
+- Allowed a halted StateScript component to tear down its registered effects within the existing work budget. The synthetic target-tracking regression reproduces a work-budget fault with a live child, then checks effect removal, cancellation of a due timer, and idempotent teardown. The StateScript and native library suites passed with 203 and 363 tests respectively. Formatting, the locked workspace check, and Clippy with script coverage passed. The same-pack matrix retained 49 blockers and 10 independent passes, and the #72 capture matched.
 
 - Added explicit projected message topics for authored bundles. The loader requires a matching client receiver and rejects conflicting server receivers. Validated self-targeted send states use the existing codec and lifecycle. The VM excludes declared topics from server dispatch. Synthetic fixtures reproduce the missing registration capability and check owner and observer projection and cleanup. All-target workspace tests with script coverage, Clippy with Inspector and script coverage, and the Python script suite passed. The existing prepared pack at `8fbc2fa3` retained 49 blockers and 10 of 32 independent passes. All 476 #72 observation sites matched.
 
