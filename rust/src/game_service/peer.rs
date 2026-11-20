@@ -179,6 +179,12 @@ impl Peer {
         }
     }
 
+    pub(super) fn death_notice_pending(&self, victim: BodyId) -> bool {
+        self.combat_ui.notices.iter().any(
+            |pending| matches!(&pending.audience, CombatAudience::Victim(body) if *body == victim),
+        )
+    }
+
     fn queue_notice(&mut self, notice: CombatNotice, audience: CombatAudience) {
         if self.combat_ui.notices.len() == MAX_PENDING_COMBAT_NOTICES {
             self.combat_ui.notices.pop_front();

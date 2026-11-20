@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Add opt-in player respawn delays by map and mode. Respawn uses the dead body's generation and existing hero, skin, and replacement path. Manual replacements cancel the old request. Shared regression and original-client timing verification remain open.
+
 - Load optional per-map lethal volumes and settle deaths through room health without assigning a killer. Add synthetic checks for safe lower positions and the existing training bot replacement deadline. Verified map regions, automatic player respawn, and shared regression remain open.
 
 - Add an authored point relocation action with destination capsule clearance for players and NPCs. It shares the motion queue and owner corrections with swept displacement. Added original fixtures for placement, queue admission, and correction. Shared-branch verification is pending.
