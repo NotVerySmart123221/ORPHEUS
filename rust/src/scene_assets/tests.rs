@@ -1,6 +1,8 @@
 use super::*;
 
 mod junkenstein;
+#[cfg(feature = "inspector")]
+mod script_coverage;
 
 #[test]
 #[ignore = "requires separately prepared 104319 Junkenstein runtime"]
@@ -107,7 +109,15 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
     use crate::script_wire::Value;
     use std::collections::BTreeSet;
 
+    const SESSION_FRAMES: u32 = 900;
     let runtime = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    #[cfg(feature = "inspector")]
+    let coverage = script_coverage::Capture::from_env(&runtime);
+    #[cfg(not(feature = "inspector"))]
+    assert!(
+        std::env::var_os("ORPHEUS_SCRIPT_COVERAGE").is_none(),
+        "script coverage capture requires the inspector feature"
+    );
     let assets = SceneAssets::load(runtime).unwrap();
     let scene = assets.prepare(GameMap::practice_range()).unwrap();
     assert!(scene.movement_ready());
@@ -235,7 +245,7 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
         let mut mover = scene.player_spawn_mover(hero.body, 0).unwrap();
         let mut owner = Vec::new();
         let mut owner_hud = Vec::new();
-        for t in 1..=900 {
+        for t in 1..=SESSION_FRAMES {
             let frame = FIRST_TICK + t;
             let (forward, buttons) = match t {
                 188..=281 | 520..=540 | 600..=640 => (0, 1),
@@ -341,7 +351,7 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
                 }
             }
         }
-        assert_eq!(streams[0].0.command_frame(), FIRST_TICK + 900);
+        assert_eq!(streams[0].0.command_frame(), FIRST_TICK + SESSION_FRAMES);
         // The owner frames carry the Sprint HUD flag the client shows.
         assert_eq!(owner_hud, [(1, None), (700, Some(1)), (761, Some(0))]);
         // The frozen reference produces the same rifle ammo and reload
@@ -376,7 +386,16 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
         if let Some(path) = probe_path {
             std::fs::write(path, serde_json::to_vec(&probe).unwrap()).unwrap();
         }
+        #[cfg(feature = "inspector")]
+        if let Some(coverage) = coverage {
+            coverage.save(hero.guid, SESSION_FRAMES, runtime.snapshot().unwrap());
+        }
     } else {
+        #[cfg(feature = "inspector")]
+        assert!(
+            coverage.is_none(),
+            "script coverage requires a target-tagged pack"
+        );
         assert!(
             std::env::var_os("ORPHEUS_SPRINT_WIRE_PROBE").is_none(),
             "Sprint wire probe requires a target-tagged pack"

@@ -112,6 +112,50 @@ prepared schema, cross-graph input, and runtime ordering before treating
 it as a missing initializer. The report omits source expressions and
 default values.
 
+### Collect a headless coverage baseline
+
+Run the existing 900-frame owner test with the Inspector feature and a
+local prepared pack that includes target tags. Set a fresh output path
+and record the full revision of the checkout used for the run.
+
+```powershell
+$env:ORPHEUS_RUNTIME_DIR = 'C:\private\runtime'
+$env:ORPHEUS_SCRIPT_COVERAGE = 'C:\private\owner-coverage.json'
+$env:ORPHEUS_SCRIPT_COVERAGE_REVISION = git rev-parse HEAD
+cargo test --locked -p orpheus --features inspector --lib stock_soldier_owner_session_idles_fires_reloads_and_sprints -- --ignored
+```
+
+Join observations with the exact graph bundle and a local hero catalog
+to identify graph position, RID, state slot, and class.
+
+```text
+python scripts/summarize_statescript_coverage.py --graph-bundle path/to/game_graphs_174.json.gz --hero-catalog path/to/game_heroes_174.json --observation path/to/owner-coverage.json --output path/to/new-coverage.json
+```
+
+The input catalog supplies direct body roots. An observation can also
+identify a child graph. Use repeated `--observation` options for separate
+runs. With no observation, the report lists catalog roots and marks their
+nodes as having no sampled scenario. Review scope skips, registration
+rejections, and unsupported sites separately. Passed dispatch scope
+shows an observed target. Missing rows in a capped observation have
+unknown coverage. The scripted inputs exercise one hero and one path.
+Record new scenarios before using the report to prioritize other
+heroes or declaring a path covered.
+
+### Generate a synthetic test scaffold
+
+```text
+python scripts/generate_statescript_scaffold.py --field-contracts path/to/field-contracts.json --output path/to/new-scaffold.json
+```
+
+The scaffold contains an original server-only plain state and example
+fields for allowlisted operand kinds. It uses invented identifiers,
+values and expected behavior. Use `--family` or `--class` to select
+operand kinds for an exact family or class in the private report. The
+selected names remain private. Operand examples are inert. Review the
+draft, add the behavior to verify, and register it with a Rust contract
+consumer before counting it as a regression test.
+
 ## Declare an ordinary server state
 
 An authored node can opt into the plain state lifecycle with

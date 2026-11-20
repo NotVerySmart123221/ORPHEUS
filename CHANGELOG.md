@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added a private StateScript coverage baseline from Inspector observations of the existing 900-frame headless owner test. The report joins dispatch locations to prepared graph positions and records capped and unsampled scenarios. Added a shape-only generator for original plain-state fixture drafts. The Inspector test build passed, and script unittest discovery passed with 19 tests and four skips.
+
 - Added private wait timing and graph variable reports. They separate literal bounds from dynamic operands and list read and write sites, schema declarations, and message bindings. Prepared public schemas add a separate default-slot check. Workspace check passed, and script unittest discovery passed with 12 tests and four skips. The ZIP and extracted directory produced identical reports for 3,186 wait sites and 1,587 graphs.
 
 - Added private field-shape and GameMessage reports for local StateScript listings. The field report separates rendered constructor shapes from exact prepared-state observations and supports capability grouping. The message catalog records endpoint and parameter evidence with explicit dynamic and unresolved entries. Workspace check and script unittest discovery passed (12 passed, four skipped). The 1,587-graph ZIP and extracted directory produced identical reports with 11,707 prepared state matches and 1,419 literal message IDs.
