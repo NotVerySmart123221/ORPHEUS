@@ -10,6 +10,10 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Applied the settled target's tags, affiliation and liveness to direct `EntityMatches` filters in a health event. A lethal impact retains its original target's qualification after the body retires. Source membership and spatial searches still use the current room frame. Validated in shared candidate `29df13cb`.
 
+- Added field-driven decay for named temporary shields. The state samples the authored rate on the VM clock and finishes at zero. Decay uses the shared grant-draining routine independently from attributed weapon hits. Synthetic lifecycle and native settlement regressions are pending integration validation.
+
+- Implemented shared named temporary shield grants, depletion, and removal. The charge bridge now projects actual damage drained from these shields as typed pool records. Added synthetic lifecycle and settlement coverage and a prepared probe for the stock 0044 charge receiver. Integration validation pending.
+
 - Keep the settled target context when an immediate same-body GameMessage carries the target as a typed entity parameter. The synthetic contract checks relayed requests across replacement and independent messages on the same VM frame. Integration validation pending.
 
 - Use actual player damage for attacker credit and hit notices. The settled-hit contract compares an overkill impact against the same capped result in the deferred event. A prepared probe checks the stock damage receiver's typed pool deductions, floor and cap. Integration validation pending.

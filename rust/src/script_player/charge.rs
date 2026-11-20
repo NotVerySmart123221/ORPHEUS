@@ -10,6 +10,7 @@ use crate::{
     script_expr::{Scope, Variable},
     script_init::State,
     script_wire::{Value, Variables},
+    vitals::NamedPoolLoss,
 };
 
 use super::{
@@ -118,8 +119,7 @@ impl PlayerBodyRuntime {
                         .collect(),
                 ),
             ),
-            // The existing credit projection has no separate mitigation entries.
-            (0x624, Value::Array(Vec::new())),
+            (0x624, named_pool_records(&damage.named_pool_losses)),
         ]);
         self.component
             .queue_message(instance, binding.damage_message, parameters)
@@ -128,5 +128,58 @@ impl PlayerBodyRuntime {
         let result = self.component.run_now(&mut self.world).map_err(unsupported);
         self.world.damage_credit = None;
         result
+    }
+}
+
+fn named_pool_records(losses: &[NamedPoolLoss]) -> Value {
+    Value::Array(
+        losses
+            .iter()
+            .filter_map(|loss| {
+                let amount = f64::from(loss.amount as f32);
+                (amount.is_finite() && amount > 0.0).then(|| {
+                    Value::Map(vec![
+                        (Value::Integer(16056), Value::Asset(loss.identifier)),
+                        (Value::Integer(499), Value::Float(amount)),
+                    ])
+                })
+            })
+            .collect(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vitals::{Death, Vitals};
+
+    #[test]
+    fn damage_credit_projects_only_drained_named_pools_in_order() {
+        const FIRST: u64 = 0x0d80_1200_0000_1001;
+        const SECOND: u64 = 0x0d80_3400_0000_1002;
+        let source = Death {
+            time: 0.0,
+            frame: 1,
+            killer: 7,
+        };
+        let mut vitals = Vitals::new(25.0, 0.0, 0.0);
+        assert_eq!(
+            named_pool_records(&vitals.damage(1.0, source).named_pool_losses),
+            Value::Array(Vec::new())
+        );
+        assert!(vitals.add_temporary_shield(FIRST, 3.25, true).is_some());
+        assert!(vitals.add_temporary_shield(SECOND, 4.0, true).is_some());
+        let damage = vitals.damage(5.0, source);
+        assert_eq!(damage.dealt, 5.0);
+        let record = |identifier, amount| {
+            Value::Map(vec![
+                (Value::Integer(16056), Value::Asset(identifier)),
+                (Value::Integer(499), Value::Float(amount)),
+            ])
+        };
+        assert_eq!(
+            named_pool_records(&damage.named_pool_losses),
+            Value::Array(vec![record(FIRST, 3.25), record(SECOND, 1.75)])
+        );
     }
 }

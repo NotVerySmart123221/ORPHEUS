@@ -19,10 +19,17 @@ pub struct Death {
     pub killer: u32,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Damage {
     pub dealt: f64,
     pub killed: bool,
+    pub named_pool_losses: Vec<NamedPoolLoss>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NamedPoolLoss {
+    pub identifier: u64,
+    pub amount: f64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -49,8 +56,71 @@ impl Pool {
 }
 
 #[derive(Debug, PartialEq)]
+struct ShieldGrant {
+    id: u32,
+    maximum: f64,
+    current: f64,
+    stacked: bool,
+}
+
+#[derive(Debug, PartialEq)]
+struct TemporaryShield {
+    identifier: u64,
+    field: usize,
+    grants: Vec<ShieldGrant>,
+}
+
+impl TemporaryShield {
+    fn amount(&self, maximum: bool) -> f64 {
+        self.grants
+            .iter()
+            .map(|grant| {
+                // The state can still observe a depleted grant before cleanup.
+                if !maximum || (grant.stacked && grant.current == 0.0) {
+                    grant.current
+                } else {
+                    grant.maximum
+                }
+            })
+            .sum()
+    }
+
+    fn drain(&mut self, left: &mut f64) -> f64 {
+        let mut taken = 0.0;
+        for grant in &mut self.grants {
+            if *left <= 0.0 {
+                break;
+            }
+            let drain = (*left).min(grant.current);
+            grant.current -= drain;
+            *left -= drain;
+            taken += drain;
+        }
+        taken
+    }
+
+    fn wire(&self) -> [u8; 20] {
+        let maximum = self.amount(true);
+        let id = if maximum > 0.0 {
+            self.identifier as u32
+        } else {
+            0
+        };
+        pool(
+            id,
+            SHIELDS_POOL as u32,
+            maximum as f32,
+            self.amount(false) as f32,
+        )
+    }
+}
+
+#[derive(Debug, PartialEq)]
 pub struct Vitals {
     pools: Vec<Pool>,
+    temporary_shields: Vec<TemporaryShield>,
+    // Preserve explicit zero rows for previously advertised named shields.
+    temporary_fields: u64,
     wave_health: Option<u32>,
     last_id: u32,
     used: u64,
@@ -89,6 +159,8 @@ impl Vitals {
     pub(crate) fn empty() -> Self {
         Self {
             pools: Vec::new(),
+            temporary_shields: Vec::new(),
+            temporary_fields: 0,
             wave_health: None,
             last_id: 0,
             used: 0,
@@ -102,19 +174,8 @@ impl Vitals {
             return None;
         }
         let first = kind as usize * POOLS;
-        let mut field = first;
-        let mut index = self.pools.partition_point(|pool| pool.field < first);
-        while self
-            .pools
-            .get(index)
-            .is_some_and(|pool| pool.field == field)
-        {
-            field += 1;
-            index += 1;
-        }
-        if field >= first + POOLS {
-            return None;
-        }
+        let field = (first..first + POOLS).find(|&field| !self.field_occupied(field))?;
+        let index = self.pools.partition_point(|pool| pool.field < field);
         let id = self.last_id.checked_add(1)?;
         self.pools.insert(
             index,
@@ -126,9 +187,110 @@ impl Vitals {
             },
         );
         self.last_id = id;
+        self.temporary_fields &= !(1 << field);
         self.used |= 1 << field;
         self.changed |= 1 << field;
         Some(id)
+    }
+
+    fn field_occupied(&self, field: usize) -> bool {
+        self.pools
+            .binary_search_by_key(&field, |pool| pool.field)
+            .is_ok()
+            || self
+                .temporary_shields
+                .iter()
+                .any(|shield| shield.field == field)
+    }
+
+    pub(crate) fn add_temporary_shield(
+        &mut self,
+        identifier: u64,
+        amount: f64,
+        stacked: bool,
+    ) -> Option<u32> {
+        if self.death.is_some()
+            || identifier >> 52 != 0x0d8
+            || identifier as u32 == 0
+            || !(0.0 < amount && amount <= f64::from(f32::MAX))
+        {
+            return None;
+        }
+        let existing = self
+            .temporary_shields
+            .iter()
+            .position(|shield| shield.identifier == identifier);
+        if let Some(index) = existing {
+            let shield = &self.temporary_shields[index];
+            if !stacked {
+                if let Some(grant) = shield.grants.iter().find(|grant| !grant.stacked) {
+                    return Some(grant.id);
+                }
+            }
+            if shield.amount(true) + amount > f64::from(f32::MAX) {
+                return None;
+            }
+        }
+        let id = self.last_id.checked_add(1)?;
+        let index = if let Some(index) = existing {
+            index
+        } else {
+            if self
+                .temporary_shields
+                .iter()
+                .any(|shield| shield.identifier as u32 == identifier as u32)
+            {
+                return None;
+            }
+            let first = SHIELDS_POOL * POOLS;
+            let field = (first + 1..first + POOLS).find(|&field| !self.field_occupied(field))?;
+            let index = self
+                .temporary_shields
+                .partition_point(|shield| shield.field < field);
+            self.temporary_shields.insert(
+                index,
+                TemporaryShield {
+                    identifier,
+                    field,
+                    grants: Vec::new(),
+                },
+            );
+            self.temporary_fields |= 1 << field;
+            self.used |= 1 << field;
+            index
+        };
+        let shield = &mut self.temporary_shields[index];
+        shield.grants.push(ShieldGrant {
+            id,
+            maximum: amount,
+            current: amount,
+            stacked,
+        });
+        self.last_id = id;
+        self.changed |= 1 << shield.field;
+        Some(id)
+    }
+
+    pub(crate) fn temporary_shield_current(&self, identifier: u64) -> f64 {
+        self.temporary_shields
+            .iter()
+            .find(|shield| shield.identifier == identifier)
+            .map_or(0.0, |shield| shield.amount(false))
+    }
+
+    /// Return the named pool's remaining shields after a pool-local drain.
+    pub(crate) fn drain_temporary_shield(&mut self, identifier: u64, mut amount: f64) -> f64 {
+        let Some(shield) = self
+            .temporary_shields
+            .iter_mut()
+            .find(|shield| shield.identifier == identifier)
+        else {
+            return 0.0;
+        };
+        if amount.is_finite() && amount > 0.0 && shield.drain(&mut amount) > 0.0 {
+            self.changed |= 1 << shield.field;
+        }
+        shield.amount(false)
     }
 
     pub(crate) fn pool_current(&self, id: u32) -> Option<f64> {
@@ -136,6 +298,13 @@ impl Vitals {
             .iter()
             .find(|pool| pool.id == id)
             .map(|pool| pool.current)
+            .or_else(|| {
+                self.temporary_shields
+                    .iter()
+                    .flat_map(|shield| &shield.grants)
+                    .find(|grant| grant.id == id)
+                    .map(|grant| grant.current)
+            })
     }
 
     pub(crate) fn add_wave_health(&mut self, amount: f64) -> Option<u32> {
@@ -148,21 +317,49 @@ impl Vitals {
     }
 
     pub(crate) fn remove_pool(&mut self, id: u32) -> Option<f64> {
-        let index = self.pools.iter().position(|pool| pool.id == id)?;
-        if self.wave_health == Some(id) {
-            self.wave_health = None;
+        if let Some(index) = self.pools.iter().position(|pool| pool.id == id) {
+            if self.wave_health == Some(id) {
+                self.wave_health = None;
+            }
+            let pool = self.pools.remove(index);
+            self.changed |= 1 << pool.field;
+            return Some(pool.current);
         }
-        let pool = self.pools.remove(index);
-        self.changed |= 1 << pool.field;
-        Some(pool.current)
+        let (index, grant) =
+            self.temporary_shields
+                .iter()
+                .enumerate()
+                .find_map(|(index, shield)| {
+                    shield
+                        .grants
+                        .iter()
+                        .position(|grant| grant.id == id)
+                        .map(|grant| (index, grant))
+                })?;
+        let shield = &mut self.temporary_shields[index];
+        let grant = shield.grants.remove(grant);
+        self.changed |= 1 << shield.field;
+        if shield.grants.is_empty() {
+            self.temporary_shields.remove(index);
+        }
+        Some(grant.current)
     }
 
     pub fn total(&self) -> f64 {
-        self.amount(None, false)
+        self.total_amount(false)
     }
 
     pub fn maximum(&self) -> f64 {
-        self.amount(None, true)
+        self.total_amount(true)
+    }
+
+    fn total_amount(&self, maximum: bool) -> f64 {
+        self.amount(None, maximum)
+            + self
+                .temporary_shields
+                .iter()
+                .map(|shield| shield.amount(maximum))
+                .sum::<f64>()
     }
 
     pub(crate) fn amount(&self, kind: Option<PoolKind>, maximum: bool) -> f64 {
@@ -183,6 +380,21 @@ impl Vitals {
         }
         let mut left = amount;
         let mut dealt = 0.0;
+        let mut named_pool_losses = Vec::new();
+        for shield in &mut self.temporary_shields {
+            let taken = shield.drain(&mut left);
+            if taken > 0.0 {
+                self.changed |= 1 << shield.field;
+                dealt += taken;
+                named_pool_losses.push(NamedPoolLoss {
+                    identifier: shield.identifier,
+                    amount: taken,
+                });
+            }
+            if left <= 0.0 {
+                break;
+            }
+        }
         'damage: for kind in DAMAGE_ORDER {
             if kind == PoolKind::Health {
                 if let Some(id) = self.wave_health {
@@ -234,9 +446,16 @@ impl Vitals {
                     self.changed |= 1 << pool.field;
                 }
             }
+            for shield in self.temporary_shields.drain(..) {
+                self.changed |= 1 << shield.field;
+            }
             self.death = Some(source);
         }
-        Damage { dealt, killed }
+        Damage {
+            dealt,
+            killed,
+            named_pool_losses,
+        }
     }
 
     pub fn heal(&mut self, amount: f64) -> f64 {
@@ -280,7 +499,13 @@ impl Vitals {
     }
 
     pub fn component(&self) -> Component {
-        pool_component(self.pools.iter().map(|pool| (pool.field, pool.wire())))
+        let fields = self
+            .pools
+            .iter()
+            .fold(self.temporary_fields, |fields, pool| {
+                fields | 1 << pool.field
+            });
+        self.encode(fields)
     }
 
     /// Include previously occupied slots so a replacement update still clears them.
@@ -307,10 +532,20 @@ impl Vitals {
             }
             let field = fields.trailing_zeros() as usize;
             fields &= fields - 1;
-            let bytes = self
-                .pools
-                .binary_search_by_key(&field, |pool| pool.field)
-                .map_or([0; 20], |index| self.pools[index].wire());
+            let bytes =
+                if let Ok(index) = self.pools.binary_search_by_key(&field, |pool| pool.field) {
+                    self.pools[index].wire()
+                } else if self.temporary_fields & (1 << field) != 0 {
+                    self.temporary_shields
+                        .iter()
+                        .find(|shield| shield.field == field)
+                        .map_or_else(
+                            || pool(0, SHIELDS_POOL as u32, 0.0, 0.0),
+                            TemporaryShield::wire,
+                        )
+                } else {
+                    [0; 20]
+                };
             Some((field, bytes))
         }))
     }
@@ -379,6 +614,162 @@ mod tests {
     }
 
     #[test]
+    fn named_shields_report_actual_drains_and_replicate_shared_slots() {
+        const FIRST: u64 = 0x0d80_0000_0044_0123;
+        const SECOND: u64 = 0x0d80_0000_0044_0124;
+        const SLOT: usize = SHIELDS_POOL * POOLS + 1;
+        let mut vitals = Vitals::new(100.0, 10.0, 20.0);
+        let shared = vitals.add_temporary_shield(FIRST, 20.0, false).unwrap();
+        assert_eq!(
+            vitals.add_temporary_shield(FIRST, 50.0, false),
+            Some(shared)
+        );
+        let stacked = vitals.add_temporary_shield(FIRST, 15.0, true).unwrap();
+        let other = vitals.add_temporary_shield(SECOND, 25.0, true).unwrap();
+        assert_eq!(
+            vitals.component().fields[SLOT],
+            Some(ComponentValue::Blob20(pool(FIRST as u32, 2, 35.0, 35.0)))
+        );
+        assert_eq!(vitals.total(), 190.0);
+        assert_eq!(vitals.maximum(), 190.0);
+        assert_eq!(vitals.amount(None, false), 130.0);
+        assert_eq!(vitals.amount(Some(PoolKind::Shields), true), 20.0);
+
+        let first = vitals.damage(28.0, HIT);
+        assert_eq!(first.dealt, 28.0);
+        assert_eq!(
+            first.named_pool_losses,
+            [NamedPoolLoss {
+                identifier: FIRST,
+                amount: 28.0
+            }]
+        );
+        assert_eq!(vitals.pool_current(shared), Some(0.0));
+        assert_eq!(vitals.pool_current(stacked), Some(7.0));
+        assert_eq!(vitals.temporary_shield_current(FIRST), 7.0);
+        assert_eq!(vitals.temporary_shield_current(SECOND), 25.0);
+        assert_eq!(vitals.total(), 162.0);
+        assert_eq!(vitals.maximum(), 190.0);
+
+        vitals.clear_changed();
+        let second = vitals.damage(40.0, HIT);
+        assert_eq!(second.dealt, 40.0);
+        assert_eq!(
+            second.named_pool_losses,
+            [
+                NamedPoolLoss {
+                    identifier: FIRST,
+                    amount: 7.0
+                },
+                NamedPoolLoss {
+                    identifier: SECOND,
+                    amount: 25.0
+                },
+            ]
+        );
+        assert_eq!(vitals.pool_current(other), Some(0.0));
+        assert_eq!(vitals.total(), 122.0);
+        assert_eq!(vitals.maximum(), 150.0);
+        let first_wire = Some(ComponentValue::Blob20(pool(FIRST as u32, 2, 20.0, 0.0)));
+        let clear = Some(ComponentValue::Blob20(pool(0, 2, 0.0, 0.0)));
+        let changed = vitals.changed_component().unwrap();
+        assert_eq!(changed.fields[SLOT], first_wire);
+        assert_eq!(changed.fields[SLOT + 1], clear);
+        assert_eq!(vitals.heal(100.0), 8.0);
+        vitals.recharge_shields(100.0);
+        assert_eq!(vitals.total(), 130.0);
+        assert_eq!(vitals.temporary_shield_current(FIRST), 0.0);
+
+        assert_eq!(vitals.remove_pool(shared), Some(0.0));
+        assert_eq!(vitals.remove_pool(stacked), Some(0.0));
+        assert_eq!(vitals.remove_pool(other), Some(0.0));
+        assert_eq!(vitals.changed_component().unwrap().fields[SLOT], clear);
+        vitals.clear_changed();
+        assert_eq!(vitals.component().fields[SLOT], clear);
+        assert_eq!(vitals.cumulative_component().fields[SLOT + 1], clear);
+        assert!(vitals.damage(5.0, HIT).named_pool_losses.is_empty());
+    }
+
+    #[test]
+    fn named_shield_without_base_shield_reserves_the_base_slot_and_clears_on_death() {
+        const ID: u64 = 0x0d80_0000_0044_0123;
+        const BASE_SLOT: usize = SHIELDS_POOL * POOLS;
+        let mut vitals = Vitals::new(10.0, 0.0, 0.0);
+        assert!(vitals.add_temporary_shield(1, 1.0, false).is_none());
+        assert!(vitals.add_temporary_shield(ID, f64::NAN, false).is_none());
+        let grant = vitals.add_temporary_shield(ID, 7.0, true).unwrap();
+        assert_eq!(vitals.component().fields[BASE_SLOT], None);
+        let base = vitals.add_pool(PoolKind::Shields, 2.0, 2.0).unwrap();
+        let damage = vitals.damage(30.0, HIT);
+        assert!(damage.killed);
+        assert_eq!(damage.dealt, 19.0);
+        assert_eq!(
+            damage.named_pool_losses,
+            [NamedPoolLoss {
+                identifier: ID,
+                amount: 7.0
+            }]
+        );
+        assert_eq!(vitals.pool_current(base), Some(0.0));
+        assert_eq!(vitals.pool_current(grant), None);
+        assert_eq!(
+            vitals.component().fields[BASE_SLOT + 1],
+            Some(ComponentValue::Blob20(pool(0, 2, 0.0, 0.0)))
+        );
+    }
+
+    #[test]
+    fn local_named_shield_drain_does_not_count_as_the_next_hit() {
+        const DECAYING: u64 = 0x0d80_0000_0044_0123;
+        const OTHER: u64 = 0x0d80_0000_0044_0124;
+        const BASE_SLOT: usize = SHIELDS_POOL * POOLS;
+        let mut vitals = Vitals::new(100.0, 0.0, 20.0);
+        let first = vitals.add_temporary_shield(DECAYING, 5.0, false).unwrap();
+        let second = vitals.add_temporary_shield(DECAYING, 7.0, true).unwrap();
+        vitals.add_temporary_shield(OTHER, 3.0, false).unwrap();
+        vitals.clear_changed();
+
+        assert_eq!(vitals.drain_temporary_shield(DECAYING, 6.25), 5.75);
+        assert_eq!(vitals.pool_current(first), Some(0.0));
+        assert_eq!(vitals.pool_current(second), Some(5.75));
+        assert_eq!(vitals.temporary_shield_current(OTHER), 3.0);
+        assert_eq!(vitals.amount(Some(PoolKind::Shields), false), 20.0);
+        let changed = vitals.changed_component().unwrap();
+        assert_eq!(changed.fields[BASE_SLOT], None);
+        assert_eq!(
+            changed.fields[BASE_SLOT + 1],
+            Some(ComponentValue::Blob20(pool(DECAYING as u32, 2, 12.0, 5.75)))
+        );
+        assert_eq!(changed.fields[BASE_SLOT + 2], None);
+
+        vitals.clear_changed();
+        assert_eq!(vitals.drain_temporary_shield(DECAYING, f64::NAN), 5.75);
+        assert_eq!(vitals.drain_temporary_shield(DECAYING, -1.0), 5.75);
+        assert_eq!(
+            vitals.drain_temporary_shield(0x0d80_0000_0044_0125, 10.0),
+            0.0
+        );
+        assert!(!vitals.has_changed());
+
+        let damage = vitals.damage(10.0, HIT);
+        assert_eq!(damage.dealt, 10.0);
+        assert_eq!(
+            damage.named_pool_losses,
+            [
+                NamedPoolLoss {
+                    identifier: DECAYING,
+                    amount: 5.75
+                },
+                NamedPoolLoss {
+                    identifier: OTHER,
+                    amount: 3.0
+                },
+            ]
+        );
+        assert_eq!(vitals.amount(Some(PoolKind::Shields), false), 18.75);
+    }
+
+    #[test]
     fn lethal_transition_keeps_original_attribution_and_stops_healing() {
         let mut vitals = Vitals::new(10.0, 0.0, 0.0);
         assert_eq!(
@@ -386,6 +777,7 @@ mod tests {
             Damage {
                 dealt: 10.0 - DEATH_EPSILON / 2.0,
                 killed: true,
+                named_pool_losses: Vec::new(),
             }
         );
         assert_eq!(vitals.total(), 0.0);

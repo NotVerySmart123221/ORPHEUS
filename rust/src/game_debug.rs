@@ -578,6 +578,7 @@ fn state_kind_summary(kind: StateKind) -> (&'static str, Option<u8>) {
         StateKind::SummonerBeamDamage => ("SummonerBeamDamage", None),
         StateKind::ModifyHealth => ("ModifyHealth", None),
         StateKind::ShieldRecharge => ("ShieldRecharge", None),
+        StateKind::NamedShieldDecay => ("NamedShieldDecay", None),
         StateKind::ForCode => ("ForCode", None),
         StateKind::AiBehavior { .. } => ("AiBehavior", None),
         StateKind::AiControlSetting => ("AiControlSetting", None),
