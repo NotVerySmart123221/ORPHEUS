@@ -156,6 +156,16 @@ Windows #131 idle and single-shot reload traces each matched their
 preceding 339-tick captures for both implementations. Strict comparison
 retained the same four RNG setup differences.
 
+At `e6cfc337`, player, NPC, gate and mode scripts began reading one
+mode-scoped engine settings table. The portable and native synthetic
+suites distinguish missing keys, explicit null, empty tables and mode
+isolation. The prepared Practice Range pack exercised the compatibility
+lookup with its existing settings. The two same-pack startup results
+matched byte for byte. The 32 actor rows remained at 11 independent
+passes, one ordinary attachment and 47 blocking sites. The #72 trace
+retained all 476 observations. This revision also includes the authored
+eye observation recovery contract at `9b957ce7`.
+
 Two of the three remaining native target-tracking startup sites have
 empty embedded plugs. One configures a second filter and an entity list
 output. The other configures a count output. Both read a dynamic radius.
