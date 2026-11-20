@@ -60,6 +60,7 @@ fn diagnostic_category(diagnostic: &Diagnostic) -> &'static str {
         Issue::MissingState(_) => "missing_state",
         Issue::UnsupportedAction(_) => "unsupported_action",
         Issue::UnsupportedState(_) => "unsupported_state",
+        Issue::UnsupportedMessageRegistration => "unsupported_message_registration",
         Issue::UnsupportedField(_) => "unsupported_field",
         Issue::EntityCreation(_) => "entity_creation",
         Issue::InvalidSubScript => "invalid_subscript",

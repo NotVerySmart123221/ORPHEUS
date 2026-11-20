@@ -68,7 +68,9 @@ impl Capture {
                 "registration_rejection"
             } else if matches!(
                 diagnostic.issue,
-                Issue::UnsupportedAction(_) | Issue::UnsupportedState(_)
+                Issue::UnsupportedAction(_)
+                    | Issue::UnsupportedState(_)
+                    | Issue::UnsupportedMessageRegistration
             ) {
                 "unsupported"
             } else {

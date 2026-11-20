@@ -1211,12 +1211,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 );
                 return Ok(());
             }
-            self.exit_subgraph(id, node, "m_33DA5163", 1)?;
             ("m_452862E6", Some(key))
         } else {
             ("m_outPlug", None)
         };
         let site = self.site(id, node);
+        let mut writes = Vec::new();
         for field in array_field(&node.fields, "m_params") {
             if !field.is_object() {
                 continue;
@@ -1236,13 +1236,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 .and_then(|params| params.get(&key))
                 .cloned()
                 .unwrap_or(Value::Null);
-            self.write(target, value)?;
+            writes.push((target, value));
         }
-        if let Some(sender) = sender.filter(|_| !node.is_state()) {
+        if let Some(sender) = sender.filter(|_| path.1.is_none()) {
             for output in ["m_B60ABDA4", "m_FF703F20"] {
                 match script_expr::dynamic(field(&node.fields, output)) {
                     Ok(Some(target)) => {
-                        self.write(source_key(id, target), Value::Entity(sender))?;
+                        writes.push((source_key(id, target), Value::Entity(sender)));
                     }
                     Ok(None) => (),
                     Err(error) => {
@@ -1251,6 +1251,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     }
                 }
             }
+        }
+        // A malformed later binding must leave earlier outputs and the receiver's
+        // active branch intact. Valid deliveries still exit before applying writes.
+        if path.1.is_some() {
+            self.exit_subgraph(id, node, "m_33DA5163", 1)?;
+        }
+        for (target, value) in writes {
+            self.write(target, value)?;
         }
         self.follow(id, node, path.0, path.1, 0)?;
         Ok(())

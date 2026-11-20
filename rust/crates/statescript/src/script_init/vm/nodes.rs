@@ -15,10 +15,10 @@ use super::super::{
     shapes::{
         array_field, array_insertion_index, case_path, configured, encounter_base_state_shape,
         excluded_target_tags, field, is_bare_header_action, is_base_health_pool,
-        is_client_subgraph_controller, is_entry, is_networked_for_code_synced,
-        is_owner_movement_sampler, is_self_target, is_wave_health_pool, living_body_array_shape,
-        participant_filter, persistent_message, pool_number, raw_indices, registered_state,
-        source_key, static_target_operand, stored,
+        is_client_subgraph_controller, is_entry, is_message_recipient_set,
+        is_networked_for_code_synced, is_owner_movement_sampler, is_self_target,
+        is_wave_health_pool, living_body_array_shape, participant_filter, persistent_message,
+        pool_number, raw_indices, registered_state, source_key, static_target_operand, stored,
     },
     types::{InitFault, Issue, SpawnSearch, SpawnSearchKey, State, StateKind},
     world::{CreationKind, EntityCreation, Site, World},
@@ -1804,6 +1804,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             StateKind::PhaseScript => self.begin_phase_script(key, node)?,
             StateKind::PhaseTransition => self.arm_phase_transition(key, node)?,
             StateKind::Anim => self.arm_animation(key, node)?,
+            StateKind::SendMessage
+                if node.field("m_targets").is_none()
+                    && node.game_message_id().is_some_and(|message| message != 0)
+                    && is_message_recipient_set(field(&node.fields, "m_target")) =>
+            {
+                // A state-managed recipient set is a registration, not an
+                // expression for the ordinary one-shot message path.
+                self.report(self.site(id, node), Issue::UnsupportedMessageRegistration);
+            }
             StateKind::SendMessage => {
                 self.send_game_message(id, node)?;
             }

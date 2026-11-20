@@ -474,6 +474,55 @@ fn direct_queued_entry_respects_node_scope() {
 }
 
 #[test]
+fn message_recipient_registration_reports_a_state_capability_gap() {
+    let graphs = store(vec![graph(
+        731,
+        vec![
+            node(
+                0,
+                "STUStatescriptEntry",
+                None,
+                json!({"m_outPlug":plug(&[(1, "m_beginPlug")], &[])}),
+            ),
+            node(
+                1,
+                "STU_38EE1100",
+                Some(0),
+                json!({
+                    "m_gameMessage": {"m_gameMessage": "0xF00000000000012A"},
+                    "m_target": {"$": "STU_9B213168", "m_targets": {"$": "STU_B5A0CAF0"}},
+                }),
+            ),
+        ],
+        json!([1]),
+        json!([0]),
+    )]);
+    let snapshot = initialize(
+        &graphs,
+        72,
+        Variables::new(),
+        vec![Root::new(1, 731)],
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    assert!(!snapshot.initialization_complete());
+    assert!(matches!(
+        snapshot.diagnostics.as_slice(),
+        [Diagnostic {
+            site: Site {
+                graph: 731,
+                node: Some(1),
+                ..
+            },
+            issue: Issue::UnsupportedMessageRegistration,
+            registration_rejected: false,
+            server_only: false,
+        }]
+    ));
+}
+
+#[test]
 fn client_subgraph_controller_keeps_its_branch_off_the_server() {
     for client_only in [true, false] {
         let mut target = node(2, "STUStatescriptState", Some(1), json!({}));

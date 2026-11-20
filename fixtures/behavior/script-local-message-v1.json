@@ -208,5 +208,27 @@
   "expected": [
     {"graph": 61, "instance": 11, "variables": {"10": 99}},
     {"graph": 83, "instance": 22, "variables": {"20": 17, "21": 17, "22": 17}}
-  ]
+  ],
+  "receiver_bindings": {
+    "entity": 752,
+    "sender": 753,
+    "message": 153,
+    "parameters": {"61": 17, "62": 29},
+    "initial": {"21": 5, "22": 6},
+    "outputs": [
+      ["0xF10000000000003D", 21],
+      ["0xF10000000000003E", 21],
+      ["0xF10000000000003F", 22]
+    ],
+    "child_abort_write": 777,
+    "malformed_issue": "variable identifier out of range",
+    "cases": [
+      {"name": "valid entry preserves write order and clears a missing value", "stateful": false},
+      {"name": "malformed later parameter does not write the earlier one", "stateful": false, "malformed": "parameter"},
+      {"name": "malformed sender alias preserves parameter and first sender outputs", "stateful": false, "malformed": "sender"},
+      {"name": "valid state delivery applies writes after exiting the active branch", "stateful": true},
+      {"name": "malformed state delivery keeps the previous branch active", "stateful": true, "malformed": "parameter"}
+    ],
+    "accepted": {"21": 29, "22": null}
+  }
 }

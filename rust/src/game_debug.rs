@@ -394,7 +394,9 @@ pub(crate) fn summarize_script_snapshot(
             }
         } else if matches!(
             &diagnostic.issue,
-            ScriptIssue::UnsupportedAction(_) | ScriptIssue::UnsupportedState(_)
+            ScriptIssue::UnsupportedAction(_)
+                | ScriptIssue::UnsupportedState(_)
+                | ScriptIssue::UnsupportedMessageRegistration
         ) {
             unsupported_nodes += 1;
         }

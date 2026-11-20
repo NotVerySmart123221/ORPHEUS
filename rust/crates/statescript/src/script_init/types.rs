@@ -344,6 +344,7 @@ pub enum Issue {
     MissingState(u16),
     UnsupportedAction(String),
     UnsupportedState(String),
+    UnsupportedMessageRegistration,
     UnsupportedField(&'static str),
     EntityCreation(String),
     InvalidSubScript,

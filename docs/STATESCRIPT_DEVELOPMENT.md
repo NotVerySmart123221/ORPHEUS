@@ -179,6 +179,11 @@ the evaluator attributed the error, including shape and context failures.
 The independent factory probe retains these details when the ordinary
 room admission reports a generic unsupported error.
 
+A state-managed recipient set reports `unsupported_message_registration`
+when its persistent registration path is unavailable. The probe keeps
+the failure blocking and records the sender node. The ordinary one-shot
+send path remains separate from registration of a persistent sender.
+
 The report's `probe_roster` declares the synthetic admitted player slots
 used by both attempts. In a live room, the player host reads the admitted
 roster at startup and refreshes it on departure. The count includes members

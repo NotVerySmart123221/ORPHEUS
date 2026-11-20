@@ -171,6 +171,10 @@ pub(super) fn is_self_target(node: &Node, name: &str) -> bool {
     script_expr::native_shape(field(&node.fields, name), "STU_B5A0CAF0", None)
 }
 
+pub(super) fn is_message_recipient_set(target: &Json) -> bool {
+    field(target, "$").as_str() == Some("STU_9B213168")
+}
+
 pub(super) fn persistent_message(graph: u32, node: &Node) -> Option<u64> {
     let message = node
         .field("m_gameMessage.m_gameMessage")
@@ -180,7 +184,7 @@ pub(super) fn persistent_message(graph: u32, node: &Node) -> Option<u64> {
     if (graph, node.pos, message) == (0x0cc7, 39, RESULT_SUMMARY)
         || (graph, node.pos, message) == (0x0cc7, 82, RESULT_SUMMARY)
     {
-        return (field(target, "$").as_str() == Some("STU_9B213168")
+        return (is_message_recipient_set(target)
             && script_expr::native_shape(field(target, "m_targets"), "STU_A3DEF368", None)
             && field(fields, "m_67FD6A60").as_u64() == Some(1)
             && field(fields, "m_priority").is_null())
@@ -188,7 +192,7 @@ pub(super) fn persistent_message(graph: u32, node: &Node) -> Option<u64> {
     }
     if (graph, node.pos, message) == (0x0cbc, 122, 0x0240_0000_0000_0744) {
         // The self-targeted receiver at 0D24:2 is client-only.
-        return (field(target, "$").as_str() == Some("STU_9B213168")
+        return (is_message_recipient_set(target)
             && script_expr::native_shape(field(target, "m_targets"), "STU_B5A0CAF0", None)
             && field(fields, "m_67FD6A60").as_u64() == Some(1)
             && field(fields, "m_params").is_null()
