@@ -69,7 +69,8 @@ struct Expected {
     host_variables: [u32; 6],
     deliveries: Vec<Option<Delivery>>,
     target_tag_query: ExpectedTargetTagQuery,
-    target_generation_relay: ExpectedTargetGenerationRelay,
+    target_generation_relay: ExpectedGenerationRelay,
+    source_generation_relay: ExpectedGenerationRelay,
 }
 
 #[derive(Deserialize)]
@@ -83,7 +84,7 @@ struct ExpectedTargetTagQuery {
 }
 
 #[derive(Deserialize)]
-struct ExpectedTargetGenerationRelay {
+struct ExpectedGenerationRelay {
     stable: Vec<f64>,
     replaced_with_ordinary_deliveries: Vec<f64>,
 }
@@ -463,6 +464,21 @@ fn settled_target_facts_are_scoped_to_immediate_host_delivery() {
 
 #[test]
 fn health_delivery_checks_original_target_generation_for_direct_and_relayed_requests() {
+    check_health_delivery_generation(HealthEndpoint::Target);
+}
+
+#[test]
+fn health_delivery_checks_original_source_generation_for_direct_and_relayed_requests() {
+    check_health_delivery_generation(HealthEndpoint::Source);
+}
+
+#[derive(Clone, Copy)]
+enum HealthEndpoint {
+    Source,
+    Target,
+}
+
+fn check_health_delivery_generation(endpoint: HealthEndpoint) {
     const SOURCE: u32 = 741;
     const TARGET: u32 = 742;
     const OTHER: u32 = 743;
@@ -476,10 +492,28 @@ fn health_delivery_checks_original_target_generation_for_direct_and_relayed_requ
         "../../../../fixtures/behavior/script-host-health-events-v1.json"
     ))
     .unwrap();
-    let expected = fixture.expected.target_generation_relay;
+    let (listener, subject, slot, source_var, target_var, expected) = match endpoint {
+        HealthEndpoint::Source => (
+            TARGET,
+            SOURCE,
+            1,
+            1,
+            3,
+            fixture.expected.source_generation_relay,
+        ),
+        HealthEndpoint::Target => (
+            SOURCE,
+            TARGET,
+            2,
+            3,
+            1,
+            fixture.expected.target_generation_relay,
+        ),
+    };
+    let subject_parameter = format!("0x{slot:016X}");
 
     struct Room {
-        target_generation: u64,
+        generations: BTreeMap<u32, u64>,
         messages: Vec<(u32, RoomMessage)>,
         health: Vec<(u32, f64)>,
     }
@@ -494,7 +528,7 @@ fn health_delivery_checks_original_target_generation_for_direct_and_relayed_requ
         }
 
         fn room_body_generation(&self, wire: u32) -> Option<u64> {
-            (wire == TARGET).then_some(self.target_generation)
+            self.generations.get(&wire).copied()
         }
 
         fn queue_room_message(&mut self, _: Site, target: u32, message: RoomMessage) -> bool {
@@ -510,12 +544,17 @@ fn health_delivery_checks_original_target_generation_for_direct_and_relayed_requ
 
     let var = |id| json!({"$":"STUConfigVarDynamic","m_identifier":id,"m_60DB8F99":false});
     let parameters = json!([
-        {"m_B5051BCE":"0x0000000000000002","m_out_Var":var(1)},
+        {"m_B5051BCE":subject_parameter,"m_out_Var":var(1)},
+        {"m_B5051BCE":"0x0000000000000003","m_out_Var":var(2)}
+    ]);
+    let host_parameters = json!([
+        {"m_B5051BCE":"0x0000000000000001","m_out_Var":var(source_var)},
+        {"m_B5051BCE":"0x0000000000000002","m_out_Var":var(target_var)},
         {"m_B5051BCE":"0x0000000000000003","m_out_Var":var(2)}
     ]);
     let requests = json!({"$":"Plug","links":[[2,"m_inPlug"],[3,"m_inPlug"]]});
-    let host_requests =
-        json!({"$":"Plug","links":[[2,"m_inPlug"],[3,"m_inPlug"],[4,"m_inPlug"],[5,"m_inPlug"]]});
+    let host_requests = json!({"$":"Plug",
+        "links":[[8,"m_inPlug"],[2,"m_inPlug"],[3,"m_inPlug"],[4,"m_inPlug"],[5,"m_inPlug"]]});
     let empty = json!({"$":"Plug","links":[]});
     let relay = |pos, topic, parameters: Json| {
         json!({"pos":pos,"rid":pos,"uid":pos,"class":"STUStatescriptActionSendGameMessage",
@@ -529,12 +568,12 @@ fn health_delivery_checks_original_target_generation_for_direct_and_relayed_requ
             "fields":{"m_gameMessage":{"m_gameMessage":format!("0x{topic:016X}")},
                 "m_params":parameters,"m_outPlug":requests}})
     };
-    let outgoing_target = json!({"m_B5051BCE":"0x0000000000000002","m_value":var(1)});
+    let outgoing_subject = json!({"m_B5051BCE":subject_parameter,"m_value":var(1)});
     let outgoing_delta = json!({"m_B5051BCE":"0x0000000000000003","m_value":var(2)});
     let nodes = json!([
         {"pos":0,"rid":0,"uid":0,"class":"EntryHostEvent","state":null,"remote":-1,
             "client_only":false,"server_only":true,"host_event_entry":"health_applied",
-            "fields":{"m_params":parameters,"m_outPlug":host_requests}},
+            "fields":{"m_params":host_parameters,"m_outPlug":host_requests}},
         {"pos":1,"rid":1,"uid":1,"class":"STUStatescriptEntryGameMessage","state":null,"remote":-1,
             "client_only":false,"server_only":true,"room_message_entry":true,
             "fields":{"m_gameMessage":{"m_gameMessage":format!("0x{INCOMING:016X}")},
@@ -547,34 +586,38 @@ fn health_delivery_checks_original_target_generation_for_direct_and_relayed_requ
         {"pos":3,"rid":3,"uid":3,"class":"authored.health","state":null,"remote":-1,
             "client_only":false,"server_only":true,"action_behavior":"health_change",
             "fields":{"target":var(1),"delta":var(2),"m_outPlug":empty}},
-        relay(4, TYPED_RELAY, json!([outgoing_target, outgoing_delta])),
+        relay(4, TYPED_RELAY, json!([outgoing_subject, outgoing_delta])),
         relay(5, NUMERIC_RELAY, json!([
-            {"m_B5051BCE":"0x0000000000000002",
-                "m_value":{"$":"STUConfigVarInt","m_value":TARGET}},
+            {"m_B5051BCE":subject_parameter,
+                "m_value":{"$":"STUConfigVarInt","m_value":subject}},
+            {"m_B5051BCE":"0x0000000000000004","m_value":{"$":"STU_B5A0CAF0"}},
             {"m_B5051BCE":"0x0000000000000003",
                 "m_value":{"$":"STUConfigVarFloat","m_value":-1.75}}
         ])),
         relay_entry(6, TYPED_RELAY, parameters.clone()),
-        // The numeric relay can still read the target from a stored variable.
-        // Without a typed target parameter it has no event-time provenance.
+        // The other endpoint's typed entity cannot carry provenance for the
+        // subject, which is only a number in this relay's parameters.
         relay_entry(7, NUMERIC_RELAY, json!([
             {"m_B5051BCE":"0x0000000000000003","m_out_Var":var(2)}
-        ]))
+        ])),
+        {"pos":8,"rid":8,"uid":8,"class":"STUStatescriptActionSetVar","state":null,
+            "remote":-1,"client_only":false,"server_only":true,
+            "fields":{"m_ADEB6E05":true,"m_out_Var":var(4),"m_value":var(source_var)}}
     ]);
     let bundle = json!({"version":1,"bodies":{},"missing":[],"graphs":[{
-        "index":GRAPH,"items":8,"nodes":nodes,"fields":{},"containers":{},"entries":[1,6,7],
+        "index":GRAPH,"items":9,"nodes":nodes,"fields":{},"containers":{},"entries":[1,6,7],
         "states":[],"remote":[],"sync_vars":[],"unknown_nodes":[],
-        "header":{"m_nodesBitCount":3,"m_statesBitCount":3,"m_remoteSyncNodesBitCount":3,"m_syncVarsBitCount":3}
+        "header":{"m_nodesBitCount":4,"m_statesBitCount":3,"m_remoteSyncNodesBitCount":3,"m_syncVarsBitCount":3}
     }]});
     let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
     let mut world = Room {
-        target_generation: GENERATION,
+        generations: BTreeMap::from([(SOURCE, GENERATION), (TARGET, GENERATION)]),
         messages: Vec::new(),
         health: Vec::new(),
     };
     let mut body = Component::start(
         graphs,
-        SOURCE,
+        listener,
         Variables::new(),
         vec![Root::new(ROOT, GRAPH)],
         0,
@@ -589,10 +632,22 @@ fn health_delivery_checks_original_target_generation_for_direct_and_relayed_requ
         killed: false,
         hit_tags: None,
     };
-    let context = || HostHealthContext {
+    let context = |generation| HostHealthContext {
+        source_body: Some(RoomBodyIdentity {
+            wire: SOURCE,
+            generation: if subject == SOURCE {
+                generation
+            } else {
+                GENERATION
+            },
+        }),
         target_body: Some(RoomBodyIdentity {
             wire: TARGET,
-            generation: GENERATION,
+            generation: if subject == TARGET {
+                generation
+            } else {
+                GENERATION
+            },
         }),
         target_facts: None,
     };
@@ -603,15 +658,15 @@ fn health_delivery_checks_original_target_generation_for_direct_and_relayed_requ
     let assert_deliveries = |world: &mut Room, amounts: &[f64]| {
         let messages: Vec<_> = amounts
             .iter()
-            .map(|&amount| (TARGET, message(OUTGOING, amount)))
+            .map(|&amount| (subject, message(OUTGOING, amount)))
             .collect();
-        let health: Vec<_> = amounts.iter().map(|&amount| (TARGET, amount)).collect();
+        let health: Vec<_> = amounts.iter().map(|&amount| (subject, amount)).collect();
         assert_eq!(std::mem::take(&mut world.messages), messages);
         assert_eq!(std::mem::take(&mut world.health), health);
     };
 
     assert_eq!(
-        body.queue_host_event_with_context(event, context())
+        body.queue_host_event_with_context(event, context(GENERATION))
             .unwrap(),
         1
     );
@@ -619,24 +674,37 @@ fn health_delivery_checks_original_target_generation_for_direct_and_relayed_requ
     assert_deliveries(&mut world, &expected.stable);
 
     assert_eq!(
-        body.queue_host_event_with_context(event, context())
+        body.queue_host_event_with_context(event, context(GENERATION))
             .unwrap(),
         1
     );
-    world.target_generation += 1;
+    let fresh_generation = GENERATION + 1;
+    world.generations.insert(subject, fresh_generation);
     let mut ordinary = message(TYPED_RELAY, 0.75);
-    ordinary.parameters.insert(2, Value::Entity(TARGET));
+    ordinary.parameters.insert(slot, Value::Entity(subject));
     assert_eq!(
         body.queue_entity_frame_message(2, TYPED_RELAY, ordinary.parameters)
             .unwrap(),
         1
     );
     let mut external = message(INCOMING, 1.25);
-    external.parameters.insert(2, Value::Entity(TARGET));
+    external.parameters.insert(slot, Value::Entity(subject));
     assert_eq!(body.queue_room_message_from(OTHER, external).unwrap(), 1);
     body.advance_frame(2, &mut world).unwrap();
 
     assert_deliveries(&mut world, &expected.replaced_with_ordinary_deliveries);
+    assert_eq!(
+        variables(&body).unwrap().get(&4),
+        Some(&Value::Entity(SOURCE))
+    );
+
+    assert_eq!(
+        body.queue_host_event_with_context(event, context(fresh_generation))
+            .unwrap(),
+        1
+    );
+    body.advance_frame(3, &mut world).unwrap();
+    assert_deliveries(&mut world, &expected.stable);
     assert!(body.snapshot().unwrap().diagnostics.is_empty());
 
     let wrong_target = HostHealthContext {
@@ -644,11 +712,37 @@ fn health_delivery_checks_original_target_generation_for_direct_and_relayed_requ
             wire: OTHER,
             generation: GENERATION,
         }),
-        ..context()
+        ..context(fresh_generation)
     };
     assert_eq!(
         body.queue_host_event_with_context(event, wrong_target)
             .unwrap(),
         0
     );
+    if matches!(endpoint, HealthEndpoint::Source) {
+        let wrong_source = HostHealthContext {
+            source_body: Some(RoomBodyIdentity {
+                wire: OTHER,
+                generation: GENERATION,
+            }),
+            ..context(fresh_generation)
+        };
+        assert_eq!(
+            body.queue_host_event_with_context(event, wrong_source)
+                .unwrap(),
+            0
+        );
+        let unattributed = HostEvent::HealthApplied {
+            source: None,
+            target: TARGET,
+            delta: 2.5,
+            killed: false,
+            hit_tags: None,
+        };
+        assert_eq!(
+            body.queue_host_event_with_context(unattributed, context(fresh_generation))
+                .unwrap(),
+            0
+        );
+    }
 }

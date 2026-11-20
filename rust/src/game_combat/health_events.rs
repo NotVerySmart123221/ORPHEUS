@@ -36,6 +36,13 @@ impl SampledBody {
         Some(Self { wire, entity })
     }
 
+    fn identity(self) -> RoomBodyIdentity {
+        RoomBodyIdentity {
+            wire: self.wire,
+            generation: self.entity.to_bits(),
+        }
+    }
+
     fn room_status(self, world: &World, free_for_all: bool) -> Option<RoomEntityStatus> {
         let (team, alive) = if let Some(state) = world.get::<BotState>(self.entity) {
             (state.bot.entity == self.wire).then_some((
@@ -190,11 +197,13 @@ impl RoomSimulation {
     pub(super) fn flush_health_events(&mut self) {
         while let Some(change) = self.health_events.pending.pop_front() {
             if let Some((event, receivers)) = change.resolve(self) {
+                let HostEvent::HealthApplied { source, .. } = event;
+                // Resolve keeps verified source attribution even for a self-change,
+                // where the source needs no separate delivery.
+                let source_body = change.source.filter(|body| source == Some(body.wire));
                 let context = HostHealthContext {
-                    target_body: Some(RoomBodyIdentity {
-                        wire: change.target.wire,
-                        generation: change.target.entity.to_bits(),
-                    }),
+                    source_body: source_body.map(SampledBody::identity),
+                    target_body: Some(change.target.identity()),
                     target_facts: change.target_facts,
                 };
                 for body in receivers.into_iter().flatten() {

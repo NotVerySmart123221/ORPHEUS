@@ -696,11 +696,10 @@ omit the slot, so delivery clears any previous value in a declared
 binding. Tags preserve authored order and duplicates.
 
 Weapon notifications carry the target's captured filter flags, target
-tags, and script variables. A settled room heal from a distinct sampled
-source can carry the same facts from the healed body. The room captures
-those facts after applying the positive pool delta. Healing tag
-attribution stays unavailable. An immediate foreign query about
-that target reads the captured values. A direct `EntityMatches` tag
+tags, and script variables. A room-settled health change from a distinct
+sampled source can carry the same facts after applying the signed pool
+delta. A change without a weapon impact leaves hit tags unavailable.
+An immediate foreign query about that target reads the captured values. A direct `EntityMatches` tag
 filter uses the captured tags and, when available, the target's
 room affiliation and post-settlement liveness. This permits credit for
 a retired target while an explicit alive filter rejects a lethal
@@ -710,19 +709,21 @@ usual host.
 Unavailable captured facts stay unavailable. The room checks body
 generation when dispatching the event, and the VM clears the snapshot
 at the end of each delivery.
-For NPC-local heals, publication samples the committed target after the
-local VM step. The queued delta remains the actual amount for each heal.
+For NPC-local changes, publication samples the committed target after
+the local VM step. Each queued delta records the actual applied amount.
 
-An immediate follow-up request to the event's foreign target uses the
-generation recorded by the room. The VM verifies it against the same room
-frame used for admission. An expired target is skipped for directed
-messages and direct health changes. This keeps historical target facts
-usable by the source after the original body retires. Radial effects
-still select present candidates through their normal spatial query.
-An immediate same-body GameMessage carries the context when a top-level
-entity parameter names the health event target. Numeric parameters,
-incoming room messages, externally scheduled messages and later graph
-work use their own context.
+An immediate directed message or direct health change to either
+participant uses their room-recorded generation. The VM verifies it
+against the room frame used for admission. An expired body is skipped.
+The original source binding and captured target facts still describe
+the completed event. Radial effects select present candidates through
+their spatial query.
+
+An immediate same-body GameMessage carries each participant's context
+when a top-level typed entity parameter names that participant.
+Target facts follow the target parameter. Numeric parameters, incoming
+room messages, externally scheduled messages and later graph work
+use their own context.
 
 The enabled room records successful weapon damage, room-settled script
 and AI requests, field healing, and VM-local AI damage and healing.

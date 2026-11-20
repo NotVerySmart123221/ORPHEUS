@@ -137,7 +137,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         return Ok(false);
                     }
                 };
-                if !self.expired_health_target(entity)
+                if !self.expired_health_event_body(entity)
                     && !self.world.queue_health_change(site, entity, delta)
                 {
                     self.report(site, Issue::UnsupportedField("health change request"));

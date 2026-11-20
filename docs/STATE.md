@@ -294,13 +294,13 @@ events collect committed target facts after the VM's local mutations.
 Direct target filters use the event's tags and, in a configured room,
 the original target's affiliation and post-settlement liveness. The
 room preserves these facts if a lethal target retires before delivery.
-The health event also carries the original body identity through VM
-delivery. A subsequent direct request to that same wire expires if the
-room now identifies a different body. The room regression includes a
-fresh award to the replacement to exercise the normal path. An
-immediate same-body message can relay the original target's context
-through a typed entity parameter. The portable regression exercises
-both direct and relayed awards across body replacement.
+The health event carries the original source and target identities
+through VM delivery. A direct request to either wire expires if the
+room now identifies a different body. The room regressions cover stale
+awards to a replaced target and stale replies to a replaced source,
+followed by fresh awards. An immediate same-body message can relay each
+participant's context through its own typed entity parameter. The
+portable regression covers direct and relayed requests after replacement.
 A prepared probe uses the original admission claim and local sender
 with the stock cap. These additions are pending integration verification.
 

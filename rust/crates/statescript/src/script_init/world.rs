@@ -111,6 +111,11 @@ pub enum HostEvent {
 }
 
 impl HostEvent {
+    pub(super) fn source(self) -> Option<u32> {
+        let Self::HealthApplied { source, .. } = self;
+        source
+    }
+
     pub(super) fn target(self) -> u32 {
         let Self::HealthApplied { target, .. } = self;
         target
@@ -170,6 +175,7 @@ pub struct RoomBodyIdentity {
 /// Host-only context scoped to the immediate health event delivery.
 #[derive(Clone, Default)]
 pub struct HostHealthContext {
+    pub source_body: Option<RoomBodyIdentity>,
     pub target_body: Option<RoomBodyIdentity>,
     pub target_facts: Option<Arc<HealthTargetFacts>>,
 }

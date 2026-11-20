@@ -678,13 +678,13 @@ impl Component {
         self.queue_host_event_with_context(
             event,
             HostHealthContext {
-                target_body: None,
                 target_facts,
+                ..HostHealthContext::default()
             },
         )
     }
 
-    /// Notify a receiver using the room-authenticated target generation and optional facts.
+    /// Notify a receiver with room-authenticated body generations and optional target facts.
     pub fn queue_host_event_with_context(
         &mut self,
         event: HostEvent,
@@ -700,6 +700,9 @@ impl Component {
             || context
                 .target_body
                 .is_some_and(|body| body.wire != event.target())
+            || context
+                .source_body
+                .is_some_and(|body| Some(body.wire) != event.source())
         {
             return Ok(0);
         }
