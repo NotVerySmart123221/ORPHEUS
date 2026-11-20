@@ -212,9 +212,9 @@ pub use types::{
 pub use world::{
     AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, CreationKind,
     EmptyWorld, EntityCreation, HealthTargetFacts, HitTags, HostEvent, HostHealthContext,
-    LandingSelection, MovementSample, PlayScript, Relocation, RoomBodyIdentity, RoomCue,
-    RoomEntityStatus, RoomMessage, ScriptedMotion, Site, SweptDisplacement, TargetTagEffect,
-    TargetTagEffects, TargetTagSnapshot, World,
+    LandingSelection, MovementSample, NamedPoolLoss, PlayScript, Relocation, RoomBodyIdentity,
+    RoomCue, RoomEntityStatus, RoomMessage, ScriptedMotion, Site, SweptDisplacement,
+    TargetTagEffect, TargetTagEffects, TargetTagSnapshot, World, named_pool_records,
 };
 
 use machine::{Event, Machine, Startup, StateKey, VarKey};
@@ -473,6 +473,7 @@ impl Component {
             parameters: None,
             health_target_facts: None,
             observed_sample: None,
+            settled_damage: false,
             watcher: None,
             read_native: false,
             read_clock: false,
@@ -556,6 +557,36 @@ impl Component {
         parameters: Variables,
     ) -> Result<usize, InitFault> {
         self.queue_message_at(self.machine.now_ms, instance, message, parameters)
+    }
+
+    /// Queue one instance's ordinary message with room-authenticated target facts.
+    pub fn queue_settled_damage_message(
+        &mut self,
+        instance: u16,
+        message: u64,
+        parameters: Variables,
+        target_facts: Arc<HealthTargetFacts>,
+    ) -> Result<usize, InitFault> {
+        if self.halted {
+            return Err(InitFault::Halted);
+        }
+        if !script_expr::valid_entity(target_facts.target)
+            || !parameters.values().any(
+                |value| matches!(value, Value::Entity(entity) if *entity == target_facts.target),
+            )
+        {
+            return Ok(0);
+        }
+        self.machine.queue_settled_damage_entries(
+            &self.graphs,
+            instance,
+            message,
+            parameters,
+            HostHealthContext {
+                target_facts: Some(target_facts),
+                ..HostHealthContext::default()
+            },
+        )
     }
 
     pub fn queue_frame_message(
@@ -681,17 +712,17 @@ impl Component {
         self.queue_host_event_with_context(
             event,
             HostHealthContext {
-                target_body: None,
                 target_facts,
+                ..HostHealthContext::default()
             },
         )
     }
 
-    /// Notify a receiver using the room-authenticated target generation and optional facts.
+    /// Notify a receiver with room-authenticated body identities and settlement facts.
     pub fn queue_host_event_with_context(
         &mut self,
         event: HostEvent,
-        context: HostHealthContext,
+        mut context: HostHealthContext,
     ) -> Result<usize, InitFault> {
         if self.halted {
             return Err(InitFault::Halted);
@@ -703,13 +734,19 @@ impl Component {
             || context
                 .target_body
                 .is_some_and(|body| body.wire != event.target())
+            || context
+                .source_body
+                .is_some_and(|body| Some(body.wire) != event.source())
         {
             return Ok(0);
         }
         let Some(due_ms) = self.next_vm_frame_ms() else {
             return Ok(0);
         };
-        let Some((kind, parameters)) = event.bindings_for(self.machine.snapshot.entity) else {
+        let named_pool_losses = context.named_pool_losses.take();
+        let Some((kind, parameters)) =
+            event.bindings_for(self.machine.snapshot.entity, named_pool_losses.as_deref())
+        else {
             return Ok(0);
         };
         self.machine

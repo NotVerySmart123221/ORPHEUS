@@ -43,6 +43,22 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Applied the settled target's tags, affiliation and liveness to direct `EntityMatches` filters in a health event. A lethal impact retains its original target's qualification after the body retires. Source membership and spatial searches still use the current room frame. Validated in shared candidate `29df13cb`.
 
+- Check both body generations before settling queued health changes. Retired sources cannot credit replacement bodies. Previously accepted effects in the same batch retain attribution when their source dies without changing generation. Added a room regression and expanded the prepared stock charge probes across admission, passive timing, damage deductions, and Mercy's local bonus receiver with explicit test inputs. Integration validation pending.
+
+- Add opt-in charge compatibility settings for selected modes, validated ordinary damage receivers, and optional ability inhibition. A receiver can be a public root or its existing native child. The legacy profile remains available when neither charge route is declared. Synthetic regressions are pending integration validation. Original stock admission and rollout remain open.
+
+- Scope compatibility damage credit facts and native filters to their immediate receiving VM instance. The targeted message retains its current-clock delivery and ordinary sender binding. Same-clock unrelated entries use their own query data. Added portable isolation and native filter regressions. Integration validation pending.
+
+- Replace fixed `TrackStat` placements with authored selectors and explicit host stat availability. Charge, melee, and NPC graphs share the continuation path when stat recording is unavailable. A dynamic target requires the entire service to be absent. Added portable policy and continuation coverage. Integration validation pending.
+
+- Expose actual named shield losses on the authored health settlement event. The room uses the same damage result for weapon hits, direct damage, and NPC-local damage. The authored binding and compatibility charge share one record encoder. Tests cover ordered losses, known empty lists, and unavailable records. Integration validation pending.
+
+- Pin both participants of a settled health event to their original room body generations. A delayed reply skips an expired source while preserving the original event binding and target facts. Same-body relays carry the identity for each typed participant they forward. Added portable and live-room regressions for replacement and fresh awards. Integration validation pending.
+
+- Extended directed numeric charge messages to support terminal server-only senders with an authored entity variable or possessed-body target. Both use the existing room route. Added synthetic sender coverage and two opt-in prepared probes for `14F2` fraction binding, cap, gates and next-frame receipt. Integration validation pending.
+
+- Preserve settled target facts for damage without a weapon impact, including lethal scripted damage. Credit listeners can still inspect the original target after retirement. Hit tags remain unavailable. Room regression covers the capped loss and deferred delivery. Integration validation pending.
+
 - Added field-driven decay for named temporary shields. The state samples the authored rate on the VM clock and finishes at zero. Decay uses the shared grant-draining routine independently from attributed weapon hits. Synthetic lifecycle and native settlement regressions are pending integration validation.
 
 - Implemented shared named temporary shield grants, depletion, and removal. The charge bridge now projects actual damage drained from these shields as typed pool records. Added synthetic lifecycle and settlement coverage and a prepared probe for the stock 0044 charge receiver. Integration validation pending.

@@ -17,6 +17,8 @@
     ],
     "replacement_meter": 0,
     "replacement_before_delivery_meter": 0,
-    "fresh_grant_after_replacement_meter": 6
+    "fresh_grant_after_replacement_meter": 6,
+    "retired_source_reply_meter": 0,
+    "fresh_source_reply_meter": 6
   }
 }

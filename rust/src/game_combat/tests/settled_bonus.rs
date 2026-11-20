@@ -45,9 +45,20 @@ struct Expected {
     replacement_meter: f64,
     replacement_before_delivery_meter: f64,
     fresh_grant_after_replacement_meter: f64,
+    retired_source_reply_meter: f64,
+    fresh_source_reply_meter: f64,
 }
 
-fn bonus_bundle(cap: f64) -> GraphStore {
+enum BonusRoute {
+    SourceToTarget,
+    TargetToSource,
+}
+
+fn bonus_bundle(cap: f64, route: BonusRoute) -> GraphStore {
+    let (sender_slot, recipient_slot) = match route {
+        BonusRoute::SourceToTarget => (SOURCE_SLOT, TARGET_SLOT),
+        BonusRoute::TargetToSource => (TARGET_SLOT, SOURCE_SLOT),
+    };
     let variable = |id: u32| {
         json!({
             "$": "STUConfigVarDynamic", "m_identifier": id, "m_60DB8F99": false
@@ -123,7 +134,7 @@ fn bonus_bundle(cap: f64) -> GraphStore {
             3,
             expression(
                 vec![8, 0, 14, 0, 37, 0],
-                vec![variable(SOURCE_SLOT)],
+                vec![variable(sender_slot)],
                 vec![],
                 vec![json!({"$":"STU_B5A0CAF0"})],
             ),
@@ -144,7 +155,7 @@ fn bonus_bundle(cap: f64) -> GraphStore {
             "STUStatescriptActionSendGameMessage",
             false,
             json!({
-                "m_ADEB6E05":1, "m_gameMessage":message, "m_targets":variable(TARGET_SLOT),
+                "m_ADEB6E05":1, "m_gameMessage":message, "m_targets":variable(recipient_slot),
                 "m_params":[{"$":"STU_814D595E", "m_B5051BCE":AMOUNT, "m_value":variable(DELTA_SLOT)}],
                 "m_outPlug":plug(None)
             }),
@@ -321,21 +332,24 @@ fn wound_and_heal(
     );
 }
 
-#[test]
-fn settled_healing_binds_a_directed_bonus_through_the_live_room() {
-    let contract: Contract = serde_json::from_str(include_str!(
+fn contract() -> Contract {
+    serde_json::from_str(include_str!(
         "../../../../fixtures/behavior/script-settled-bonus-v1.json"
     ))
-    .unwrap();
-    let graph_store = Arc::new(bonus_bundle(contract.input.meter_cap));
+    .unwrap()
+}
+
+fn room_with_bonus_route(
+    input: &Input,
+    route: BonusRoute,
+    ground: Arc<CollisionScene>,
+) -> (RoomSimulation, PlayerBodyFactory, OwnerBodySpawn) {
+    let graph_store = Arc::new(bonus_bundle(input.meter_cap, route));
     assert!(graph_store.uses_host_health_events());
     assert_eq!(graph_store.room_spatial_needs(), RoomSpatialNeeds::Queries);
-    let ground = Arc::new(fixture_ground());
-    let movers = MoverCatalog::default();
-    let queries = BotQueries::new(false, &movers, ground.as_ref(), None);
     let mut room = RoomSimulation::new(Vec::new()).unwrap();
     room.enable_host_health_events();
-    room.enable_spatial_queries(false, Arc::clone(&ground), graph_store.room_spatial_needs());
+    room.enable_spatial_queries(false, ground, graph_store.room_spatial_needs());
 
     let (_, template) = fixture_body_factory();
     let codecs = Arc::new(CodecTable::from_json(r#"{"classes":{}}"#).unwrap());
@@ -355,6 +369,20 @@ fn settled_healing_binds_a_directed_bonus_through_the_live_room() {
         (template, OwnerBodySetup::default()),
     )
     .unwrap();
+    (room, factory, template)
+}
+
+#[test]
+fn settled_healing_binds_a_directed_bonus_through_the_live_room() {
+    let contract = contract();
+    let ground = Arc::new(fixture_ground());
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, ground.as_ref(), None);
+    let (mut room, factory, template) = room_with_bonus_route(
+        &contract.input,
+        BonusRoute::SourceToTarget,
+        Arc::clone(&ground),
+    );
     let mut frame = template.frame;
     let source = attach(&mut room, &factory, template, 0, frame, 1);
     let recipient = attach(&mut room, &factory, template, 1, frame, 1);
@@ -422,5 +450,58 @@ fn settled_healing_binds_a_directed_bonus_through_the_live_room() {
         contract.expected.fresh_grant_after_replacement_meter
     );
     assert_eq!(meter(&room, source), 0.0);
+    assert_eq!(meter(&room, bystander), 0.0);
+}
+
+#[test]
+fn settled_healing_reply_cannot_credit_a_replacement_source() {
+    let contract = contract();
+    let ground = Arc::new(fixture_ground());
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, ground.as_ref(), None);
+    let (mut room, factory, template) = room_with_bonus_route(
+        &contract.input,
+        BonusRoute::TargetToSource,
+        Arc::clone(&ground),
+    );
+    let frame = template.frame;
+    let source = attach(&mut room, &factory, template, 0, frame, 1);
+    let target = attach(&mut room, &factory, template, 1, frame, 1);
+    let bystander = attach(&mut room, &factory, template, 2, frame, 1);
+    let finish = |room: &mut RoomSimulation, frame| {
+        room.finish_tick(&queries, frame, frame * TICK_PERIOD)
+            .unwrap();
+    };
+
+    wound_and_heal(&mut room, &contract.input, source, target, frame);
+    finish(&mut room, frame);
+    // The target already has the event referring to the original healer.
+    let replacement = attach(&mut room, &factory, template, 0, frame, 2);
+    assert_eq!(replacement.entity, source.entity);
+    assert!(room.player_body(source).is_none());
+    let actors = [replacement, target, bystander];
+    advance(&mut room, frame + 1, actors);
+    finish(&mut room, frame + 1);
+    advance(&mut room, frame + 2, actors);
+    assert_eq!(
+        meter(&room, replacement),
+        contract.expected.retired_source_reply_meter
+    );
+
+    let frame = frame + 2;
+    wound_and_heal(&mut room, &contract.input, replacement, target, frame);
+    finish(&mut room, frame);
+    advance(&mut room, frame + 1, actors);
+    finish(&mut room, frame + 1);
+    assert_eq!(
+        meter(&room, replacement),
+        contract.expected.retired_source_reply_meter
+    );
+    advance(&mut room, frame + 2, actors);
+    assert_eq!(
+        meter(&room, replacement),
+        contract.expected.fresh_source_reply_meter
+    );
+    assert_eq!(meter(&room, target), 0.0);
     assert_eq!(meter(&room, bystander), 0.0);
 }

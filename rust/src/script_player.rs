@@ -69,7 +69,7 @@ pub(crate) struct PlayerBodyFactory {
     pools: Option<HealthPools>,
     target_tags: Option<BTreeSet<u64>>,
     controller_on_fire: bool,
-    uses_authored_charge: bool,
+    charge_route: charge::ChargeRoute,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -84,6 +84,8 @@ pub(crate) enum OwnerBodyPreparationError {
     MissingModeRoot,
     #[error("authored charge graph {0:04X} must remain a single private root after room setup")]
     AuthoredChargeRoot(u32),
+    #[error("compatibility charge graph {0:04X} must remain a single public root after room setup")]
+    CompatibilityChargeRoot(u32),
     #[error(transparent)]
     Start(#[from] OwnerBodyStartupError),
     #[error(transparent)]
@@ -149,7 +151,7 @@ impl PlayerBodyFactory {
         let health = pools.unwrap_or(FALLBACK_POOLS).total();
         let variables = crate::script_init::player_entity_variables(body, health, health);
         let target_tags = body.target_tags.clone();
-        let uses_authored_charge = body.authored_charge_graph.is_some();
+        let charge_route = charge::ChargeRoute::prepare(body, mode, &roots)?;
         Ok(Self {
             graphs,
             codecs,
@@ -161,7 +163,7 @@ impl PlayerBodyFactory {
             pools,
             target_tags,
             controller_on_fire,
-            uses_authored_charge,
+            charge_route,
         })
     }
 
@@ -266,8 +268,6 @@ impl PlayerBodyFactory {
             deadeye_scene: DeadeyeScene::default(),
             velocity_changes: Vec::new(),
             scripted_motion: None,
-            damage_credit: None,
-            uses_authored_charge: self.uses_authored_charge,
         };
         let mut component = Component::start(
             Arc::clone(&self.graphs),
@@ -303,6 +303,7 @@ impl PlayerBodyFactory {
             modifiers,
             leases,
             frame: spawn.frame,
+            charge_binding: self.charge_route.bind(self.mode, self.hero),
         };
         runtime
             .sync_charge_admission(true)

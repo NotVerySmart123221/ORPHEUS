@@ -215,7 +215,9 @@ impl RoomSimulation {
         tick: u32,
         now: Duration,
     ) -> Result<(), CombatError> {
-        if !self.room_body_generation_current(request.wire, request.entity) {
+        if !self.room_body_generation_current(request.wire, request.entity)
+            || !self.room_body_generation_current(source.wire, source.entity)
+        {
             return Ok(());
         }
         match request.effect {
@@ -232,12 +234,10 @@ impl RoomSimulation {
                 )?;
             }
             ScriptEffect::Message(message) => {
-                if self.room_body_generation_current(source.wire, source.entity) {
-                    self.route_room_message(request.entity, source.wire, message);
-                }
+                self.route_room_message(request.entity, source.wire, message);
             }
             ScriptEffect::Cue(cue, source_entity) => {
-                if !self.room_cue_source_current(source.wire, source_entity) {
+                if source_entity != source.entity {
                     return Ok(());
                 }
                 if let Some(player) = self

@@ -42,6 +42,7 @@ pub(crate) struct PlayerBodyRuntime {
     pub(super) modifiers: Option<BTreeMap<ModifierKey, Modifier>>,
     pub(super) leases: ProjectileLeases,
     pub(super) frame: u32,
+    pub(super) charge_binding: Option<super::charge::ChargeBinding>,
 }
 
 pub(super) const DEADEYE_GRAPH: u32 = 0x022f;
@@ -53,9 +54,17 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
     }
 
     fn set_encounter_active(&mut self, active: bool) -> io::Result<()> {
+        if self
+            .charge_binding
+            .is_some_and(|binding| binding.is_configured())
+            && self.world.room_activity == Some(OwnerRoomActivity::Regular)
+        {
+            // Regular rooms report no encounter and still admit configured charge.
+            return self.sync_charge_admission(true);
+        }
         // The room normally supplies this phase before synchronizing charge.
         // Keep direct calls usable by supplying it here when necessary.
-        if self.world.charge_binding().is_some()
+        if self.charge_binding.is_some()
             && self
                 .world
                 .room_activity

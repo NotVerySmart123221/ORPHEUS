@@ -211,6 +211,12 @@ ability support.
   state payload. The static path leaves the impulse operands dormant.
   A dynamic-body implementation and original-client acceptance remain open.
 
+- `TrackStat` actions use their typed stat fields and target selectors.
+  A confirmed absent owner stats record supports self-target actions.
+  A variable target requires confirmation that this VM exposes no stat
+  service. The VM leaves the operands dormant and follows the normal
+  continuation. Live stat recording still needs a host implementation.
+
 Native target tracking still needs ordered samples, optional typed
 output bindings, and the lifecycle of its embedded state slots. The
 authored `track_entities` node owns separate child graph instances.
@@ -854,12 +860,13 @@ Run this action from events after the body receives its first room frame.
 During component initialization, the host can lack a room frame and reject
 the request. Admission requires a living target with health pools in that
 frame and free space in the source body's queue. The output runs when the host accepts it.
-The room settles accepted requests before retirement and checks the target's
-generation again, so an accepted request can expire before it changes health.
-The queue belongs to the source runtime and is dropped if that runtime is
-retired before settlement. Effects follow queued order within each source body. Death and health updates
-use the existing room lifecycle. These authored actions also enable the room
-body snapshot in bundles that use no spatial expressions.
+The room settles accepted requests before retirement and checks both body
+generations again. A replacement can neither receive nor inherit a queued
+health effect. Already accepted effects keep their attribution if the same
+source body dies while the room is settling the batch. Effects follow queued
+order within each source body. Death and health updates use the existing room
+lifecycle. These authored actions also enable the room body snapshot in
+bundles that use no spatial expressions.
 
 See the [synthetic health contract](../fixtures/behavior/script-health-change-v1.json).
 
@@ -930,18 +937,26 @@ and continue from `m_outPlug`.
 | 3 | Actual signed pool delta, positive for healing and negative for damage |
 | 4 | Whether damage killed the target |
 | 5 | Ordered hit tag assets, or null at a declared binding when unavailable |
+| 6 | Ordered records of named shield loss, or null at a declared binding when unavailable |
 
 The hit tag slot uses the list carried by the applied impact. A known
 empty list stays empty. Other settled effects that lack hit attribution
 omit the slot, so delivery clears any previous value in a declared
 binding. Tags preserve authored order and duplicates.
 
+Damage with pool accounting can bind slot 6 to an array of named shield
+loss records. Each record has an asset identifier at key `16056` and a
+positive amount at key `499`, rounded to native float precision. An
+empty array means a known result with no named loss. Healing and damage
+without pool accounting omit the slot. The compatibility charge message
+uses the same record encoder. A same-body GameMessage can carry the
+array as an explicit parameter.
+
 Weapon notifications carry the target's captured filter flags, target
-tags, and script variables. A settled room heal from a distinct sampled
-source can carry the same facts from the healed body. The room captures
-those facts after applying the positive pool delta. Healing tag
-attribution stays unavailable. An immediate foreign query about
-that target reads the captured values. A direct `EntityMatches` tag
+tags, and script variables. A room-settled health change from a distinct
+sampled source can carry the same facts after applying the signed pool
+delta. A change without a weapon impact leaves hit tags unavailable.
+An immediate foreign query about that target reads the captured values. A direct `EntityMatches` tag
 filter uses the captured tags and, when available, the target's
 room affiliation and post-settlement liveness. This permits credit for
 a retired target while an explicit alive filter rejects a lethal
@@ -951,19 +966,27 @@ usual host.
 Unavailable captured facts stay unavailable. The room checks body
 generation when dispatching the event, and the VM clears the snapshot
 at the end of each delivery.
-For NPC-local heals, publication samples the committed target after the
-local VM step. The queued delta remains the actual amount for each heal.
+For NPC-local changes, publication samples the committed target after
+the local VM step. Each queued delta records the actual applied amount.
 
-An immediate follow-up request to the event's foreign target uses the
-generation recorded by the room. The VM verifies it against the same room
-frame used for admission. An expired target is skipped for directed
-messages and direct health changes. This keeps historical target facts
-usable by the source after the original body retires. Radial effects
-still select present candidates through their normal spatial query.
-An immediate same-body GameMessage carries the context when a top-level
-entity parameter names the health event target. Numeric parameters,
-incoming room messages, externally scheduled messages and later graph
-work use their own context.
+An immediate directed message or direct health change to either
+participant uses their room-recorded generation. The VM verifies it
+against the room frame used for admission. An expired body is skipped.
+The original source binding and captured target facts still describe
+the completed event. Radial effects select present candidates through
+their spatial query.
+
+An immediate same-body GameMessage carries each participant's context
+when a top-level typed entity parameter names that participant.
+Target facts follow the target parameter. Numeric parameters, incoming
+room messages, externally scheduled messages and later graph work
+use their own context.
+
+The compatibility damage message runs at the current VM clock on its
+selected receiver. It carries the same settlement snapshot and must
+supply a matching typed target parameter. The host's compatibility
+filter and hostility queries apply only during that original delivery.
+A relay can carry matching target facts through its own typed parameter.
 
 The enabled room records successful weapon damage, room-settled script
 and AI requests, field healing, and VM-local AI damage and healing.
@@ -1053,8 +1076,7 @@ The loader requires exactly one private mount of the selected graph and
 a valid server `health_applied` entry. The factory checks the same mount
 constraint after adding room roots. A selected root uses the ordinary
 settled events on its next VM frame. The host skips its compatibility
-charge admission and synchronous damage credit for that body. An
-omitted selection retains the existing bridge for its supported profile.
+charge admission and synchronous damage credit for that body.
 Graph bindings remain the source for authored starting values and costs.
 A configured private root can inspect hit tags after weapon settlement.
 The stock charge graph still reads its synchronous native damage message
@@ -1062,6 +1084,27 @@ and target snapshot. Its timing, target flags, and mitigation records
 need separate validation before switching routes.
 
 See the [synthetic charge route contract](../fixtures/behavior/script-authored-charge-route-v1.json).
+
+Use `charge_compatibility` to bind the synchronous bridge to an existing
+receiver on a player body. Declare the supported mode GUIDs in `modes`,
+the receiving graph GUID in `receiver_graph`, its entity-scoped
+`admission_variable` key, and the ordinary `damage_message` GUID.
+The loader checks for one server receiver with distinct writable bindings
+for all four damage parameters.
+
+The receiving graph can be a public root mounted once on the body. For
+an existing native child, give the mounted public root and its native
+subscript's raw state slot in `parent: {graph, state}`. The subscript must
+refer to the declared receiver. Optional `inhibit: {graph, state}`
+identifies an ability state that suspends damage credit while active.
+Both references use full graph GUIDs and raw state slots.
+
+A body can declare either `charge_compatibility` or
+`authored_charge_graph`. A compatibility declaration applies only in its
+listed modes. Bodies with neither declaration keep the existing legacy
+bridge for its supported profile. The synthetic example includes both
+mount layouts. Original stock admission and rollout still require
+validation. [Synthetic compatibility fixture](../fixtures/behavior/script-charge-compatibility-v1.json)
 
 To check the stock timing and bonus receiver, point
 `ORPHEUS_RUNTIME_DIR` at the private 104319 graph bundle and run:
@@ -1083,16 +1126,31 @@ message in the recipient's next VM frame after routing. The recipient
 graph owns admission and capping. A body replacement between request
 admission and room settlement discards the pending grant.
 
-The prepared local probe exercises the isolated original admission
-claim, stock sender, receiver and cap from the available body binding.
+The prepared local probe exercises the original admission claim, passive
+wait, damage and alternate-credit receivers, and local bonus sender on one
+meter. It checks damage-pool deductions, cap and re-arm, and cancellation on
+admission withdrawal.
 
 ```text
 cargo test --locked -p orpheus-statescript --test stock_charge -- --ignored --exact prepared_stock_admission_controls_local_bonus_credit
 ```
 
-This probe supplies the admission trigger and bonus amount. Room-origin
-native `0D9A` emission and the previously unbound foreign operands still
-need independent evidence.
+This probe supplies the admission trigger, damage and alternate-credit
+messages, and bonus amount. The `0044` receiver's native producer and the
+connection to an actual heal are still unverified. Room-origin native
+`0D9A` emission and the previously unbound foreign operands also need
+independent evidence.
+
+The prepared Mercy probe injects `0D9A` into the original weapon graph
+and follows its local `00EB` sender. It supplies a filter policy and
+typed target facts inside the test because the production player host
+does not yet provide that policy. The sibling `0042` action still
+reports an unsupported diagnostic. This exercises the receiver and
+amount gates with controlled inputs.
+
+```text
+cargo test --locked -p orpheus-statescript --test stock_charge -- --ignored --exact mercy_receiver::prepared_mercy_admission_delivers_local_bonus_with_explicit_policy
+```
 
 To exercise incoming stock damage credit with explicit pool records, use
 the same private runtime:
