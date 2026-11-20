@@ -14,14 +14,15 @@ use super::super::{
     machine::{ArrayInsertion, Event, StateKey},
     shapes::{
         array_field, array_insertion_index, case_path, configured, encounter_base_state_shape,
-        excluded_target_tags, field, is_bare_header_action, is_base_health_pool,
-        is_cinematic_time_scale_envelope, is_client_subgraph_controller, is_elapsed_wait, is_entry,
-        is_horizontal_velocity_clamp, is_literal_frame_wait, is_message_recipient_set,
-        is_networked_for_code_synced, is_owner_movement_sampler, is_parent_owned_timed_graph,
-        is_projected_self_message, is_self_shield_recharge, is_self_stat_timer, is_self_target,
-        is_wave_health_pool, living_body_array_shape, parent_owned_graph_duration,
-        participant_filter, persistent_message, placement_collection_tag, pool_number, raw_indices,
-        registered_state, source_key, static_target_operand, stored,
+        excluded_target_tags, field, immediate_self_damage, is_bare_header_action,
+        is_base_health_pool, is_cinematic_time_scale_envelope, is_client_subgraph_controller,
+        is_elapsed_wait, is_entry, is_horizontal_velocity_clamp, is_literal_frame_wait,
+        is_message_recipient_set, is_networked_for_code_synced, is_owner_movement_sampler,
+        is_parent_owned_timed_graph, is_projected_self_message, is_self_shield_recharge,
+        is_self_stat_timer, is_self_target, is_wave_health_pool, living_body_array_shape,
+        parent_owned_graph_duration, participant_filter, persistent_message,
+        placement_collection_tag, pool_number, raw_indices, registered_state, source_key,
+        static_target_operand, stored,
     },
     types::{InitFault, Issue, SpawnSearch, SpawnSearchKey, State, StateKind},
     world::{CreationKind, EntityCreation, Site, World},
@@ -1122,12 +1123,30 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 // when 978A30 cannot resolve the auxiliary client owner.
                 StateKind::Plain
             }
-            "STU_9028E035"
+            "STU_9028E035" | "STU_43994F1B" | "STU_93B8758C"
                 if registration.shape(registered_state(self.graph(id), node).is_some()) =>
             {
                 StateKind::Registered { next: None }
             }
-            "STU_33A46033" | "STU_43994F1B" | "STU_93B8758C" | "STU_9935FBC8"
+            "STU_33A46033" => {
+                let site = self.site(id, node);
+                let Some(entry) = registered_state(self.graph(id), node) else {
+                    self.report(site, Issue::UnsupportedState(node.class.clone()));
+                    return Ok(());
+                };
+                if entry.suppresses_model
+                    && (self.machine.snapshot.instances[&id].is_server_only()
+                        || !self.world.supports_static_model_protection(site))
+                {
+                    self.report(
+                        site,
+                        Issue::UnsupportedField("static model protection context"),
+                    );
+                    return Ok(());
+                }
+                StateKind::Registered { next: None }
+            }
+            "STU_9935FBC8"
                 if registration.permits(registered_state(self.graph(id), node).is_some()) =>
             {
                 StateKind::Registered { next: None }
@@ -1441,10 +1460,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::ShieldRecharge
             }
             "STUStatescriptStateModifyHealth"
-                if registration.permits(matches!(
-                    (self.graph(id).index, node.pos),
-                    (0x0c89, 38 | 46 | 48) | (0x0cbc, 69) | (0x0b27, 93)
-                )) =>
+                if registration.shape(immediate_self_damage(node, key.raw).is_some())
+                    || registration.permits(matches!(
+                        (self.graph(id).index, node.pos),
+                        (0x0c89, 38 | 48) | (0x0b27, 93)
+                    )) =>
             {
                 StateKind::ModifyHealth
             }

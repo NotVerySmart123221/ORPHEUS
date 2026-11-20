@@ -67,7 +67,7 @@ def guid_index(records):
 def runtime_state_metadata(bundle):
     metadata = bundle.get("runtime_state_metadata", {})
     if not isinstance(metadata, dict) or set(metadata) - {
-        "plain_classes", "client_states", "projected_message_topics",
+        "plain_classes", "client_states", "projected_message_topics", "directed_numeric_messages",
     }:
         raise ValueError("invalid runtime state metadata fields")
     plain = metadata.get("plain_classes", [])
@@ -82,6 +82,25 @@ def runtime_state_metadata(bundle):
         for topic in topics
     ) or len(set(topics)) != len(topics):
         raise ValueError("invalid or duplicate projected message topic")
+
+    directed = metadata.get("directed_numeric_messages", [])
+    if not isinstance(directed, list):
+        raise ValueError("expected a directed numeric message list")
+    directed_topics = set()
+    for route in directed:
+        if (
+            not isinstance(route, dict) or set(route) != {"topic", "parameter"}
+            or any(not isinstance(value, str) or not CANONICAL_GUID.fullmatch(value)
+                   for value in route.values())
+        ):
+            raise ValueError("invalid directed numeric message")
+        topic, parameter = route["topic"], route["parameter"]
+        if (
+            not topic.startswith("0x0240") or not parameter.startswith("0x0A4000000000")
+            or topic.endswith("0000") or parameter.endswith("0000") or topic in directed_topics
+        ):
+            raise ValueError("invalid or duplicate directed numeric message")
+        directed_topics.add(topic)
 
     entries = metadata.get("client_states", [])
     if not isinstance(entries, list):

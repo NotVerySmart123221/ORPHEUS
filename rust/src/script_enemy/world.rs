@@ -574,16 +574,15 @@ impl World for EnemyWorld<'_> {
     fn outline_context_available(&self, _site: Site) -> Option<bool> {
         Some(false)
     }
+    fn supports_static_model_protection(&self, site: Site) -> bool {
+        site.entity == self.binding.body
+            && is_junkenstein_mode(self.binding.mode)
+            && crate::npc_catalog::is_junkenstein_boss(self.binding.hero)
+    }
+
     fn set_encounter_model_enabled(&mut self, site: Site, enabled: bool) -> bool {
         const MASK: u64 = (1 << 45) | (1 << 15);
-        if site.entity != self.binding.body
-            || !is_junkenstein_mode(self.binding.mode)
-            || !crate::npc_catalog::is_junkenstein_boss(self.binding.hero)
-            || !matches!(
-                (site.graph, site.node),
-                (0x01cb, Some(20)) | (0x0ce0, Some(17)) | (0x0d03, Some(2))
-            )
-        {
+        if !self.supports_static_model_protection(site) {
             return false;
         }
         if enabled {

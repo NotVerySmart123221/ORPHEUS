@@ -270,6 +270,27 @@ class StateScriptCoverageTest(unittest.TestCase):
         self.assertIsNone(nodes[2]["client_scope_skipped"])
         self.assertEqual(scenario["counts"]["client_skipped"], 1)
 
+    def test_directed_numeric_messages_validate_syntax_without_affecting_coverage(self):
+        baseline = self.read_report()
+        self.output.unlink()
+        route = {"topic": "0x02400000000001D2", "parameter": "0x0A40000000000217"}
+        metadata = self.prepared["runtime_state_metadata"] = {
+            "directed_numeric_messages": [route],
+        }
+        self.write_bundle()
+        annotated = self.read_report()
+        self.assertNotEqual(annotated.pop("graph_bundle_sha256"), baseline.pop("graph_bundle_sha256"))
+        self.assertEqual(annotated, baseline)
+        self.output.unlink()
+
+        for routes in ([route, route], [dict(route, parameter="0x0A40000000000000")]):
+            with self.subTest(routes=routes):
+                metadata["directed_numeric_messages"] = routes
+                self.write_bundle()
+                result = self.run_report()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("directed numeric message", result.stderr)
+
     def test_projected_message_topics_validate_syntax_without_affecting_coverage(self):
         baseline = self.read_report()
         self.output.unlink()

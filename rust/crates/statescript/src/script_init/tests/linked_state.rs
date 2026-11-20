@@ -8,6 +8,7 @@ const LINKED: &str = "STU_9028E035";
 struct Contract {
     input: Input,
     expected: Expected,
+    registry_only_pair: RegistryCases,
 }
 
 #[derive(Deserialize)]
@@ -29,6 +30,29 @@ struct Example {
 struct Expected {
     links_after_enter: Vec<Option<(u16, u16)>>,
     links_after_final_root_ends: Vec<Option<(u16, u16)>>,
+}
+
+#[derive(Deserialize)]
+struct RegistryCases {
+    roots: Vec<RegistryExample>,
+    rejected: Vec<RegistryExample>,
+    client_only: Vec<RegistryExample>,
+    initial_links: Vec<Option<(u16, u16)>>,
+}
+
+#[derive(Deserialize)]
+struct RegistryExample {
+    graph: u32,
+    position: u16,
+    class: String,
+    #[serde(default)]
+    configured: serde_json::Map<String, Json>,
+    #[serde(default)]
+    server_only: bool,
+    #[serde(default)]
+    client_only: bool,
+    #[serde(default)]
+    has_remote_slot: bool,
 }
 
 fn contract() -> Contract {
@@ -134,5 +158,134 @@ fn native_type_list_keeps_unsupported_shapes_diagnostic() {
                 ..
             }] if class == LINKED
         ));
+    }
+}
+
+fn start_registry_pair(examples: &[RegistryExample]) -> Component {
+    let mut graphs = Vec::new();
+    let mut roots = Vec::new();
+    for (id, example) in (1..).zip(examples) {
+        let child = example.position + 1;
+        let entry = node(
+            0,
+            "STUStatescriptEntry",
+            None,
+            json!({"m_outPlug": plug(&[(example.position, "m_beginPlug")], &[])}),
+        );
+        let mut fields = json!({
+            "m_4A5CA514": {"$": "STU_B5A0CAF0"},
+            "m_subgraphPlug": plug(&[(child, "m_beginPlug")], &[1]),
+        });
+        fields
+            .as_object_mut()
+            .unwrap()
+            .extend(example.configured.clone());
+        let mut state = node(example.position, &example.class, Some(0), fields);
+        state["server_only"] = json!(example.server_only);
+        state["client_only"] = json!(example.client_only);
+        let wait = node(
+            child,
+            "STUStatescriptStateWait",
+            Some(1),
+            json!({"m_timeout": {"$": "STUConfigVarFloat", "m_value": 3.5}}),
+        );
+        if example.has_remote_slot {
+            state["remote"] = json!(0);
+        }
+        let mut definition = graph(
+            example.graph,
+            vec![entry, state, wait],
+            json!([example.position, child]),
+            json!([0]),
+        );
+        definition["items"] = json!(child + 1);
+        if example.has_remote_slot {
+            definition["remote"] = json!([example.position]);
+        }
+        graphs.push(definition);
+        roots.push(Root::new(id, example.graph));
+    }
+    Component::start(
+        Arc::new(store(graphs)),
+        731,
+        Variables::new(),
+        roots,
+        0,
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap()
+}
+
+#[test]
+fn resource_free_states_register_per_class_and_keep_nested_lifecycle() {
+    let cases = contract().registry_only_pair;
+    let mut component = start_registry_pair(&cases.roots);
+    let snapshot = component.snapshot().unwrap();
+    assert!(
+        snapshot.initialization_complete(),
+        "{:?}",
+        snapshot.diagnostics
+    );
+    for (id, next) in (1..).zip(cases.initial_links) {
+        let states = &snapshot.instances[&id].states;
+        assert_eq!(states[&0].kind, StateKind::Registered { next });
+        assert!(states[&0].active && states[&1].active);
+    }
+
+    component.debug_end_state(3, 0, &mut EmptyWorld).unwrap();
+    let snapshot = component.snapshot().unwrap();
+    assert_eq!(
+        snapshot.instances[&1].states[&0].kind,
+        StateKind::Registered { next: None }
+    );
+    assert_eq!(
+        snapshot.instances[&2].states[&0].kind,
+        StateKind::Registered { next: Some((4, 0)) }
+    );
+    assert!(!snapshot.instances[&3].states[&0].active);
+    assert!(!snapshot.instances[&3].states[&1].active);
+
+    component.debug_exit_instance(4, &mut EmptyWorld).unwrap();
+    let snapshot = component.snapshot().unwrap();
+    assert!(
+        snapshot.initialization_complete(),
+        "{:?}",
+        snapshot.diagnostics
+    );
+    assert!(!snapshot.instances.contains_key(&4));
+    assert_eq!(
+        snapshot.instances[&2].states[&0].kind,
+        StateKind::Registered { next: None }
+    );
+    assert!(snapshot.instances[&2].states[&1].active);
+}
+
+#[test]
+fn resource_free_registry_requires_supported_authored_shape_and_scope() {
+    let cases = contract().registry_only_pair;
+    for example in &cases.rejected {
+        let component = start_registry_pair(std::slice::from_ref(example));
+        let snapshot = component.snapshot().unwrap();
+        assert!(
+            matches!(
+                snapshot.diagnostics.as_slice(),
+                [Diagnostic { issue: Issue::UnsupportedState(class), .. }] if class == &example.class
+            ),
+            "{}: {:?}",
+            example.graph,
+            snapshot.diagnostics
+        );
+        assert!(snapshot.instances[&1].states.is_empty());
+    }
+    for example in &cases.client_only {
+        let component = start_registry_pair(std::slice::from_ref(example));
+        let snapshot = component.snapshot().unwrap();
+        assert!(
+            snapshot.initialization_complete(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        assert!(snapshot.instances[&1].states.is_empty());
     }
 }

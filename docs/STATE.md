@@ -330,6 +330,56 @@ sites**. All actor rows and the 476 observations in the #72 capture
 matched the previous run. Both #131 schedules reproduced 339 ticks
 per implementation, with the same four RNG setup differences.
 
+At `001cd3ea`, the room captures the target of a positive heal when the
+event has a distinct sampled source. Target facts use the same capture
+path as impacts, with the actual healed delta and unavailable hit
+attribution. Two resource-free state classes now register by checked
+fields and raw state slots. The prepared boss graph probe passed its
+successor, owner and observer codec, and retirement checks. The locked
+workspace suite and Clippy passed with script coverage.
+
+The unaltered `0B8B` passive subtree and `00EB` bonus receiver passed
+the prepared graph-runner probe with a detached host. It reproduced the
+one-second passive deadline, admission cancellation and re-arm, and
+bonus capping. Admission and attribution for a running room remain
+separate from this graph execution.
+
+Two same-pack 104319 startup reports matched with all 32 actor rows
+unchanged, including **12 independent starts**, one ordinary room
+attachment, and **46 blocking sites**. The #72 trace retained its
+476 observations. Both #131 schedules reproduced the previous 339
+ticks per implementation and the same four RNG setup differences.
+
+The opt-in directed numeric route preserves ordinary local delivery
+and uses the room queue for a validated foreign target. The prepared
+probe passed for the original `00EB` sender actions and receiver with
+provided caller inputs. Room tests checked source and target generation
+at settlement and delivery on the next receiver VM frame. Natural
+target binding and native foreign timing remain unverified.
+
+Static model protection now uses the authored state slots and an
+explicit host capability. The prepared boss graph regression passed its
+link, encoding, and final restoration checks. The current encounter
+host owns the model mask bookkeeping. Runtime rendering and collision
+effects have separate verification.
+
+The workspace suite, Clippy, Python bundle and coverage tests, and
+the three prepared graph probes above passed before handoff on this
+Phase 2 worktree. Shared-branch verification belongs to integration.
+
+Immediate self damage uses validated local state fields for two encounter
+forms. The self-instigated form reads a positive native integer amount.
+The no-instigator cleanup form retains the reference's 10,000 validation
+and skips an already dead VM owner. The existing NPC host still owns health
+settlement. Other no-instigator amounts, external targets, and compound
+modifiers require their own evidence. Integration verification is pending.
+
+Two of the three remaining native target-tracking startup sites have
+empty embedded plugs. One configures a second filter and an entity list
+output. The other configures a count output. Both read a dynamic radius.
+The remaining site links embedded states. Each configuration still needs
+its native query and output semantics verified.
+
 The following Phase 3A results were measured on its standalone revisions.
 
 At `339b05d8`, the Phase 3A authored static ray query passed synthetic

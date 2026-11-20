@@ -22,7 +22,7 @@ The Rust-only [class declaration fixture](../fixtures/behavior/script-authored-c
 
 The Rust-only [local message fixture](../fixtures/behavior/script-local-message-v1.json) checks parameter capture, continuation, graph-order delivery and client-only scope through the production VM. It also checks that a malformed receiver binding leaves earlier outputs and the active receiver branch intact. It needs no prepared runtime.
 
-The Rust-only [room message fixture](../fixtures/behavior/script-room-message-v1.json) checks typed admission and payload capture, explicit listener scope, and delivery in the recipient's next VM frame. Native room tests cover generation checks and the shared request order.
+The Rust-only [room message fixture](../fixtures/behavior/script-room-message-v1.json) checks typed admission and payload capture, explicit listener scope, and delivery in the recipient's next VM frame. Native room tests cover sender and target generation checks, shared request order, and next-frame delivery. Portable coverage validates the opt-in native numeric route and ordinary local handling.
 
 The Rust-only [projected message topics fixture](../fixtures/behavior/script-projected-message-topics-v1.json) checks explicit client scope, loading conflicts, ordinary state entry and exit, and server dispatch exclusion. The native test compares owner and observer activation frames and removal deltas with the existing send codec.
 
@@ -53,8 +53,13 @@ The [voice projection fixture](../fixtures/behavior/statescript-voice-empty-proj
 
 The [linked state fixture](../fixtures/behavior/script-linked-state-lifecycle-v1.json)
 covers cross-instance link order, server-only entries, retirement, and invalid types.
+The [static model protection fixture](../fixtures/behavior/script-static-model-protection-v1.json)
+covers authored slot validation, host admission, and restoration after the last state retires.
 The [self shield recharge fixture](../fixtures/behavior/script-self-shield-recharge-v1.json)
 covers field-based admission, ticking, rate changes, and retirement.
+The [immediate self-damage fixture](../fixtures/behavior/script-immediate-self-damage-v1.json)
+checks admission at invented positions, native integer rounding, one-shot
+execution, the different death rules, and rejection of unreviewed modifiers.
 The [mode entity fixture](../fixtures/behavior/script-mode-entity-query-v1.json)
 covers available, absent, and unknown mode script context through the owner VM.
 
@@ -64,7 +69,7 @@ The Rust-only [authored resource meter fixture](../fixtures/behavior/script-auth
 
 The Rust-only [local health outcomes fixture](../fixtures/behavior/script-local-health-outcomes-v1.json) checks actual damage from AI callbacks and capped field healing. Room tests also exercise source provenance across body replacement.
 
-The Rust-only [host health event fixture](../fixtures/behavior/script-host-health-events-v1.json) checks authenticated delivery through the ordinary VM event timeline, typed receipt parameters, and separation from script-sent messages. It distinguishes ordered hit tags, an explicitly empty list, and clearing the binding when tags are unavailable. The [settled hit fixture](../fixtures/behavior/script-settled-hit-tags-v1.json) exercises native player and bot impact settlement and the captured tag list. It also checks which target facts survive settlement and how the room handles source and target replacement. Portable coverage checks that those facts are scoped to their own host event.
+The Rust-only [host health event fixture](../fixtures/behavior/script-host-health-events-v1.json) checks authenticated delivery through the ordinary VM event timeline, typed receipt parameters, and separation from script-sent messages. It distinguishes ordered hit tags, an explicitly empty list, and clearing the binding when tags are unavailable. The [settled hit fixture](../fixtures/behavior/script-settled-hit-tags-v1.json) exercises native player and bot impact settlement and the captured tag list. It also checks which target facts survive settlement and how the room handles source and target replacement. Portable coverage checks that those facts are scoped to their own host event. The native test also captures the healed target with a distinct current source and checks the capped amount and absent hit attribution.
 
 The Rust-only [mode ruleset fixture](../fixtures/behavior/script-mode-rulesets-v1.json) checks mode isolation, actor overrides, typed values, and explicit null results through the production StateScript loader. The same fixture covers the separate engine settings table, including an omitted table, an empty table, and an absent key. The owner host reads these values through its bound mode.
 

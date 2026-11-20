@@ -180,6 +180,10 @@
     "integer": 113,
     "vector": [1.5, -2.0, 0.0]
   },
+  "native_sender_generation": {
+    "stale_payload": 20,
+    "current_payload": 21
+  },
   "expected": {
     "continuation_value": 19,
     "room_receiver_count": 2,

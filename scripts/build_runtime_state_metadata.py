@@ -1,4 +1,4 @@
-"""Add locally verified state scope metadata to a private graph bundle."""
+"""Add locally verified state and message metadata to a private graph bundle."""
 
 import argparse
 import gzip
@@ -138,42 +138,73 @@ def write_bundle(path, bundle):
         raise
 
 
+def directed_numeric_message(raw):
+    if not re.fullmatch(r"0x0240[0-9a-f]{12}:0x0a4000000000[0-9a-f]{4}", raw, re.IGNORECASE):
+        raise argparse.ArgumentTypeError("expected native message GUID:parameter GUID")
+    topic, parameter = (int(part, 16) for part in raw.split(":"))
+    if (topic & 0xFFFF) == 0 or (parameter & 0xFFFF) == 0:
+        raise argparse.ArgumentTypeError("expected nonzero message and parameter slots")
+    return {"topic": f"0x{topic:016X}", "parameter": f"0x{parameter:016X}"}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--graph-bundle", type=Path, required=True, help="version 1 gzip graph bundle")
-    parser.add_argument("--evidence", type=Path, required=True, help="local listing ZIP or directory")
+    parser.add_argument("--evidence", type=Path, help="local listing ZIP or directory")
+    parser.add_argument(
+        "--directed-numeric-message",
+        action="append",
+        default=[],
+        type=directed_numeric_message,
+        metavar="TOPIC:PARAMETER",
+        help="declare a reviewed native numeric room message (repeatable)",
+    )
     parser.add_argument("--output", type=Path, required=True, help="new private gzip bundle")
     args = parser.parse_args()
+    if args.evidence is None and not args.directed_numeric_message:
+        parser.error("provide --evidence or --directed-numeric-message")
 
     try:
         with gzip.open(args.graph_bundle, "rt", encoding="utf-8") as source:
             bundle = json.load(source)
-        if (
-            not isinstance(bundle, dict)
-            or bundle.get("version") != 1
-            or "runtime_state_metadata" in bundle
-        ):
-            raise ValueError("expected a version 1 graph bundle without runtime state metadata")
-        graphs = {
-            graph["index"]: (graph["states"], {node["pos"]: node for node in graph["nodes"]})
-            for graph in bundle["graphs"]
-        }
-        if len(graphs) != len(bundle["graphs"]):
-            raise ValueError("duplicate prepared graph index")
-        metadata, counts, outside, unmatched = build_metadata(args.evidence, graphs)
-        bundle["runtime_state_metadata"] = metadata
+        if not isinstance(bundle, dict) or bundle.get("version") != 1:
+            raise ValueError("expected a version 1 graph bundle")
+        if args.evidence is not None:
+            if "runtime_state_metadata" in bundle:
+                raise ValueError("classification requires a bundle without runtime state metadata")
+            graphs = {
+                graph["index"]: (graph["states"], {node["pos"]: node for node in graph["nodes"]})
+                for graph in bundle["graphs"]
+            }
+            if len(graphs) != len(bundle["graphs"]):
+                raise ValueError("duplicate prepared graph index")
+            metadata, counts, outside, unmatched = build_metadata(args.evidence, graphs)
+            bundle["runtime_state_metadata"] = metadata
+        elif not isinstance(bundle.get("graphs"), list):
+            raise ValueError("expected a prepared graph list")
+        if args.directed_numeric_message:
+            metadata = bundle.setdefault("runtime_state_metadata", {})
+            if not isinstance(metadata, dict) or "directed_numeric_messages" in metadata:
+                raise ValueError("cannot replace existing directed numeric message metadata")
+            routes = sorted(args.directed_numeric_message, key=lambda route: route["topic"])
+            if len({route["topic"] for route in routes}) != len(routes):
+                raise ValueError("duplicate directed numeric message topic")
+            metadata["directed_numeric_messages"] = routes
         write_bundle(args.output, bundle)
     except (OSError, ValueError, KeyError, TypeError, BadZipFile) as error:
         parser.error(str(error))
 
-    listings_count, state_count, overlap = counts
-    print(f"Read {listings_count} graph listings and {state_count} state markers.")
-    print(f"Matched {overlap} of {len(graphs)} prepared graphs.")
-    print(f"Recorded {len(metadata['plain_classes'])} plain state classes.")
-    print(
-        f"Confirmed {len(metadata['client_states'])} client states, "
-        f"with {outside} outside the bundle and {unmatched} unmatched within it."
-    )
+    if args.evidence is not None:
+        listings_count, state_count, overlap = counts
+        print(f"Read {listings_count} graph listings and {state_count} state markers.")
+        print(f"Matched {overlap} of {len(graphs)} prepared graphs.")
+        print(f"Recorded {len(metadata['plain_classes'])} plain state classes.")
+        print(
+            f"Confirmed {len(metadata['client_states'])} client states, "
+            f"with {outside} outside the bundle and {unmatched} unmatched within it."
+        )
+    if args.directed_numeric_message:
+        print(f"Declared {len(args.directed_numeric_message)} directed numeric messages.")
 
 
 if __name__ == "__main__":

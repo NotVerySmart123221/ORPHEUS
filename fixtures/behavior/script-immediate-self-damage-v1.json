@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "case_id": "script-immediate-self-damage.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "source": {"basis": "Invented graph positions and inputs exercise the callback and death behavior from the pinned encounter reference."},
+  "input": [
+    {
+      "name": "instigated self damage uses the authored value with native rounding",
+      "graph": 28688,
+      "pos": 3,
+      "self_instigator": true,
+      "amount": 16777217,
+      "admitted": true,
+      "expected_damage": [16777216.0]
+    },
+    {
+      "name": "instigated self damage defers dead body policy to the host",
+      "graph": 28689,
+      "pos": 4,
+      "self_instigator": true,
+      "owner_dead": true,
+      "amount": 217,
+      "admitted": true,
+      "expected_damage": [217.0]
+    },
+    {
+      "name": "uninstigated cleanup runs on a living body",
+      "graph": 28690,
+      "pos": 6,
+      "self_instigator": false,
+      "amount": 10000,
+      "admitted": true,
+      "expected_damage": [10000.0]
+    },
+    {
+      "name": "uninstigated cleanup skips a dead body",
+      "graph": 28691,
+      "pos": 7,
+      "self_instigator": false,
+      "owner_dead": true,
+      "amount": 10000,
+      "admitted": true,
+      "expected_damage": []
+    },
+    {
+      "name": "uninstigated damage with another value is outside the known cleanup form",
+      "graph": 28692,
+      "pos": 8,
+      "self_instigator": false,
+      "amount": 999,
+      "admitted": false,
+      "expected_damage": []
+    },
+    {
+      "name": "a connected completion hook is outside the reviewed form",
+      "graph": 28693,
+      "pos": 9,
+      "self_instigator": true,
+      "amount": 125,
+      "node_fields": {
+        "m_onFinishedPlug": {"$": "STUStatescriptOutputPlug", "links": [[9, "m_beginPlug"]]}
+      },
+      "admitted": false,
+      "expected_damage": []
+    },
+    {
+      "name": "a live secondary modifier rejects the immediate shape",
+      "graph": 28694,
+      "pos": 10,
+      "self_instigator": true,
+      "amount": 125,
+      "effect_fields": {"m_430E83BE": 1},
+      "admitted": false,
+      "expected_damage": []
+    },
+    {
+      "name": "an integer outside the signed native range is rejected",
+      "graph": 28695,
+      "pos": 11,
+      "self_instigator": true,
+      "amount": 4294967297,
+      "admitted": false,
+      "expected_damage": []
+    }
+  ]
+}
