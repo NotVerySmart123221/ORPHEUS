@@ -2,6 +2,7 @@ use super::*;
 
 mod abilities_and_weapons;
 mod actions_contract;
+mod actor_scope_identity;
 mod ai_and_spawning;
 mod arrays_and_boss;
 mod authored_classes;

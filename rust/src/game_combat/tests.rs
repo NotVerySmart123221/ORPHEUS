@@ -628,6 +628,9 @@ fn actor_rays_sample_capsules_once_and_respect_occlusion_and_replacement() {
     room.prepare_spatial_frame(1).unwrap();
     let first = Arc::clone(&room.spatial_frame.as_ref().unwrap().1);
     let capsules = first.actor_capsules.as_ref().unwrap();
+    let original_identity = first.actor_identity(7).unwrap();
+    assert_eq!(original_identity, first.script_targets[&7].entity.to_bits());
+    assert_eq!(first.actor_identity(99), None);
     assert_eq!(capsules.len(), 3);
     assert_eq!(capsules[&7].radius, 0.25);
     assert_eq!(capsules[&bot_ids[0]].height, 1.0);
@@ -696,6 +699,12 @@ fn actor_rays_sample_capsules_once_and_respect_occlusion_and_replacement() {
         room.spawn_player_body(player(generation, [5.0, 0.0, 0.25]))
             .unwrap();
         let replacement = room.owner_startup_spatial_frame(8).unwrap();
+        assert_eq!(first.actor_identity(7), Some(original_identity));
+        assert_eq!(replacement.actor_identity(7), None);
+        assert_eq!(
+            replacement.actor_identity(bot_ids[0]),
+            first.actor_identity(bot_ids[0])
+        );
         assert!(
             !replacement
                 .actor_capsules
@@ -752,6 +761,12 @@ fn actor_rays_sample_capsules_once_and_respect_occlusion_and_replacement() {
     assert_eq!(next.actor_capsules.as_ref().unwrap()[&7].height, 0.5);
     assert_eq!(next.actor_capsules.as_ref().unwrap()[&7].radius, 0.125);
     assert_ne!(next.script_targets[&7].entity, old_entity);
+    assert_eq!(
+        next.actor_identity(7),
+        Some(next.script_targets[&7].entity.to_bits())
+    );
+    assert_ne!(next.actor_identity(7), Some(original_identity));
+    assert_eq!(first.actor_identity(7), Some(original_identity));
     assert_eq!(
         next.actor_ray_cast(
             SCRIPT_RAY_SITE,

@@ -1072,6 +1072,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
 
     pub(in crate::script_init) fn update(&mut self) -> Result<(), InitFault> {
         self.spend("component update")?;
+        self.retire_stale_actor_children()?;
         // Release scopes that cannot accept input before timers or observations
         // sample their next frame. Physical input remains available to opt-ins.
         if std::mem::take(&mut self.machine.logical_buttons_need_resync) {

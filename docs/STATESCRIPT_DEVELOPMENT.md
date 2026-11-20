@@ -942,6 +942,14 @@ A successful empty result removes all children. Removing an entity or
 ending the tracker tears down the corresponding child, scoped descendants
 and timers. The tracker and its child instances execute on the server.
 
+Set `"identity": "room_actor"` to bind each child to the actor in the room's
+frozen sample. A target with no live identity waits for a successful
+sample with a known identity. An unchanged identity keeps its child while
+the target query is unavailable. A changed or missing identity retires
+the child and its descendants before their queued work can run, even if
+the target query is unavailable. A subsequent successful sample can start
+a fresh child for the replacement body at the same entity ID.
+
 See the [synthetic target child contract](../fixtures/behavior/script-target-children-v1.json).
 
 ## Declare a client-only operand

@@ -1,9 +1,10 @@
 //! State-owned child instances keyed by target identity.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 use crate::{
     script_expr::{self, EvalError},
+    script_init::machine::ActorTargetGuard,
     script_wire::{Value, Variables},
 };
 
@@ -36,7 +37,7 @@ impl<W: World> Vm<'_, '_, '_, W> {
             );
             return Ok(());
         };
-        let mut targets = BTreeSet::new();
+        let mut targets = BTreeMap::new();
         for target in entities {
             self.spend("tracked target entity")?;
             let entity = match target {
@@ -49,24 +50,74 @@ impl<W: World> Vm<'_, '_, '_, W> {
                     return Ok(());
                 }
             };
-            targets.insert(entity);
+            targets.insert(entity, None);
             if targets.len() > MAX_TRACKED_TARGETS {
                 self.report(site, Issue::UnsupportedField("tracked target limit"));
                 return Ok(());
             }
         }
 
-        let targets: Vec<_> = targets.into_iter().collect();
-        self.retain_target_children(key, &targets)?;
-        for &entity in &targets {
-            self.ensure_target_child(key, entity, child_graph, true, || {
+        if node.tracks_room_actor_identity() {
+            targets.retain(|&entity, identity| {
+                *identity = self.world.room_actor_identity(entity);
+                identity.is_some()
+            });
+        }
+        let selected: Vec<_> = targets.keys().copied().collect();
+        self.retain_target_children(key, &selected)?;
+        for (entity, identity) in targets {
+            self.ensure_target_child(key, entity, child_graph, true, identity, || {
                 Variables::from([(variable, Value::Entity(entity))])
             })?;
         }
         self.state_mut(key)
             .expect("active entity tracker")
-            .tracked_targets = targets;
+            .tracked_targets = selected;
         self.try_complete(key, node, 0)
+    }
+
+    /// Clear scopes before dispatching any work against a new room sample.
+    pub(super) fn retire_stale_actor_children(&mut self) -> Result<(), InitFault> {
+        if self.machine.actor_target_guards.is_empty() {
+            return Ok(());
+        }
+        for _ in 0..self.machine.actor_target_guards.len() {
+            self.spend("tracked actor identity")?;
+        }
+        let stale: Vec<_> = self
+            .machine
+            .actor_target_guards
+            .iter()
+            .filter_map(|(&child, guard)| {
+                (self.world.room_actor_identity(guard.entity) != Some(guard.identity))
+                    .then_some(child)
+            })
+            .collect();
+        if stale.is_empty() {
+            return Ok(());
+        }
+        // Releasing a child may resynchronize inputs in other children.
+        // Mark the whole retiring set before releasing the first effect.
+        self.quiesce_actor_scopes(&stale)?;
+        for child in stale {
+            self.destroy(child)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn detach_actor_target_guard(&mut self, child: u16) {
+        let Some(guard) = self.machine.actor_target_guards.remove(&child) else {
+            return;
+        };
+        if let Some(tracker) = self
+            .state_mut(guard.tracker)
+            .filter(|tracker| tracker.target_children.get(&guard.entity) == Some(&child))
+        {
+            tracker.target_children.remove(&guard.entity);
+            tracker
+                .tracked_targets
+                .retain(|&entity| entity != guard.entity);
+        }
     }
 
     /// Discard dead child records and tear down children whose targets left.
@@ -104,6 +155,7 @@ impl<W: World> Vm<'_, '_, '_, W> {
         entity: u32,
         graph: u32,
         server_only: bool,
+        actor_identity: Option<u64>,
         variables: impl FnOnce() -> Variables,
     ) -> Result<Option<u16>, InitFault> {
         let children = &self
@@ -122,6 +174,16 @@ impl<W: World> Vm<'_, '_, '_, W> {
                 .expect("target tracker state")
                 .target_children
                 .insert(entity, child);
+            if let Some(identity) = actor_identity {
+                self.machine.actor_target_guards.insert(
+                    child,
+                    ActorTargetGuard {
+                        tracker: key,
+                        entity,
+                        identity,
+                    },
+                );
+            }
         }
         Ok(created?.then_some(child))
     }

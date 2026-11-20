@@ -1649,6 +1649,38 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         Ok(())
     }
 
+    fn owned_children(&self, id: u16) -> Vec<u16> {
+        let instances = &self.machine.snapshot.instances;
+        instances[&id]
+            .states
+            .values()
+            .flat_map(|state| state.target_children.values().copied())
+            .filter(|child| instances.contains_key(child))
+            .chain(instances.iter().rev().filter_map(|(&child, instance)| {
+                instance
+                    .parent
+                    .is_some_and(|(parent, _)| parent == id)
+                    .then_some(child)
+            }))
+            .collect()
+    }
+
+    pub(super) fn quiesce_actor_scopes(&mut self, roots: &[u16]) -> Result<(), InitFault> {
+        let mut pending = roots.to_vec();
+        let mut visited = std::collections::BTreeSet::new();
+        while let Some(id) = pending.pop() {
+            if !self.machine.snapshot.instances.contains_key(&id) || !visited.insert(id) {
+                continue;
+            }
+            self.spend("retiring actor scope")?;
+            pending.extend(self.owned_children(id));
+            for state in self.machine.snapshot.instances[&id].states.values_mut() {
+                state.ending = true;
+            }
+        }
+        Ok(())
+    }
+
     pub(in crate::script_init) fn destroy(&mut self, id: u16) -> Result<(), InitFault> {
         let mut pending = vec![(id, false)];
         while let Some((id, children_done)) = pending.pop() {
@@ -1657,26 +1689,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             if !children_done {
                 self.spend("instance teardown")?;
-                let mut effects = Vec::new();
+                let children = self.owned_children(id);
                 for state in self.machine.snapshot.instances[&id].states.values_mut() {
                     state.ending = true;
-                    effects.extend(std::mem::take(&mut state.target_children).into_values());
+                    state.target_children.clear();
                 }
                 pending.push((id, true));
-                pending.extend(
-                    effects
-                        .into_iter()
-                        .filter(|child| self.machine.snapshot.instances.contains_key(child))
-                        .map(|child| (child, false)),
-                );
-                pending.extend(self.machine.snapshot.instances.iter().rev().filter_map(
-                    |(&child, instance)| {
-                        instance
-                            .parent
-                            .is_some_and(|(parent, _)| parent == id)
-                            .then_some((child, false))
-                    },
-                ));
+                pending.extend(children.into_iter().map(|child| (child, false)));
                 continue;
             }
             let outputs: Vec<_> = self.machine.snapshot.instances[&id]
@@ -1822,6 +1841,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     self.unlink_single_output(key, 0)?;
                 }
             }
+            self.detach_actor_target_guard(id);
             self.machine.snapshot.instances.shift_remove(&id);
             self.machine
                 .movement_modifiers

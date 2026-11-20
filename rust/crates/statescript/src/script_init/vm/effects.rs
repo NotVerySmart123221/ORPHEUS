@@ -745,12 +745,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         };
         self.retain_target_children(key, &selected)?;
         for entity in selected {
-            let Some(child) = self.ensure_target_child(key, entity, TARGET_GRAPH, false, || {
-                Variables::from([
-                    (536, Value::Entity(entity)),
-                    (SCRIPT_SOURCE, Value::Entity(site.entity)),
-                ])
-            })?
+            let Some(child) =
+                self.ensure_target_child(key, entity, TARGET_GRAPH, false, None, || {
+                    Variables::from([
+                        (536, Value::Entity(entity)),
+                        (SCRIPT_SOURCE, Value::Entity(site.entity)),
+                    ])
+                })?
             else {
                 continue;
             };

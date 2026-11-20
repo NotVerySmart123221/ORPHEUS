@@ -1041,6 +1041,13 @@ impl World for EnemyWorld<'_> {
         self.binding.spatial_frame.as_deref()?.entity_facts()
     }
 
+    fn room_actor_identity(&self, entity: u32) -> Option<u64> {
+        self.binding
+            .spatial_frame
+            .as_deref()?
+            .actor_identity(entity)
+    }
+
     fn spatial_line_clear(&self, origin: [f64; 3], target: [f64; 3]) -> Option<bool> {
         self.binding
             .spatial_frame

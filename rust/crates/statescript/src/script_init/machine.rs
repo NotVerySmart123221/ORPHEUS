@@ -55,6 +55,13 @@ pub(super) struct StateKey {
     pub(super) raw: u16,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct ActorTargetGuard {
+    pub(super) tracker: StateKey,
+    pub(super) entity: u32,
+    pub(super) identity: u64,
+}
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum RegisteredClass {
     CinematicAim,
@@ -219,6 +226,7 @@ pub(super) struct Machine {
     pub(super) watchers: BTreeMap<VarKey, Vec<StateKey>>,
     pub(super) foreign_watchers: BTreeMap<(u32, u32), Vec<StateKey>>,
     pub(super) ticking: BTreeMap<u16, IndexMap<u16, u64>>,
+    pub(super) actor_target_guards: BTreeMap<u16, ActorTargetGuard>,
     pub(super) deferred: BTreeMap<u16, Vec<(f64, u16)>>,
     pub(super) voice_poll: Vec<StateKey>,
     pub(super) links: BTreeMap<VarKey, Vec<VariableLink>>,
@@ -256,6 +264,7 @@ impl Clone for Machine {
             watchers: self.watchers.clone(),
             foreign_watchers: self.foreign_watchers.clone(),
             ticking: self.ticking.clone(),
+            actor_target_guards: self.actor_target_guards.clone(),
             deferred: self.deferred.clone(),
             voice_poll: self.voice_poll.clone(),
             links: self.links.clone(),
@@ -338,6 +347,7 @@ impl Machine {
             watchers: BTreeMap::new(),
             foreign_watchers: BTreeMap::new(),
             ticking: BTreeMap::new(),
+            actor_target_guards: BTreeMap::new(),
             deferred: BTreeMap::new(),
             voice_poll: Vec::new(),
             links: BTreeMap::new(),
