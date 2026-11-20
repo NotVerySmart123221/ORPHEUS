@@ -566,12 +566,18 @@ steering update. Both move through the existing capsule solver and static
 collision category. The sweep preserves velocity for the ordinary
 movement step. Death and runtime retirement clear pending displacement.
 
-Static mesh and scheduling behavior have synthetic contracts. Dynamic
-actor contact during displacement and original-client prediction and
-correction still require acceptance.
+An actual player displacement opens a bounded owner correction window at
+the moved pose. Delivery uses the existing create acknowledgement,
+packet budget, and input replay rules, including the input acknowledged
+before this motion. A correction for an already moved
+pose stays eligible if its body script stops. Body retirement discards
+the old generation's correction. Dynamic actor contact and
+original-client acceptance remain open.
 
 See the [script dispatch contract](../fixtures/behavior/script-swept-displacement-v1.json)
 and the [native capsule contract](../fixtures/behavior/native-swept-displacement-v1.json).
+The [owner motion contract](../fixtures/behavior/owner-swept-motion-v1.json)
+covers correction scheduling and a same-frame script failure.
 
 ## Use priorities for control effects
 

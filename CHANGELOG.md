@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Send owner corrections when an authored displacement actually moves a player. The correction window starts on the moved pose and remains eligible for the same body if its script fails afterward. Shared-branch verification is pending.
+
 - Added a server-only StateScript action for bounded self displacement through player and NPC capsule collision. Requests use movement frame deadlines and clear when the owning body dies or retires. Added synthetic VM, mover, and room regressions. Shared-branch verification is pending.
 
 - Fixed outdated held-input branches that could start after a lock was acquired, released, and acquired again in the same VM update. Shared-branch verification is pending.

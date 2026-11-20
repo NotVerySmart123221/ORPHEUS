@@ -69,13 +69,28 @@ impl CorrectionHistory {
 
     /// Open or extend the server-only motion correction window through this frame's tail.
     pub fn server_motion(&mut self, frame: u32, frame_us: u32) {
+        self.motion_correction_window(frame.saturating_add(1), frame_us, false);
+    }
+
+    /// Correct a swept displacement starting with the pose where it actually moved.
+    pub(crate) fn swept_motion(&mut self, first_moved_frame: u32, frame_us: u32) {
+        self.motion_correction_window(first_moved_frame, frame_us, true);
+    }
+
+    fn motion_correction_window(&mut self, first: u32, frame_us: u32, include_earlier_frame: bool) {
         if frame_us == 0 {
             return;
         }
-        let first = frame.saturating_add(1);
         let through = first.saturating_add((SERVER_MOTION_TAIL_US - 1) / frame_us);
         self.impulse_correction = Some(match self.impulse_correction {
-            Some((prev_first, prev_through)) => (prev_first, prev_through.max(through)),
+            Some((prev_first, prev_through)) => (
+                if include_earlier_frame {
+                    prev_first.min(first)
+                } else {
+                    prev_first
+                },
+                prev_through.max(through),
+            ),
             None => (first, through),
         });
     }
@@ -431,5 +446,92 @@ mod tests {
 
         history.server_motion(u32::MAX, 16_000);
         assert_eq!(history.impulse_correction(), Some((u32::MAX, u32::MAX)));
+    }
+
+    #[test]
+    fn swept_motion_includes_first_moved_pose_without_repeating_old_frames() {
+        let mut history = CorrectionHistory::new(ENTITY, 1);
+        assert!(history.record(pose(9)));
+        history.swept_motion(10, 100_000);
+        assert_eq!(history.impulse_correction(), Some((10, 12)));
+        assert!(history.candidate_with_hero(9, true, false).is_none());
+
+        assert!(history.record(pose(10)));
+        assert!(history.candidate_with_hero(10, false, false).is_none());
+        let moved = history.candidate_with_hero(10, true, false).unwrap();
+        assert_eq!(moved.frame(), 10);
+        assert!(history.sent(&moved));
+        assert!(!history.sent(&moved));
+        assert!(history.candidate_with_hero(9, true, false).is_none());
+        assert!(history.candidate_with_hero(10, true, false).is_none());
+        assert!(!history.record(pose(9)));
+        assert!(!history.record(pose(10)));
+        assert_eq!(history.impulse_correction(), Some((10, 12)));
+    }
+
+    #[test]
+    fn swept_motion_window_expires_only_after_sending_its_bounded_tail() {
+        let mut history = CorrectionHistory::new(ENTITY, 1);
+        history.swept_motion(10, 100_000);
+        for frame in 10..=13 {
+            assert!(history.record(pose(frame)));
+        }
+
+        let before_tail = history.candidate_with_hero(11, true, false).unwrap();
+        assert!(history.sent(&before_tail));
+        assert_eq!(history.impulse_correction(), Some((10, 12)));
+
+        let tail = history.candidate_with_hero(12, true, false).unwrap();
+        assert_eq!(tail.frame(), 12);
+        // Selecting a packet held back by budget or transport does not commit it.
+        assert_eq!(history.corrected(), Some(11));
+        assert_eq!(history.impulse_correction(), Some((10, 12)));
+        assert_eq!(
+            history
+                .candidate_with_hero(12, true, false)
+                .unwrap()
+                .frame(),
+            12
+        );
+
+        assert!(history.sent(&tail));
+        assert_eq!(history.impulse_correction(), None);
+        assert!(!history.sent(&tail));
+        assert!(!history.sent(&before_tail));
+        assert!(history.candidate_with_hero(13, true, false).is_none());
+        assert_eq!(history.candidate(13, true).unwrap().frame(), 13);
+    }
+
+    #[test]
+    fn swept_motion_preserves_zero_duration_saturation_and_existing_window_extension() {
+        let mut history = CorrectionHistory::new(ENTITY, 1);
+        history.swept_motion(10, 0);
+        assert_eq!(history.impulse_correction(), None);
+
+        history.server_motion(9, 100_000);
+        history.swept_motion(12, 100_000);
+        assert_eq!(history.impulse_correction(), Some((10, 14)));
+        history.server_motion(14, 100_000);
+        assert_eq!(history.impulse_correction(), Some((10, 17)));
+
+        let mut overlapping = CorrectionHistory::new(ENTITY, 1);
+        overlapping.server_motion(10, 100_000);
+        assert_eq!(overlapping.impulse_correction(), Some((11, 13)));
+        overlapping.server_motion(8, 100_000);
+        assert_eq!(overlapping.impulse_correction(), Some((11, 13)));
+        overlapping.swept_motion(10, 100_000);
+        assert_eq!(overlapping.impulse_correction(), Some((10, 13)));
+        assert!(overlapping.record(pose(10)));
+        assert_eq!(
+            overlapping
+                .candidate_with_hero(10, true, false)
+                .unwrap()
+                .frame(),
+            10
+        );
+
+        let mut saturated = CorrectionHistory::new(ENTITY, 1);
+        saturated.swept_motion(u32::MAX, 16_000);
+        assert_eq!(saturated.impulse_correction(), Some((u32::MAX, u32::MAX)));
     }
 }

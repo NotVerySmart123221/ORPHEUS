@@ -96,6 +96,7 @@ pub struct Mover {
     authored_facing: Option<[i32; 2]>,
     velocity_changes: Vec<(u32, VelocityChange)>,
     swept_displacement: Option<(u32, SweptDisplacement)>,
+    swept_displacement_frame: Option<u32>,
     last_command: Option<Command>,
     last_input: Option<u32>,
     pose: Movement,
@@ -125,6 +126,7 @@ impl Mover {
             authored_facing: None,
             velocity_changes: Vec::new(),
             swept_displacement: None,
+            swept_displacement_frame: None,
             last_command: None,
             last_input: None,
             pose: Movement {
@@ -218,10 +220,16 @@ impl Mover {
 
     pub(crate) fn clear_swept_displacement(&mut self) {
         self.swept_displacement = None;
+        self.swept_displacement_frame = None;
     }
 
     pub(crate) fn has_swept_displacement(&self) -> bool {
         self.swept_displacement.is_some()
+    }
+
+    /// Whether this successfully completed pose changed feet through a swept request.
+    pub(crate) fn swept_displacement_at(&self, frame: u32) -> bool {
+        self.swept_displacement_frame == Some(frame)
     }
 
     /// Simulate the newest command and any reconstructible poses before it.
@@ -271,6 +279,8 @@ impl Mover {
         command: Command,
         dt: f64,
     ) -> Result<(), HullContactError> {
+        self.swept_displacement_frame = None;
+        let mut swept_changed = false;
         if self
             .swept_displacement
             .is_some_and(|(frame, _)| frame <= command.frame)
@@ -278,7 +288,9 @@ impl Mover {
             // Consume once even if the solver rejects the attempt. Stage on a
             // fresh capsule so an error cannot separate the body from its feet.
             if let Some((_, displacement)) = self.swept_displacement.take() {
+                let before = self.pose.position;
                 self.apply_swept_displacement(displacement, dt)?;
+                swept_changed = self.pose.position != before;
             }
         }
         self.velocity_changes.retain(|&(frame, change)| {
@@ -386,6 +398,7 @@ impl Mover {
         self.pose.spring = self.posture.spring_steps().map(i32::from);
         self.pose.spring_speed = f64::from(self.posture.spring_speed());
         self.pose.fall = self.posture.fall;
+        self.swept_displacement_frame = swept_changed.then_some(command.frame);
         Ok(())
     }
 
@@ -585,11 +598,13 @@ mod tests {
                     0
                 );
                 assert!(moved.has_swept_displacement());
+                assert!(!moved.swept_displacement_at(frame));
             }
             if frame == due + 1 {
                 assert!(moved.queue_swept_displacement(frame, second));
                 moved.clear_swept_displacement();
                 assert!(!moved.has_swept_displacement());
+                assert!(!moved.swept_displacement_at(due));
             }
             moved.step(&rays, command, 0.016, |_, _| {}).unwrap();
             reference.step(&rays, command, 0.016, |_, _| {}).unwrap();
@@ -602,7 +617,58 @@ mod tests {
             assert_eq!(moved.pose.flags, reference.pose.flags);
             assert_eq!(moved.pose.frame, reference.pose.frame);
             assert_eq!(moved.has_swept_displacement(), frame < due);
+            assert_eq!(moved.swept_displacement_at(frame), frame == due);
         }
+    }
+
+    #[test]
+    fn swept_displacement_marker_excludes_rounded_and_canceled_requests() {
+        let rays = TriangleIndex::new([]).unwrap();
+        let mut mover = Mover::new(
+            MoverSettings {
+                gravity_scale: 0.0,
+                ..MoverSettings::default()
+            },
+            Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+            [0.0; 3],
+            0,
+            0x18,
+        )
+        .unwrap();
+        let tiny = SweptDisplacement::new([0.000_001, 0.0, 0.0]).unwrap();
+        assert!(mover.queue_swept_displacement(1, tiny));
+        mover
+            .step(
+                &rays,
+                Command {
+                    frame: 1,
+                    ..Command::default()
+                },
+                0.016,
+                |_, _| {},
+            )
+            .unwrap();
+        assert_eq!(mover.pose.position[0], 0.0);
+        assert!(!mover.has_swept_displacement());
+        assert!(!mover.swept_displacement_at(1));
+        assert!(
+            mover.queue_swept_displacement(2, SweptDisplacement::new([2.0, 0.0, 0.0]).unwrap())
+        );
+        mover.clear_swept_displacement();
+        mover
+            .step(
+                &rays,
+                Command {
+                    frame: 2,
+                    ..Command::default()
+                },
+                0.016,
+                |_, _| {},
+            )
+            .unwrap();
+        assert_eq!(mover.pose.position[0], 0.0);
+        assert!(!mover.has_swept_displacement());
+        assert!(!mover.swept_displacement_at(2));
     }
 
     #[test]

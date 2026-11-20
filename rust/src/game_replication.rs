@@ -298,6 +298,7 @@ pub(crate) struct WorldDelivery {
     remote_players: HashMap<u32, (BodyId, BotLifetime)>,
     input: InputQueue,
     body_script: Option<BodyScript>,
+    detached_motion: Option<(BodyId, CorrectionHistory)>,
     #[cfg(test)]
     owner_script_fault: Option<OwnerScriptFault>,
     projectile_destroys: HashMap<u32, (BodyId, ProjectileToken)>,
