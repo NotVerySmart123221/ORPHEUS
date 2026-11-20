@@ -460,9 +460,17 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
 
     pub(in crate::script_init) fn release_button_block(
         &mut self,
-        button: u8,
+        key: StateKey,
         depth: usize,
     ) -> Result<(), InitFault> {
+        let Some(state) = self.state_mut(key) else {
+            return Ok(());
+        };
+        let StateKind::ButtonBlock(Some(button)) = state.kind else {
+            return Ok(());
+        };
+        // Clear ownership before button callbacks can end or destroy this state again.
+        state.kind = StateKind::ButtonBlock(None);
         let count = &mut self.machine.button_blocks[usize::from(button)];
         *count -= 1;
         self.resync_logical_buttons(button, depth)

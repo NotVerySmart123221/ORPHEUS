@@ -1150,6 +1150,180 @@ fn logical_button_block_resyncs_until_last_owner_exits() {
 }
 
 #[test]
+fn authored_button_lock_stacks_expires_and_removes_only_matching_buffered_presses() {
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct Contract {
+        schema_version: u8,
+        case_id: String,
+        evidence: String,
+        input: Input,
+        expected: Vec<Expected>,
+    }
+
+    #[derive(Deserialize)]
+    struct Input {
+        bundle: Json,
+        steps: Vec<Step>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(tag = "op", rename_all = "snake_case")]
+    enum Step {
+        Command { frame: u32, buttons: u32 },
+        Lock { private: bool },
+        Abort,
+        Global { blocked: bool },
+        Teardown,
+    }
+
+    #[derive(Deserialize)]
+    struct Expected {
+        held: Option<[bool; 2]>,
+        owners: usize,
+        buffered: Option<Vec<u8>>,
+    }
+
+    const PUBLIC: u16 = 1;
+    const PUBLIC_GRAPH: u32 = 531;
+    const PRIVATE_GRAPH: u32 = 532;
+    const PUBLIC_LOCK_RAW: u16 = 3;
+    const BUTTON: usize = 20;
+    const ABORT: u64 = 0xf000_0000_0000_0069;
+    let fixture: Contract = serde_json::from_str(include_str!(
+        "../../../../../../fixtures/behavior/script-button-lock-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(fixture.schema_version, 1);
+    assert_eq!(fixture.case_id, "script-button-lock.synthetic.v1");
+    assert_eq!(fixture.evidence, "synthetic-rust");
+    assert_eq!(fixture.input.steps.len(), fixture.expected.len());
+    let graphs = Arc::new(
+        GraphStore::from_json(&serde_json::to_vec(&fixture.input.bundle).unwrap()).unwrap(),
+    );
+    assert!(
+        graphs
+            .graph(PUBLIC_GRAPH)
+            .unwrap()
+            .node(3)
+            .unwrap()
+            .server_only
+    );
+    assert!(
+        graphs
+            .graph(PRIVATE_GRAPH)
+            .unwrap()
+            .node(0)
+            .unwrap()
+            .server_only
+    );
+    let mut component = Component::start(
+        graphs,
+        821,
+        Variables::new(),
+        vec![
+            Root::new(PUBLIC, PUBLIC_GRAPH),
+            Root::server_only(PRIVATE_GRAPH),
+        ],
+        0,
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let (&private, instance) = component
+        .snapshot()
+        .unwrap()
+        .instances
+        .iter()
+        .find(|(_, instance)| instance.graph == PRIVATE_GRAPH)
+        .unwrap();
+    assert!(instance.is_server_only());
+    let ability = StateKey {
+        instance: PUBLIC,
+        raw: 2,
+    };
+
+    for (index, (step, expected)) in fixture
+        .input
+        .steps
+        .into_iter()
+        .zip(fixture.expected)
+        .enumerate()
+    {
+        match step {
+            Step::Command { frame, buttons } => component
+                .advance_command(
+                    Command {
+                        frame,
+                        buttons,
+                        ..Command::default()
+                    },
+                    &mut EmptyWorld,
+                )
+                .unwrap(),
+            Step::Lock { private: isolated } => {
+                let (instance, raw) = if isolated {
+                    (private, 0)
+                } else {
+                    (PUBLIC, PUBLIC_LOCK_RAW)
+                };
+                component
+                    .begin_state(instance, raw, &mut EmptyWorld)
+                    .unwrap();
+            }
+            Step::Abort => {
+                assert_eq!(
+                    component
+                        .queue_message(PUBLIC, ABORT, Variables::new())
+                        .unwrap(),
+                    1
+                );
+                component.run_now(&mut EmptyWorld).unwrap();
+            }
+            Step::Global { blocked } => component
+                .set_control_blocked(blocked, &mut EmptyWorld)
+                .unwrap(),
+            Step::Teardown => component.teardown(&mut EmptyWorld).unwrap(),
+        }
+        let snapshot = component.snapshot().unwrap();
+        assert!(
+            snapshot.diagnostics.is_empty(),
+            "step {index}: {:?}",
+            snapshot.diagnostics
+        );
+        let held = snapshot.instances.get(&PUBLIC).map(|instance| {
+            [0, 1].map(|state| {
+                matches!(
+                    instance.states[&state].kind,
+                    StateKind::LogicalButton { down: true }
+                )
+            })
+        });
+        assert_eq!(held, expected.held, "step {index}");
+        assert_eq!(
+            component.machine.button_blocks[BUTTON], expected.owners,
+            "step {index}"
+        );
+        if let Some(buffered) = expected.buffered {
+            let actual: Vec<_> = component
+                .machine
+                .ability_presses
+                .get(&ability)
+                .into_iter()
+                .flatten()
+                .map(|press| press.button)
+                .collect();
+            assert_eq!(actual, buffered, "step {index}");
+        }
+        if expected.held.is_none() {
+            assert!(snapshot.instances.is_empty());
+            assert!(snapshot.pending_timers.is_empty());
+        }
+    }
+}
+
+#[test]
 fn buffered_action_press_uses_the_shared_clock_and_releases_after_one_millisecond() {
     let mut fixture = graph(
         42,

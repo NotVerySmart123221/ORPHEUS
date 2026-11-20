@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added authored timed and untimed logical-button locks. They share the VM's existing counted button state and cleanup, and discard buffered ability presses for the acquired button. A room-message receiver can start the lock on its own VM timeline. Passed 647 default and 654 Inspector workspace tests, both locked Clippy lanes, the Rust 1.85 compatibility check, 12 pinned Python behavior contracts, and the prepared 900-frame headless regression.
+
 - Added isolated server-only graph roots for authored body bindings. The VM assigns private roots and their same-component descendants from a separate ID range. Added synthetic allocation and projection coverage for an active private meter alongside public roots and children. Passed 645 default and 652 Inspector workspace tests, both locked Clippy lanes, Rust 1.85, 12 pinned Python public contracts, and the prepared 900-frame headless regression.
 
 - Isolated the existing charge bridge from the ability host's admission check. Its graph, damage message and active-state suppression are defined together in a compatibility binding. Added a synthetic resource meter that uses shared health events, affiliation filters and passive intervals with distinct body-bound rates and limits. Passed 641 default and 648 Inspector workspace tests, both locked Clippy lanes, Rust 1.85, 12 pinned Python public contracts, and the prepared 900-frame headless regression. Prepared Junkenstein charge coverage requires its separate mode pack.

@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "case_id": "script-button-lock.synthetic.v1",
+  "source": {"basis": "Original graph states, input sequence and two independent lock owners."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "bundle": {
+      "version": 1,
+      "authored_classes": [{"class": "authored.timed_lock", "behavior": "button_lock_state"}],
+      "graphs": [
+        {
+          "index": 531,
+          "items": 6,
+          "header": {
+            "m_nodesBitCount": 4, "m_statesBitCount": 4,
+            "m_remoteSyncNodesBitCount": 4, "m_syncVarsBitCount": 4
+          },
+          "fields": {"m_680A2CB2": [0, 1, 2]},
+          "containers": {},
+          "nodes": [
+            {
+              "pos": 0, "class": "STUStatescriptStateLogicalButton", "uid": 0, "rid": 0,
+              "remote": -1, "state": 0, "client_only": false, "server_only": false,
+              "fields": {
+                "m_2BBEEAB8": true,
+                "m_logicalButton": {"$": "STUConfigVarLogicalButton", "m_logicalButton": 20}
+              }
+            },
+            {
+              "pos": 1, "class": "STUStatescriptStateLogicalButton", "uid": 1, "rid": 1,
+              "remote": -1, "state": 1, "client_only": false, "server_only": false,
+              "fields": {
+                "m_2BBEEAB8": true,
+                "m_logicalButton": {"$": "STUConfigVarLogicalButton", "m_logicalButton": 29}
+              }
+            },
+            {
+              "pos": 2, "class": "STUStatescriptStateAbility", "uid": 2, "rid": 2,
+              "remote": -1, "state": 2, "client_only": false, "server_only": false,
+              "fields": {"m_2BBEEAB8": true, "m_A5F1A77B": 20, "m_A368407D": 29, "m_8CBD15DA": 0}
+            },
+            {
+              "pos": 3, "class": "authored.held_lock", "uid": 3, "rid": 3,
+              "remote": -1, "state": 3, "client_only": false, "server_only": true,
+              "state_behavior": "button_lock",
+              "fields": {"button": 20}
+            },
+            {
+              "pos": 4, "class": "STUStatescriptEntry", "uid": 4, "rid": 4,
+              "remote": -1, "state": null, "client_only": false, "server_only": false,
+              "fields": {"m_outPlug": {"$": "Plug", "links": [[0, "m_beginPlug"], [1, "m_beginPlug"]]}}
+            },
+            {
+              "pos": 5, "class": "STUStatescriptEntryGameMessage", "uid": 5, "rid": 5,
+              "remote": -1, "state": null, "client_only": false, "server_only": false,
+              "fields": {
+                "m_gameMessage": {"m_gameMessage": "0xF000000000000069"},
+                "m_outPlug": {"$": "Plug", "links": [[3, "m_F198FD3A"]]}
+              }
+            }
+          ],
+          "unknown_nodes": [], "states": [0, 1, 2, 3], "entries": [4, 5], "remote": [], "sync_vars": []
+        },
+        {
+          "index": 532,
+          "items": 1,
+          "header": {
+            "m_nodesBitCount": 1, "m_statesBitCount": 1,
+            "m_remoteSyncNodesBitCount": 1, "m_syncVarsBitCount": 1
+          },
+          "fields": {},
+          "containers": {},
+          "nodes": [
+            {
+              "pos": 0, "class": "authored.timed_lock", "uid": 0, "rid": 0,
+              "remote": -1, "state": 0, "client_only": false, "server_only": false,
+              "fields": {"button": 20, "duration_frames": 3}
+            }
+          ],
+          "unknown_nodes": [], "states": [0], "entries": [], "remote": [], "sync_vars": []
+        }
+      ],
+      "bodies": {},
+      "missing": []
+    },
+    "steps": [
+      {"op": "command", "frame": 1, "buttons": 3},
+      {"op": "lock", "private": false},
+      {"op": "lock", "private": true},
+      {"op": "command", "frame": 2, "buttons": 0},
+      {"op": "command", "frame": 3, "buttons": 3},
+      {"op": "abort"},
+      {"op": "command", "frame": 4, "buttons": 3},
+      {"op": "lock", "private": false},
+      {"op": "global", "blocked": true},
+      {"op": "command", "frame": 5, "buttons": 3},
+      {"op": "global", "blocked": false},
+      {"op": "command", "frame": 6, "buttons": 3},
+      {"op": "abort"},
+      {"op": "lock", "private": true},
+      {"op": "teardown"}
+    ]
+  },
+  "expected": [
+    {"held": [true, true], "owners": 0, "buffered": [20, 29]},
+    {"held": [false, true], "owners": 1, "buffered": [29]},
+    {"held": [false, true], "owners": 2},
+    {"held": [false, false], "owners": 2},
+    {"held": [false, true], "owners": 2, "buffered": [29, 29]},
+    {"held": [false, true], "owners": 1},
+    {"held": [true, true], "owners": 0},
+    {"held": [false, true], "owners": 1},
+    {"held": [false, false], "owners": 1, "buffered": []},
+    {"held": [false, false], "owners": 1, "buffered": []},
+    {"held": [false, false], "owners": 1},
+    {"held": [false, true], "owners": 1, "buffered": [29]},
+    {"held": [true, true], "owners": 0},
+    {"held": [false, true], "owners": 1},
+    {"held": null, "owners": 0, "buffered": []}
+  ]
+}

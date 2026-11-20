@@ -1047,6 +1047,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         }
         let mut registration = RegistrationChecks::default();
         let interval_frames = node.interval_frames();
+        let button_lock = node.button_lock();
         let kind = match node.class.as_str() {
             // These client presentation states use the base state lifecycle on the server.
             "STUStatescriptState"
@@ -1320,6 +1321,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             "STU_91EF24A9" => StateKind::AiCandidate { selected: false },
             "STUStatescriptStateLogicalButton" => StateKind::LogicalButton { down: false },
             "STU_E4A30BCF" => StateKind::ButtonBlock(None),
+            _ if button_lock.is_some() => StateKind::ButtonBlock(None),
             "STUStatescriptStateStack" | "STU_A97E6999" => StateKind::Stack {
                 top: false,
                 under: false,
@@ -1666,7 +1668,24 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             StateKind::LogicalButton { .. } => self.enter_button(key, node, depth)?,
             StateKind::ButtonBlock(_) => {
-                if let Some(button) = self.logical_button_id(id, node) {
+                let button = button_lock
+                    .map(|(button, _)| button)
+                    .or_else(|| self.logical_button_id(id, node));
+                if let Some(button) = button {
+                    if let Some((_, duration)) = button_lock {
+                        // Resynchronizing logical buttons can synchronously end this lock.
+                        if let Some(frames) = duration {
+                            self.post_after(
+                                id,
+                                u64::from(frames.get()) * FRAME_MS,
+                                Event::Finish(key.raw),
+                            )?;
+                        }
+                        self.machine.ability_presses.retain(|_, presses| {
+                            presses.retain(|press| press.button != button);
+                            !presses.is_empty()
+                        });
+                    }
                     self.state_mut(key).expect("active button block").kind =
                         StateKind::ButtonBlock(Some(button));
                     self.machine.button_blocks[usize::from(button)] += 1;

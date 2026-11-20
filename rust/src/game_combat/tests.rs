@@ -192,7 +192,7 @@ fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() 
     let bundle = json!({
         "version":1,"bodies":{},"missing":[],
         "graphs":[{
-            "index":123,"items":2,"states":[],"entries":[0,1],"remote":[],"sync_vars":[],
+            "index":123,"items":3,"states":[2],"entries":[0,1],"remote":[],"sync_vars":[],
             "fields":{},"containers":{},"unknown_nodes":[],
             "header":{"m_nodesBitCount":4,"m_statesBitCount":4,
                 "m_remoteSyncNodesBitCount":4,"m_syncVarsBitCount":4},
@@ -204,7 +204,7 @@ fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() 
                     "m_B60ABDA4":entity_var(SENDER_SLOT),
                     "m_params":[{"m_B5051BCE":format!("0x{PARAMETER:016X}"),
                         "m_out_Var":entity_var(PAYLOAD_SLOT)}],
-                    "m_outPlug":{"$":"Plug","links":[]}
+                    "m_outPlug":{"$":"Plug","links":[[2,"m_beginPlug"]]}
                 }
             },{
                 "pos":1,"uid":1,"rid":1,"remote":-1,"state":null,
@@ -214,6 +214,10 @@ fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() 
                         "m_out_Var":entity_var(HOST_DELTA_SLOT)}],
                     "m_outPlug":{"$":"Plug","links":[]}
                 }
+            },{
+                "pos":2,"uid":2,"rid":2,"remote":-1,"state":0,
+                "class":"authored.input_lock","server_only":true,"client_only":false,
+                "state_behavior":"button_lock","fields":{"button":1,"duration_frames":2}
             }]
         }],
         "junkenstein":{
@@ -304,9 +308,23 @@ fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() 
             variables.get(&PAYLOAD_SLOT).cloned(),
         )
     };
+    let lock_active = |room: &RoomSimulation, wire, controller| {
+        let enemy = state(room, wire).unwrap().enemy.as_ref().unwrap();
+        let component = if controller {
+            &enemy.scripts.controller
+        } else {
+            &enemy.scripts.body
+        };
+        component.snapshot().unwrap().instances[&1]
+            .states
+            .get(&0)
+            .is_some_and(|state| state.active)
+    };
+    assert!(!lock_active(&room, receiver, false));
     assert_eq!(observed(&room, receiver, false), (None, None));
     room.finish_tick(&queries, context.tick, context.now)
         .unwrap();
+    assert!(!lock_active(&room, receiver, false));
     assert_eq!(observed(&room, receiver, false), (None, None));
     room.finish_tick(&queries, context.tick + 1, context.now + TICK_PERIOD)
         .unwrap();
@@ -316,6 +334,9 @@ fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() 
     );
     assert_eq!(observed(&room, receiver, true), (None, None));
     assert_eq!(observed(&room, sender, false), (None, None));
+    assert!(lock_active(&room, receiver, false));
+    assert!(!lock_active(&room, receiver, true));
+    assert!(!lock_active(&room, sender, false));
 
     let host_delta = |room: &RoomSimulation, wire| {
         let enemy = state(room, wire).unwrap().enemy.as_ref().unwrap();
@@ -346,6 +367,7 @@ fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() 
     room.finish_tick(&queries, tick, now).unwrap();
     assert_eq!(host_delta(&room, receiver), (None, None));
     assert_eq!(host_delta(&room, sender), (None, None));
+    assert!(lock_active(&room, receiver, false));
     room.finish_tick(&queries, tick + 1, now + TICK_PERIOD)
         .unwrap();
     assert_eq!(
@@ -353,6 +375,7 @@ fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() 
         (Some(Value::Float(-25.0)), None)
     );
     assert_eq!(host_delta(&room, sender), (Some(Value::Float(-25.0)), None));
+    assert!(!lock_active(&room, receiver, false));
 }
 
 #[test]

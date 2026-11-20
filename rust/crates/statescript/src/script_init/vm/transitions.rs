@@ -1346,11 +1346,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             StateKind::AiCandidate { selected: true } => {
                 self.exit_subgraph(id, node, "m_6F92F4BD", depth + 1)?;
             }
-            StateKind::ButtonBlock(Some(button)) => {
-                self.state_mut(key).expect("ending button block").kind =
-                    StateKind::ButtonBlock(None);
-                self.release_button_block(button, depth + 1)?;
-            }
+            StateKind::ButtonBlock(Some(_)) => self.release_button_block(key, depth + 1)?,
             StateKind::LogicalButton { .. } => {
                 self.exit_subgraph(id, node, "m_80AF45FB", depth + 1)?;
                 self.exit_subgraph(id, node, "m_1C9EF058", depth + 1)?;
@@ -1643,10 +1639,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     let node = self.graph(id).state(usize::from(raw)).expect("target tag");
                     self.world
                         .set_target_tag_effect(self.site(id, node), effect, false);
-                } else if let StateKind::ButtonBlock(Some(button)) = kind {
-                    self.state_mut(key).expect("destroyed button block").kind =
-                        StateKind::ButtonBlock(None);
-                    self.release_button_block(button, 0)?;
+                } else if matches!(kind, StateKind::ButtonBlock(Some(_))) {
+                    self.release_button_block(key, 0)?;
                 } else if let StateKind::HealthPool { pool: Some(pool) } = kind {
                     let node = self.graph(id).state(usize::from(raw)).expect("health pool");
                     let site = self.site(id, node);

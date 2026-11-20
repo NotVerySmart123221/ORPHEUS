@@ -38,6 +38,7 @@ enum StateBehavior {
     Plain,
     Observe,
     Interval,
+    ButtonLock,
     TrackEntities,
 }
 
@@ -113,6 +114,21 @@ impl Node {
         }
         let frames = self.field("interval_frames")?.as_u64()?;
         NonZeroU32::new(u32::try_from(frames).ok()?)
+    }
+
+    pub(crate) fn button_lock(&self) -> Option<(u8, Option<NonZeroU32>)> {
+        if self.state_behavior != Some(StateBehavior::ButtonLock) {
+            return None;
+        }
+        let button = u8::try_from(self.field("button")?.as_u64()?).ok()?;
+        if button == 0 {
+            return None;
+        }
+        let duration = match self.field("duration_frames") {
+            Some(value) => Some(NonZeroU32::new(u32::try_from(value.as_u64()?).ok()?)?),
+            None => None,
+        };
+        Some((button, duration))
     }
 
     pub(crate) fn target_child_binding(&self) -> Option<(u32, u32)> {
@@ -365,6 +381,7 @@ impl Graph {
                     StateBehavior::Plain => "plain state",
                     StateBehavior::Observe => "observe state",
                     StateBehavior::Interval => "interval state",
+                    StateBehavior::ButtonLock => "button lock state",
                     StateBehavior::TrackEntities => "track entities state",
                 };
                 let occupies_state_slot = node
@@ -431,6 +448,15 @@ impl Graph {
                             )));
                         }
                         "StateInterval"
+                    }
+                    StateBehavior::ButtonLock => {
+                        if node.button_lock().is_none() {
+                            return Err(invalid(format!(
+                                "{state} in graph {} at node {} requires an integer button in 1..=255 and an optional nonzero u32 duration_frames",
+                                self.index, node.pos
+                            )));
+                        }
+                        "StateButtonLock"
                     }
                     StateBehavior::TrackEntities => {
                         if node.field("targets").is_none_or(Value::is_null) {
@@ -858,6 +884,7 @@ enum AuthoredClassBehavior {
     PlainState,
     ObserveState,
     IntervalState,
+    ButtonLockState,
     TrackEntitiesState,
     ForwardAction,
     BranchAction,
@@ -874,6 +901,7 @@ impl AuthoredClassBehavior {
             Self::PlainState => (false, Some(StateBehavior::Plain), None),
             Self::ObserveState => (false, Some(StateBehavior::Observe), None),
             Self::IntervalState => (false, Some(StateBehavior::Interval), None),
+            Self::ButtonLockState => (false, Some(StateBehavior::ButtonLock), None),
             Self::TrackEntitiesState => (false, Some(StateBehavior::TrackEntities), None),
             Self::ForwardAction => (false, None, Some(ActionBehavior::Forward)),
             Self::BranchAction => (false, None, Some(ActionBehavior::Branch)),
@@ -2169,6 +2197,62 @@ mod tests {
             interval.interval_frames().map(NonZeroU32::get),
             Some(u32::MAX)
         );
+    }
+
+    #[test]
+    fn authored_button_lock_requires_server_scope_and_valid_config() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let mut data = fixture();
+        data["graphs"][0]["states"][3] = Value::Null;
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state"] = json!(0);
+        node["server_only"] = json!(true);
+        node["state_behavior"] = json!("button_lock");
+        node["fields"] = json!({"button": 255});
+
+        let graphs = load(&data).unwrap();
+        let lock = graphs.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(lock.class, "StateButtonLock");
+        assert_eq!(lock.button_lock(), Some((255, None)));
+        assert!(lock.is_state() && !lock.is_networked());
+
+        for (field, invalid) in [
+            ("button", json!(0)),
+            ("button", json!(256)),
+            ("button", json!(-1)),
+            ("button", json!(1.0)),
+            ("duration_frames", Value::Null),
+            ("duration_frames", json!(0)),
+            ("duration_frames", json!(1.0)),
+            ("duration_frames", json!(u64::from(u32::MAX) + 1)),
+        ] {
+            let mut bad = data.clone();
+            bad["graphs"][0]["nodes"][0]["fields"][field] = invalid;
+            let error = load(&bad).unwrap_err().to_string();
+            assert!(
+                error.contains("button lock state in graph 42 at node 0"),
+                "{error}"
+            );
+            assert!(error.contains(field), "{error}");
+        }
+        for (field, invalid) in [("server_only", false), ("client_only", true)] {
+            let mut bad = data.clone();
+            bad["graphs"][0]["nodes"][0][field] = json!(invalid);
+            assert!(load(&bad).unwrap_err().to_string().contains("server-only"));
+        }
+
+        data["authored_classes"] =
+            json!([{"class": "authored.lock", "behavior": "button_lock_state"}]);
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["class"] = json!("authored.lock");
+        node["state_behavior"] = Value::Null;
+        node["server_only"] = json!(false);
+        node["fields"] = json!({"button": 1, "duration_frames": u32::MAX});
+        let graphs = load(&data).unwrap();
+        let lock = graphs.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(lock.class, "StateButtonLock");
+        assert_eq!(lock.button_lock(), Some((1, NonZeroU32::new(u32::MAX))));
+        assert!(lock.server_only && !lock.client_only);
     }
 
     #[test]

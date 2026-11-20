@@ -44,6 +44,27 @@ no transition. Evaluation errors are reported at the node and take no
 output. Use a client-only operand with a server fallback when an
 authored condition needs a different value on the server.
 
+## Lock a logical button for a state
+
+Set `"state_behavior": "button_lock"` on a server-only state, or declare
+the `button_lock_state` behavior for an authored class. Set `fields.button`
+to a logical button from 1 through 255. A positive integer
+`fields.duration_frames` finishes the state after that many VM frames.
+Omit the duration to let another graph action end or abort the state.
+
+Locks on the same button stack. The VM releases each claim when its state
+finishes, aborts, or is destroyed. Acquisition discards buffered ability
+presses for that button. Logical listeners resynchronize against the
+held input as counts change, and their existing bypass applies.
+This operates on VM input. Room movement and the native whole-body input
+gate use their own controls.
+
+A directed room-message entry can begin the lock in the recipient's VM.
+The lock takes effect when its begin runs. Commands and state transitions
+continue to follow the component's event order.
+
+See the [synthetic button lock contract](../fixtures/behavior/script-button-lock-v1.json).
+
 ## Share class behavior across a graph bundle
 
 Add `authored_classes` to a version 1 bundle and use those names in the
