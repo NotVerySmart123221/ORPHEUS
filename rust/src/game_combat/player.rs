@@ -18,7 +18,7 @@ use crate::{
     junkenstein_messages::{DefenderMessage, DefenderSighting},
     mover::Mover,
     script_enemy::EnemyTarget,
-    script_init::HealthTargetFacts,
+    script_init::{HealthTargetFacts, HitTags},
     script_snapshot_wire::SceneProjection,
     vitals::{Damage, Death},
     world::{EntityUpdate, Operation},
@@ -709,8 +709,8 @@ impl RoomSimulation {
         id: BodyId,
         amount: f64,
         source: Death,
-        impact: Option<&AppliedDamage>,
-    ) -> Option<(u32, bool, Option<EntityUpdate>)> {
+        impact: Option<(HitTags, &HealthTargetFacts)>,
+    ) -> Option<(u32, Damage, Option<EntityUpdate>)> {
         let cassidy_protected = self.cassidy_protected;
         let state = self.player_body_mut(id)?;
         if cassidy_protected && state.hero == crate::game_heroes::CASSIDY {
@@ -735,7 +735,7 @@ impl RoomSimulation {
             outcome.killed,
             impact,
         );
-        Some((owner, outcome.killed, health))
+        Some((owner, outcome, health))
     }
 
     pub(crate) fn observer_player_creates(
@@ -913,13 +913,8 @@ impl RoomSimulation {
             .as_ref()
             .and_then(|runtime| runtime.vitals())
             .map(|vitals| vitals.cumulative_component());
-        let damage = AppliedDamage {
-            source,
-            amount: impact.damage,
-            tags: impact.tags,
-            target_facts: state.health_target_facts(),
-        };
-        let Some((owner, killed, health)) = self.damage_player_body_by_wire(
+        let target_facts = state.health_target_facts();
+        let Some((owner, outcome, health)) = self.damage_player_body_by_wire(
             id,
             impact.damage,
             Death {
@@ -927,10 +922,15 @@ impl RoomSimulation {
                 frame: context.tick,
                 killer: source,
             },
-            Some(&damage),
+            Some((impact.tags, &target_facts)),
         ) else {
             return Ok(None);
         };
+        if outcome.dealt <= 0.0 {
+            self.scripted_health.extend(health);
+            return Ok(None);
+        }
+        let killed = outcome.killed;
         let Some(health) = health.or_else(|| {
             killed.then(|| EntityUpdate {
                 entity: id.entity,
@@ -950,11 +950,16 @@ impl RoomSimulation {
             });
         }
         Ok(Some(BotHit {
-            damage,
+            damage: AppliedDamage {
+                source,
+                amount: outcome.dealt,
+                tags: impact.tags,
+                target_facts,
+            },
             notices: [
                 Some(CombatNotice::Hit {
                     target: id.entity,
-                    dealt: impact.damage,
+                    dealt: outcome.dealt,
                     critical: impact.critical,
                     killed,
                     shot_frame,

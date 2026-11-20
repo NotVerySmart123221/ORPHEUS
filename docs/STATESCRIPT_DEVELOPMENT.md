@@ -839,7 +839,10 @@ frame used for admission. An expired target is skipped for directed
 messages and direct health changes. This keeps historical target facts
 usable by the source after the original body retires. Radial effects
 still select present candidates through their normal spatial query.
-Ordinary messages and later graph work start with their own context.
+An immediate same-body GameMessage carries the context when a top-level
+entity parameter names the health event target. Numeric parameters,
+incoming room messages, externally scheduled messages and later graph
+work use their own context.
 
 The enabled room records successful weapon damage, room-settled script
 and AI requests, field healing, and VM-local AI damage and healing.
@@ -969,6 +972,22 @@ cargo test --locked -p orpheus-statescript --test stock_charge -- --ignored --ex
 This probe supplies the admission trigger and bonus amount. Room-origin
 native `0D9A` emission and the previously unbound foreign operands still
 need independent evidence.
+
+To exercise incoming stock damage credit with explicit pool records, use
+the same private runtime:
+
+```text
+cargo test --locked -p orpheus-statescript --test stock_charge -- --ignored --exact prepared_stock_damage_credit_consumes_typed_pool_records
+```
+
+The probe keeps its target facts fixed and compares empty, unrelated
+and matching records in slot `0624`. The authored fold reads a typed
+pool identifier and a numeric amount, then deducts matching records
+before capping the award. Current player hits use the actual pool loss,
+following the pinned Python settlement path. The compatibility bridge
+still supplies an empty pool list. Temporary named pools and the
+native producer's exact output and timing need independent evidence.
+[Pinned damage settlement](https://github.com/leafall903/ORPHEUS/blob/c73e5a499ec73d499c97eaae46357af30c9e4b39/src/ow174/game/combat.py#L1870-L1896)
 
 ## Apply a radial health change
 

@@ -105,6 +105,10 @@
       "retired_alive_match": false,
       "unavailable_fact_diagnostics": 5
     },
+    "target_generation_relay": {
+      "stable": [-2.5, -2.5, -1.75],
+      "replaced_with_ordinary_deliveries": [0.75, 1.25, -1.75]
+    },
     "deliveries": [
       [701, 702, -12.5, true, [808, 807, 808]],
       [701, 702, -12.5, true, [808, 807, 808]],

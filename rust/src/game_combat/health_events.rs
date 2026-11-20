@@ -13,7 +13,7 @@ use crate::{
     },
 };
 
-use super::{AppliedDamage, BotState, PlayerBodyState, RoomSimulation};
+use super::{BotState, PlayerBodyState, RoomSimulation};
 
 const MAX_ROOM_HEALTH_EVENTS: usize = 512;
 
@@ -63,7 +63,7 @@ impl SampledBody {
 
 pub(super) enum HealthEventContext<'a> {
     Unattributed,
-    Impact(&'a AppliedDamage),
+    Impact(HitTags, &'a HealthTargetFacts),
     Healing(&'a World),
 }
 
@@ -122,8 +122,8 @@ impl RoomHealthEvents {
             return;
         }
         let (hit_tags, mut target_facts) = match context {
-            HealthEventContext::Impact(impact) if impact.target_facts.target == target.wire => {
-                (Some(impact.tags), Some(impact.target_facts.clone()))
+            HealthEventContext::Impact(tags, facts) if facts.target == target.wire => {
+                (Some(tags), Some(facts.clone()))
             }
             // A self-heal or an unavailable source has no foreign observer
             // of the target in this notification.
@@ -159,7 +159,7 @@ impl RoomSimulation {
         target: u32,
         delta: f64,
         killed: bool,
-        impact: Option<&AppliedDamage>,
+        impact: Option<(HitTags, &HealthTargetFacts)>,
     ) {
         if !self.health_events.enabled {
             return;
@@ -169,7 +169,7 @@ impl RoomSimulation {
         };
         let source = self.sample_health_body(source);
         let context = match impact {
-            Some(impact) => HealthEventContext::Impact(impact),
+            Some((tags, facts)) => HealthEventContext::Impact(tags, facts),
             None if delta > 0.0 => HealthEventContext::Healing(&self.world),
             None => HealthEventContext::Unattributed,
         };
