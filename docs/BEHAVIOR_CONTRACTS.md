@@ -1,12 +1,14 @@
 # Shared Behavior Contracts (`rust`)
 
-ORPHEUS stores language-neutral JSON contracts under `fixtures/behavior/` (`57` files total). Cross-language consumers compare Python (`main`) and Rust (`rust`) through production code paths; Rust-only regression contracts identify their narrower scope explicitly. Fixtures do not bundle game assets or captures.
+ORPHEUS stores language-neutral JSON contracts under `fixtures/behavior/` (`58` files total). Cross-language consumers compare Python (`main`) and Rust (`rust`) through production code paths; Rust-only regression contracts identify their narrower scope explicitly. Fixtures do not bundle game assets or captures.
 
 The Rust-only `script-actions-v1.json` adds 15 historical assignment/branch cases pinned to `f763beb`. Both `orpheus-statescript` public workspace lanes run `script_init::tests::actions_contract::actions_preserve_the_pinned_synthetic_reference_contract`; it is not registered in the Python/Rust differential job. See the [action development guide](STATESCRIPT_DEVELOPMENT.md) for provenance, current module boundaries and the synthetic benchmark.
 
 The Rust-only [class declaration fixture](../fixtures/behavior/script-authored-classes-v1.json) uses two invented graphs to check shared class behavior through the production loader and VM. It runs in both workspace lanes and needs no prepared runtime.
 
 The Rust-only [local message fixture](../fixtures/behavior/script-local-message-v1.json) checks parameter capture, continuation, graph-order delivery and client-only scope through the production VM. It needs no prepared runtime.
+
+The Rust-only [room message fixture](../fixtures/behavior/script-room-message-v1.json) checks typed admission and payload capture, explicit listener scope, and delivery in the recipient's next VM frame. Native room tests cover generation checks and the shared request order.
 
 The Rust-only [health action fixture](../fixtures/behavior/script-health-change-v1.json) checks signed health request admission, continuation, and rejection diagnostics. Room tests cover player and bot settlement, stale body identity, and death and health updates.
 

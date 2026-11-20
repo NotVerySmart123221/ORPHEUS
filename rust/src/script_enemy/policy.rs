@@ -259,8 +259,16 @@ impl EnemyScripts {
         self.control_records.ai_control_setting
     }
 
-    pub(crate) fn take_health_requests(&mut self) -> Vec<crate::game_combat::RoomHealthRequest> {
-        self.control_records.health_requests.take()
+    pub(crate) fn take_script_requests(&mut self) -> Vec<crate::game_combat::RoomScriptRequest> {
+        self.control_records.script_requests.take()
+    }
+
+    pub(crate) fn receive_room_message(
+        &mut self,
+        sender: u32,
+        message: RoomMessage,
+    ) -> Result<usize, InitFault> {
+        self.body.queue_room_message_from(sender, message)
     }
 
     pub(crate) fn take_scripted_damage(&mut self) -> Vec<EnemyDamage> {

@@ -239,6 +239,7 @@ mod encounter;
 mod enemy;
 mod health;
 mod player;
+mod script_requests;
 pub(crate) use encounter::{
     ENCOUNTER_INSTANCE, EncounterRegistration, EncounterWorld, GateState, GateWorld,
 };
@@ -247,8 +248,9 @@ use encounter::{EncounterComponent, GateHandle};
 pub(crate) use encounter::{EncounterPhase, GateDamageStage, GateHealth};
 use enemy::{BotState, EnemyState};
 use health::HealthEffect;
-pub(crate) use health::{RoomHealthRequest, RoomHealthRequests};
 pub(crate) use player::{PlayerBodyEvent, PlayerBodyHandle, PlayerBodyState};
+use script_requests::RoomScriptTarget;
+pub(crate) use script_requests::{RoomScriptRequest, RoomScriptRequests};
 
 #[derive(Component)]
 pub(crate) struct AdmittedFlight {
@@ -274,7 +276,7 @@ struct FlightBatch {
 /// A room frame's living candidate rows and the shared static collision view.
 pub(crate) struct RoomSpatialFrame {
     candidates: Box<[SpatialCandidate]>,
-    health_targets: HashMap<u32, Entity>,
+    script_targets: HashMap<u32, RoomScriptTarget>,
     ground: Arc<CollisionScene>,
 }
 
@@ -679,13 +681,22 @@ impl RoomSimulation {
 
         let capacity = self.players_by_wire.len() + self.by_wire.len();
         let mut candidates = Vec::with_capacity(capacity);
-        let mut health_targets = HashMap::with_capacity(capacity);
+        let mut script_targets = HashMap::with_capacity(capacity);
         for (state, &entity) in self.states().zip(self.by_wire.values()) {
             let state = state?;
             let bot = &state.bot;
             if !bot.dead {
                 if state.vitals.death().is_none() {
-                    health_targets.insert(bot.entity, entity);
+                    script_targets.insert(
+                        bot.entity,
+                        RoomScriptTarget {
+                            entity,
+                            health: true,
+                            messages: state.enemy.as_ref().is_some_and(|enemy| {
+                                enemy.fault.is_none() && !enemy.scripts.retirement_requested
+                            }),
+                        },
+                    );
                 }
                 candidates.push(SpatialCandidate {
                     entity: bot.entity,
@@ -706,13 +717,15 @@ impl RoomSimulation {
                 });
             }
             if state.alive() {
-                if state
-                    .runtime
-                    .as_ref()
-                    .and_then(|runtime| runtime.vitals())
-                    .is_some()
-                {
-                    health_targets.insert(wire, entity);
+                if let Some(runtime) = &state.runtime {
+                    script_targets.insert(
+                        wire,
+                        RoomScriptTarget {
+                            entity,
+                            health: runtime.vitals().is_some(),
+                            messages: true,
+                        },
+                    );
                 }
                 candidates.push(SpatialCandidate {
                     entity: wire,
@@ -724,7 +737,7 @@ impl RoomSimulation {
 
         let spatial = Arc::new(RoomSpatialFrame {
             candidates: candidates.into_boxed_slice(),
-            health_targets,
+            script_targets,
             ground: Arc::clone(ground),
         });
         for &entity in self.players_by_wire.values() {
@@ -1742,7 +1755,7 @@ impl RoomSimulation {
             self.set_player_defenders(defenders);
         }
         if !self.combat_active {
-            self.settle_authored_health(tick, now)?;
+            self.settle_authored_requests(tick, now)?;
             return Ok(Vec::new());
         }
         let external_and_players = self.collect_player_enemy_targets();
@@ -2112,7 +2125,7 @@ impl RoomSimulation {
                 self.external_enemy_damage.push(hit);
             }
         }
-        self.settle_authored_health(tick, now)?;
+        self.settle_authored_requests(tick, now)?;
         for wire in retired {
             let entity = self.by_wire.shift_remove(&wire).expect("retired NPC body");
             let enemy = self

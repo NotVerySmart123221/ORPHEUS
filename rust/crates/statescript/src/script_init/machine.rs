@@ -19,13 +19,19 @@ use crate::{
 };
 
 use super::{
-    MAX_PENDING_EVENTS,
+    MAX_PENDING_EVENTS, RoomMessage,
     shapes::stored,
     types::{
         InitFault, PendingTimer, RandomCheckpoint, ShotEvent, Snapshot, SpawnSearchKey,
         StackBinding, StateKind,
     },
 };
+
+#[derive(Clone, Copy)]
+enum MessageDestination {
+    Ordinary(Option<u16>),
+    Room,
+}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum VarKey {
@@ -399,27 +405,70 @@ impl Machine {
         parameters: Variables,
         due_ms: u64,
     ) -> Result<usize, InitFault> {
+        self.queue_message_entries(
+            graphs,
+            MessageDestination::Ordinary(recipient),
+            sender,
+            message,
+            parameters,
+            due_ms,
+        )
+    }
+
+    pub(super) fn queue_room_entries_from(
+        &mut self,
+        graphs: &GraphStore,
+        sender: u32,
+        message: RoomMessage,
+        due_ms: u64,
+    ) -> Result<usize, InitFault> {
+        self.queue_message_entries(
+            graphs,
+            MessageDestination::Room,
+            Some(sender),
+            message.id,
+            message.parameters,
+            due_ms,
+        )
+    }
+
+    fn queue_message_entries(
+        &mut self,
+        graphs: &GraphStore,
+        destination: MessageDestination,
+        sender: Option<u32>,
+        message: u64,
+        parameters: Variables,
+        due_ms: u64,
+    ) -> Result<usize, InitFault> {
         let mut entries = Vec::new();
         for (&id, item) in &self.snapshot.instances {
-            if recipient.is_some_and(|recipient| recipient != id) {
+            if matches!(destination, MessageDestination::Ordinary(Some(recipient)) if recipient != id)
+            {
                 continue;
             }
             let graph = graphs.graph(item.graph).expect("registered graph");
-            entries.extend(
-                graph
-                    .message_handlers(message)
-                    .filter(|node| {
-                        node.is_message_entry()
-                            || node.state.is_some_and(|raw| {
-                                item.states.get(&raw).is_some_and(|state| {
-                                    state.active && state.kind == StateKind::MessageIdle
-                                })
-                            })
-                    })
-                    .map(|node| (id, node.pos)),
-            );
+            for node in graph
+                .message_handlers(message)
+                .filter(|node| match destination {
+                    MessageDestination::Room => node.declares_room_message_entry(),
+                    MessageDestination::Ordinary(_) => {
+                        !node.declares_room_message_entry()
+                            && (node.is_message_entry()
+                                || node.state.is_some_and(|raw| {
+                                    item.states.get(&raw).is_some_and(|state| {
+                                        state.active && state.kind == StateKind::MessageIdle
+                                    })
+                                }))
+                    }
+                })
+            {
+                // Bound the temporary batch as well as the VM queue. No
+                // receiver gets a partial delivery on a capacity failure.
+                self.queues.reserve(entries.len() + 1)?;
+                entries.push((id, node.pos));
+            }
         }
-        self.queues.reserve(entries.len())?;
         let parameters = Arc::new(parameters);
         for &(instance, position) in &entries {
             self.queues.push(

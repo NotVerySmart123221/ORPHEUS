@@ -14,6 +14,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 const GRAPH_TYPE: u64 = 0x0580;
+pub(crate) const MAX_ROOM_MESSAGE_PARAMETERS: usize = 16;
 
 #[derive(Debug, Deserialize)]
 pub struct Header {
@@ -42,6 +43,7 @@ enum ActionBehavior {
     Forward,
     Branch,
     LocalMessage,
+    RoomMessage,
     HealthChange,
 }
 
@@ -55,6 +57,8 @@ pub struct Node {
     pub state: Option<u16>,
     state_behavior: Option<StateBehavior>,
     action_behavior: Option<ActionBehavior>,
+    #[serde(default)]
+    room_message_entry: bool,
     #[serde(deserialize_with = "node_flag")]
     pub client_only: bool,
     #[serde(deserialize_with = "node_flag")]
@@ -114,6 +118,14 @@ impl Node {
         matches!(self.action_behavior, Some(ActionBehavior::Branch))
     }
 
+    pub(crate) fn declares_room_message_action(&self) -> bool {
+        self.action_behavior == Some(ActionBehavior::RoomMessage)
+    }
+
+    pub(crate) fn declares_room_message_entry(&self) -> bool {
+        self.room_message_entry
+    }
+
     pub(crate) fn declares_health_change_action(&self) -> bool {
         matches!(self.action_behavior, Some(ActionBehavior::HealthChange))
     }
@@ -128,21 +140,33 @@ impl Node {
     }
 
     fn valid_local_message(&self) -> bool {
-        if !self.game_message_id().is_some_and(|message| message != 0)
-            || !self.fields.get("m_targets").is_none_or(Value::is_null)
-            || !self.fields.get("m_target").is_none_or(Value::is_null)
-        {
-            return false;
-        }
+        self.game_message_id().is_some_and(|message| message != 0)
+            && self.fields.get("m_targets").is_none_or(Value::is_null)
+            && self.fields.get("m_target").is_none_or(Value::is_null)
+            && self.valid_message_parameters(usize::MAX)
+    }
+
+    fn valid_room_message(&self) -> bool {
+        self.game_message_id().is_some_and(|message| message != 0)
+            && self.fields.get("m_targets").is_none()
+            && self
+                .fields
+                .get("m_target")
+                .is_some_and(|target| !target.is_null())
+            && self.valid_message_parameters(MAX_ROOM_MESSAGE_PARAMETERS)
+    }
+
+    fn valid_message_parameters(&self, max_parameters: usize) -> bool {
         let Some(parameters) = self.fields.get("m_params").filter(|value| !value.is_null()) else {
             return true;
         };
         let mut slots = BTreeSet::new();
         parameters.as_array().is_some_and(|parameters| {
-            parameters.iter().all(|parameter| {
-                let slot = message_parameter_id(parameter);
-                slot != 0 && parameter.get("m_value").is_some() && slots.insert(slot)
-            })
+            parameters.len() <= max_parameters
+                && parameters.iter().all(|parameter| {
+                    let slot = message_parameter_id(parameter);
+                    slot != 0 && parameter.get("m_value").is_some() && slots.insert(slot)
+                })
         })
     }
 
@@ -275,11 +299,11 @@ impl Graph {
             self.by_rid = vec![None; usize::from(max) + 1];
         }
         let mut authored_state_slots = BTreeMap::new();
-        if self
-            .nodes
-            .iter()
-            .any(|node| node.state_behavior.is_some() || node.action_behavior.is_some())
-        {
+        if self.nodes.iter().any(|node| {
+            node.state_behavior.is_some()
+                || node.action_behavior.is_some()
+                || node.declares_room_message_entry()
+        }) {
             for &position in self.states.iter().flatten() {
                 *authored_state_slots.entry(position).or_insert(0_usize) += 1;
             }
@@ -380,6 +404,7 @@ impl Graph {
                     ActionBehavior::Forward => ("forward action", &["m_outPlug"]),
                     ActionBehavior::Branch => ("branch action", &["m_truePlug", "m_falsePlug"]),
                     ActionBehavior::LocalMessage => ("local message action", &["m_outPlug"]),
+                    ActionBehavior::RoomMessage => ("room message action", &["m_outPlug"]),
                     ActionBehavior::HealthChange => ("health change action", &["m_outPlug"]),
                 };
                 let state_slot = authored_state_slots.contains_key(&node.pos);
@@ -424,6 +449,15 @@ impl Graph {
                         }
                         "STUStatescriptActionSendGameMessage".into()
                     }
+                    ActionBehavior::RoomMessage => {
+                        if !node.valid_room_message() {
+                            return Err(invalid(format!(
+                                "{action} in graph {} at node {} requires a nonzero message, one explicit m_target and at most {MAX_ROOM_MESSAGE_PARAMETERS} unique parameter slots",
+                                self.index, node.pos
+                            )));
+                        }
+                        "ActionRoomMessage".into()
+                    }
                     ActionBehavior::HealthChange => {
                         for operand in ["target", "delta"] {
                             if node.field(operand).is_none_or(Value::is_null) {
@@ -436,6 +470,22 @@ impl Graph {
                         "ActionHealthChange".into()
                     }
                 };
+            }
+            if node.declares_room_message_entry()
+                && (!node.server_only
+                    || !node.runs_on_server()
+                    || !node.is_message_entry()
+                    || node.is_action()
+                    || node.is_state()
+                    || node.state.is_some()
+                    || authored_state_slots.contains_key(&node.pos)
+                    || node.game_message_id().is_none_or(|message| message == 0)
+                    || !node.field("m_outPlug").is_some_and(valid_output_plug))
+            {
+                return Err(invalid(format!(
+                    "room message entry in graph {} at node {} must be a server-only message entry with a nonzero message and a valid m_outPlug",
+                    self.index, node.pos
+                )));
             }
             let position = self
                 .by_pos
@@ -718,6 +768,7 @@ enum AuthoredClassBehavior {
     ForwardAction,
     BranchAction,
     LocalMessageAction,
+    RoomMessageAction,
     HealthChangeAction,
     ClientOnly,
 }
@@ -732,6 +783,7 @@ impl AuthoredClassBehavior {
             Self::ForwardAction => (false, None, Some(ActionBehavior::Forward)),
             Self::BranchAction => (false, None, Some(ActionBehavior::Branch)),
             Self::LocalMessageAction => (false, None, Some(ActionBehavior::LocalMessage)),
+            Self::RoomMessageAction => (false, None, Some(ActionBehavior::RoomMessage)),
             Self::HealthChangeAction => (false, None, Some(ActionBehavior::HealthChange)),
             Self::ClientOnly => (true, None, None),
         };
@@ -866,7 +918,9 @@ impl GraphStore {
         let uses_room_spatial_frame = graphs.values().any(|graph| {
             graph.nodes.iter().any(|node| {
                 node.runs_on_server()
-                    && (node.declares_health_change_action() || uses_radius_query(&node.fields))
+                    && (node.declares_health_change_action()
+                        || node.declares_room_message_action()
+                        || uses_radius_query(&node.fields))
             })
         });
         Ok(Self {

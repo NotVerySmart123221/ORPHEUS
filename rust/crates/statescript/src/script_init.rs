@@ -15,7 +15,7 @@ use crate::{
     script_expr::{self, EmptyContext, EvalError, StackPriority, Variable},
     script_graph::{Body, GraphStore, Node, asset_guid},
     script_modifiers::{Modifier, ModifierKey},
-    script_runtime::frame_start,
+    script_runtime::{FRAME_MS, frame_start},
     script_wire::{Value, Variables},
 };
 
@@ -175,7 +175,7 @@ pub use types::{
 };
 pub use world::{
     AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, CreationKind,
-    EmptyWorld, EntityCreation, LandingSelection, PlayScript, Site, TargetTagEffect,
+    EmptyWorld, EntityCreation, LandingSelection, PlayScript, RoomMessage, Site, TargetTagEffect,
     TargetTagEffects, TargetTagSnapshot, World,
 };
 
@@ -596,6 +596,28 @@ impl Component {
             parameters,
             due_ms,
         )
+    }
+
+    /// Schedule an authored room message at the start of the next VM frame.
+    pub fn queue_room_message_from(
+        &mut self,
+        sender: u32,
+        message: RoomMessage,
+    ) -> Result<usize, InitFault> {
+        if self.halted {
+            return Err(InitFault::Halted);
+        }
+        if !script_expr::valid_entity(sender)
+            || sender == self.machine.snapshot.entity
+            || !message.is_valid()
+        {
+            return Ok(0);
+        }
+        let Ok(frame) = u32::try_from(self.machine.now_ms / FRAME_MS + 1) else {
+            return Ok(0);
+        };
+        self.machine
+            .queue_room_entries_from(&self.graphs, sender, message, frame_start(frame))
     }
 
     fn queue_message_at(

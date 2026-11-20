@@ -74,7 +74,7 @@ fn check_spatial_candidates_frame(free_for_all: bool) {
     let (captured, initial) = room.spatial_frame.as_ref().unwrap();
     assert_eq!(*captured, frame);
     assert_eq!(initial.candidates().len(), 3);
-    assert!(!RoomHealthRequests::default().queue(initial, player.entity, -1.0));
+    assert!(!RoomScriptRequests::default().queue_health(initial, player.entity, -1.0));
     let bot_team = (!free_for_all).then_some(1);
     assert!(
         initial
@@ -141,6 +141,146 @@ fn spatial_visibility_blocks_only_hits_before_the_target() {
         spatial.line_clear([0.0; 3], [f64::from_bits(1), 0.0, 0.0]),
         Some(true)
     );
+}
+
+#[test]
+fn authored_room_message_reaches_only_the_npc_body_on_its_next_frame() {
+    use crate::{
+        game_clock::TICK_PERIOD,
+        game_pools::HealthPools,
+        mover_settings::MoverCatalog,
+        npc_catalog::NpcDefinition,
+        script_codecs::CodecTable,
+        script_enemy::EnemySpawn,
+        script_graph::GraphStore,
+        script_init::{CreationKind, EntityCreation, RoomMessage},
+        script_wire::{Value, Variables},
+    };
+    use serde_json::json;
+
+    const HERO: u64 = 0x02e0_0000_0050_0101;
+    const BODY: u64 = 0x0400_0000_0050_0102;
+    const MESSAGE: u64 = 71;
+    const SENDER_SLOT: u32 = 7;
+    const PAYLOAD_SLOT: u32 = 8;
+    const PARAMETER: u32 = 9;
+
+    let entity_var = |id| json!({"$":"STUConfigVarDynamic","m_identifier":id,"m_60DB8F99":true});
+    let bundle = json!({
+        "version":1,"bodies":{},"missing":[],
+        "graphs":[{
+            "index":123,"items":1,"states":[],"entries":[0],"remote":[],"sync_vars":[],
+            "fields":{},"containers":{},"unknown_nodes":[],
+            "header":{"m_nodesBitCount":4,"m_statesBitCount":4,
+                "m_remoteSyncNodesBitCount":4,"m_syncVarsBitCount":4},
+            "nodes":[{
+                "pos":0,"uid":0,"rid":0,"remote":-1,"state":null,
+                "class":"STUStatescriptEntryGameMessage","server_only":true,"client_only":false,
+                "room_message_entry":true,"fields":{
+                    "m_gameMessage":{"m_gameMessage":format!("0x{MESSAGE:016X}")},
+                    "m_B60ABDA4":entity_var(SENDER_SLOT),
+                    "m_params":[{"m_B5051BCE":format!("0x{PARAMETER:016X}"),
+                        "m_out_Var":entity_var(PAYLOAD_SLOT)}],
+                    "m_outPlug":{"$":"Plug","links":[]}
+                }
+            }]
+        }],
+        "junkenstein":{
+            "pairs":{"0x02E0000000500101":{"body":"0x0400000000500102",
+                "controller":"0x0400000000500103"}},
+            "entities":{
+                "0x0400000000500102":{"hero":"0x02E0000000500101","name":"Body",
+                    "manager":null,"weapons":[],"graphs":[{"graph":123,"m_75408640":0}]},
+                "0x0400000000500103":{"hero":null,"name":"Controller",
+                    "manager":null,"weapons":[],"graphs":[{"graph":123,"m_75408640":0}]}
+            }
+        }
+    });
+    let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    let codecs = Arc::new(CodecTable::from_json(r#"{"classes":{}}"#).unwrap());
+    let definition = NpcDefinition {
+        hero: HERO,
+        body: BODY,
+        name: "Message test".into(),
+        pools: HealthPools {
+            health: 100.0,
+            armour: 0.0,
+            shields: 0.0,
+        },
+    };
+    let request = EntityCreation {
+        position: [1.0, 2.0, 3.0],
+        kind: CreationKind::Hero {
+            hero: HERO,
+            team: 1,
+            yaw: 0.0,
+            flags: [Value::Bool(false), Value::Bool(false)],
+            controller: None,
+            skin: None,
+        },
+    };
+    let context = FIXTURE_CONTEXT;
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    let mut spawn = || {
+        room.create_enemy(EnemySpawn {
+            graphs: Arc::clone(&graphs),
+            codecs: Arc::clone(&codecs),
+            definition: &definition,
+            request: &request,
+            mode: 0,
+            mode_variables: Arc::new(Variables::new()),
+            tick: context.tick,
+            walk: crate::game_bots::BotWalk::default(),
+            gate: None,
+        })
+        .unwrap()
+    };
+    let sender = spawn();
+    let receiver = spawn();
+    let ground = Arc::new(fixture_ground());
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, &ground, None);
+    room.enable_spatial_queries(false, Arc::clone(&ground));
+    room.prepare_spatial_frame(context.tick).unwrap();
+
+    let frame = &room.spatial_frame.as_ref().unwrap().1;
+    let mut outbox = RoomScriptRequests::default();
+    let message = RoomMessage {
+        id: MESSAGE,
+        parameters: Variables::from([(PARAMETER, Value::Integer(17))]),
+    };
+    assert!(!outbox.queue_message(frame, receiver + 1, message.clone()));
+    assert!(outbox.queue_message(frame, receiver, message));
+    let envelope = outbox.take().pop().unwrap();
+    room.settle_script_request(envelope, sender, context.tick, context.now)
+        .unwrap();
+
+    let observed = |room: &RoomSimulation, wire, controller| {
+        let enemy = state(room, wire).unwrap().enemy.as_ref().unwrap();
+        assert_eq!(enemy.fault, None);
+        let component = if controller {
+            &enemy.scripts.controller
+        } else {
+            &enemy.scripts.body
+        };
+        let variables = &component.snapshot().unwrap().variables;
+        (
+            variables.get(&SENDER_SLOT).cloned(),
+            variables.get(&PAYLOAD_SLOT).cloned(),
+        )
+    };
+    assert_eq!(observed(&room, receiver, false), (None, None));
+    room.finish_tick(&queries, context.tick, context.now)
+        .unwrap();
+    assert_eq!(observed(&room, receiver, false), (None, None));
+    room.finish_tick(&queries, context.tick + 1, context.now + TICK_PERIOD)
+        .unwrap();
+    assert_eq!(
+        observed(&room, receiver, false),
+        (Some(Value::Entity(sender)), Some(Value::Integer(17)))
+    );
+    assert_eq!(observed(&room, receiver, true), (None, None));
+    assert_eq!(observed(&room, sender, false), (None, None));
 }
 
 #[test]

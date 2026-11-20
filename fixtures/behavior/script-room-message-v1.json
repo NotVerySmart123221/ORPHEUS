@@ -1,0 +1,193 @@
+{
+  "schema_version": 1,
+  "case_id": "script-room-message.synthetic.v1",
+  "source": {
+    "basis": "Original sender and receiver graphs for directed queued room messages."
+  },
+  "evidence": "synthetic-rust",
+  "input": {
+    "bundle": {
+      "version": 1,
+      "authored_classes": [
+        {
+          "class": "authored.address_actor",
+          "behavior": "room_message_action"
+        }
+      ],
+      "graphs": [
+        {
+          "index": 201,
+          "items": 3,
+          "header": {
+            "m_nodesBitCount": 4,
+            "m_statesBitCount": 4,
+            "m_remoteSyncNodesBitCount": 4,
+            "m_syncVarsBitCount": 4
+          },
+          "fields": {},
+          "containers": {},
+          "nodes": [
+            {
+              "pos": 0,
+              "class": "STUStatescriptEntryGameMessage",
+              "uid": 0,
+              "rid": 0,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": false,
+              "fields": {
+                "m_gameMessage": {"m_gameMessage": "0xF00000000000004A"},
+                "m_outPlug": {"$": "Plug", "links": [[1, "m_inPlug"]], "m_FF3DAF1E": []}
+              }
+            },
+            {
+              "pos": 1,
+              "class": "authored.address_actor",
+              "uid": 1,
+              "rid": 1,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": false,
+              "fields": {
+                "m_gameMessage": {"m_gameMessage": "0xF00000000000004B"},
+                "m_target": {"$": "STUConfigVarDynamic", "m_identifier": 1, "m_60DB8F99": true},
+                "m_params": [
+                  {"m_B5051BCE": "0xF10000000000002D", "m_value": {"$": "STUConfigVarDynamic", "m_identifier": 2, "m_60DB8F99": true}},
+                  {"m_B5051BCE": "0xF10000000000002E", "m_value": {"$": "STUConfigVarDynamic", "m_identifier": 3, "m_60DB8F99": true}}
+                ],
+                "m_outPlug": {"$": "Plug", "links": [[2, "m_inPlug"]], "m_FF3DAF1E": []}
+              }
+            },
+            {
+              "pos": 2,
+              "class": "STUStatescriptActionSetVar",
+              "uid": 2,
+              "rid": 2,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": false,
+              "fields": {
+                "m_ADEB6E05": true,
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 2, "m_60DB8F99": true},
+                "m_value": 19
+              }
+            }
+          ],
+          "unknown_nodes": [],
+          "states": [],
+          "entries": [0],
+          "remote": [],
+          "sync_vars": []
+        },
+        {
+          "index": 202,
+          "items": 4,
+          "header": {
+            "m_nodesBitCount": 4,
+            "m_statesBitCount": 4,
+            "m_remoteSyncNodesBitCount": 4,
+            "m_syncVarsBitCount": 4
+          },
+          "fields": {},
+          "containers": {},
+          "nodes": [
+            {
+              "pos": 2,
+              "class": "STUStatescriptEntryGameMessage",
+              "uid": 2,
+              "rid": 2,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "room_message_entry": true,
+              "fields": {
+                "m_gameMessage": {"m_gameMessage": "0xF00000000000004B"},
+                "m_params": [
+                  {"m_B5051BCE": "0xF10000000000002D", "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 20, "m_60DB8F99": false}},
+                  {"m_B5051BCE": "0xF10000000000002E", "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 21, "m_60DB8F99": false}}
+                ],
+                "m_B60ABDA4": {"$": "STUConfigVarDynamic", "m_identifier": 23, "m_60DB8F99": false},
+                "m_outPlug": {"$": "Plug", "links": [], "m_FF3DAF1E": []}
+              }
+            },
+            {
+              "pos": 0,
+              "class": "STUStatescriptEntryGameMessage",
+              "uid": 0,
+              "rid": 0,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "room_message_entry": true,
+              "fields": {
+                "m_gameMessage": {"m_gameMessage": "0xF00000000000004B"},
+                "m_outPlug": {"$": "Plug", "links": [[3, "m_inPlug"]], "m_FF3DAF1E": []}
+              }
+            },
+            {
+              "pos": 1,
+              "class": "STUStatescriptEntryGameMessage",
+              "uid": 1,
+              "rid": 1,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": false,
+              "fields": {
+                "m_gameMessage": {"m_gameMessage": "0xF00000000000004B"},
+                "m_params": [
+                  {"m_B5051BCE": "0xF10000000000002D", "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 24, "m_60DB8F99": false}}
+                ]
+              }
+            },
+            {
+              "pos": 3,
+              "class": "STUStatescriptActionSetVar",
+              "uid": 3,
+              "rid": 3,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": false,
+              "fields": {
+                "m_ADEB6E05": true,
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 22, "m_60DB8F99": false},
+                "m_value": {"$": "STUConfigVarDynamic", "m_identifier": 20, "m_60DB8F99": false}
+              }
+            }
+          ],
+          "unknown_nodes": [],
+          "states": [],
+          "entries": [0, 1, 2],
+          "remote": [],
+          "sync_vars": []
+        }
+      ],
+      "bodies": {},
+      "missing": []
+    },
+    "source_entity": 31001,
+    "target_entity": 31002,
+    "source_graph": 201,
+    "target_graph": 202,
+    "trigger": 17293822569102704714,
+    "frame": 7,
+    "integer": 113,
+    "vector": [1.5, -2.0, 0.0]
+  },
+  "expected": {
+    "continuation_value": 19,
+    "room_receiver_count": 2,
+    "ordinary_receiver_count": 1,
+    "integer_variable": 20,
+    "vector_variable": 21,
+    "ordered_read_variable": 22,
+    "sender_variable": 23,
+    "ordinary_variable": 24
+  }
+}

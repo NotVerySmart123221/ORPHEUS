@@ -6,7 +6,7 @@ use serde_json::Value as Json;
 
 use crate::{
     script_expr::{self, EntityRelation, OnFire, SpatialCandidate, StackPriority},
-    script_graph::Node,
+    script_graph::{MAX_ROOM_MESSAGE_PARAMETERS, Node},
     script_runtime::PoolKind,
     script_voice::IntroCue,
     script_wire::{Value, Variables},
@@ -18,6 +18,31 @@ pub struct Site {
     pub instance: u16,
     pub graph: u32,
     pub node: Option<u16>,
+}
+
+/// A bounded, typed message evaluated by the sending StateScript VM.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RoomMessage {
+    pub id: u64,
+    pub parameters: Variables,
+}
+
+impl RoomMessage {
+    pub(super) fn is_valid(&self) -> bool {
+        self.id != 0
+            && self.parameters.len() <= MAX_ROOM_MESSAGE_PARAMETERS
+            && self.parameters.iter().all(|(&slot, value)| {
+                slot != 0
+                    && u16::try_from(slot).is_ok()
+                    && match value {
+                        Value::Null | Value::Bool(_) | Value::Integer(_) | Value::Asset(_) => true,
+                        Value::Float(value) => value.is_finite(),
+                        Value::Entity(entity) => script_expr::valid_entity(*entity),
+                        Value::Vector(parts) => parts.iter().all(|part| part.is_finite()),
+                        _ => false,
+                    }
+            })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -626,6 +651,11 @@ pub trait World {
 
     fn selects_ai_behavior(&mut self, _site: Site) -> Option<bool> {
         None
+    }
+
+    /// Admit an authored message for a different body. Delivery happens later.
+    fn queue_room_message(&mut self, _site: Site, _target: u32, _message: RoomMessage) -> bool {
+        false
     }
 
     /// The world owns delivery outside the current body.

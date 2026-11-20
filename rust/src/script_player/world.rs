@@ -9,7 +9,7 @@ use super::lifecycle::{DEADEYE_GRAPH, DEADEYE_TARGET_EFFECT};
 use crate::{
     collision_scene::CollisionScene,
     commands::Command,
-    game_combat::{RoomHealthRequests, eye_height},
+    game_combat::{RoomScriptRequests, eye_height},
     game_content::{PRACTICE_RANGE_MODE, TUTORIAL_MODE, is_junkenstein_mode},
     game_heroes::{CASSIDY, SOLDIER},
     game_hitscan::{TargetPose, aim_direction},
@@ -18,7 +18,7 @@ use crate::{
     scene_assets::MOVER_CATEGORY,
     script_expr::{EntityRelation, OnFire, native_shape, valid_entity},
     script_graph::GraphStore,
-    script_init::{MAX_INIT_WORK, Site, TargetTagEffect, TargetTagEffects, World},
+    script_init::{MAX_INIT_WORK, RoomMessage, Site, TargetTagEffect, TargetTagEffects, World},
     script_wire::{Value, Variables},
     static_ray::{Vec3, capsule_entry_distance, norm},
     vitals::{PoolKind, Vitals},
@@ -133,7 +133,7 @@ pub(super) struct BodyWorld {
     pub(super) damage_credit: Option<crate::game_combat::AppliedDamage>,
     pub(super) graphs: Arc<GraphStore>,
     pub(super) spatial_frame: Option<Arc<crate::game_combat::RoomSpatialFrame>>,
-    pub(super) health_requests: RoomHealthRequests,
+    pub(super) script_requests: RoomScriptRequests,
     pub(super) controller: u32,
     pub(super) entity: u32,
     pub(super) body_filter: u64,
@@ -334,7 +334,16 @@ impl World for BodyWorld {
         }
         self.spatial_frame
             .as_deref()
-            .is_some_and(|frame| self.health_requests.queue(frame, target, delta))
+            .is_some_and(|frame| self.script_requests.queue_health(frame, target, delta))
+    }
+
+    fn queue_room_message(&mut self, site: Site, target: u32, message: RoomMessage) -> bool {
+        if !self.is_player_site(site) {
+            return false;
+        }
+        self.spatial_frame
+            .as_deref()
+            .is_some_and(|frame| self.script_requests.queue_message(frame, target, message))
     }
 
     fn spatial_candidates(&self) -> Option<&[crate::script_expr::SpatialCandidate]> {

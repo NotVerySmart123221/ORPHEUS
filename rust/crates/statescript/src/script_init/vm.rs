@@ -11,7 +11,7 @@ use orpheus_wire::commands::Command;
 use serde_json::Value as Json;
 
 use crate::{
-    script_expr::{self, Scope, StackPriority, truthy},
+    script_expr::{self, EvalError, Scope, StackPriority, truthy},
     script_graph::{Graph, GraphStore, Node, asset_guid, message_parameter_id},
     script_runtime::{ButtonEdge, FRAME_MS, button_edges, frame_start},
     script_wire::{Value, Variables},
@@ -29,7 +29,7 @@ use super::{
         AbilityCooldown, BufferedPress, Diagnostic, InitFault, Instance, Issue, State, StateKind,
     },
     voice::InstanceContext,
-    world::{PlayScript, Site, World},
+    world::{PlayScript, RoomMessage, Site, World},
 };
 
 mod effects;
@@ -1850,10 +1850,74 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         Ok(true)
     }
 
+    pub(in crate::script_init) fn send_room_message(
+        &mut self,
+        id: u16,
+        node: &Node,
+        caller: Option<StateKey>,
+    ) -> Result<bool, InitFault> {
+        let site = self.site(id, node);
+        let Some(target) = self.evaluate(id, node, field(&node.fields, "m_target"), caller) else {
+            return Ok(false);
+        };
+        let Value::Entity(target) = target else {
+            self.report(
+                site,
+                Issue::Expression(EvalError::MalformedConfig(
+                    "room message target must be a bound entity",
+                )),
+            );
+            return Ok(false);
+        };
+        if !script_expr::valid_entity(target) || target == site.entity {
+            self.report(
+                site,
+                Issue::Expression(EvalError::MalformedConfig(
+                    "room message target must be a different bound entity",
+                )),
+            );
+            return Ok(false);
+        }
+        let Some(message) = node.game_message_id() else {
+            return Ok(false);
+        };
+        let Some(parameters) = self.message_parameters(id, node, caller)? else {
+            return Ok(false);
+        };
+        let message = RoomMessage {
+            id: message,
+            parameters,
+        };
+        if !message.is_valid() {
+            self.report(
+                site,
+                Issue::Expression(EvalError::MalformedConfig(
+                    "room message parameters must be bounded scalar or finite vector values",
+                )),
+            );
+            return Ok(false);
+        }
+        self.spend("room message admission")?;
+        if !self.world.queue_room_message(site, target, message) {
+            self.report(site, Issue::UnsupportedField("room message request"));
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
     pub(in crate::script_init) fn game_message_parameters(
         &mut self,
         id: u16,
         node: &Node,
+    ) -> Result<Option<Variables>, InitFault> {
+        self.message_parameters(id, node, None)
+    }
+
+    fn message_parameters(
+        &mut self,
+        id: u16,
+        node: &Node,
+        caller: Option<StateKey>,
     ) -> Result<Option<Variables>, InitFault> {
         let mut parameters = Variables::new();
         for parameter in array_field(&node.fields, "m_params")
@@ -1861,7 +1925,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .filter(|value| value.is_object())
         {
             self.spend("game message parameter")?;
-            let Some(value) = self.evaluate(id, node, field(parameter, "m_value"), None) else {
+            let Some(value) = self.evaluate(id, node, field(parameter, "m_value"), caller) else {
                 return Ok(None);
             };
             parameters.insert(message_parameter_id(parameter), value);

@@ -944,8 +944,19 @@ impl World for EnemyWorld<'_> {
         }
         self.binding.spatial_frame.as_deref().is_some_and(|frame| {
             self.control_records
-                .health_requests
-                .queue(frame, target, delta)
+                .script_requests
+                .queue_health(frame, target, delta)
+        })
+    }
+
+    fn queue_room_message(&mut self, site: Site, target: u32, message: RoomMessage) -> bool {
+        if site.entity != self.binding.body {
+            return false;
+        }
+        self.binding.spatial_frame.as_deref().is_some_and(|frame| {
+            self.control_records
+                .script_requests
+                .queue_message(frame, target, message)
         })
     }
 

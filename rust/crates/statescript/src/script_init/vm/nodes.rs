@@ -71,6 +71,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 };
                 self.follow(id, node, output, caller, depth)
             }
+            _ if node.declares_room_message_action() => {
+                if !self.send_room_message(id, node, caller)? {
+                    return Ok(false);
+                }
+                self.follow(id, node, "m_outPlug", caller, depth)?;
+                Ok(true)
+            }
             _ if node.declares_health_change_action() => {
                 let site = self.site(id, node);
                 let Some(target) = self.evaluate(id, node, field(&node.fields, "target"), caller)

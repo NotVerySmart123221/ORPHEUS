@@ -89,6 +89,27 @@ State listeners still need to be active when the message is queued and
 delivered. Client-only listeners remain outside the server route.
 See the [synthetic local message contract](../fixtures/behavior/script-local-message-v1.json).
 
+## Send an authored message to another room body
+
+Set `action_behavior` to `"room_message"` on a server-only action, or
+declare `"room_message_action"` for an authored class. Supply a nonzero
+message ID in `m_gameMessage.m_gameMessage`, an `m_target` expression that
+yields a different live body, and a valid `m_outPlug`. Use up to 16 distinct
+nonzero parameter slots in `m_params`. Parameters can hold scalar values or
+finite vectors.
+
+A receiving game-message entry declares `"room_message_entry": true` and
+server-only scope. That declaration puts the entry on the authored room route.
+The sender captures parameter values when the request is accepted and can
+then follow its output. The room uses the same per-body FIFO and identity
+checks as health requests, with a combined limit of 64 pending requests per
+body. It schedules delivery for the receiving body's next VM frame.
+An accepted message can expire if the body is replaced or retires, or if
+the recipient has no matching listener. A receiver with too little queue
+space rejects the whole batch of matching listeners.
+
+See the [synthetic room message contract](../fixtures/behavior/script-room-message-v1.json).
+
 ## Request a health change
 
 Set `action_behavior` to `"health_change"` on a server-only action, or

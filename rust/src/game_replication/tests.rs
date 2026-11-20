@@ -829,18 +829,35 @@ struct SyntheticOwner {
     health_update: Arc<Mutex<Option<WorldComponent>>>,
     vitals: Option<crate::vitals::Vitals>,
     authored_health_change: Option<(u32, f64)>,
-    health_requests: crate::game_combat::RoomHealthRequests,
+    authored_room_message: Option<(u32, crate::script_init::RoomMessage)>,
+    received_room_messages: Arc<Mutex<Vec<(u32, crate::script_init::RoomMessage)>>>,
+    script_requests: crate::game_combat::RoomScriptRequests,
 }
 
 impl OwnerBodyRuntime for SyntheticOwner {
     fn set_spatial_frame(&mut self, frame: Arc<crate::game_combat::RoomSpatialFrame>) {
         if let Some((target, delta)) = self.authored_health_change.take() {
-            assert!(self.health_requests.queue(&frame, target, delta));
+            assert!(self.script_requests.queue_health(&frame, target, delta));
+        }
+        if let Some((target, message)) = self.authored_room_message.take() {
+            assert!(self.script_requests.queue_message(&frame, target, message));
         }
     }
 
-    fn take_health_requests(&mut self) -> Vec<crate::game_combat::RoomHealthRequest> {
-        self.health_requests.take()
+    fn receive_room_message(
+        &mut self,
+        sender: u32,
+        message: crate::script_init::RoomMessage,
+    ) -> Result<usize, crate::script_init::InitFault> {
+        self.received_room_messages
+            .lock()
+            .unwrap()
+            .push((sender, message));
+        Ok(1)
+    }
+
+    fn take_script_requests(&mut self) -> Vec<crate::game_combat::RoomScriptRequest> {
+        self.script_requests.take()
     }
 
     fn snapshot(&self) -> Option<&Snapshot> {
@@ -930,7 +947,9 @@ fn synthetic_owner_with_vitals(
         health_update: Arc::default(),
         vitals,
         authored_health_change: None,
-        health_requests: Default::default(),
+        authored_room_message: None,
+        received_room_messages: Arc::default(),
+        script_requests: Default::default(),
     }
 }
 
@@ -2694,6 +2713,95 @@ fn authored_player_health_settles_once_for_the_accepted_body() {
         simulation.finish_tick(&queries, frame + 1, now).unwrap();
         assert!(simulation.take_scripted_health().is_empty());
         assert!(simulation.take_player_deaths().is_empty());
+    }
+}
+
+#[test]
+fn authored_room_message_targets_the_sampled_player_generation() {
+    use crate::{
+        mover_settings::MoverCatalog,
+        scene_assets::BotQueries,
+        script_init::RoomMessage,
+        script_wire::{Value, Variables},
+        vitals::Vitals,
+    };
+
+    const MESSAGE: u64 = 0x1234;
+    let ground = Arc::new(fixture_ground());
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, &ground, None);
+    let source = BodyId {
+        entity: OWNER | 1,
+        generation: 1,
+    };
+    let target_owner = OWNER + 0x100;
+    let frame = 100;
+    let now = Duration::from_secs(2);
+
+    // Each outbox starts with the same accepted target, before replacement or health settlement.
+    for (replace_target, kill_target) in [(false, false), (true, false), (false, true)] {
+        let target = BodyId {
+            entity: target_owner | 1,
+            generation: 1,
+        };
+        let delivered = Arc::default();
+        let target_state = |id: BodyId| {
+            let mut state =
+                fixture_player_state(id, target_owner, 1, 1, [3.0, 0.0, 0.0], 25.0, false);
+            let mut runtime = synthetic_owner_with_vitals(
+                id.entity,
+                frame,
+                Arc::default(),
+                Some(Vitals::new(25.0, 0.0, 0.0)),
+            );
+            runtime.received_room_messages = Arc::clone(&delivered);
+            state.runtime = Some(Box::new(runtime));
+            state
+        };
+        let mut source_state = fixture_player_state(source, OWNER, 0, 0, [0.0; 3], 100.0, false);
+        let mut runtime = synthetic_owner_with_vitals(
+            source.entity,
+            frame,
+            Arc::default(),
+            Some(Vitals::new(100.0, 0.0, 0.0)),
+        );
+        let parameters = Variables::from([(1, Value::Float(2.5)), (2, Value::Bool(true))]);
+        runtime.authored_health_change = kill_target.then_some((target.entity, -50.0));
+        runtime.authored_room_message = Some((
+            target.entity,
+            RoomMessage {
+                id: MESSAGE,
+                parameters: parameters.clone(),
+            },
+        ));
+        source_state.runtime = Some(Box::new(runtime));
+
+        let mut simulation = RoomSimulation::new(Vec::new()).unwrap();
+        simulation.spawn_player_body(source_state).unwrap();
+        simulation.spawn_player_body(target_state(target)).unwrap();
+        simulation.enable_spatial_queries(false, Arc::clone(&ground));
+        simulation.prepare_spatial_frame(frame).unwrap();
+        assert!(delivered.lock().unwrap().is_empty());
+
+        if replace_target {
+            simulation
+                .spawn_player_body(target_state(BodyId {
+                    generation: 2,
+                    ..target
+                }))
+                .unwrap();
+        }
+        simulation.finish_tick(&queries, frame, now).unwrap();
+        simulation.finish_tick(&queries, frame + 1, now).unwrap();
+        let delivered = delivered.lock().unwrap();
+        if replace_target || kill_target {
+            assert!(delivered.is_empty());
+        } else {
+            assert_eq!(delivered.len(), 1);
+            assert_eq!(delivered[0].0, source.entity);
+            assert_eq!(delivered[0].1.id, MESSAGE);
+            assert_eq!(delivered[0].1.parameters, parameters);
+        }
     }
 }
 

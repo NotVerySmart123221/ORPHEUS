@@ -24,7 +24,7 @@ use crate::{
     script_codecs::CodecTable,
     script_expr::to_float,
     script_graph::GraphStore,
-    script_init::{Component, Snapshot},
+    script_init::{Component, InitFault, RoomMessage, Snapshot},
     script_runtime::FRAME_MS,
     script_snapshot_wire::SnapshotEncoder,
     script_wire::{Value, Variables},
@@ -174,8 +174,16 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         self.world.deadeye_scene = scene;
     }
 
-    fn take_health_requests(&mut self) -> Vec<crate::game_combat::RoomHealthRequest> {
-        self.world.health_requests.take()
+    fn take_script_requests(&mut self) -> Vec<crate::game_combat::RoomScriptRequest> {
+        self.world.script_requests.take()
+    }
+
+    fn receive_room_message(
+        &mut self,
+        sender: u32,
+        message: RoomMessage,
+    ) -> Result<usize, InitFault> {
+        self.component.queue_room_message_from(sender, message)
     }
 
     fn set_spatial_frame(&mut self, frame: Arc<crate::game_combat::RoomSpatialFrame>) {

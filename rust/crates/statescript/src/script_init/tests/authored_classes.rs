@@ -972,6 +972,301 @@ fn authored_target_children_reuse_instances_and_clear_retired_schedules() {
     }
 }
 
+#[derive(Deserialize)]
+struct RoomMessageContract {
+    schema_version: u8,
+    case_id: String,
+    evidence: String,
+    input: RoomMessageInput,
+    expected: RoomMessageExpected,
+}
+
+#[derive(Deserialize)]
+struct RoomMessageInput {
+    bundle: Json,
+    source_entity: u32,
+    target_entity: u32,
+    source_graph: u32,
+    target_graph: u32,
+    trigger: u64,
+    frame: u32,
+    integer: i64,
+    vector: [f64; 3],
+}
+
+#[derive(Deserialize)]
+struct RoomMessageExpected {
+    continuation_value: i64,
+    room_receiver_count: usize,
+    ordinary_receiver_count: usize,
+    integer_variable: u32,
+    vector_variable: u32,
+    ordered_read_variable: u32,
+    sender_variable: u32,
+    ordinary_variable: u32,
+}
+
+fn room_message_contract() -> RoomMessageContract {
+    let contract: RoomMessageContract = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/script-room-message-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    assert_eq!(contract.case_id, "script-room-message.synthetic.v1");
+    assert_eq!(contract.evidence, "synthetic-rust");
+    contract
+}
+
+struct RoomMessageWorld {
+    accept: bool,
+    requests: Vec<(Site, u32, RoomMessage)>,
+}
+
+impl World for RoomMessageWorld {
+    fn position(&mut self, _entity: u32) -> Option<[f64; 3]> {
+        None
+    }
+
+    fn entity_variable(&mut self, _entity: u32, _id: u32) -> Option<Value> {
+        None
+    }
+
+    fn queue_room_message(&mut self, site: Site, target: u32, message: RoomMessage) -> bool {
+        self.requests.push((site, target, message));
+        self.accept
+    }
+}
+
+#[test]
+fn authored_room_messages_copy_typed_parameters_and_wait_for_the_receiver_frame() {
+    const ROOT: u16 = 1;
+    const INTEGER_SLOT: u32 = 45;
+    const VECTOR_SLOT: u32 = 46;
+    let RoomMessageContract {
+        input, expected, ..
+    } = room_message_contract();
+    let graphs =
+        Arc::new(GraphStore::from_json(&serde_json::to_vec(&input.bundle).unwrap()).unwrap());
+    assert!(graphs.uses_room_spatial_frame());
+    let cases = [
+        (
+            Value::Entity(input.target_entity),
+            Value::Vector(input.vector),
+            true,
+            true,
+        ),
+        (
+            Value::Entity(input.target_entity),
+            Value::Vector(input.vector),
+            false,
+            true,
+        ),
+        (
+            Value::Integer(i64::from(input.target_entity)),
+            Value::Vector(input.vector),
+            true,
+            false,
+        ),
+        (
+            Value::Entity(input.source_entity),
+            Value::Vector(input.vector),
+            true,
+            false,
+        ),
+        (
+            Value::Entity(input.target_entity),
+            Value::Array(Vec::new()),
+            true,
+            false,
+        ),
+        (
+            Value::Entity(input.target_entity),
+            Value::Vector([f64::NAN, 0.0, 0.0]),
+            true,
+            false,
+        ),
+    ];
+    let mut message = None;
+    for (target, vector, accept, requested) in cases {
+        let mut world = RoomMessageWorld {
+            accept,
+            requests: Vec::new(),
+        };
+        let mut source = Component::start(
+            Arc::clone(&graphs),
+            input.source_entity,
+            Variables::from([(1, target), (2, Value::Integer(input.integer)), (3, vector)]),
+            vec![Root::new(ROOT, input.source_graph)],
+            0,
+            &mut world,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        assert_eq!(
+            source
+                .queue_message(ROOT, input.trigger, Variables::new())
+                .unwrap(),
+            1
+        );
+        source.run_now(&mut world).unwrap();
+        let state = source.snapshot().unwrap();
+        let continued = accept && requested;
+        let remaining = if continued {
+            expected.continuation_value
+        } else {
+            input.integer
+        };
+        assert_eq!(state.variables[&2], Value::Integer(remaining));
+        assert_eq!(state.diagnostics.len(), usize::from(!continued));
+        assert_eq!(world.requests.len(), usize::from(requested));
+        if let Some((site, target, envelope)) = world.requests.pop() {
+            assert_eq!(site.entity, input.source_entity);
+            assert_eq!((site.graph, site.node), (input.source_graph, Some(1)));
+            assert_eq!(target, input.target_entity);
+            assert_eq!(
+                envelope.parameters,
+                Variables::from([
+                    (INTEGER_SLOT, Value::Integer(input.integer)),
+                    (VECTOR_SLOT, Value::Vector(input.vector)),
+                ])
+            );
+            if continued {
+                message = Some(envelope);
+            }
+        }
+    }
+
+    let message = message.unwrap();
+    let mut receiver = Component::start(
+        graphs,
+        input.target_entity,
+        Variables::new(),
+        vec![Root::new(ROOT, input.target_graph)],
+        0,
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    receiver
+        .advance_frame(input.frame, &mut EmptyWorld)
+        .unwrap();
+    assert_eq!(
+        receiver
+            .queue_room_message_from(input.target_entity, message.clone())
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        receiver
+            .queue_room_message_from(input.source_entity, message.clone())
+            .unwrap(),
+        expected.room_receiver_count
+    );
+    receiver.run_now(&mut EmptyWorld).unwrap();
+    assert!(
+        receiver.snapshot().unwrap().instances[&ROOT]
+            .variables
+            .is_empty()
+    );
+    receiver
+        .advance_frame(input.frame + 1, &mut EmptyWorld)
+        .unwrap();
+
+    let snapshot = receiver.snapshot().unwrap();
+    assert!(snapshot.diagnostics.is_empty());
+    let variables = &snapshot.instances[&ROOT].variables;
+    assert_eq!(
+        variables[&expected.integer_variable],
+        Value::Integer(input.integer)
+    );
+    assert_eq!(
+        variables[&expected.vector_variable],
+        Value::Vector(input.vector)
+    );
+    assert_eq!(
+        variables[&expected.ordered_read_variable],
+        Value::Integer(input.integer)
+    );
+    assert_eq!(
+        variables[&expected.sender_variable],
+        Value::Entity(input.source_entity)
+    );
+    assert!(!variables.contains_key(&expected.ordinary_variable));
+
+    assert_eq!(
+        receiver
+            .queue_frame_message_from(
+                input.frame + 2,
+                input.source_entity,
+                message.id,
+                Variables::from([(INTEGER_SLOT, Value::Integer(3))]),
+            )
+            .unwrap(),
+        expected.ordinary_receiver_count
+    );
+    receiver
+        .advance_frame(input.frame + 2, &mut EmptyWorld)
+        .unwrap();
+    let variables = &receiver.snapshot().unwrap().instances[&ROOT].variables;
+    assert_eq!(variables[&expected.ordinary_variable], Value::Integer(3));
+    assert_eq!(
+        variables[&expected.integer_variable],
+        Value::Integer(input.integer)
+    );
+    let occupied = crate::script_init::MAX_PENDING_EVENTS - 1;
+    let queued_at = frame_start(input.frame + 5);
+    for _ in 0..occupied {
+        receiver
+            .machine
+            .queues
+            .push(
+                ROOT,
+                queued_at,
+                crate::script_init::machine::Event::Finish(0),
+            )
+            .unwrap();
+    }
+    assert!(matches!(
+        receiver.queue_room_message_from(input.source_entity, message),
+        Err(InitFault::PendingEvents { .. })
+    ));
+    assert_eq!(receiver.machine.queues.iter(ROOT).count(), occupied);
+}
+
+#[test]
+fn authored_room_messages_require_explicit_server_receiver_and_bounded_sender() {
+    let original = room_message_contract().input.bundle;
+    let mut invalid = original.clone();
+    invalid["graphs"][1]["nodes"][0]["server_only"] = Json::Bool(false);
+    let error = GraphStore::from_json(&serde_json::to_vec(&invalid).unwrap()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("room message entry in graph 202 at node 2")
+    );
+    invalid = original.clone();
+    invalid["graphs"][0]["nodes"][1]["fields"]["m_target"] = Json::Null;
+    let error = GraphStore::from_json(&serde_json::to_vec(&invalid).unwrap()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("room message action in graph 201 at node 1")
+    );
+    invalid = original;
+    invalid["graphs"][0]["nodes"][1]["fields"]["m_params"] = Json::Array(
+        (1..=17)
+            .map(|slot| serde_json::json!({"m_B5051BCE": format!("0x{slot:016X}"), "m_value": 1}))
+            .collect(),
+    );
+    let error = GraphStore::from_json(&serde_json::to_vec(&invalid).unwrap()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("at most 16 unique parameter slots")
+    );
+}
+
 #[cfg(feature = "node-observations")]
 #[test]
 fn node_observation_limit_counts_only_distinct_sites() {
