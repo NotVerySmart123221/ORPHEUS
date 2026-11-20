@@ -67,6 +67,78 @@ fn authored_pose_queries_read_live_npc_pose_with_static_fallback() {
 }
 
 #[test]
+fn npc_bound_body_angles_follow_the_live_pose_outside_encounter_mode() {
+    use crate::script_expr::{AngleQuery, BodyAngle};
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-bound-body-angle-v1.json"
+    ))
+    .unwrap();
+    let poses = contract["input"]["poses"].as_array().unwrap();
+    let expected = contract["expected"].as_array().unwrap();
+    assert_eq!(poses.len(), expected.len());
+    let (graphs, _, definition, _) = fixture(false);
+    let mut binding = EnemyBinding {
+        body: 0xc000_1000,
+        controller: 0xc000_1001,
+        hero: definition.hero,
+        pair: graphs.enemy_pair(definition.hero).unwrap(),
+        mode: crate::game_content::PRACTICE_RANGE_MODE,
+        mode_variables: Arc::default(),
+        team: 1,
+        skin: None,
+        pose: Movement::default(),
+        gate: None,
+        spatial_frame: None,
+        roster: None,
+        retired_entities: Arc::default(),
+        frame: 0,
+        now_secs: 0.0,
+        spawn_anchors: None,
+        mode_voice_set: None,
+    };
+    let mut vitals = definition.pools.vitals();
+    let mut retirement_requested = false;
+    let mut messages = VecDeque::new();
+    let mut tags = TargetTagEffects::default();
+    let mut behaviors = Default::default();
+    let mut control = AiControlRecords::default();
+    let empty = Variables::new();
+    for (pose, angles) in poses.iter().zip(expected) {
+        binding.pose.yaw = i32::try_from(pose["yaw"].as_i64().unwrap()).unwrap();
+        binding.pose.pitch = i32::try_from(pose["pitch"].as_i64().unwrap()).unwrap();
+        let world = EnemyWorld {
+            retirement_requested: &mut retirement_requested,
+            messages: &mut messages,
+            target_tag_effects: &mut tags,
+            behavior_records: &mut behaviors,
+            control_records: &mut control,
+            binding: &binding,
+            graphs: &graphs,
+            vitals: &mut vitals,
+            body_variables: &empty,
+            controller_variables: &empty,
+        };
+        for (axis, key) in [(BodyAngle::Yaw, "yaw"), (BodyAngle::Pitch, "pitch")] {
+            assert_eq!(world.body_angle(0, axis), AngleQuery::Unbound);
+            assert_eq!(
+                world.body_angle(binding.body, axis),
+                angles[key]
+                    .as_f64()
+                    .map_or(AngleQuery::Unavailable, AngleQuery::Present)
+            );
+            assert_eq!(
+                world.body_angle(binding.controller, axis),
+                AngleQuery::Unavailable
+            );
+            assert_eq!(
+                world.body_angle(binding.body + 2, axis),
+                AngleQuery::Unavailable
+            );
+        }
+    }
+}
+
+#[test]
 fn shared_captured_aim_lifecycle_contract() {
     let fixture: Json = serde_json::from_str(include_str!(
         "../../../fixtures/behavior/flashbang-captured-aim-lock-v1.json"

@@ -133,9 +133,6 @@ impl World for EnemyWorld<'_> {
         axis: crate::script_expr::BodyAngle,
     ) -> crate::script_expr::AngleQuery {
         use crate::script_expr::{AngleQuery, BodyAngle};
-        if !is_junkenstein_mode(self.binding.mode) {
-            return AngleQuery::Unavailable;
-        }
         if entity == 0 {
             return AngleQuery::Unbound;
         }

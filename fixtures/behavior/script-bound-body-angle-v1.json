@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "case_id": "script-bound-body-angle.synthetic.v1",
+  "source": {"basis": "Invented packed mover poses shared by owner and NPC host tests."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "poses": [
+      {"yaw": -16384, "pitch": 8192},
+      {"yaw": 32768, "pitch": -32769}
+    ]
+  },
+  "expected": [
+    {"yaw": -90.0, "pitch": 45.0},
+    {"yaw": null, "pitch": null}
+  ]
+}

@@ -255,37 +255,46 @@ fn charge_admission_preserves_profile_scope_and_requires_a_live_instance_for_cre
 }
 
 #[test]
-fn encounter_body_angles_follow_the_live_owner_pose() {
+fn player_bound_body_angles_follow_the_live_pose_in_each_mode() {
     use crate::script_expr::{AngleQuery, BodyAngle};
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-bound-body-angle-v1.json"
+    ))
+    .unwrap();
+    let poses = contract["input"]["poses"].as_array().unwrap();
+    let expected = contract["expected"].as_array().unwrap();
+    assert_eq!(poses.len(), expected.len());
     let (factory, spawn) = fixture_body_factory();
     let mut runtime = factory.start(spawn).unwrap();
     let world = &mut runtime.world;
-    world.mode = crate::game_content::JUNKENSTEIN_REVENGE;
-    world.movement.yaw = 8192;
-    world.movement.pitch = -8192;
-    assert_eq!(
-        world.body_angle(world.entity, BodyAngle::Yaw),
-        AngleQuery::Present(45.0)
-    );
-    assert_eq!(
-        world.body_angle(world.entity, BodyAngle::Pitch),
-        AngleQuery::Present(-45.0)
-    );
-    assert_eq!(world.body_angle(0, BodyAngle::Yaw), AngleQuery::Unbound);
-    assert_eq!(
-        world.body_angle(world.entity + 1, BodyAngle::Yaw),
-        AngleQuery::Unavailable
-    );
-    world.movement.yaw = 32768;
-    assert_eq!(
-        world.body_angle(world.entity, BodyAngle::Yaw),
-        AngleQuery::Unavailable
-    );
-    world.mode = PRACTICE_RANGE_MODE;
-    assert_eq!(
-        world.body_angle(world.entity, BodyAngle::Pitch),
-        AngleQuery::Unavailable
-    );
+    for mode in [
+        crate::game_content::JUNKENSTEIN_REVENGE,
+        PRACTICE_RANGE_MODE,
+        TUTORIAL_MODE,
+    ] {
+        world.mode = mode;
+        assert_eq!(world.body_angle(0, BodyAngle::Yaw), AngleQuery::Unbound);
+        for (pose, angles) in poses.iter().zip(expected) {
+            world.movement.yaw = i32::try_from(pose["yaw"].as_i64().unwrap()).unwrap();
+            world.movement.pitch = i32::try_from(pose["pitch"].as_i64().unwrap()).unwrap();
+            for (axis, key) in [(BodyAngle::Yaw, "yaw"), (BodyAngle::Pitch, "pitch")] {
+                assert_eq!(
+                    world.body_angle(spawn.entity, axis),
+                    angles[key]
+                        .as_f64()
+                        .map_or(AngleQuery::Unavailable, AngleQuery::Present)
+                );
+                assert_eq!(
+                    world.body_angle(spawn.controller, axis),
+                    AngleQuery::Unavailable
+                );
+                assert_eq!(
+                    world.body_angle(spawn.entity + 1, axis),
+                    AngleQuery::Unavailable
+                );
+            }
+        }
+    }
 }
 
 #[test]
