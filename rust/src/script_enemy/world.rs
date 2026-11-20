@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::{policy::body_has_target_tag, *};
-use crate::script_expr::RoomEntityFacts;
+use crate::{game_hitscan::direction_for_angles, script_expr::RoomEntityFacts};
 
 const MAX_LOCAL_HEALTH_CHANGES: usize = 64;
 
@@ -1026,6 +1026,46 @@ impl World for EnemyWorld<'_> {
     fn forward(&self, entity: u32) -> Option<[f64; 3]> {
         self.binding.spawn_anchors.as_ref()?.forward(entity)
     }
+    fn authored_position(&mut self, entity: u32) -> Option<[f64; 3]> {
+        if entity == self.binding.body {
+            return Some(self.binding.pose.position);
+        }
+        let frame = self.binding.spatial_frame.as_deref();
+        if let Some((position, _)) = frame.and_then(|frame| frame.actor_pose(entity)) {
+            return Some(position);
+        }
+        if self.binding.retired_entities.contains(&entity) {
+            return None;
+        }
+        if frame.is_none() {
+            return self.position(entity);
+        }
+        self.binding
+            .gate
+            .filter(|gate| gate.entity == entity)
+            .map(|gate| gate.position)
+            .or_else(|| self.binding.spawn_anchors.as_ref()?.position(entity))
+    }
+
+    fn authored_forward(&self, entity: u32) -> Option<[f64; 3]> {
+        if entity == self.binding.body {
+            let pose = &self.binding.pose;
+            return Some(direction_for_angles(pose.yaw, pose.pitch));
+        }
+        if let Some((_, [yaw, pitch])) = self
+            .binding
+            .spatial_frame
+            .as_deref()
+            .and_then(|frame| frame.actor_pose(entity))
+        {
+            return Some(direction_for_angles(yaw, pitch));
+        }
+        if self.binding.retired_entities.contains(&entity) {
+            return None;
+        }
+        self.forward(entity)
+    }
+
     fn targets_with_tag(&self, site: Site, tag: u64, excluded: u64) -> Option<Vec<u32>> {
         if (site.entity, site.graph, site.node) != (self.binding.body, 0x00ca, Some(33))
             || !is_junkenstein_mode(self.binding.mode)

@@ -12,7 +12,7 @@ use crate::{
     game_combat::{AppliedDamage, RoomScriptRequests, eye_height},
     game_content::{PRACTICE_RANGE_MODE, TUTORIAL_MODE, is_junkenstein_mode},
     game_heroes::CASSIDY,
-    game_hitscan::{TargetPose, aim_direction},
+    game_hitscan::{TargetPose, aim_direction, direction_for_angles},
     junkenstein_messages::{self, DefenderSighting, SIGHTING, SIGHTING_TAGS, SightingSource},
     mover::sample_movement_flags,
     scene_assets::MOVER_CATEGORY,
@@ -367,10 +367,12 @@ impl World for BodyWorld {
         self.spatial_frame.as_deref()?.line_clear(origin, target)
     }
 
+    fn known_position(&self, entity: u32) -> Option<[f64; 3]> {
+        (entity == self.entity).then_some(self.position)
+    }
+
     fn position(&mut self, entity: u32) -> Option<[f64; 3]> {
-        if entity == self.entity {
-            Some(self.position)
-        } else {
+        self.known_position(entity).or_else(|| {
             self.sighting_source
                 .filter(|source| source.entity == entity)
                 .map(|source| source.position)
@@ -380,6 +382,28 @@ impl World for BodyWorld {
                         .get(&entity)
                         .map(|subject| subject.position)
                 })
+        })
+    }
+
+    fn authored_position(&mut self, entity: u32) -> Option<[f64; 3]> {
+        if let Some(position) = self.known_position(entity) {
+            return Some(position);
+        }
+        match self.spatial_frame.as_deref() {
+            Some(frame) => frame.actor_pose(entity).map(|(position, _)| position),
+            None => self.position(entity),
+        }
+    }
+
+    fn authored_forward(&self, entity: u32) -> Option<[f64; 3]> {
+        if entity == self.entity {
+            return Some(direction_for_angles(self.movement.yaw, self.movement.pitch));
+        }
+        match self.spatial_frame.as_deref() {
+            Some(frame) => frame
+                .actor_pose(entity)
+                .map(|(_, [yaw, pitch])| direction_for_angles(yaw, pitch)),
+            None => self.forward(entity),
         }
     }
 

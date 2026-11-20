@@ -1162,7 +1162,9 @@ fn room_spatial_needs(value: &Value) -> RoomSpatialNeeds {
             {
                 EntityFacts
             }
-            Some("EntitiesInRadius" | "SegmentClear") => Queries,
+            Some("EntitiesInRadius" | "SegmentClear" | "EntityPosition" | "EntityDirection") => {
+                Queries
+            }
             _ => NoQueries,
         }
     };
@@ -2135,6 +2137,14 @@ mod tests {
         assert!(load(&data).room_spatial_needs() < RoomSpatialNeeds::EntityFacts);
 
         for (predicate, needs) in [
+            (
+                json!({"$":"EntityPosition","entity":null}),
+                RoomSpatialNeeds::Queries,
+            ),
+            (
+                json!({"$":"EntityDirection","entity":null}),
+                RoomSpatialNeeds::Queries,
+            ),
             (
                 json!({"$":"SegmentClear","origin":null,"target":null}),
                 RoomSpatialNeeds::Queries,

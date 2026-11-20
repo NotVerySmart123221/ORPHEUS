@@ -302,6 +302,12 @@ impl RoomSpatialFrame {
         &self.candidates
     }
 
+    pub(crate) fn actor_pose(&self, entity: u32) -> Option<(Vec3, [i32; 2])> {
+        let target = self.script_targets.get(&entity)?;
+        let candidate = self.candidates.get(target.candidate_index)?;
+        (candidate.entity == entity).then_some((candidate.position, target.angles))
+    }
+
     pub(crate) fn entity_facts(&self) -> Option<&BTreeMap<u32, RoomEntityFacts>> {
         self.entity_facts.as_ref()
     }
@@ -736,10 +742,13 @@ impl RoomSimulation {
                 facts.insert(bot.entity, RoomEntityFacts { team, alive, tags });
             }
             if alive {
+                let pose = bot.movement(frame);
                 script_targets.insert(
                     bot.entity,
                     RoomScriptTarget {
                         entity,
+                        candidate_index: candidates.len(),
+                        angles: [pose.yaw, pose.pitch],
                         health: true,
                         messages: state.enemy.as_ref().is_some_and(|enemy| {
                             enemy.fault.is_none() && !enemy.scripts.retirement_requested
@@ -749,7 +758,7 @@ impl RoomSimulation {
                 );
                 candidates.push(SpatialCandidate {
                     entity: bot.entity,
-                    position: bot.position,
+                    position: pose.position,
                     team,
                 });
             }
@@ -779,10 +788,13 @@ impl RoomSimulation {
                 facts.insert(wire, RoomEntityFacts { team, alive, tags });
             }
             if alive {
+                let pose = state.mover.pose();
                 script_targets.insert(
                     wire,
                     RoomScriptTarget {
                         entity,
+                        candidate_index: candidates.len(),
+                        angles: [pose.yaw, pose.pitch],
                         health: state
                             .runtime
                             .as_ref()
@@ -793,7 +805,7 @@ impl RoomSimulation {
                 );
                 candidates.push(SpatialCandidate {
                     entity: wire,
-                    position: state.mover.pose().position,
+                    position: pose.position,
                     team,
                 });
             }

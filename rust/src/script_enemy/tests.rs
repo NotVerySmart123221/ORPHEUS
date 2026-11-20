@@ -2,6 +2,71 @@ use super::{policy::*, *};
 use crate::script_control::LEGACY_PROJECTILE_CONTROL;
 
 #[test]
+fn authored_pose_queries_read_live_npc_pose_with_static_fallback() {
+    let (graphs, _, definition, _) = fixture(false);
+    let gate = EnemyGate {
+        entity: 0x8000_0077,
+        position: [0.0, 5.5, -3.0],
+    };
+    let pose = Movement {
+        position: [-2.0, 0.0, 9.0],
+        yaw: -16_384,
+        pitch: 8_192,
+        ..Movement::default()
+    };
+    let binding = EnemyBinding {
+        body: 0xc000_1000,
+        controller: 0xc000_1001,
+        hero: definition.hero,
+        pair: graphs.enemy_pair(definition.hero).unwrap(),
+        mode: crate::game_content::PRACTICE_RANGE_MODE,
+        mode_variables: Arc::default(),
+        team: 1,
+        skin: None,
+        pose,
+        gate: Some(gate),
+        spatial_frame: None,
+        roster: None,
+        retired_entities: Arc::default(),
+        frame: 0,
+        now_secs: 0.0,
+        spawn_anchors: None,
+        mode_voice_set: None,
+    };
+    let mut vitals = definition.pools.vitals();
+    let mut retirement_requested = false;
+    let mut messages = VecDeque::new();
+    let mut tags = TargetTagEffects::default();
+    let mut behaviors = Default::default();
+    let mut control = AiControlRecords::default();
+    let empty = Variables::new();
+    let mut world = EnemyWorld {
+        retirement_requested: &mut retirement_requested,
+        messages: &mut messages,
+        target_tag_effects: &mut tags,
+        behavior_records: &mut behaviors,
+        control_records: &mut control,
+        binding: &binding,
+        graphs: &graphs,
+        vitals: &mut vitals,
+        body_variables: &empty,
+        controller_variables: &empty,
+    };
+    assert_eq!(world.authored_position(binding.body), Some(pose.position));
+    assert_eq!(world.forward(binding.body), None);
+    let axis = std::f64::consts::FRAC_1_SQRT_2;
+    let direction = world.authored_forward(binding.body).unwrap();
+    for (actual, expected) in direction.into_iter().zip([-axis, -axis, 0.0]) {
+        assert!((actual - expected).abs() < 1e-12);
+    }
+
+    assert_eq!(world.authored_position(gate.entity), Some(gate.position));
+    assert_eq!(world.authored_forward(gate.entity), None);
+    assert_eq!(world.authored_position(binding.controller), None);
+    assert_eq!(world.authored_forward(binding.controller), None);
+}
+
+#[test]
 fn shared_captured_aim_lifecycle_contract() {
     let fixture: Json = serde_json::from_str(include_str!(
         "../../../fixtures/behavior/flashbang-captured-aim-lock-v1.json"

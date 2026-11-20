@@ -142,6 +142,110 @@ fn check_spatial_candidates_frame(free_for_all: bool) {
 }
 
 #[test]
+fn spatial_actor_poses_follow_room_frames_and_body_generations() {
+    use crate::{contact_world::ContactWorld, mover::Mover, mover_settings::MoverSettings};
+
+    type Pose = (Vec3, [i32; 2]);
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        frame: u32,
+        bot_poses: [Pose; 2],
+        player_poses: [Pose; 2],
+        damage: f64,
+    }
+
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-room-actor-pose-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(fixture["schema_version"], 1);
+    assert_eq!(fixture["case_id"], "script-room-actor-pose.synthetic.v1");
+    assert_eq!(fixture["evidence"], "synthetic-rust");
+    let Input {
+        frame,
+        bot_poses,
+        player_poses,
+        damage,
+    } = serde_json::from_value(fixture["input"].clone()).unwrap();
+
+    let bot = fixture_bots().remove(0);
+    let bot_wire = bot.entity;
+    let mut room = RoomSimulation::new(vec![bot]).unwrap();
+    let move_bot = |room: &mut RoomSimulation, (position, angles): Pose, frame| {
+        let bot = room.body_mut(bot_wire).unwrap();
+        bot.position = position;
+        bot.apply_encounter_aim(angles, frame);
+    };
+    let body = BodyId {
+        entity: 71,
+        generation: 1,
+    };
+    let contact = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+    let spawn = |room: &mut RoomSimulation, id, (position, [yaw, _]): Pose| {
+        let mover = Mover::new(
+            MoverSettings::default(),
+            Arc::clone(&contact),
+            position,
+            yaw,
+            0x08,
+        )
+        .unwrap();
+        room.spawn_player_body(PlayerBodyState::new(
+            id, 70, 0, 0, 1, mover, None, frame, None,
+        ))
+        .unwrap();
+    };
+
+    move_bot(&mut room, bot_poses[0], frame);
+    spawn(&mut room, body, player_poses[0]);
+    room.enable_spatial_queries(
+        false,
+        Arc::new(fixture_ground()),
+        RoomSpatialNeeds::EntityFacts,
+    );
+    room.prepare_spatial_frame(frame).unwrap();
+    let initial = Arc::clone(&room.spatial_frame.as_ref().unwrap().1);
+    assert_eq!(initial.actor_pose(bot_wire), Some(bot_poses[0]));
+    assert_eq!(initial.actor_pose(body.entity), Some(player_poses[0]));
+    let old_player = initial.script_targets[&body.entity].entity;
+
+    move_bot(&mut room, bot_poses[1], frame);
+    let replacement = BodyId {
+        generation: 2,
+        ..body
+    };
+    spawn(&mut room, replacement, player_poses[1]);
+    room.prepare_spatial_frame(frame).unwrap();
+    let same_frame = &room.spatial_frame.as_ref().unwrap().1;
+    assert!(Arc::ptr_eq(&initial, same_frame));
+    assert_eq!(same_frame.actor_pose(bot_wire), Some(bot_poses[0]));
+    assert_eq!(same_frame.actor_pose(body.entity), Some(player_poses[0]));
+
+    room.prepare_spatial_frame(frame + 1).unwrap();
+    let next = &room.spatial_frame.as_ref().unwrap().1;
+    assert_eq!(next.actor_pose(bot_wire), Some(bot_poses[1]));
+    assert_eq!(next.actor_pose(body.entity), Some(player_poses[1]));
+    let new_player = next.script_targets[&body.entity].entity;
+    assert_ne!(new_player, old_player);
+    assert_eq!(new_player, room.players_by_wire[&body.entity]);
+
+    let death = Death {
+        time: 0.0,
+        frame: frame + 1,
+        killer: 0,
+    };
+    let state = room.state_mut(bot_wire).unwrap().unwrap();
+    assert!(state.vitals.damage(damage, death).killed);
+    assert!(room.retire_player_body(replacement));
+    room.prepare_spatial_frame(frame + 2).unwrap();
+    let terminal = &room.spatial_frame.as_ref().unwrap().1;
+    assert_eq!(terminal.actor_pose(bot_wire), None);
+    assert_eq!(terminal.actor_pose(body.entity), None);
+    assert!(!terminal.entity_facts().unwrap()[&bot_wire].alive);
+}
+
+#[test]
 fn spatial_candidates_exclude_vitals_death_before_bot_reconciliation() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
         "../../../fixtures/behavior/room-spatial-liveness-v1.json"

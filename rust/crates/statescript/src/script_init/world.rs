@@ -552,6 +552,15 @@ pub trait World {
         None
     }
 
+    /// Authored operands may use the room's actor sample instead of a profile-specific lookup.
+    fn authored_position(&mut self, entity: u32) -> Option<[f64; 3]> {
+        self.position(entity)
+    }
+
+    fn authored_forward(&self, entity: u32) -> Option<[f64; 3]> {
+        self.forward(entity)
+    }
+
     /// None means the current candidate snapshot is unavailable.
     fn spatial_candidates(&self) -> Option<&[SpatialCandidate]> {
         None

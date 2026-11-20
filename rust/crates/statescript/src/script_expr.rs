@@ -292,6 +292,16 @@ pub trait Context {
         None
     }
 
+    /// A position read by an authored room operand.
+    fn authored_position(&mut self, entity: u32) -> Option<[f64; 3]> {
+        self.position(entity)
+    }
+
+    /// A forward vector read by an authored room operand.
+    fn authored_forward(&mut self, entity: u32) -> Option<[f64; 3]> {
+        self.forward(entity)
+    }
+
     /// None means the current candidate snapshot is unavailable.
     fn spatial_candidates(&mut self) -> Option<&[SpatialCandidate]> {
         None

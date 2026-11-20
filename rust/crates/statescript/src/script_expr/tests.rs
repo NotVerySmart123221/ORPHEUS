@@ -1673,17 +1673,27 @@ fn authored_spatial_queries_read_current_entity_vectors() {
         }
 
         fn position(&mut self, entity: u32) -> Option<[f64; 3]> {
-            self.reads.push(("position", entity));
-            self.position
+            self.reads.push(("legacy_position", entity));
+            Some([3.0, 4.0, 0.0])
         }
 
         fn forward(&mut self, entity: u32) -> Option<[f64; 3]> {
-            self.reads.push(("direction", entity));
+            self.reads.push(("legacy_forward", entity));
+            Some([0.0, 0.0, 1.0])
+        }
+
+        fn authored_position(&mut self, entity: u32) -> Option<[f64; 3]> {
+            self.reads.push(("authored_position", entity));
+            self.position
+        }
+
+        fn authored_forward(&mut self, entity: u32) -> Option<[f64; 3]> {
+            self.reads.push(("authored_forward", entity));
             self.direction
         }
 
         fn known_position(&mut self, _: u32) -> Option<[f64; 3]> {
-            panic!("authored position uses the ordinary position query");
+            panic!("the transform operands do not use the known-position query");
         }
     }
 
@@ -1708,7 +1718,7 @@ fn authored_spatial_queries_read_current_entity_vectors() {
         direction: None,
         reads: Vec::new(),
     };
-    let expected_reads = [("position", entity), ("direction", entity)];
+    let expected_reads = [("authored_position", entity), ("authored_forward", entity)];
     for (sample, expected) in samples.into_iter().zip(contract.expected) {
         host.position = Some(sample.position);
         host.direction = Some(sample.direction);
@@ -1723,6 +1733,13 @@ fn authored_spatial_queries_read_current_entity_vectors() {
         assert_eq!(std::mem::take(&mut host.reads), expected_reads);
     }
 
+    let legacy_position = expression(
+        json!([8, 0, 50, 0]),
+        &[variable(61, Scope::Instance)],
+        &[],
+        &[],
+    );
+    let legacy_forward = json!({"$": "STU_021D01CD", "m_entity": &direction["entity"]});
     for (host_position, host_direction) in [
         (None, None),
         (Some([f64::NAN, 0.0, 0.0]), Some([0.0, f64::INFINITY, 0.0])),
@@ -1738,6 +1755,15 @@ fn authored_spatial_queries_read_current_entity_vectors() {
             Err(EvalError::UnavailableEntityDirection(entity))
         );
         assert_eq!(std::mem::take(&mut host.reads), expected_reads);
+        assert_eq!(evaluate(&legacy_position, &mut host), Ok(Value::Float(5.0)));
+        assert_eq!(
+            evaluate(&legacy_forward, &mut host),
+            Ok(Value::Vector([0.0, 0.0, 1.0]))
+        );
+        assert_eq!(
+            std::mem::take(&mut host.reads),
+            [("legacy_position", entity), ("legacy_forward", entity)]
+        );
     }
 
     for config in [&position, &direction] {

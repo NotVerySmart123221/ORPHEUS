@@ -974,6 +974,43 @@ fn verified_body_starts_fresh_instances_and_advances_only_its_own_retail_clock()
 }
 
 #[test]
+fn authored_pose_queries_read_live_player_position_and_aim_outside_encounter_mode() {
+    let (factory, spawn) = fixture_body_factory();
+    let mut world = factory.start(spawn).unwrap().world;
+    assert!(!is_junkenstein_mode(world.mode));
+    let current = [0.0, 1.5, -6.25];
+    world.position = current;
+    world.movement.yaw = 16_384;
+    world.movement.pitch = -8_192;
+    assert_eq!(world.known_position(spawn.entity), Some(current));
+    assert_eq!(world.position(spawn.entity), Some(current));
+    assert_eq!(world.authored_position(spawn.entity), Some(current));
+    assert_eq!(world.forward(spawn.entity), None);
+    let axis = std::f64::consts::FRAC_1_SQRT_2;
+    let direction = world.authored_forward(spawn.entity).unwrap();
+    for (actual, expected) in direction.into_iter().zip([axis, axis, 0.0]) {
+        assert!((actual - expected).abs() < 1e-12);
+    }
+
+    let foreign = spawn.entity + 1;
+    let static_position = [12.0, 4.0, -2.0];
+    let static_forward = [0.0, 0.0, 1.0];
+    world.deadeye_scene.view_subjects.insert(
+        foreign,
+        super::world::ViewSubject {
+            position: static_position,
+            forward: static_forward,
+            tags: Default::default(),
+        },
+    );
+    assert_eq!(world.known_position(foreign), None);
+    assert_eq!(world.authored_position(foreign), Some(static_position));
+    assert_eq!(world.authored_forward(foreign), Some(static_forward));
+    assert_eq!(world.authored_position(spawn.controller), None);
+    assert_eq!(world.authored_forward(spawn.controller), None);
+}
+
+#[test]
 fn body_world_queries_only_expose_its_body_and_available_mode_variable_table() {
     use serde_json::json;
 

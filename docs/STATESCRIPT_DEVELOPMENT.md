@@ -591,14 +591,23 @@ order. An entry with no fallback contributes no value inside a group.
 
 Use `EntityPosition` or `EntityDirection` as the `$` tag of an authored
 operand with one `entity` field. The field must evaluate to a bound
-entity reference. The VM reads the current position or forward vector
-from the host on each evaluation and returns its finite components
-verbatim. A missing or nonfinite response is an unavailable-entity
-query error. The origin is a valid position. These reads use the
-ordinary expression budget and the host's existing data sources.
+entity reference. On each evaluation, the VM reads the position or
+forward vector from the host and returns its finite components verbatim.
+A missing or nonfinite response is an unavailable-entity query error.
+The origin is a valid position.
+
+In native room scripts, an actor reads its own live pose, including
+before the room has sampled it. Other living actors use the room's
+existing frozen spatial frame. Changes to those actors appear in the
+next sample. The frame keeps position and packed aim together, and
+the host derives forward vectors on demand. A server operand requests
+this frame without requiring tag data. Static anchors remain separate
+from living body observations.
 
 The [synthetic spatial contract](../fixtures/behavior/statescript-entity-spatial-v1.json)
 shows both operands applied to the same entity at two points in time.
+The [room pose contract](../fixtures/behavior/script-room-actor-pose-v1.json)
+checks how the native room captures actor movement and aim.
 
 ## Find room entities within a radius
 

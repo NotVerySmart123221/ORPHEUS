@@ -635,12 +635,12 @@ impl Evaluator {
                 };
                 let (value, unavailable) = if class == "EntityPosition" {
                     (
-                        context.position(entity),
+                        context.authored_position(entity),
                         EvalError::UnavailableEntityPosition(entity),
                     )
                 } else {
                     (
-                        context.forward(entity),
+                        context.authored_forward(entity),
                         EvalError::UnavailableEntityDirection(entity),
                     )
                 };

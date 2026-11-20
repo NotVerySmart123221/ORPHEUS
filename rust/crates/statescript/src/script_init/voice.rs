@@ -481,6 +481,16 @@ impl<W: World> Context for InstanceContext<'_, W> {
         self.world.forward(entity)
     }
 
+    fn authored_position(&mut self, entity: u32) -> Option<[f64; 3]> {
+        self.read_native = true;
+        self.world.authored_position(entity)
+    }
+
+    fn authored_forward(&mut self, entity: u32) -> Option<[f64; 3]> {
+        self.read_native = true;
+        self.world.authored_forward(entity)
+    }
+
     fn spatial_candidates(&mut self) -> Option<&[script_expr::SpatialCandidate]> {
         self.read_native = true;
         self.world.spatial_candidates()

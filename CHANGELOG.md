@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Exposed live self poses and frozen foreign actor poses through the authored position and direction operands. Player and NPC scripts share the room sample and its existing actor identities. The player host also supplies its own live position to known-position queries during bootstrap. The StateScript suite passed with 188 tests and 13 skipped. The native library suite with script coverage passed with 357 tests and 120 skipped.
+
 - Kept config groups in their assignment context when an authored client-only wrapper supplies a server fallback. SetVar and subscript bindings share selection and flattening. An original graph reproduced both direct and nested group failures before the fix. The StateScript suite passed with 188 tests and 13 prepared-runtime tests skipped.
 
 - Added bounded operand class identifiers to private actor startup diagnostics. Distinct classes at one node now remain distinct in the report. Other error text stays outside the report. The serializer test and locked workspace check passed. Two prepared runs at `c9e8253b` produced identical reports and attributed 41 sites to 14 classes. All 32 startup and admission outcomes matched the previous run. The #72 900-frame regression passed and reproduced its 476 observation sites.

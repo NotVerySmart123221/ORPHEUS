@@ -16,6 +16,8 @@ pub(super) const MAX_BODY_SCRIPT_REQUESTS: usize = 64;
 
 pub(super) struct RoomScriptTarget {
     pub(super) entity: Entity,
+    pub(super) candidate_index: usize,
+    pub(super) angles: [i32; 2],
     pub(super) health: bool,
     pub(super) messages: bool,
     pub(super) cue_listener: bool,
@@ -427,19 +429,27 @@ mod tests {
     #[test]
     fn invalid_batches_leave_mixed_outbox_work_and_capacity_intact() {
         let mut world = bevy_ecs::world::World::new();
-        let mut target = |health, messages| RoomScriptTarget {
+        let mut target = |candidate_index, health, messages| RoomScriptTarget {
             entity: world.spawn_empty().id(),
+            candidate_index,
+            angles: [0; 2],
             health,
             messages,
             cue_listener: health,
         };
         let frame = RoomSpatialFrame {
-            candidates: Box::default(),
+            candidates: Box::new(
+                [1, 2, 3].map(|entity| crate::script_expr::SpatialCandidate {
+                    entity,
+                    position: [0.0; 3],
+                    team: None,
+                }),
+            ),
             entity_facts: None,
             script_targets: HashMap::from([
-                (1, target(true, false)),
-                (2, target(true, false)),
-                (3, target(false, true)),
+                (1, target(0, true, false)),
+                (2, target(1, true, false)),
+                (3, target(2, false, true)),
             ]),
             ground: Arc::new(fixture_ground()),
         };

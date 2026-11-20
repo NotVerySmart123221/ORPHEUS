@@ -339,6 +339,10 @@ impl HitscanShot {
 
 pub(crate) fn aim_direction(command: &Command) -> Vec3 {
     let (yaw, pitch) = command.aim();
+    direction_for_angles(yaw, pitch)
+}
+
+pub(crate) fn direction_for_angles(yaw: i32, pitch: i32) -> Vec3 {
     let (y_sin, y_cos) = (f64::from(yaw) * ANGLE_STEP).sin_cos();
     let (p_sin, p_cos) = (f64::from(pitch) * ANGLE_STEP).sin_cos();
     [y_sin * p_cos, -p_sin, y_cos * p_cos]
