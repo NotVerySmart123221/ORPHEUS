@@ -648,6 +648,7 @@ An occupied destination leaves the body in place and consumes the
 request. The owner correction starts only when a pose actually moves.
 See the [portable action contract](../fixtures/behavior/script-relocation-v1.json)
 and [physical destination contract](../fixtures/behavior/native-capsule-relocation-v1.json).
+
 The [owner motion contract](../fixtures/behavior/owner-swept-motion-v1.json)
 covers correction scheduling and a same-frame script failure.
 
@@ -664,7 +665,8 @@ uses an original test map and coordinates.
     "0x42": {
       "lethal_volumes": [
         {"min": [-2.0, -18.0, -2.0], "max": [2.0, -8.0, 2.0]}
-      ]
+      ],
+      "player_respawns": [{"mode": "0x43", "delay_ms": 1200}]
     }
   }
 }
@@ -674,9 +676,18 @@ The server allows up to 64 volumes per map. Each axis requires two
 finite, strictly ordered endpoints. The room checks the final sampled
 feet position, including the box faces, and settles lethal damage with
 no killer credit. Training bots use their existing replacement timer.
-Player death notices use the ordinary health path. Automatic player
-respawn and verified Practice Range regions remain open.
+Player death notices use the ordinary health path.
 Missing files and unlisted maps have no configured lethal volumes.
+
+`player_respawns` is optional. Each entry binds a mode GUID to a positive
+delay in milliseconds. An empty or omitted list leaves automatic player
+respawn disabled. An enabled room starts the delay on its simulation
+clock when it settles a player death. The deadline belongs to that body
+generation and retains the hero and skin. An already queued hero or
+skin selection gets processed first. Automatic replacement gives the
+old death notice up to the connection silence window to enter the reliable
+queue. It uses the ordinary body creation and possession path. Verified Practice Range regions and
+original-client respawn timing remain open.
 
 ## Use priorities for control effects
 

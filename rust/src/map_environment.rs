@@ -1,6 +1,6 @@
-//! Optional authored environmental hazards, independent of collision safety bounds.
+//! Optional authored hazards and lifecycle policy, independent of collision safety bounds.
 
-use std::{collections::HashMap, fs, io, path::Path};
+use std::{collections::HashMap, fs, io, path::Path, time::Duration};
 
 use serde::Deserialize;
 
@@ -29,15 +29,20 @@ impl LethalVolume {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct MapEnvironment {
     lethal_volumes: Vec<LethalVolume>,
+    player_respawns: HashMap<u64, Duration>,
 }
 
 impl MapEnvironment {
+    /// Whether there are no lethal volumes; lifecycle rules may still be configured.
     pub(crate) fn is_empty(&self) -> bool {
         self.lethal_volumes.is_empty()
+    }
+
+    pub(crate) fn player_respawn_delay(&self, mode: u64) -> Option<Duration> {
+        self.player_respawns.get(&mode).copied()
     }
 
     /// Box faces count as inside. Invalid poses do not imply a gameplay death.
@@ -54,7 +59,22 @@ impl MapEnvironment {
 #[serde(deny_unknown_fields)]
 struct CatalogData {
     version: u32,
-    maps: HashMap<String, MapEnvironment>,
+    maps: HashMap<String, MapEnvironmentData>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MapEnvironmentData {
+    lethal_volumes: Vec<LethalVolume>,
+    #[serde(default)]
+    player_respawns: Vec<PlayerRespawnData>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlayerRespawnData {
+    mode: String,
+    delay_ms: u32,
 }
 
 #[derive(Debug, Default)]
@@ -79,23 +99,39 @@ impl EnvironmentCatalog {
             return Err(invalid("unsupported map environment version"));
         }
         let mut maps = HashMap::with_capacity(data.maps.len());
-        for (key, environment) in data.maps {
+        for (key, data) in data.maps {
             let map = parse_guid(&key)
                 .ok_or_else(|| invalid(format!("invalid environment map GUID {key:?}")))?;
-            if environment.lethal_volumes.len() > MAX_LETHAL_VOLUMES {
+            if data.lethal_volumes.len() > MAX_LETHAL_VOLUMES {
                 return Err(invalid(format!(
                     "map {key:?} exceeds the {MAX_LETHAL_VOLUMES} lethal volume limit"
                 )));
             }
-            if environment
-                .lethal_volumes
-                .iter()
-                .any(|volume| !volume.valid())
-            {
+            if data.lethal_volumes.iter().any(|volume| !volume.valid()) {
                 return Err(invalid(format!(
                     "map {key:?} requires finite lethal volume bounds with min < max on every axis"
                 )));
             }
+            let mut player_respawns = HashMap::with_capacity(data.player_respawns.len());
+            for rule in data.player_respawns {
+                let mode = parse_guid(&rule.mode).ok_or_else(|| {
+                    invalid(format!("invalid player respawn mode GUID {:?}", rule.mode))
+                })?;
+                if rule.delay_ms == 0 {
+                    return Err(invalid("player respawn delay_ms must be positive"));
+                }
+                let delay = Duration::from_millis(u64::from(rule.delay_ms));
+                if player_respawns.insert(mode, delay).is_some() {
+                    return Err(invalid(format!(
+                        "duplicate player respawn mode GUID {:?} for map {key:?}",
+                        rule.mode
+                    )));
+                }
+            }
+            let environment = MapEnvironment {
+                lethal_volumes: data.lethal_volumes,
+                player_respawns,
+            };
             if maps.insert(map, environment).is_some() {
                 return Err(invalid(format!("duplicate environment map GUID {key:?}")));
             }
@@ -137,6 +173,7 @@ mod tests {
         .unwrap();
         let environment = catalog.for_map(MAP);
         assert!(!environment.is_empty());
+        assert_eq!(environment.player_respawn_delay(42), None);
         for feet in [
             [0.0; 3],
             [-2.0, 0.0, 0.0],
@@ -169,6 +206,67 @@ mod tests {
         let mut detached = catalog.for_map(MAP);
         detached.lethal_volumes.clear();
         assert!(catalog.for_map(MAP).lethal_at([0.0; 3]));
+    }
+
+    #[test]
+    fn player_respawn_rules_select_only_the_authored_map_and_mode() {
+        let mut data = source(vec![volume()]);
+        let map = format!("0x{MAP:016X}");
+        data["maps"][&map]["player_respawns"] = json!([
+            {"mode":"0x2A","delay_ms":500},
+            {"mode":"0x2B","delay_ms":1200}
+        ]);
+        let catalog = EnvironmentCatalog::from_json(&data.to_string()).unwrap();
+        let environment = catalog.for_map(MAP);
+        assert_eq!(
+            environment.player_respawn_delay(42),
+            Some(Duration::from_millis(500))
+        );
+        assert_eq!(
+            environment.player_respawn_delay(43),
+            Some(Duration::from_millis(1200))
+        );
+        assert_eq!(environment.player_respawn_delay(44), None);
+        assert_eq!(catalog.for_map(MAP + 1).player_respawn_delay(42), None);
+        assert!(environment.lethal_at([0.0; 3]));
+
+        // A lifecycle-only map does not enable the lethal-volume sampling path.
+        data["maps"][&map]["lethal_volumes"] = json!([]);
+        data["maps"][&map]["player_respawns"] = json!([
+            {"mode":"0x2A","delay_ms":u32::MAX}
+        ]);
+        let environment = EnvironmentCatalog::from_json(&data.to_string())
+            .unwrap()
+            .for_map(MAP);
+        assert!(environment.is_empty());
+        assert_eq!(
+            environment.player_respawn_delay(42),
+            Some(Duration::from_millis(u64::from(u32::MAX)))
+        );
+    }
+
+    #[test]
+    fn player_respawn_rules_reject_invalid_delays_modes_and_unknown_fields() {
+        for rules in [
+            json!([{"mode":"0x2A","delay_ms":0}]),
+            json!([{"mode":"0x2A","delay_ms":-1}]),
+            json!([{"mode":"0x2A","delay_ms":0.5}]),
+            json!([{"mode":"0x2A","delay_ms":true}]),
+            json!([{"mode":"0x2A","delay_ms":4294967296_u64}]),
+            json!([{"mode":"0x2A"}]),
+            json!([{"mode":"invalid","delay_ms":1}]),
+            json!([{"mode":"0x2A","delay_ms":1,"hero":7}]),
+            json!([{"mode":"0x2A","delay_ms":1},{"mode":"42","delay_ms":2}]),
+        ] {
+            let mut data = source(vec![]);
+            data["maps"][format!("0x{MAP:016X}")]["player_respawns"] = rules;
+            assert_eq!(
+                EnvironmentCatalog::from_json(&data.to_string())
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::InvalidData
+            );
+        }
     }
 
     #[test]

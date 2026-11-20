@@ -705,6 +705,10 @@ impl Room {
         };
         world.scene.simulation_mut().prepare_spatial_frame(tick)?;
         let junkenstein = world.scene.map().is_junkenstein();
+        let respawn_delay = world
+            .scene
+            .simulation()
+            .player_respawn_delay(world.scene.map().mode_guid);
         let activity = world.scene.owner_room_activity();
         world.scene.simulation_mut().sync_player_activity(activity);
 
@@ -738,6 +742,10 @@ impl Room {
             for member in self.members.values_mut() {
                 if let Some(peer) = &mut member.peer {
                     peer.queue_player_death(death);
+                    if let Some(delay) = respawn_delay {
+                        peer.world
+                            .schedule_player_respawn(death.body, now.saturating_add(delay));
+                    }
                 }
             }
         }
@@ -801,6 +809,44 @@ impl Room {
                     .scene
                     .simulation_mut()
                     .deliver_player_defender_sighting(message);
+            }
+        }
+        if respawn_delay.is_some() && !world.scene.simulation().encounter_screens_complete() {
+            for member in self.members.values_mut() {
+                let Some(peer) = &mut member.peer else {
+                    continue;
+                };
+                let Some((victim, due)) = peer.world.pending_player_respawn() else {
+                    continue;
+                };
+                // Keep the victim notice eligible until reliable admission.
+                // An unavailable UI identity cannot block respawn indefinitely.
+                if now < due
+                    || (now < due.saturating_add(SILENCE_TIME) && peer.death_notice_pending(victim))
+                {
+                    continue;
+                }
+                let Some(player) = self.players.get(member.slot).filter(|player| !player.gone)
+                else {
+                    continue;
+                };
+                let viewer = PlayerAppearance {
+                    entity: player.entity,
+                    slot: i8::try_from(member.slot).map_err(|_| {
+                        RoomError::Invariant("respawn member has invalid roster slot")
+                    })?,
+                    team: player.info.team,
+                    card: &world.card,
+                };
+                if let Err(error) = peer.world.advance_player_respawn(
+                    &mut world.scene,
+                    &viewer,
+                    tick,
+                    player.quanta(),
+                    now,
+                ) {
+                    eprintln!("player {:08X} respawn rejected: {error}", viewer.entity);
+                }
             }
         }
         Ok(RoomUpdates {

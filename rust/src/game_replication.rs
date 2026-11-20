@@ -295,6 +295,7 @@ pub(crate) struct WorldDelivery {
     encounter_outcome_queued: bool,
     select_open: bool,
     body: Option<Body>,
+    player_respawn: Option<(BodyId, Duration)>,
     bound: Option<BodyId>,
     generation: u64,
     bodies: HashMap<u32, (u64, Lifetime)>,

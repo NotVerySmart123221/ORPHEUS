@@ -14,6 +14,10 @@ impl RoomSimulation {
         self.environment = environment;
     }
 
+    pub(crate) fn player_respawn_delay(&self, mode: u64) -> Option<Duration> {
+        self.environment.player_respawn_delay(mode)
+    }
+
     pub(super) fn settle_environment(
         &mut self,
         tick: u32,

@@ -29,6 +29,7 @@ mod owner_fault_shields;
 mod owner_model;
 mod owner_swept_motion;
 mod owner_synchronous_fault;
+mod player_respawn;
 pub(crate) mod practice_observation;
 
 fn pick_hero(entity: u32, hero: u64) -> Message {
