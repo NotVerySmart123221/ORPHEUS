@@ -293,6 +293,13 @@ impl Vitals {
         shield.amount(false)
     }
 
+    /// End all named grants and retain the slot history needed to publish clears.
+    pub(crate) fn clear_temporary_shields(&mut self) {
+        for shield in self.temporary_shields.drain(..) {
+            self.changed |= 1 << shield.field;
+        }
+    }
+
     pub(crate) fn pool_current(&self, id: u32) -> Option<f64> {
         self.pools
             .iter()
@@ -446,9 +453,7 @@ impl Vitals {
                     self.changed |= 1 << pool.field;
                 }
             }
-            for shield in self.temporary_shields.drain(..) {
-                self.changed |= 1 << shield.field;
-            }
+            self.clear_temporary_shields();
             self.death = Some(source);
         }
         Damage {

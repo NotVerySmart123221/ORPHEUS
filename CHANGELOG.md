@@ -8,15 +8,17 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Add opt-in player respawn delays by map and mode. Respawn uses the dead body's generation and existing hero, skin, and replacement path. Manual replacements cancel the old request. Shared regression and original-client timing verification remain open.
 
-- Load optional per-map lethal volumes and settle deaths through room health without assigning a killer. Add synthetic checks for safe lower positions and the existing training bot replacement deadline. Verified map regions, automatic player respawn, and shared regression remain open.
+- Load optional per-map lethal volumes and settle deaths through room health without assigning a killer. Add synthetic checks for safe lower positions and the existing training bot replacement deadline. Verified map regions remain open.
+
+- Added an opt-in node-shape section to the prepared actor input report. It describes the schema and registration at a failing graph site while omitting raw operand values. The default report stays compatible with earlier comparisons.
+
+- Separate NPC StateScript chunks from reliable messages under contention. A peer alternates sends so delayed or lost NPC chunks and sustained combat notices can both make progress. Added synthetic coverage for the wire payload and retry order. Original-client verification is pending.
 
 - Add an authored point relocation action with destination capsule clearance for players and NPCs. It shares the motion queue and owner corrections with swept displacement. Added original fixtures for placement, queue admission, and correction. Shared-branch verification is pending.
 
 - Cancel queued script motion on player and NPC death or runtime failure. Commands recovered after a script fault continue from the settled pose without applying the old script's future velocity edits. Shared-branch verification is pending.
 
 - Apply effective character-collision settings to player and NPC movement. Body defaults and timed modifiers determine actor contact participation while static geometry continues to block movement. Added synthetic coverage for modifier retirement and both movement paths. Shared-branch verification is pending.
-
-- Separate NPC StateScript chunks from reliable messages under contention. A peer alternates sends so delayed or lost NPC chunks and sustained combat notices can both make progress. Added synthetic coverage for the wire payload and retry order. Original-client verification is pending.
 
 - Use one room-tick snapshot of living actor capsules for scripted displacement, ordinary player input, and NPC patrol and objective movement. Added synthetic coverage for recovered input frames, patrol catch-up, and stale snapshots. Shared-branch verification is pending.
 
@@ -28,15 +30,16 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Fixed outdated held-input branches that could start after a lock was acquired, released, and acquired again in the same VM update. Shared-branch verification is pending.
 
-- Preserve observation inputs through a committed StateScript logical-button branch. Its child states use current values if the source expires, so finishing a sample does not interrupt the listener's held or idle lifecycle. Shared-branch verification is pending.
-
-- Preserve observation inputs through a committed StateScript logical-button branch. Its child states use current values if the source expires, so finishing a sample does not interrupt the listener's held or idle lifecycle. Shared-branch verification is pending.
 
 - Process training bot respawn deadlines after authored damage, including before normal room combat starts. Preserve bot replacement order for each peer while its old body records are being acknowledged.
 
 - Replaced fixed PhysicsExplosion placements with authored state checks and an explicit map physics capability. Static rooms retain the ordinary state lifecycle and transitions. Unknown and dynamic map physics still produce a diagnostic. Added a synthetic regression for scope, lifecycle, and unsupported fields. Integration validation pending.
 
 - Preserve already generated hitscan and current health pools when an owner script stops. The room can settle prior shots and continue damage, healing, and death for the same body until it is replaced.
+
+- Retire a player script as soon as synchronous encounter messages halt it. Clear its control effects and publish the body's final health after older updates, with a generation check for the owner and each observer. Added a synthetic regression for both message routes. Integration validation is pending.
+
+- Clear named temporary shields when a player script stops and keep the body's ordinary pools and their IDs. The owner and observers receive the cleared slots through the existing health stream. Added a synthetic fault and retransmission regression. Integration validation is pending.
 
 - Applied the settled target's tags, affiliation and liveness to direct `EntityMatches` filters in a health event. A lethal impact retains its original target's qualification after the body retires. Source membership and spatial searches still use the current room frame. Validated in shared candidate `29df13cb`.
 

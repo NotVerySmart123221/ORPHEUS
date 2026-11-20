@@ -52,6 +52,11 @@ pub(crate) enum PlayerBodyEvent {
         owner: u32,
         id: BodyId,
     },
+    ScriptHalted {
+        owner: u32,
+        id: BodyId,
+        health: Option<WorldComponent>,
+    },
 }
 
 /// Room-owned authoritative player body component stored inside `RoomSimulation`'s ECS world.
@@ -453,10 +458,24 @@ impl RoomSimulation {
         state.mover.clear_pending_script_motion();
         if let Some(mut runtime) = state.runtime.take() {
             state.halted_vitals = runtime.take_vitals();
+            if let Some(vitals) = &mut state.halted_vitals {
+                vitals.clear_temporary_shields();
+            }
         }
         state.fields.clear();
         state.launches.clear();
         true
+    }
+
+    fn retire_faulted_defender_script(&mut self, id: BodyId) {
+        if self.clear_player_runtime(id) {
+            if let Some(state) = self.player_body_mut(id) {
+                let owner = state.owner;
+                let health = state.take_health_update();
+                self.player_events
+                    .push(PlayerBodyEvent::ScriptHalted { owner, id, health });
+            }
+        }
     }
 
     pub(crate) fn player_body(&self, id: BodyId) -> Option<&PlayerBodyState> {
@@ -673,10 +692,14 @@ impl RoomSimulation {
         }
         if let Some(runtime) = &mut state.runtime {
             if let Err(error) = runtime.receive_sighting(message) {
+                let id = state.id;
                 eprintln!(
                     "Junkenstein defender message failed for {:08x}: {error}",
-                    state.id.entity
+                    id.entity
                 );
+                if runtime.snapshot().is_none() {
+                    self.retire_faulted_defender_script(id);
+                }
             }
         }
         true
@@ -704,11 +727,15 @@ impl RoomSimulation {
                 true
             }
             Err(error) => {
-                state.mover.set_authored_facing(None);
                 eprintln!(
                     "Junkenstein defender message failed for {:08x}: {error}",
                     id.entity
                 );
+                if runtime.snapshot().is_none() {
+                    self.retire_faulted_defender_script(id);
+                } else {
+                    state.mover.set_authored_facing(None);
+                }
                 false
             }
         }

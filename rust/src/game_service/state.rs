@@ -1154,6 +1154,20 @@ impl State {
                             }
                         }
                     }
+                    // A synchronous script stop is newer than the health
+                    // already collected during combat or owner projection.
+                    if let Some(events) = player_events.get(&id) {
+                        for event in events {
+                            if let crate::game_combat::PlayerBodyEvent::ScriptHalted {
+                                owner,
+                                id,
+                                health,
+                            } = event
+                            {
+                                peer.world.player_script_halted(*owner, *id, health.clone());
+                            }
+                        }
+                    }
                     if let Some(records) = retired_enemies.get(&id) {
                         for &entity in records {
                             peer.world.retire_enemy(entity);

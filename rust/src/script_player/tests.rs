@@ -756,6 +756,39 @@ fn shared_horizontal_cap_queues_on_a_live_player_without_a_roll_profile() {
 }
 
 #[test]
+fn authored_impulse_queues_only_for_its_live_body() {
+    use crate::mover::VelocityChange;
+
+    let spawn = fixture_body_factory().1;
+    let mut body = fixture_hitscan_factory(20.0).start(spawn).unwrap();
+    let site = Site {
+        entity: spawn.entity,
+        instance: 2,
+        graph: 61061,
+        node: Some(9),
+    };
+    let foreign = Site {
+        entity: spawn.entity + 1,
+        ..site
+    };
+    let delta = [2.0, 7.0, -0.5];
+    assert!(!body.world.apply_velocity_impulse(foreign, 12, 1.0, delta));
+    assert!(!body.world.apply_velocity_impulse(site, 12, f64::MAX, delta));
+    assert!(body.world.apply_velocity_impulse(site, 12, 1.0, delta));
+    assert_eq!(
+        body.take_velocity_changes(),
+        [(
+            13,
+            VelocityChange::VerticalImpulse {
+                vertical: 1.0,
+                delta,
+            },
+        )]
+    );
+    assert!(body.take_velocity_changes().is_empty());
+}
+
+#[test]
 fn swept_displacement_requests_belong_to_the_live_player_body() {
     use crate::script_init::{Relocation, ScriptedMotion, SweptDisplacement};
 
@@ -811,39 +844,6 @@ fn swept_displacement_requests_belong_to_the_live_player_body() {
         body.world.queue_scripted_motion(site, 33, alternate),
         Some(false)
     );
-}
-
-#[test]
-fn authored_impulse_queues_only_for_its_live_body() {
-    use crate::mover::VelocityChange;
-
-    let spawn = fixture_body_factory().1;
-    let mut body = fixture_hitscan_factory(20.0).start(spawn).unwrap();
-    let site = Site {
-        entity: spawn.entity,
-        instance: 2,
-        graph: 61061,
-        node: Some(9),
-    };
-    let foreign = Site {
-        entity: spawn.entity + 1,
-        ..site
-    };
-    let delta = [2.0, 7.0, -0.5];
-    assert!(!body.world.apply_velocity_impulse(foreign, 12, 1.0, delta));
-    assert!(!body.world.apply_velocity_impulse(site, 12, f64::MAX, delta));
-    assert!(body.world.apply_velocity_impulse(site, 12, 1.0, delta));
-    assert_eq!(
-        body.take_velocity_changes(),
-        [(
-            13,
-            VelocityChange::VerticalImpulse {
-                vertical: 1.0,
-                delta,
-            },
-        )]
-    );
-    assert!(body.take_velocity_changes().is_empty());
 }
 
 #[test]
