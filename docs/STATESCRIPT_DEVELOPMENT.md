@@ -187,6 +187,30 @@ space rejects the whole batch of matching listeners.
 
 See the [synthetic room message contract](../fixtures/behavior/script-room-message-v1.json).
 
+## Send a cue to selected players
+
+A server-only action can declare `"action_behavior": "room_cue"` or use
+an authored class with `room_cue_action`. Supply literal, nonzero
+`fields.stimulus` and `fields.line` identifiers in canonical 16-digit hex
+form, an `audience` expression that returns an array of entity references,
+and a valid `m_outPlug`. A graph can build the audience with
+`EntitiesInRadius` and its team, liveness, and tag filters.
+
+The VM keeps the first occurrence of each entity and accepts at most 64
+distinct entries. An empty audience continues immediately. For other
+audiences the room keeps current living player bodies and ignores other
+entities. The batch uses the sender's existing request budget. The action
+continues once the batch is accepted.
+
+The notice carries the sender as its anchor and speaker. Before reliable
+delivery, the transport checks both body generations and waits for both
+identity acknowledgements. Each player has at most one unacknowledged
+authored cue in reliable delivery. When the pending combat queue is full,
+a new cue is dropped. Cue identifiers describe resources supplied by the
+author.
+
+See the [synthetic room cue contract](../fixtures/behavior/script-room-cue-v1.json).
+
 ## Request a health change
 
 Set `action_behavior` to `"health_change"` on a server-only action, or

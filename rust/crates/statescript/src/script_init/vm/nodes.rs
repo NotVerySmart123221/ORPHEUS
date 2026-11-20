@@ -78,6 +78,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }
+            _ if node.declares_room_cue_action() => {
+                if !self.send_room_cue(id, node, caller)? {
+                    return Ok(false);
+                }
+                self.follow(id, node, "m_outPlug", caller, depth)?;
+                Ok(true)
+            }
             _ if node.declares_radial_health_action() => {
                 if !self.request_radial_health(id, node, caller) {
                     return Ok(false);

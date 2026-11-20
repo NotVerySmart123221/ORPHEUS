@@ -265,7 +265,7 @@ use enemy::{BotState, EnemyState};
 use health::HealthEffect;
 use health_events::SampledBody;
 pub(crate) use player::{PlayerBodyEvent, PlayerBodyHandle, PlayerBodyState};
-use script_requests::RoomScriptTarget;
+use script_requests::{PlayerRoomCue, RoomScriptTarget};
 pub(crate) use script_requests::{RoomScriptRequest, RoomScriptRequests};
 
 #[derive(Component)]
@@ -347,6 +347,7 @@ pub(crate) struct RoomSimulation {
     retired_entity_ids: Arc<std::collections::BTreeSet<u32>>,
     defender_messages: Vec<DefenderMessage>,
     mode_voice_requests: Vec<crate::junkenstein_voice::VoiceRequest>,
+    player_cues: Vec<PlayerRoomCue>,
     mode_voice_set: Option<u64>,
     mode_boss_pause: bool,
     spawn_anchors: Option<Arc<crate::scene_assets::SpawnAnchors>>,
@@ -663,6 +664,7 @@ impl RoomSimulation {
             retired_entity_ids: Arc::default(),
             defender_messages: Vec::new(),
             mode_voice_requests: Vec::new(),
+            player_cues: Vec::new(),
             mode_voice_set: None,
             mode_boss_pause: false,
             spawn_anchors: None,
@@ -743,6 +745,7 @@ impl RoomSimulation {
                             messages: state.enemy.as_ref().is_some_and(|enemy| {
                                 enemy.fault.is_none() && !enemy.scripts.retirement_requested
                             }),
+                            cue_listener: false,
                         },
                     );
                 }
@@ -778,16 +781,18 @@ impl RoomSimulation {
                 facts.insert(wire, RoomEntityFacts { team, alive, tags });
             }
             if alive {
-                if let Some(runtime) = &state.runtime {
-                    script_targets.insert(
-                        wire,
-                        RoomScriptTarget {
-                            entity,
-                            health: runtime.vitals().is_some(),
-                            messages: true,
-                        },
-                    );
-                }
+                script_targets.insert(
+                    wire,
+                    RoomScriptTarget {
+                        entity,
+                        health: state
+                            .runtime
+                            .as_ref()
+                            .is_some_and(|runtime| runtime.vitals().is_some()),
+                        messages: state.runtime.is_some(),
+                        cue_listener: true,
+                    },
+                );
                 candidates.push(SpatialCandidate {
                     entity: wire,
                     position: state.mover.pose().position,
@@ -2451,6 +2456,7 @@ impl RoomSimulation {
         self.retired_entity_ids = Arc::default();
         self.defender_messages.clear();
         self.mode_voice_requests.clear();
+        self.player_cues.clear();
         self.witch_staff_links.clear();
         #[cfg(any(test, feature = "inspector"))]
         {

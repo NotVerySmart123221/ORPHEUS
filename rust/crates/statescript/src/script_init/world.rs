@@ -45,6 +45,17 @@ impl RoomMessage {
     }
 }
 
+/// An authored cue admitted by the room host for explicit listeners.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RoomCue {
+    pub stimulus: u64,
+    pub line: u64,
+}
+
+impl RoomCue {
+    pub const MAX_TARGETS: usize = 64;
+}
+
 /// Authoritative notification emitted by the simulation after a health change.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum HostEvent {
@@ -705,6 +716,11 @@ pub trait World {
 
     /// Admit an authored message for a different body. Delivery happens later.
     fn queue_room_message(&mut self, _site: Site, _target: u32, _message: RoomMessage) -> bool {
+        false
+    }
+
+    /// Admit a cue for a bounded set of listeners. Delivery happens later.
+    fn queue_room_cue(&mut self, _site: Site, _targets: &[u32], _cue: RoomCue) -> bool {
         false
     }
 

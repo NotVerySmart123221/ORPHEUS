@@ -211,8 +211,8 @@ pub use types::{
 };
 pub use world::{
     AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, CreationKind,
-    EmptyWorld, EntityCreation, HostEvent, LandingSelection, PlayScript, RoomMessage, Site,
-    TargetTagEffect, TargetTagEffects, TargetTagSnapshot, World,
+    EmptyWorld, EntityCreation, HostEvent, LandingSelection, PlayScript, RoomCue, RoomMessage,
+    Site, TargetTagEffect, TargetTagEffects, TargetTagSnapshot, World,
 };
 
 use machine::{Event, Machine, Startup, StateKey, VarKey};

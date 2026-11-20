@@ -3,7 +3,12 @@
 use super::{
     BotState, CombatError, PlayerBodyState, RoomSimulation, RoomSpatialFrame, health::HealthEffect,
 };
-use crate::{script_init::RoomMessage, vitals::Death};
+use crate::{
+    game_combat_messages::CombatNotice,
+    game_replication::BodyId,
+    script_init::{RoomCue, RoomMessage},
+    vitals::Death,
+};
 use bevy_ecs::entity::Entity;
 use std::{collections::HashSet, time::Duration};
 
@@ -13,6 +18,7 @@ pub(super) struct RoomScriptTarget {
     pub(super) entity: Entity,
     pub(super) health: bool,
     pub(super) messages: bool,
+    pub(super) cue_listener: bool,
 }
 
 pub(crate) struct RoomScriptRequest {
@@ -27,6 +33,7 @@ impl RoomScriptRequest {
         let supported = match &effect {
             ScriptEffect::Health(_) => target.health,
             ScriptEffect::Message(_) => target.messages,
+            ScriptEffect::Cue(_, _) => target.cue_listener,
         };
         supported.then_some(Self {
             wire,
@@ -39,6 +46,15 @@ impl RoomScriptRequest {
 enum ScriptEffect {
     Health(HealthEffect),
     Message(RoomMessage),
+    Cue(RoomCue, Entity),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PlayerRoomCue {
+    pub(crate) owner: u32,
+    pub(crate) listener: BodyId,
+    pub(crate) source: Entity,
+    pub(crate) notice: CombatNotice,
 }
 
 #[derive(Default)]
@@ -94,6 +110,39 @@ impl RoomScriptRequests {
             return false;
         }
         self.queue(frame, wire, ScriptEffect::Message(message))
+    }
+
+    pub(crate) fn queue_cue(
+        &mut self,
+        frame: &RoomSpatialFrame,
+        source: u32,
+        targets: &[u32],
+        cue: RoomCue,
+    ) -> bool {
+        if cue.stimulus == 0 || cue.line == 0 || targets.len() > RoomCue::MAX_TARGETS {
+            return false;
+        }
+        let Some(source) = frame
+            .script_targets
+            .get(&source)
+            .map(|target| target.entity)
+        else {
+            return false;
+        };
+        let mut seen = HashSet::with_capacity(targets.len());
+        let staged: Vec<_> = targets
+            .iter()
+            .copied()
+            .filter(|wire| seen.insert(*wire))
+            .filter_map(|wire| {
+                RoomScriptRequest::for_target(frame, wire, ScriptEffect::Cue(cue, source))
+            })
+            .collect();
+        if staged.len() > MAX_BODY_SCRIPT_REQUESTS.saturating_sub(self.0.len()) {
+            return false;
+        }
+        self.0.extend(staged);
+        true
     }
 
     fn queue(&mut self, frame: &RoomSpatialFrame, wire: u32, effect: ScriptEffect) -> bool {
@@ -184,8 +233,51 @@ impl RoomSimulation {
             ScriptEffect::Message(message) => {
                 self.route_room_message(request.entity, source, message)
             }
+            ScriptEffect::Cue(cue, source_entity) => {
+                if !self.room_cue_source_current(source, source_entity) {
+                    return Ok(());
+                }
+                if let Some(player) = self
+                    .world
+                    .get::<PlayerBodyState>(request.entity)
+                    .filter(|player| player.alive())
+                {
+                    self.player_cues.push(PlayerRoomCue {
+                        owner: player.owner,
+                        listener: player.id,
+                        source: source_entity,
+                        notice: CombatNotice::Voice {
+                            anchor: source,
+                            speaker: source,
+                            listener: request.wire,
+                            stimulus: cue.stimulus,
+                            line: cue.line,
+                        },
+                    });
+                }
+            }
         }
         Ok(())
+    }
+
+    pub(crate) fn room_cue_source_current(&self, wire: u32, source: Entity) -> bool {
+        self.by_wire
+            .get(&wire)
+            .or_else(|| self.players_by_wire.get(&wire))
+            .is_some_and(|entity| *entity == source)
+    }
+
+    pub(crate) fn take_player_cues(&mut self) -> Vec<PlayerRoomCue> {
+        let mut cues = std::mem::take(&mut self.player_cues);
+        cues.retain(|cue| {
+            cue.notice
+                .required_identity()
+                .is_some_and(|wire| self.room_cue_source_current(wire, cue.source))
+                && self
+                    .player_body(cue.listener)
+                    .is_some_and(|player| player.owner == cue.owner && player.alive())
+        });
+        cues
     }
 
     fn route_room_message(&mut self, entity: Entity, source: u32, message: RoomMessage) {
@@ -219,12 +311,127 @@ mod tests {
     use crate::game_combat::tests::fixture_ground;
 
     #[test]
+    fn room_cues_reach_only_selected_live_player_generations() {
+        use crate::{
+            contact_world::ContactWorld, game_combat::tests::fixture_bots, mover::Mover,
+            mover_settings::MoverSettings, script_graph::RoomSpatialNeeds,
+        };
+
+        let bots = fixture_bots();
+        let speaker = bots[0].entity;
+        let mut room = RoomSimulation::new(bots).unwrap();
+        let first = BodyId {
+            entity: 30,
+            generation: 1,
+        };
+        let second = BodyId {
+            entity: 31,
+            generation: 1,
+        };
+        let outsider = BodyId {
+            entity: 32,
+            generation: 1,
+        };
+        let spawn = |room: &mut RoomSimulation, id, owner, slot| {
+            let mover = Mover::new(
+                MoverSettings::default(),
+                Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+                [1.0, 0.0, 0.0],
+                0,
+                8,
+            )
+            .unwrap();
+            room.spawn_player_body(PlayerBodyState::new(
+                id, owner, slot, 1, 1, mover, None, 1, None,
+            ))
+            .unwrap();
+        };
+        spawn(&mut room, first, 2, 0);
+        spawn(&mut room, second, 3, 1);
+        spawn(&mut room, outsider, 4, 2);
+        room.enable_spatial_queries(false, Arc::new(fixture_ground()), RoomSpatialNeeds::Queries);
+        room.prepare_spatial_frame(1).unwrap();
+
+        let frame = &room.spatial_frame.as_ref().unwrap().1;
+        let source = frame.script_targets[&speaker].entity;
+        let cue = RoomCue {
+            stimulus: 41,
+            line: 42,
+        };
+        let mut outbox = RoomScriptRequests::default();
+        assert!(outbox.queue_cue(
+            frame,
+            speaker,
+            &[first.entity, speaker, second.entity, first.entity],
+            cue
+        ));
+        assert!(outbox.queue_cue(frame, speaker, &[second.entity], cue));
+        assert!(outbox.queue_cue(frame, speaker, &[], cue));
+        let [valid, expires_after_settlement, expires_before_settlement]: [RoomScriptRequest; 3] =
+            outbox.take().try_into().ok().unwrap();
+        assert_eq!(valid.wire, first.entity);
+        assert_eq!(expires_after_settlement.wire, second.entity);
+
+        for request in [valid, expires_after_settlement] {
+            room.settle_script_request(request, speaker, 1, Duration::ZERO)
+                .unwrap();
+        }
+        assert!(room.retire_player_body(second));
+        spawn(
+            &mut room,
+            BodyId {
+                generation: 2,
+                ..second
+            },
+            3,
+            1,
+        );
+        room.settle_script_request(expires_before_settlement, speaker, 1, Duration::ZERO)
+            .unwrap();
+        assert_eq!(
+            room.take_player_cues(),
+            [PlayerRoomCue {
+                owner: 2,
+                listener: first,
+                source,
+                notice: CombatNotice::Voice {
+                    anchor: speaker,
+                    speaker,
+                    listener: first.entity,
+                    stimulus: 41,
+                    line: 42,
+                },
+            }]
+        );
+        assert!(room.take_player_cues().is_empty());
+
+        room.prepare_spatial_frame(2).unwrap();
+        let frame = &room.spatial_frame.as_ref().unwrap().1;
+        assert!(outbox.queue_cue(frame, outsider.entity, &[first.entity], cue));
+        let request = outbox.take().pop().unwrap();
+        room.settle_script_request(request, outsider.entity, 2, Duration::ZERO)
+            .unwrap();
+        assert!(room.retire_player_body(outsider));
+        spawn(
+            &mut room,
+            BodyId {
+                generation: 2,
+                ..outsider
+            },
+            4,
+            2,
+        );
+        assert!(room.take_player_cues().is_empty());
+    }
+
+    #[test]
     fn invalid_batches_leave_mixed_outbox_work_and_capacity_intact() {
         let mut world = bevy_ecs::world::World::new();
         let mut target = |health, messages| RoomScriptTarget {
             entity: world.spawn_empty().id(),
             health,
             messages,
+            cue_listener: health,
         };
         let frame = RoomSpatialFrame {
             candidates: Box::default(),
@@ -254,6 +461,15 @@ mod tests {
         assert_eq!(outbox.0.len(), MAX_BODY_SCRIPT_REQUESTS - 1);
         assert!(outbox.queue_health_changes(&frame, &[(2, 2.0)]));
         assert!(outbox.queue_health_changes(&frame, &[]));
+        assert!(!outbox.queue_cue(
+            &frame,
+            3,
+            &[2],
+            RoomCue {
+                stimulus: 9,
+                line: 10
+            }
+        ));
 
         let queued = outbox.take();
         assert_eq!(queued.len(), MAX_BODY_SCRIPT_REQUESTS);

@@ -55,6 +55,7 @@ enum ActionBehavior {
     Branch,
     LocalMessage,
     RoomMessage,
+    RoomCue,
     HealthChange,
     RadialHealth,
 }
@@ -195,6 +196,19 @@ impl Node {
 
     pub(crate) fn declares_room_message_action(&self) -> bool {
         self.action_behavior == Some(ActionBehavior::RoomMessage)
+    }
+
+    pub(crate) fn declares_room_cue_action(&self) -> bool {
+        self.action_behavior == Some(ActionBehavior::RoomCue)
+    }
+
+    pub(crate) fn room_cue_assets(&self) -> Option<(u64, u64)> {
+        if !self.declares_room_cue_action() {
+            return None;
+        }
+        let stimulus = asset_guid(self.field("stimulus")?)?;
+        let line = asset_guid(self.field("line")?)?;
+        (stimulus != 0 && line != 0).then_some((stimulus, line))
     }
 
     pub(crate) fn declares_room_message_entry(&self) -> bool {
@@ -549,6 +563,7 @@ impl Graph {
                     ActionBehavior::Branch => ("branch action", &["m_truePlug", "m_falsePlug"]),
                     ActionBehavior::LocalMessage => ("local message action", &["m_outPlug"]),
                     ActionBehavior::RoomMessage => ("room message action", &["m_outPlug"]),
+                    ActionBehavior::RoomCue => ("room cue action", &["m_outPlug"]),
                     ActionBehavior::HealthChange => ("health change action", &["m_outPlug"]),
                     ActionBehavior::RadialHealth => ("radial health action", &["m_outPlug"]),
                 };
@@ -602,6 +617,21 @@ impl Graph {
                             )));
                         }
                         "ActionRoomMessage".into()
+                    }
+                    ActionBehavior::RoomCue => {
+                        if node.field("audience").is_none_or(Value::is_null) {
+                            return Err(invalid(format!(
+                                "{action} in graph {} at node {} requires an audience expression",
+                                self.index, node.pos
+                            )));
+                        }
+                        if node.room_cue_assets().is_none() {
+                            return Err(invalid(format!(
+                                "{action} in graph {} at node {} requires nonzero stimulus and line asset GUIDs",
+                                self.index, node.pos
+                            )));
+                        }
+                        "ActionRoomCue".into()
                     }
                     ActionBehavior::HealthChange => {
                         for operand in ["target", "delta"] {
@@ -959,6 +989,7 @@ enum AuthoredClassBehavior {
     BranchAction,
     LocalMessageAction,
     RoomMessageAction,
+    RoomCueAction,
     HealthChangeAction,
     RadialHealthAction,
     ClientOnly,
@@ -978,6 +1009,7 @@ impl AuthoredClassBehavior {
             Self::BranchAction => (false, None, Some(ActionBehavior::Branch)),
             Self::LocalMessageAction => (false, None, Some(ActionBehavior::LocalMessage)),
             Self::RoomMessageAction => (false, None, Some(ActionBehavior::RoomMessage)),
+            Self::RoomCueAction => (false, None, Some(ActionBehavior::RoomCue)),
             Self::HealthChangeAction => (false, None, Some(ActionBehavior::HealthChange)),
             Self::RadialHealthAction => (false, None, Some(ActionBehavior::RadialHealth)),
             Self::ClientOnly => (true, None, None),
@@ -1171,7 +1203,10 @@ impl GraphStore {
             .filter(|node| node.runs_on_server())
             .map(|node| {
                 let needs = room_spatial_needs(&node.fields);
-                if node.declares_health_change_action() || node.declares_room_message_action() {
+                if node.declares_health_change_action()
+                    || node.declares_room_message_action()
+                    || node.declares_room_cue_action()
+                {
                     needs.max(RoomSpatialNeeds::Queries)
                 } else {
                     needs
@@ -2034,6 +2069,75 @@ mod tests {
         data["graphs"][0]["nodes"][2]["server_only"] = json!(false);
         let error = load(&data).unwrap_err().to_string();
         assert!(error.contains("must be server-only with no state slot"));
+    }
+
+    #[test]
+    fn room_cue_requires_an_authored_server_action_audience_and_assets() {
+        let mut data = fixture();
+        let node = &mut data["graphs"][0]["nodes"][2];
+        node["action_behavior"] = json!("room_cue");
+        node["server_only"] = json!(true);
+        node["fields"] = json!({
+            "audience": [17],
+            "stimulus": "0x00000000000000A1",
+            "line": "0x00000000000000B2",
+            "m_outPlug": {"$": "Plug", "links": []},
+        });
+
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let store = load(&data).unwrap();
+        let action = store.graph(42).unwrap().node(2).unwrap();
+        assert_eq!(action.class, "ActionRoomCue");
+        assert!(action.is_action() && !action.is_networked() && !action.is_state());
+        assert_eq!(action.room_cue_assets(), Some((0xA1, 0xB2)));
+        assert_eq!(store.room_spatial_needs(), RoomSpatialNeeds::Queries);
+
+        for (field, value, diagnostic) in [
+            ("audience", Value::Null, "audience expression"),
+            ("stimulus", json!("0x0000000000000000"), "asset GUIDs"),
+            ("stimulus", json!("0x00000000000000a1"), "asset GUIDs"),
+            ("line", json!(178), "asset GUIDs"),
+            ("line", json!("0xB2"), "asset GUIDs"),
+            ("m_outPlug", Value::Null, "m_outPlug output plug"),
+        ] {
+            let mut malformed = data.clone();
+            malformed["graphs"][0]["nodes"][2]["fields"][field] = value;
+            let error = load(&malformed).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            let error = error.to_string();
+            assert!(error.contains("room cue action in graph 42 at node 2"));
+            assert!(error.contains(diagnostic), "{error}");
+        }
+
+        data["graphs"][0]["nodes"][2]["server_only"] = json!(false);
+        let error = load(&data).unwrap_err().to_string();
+        assert!(error.contains("must be server-only with no state slot"));
+
+        let node = &mut data["graphs"][0]["nodes"][2];
+        node["action_behavior"] = Value::Null;
+        node["class"] = json!("ActionRoomCue");
+        let store = load(&data).unwrap();
+        let action = store.graph(42).unwrap().node(2).unwrap();
+        assert!(!action.declares_room_cue_action());
+        assert_eq!(action.room_cue_assets(), None);
+        assert_eq!(store.room_spatial_needs(), RoomSpatialNeeds::None);
+
+        let node = &mut data["graphs"][0]["nodes"][2];
+        node["class"] = json!("authored.cue");
+        node["fields"]["audience"] = json!({
+            "$": "EntitiesInRadius",
+            "center": {"$": "EntityPosition", "entity": null},
+            "radius": 10,
+            "filter": {"tags": {"all": ["0xF100000000000007"]}},
+        });
+        data["authored_classes"] =
+            json!([{"class": "authored.cue", "behavior": "room_cue_action"}]);
+        let store = load(&data).unwrap();
+        let action = store.graph(42).unwrap().node(2).unwrap();
+        assert_eq!(action.class, "ActionRoomCue");
+        assert!(action.server_only && action.declares_room_cue_action());
+        assert_eq!(action.room_cue_assets(), Some((0xA1, 0xB2)));
+        assert_eq!(store.room_spatial_needs(), RoomSpatialNeeds::EntityTags);
     }
 
     #[test]

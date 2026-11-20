@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added authored room cues with a graph-selected audience and literal cue identifiers. Player and NPC hosts use the same bounded room outbox. Only selected players with current body generations receive a cue, through the existing reliable notice path. Both source and listener identities are checked before reliable delivery. Passed 658 default and 665 Inspector workspace tests, both locked Clippy lanes, 12 pinned Python behavior contracts, and the #72 prepared 900-frame headless regression.
+
 - Consolidated the existing timed projectile control binding across shot construction, flight handoff and NPC admission. Duration and entry validation share one wrapper override lookup. The receiver keeps native timer admission and ordered script reaction delivery as separate decisions. Passed nine targeted tests, 654 default and 661 Inspector workspace tests, both locked Clippy lanes, Rust 1.85, 12 pinned Python behavior contracts, and the prepared 900-frame headless regression. The dedicated legacy effect tests still require their wrapper graph and the full encounter test requires the separate mode pack.
 
 - Added graph-authored, optionally timed stack claims and a local admission predicate. They share the VM's existing priority, tie order, variable scopes and top or under subgraphs. Synthetic coverage checks displacement, expiry and teardown, and the native room regression checks tag and priority admission before an input lock and movement scale start. Passed 653 default and 660 Inspector workspace tests, both locked Clippy lanes, Rust 1.85, 12 pinned Python behavior contracts, and the prepared 900-frame headless regression.

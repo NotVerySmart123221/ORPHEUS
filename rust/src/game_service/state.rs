@@ -1193,7 +1193,8 @@ impl State {
                         return Ok(());
                     }
                     if !reliable_only {
-                        peer.flush_combat(&schemas, room_now)?;
+                        let simulation = room.world.as_ref().map(|world| world.scene.simulation());
+                        peer.flush_combat(&schemas, room_now, simulation)?;
                     }
                     let movements = if reliable_only {
                         Vec::new()

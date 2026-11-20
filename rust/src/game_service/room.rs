@@ -693,6 +693,7 @@ impl Room {
             deaths,
             player_events,
             observer_player_health,
+            player_cues,
         ) = {
             let (bots, queries) = world.scene.bot_simulation();
             let sightings = bots.take_player_defender_sightings();
@@ -708,6 +709,7 @@ impl Room {
                 bots.take_player_deaths(),
                 bots.take_player_events(),
                 bots.take_observer_player_health(),
+                bots.take_player_cues(),
             )
         };
         for death in deaths {
@@ -720,6 +722,20 @@ impl Room {
                         });
                     }
                 }
+            }
+        }
+        for cue in player_cues {
+            let peer = self.members.values_mut().find_map(|member| {
+                self.players
+                    .get(member.slot)
+                    .filter(|player| !player.gone)?;
+                member.peer.as_mut().filter(|peer| {
+                    peer.world.owner() == cue.owner
+                        && peer.world.active_body_id() == Some(cue.listener)
+                })
+            });
+            if let Some(peer) = peer {
+                peer.queue_player_cue(cue.listener, cue.source, cue.notice);
             }
         }
         if junkenstein {

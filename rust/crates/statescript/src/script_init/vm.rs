@@ -30,7 +30,7 @@ use super::{
         State, StateKind,
     },
     voice::InstanceContext,
-    world::{PlayScript, RoomMessage, Site, World},
+    world::{PlayScript, RoomCue, RoomMessage, Site, World},
 };
 
 mod effects;
@@ -1133,7 +1133,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 .node
                 .and_then(|position| self.graphs.graph(site.graph)?.node(position))
                 .is_some_and(|node| {
-                    node.target_child_binding().is_some() || node.declares_stack_claim()
+                    node.target_child_binding().is_some()
+                        || node.declares_stack_claim()
+                        || node.declares_room_cue_action()
                 });
         self.record_diagnostic(Diagnostic {
             site,
@@ -1941,6 +1943,65 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         self.spend("room message admission")?;
         if !self.world.queue_room_message(site, target, message) {
             self.report(site, Issue::UnsupportedField("room message request"));
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    fn send_room_cue(
+        &mut self,
+        id: u16,
+        node: &Node,
+        caller: Option<StateKey>,
+    ) -> Result<bool, InitFault> {
+        let site = self.site(id, node);
+        let Some(audience) = self.evaluate(id, node, field(&node.fields, "audience"), caller)
+        else {
+            return Ok(false);
+        };
+        let Value::Array(audience) = audience else {
+            self.report(
+                site,
+                Issue::Expression(EvalError::MalformedConfig(
+                    "expected a room cue audience array",
+                )),
+            );
+            return Ok(false);
+        };
+        let mut seen = HashSet::new();
+        let mut targets = Vec::new();
+        for listener in audience {
+            self.spend("room cue listener")?;
+            let entity = match listener {
+                Value::Entity(entity) if script_expr::valid_entity(entity) => entity,
+                _ => {
+                    self.report(
+                        site,
+                        Issue::Expression(EvalError::MalformedConfig("invalid room cue listener")),
+                    );
+                    return Ok(false);
+                }
+            };
+            if seen.insert(entity) {
+                if targets.len() == RoomCue::MAX_TARGETS {
+                    self.report(site, Issue::UnsupportedField("room cue audience limit"));
+                    return Ok(false);
+                }
+                targets.push(entity);
+            }
+        }
+        let Some((stimulus, line)) = node.room_cue_assets() else {
+            return Ok(false);
+        };
+        if targets.is_empty() {
+            return Ok(true);
+        }
+        self.spend("room cue admission")?;
+        if !self
+            .world
+            .queue_room_cue(site, &targets, RoomCue { stimulus, line })
+        {
+            self.report(site, Issue::UnsupportedField("room cue request"));
             return Ok(false);
         }
         Ok(true)

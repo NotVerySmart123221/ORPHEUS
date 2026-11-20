@@ -342,6 +342,19 @@ impl World for BodyWorld {
             .is_some_and(|frame| self.script_requests.queue_message(frame, target, message))
     }
 
+    fn queue_room_cue(
+        &mut self,
+        site: Site,
+        targets: &[u32],
+        cue: crate::script_init::RoomCue,
+    ) -> bool {
+        self.is_player_site(site)
+            && self.spatial_frame.as_deref().is_some_and(|frame| {
+                self.script_requests
+                    .queue_cue(frame, site.entity, targets, cue)
+            })
+    }
+
     fn spatial_candidates(&self) -> Option<&[crate::script_expr::SpatialCandidate]> {
         Some(self.spatial_frame.as_deref()?.candidates())
     }
