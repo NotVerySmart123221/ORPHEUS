@@ -168,6 +168,7 @@ pub enum StateKind {
 pub(super) struct BufferedPress {
     pub(super) time_ms: u64,
     pub(super) activation: u16,
+    pub(super) button: u8,
 }
 
 #[derive(Clone, Debug)]

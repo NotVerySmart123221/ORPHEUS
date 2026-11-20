@@ -372,9 +372,49 @@ Range attachment, and **47** blocking sites. The #72 replay matched all
 476 observation sites across 900 frames. Original ability mappings
 and client zoom acceptance remain open.
 
+At `055adca3`, the original held-aim fixture composed command input,
+actor rays, an owner-only target indicator, and a scoped movement
+multiplier. The native test verified activation, repeated hold,
+occlusion, temporary sampling failure, recovery, release, and
+replacement of the source body. Failure cleared the derived indicator
+while keeping the last successful raw ray sample. Observer full bytes
+were stable through these changes. The movement modifier test
+observed activation and release at the next pose boundary.
+
+The portable VM fixture verified that a listener requiring a living
+owner refuses late entry and lock release after death. It also verified
+cleanup before a timer-only update and preserved the explicit dead-input
+opt-in. Observation tests covered unavailable first samples, unchanged
+recovery, invalid expressions, and cancellation on retirement.
+
+Formatting, Clippy, and all public workspace tests passed for default
+and Inspector builds. Default passed 369 native server tests and 221
+StateScript tests. Inspector passed 375 native server tests and 222
+StateScript tests. The two prepared startup reports were byte-identical
+and matched the preceding 104319 baseline apart from source revision.
+The matrix recorded **11 of 32** independent passes, **one** ordinary
+Practice Range attachment, and **47** blocking sites. The #72 replay
+matched all 476 observation sites across 900 frames. Original ability
+mappings and client zoom acceptance remain open.
+
+At `3c87fd49`, the held-input contract passed automatic registration,
+held and idle ownership, cancellation of sibling starts queued during
+release, and rejection of buffered presses from a previous button binding.
+Both listener forms passed the same native held-aim scenario, including
+owner-only status, observer bytes, movement cleanup, and body replacement.
+
+Formatting and both Clippy lanes passed. The locked all-target workspace
+suites passed **729** default tests and **736** Inspector tests, with
+135 opt-in tests skipped per lane. Two separately selected prepared
+startup runs produced identical reports. Against the same 104319 inputs,
+the matrix matched the preceding baseline apart from the source revision
+at **11 of 32** independent starts, **one** ordinary attachment, and **47**
+blocking sites. The #72 replay matched all 476 sites across 900 frames.
+The original ability mappings and client zoom still require acceptance.
+
 The combined checkpoint measurements are recorded above. The newer
-integration with the Phase 2 follow-up still needs startup, room
-admission, and input measurements.
+integration with the Phase 2 and Phase 3A follow-ups still needs
+startup, room admission, and input measurements.
 
 Two of the three remaining native target-tracking startup sites in the
 Phase 2 run have empty embedded plugs. One configures a second filter
@@ -382,11 +422,11 @@ and an entity list output. The other configures a count output. Both read
 a dynamic radius. The remaining site links embedded states. Each
 configuration still needs its native query and output semantics verified.
 
-The Phase 2 run left six actor probes with one blocking site each.
-Mercy's paired tag query selects its shared VM path by authored fields.
-Its host still needs the tagged placement inventory and live actor
-tags. Orisa and Sigma
-still hit persistent message registration. Baptiste cannot read a
+The standalone Phase 3A run retained seven actors with a single blocking
+site each. The Phase 2 run left six. Mercy's paired tag query selects its
+shared VM path by authored fields. Its host still needs the tagged
+placement inventory and live actor tags. Orisa and Sigma still hit
+persistent message registration. Baptiste cannot read a
 controller variable. Torbjörn's hardpoint query now reaches the shared
 host interface and reports unavailable active-model membership.
 Symmetra still reports an unsupported state.

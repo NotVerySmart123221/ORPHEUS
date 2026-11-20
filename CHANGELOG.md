@@ -14,6 +14,9 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Integrated checked Phase 2 and Phase 3A commits with the native Practice Range admission branch. The combined 104319 matrix passed independent startup and room attachment for 12 of 32 actors, adding Moira in both. The locked workspace tests, Clippy, and transactional admission check passed.
 
+- Added authored held-input states with automatic listener registration and explicit state ownership for held and idle branches. The loader uses the existing logical-button lifecycle for button edges, locks, death admission, and teardown. An early buffered press follows its originating button binding.
+- Cancelled pending starts for a departing subgraph after all its child teardown callbacks run. An end callback can no longer reactivate an earlier sibling during the same release.
+
 - Applied logical button death admission consistently on presses, state entry, and lock changes. Held scopes that require a living owner release before the next VM update samples their observations.
 
 - Added an optional StateScript `on_unavailable` observation plug for clearing derived target state when a host sample is temporarily unavailable. The standalone Phase 3A revision `055adca3` passed the default and Inspector workspace tests and Clippy.

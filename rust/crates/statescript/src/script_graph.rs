@@ -43,6 +43,7 @@ enum StateBehavior {
     Observe,
     Interval,
     ButtonLock,
+    HeldInput,
     MovementScale,
     StackClaim,
     FacingClaim,
@@ -444,6 +445,8 @@ pub struct Graph {
     #[serde(skip)]
     entry_handlers: BTreeMap<EntryTopic, Vec<usize>>,
     #[serde(skip)]
+    authored_logical_button_slots: Vec<u16>,
+    #[serde(skip)]
     owner: WireSlots,
     #[serde(skip)]
     remote: WireSlots,
@@ -538,6 +541,7 @@ impl Graph {
                 *authored_state_slots.entry(position).or_insert(0_usize) += 1;
             }
         }
+        let mut held_inputs = Vec::new();
         for (index, node) in self.nodes.iter_mut().enumerate() {
             if let Some(behavior) = node.state_behavior {
                 let state = match behavior {
@@ -545,6 +549,7 @@ impl Graph {
                     StateBehavior::Observe => "observe state",
                     StateBehavior::Interval => "interval state",
                     StateBehavior::ButtonLock => "button lock state",
+                    StateBehavior::HeldInput => "held input state",
                     StateBehavior::MovementScale => "movement scale state",
                     StateBehavior::StackClaim => "stack claim state",
                     StateBehavior::FacingClaim => "facing claim state",
@@ -631,6 +636,10 @@ impl Graph {
                             )));
                         }
                         "StateButtonLock"
+                    }
+                    StateBehavior::HeldInput => {
+                        held_inputs.push(index);
+                        "STUStatescriptStateLogicalButton"
                     }
                     StateBehavior::MovementScale => {
                         if node.movement_scale().is_none() {
@@ -844,6 +853,16 @@ impl Graph {
                 self.entry_handlers.entry(topic).or_default().push(index);
             }
         }
+        if !held_inputs.is_empty() {
+            held_inputs.sort_unstable_by_key(|&index| self.nodes[index].state);
+            let mut registered: BTreeSet<_> = self.logical_button_slots().collect();
+            for index in held_inputs {
+                let raw = self.lower_held_input(index, &authored_state_slots)?;
+                if registered.insert(raw) {
+                    self.authored_logical_button_slots.push(raw);
+                }
+            }
+        }
         self.owner = WireSlots::build(&self.states, self, false);
         self.remote = WireSlots::build(&self.remote_nodes, self, true);
         self.presence = self
@@ -853,6 +872,144 @@ impl Graph {
             .filter_map(|(index, var)| var.has_presence_bit().then_some(index))
             .collect();
         Ok(())
+    }
+
+    fn lower_held_input(
+        &mut self,
+        index: usize,
+        state_occurrences: &BTreeMap<u16, usize>,
+    ) -> io::Result<u16> {
+        let node = &self.nodes[index];
+        let context = format!(
+            "held input state in graph {} at node {}",
+            self.index, node.pos
+        );
+        let raw = node
+            .state
+            .ok_or_else(|| invalid(format!("{context} has no state slot")))?;
+        let button = node
+            .field("button")
+            .and_then(Value::as_u64)
+            .and_then(|value| u8::try_from(value).ok())
+            .filter(|&button| button != 0)
+            .ok_or_else(|| invalid(format!("{context} requires an integer button in 1..=255")))?;
+        let allow_dead = match node.field("allow_dead") {
+            None => false,
+            Some(value) => value
+                .as_bool()
+                .ok_or_else(|| invalid(format!("{context} requires boolean allow_dead")))?,
+        };
+        for field in [
+            "m_logicalButton",
+            "m_80AF45FB",
+            "m_1C9EF058",
+            "m_onGoingDownPlug",
+            "m_onComingUpPlug",
+            "m_5AE05408",
+            "m_53C4B6A6",
+            "m_246438AD",
+        ] {
+            if node.field(field).is_some() {
+                return Err(invalid(format!(
+                    "{context} conflicts with generated field {field}"
+                )));
+            }
+        }
+        let mut owned = BTreeSet::new();
+        let held =
+            self.held_input_stage(node, "held_states", true, &mut owned, state_occurrences)?;
+        let idle =
+            self.held_input_stage(node, "idle_states", false, &mut owned, state_occurrences)?;
+        let empty = serde_json::json!({"$":"Plug","links":[]});
+        let hook = |name| match node.field(name) {
+            Some(plug) if valid_output_plug(plug) => Ok(plug.clone()),
+            Some(_) => Err(invalid(format!(
+                "{context} has an invalid {name} output plug"
+            ))),
+            None => Ok(empty.clone()),
+        };
+        let on_press = hook("on_press")?;
+        let on_release = hook("on_release")?;
+        let fields = self.nodes[index]
+            .fields
+            .as_object_mut()
+            .ok_or_else(|| invalid(format!("{context} requires object fields")))?;
+        fields.insert(
+            "m_logicalButton".into(),
+            serde_json::json!({
+            "$":"STUConfigVarLogicalButton","m_logicalButton":button}),
+        );
+        fields.insert("m_80AF45FB".into(), held);
+        fields.insert("m_1C9EF058".into(), idle);
+        fields.insert("m_onGoingDownPlug".into(), on_press);
+        fields.insert("m_onComingUpPlug".into(), on_release);
+        fields.insert("m_5AE05408".into(), Value::Bool(allow_dead));
+        Ok(raw)
+    }
+
+    fn held_input_stage(
+        &self,
+        node: &Node,
+        name: &str,
+        required: bool,
+        owned: &mut BTreeSet<u16>,
+        state_occurrences: &BTreeMap<u16, usize>,
+    ) -> io::Result<Value> {
+        let context = format!(
+            "held input state in graph {} at node {}",
+            self.index, node.pos
+        );
+        let slots = match node.field(name) {
+            Some(Value::Array(slots)) if !required || !slots.is_empty() => slots.as_slice(),
+            None if !required => &[],
+            _ => {
+                return Err(invalid(format!(
+                    "{context} requires {}{name} state slots",
+                    if required { "nonempty " } else { "array " }
+                )));
+            }
+        };
+        let mut links = Vec::with_capacity(slots.len());
+        let mut states = Vec::with_capacity(slots.len());
+        for slot in slots {
+            let raw = slot
+                .as_u64()
+                .and_then(|value| u16::try_from(value).ok())
+                .ok_or_else(|| invalid(format!("{context} has an invalid {name} state slot")))?;
+            let target = self
+                .state(usize::from(raw))
+                .filter(|target| {
+                    target.state == Some(raw)
+                        && target.is_state()
+                        && !target.is_action()
+                        && target.runs_on_server()
+                        && state_occurrences.get(&target.pos) == Some(&1)
+                })
+                .ok_or_else(|| {
+                    invalid(format!(
+                        "{context} {name} slot {raw} must identify one runnable state exactly once"
+                    ))
+                })?;
+            if Some(raw) == node.state || !owned.insert(raw) {
+                return Err(invalid(format!(
+                    "{context} {name} slot {raw} is self-owned or already owned by another stage"
+                )));
+            }
+            links.push(serde_json::json!([target.pos, "m_beginPlug"]));
+            states.push(raw);
+        }
+        Ok(serde_json::json!({"$":"Plug","links":links,"m_FF3DAF1E":states}))
+    }
+
+    /// Preserve legacy dispatch order and append automatically registered authored inputs.
+    pub(crate) fn logical_button_slots(&self) -> impl Iterator<Item = u16> + '_ {
+        self.fields
+            .get("m_680A2CB2")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|value| u16::try_from(value.as_u64()?).ok())
+            .chain(self.authored_logical_button_slots.iter().copied())
     }
 
     pub(crate) fn entry_handlers(&self, topic: EntryTopic) -> impl Iterator<Item = &Node> {
@@ -1112,6 +1269,7 @@ enum AuthoredClassBehavior {
     ObserveState,
     IntervalState,
     ButtonLockState,
+    HeldInputState,
     MovementScaleState,
     StackClaimState,
     FacingClaimState,
@@ -1133,6 +1291,7 @@ impl AuthoredClassBehavior {
             Self::ObserveState => (false, Some(StateBehavior::Observe), None),
             Self::IntervalState => (false, Some(StateBehavior::Interval), None),
             Self::ButtonLockState => (false, Some(StateBehavior::ButtonLock), None),
+            Self::HeldInputState => (false, Some(StateBehavior::HeldInput), None),
             Self::MovementScaleState => (false, Some(StateBehavior::MovementScale), None),
             Self::StackClaimState => (false, Some(StateBehavior::StackClaim), None),
             Self::FacingClaimState => (false, Some(StateBehavior::FacingClaim), None),
@@ -3189,6 +3348,279 @@ mod tests {
         assert_eq!(
             interval.interval_frames().map(NonZeroU32::get),
             Some(u32::MAX)
+        );
+    }
+
+    fn held_input_fixture() -> Value {
+        let node = |position, class, state, server_only, fields| {
+            json!({
+                "pos":position,"rid":position,"uid":position,"remote":-1,"state":state,
+                "class":class,"server_only":server_only,"client_only":false,"fields":fields,
+            })
+        };
+        let mut input = node(
+            0,
+            "authored.aim_input",
+            0,
+            true,
+            json!({"button":29,"held_states":[1],"idle_states":[2]}),
+        );
+        input["state_behavior"] = json!("held_input");
+        json!({"version":1,"bodies":{},"missing":[],"graphs":[{
+            "index":42,"items":4,"containers":{},"unknown_nodes":[],
+            "states":[0,1,2,3],"entries":[],"remote":[],"sync_vars":[],
+            "header":{"m_nodesBitCount":3,"m_statesBitCount":3,
+                "m_remoteSyncNodesBitCount":3,"m_syncVarsBitCount":3},
+            "fields":{"m_680A2CB2":[3,3,null,"ignored",-1,65536]},
+            "nodes":[input,
+                node(1,"STUStatescriptState",1,false,json!({"m_2BBEEAB8":true})),
+                node(2,"STUStatescriptState",2,true,json!({"m_2BBEEAB8":true})),
+                node(3,"STUStatescriptStateLogicalButton",3,false,json!({
+                    "m_2BBEEAB8":true,"m_logicalButton":20}))
+            ]
+        }]})
+    }
+
+    #[test]
+    fn authored_held_input_lowers_owned_stages_without_rewriting_legacy_dispatch() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let data = held_input_fixture();
+        let graphs = load(&data).unwrap();
+        let graph = graphs.graph(42).unwrap();
+        assert_eq!(graph.fields, data["graphs"][0]["fields"]);
+        assert_eq!(graph.logical_button_slots().collect::<Vec<_>>(), [3, 3, 0]);
+        let input = graph.state(0).unwrap();
+        assert_eq!(input.class, "STUStatescriptStateLogicalButton");
+        assert!(input.is_state() && input.server_only && !input.is_networked());
+        assert_eq!(
+            input.field("m_logicalButton"),
+            Some(&json!({
+            "$":"STUConfigVarLogicalButton","m_logicalButton":29}))
+        );
+        assert_eq!(
+            input.field("m_80AF45FB"),
+            Some(&json!({
+            "$":"Plug","links":[[1,"m_beginPlug"]],"m_FF3DAF1E":[1]}))
+        );
+        assert_eq!(
+            input.field("m_1C9EF058"),
+            Some(&json!({
+            "$":"Plug","links":[[2,"m_beginPlug"]],"m_FF3DAF1E":[2]}))
+        );
+        assert_eq!(input.field("m_5AE05408"), Some(&json!(false)));
+        for name in ["m_onGoingDownPlug", "m_onComingUpPlug"] {
+            assert_eq!(input.field(name), Some(&json!({"$":"Plug","links":[]})));
+        }
+
+        let mut registered = data.clone();
+        registered["graphs"][0]["fields"]["m_680A2CB2"] = json!([3, 0, 3, 0]);
+        let graphs = load(&registered).unwrap();
+        assert_eq!(
+            graphs
+                .graph(42)
+                .unwrap()
+                .logical_button_slots()
+                .collect::<Vec<_>>(),
+            [3, 0, 3, 0]
+        );
+        let mut automatic = data.clone();
+        automatic["graphs"][0]["fields"] = json!({});
+        let graphs = load(&automatic).unwrap();
+        assert_eq!(
+            graphs
+                .graph(42)
+                .unwrap()
+                .logical_button_slots()
+                .collect::<Vec<_>>(),
+            [0]
+        );
+        let mut multiple = automatic;
+        let second = &mut multiple["graphs"][0]["nodes"][3];
+        second["server_only"] = json!(true);
+        second["state_behavior"] = json!("held_input");
+        second["fields"] = json!({"button":20,"held_states":[2]});
+        multiple["graphs"][0]["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .reverse();
+        let graphs = load(&multiple).unwrap();
+        assert_eq!(
+            graphs
+                .graph(42)
+                .unwrap()
+                .logical_button_slots()
+                .collect::<Vec<_>>(),
+            [0, 3]
+        );
+
+        let mut alias = data;
+        alias["authored_classes"] = json!([
+            {"class":"authored.aim_input","behavior":"held_input_state"}]);
+        let input = &mut alias["graphs"][0]["nodes"][0];
+        input["state_behavior"] = Value::Null;
+        input["server_only"] = json!(false);
+        input["fields"]
+            .as_object_mut()
+            .unwrap()
+            .remove("idle_states");
+        input["fields"]["allow_dead"] = json!(true);
+        input["fields"]["on_press"] = json!({"$":"Plug","links":[[3,"m_beginPlug"]]});
+        input["fields"]["on_release"] = json!({"$":"Plug","links":[]});
+        let graphs = load(&alias).unwrap();
+        let input = graphs.graph(42).unwrap().state(0).unwrap();
+        assert!(input.server_only && !input.client_only);
+        assert_eq!(input.field("m_5AE05408"), Some(&json!(true)));
+        assert_eq!(
+            input.field("m_onGoingDownPlug"),
+            Some(&json!({
+            "$":"Plug","links":[[3,"m_beginPlug"]]}))
+        );
+        assert_eq!(
+            input.field("m_1C9EF058"),
+            Some(&json!({
+            "$":"Plug","links":[],"m_FF3DAF1E":[]}))
+        );
+    }
+
+    #[test]
+    fn authored_held_input_rejects_malformed_or_conflicting_configuration() {
+        let source = held_input_fixture();
+        let rejects = |data: &Value| {
+            let error = GraphStore::from_json(&serde_json::to_vec(data).unwrap()).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(
+                error
+                    .to_string()
+                    .contains("held input state in graph 42 at node 0"),
+                "{error}"
+            );
+        };
+        for (name, invalid) in [
+            ("button", json!(null)),
+            ("button", json!(0)),
+            ("button", json!(256)),
+            ("button", json!(-1)),
+            ("button", json!(29.0)),
+            ("button", json!(true)),
+            ("button", json!("29")),
+            ("held_states", json!(null)),
+            ("held_states", json!([])),
+            ("held_states", json!({})),
+            ("held_states", json!([null])),
+            ("held_states", json!([1.0])),
+            ("held_states", json!([-1])),
+            ("held_states", json!([65536])),
+            ("held_states", json!([0])),
+            ("held_states", json!([1, 1])),
+            ("held_states", json!([9])),
+            ("idle_states", json!(null)),
+            ("idle_states", json!([1])),
+            ("allow_dead", json!(null)),
+            ("allow_dead", json!(1)),
+            ("allow_dead", json!("false")),
+            ("on_press", json!(null)),
+            ("on_press", json!({"$":"Plug"})),
+            ("on_release", json!({"$":"Plug","links":[[1,7]]})),
+        ] {
+            let mut invalid_data = source.clone();
+            invalid_data["graphs"][0]["nodes"][0]["fields"][name] = invalid;
+            rejects(&invalid_data);
+        }
+        for name in ["button", "held_states"] {
+            let mut missing = source.clone();
+            missing["graphs"][0]["nodes"][0]["fields"]
+                .as_object_mut()
+                .unwrap()
+                .remove(name);
+            rejects(&missing);
+        }
+        for name in [
+            "m_logicalButton",
+            "m_80AF45FB",
+            "m_1C9EF058",
+            "m_onGoingDownPlug",
+            "m_onComingUpPlug",
+            "m_5AE05408",
+            "m_53C4B6A6",
+            "m_246438AD",
+        ] {
+            let mut conflicting = source.clone();
+            conflicting["graphs"][0]["nodes"][0]["fields"][name] = Value::Null;
+            rejects(&conflicting);
+        }
+        for (name, invalid) in [
+            ("server_only", json!(false)),
+            ("client_only", json!(true)),
+            ("state", json!(null)),
+        ] {
+            let mut invalid_data = source.clone();
+            invalid_data["graphs"][0]["nodes"][0][name] = invalid;
+            rejects(&invalid_data);
+        }
+        let mut conflict = source;
+        conflict["authored_classes"] = json!([
+            {"class":"authored.aim_input","behavior":"plain_state"}]);
+        assert!(
+            GraphStore::from_json(&serde_json::to_vec(&conflict).unwrap())
+                .unwrap_err()
+                .to_string()
+                .contains("conflicts with scope or behavior")
+        );
+    }
+
+    #[test]
+    fn authored_held_input_requires_real_unambiguous_stage_targets() {
+        let source = held_input_fixture();
+        let rejects = |data: &Value| {
+            let error = GraphStore::from_json(&serde_json::to_vec(data).unwrap()).unwrap_err();
+            assert!(error.to_string().contains("held_states slot 1"), "{error}");
+        };
+        for (name, invalid) in [
+            ("client_only", json!(true)),
+            ("state", json!(2)),
+            ("fields", json!({"m_2BBEEAB8":false})),
+            ("fields", json!({"m_2BBEEAB8":true,"m_ADEB6E05":true})),
+        ] {
+            let mut invalid_data = source.clone();
+            invalid_data["graphs"][0]["nodes"][1][name] = invalid;
+            rejects(&invalid_data);
+        }
+        for position in [json!(null), json!(99)] {
+            let mut invalid_data = source.clone();
+            invalid_data["graphs"][0]["states"][1] = position;
+            rejects(&invalid_data);
+        }
+        let mut duplicated = source.clone();
+        duplicated["graphs"][0]["states"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(1));
+        rejects(&duplicated);
+        let mut duplicate_own = source.clone();
+        duplicate_own["graphs"][0]["states"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(0));
+        assert!(
+            GraphStore::from_json(&serde_json::to_vec(&duplicate_own).unwrap())
+                .unwrap_err()
+                .to_string()
+                .contains("occupy its state slot exactly once")
+        );
+
+        // A runnable legacy state is permitted; network visibility is independent
+        // of stage ownership, and no engine-specific class list is imposed here.
+        let mut legacy_target = source;
+        legacy_target["graphs"][0]["nodes"][0]["fields"]["held_states"] = json!([3]);
+        let graphs = GraphStore::from_json(&serde_json::to_vec(&legacy_target).unwrap()).unwrap();
+        assert_eq!(
+            graphs
+                .graph(42)
+                .unwrap()
+                .state(0)
+                .unwrap()
+                .field("m_80AF45FB"),
+            Some(&json!({"$":"Plug","links":[[3,"m_beginPlug"]],"m_FF3DAF1E":[3]}))
         );
     }
 

@@ -1603,10 +1603,19 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let Some(plug) = node.field(path) else {
             return Ok(());
         };
-        for raw in raw_indices(array_field(plug, SUBGRAPH_STATES)) {
-            self.end(StateKey { instance: id, raw }, false, depth)?;
-            self.drop_begin(id, raw);
+        let slots = array_field(plug, SUBGRAPH_STATES);
+        if slots.is_empty() {
+            return Ok(());
         }
+        for raw in raw_indices(slots) {
+            self.end(StateKey { instance: id, raw }, false, depth)?;
+        }
+        // A later child's end callback can queue a start for an earlier child.
+        let now = self.machine.now_ms;
+        self.machine.queues.retain(id, |due, event| {
+            due != now
+                || !matches!(event, Event::Begin(state) if raw_indices(slots).any(|raw| raw == *state))
+        });
         Ok(())
     }
 
