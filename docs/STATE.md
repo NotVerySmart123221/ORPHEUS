@@ -236,6 +236,20 @@ retained 476 observations. Both #131 schedules reproduced their earlier
 339 ticks per implementation. Strict comparison retained the same four
 RNG setup differences.
 
+At `b9df99a1`, the horizontal cap uses a validated row shape and
+applies on the next movement frame. The local 373-graph pack has
+two matching selector-1 actions with integer bounds. Synthetic player
+and NPC tests exercise queueing and rejection. Settled weapon damage
+also carries the target's original flags, tags, and script state
+through the host event. Tests verify event scope and generation checks.
+The locked workspace suite and Clippy passed with script coverage.
+
+Two same-pack 104319 startup reports matched and retained **12
+independent starts**, one ordinary room attachment, and **46 blocking
+sites**. All actor rows and the 476 observations in the #72 capture
+matched the previous run. Both #131 schedules reproduced 339 ticks
+per implementation, with the same four RNG setup differences.
+
 Two of the three remaining native target-tracking startup sites have
 empty embedded plugs. One configures a second filter and an entity list
 output. The other configures a count output. Both read a dynamic radius.
