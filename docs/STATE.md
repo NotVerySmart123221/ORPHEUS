@@ -145,6 +145,23 @@ The Windows #131 idle and single-shot reload schedules each produced
 Every tick matched its own preceding Windows capture. Strict comparison
 still reports the four RNG model and seed differences.
 
+At `e540fdc0`, the native local combat accumulator stopped using two
+fixed placements to choose its no-tick state. The current owner body
+reports the local accumulator absent to the VM. Hosts with available or
+unknown context still report an unsupported state. Two same-pack startup
+reports matched byte for byte. The 32 actor results remained unchanged,
+with 11 independent passes, one ordinary attachment, and 47 blocking
+sites. The #72 900-frame trace matched all 476 prior observations. The
+Windows #131 idle and single-shot reload traces each matched their
+preceding 339-tick captures for both implementations. Strict comparison
+retained the same four RNG setup differences.
+
+Two of the three remaining native target-tracking startup sites have
+empty embedded plugs. One configures a second filter and an entity list
+output. The other configures a count output. Both read a dynamic radius.
+The remaining site links embedded states. Each configuration still needs
+its native query and output semantics verified.
+
 Seven actor probes have one blocking site each. Mercy's tag query needs
 the tagged placement inventory and live actor tags. Orisa and Sigma
 still hit persistent message registration. Baptiste cannot read a
