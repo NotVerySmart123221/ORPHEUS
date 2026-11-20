@@ -1004,15 +1004,21 @@ impl State {
                             tick: room_tick,
                             now: room_now,
                         };
-                        let pulses = peer
+                        if let Some((source, pulses)) = peer
                             .world
-                            .advance_fields(world.scene.simulation_mut(), room_tick)?;
-                        let skip_wire = peer.world.spawned_body();
-                        let (bots, queries) = world.scene.bot_simulation();
-                        for update in
-                            bots.heal_allies(&queries, context.team, skip_wire, &pulses)?
+                            .advance_fields(world.scene.simulation_mut(), room_tick)?
                         {
-                            peer.world.queue_health(update);
+                            let skip_wire = peer.world.spawned_body();
+                            let (bots, queries) = world.scene.bot_simulation();
+                            for update in bots.heal_allies(
+                                &queries,
+                                context.team,
+                                skip_wire,
+                                Some(source),
+                                &pulses,
+                            )? {
+                                peer.world.queue_health(update);
+                            }
                         }
                         peer.world
                             .advance_biotic_views(world.scene.simulation(), room_tick)?;

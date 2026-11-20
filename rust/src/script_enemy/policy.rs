@@ -275,6 +275,10 @@ impl EnemyScripts {
         std::mem::take(&mut self.control_records.scripted_damage)
     }
 
+    pub(crate) fn take_local_health_changes(&mut self) -> Vec<LocalHealthChange> {
+        std::mem::take(&mut self.control_records.local_health_changes)
+    }
+
     pub(crate) fn set_objective_route(&mut self, active: bool) {
         self.control_records.objective_route_active = Some(active);
     }

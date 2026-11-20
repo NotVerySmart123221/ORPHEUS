@@ -180,9 +180,12 @@ and continue from `m_outPlug`.
 | 3 | Actual signed pool delta, positive for healing and negative for damage |
 | 4 | Whether damage killed the target |
 
-The enabled room records successful weapon damage and room-settled
-script and AI health requests. Pool mitigation and caps are already
-reflected in the delta. Changes that apply zero produce no event.
+The enabled room records successful weapon damage, room-settled script
+and AI requests, field healing, and VM-local AI damage and healing.
+Pool mitigation and caps are already reflected in the delta. Changes
+that apply zero produce no event. For overlapping pulses from one owner,
+the record carries the actual total healed per target. Pool capacity,
+respawn, and shield recharge have independent lifecycles.
 The room checks each recipient's body identity after settlement and
 schedules delivery at the start of that component's next VM frame.
 Living source and target actors can subscribe. A self-effect is delivered
@@ -191,8 +194,8 @@ once. A killed target can still be reported to the living source.
 Host entries use the bounded VM event queue and parameter binding. Their
 subscription is distinct from local and directed room messages. Queue
 rejection discards the notification and leaves the settled pool result
-in place. Legacy health mutations that occur directly inside a VM or
-inside the field-pulse handling path are outside this event feed.
+in place. The same room queue delivers VM-local outcomes after the
+corresponding simulation phase.
 
 See the [synthetic host health contract](../fixtures/behavior/script-host-health-events-v1.json).
 

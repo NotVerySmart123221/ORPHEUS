@@ -147,6 +147,14 @@ impl HealingPulse {
         let [a, b] = target.segment();
         norm(segment_separation(self.centre, a, b)) - target.radius <= 5.0
     }
+
+    fn total_at(pulses: &[Self], target: TargetPose) -> f64 {
+        pulses
+            .iter()
+            .filter(|pulse| pulse.reaches(target))
+            .map(|pulse| pulse.amount)
+            .sum()
+    }
 }
 
 impl BioticField {
@@ -255,6 +263,7 @@ use encounter::{EncounterComponent, GateHandle};
 pub(crate) use encounter::{EncounterPhase, GateDamageStage, GateHealth};
 use enemy::{BotState, EnemyState};
 use health::HealthEffect;
+use health_events::SampledBody;
 pub(crate) use player::{PlayerBodyEvent, PlayerBodyHandle, PlayerBodyState};
 use script_requests::RoomScriptTarget;
 pub(crate) use script_requests::{RoomScriptRequest, RoomScriptRequests};
@@ -1436,7 +1445,7 @@ impl RoomSimulation {
         team: u8,
         pulses: &[HealingPulse],
     ) -> Result<Vec<EntityUpdate>, CombatError> {
-        self.heal_allies(queries, team, None, pulses)
+        self.heal_allies(queries, team, None, None, pulses)
     }
 
     pub(crate) fn heal_allies(
@@ -1444,12 +1453,16 @@ impl RoomSimulation {
         queries: &BotQueries<'_>,
         team: u8,
         skip_player_wire: Option<u32>,
+        field_owner: Option<BodyId>,
         pulses: &[HealingPulse],
     ) -> Result<Vec<EntityUpdate>, CombatError> {
         if queries.free_for_all() || pulses.is_empty() {
             return Ok(Vec::new());
         }
         self.activate_combat();
+        let source = field_owner
+            .filter(|&id| self.player_body(id).is_some())
+            .and_then(|id| self.sample_health_body(id.entity));
         let mut updates = Vec::new();
         for (&wire, &entity) in &self.by_wire {
             let state = self
@@ -1462,13 +1475,9 @@ impl RoomSimulation {
             if bot.dead || bot.spawn.team != team {
                 continue;
             }
-            let pose = queries.target(bot);
-            let amount = pulses
-                .iter()
-                .filter(|pulse| pulse.reaches(pose))
-                .map(|pulse| pulse.amount)
-                .sum();
-            if state.vitals.heal(amount) <= 0.0 {
+            let amount = HealingPulse::total_at(pulses, queries.target(bot));
+            let healed = state.vitals.heal(amount);
+            if healed <= 0.0 {
                 continue;
             }
             let component = state.vitals.component();
@@ -1478,14 +1487,10 @@ impl RoomSimulation {
                 operation: Some(Operation::Update(vec![component])),
                 ..EntityUpdate::default()
             });
+            self.health_events
+                .stage(source, SampledBody { wire, entity }, healed, false);
         }
-        self.heal_player_bodies(
-            team,
-            queries.free_for_all(),
-            skip_player_wire,
-            pulses,
-            &mut updates,
-        );
+        self.heal_player_bodies(team, skip_player_wire, source, pulses, &mut updates);
         Ok(updates)
     }
 
@@ -1810,6 +1815,7 @@ impl RoomSimulation {
             self.set_player_defenders(defenders);
         }
         if !self.combat_active {
+            self.collect_local_health_events();
             self.settle_authored_requests(tick, now)?;
             self.flush_health_events();
             return Ok(Vec::new());
@@ -2129,6 +2135,7 @@ impl RoomSimulation {
         for ray in recorded_rays {
             self.record_debug_ray(ray);
         }
+        self.collect_local_health_events();
         // +80 voice callbacks are a separate phase after all ordinary actor updates.
         // Select through read-only facts before taking a mutable actor reference.
         let voiced =
@@ -2156,6 +2163,7 @@ impl RoomSimulation {
                 }
             }
         }
+        self.collect_local_health_events();
         self.advance_enemy_projectiles(
             queries,
             roster.as_deref().map_or(&[], Vec::as_slice),
@@ -2198,6 +2206,7 @@ impl RoomSimulation {
         }
         if witch_present || !self.witch_staff_links.is_empty() {
             self.sync_witch_staff_links()?;
+            self.collect_local_health_events();
         }
         let replacements = self.respawn_due(tick, now);
         self.record_poses(queries, tick)?;

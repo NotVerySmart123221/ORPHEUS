@@ -3,7 +3,23 @@ use std::collections::BTreeMap;
 use super::{policy::body_has_target_tag, *};
 use crate::script_expr::RoomEntityFacts;
 
+const MAX_LOCAL_HEALTH_CHANGES: usize = 64;
+
 impl EnemyWorld<'_> {
+    fn record_local_health_change(&mut self, source: u32, delta: f64, killed: bool) {
+        let changes = &mut self.control_records.local_health_changes;
+        if delta != 0.0
+            && self.graphs.uses_host_health_events()
+            && changes.len() < MAX_LOCAL_HEALTH_CHANGES
+        {
+            changes.push(LocalHealthChange {
+                source,
+                delta,
+                killed,
+            });
+        }
+    }
+
     fn live_staff_source(&self, source: u32) -> bool {
         self.control_records
             .witch_staff_sources
@@ -212,7 +228,7 @@ impl World for EnemyWorld<'_> {
         if site.entity != self.binding.body {
             return false;
         }
-        self.vitals.damage(
+        let result = self.vitals.damage(
             amount,
             crate::vitals::Death {
                 time: self.binding.now_secs,
@@ -220,6 +236,7 @@ impl World for EnemyWorld<'_> {
                 killer: self.binding.body,
             },
         );
+        self.record_local_health_change(self.binding.body, -result.dealt, result.killed);
         true
     }
     fn recharge_shields(&mut self, site: Site, amount: f64) -> bool {
@@ -324,7 +341,8 @@ impl World for EnemyWorld<'_> {
             return false;
         }
         if !self.control_records.room_boss_pause && self.live_staff_source(source) {
-            self.vitals.heal(amount);
+            let healed = self.vitals.heal(amount);
+            self.record_local_health_change(source, healed, false);
         }
         true
     }

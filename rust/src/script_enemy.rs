@@ -53,6 +53,7 @@ pub(crate) struct AiControlRecords {
     voice_requests: Vec<VoiceRequest>,
     voice_variation: u64,
     scripted_damage: Vec<EnemyDamage>,
+    local_health_changes: Vec<LocalHealthChange>,
     script_requests: RoomScriptRequests,
     objective_route_active: Option<bool>,
     weapon_target: Option<BossTarget>,
@@ -64,6 +65,13 @@ pub(crate) struct AiControlRecords {
     witch_staff_effect: Option<(u32, f64)>,
     witch_staff_sources: IndexMap<u32, WitchStaffSource>,
     ai_control_setting: Option<(f32, bool)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct LocalHealthChange {
+    pub(crate) source: u32,
+    pub(crate) delta: f64,
+    pub(crate) killed: bool,
 }
 
 pub(crate) struct WitchStaffSource {

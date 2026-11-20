@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 
 use bevy_ecs::entity::Entity;
+use indexmap::IndexMap;
 
 use crate::{script_expr::valid_entity, script_init::HostEvent};
 
@@ -11,9 +12,23 @@ use super::{BotState, PlayerBodyState, RoomSimulation};
 const MAX_ROOM_HEALTH_EVENTS: usize = 512;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct SampledBody {
-    wire: u32,
-    entity: Entity,
+pub(super) struct SampledBody {
+    pub(super) wire: u32,
+    pub(super) entity: Entity,
+}
+
+impl SampledBody {
+    fn lookup(
+        wire: u32,
+        bots: &IndexMap<u32, Entity>,
+        players: &IndexMap<u32, Entity>,
+    ) -> Option<Self> {
+        if !valid_entity(wire) {
+            return None;
+        }
+        let &entity = bots.get(&wire).or_else(|| players.get(&wire))?;
+        Some(Self { wire, entity })
+    }
 }
 
 struct HealthApplied {
@@ -49,6 +64,31 @@ pub(super) struct RoomHealthEvents {
     pending: VecDeque<HealthApplied>,
 }
 
+impl RoomHealthEvents {
+    pub(super) fn stage(
+        &mut self,
+        source: Option<SampledBody>,
+        target: SampledBody,
+        delta: f64,
+        killed: bool,
+    ) {
+        if !self.enabled
+            || self.pending.len() >= MAX_ROOM_HEALTH_EVENTS
+            || !delta.is_finite()
+            || delta == 0.0
+            || (killed && delta > 0.0)
+        {
+            return;
+        }
+        self.pending.push_back(HealthApplied {
+            source,
+            target,
+            delta,
+            killed,
+        });
+    }
+}
+
 impl RoomSimulation {
     pub(crate) fn enable_host_health_events(&mut self) {
         self.health_events.enabled = true;
@@ -61,24 +101,14 @@ impl RoomSimulation {
         delta: f64,
         killed: bool,
     ) {
-        if !self.health_events.enabled
-            || self.health_events.pending.len() >= MAX_ROOM_HEALTH_EVENTS
-            || !delta.is_finite()
-            || delta == 0.0
-            || (killed && delta > 0.0)
-        {
+        if !self.health_events.enabled {
             return;
         }
         let Some(target) = self.sample_health_body(target) else {
             return;
         };
         let source = self.sample_health_body(source);
-        self.health_events.pending.push_back(HealthApplied {
-            source,
-            target,
-            delta,
-            killed,
-        });
+        self.health_events.stage(source, target, delta, killed);
     }
 
     /// Queue each event for the recipients' next VM frames, in settlement order.
@@ -92,15 +122,30 @@ impl RoomSimulation {
         }
     }
 
-    fn sample_health_body(&self, wire: u32) -> Option<SampledBody> {
-        if !valid_entity(wire) {
-            return None;
+    pub(super) fn sample_health_body(&self, wire: u32) -> Option<SampledBody> {
+        SampledBody::lookup(wire, &self.by_wire, &self.players_by_wire)
+    }
+
+    /// Collect already applied VM-local mutations before processing retirement.
+    pub(super) fn collect_local_health_events(&mut self) {
+        if !self.health_events.enabled {
+            return;
         }
-        let &entity = self
-            .by_wire
-            .get(&wire)
-            .or_else(|| self.players_by_wire.get(&wire))?;
-        Some(SampledBody { wire, entity })
+        for (&wire, &entity) in &self.by_wire {
+            let Some(mut state) = self.world.get_mut::<BotState>(entity) else {
+                continue;
+            };
+            let Some(enemy) = state.enemy.as_mut() else {
+                continue;
+            };
+            let target = SampledBody { wire, entity };
+            for change in enemy.scripts.take_local_health_changes() {
+                let source =
+                    SampledBody::lookup(change.source, &self.by_wire, &self.players_by_wire);
+                self.health_events
+                    .stage(source, target, change.delta, change.killed);
+            }
+        }
     }
 
     fn queue_health_event(&mut self, entity: Entity, event: HostEvent) {
@@ -169,6 +214,118 @@ mod tests {
             assert_eq!(actual, expected);
             assert!(room.health_events.pending.is_empty());
         }
+    }
+
+    #[test]
+    fn field_pulses_record_one_capped_change_with_checked_source_per_body() {
+        use crate::{
+            contact_world::ContactWorld,
+            game_combat::{BioticField, BotQueries, FIELD_DELAY, tests::fixture_ground},
+            game_replication::BodyId,
+            mover::Mover,
+            mover_settings::{MoverCatalog, MoverSettings},
+        };
+        use std::sync::Arc;
+
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fixtures/behavior/script-local-health-outcomes-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            fixture["case_id"],
+            "script-local-health-outcomes.synthetic.v1"
+        );
+        let field = &fixture["input"]["field"];
+        let wounds: [f64; 2] =
+            serde_json::from_value(field["initial_two_actor_wounds"].clone()).unwrap();
+        let deltas: [f64; 2] =
+            serde_json::from_value(fixture["expected"]["field"]["actual_deltas"].clone()).unwrap();
+        let elapsed = u32::try_from(field["pulse_ticks_elapsed"].as_u64().unwrap()).unwrap();
+
+        let bots = fixture_bots();
+        let targets = [bots[0].entity, bots[1].entity];
+        let mut room = RoomSimulation::new(bots).unwrap();
+        let owner = BodyId {
+            entity: 702,
+            generation: 1,
+        };
+        let owner_body = |id| {
+            let mover = Mover::new(
+                MoverSettings::default(),
+                Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+                [0.0; 3],
+                0,
+                0x08,
+            )
+            .unwrap();
+            PlayerBodyState::new(id, 701, 0, 1, 703, mover, None, 100, None)
+        };
+        room.spawn_player_body(owner_body(owner)).unwrap();
+        room.enable_host_health_events();
+        let mut field = BioticField::new([0.0; 3]);
+        assert!(field.advance(100).0.is_none());
+        let pulse = field.advance(100 + FIELD_DELAY + elapsed).0.unwrap();
+        assert!(pulse.amount < wounds[1]);
+        let pulses = [pulse, pulse];
+        let ground = fixture_ground();
+        let movers = MoverCatalog::default();
+        let queries = BotQueries::new(false, &movers, &ground, None);
+
+        let wound = |room: &mut RoomSimulation, target, amount| {
+            room.state_mut(target).unwrap().unwrap().vitals.damage(
+                amount,
+                Death {
+                    killer: owner.entity,
+                    frame: 100,
+                    time: 1.6,
+                },
+            );
+        };
+        for (target, amount) in targets.into_iter().zip(wounds) {
+            wound(&mut room, target, amount);
+        }
+        let updates = room
+            .heal_allies(&queries, 1, Some(owner.entity), Some(owner), &pulses)
+            .unwrap();
+        assert_eq!(
+            updates
+                .iter()
+                .map(|update| update.entity)
+                .collect::<Vec<_>>(),
+            targets
+        );
+        for (wire, delta) in targets.into_iter().zip(deltas) {
+            let event = room.health_events.pending.pop_front().unwrap();
+            assert_eq!(event.source.map(|body| body.wire), Some(owner.entity));
+            assert_eq!(
+                (event.target.wire, event.delta, event.killed),
+                (wire, delta, false)
+            );
+        }
+        assert!(room.health_events.pending.is_empty());
+        assert!(
+            room.heal_allies(&queries, 1, Some(owner.entity), Some(owner), &pulses)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(room.health_events.pending.is_empty());
+
+        room.spawn_player_body(owner_body(BodyId {
+            generation: 2,
+            ..owner
+        }))
+        .unwrap();
+        assert!(
+            room.advance_player_fields(owner, 100 + FIELD_DELAY + elapsed)
+                .is_none()
+        );
+        wound(&mut room, targets[0], wounds[0]);
+        room.heal_allies(&queries, 1, Some(owner.entity), Some(owner), &pulses)
+            .unwrap();
+        let event = room.health_events.pending.pop_front().unwrap();
+        assert!(event.source.is_none());
+        assert_eq!((event.target.wire, event.delta), (targets[0], deltas[0]));
+        assert!(room.health_events.pending.is_empty());
     }
 
     #[test]

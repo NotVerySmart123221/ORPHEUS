@@ -1160,32 +1160,31 @@ impl WorldDelivery {
         &mut self,
         simulation: &mut RoomSimulation,
         tick: u32,
-    ) -> io::Result<Vec<HealingPulse>> {
+    ) -> io::Result<Option<(BodyId, Vec<HealingPulse>)>> {
         let Some(id) = self
             .body_script
             .as_ref()
             .filter(|script| script.projectiles.is_some())
             .map(|script| script.id)
         else {
-            return Ok(Vec::new());
+            return Ok(None);
         };
-        let Some(state) = simulation.player_body_mut(id) else {
-            return Ok(Vec::new());
+        let Some((pulses, expired_tokens)) = simulation.advance_player_fields(id, tick) else {
+            return Ok(None);
         };
-        let (pulses, expired_tokens) = state.advance_fields(tick);
         let Some(projectiles) = self
             .body_script
             .as_mut()
             .and_then(|script| script.projectiles.as_mut())
         else {
-            return Ok(Vec::new());
+            return Ok(None);
         };
         let mut deliveries = Vec::new();
         for token in expired_tokens {
             projectiles.cancel(token, &mut deliveries);
         }
         self.queue_projectiles(id, deliveries)?;
-        Ok(pulses)
+        Ok((!pulses.is_empty()).then_some((id, pulses)))
     }
 
     fn retire_biotic_views(&mut self, keep: impl Fn(&BioticView) -> bool) {

@@ -511,6 +511,119 @@ fn shared_self_damage_clock_contract() {
 }
 
 #[test]
+fn local_health_events_capture_ai_self_damage_only_when_enabled() {
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-local-health-outcomes-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(contract["schema_version"], 1);
+    assert_eq!(
+        contract["case_id"],
+        "script-local-health-outcomes.synthetic.v1"
+    );
+    assert_eq!(contract["evidence"], "synthetic-rust");
+    let input = &contract["input"]["ai"];
+    let expected = &contract["expected"]["ai"];
+    let body = u32::try_from(input["body"].as_u64().unwrap()).unwrap();
+    let controller = u32::try_from(input["controller"].as_u64().unwrap()).unwrap();
+    let attempts = input["attempts"].as_array().unwrap();
+    let accepted = expected["accepted"].as_array().unwrap();
+    let remaining = expected["remaining_health"].as_array().unwrap();
+    assert_eq!(attempts.len(), accepted.len());
+    assert_eq!(attempts.len(), remaining.len());
+    let expected_changes: Vec<_> = expected["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|change| {
+            (
+                u32::try_from(change["source"].as_u64().unwrap()).unwrap(),
+                change["delta"].as_f64().unwrap(),
+                change["killed"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+
+    for enabled in [false, true] {
+        let extra = enabled.then(|| input["listener_graph"].clone());
+        let (graphs, _, definition, _) = fixture_with_graphs(false, extra.as_slice());
+        assert_eq!(graphs.uses_host_health_events(), enabled);
+        let binding = EnemyBinding {
+            body,
+            controller,
+            hero: definition.hero,
+            pair: graphs.enemy_pair(definition.hero).unwrap(),
+            mode: 0,
+            mode_variables: Arc::default(),
+            team: 1,
+            skin: None,
+            pose: Movement::default(),
+            gate: None,
+            spatial_frame: None,
+            roster: None,
+            retired_entities: Arc::default(),
+            frame: 3,
+            now_secs: 0.048,
+            spawn_anchors: None,
+            mode_voice_set: None,
+        };
+        let mut vitals = Vitals::new(input["initial_health"].as_f64().unwrap(), 0.0, 0.0);
+        let mut scripts = EnemyScripts::start(
+            Arc::clone(&graphs),
+            &definition,
+            &binding,
+            binding.frame,
+            &mut vitals,
+        )
+        .unwrap();
+        let empty = Variables::new();
+        let mut world = EnemyWorld {
+            retirement_requested: &mut scripts.retirement_requested,
+            messages: &mut scripts.messages,
+            behavior_records: &mut scripts.behavior_records,
+            control_records: &mut scripts.control_records,
+            target_tag_effects: &mut scripts.target_tag_effects,
+            binding: &binding,
+            graphs: &graphs,
+            vitals: &mut vitals,
+            body_variables: &empty,
+            controller_variables: &empty,
+        };
+        for ((attempt, accepted), remaining) in attempts.iter().zip(accepted).zip(remaining) {
+            let site = Site {
+                entity: u32::try_from(attempt["actor"].as_u64().unwrap()).unwrap(),
+                instance: 1,
+                graph: 42,
+                node: None,
+            };
+            let damage = attempt["damage"].as_f64().unwrap();
+            assert_eq!(
+                world.self_damage(site, damage),
+                accepted.as_bool().unwrap(),
+                "{attempt}"
+            );
+            assert_eq!(
+                world.vitals.total(),
+                remaining.as_f64().unwrap(),
+                "{attempt}"
+            );
+        }
+        let changes: Vec<_> = scripts
+            .take_local_health_changes()
+            .into_iter()
+            .map(|change| (change.source, change.delta, change.killed))
+            .collect();
+        let expected = if enabled {
+            expected_changes.as_slice()
+        } else {
+            &[]
+        };
+        assert_eq!(changes.as_slice(), expected);
+        assert!(scripts.take_local_health_changes().is_empty());
+    }
+}
+
+#[test]
 fn shared_flashbang_exclusion_guard_contract() {
     use serde_json::json;
     let contract: Json = serde_json::from_str(include_str!(

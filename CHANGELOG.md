@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added field-pulse and AI-local health outcomes to the authoritative script event feed. Overlapping pulses report the actual aggregate heal for each actor, and field owner attribution uses the producing body generation. Added synthetic coverage for clamping, event opt-in, and source replacement. Passed 639 default and 646 Inspector workspace tests, both locked Clippy lanes, Rust 1.85, 12 pinned Python public contracts, and the prepared 900-frame, field activation, and ally healing regressions.
+
 - Added authored subscriptions for settled room health changes. Player and AI scripts can receive the actual signed pool delta after damage or healing through their next-frame event queue. Room staging checks entity identity and bounds pending events. Added synthetic coverage for delivery, message isolation, and settlement. Passed 637 default and 644 Inspector workspace tests, both locked Clippy lanes, Rust 1.85, 12 pinned Python public contracts, and the prepared 900-frame headless regression.
 
 - Shared ruleset resolution between player and AI script hosts. Graph bundles can define typed mode defaults and actor overrides. Existing runtime packs use the same compatibility values and scopes. Synthetic tests cover lookup precedence, duplicate rules, and exact numeric types. Passed 634 default and 641 Inspector workspace tests, both locked Clippy lanes, Rust 1.85, 12 pinned Python public contracts, and the prepared 900-frame headless regression. Prepared Junkenstein coverage requires its separate mode pack.

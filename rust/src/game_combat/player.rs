@@ -7,7 +7,7 @@ use bevy_ecs::component::Component;
 use crate::{
     game_combat::{
         AdmittedFlight, AppliedDamage, BioticField, BotHit, CombatError, HealingPulse,
-        PosedHitscan, RoomSimulation, eligible_target, eye_height,
+        PosedHitscan, RoomSimulation, SampledBody, eligible_target, eye_height,
     },
     game_combat_messages::CombatNotice,
     game_hitscan::{Impact, TargetHistory, TargetPose, ViewFrame},
@@ -172,12 +172,9 @@ impl PlayerBodyState {
         }
     }
 
-    pub(crate) fn advance_fields(
-        &mut self,
-        tick: u32,
-    ) -> (Vec<HealingPulse>, Vec<ProjectileToken>) {
+    fn advance_fields(&mut self, tick: u32) -> (Vec<HealingPulse>, Vec<ProjectileToken>, f64) {
         if self.runtime.is_none() {
-            return (Vec::new(), Vec::new());
+            return (Vec::new(), Vec::new(), 0.0);
         }
         let mut pulses = Vec::new();
         let mut expired_tokens = Vec::new();
@@ -190,15 +187,10 @@ impl PlayerBodyState {
             !expired
         });
         let pose = self.target_pose();
-        if let Some(runtime) = &mut self.runtime {
-            let amount: f64 = pulses
-                .iter()
-                .filter(|pulse| pulse.reaches(pose))
-                .map(|pulse| pulse.amount)
-                .sum();
-            runtime.heal(amount);
-        }
-        (pulses, expired_tokens)
+        let healed = self.runtime.as_mut().map_or(0.0, |runtime| {
+            runtime.heal(HealingPulse::total_at(&pulses, pose))
+        });
+        (pulses, expired_tokens, healed)
     }
 
     fn receive_damage(&mut self, amount: f64, source: Death) -> Damage {
@@ -219,6 +211,16 @@ impl PlayerBodyState {
 }
 
 impl RoomSimulation {
+    pub(crate) fn advance_player_fields(
+        &mut self,
+        owner: BodyId,
+        tick: u32,
+    ) -> Option<(Vec<HealingPulse>, Vec<ProjectileToken>)> {
+        let (pulses, expired_tokens, healed) = self.player_body_mut(owner)?.advance_fields(tick);
+        self.record_health_applied(owner.entity, owner.entity, healed, false);
+        Some((pulses, expired_tokens))
+    }
+
     pub(crate) fn next_player_generation(&mut self, owner: u32, floor: u64) -> io::Result<u64> {
         let previous = self
             .player_generations
@@ -944,16 +946,12 @@ impl RoomSimulation {
     pub(super) fn heal_player_bodies(
         &mut self,
         team: u8,
-        free_for_all: bool,
         skip_wire: Option<u32>,
+        source: Option<SampledBody>,
         pulses: &[HealingPulse],
         updates: &mut Vec<EntityUpdate>,
     ) {
-        if free_for_all || pulses.is_empty() {
-            return;
-        }
-        let wires: Vec<_> = self.players_by_wire.iter().map(|(&w, &e)| (w, e)).collect();
-        for (wire, entity) in wires {
+        for (&wire, &entity) in &self.players_by_wire {
             if Some(wire) == skip_wire {
                 continue;
             }
@@ -964,17 +962,12 @@ impl RoomSimulation {
             if state.id.entity != wire || state.team != team || !state.alive() {
                 continue;
             }
-            let pose = state.target_pose();
-            let amount: f64 = pulses
-                .iter()
-                .filter(|pulse| pulse.reaches(pose))
-                .map(|pulse| pulse.amount)
-                .sum();
+            let amount = HealingPulse::total_at(pulses, state.target_pose());
             if amount <= 0.0 {
                 continue;
             }
             if let Some(runtime) = &mut state.runtime {
-                runtime.heal(amount);
+                let healed = runtime.heal(amount);
                 if let Some(component) = runtime.take_health_update() {
                     updates.push(EntityUpdate {
                         entity: wire,
@@ -982,6 +975,8 @@ impl RoomSimulation {
                         ..EntityUpdate::default()
                     });
                 }
+                self.health_events
+                    .stage(source, SampledBody { wire, entity }, healed, false);
             }
         }
     }
