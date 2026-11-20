@@ -256,7 +256,7 @@ impl Node {
 
     fn valid_host_event_parameters(&self, kind: HostEventKind) -> bool {
         let max_slot = match kind {
-            HostEventKind::HealthApplied => 5,
+            HostEventKind::HealthApplied => 6,
         };
         let Some(parameters) = self.fields.get("m_params").filter(|value| !value.is_null()) else {
             return true;

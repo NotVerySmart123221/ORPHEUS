@@ -8,7 +8,13 @@ use crate::{
 const MAX_LOCAL_HEALTH_CHANGES: usize = 64;
 
 impl EnemyWorld<'_> {
-    fn record_local_health_change(&mut self, source: u32, delta: f64, killed: bool) {
+    fn record_local_health_change(
+        &mut self,
+        source: u32,
+        delta: f64,
+        killed: bool,
+        named_pool_losses: Option<Vec<NamedPoolLoss>>,
+    ) {
         let changes = &mut self.control_records.local_health_changes;
         if delta != 0.0
             && self.graphs.uses_host_health_events()
@@ -18,6 +24,7 @@ impl EnemyWorld<'_> {
                 source,
                 delta,
                 killed,
+                named_pool_losses,
             });
         }
     }
@@ -236,7 +243,12 @@ impl World for EnemyWorld<'_> {
                 killer: self.binding.body,
             },
         );
-        self.record_local_health_change(self.binding.body, -result.dealt, result.killed);
+        self.record_local_health_change(
+            self.binding.body,
+            -result.dealt,
+            result.killed,
+            Some(result.named_pool_losses),
+        );
         true
     }
     fn recharge_shields(&mut self, site: Site, amount: f64) -> bool {
@@ -344,7 +356,7 @@ impl World for EnemyWorld<'_> {
         }
         if !self.control_records.room_boss_pause && self.live_staff_source(source) {
             let healed = self.vitals.heal(amount);
-            self.record_local_health_change(source, healed, false);
+            self.record_local_health_change(source, healed, false, None);
         }
         true
     }

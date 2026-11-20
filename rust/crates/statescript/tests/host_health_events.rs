@@ -9,7 +9,7 @@ use orpheus_statescript::{
     script_graph::GraphStore,
     script_init::{
         Component, EmptyWorld, HealthTargetFacts, HitTags, HostEvent, HostHealthContext,
-        MAX_INIT_WORK, RoomBodyIdentity, RoomEntityStatus, RoomMessage, Root, Site,
+        MAX_INIT_WORK, NamedPoolLoss, RoomBodyIdentity, RoomEntityStatus, RoomMessage, Root, Site,
         TargetTagEffects, World,
     },
     script_wire::{Value, Variables},
@@ -58,15 +58,23 @@ struct Event {
     delta: Json,
     killed: bool,
     hit_tags: Option<Vec<u64>>,
+    named_pool_losses: Option<Vec<(u64, f64)>>,
 }
 
-type Delivery = (Option<u32>, u32, f64, bool, Option<Vec<u64>>);
+type Delivery = (
+    Option<u32>,
+    u32,
+    f64,
+    bool,
+    Option<Vec<u64>>,
+    Option<Vec<(u64, f64)>>,
+);
 
 #[derive(Deserialize)]
 struct Expected {
     ordinary_variable: u32,
     room_variable: u32,
-    host_variables: [u32; 6],
+    host_variables: [u32; 7],
     deliveries: Vec<Option<Delivery>>,
     target_tag_query: ExpectedTargetTagQuery,
     target_generation_relay: ExpectedGenerationRelay,
@@ -136,6 +144,7 @@ fn host_health_entries_only_receive_settled_events_on_the_next_frame() {
         (2, Value::Entity(input.target)),
         (3, Value::Float(input.forged_delta)),
         (4, Value::Bool(true)),
+        (6, Value::Float(999.0)),
     ]);
     assert_eq!(
         target.queue_message(ROOT, message, forged.clone()).unwrap(),
@@ -197,13 +206,23 @@ fn host_health_entries_only_receive_settled_events_on_the_next_frame() {
         });
         assert_eq!(
             recipient
-                .queue_host_event(HostEvent::HealthApplied {
-                    source: event.source,
-                    target: event.target,
-                    delta,
-                    killed: event.killed,
-                    hit_tags,
-                })
+                .queue_host_event_with_context(
+                    HostEvent::HealthApplied {
+                        source: event.source,
+                        target: event.target,
+                        delta,
+                        killed: event.killed,
+                        hit_tags,
+                    },
+                    HostHealthContext {
+                        named_pool_losses: event.named_pool_losses.map(|rows| {
+                            rows.into_iter()
+                                .map(|(identifier, amount)| NamedPoolLoss { identifier, amount })
+                                .collect()
+                        }),
+                        ..HostHealthContext::default()
+                    },
+                )
                 .unwrap(),
             usize::from(delivery.is_some()),
             "{}",
@@ -214,7 +233,7 @@ fn host_health_entries_only_receive_settled_events_on_the_next_frame() {
         recipient.advance_frame(frame + 1, &mut EmptyWorld).unwrap();
 
         let mut after = before;
-        if let Some((source, target, delta, killed, tags)) = delivery {
+        if let Some((source, target, delta, killed, tags, losses)) = delivery {
             let after = after.as_mut().unwrap();
             for (variable, value) in expected.host_variables.into_iter().zip([
                 source.map_or(Value::Null, Value::Entity),
@@ -224,6 +243,19 @@ fn host_health_entries_only_receive_settled_events_on_the_next_frame() {
                 Value::Float(delta),
                 tags.map_or(Value::Null, |tags| {
                     Value::Array(tags.into_iter().map(Value::Asset).collect())
+                }),
+                losses.map_or(Value::Null, |losses| {
+                    Value::Array(
+                        losses
+                            .into_iter()
+                            .map(|(identifier, amount)| {
+                                Value::Map(vec![
+                                    (Value::Integer(16056), Value::Asset(identifier)),
+                                    (Value::Integer(499), Value::Float(amount)),
+                                ])
+                            })
+                            .collect(),
+                    )
                 }),
             ]) {
                 after.insert(variable, value);
@@ -633,6 +665,7 @@ fn check_health_delivery_generation(endpoint: HealthEndpoint) {
         hit_tags: None,
     };
     let context = |generation| HostHealthContext {
+        named_pool_losses: None,
         source_body: Some(RoomBodyIdentity {
             wire: SOURCE,
             generation: if subject == SOURCE {

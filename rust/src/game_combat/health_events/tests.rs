@@ -16,7 +16,7 @@ use crate::{
     script_init::{HealthTargetFacts, OWNER_HEALTH},
     script_player::fixture_body_factory,
     script_wire::Value,
-    vitals::Death,
+    vitals::{Death, NamedPoolLoss},
 };
 
 #[derive(Deserialize)]
@@ -34,6 +34,17 @@ struct Input {
     unavailable_target_tag: u64,
     generic_healing: f64,
     generic_damage: f64,
+    named_damage: NamedDamage,
+}
+
+#[derive(Deserialize)]
+struct NamedDamage {
+    grants: Vec<(u64, f64)>,
+    weapon_damage: f64,
+    scripted_damage: f64,
+    heal: f64,
+    ordinary_damage: f64,
+    expected_losses: Vec<Option<Vec<(u64, f64)>>>,
 }
 
 #[derive(Deserialize)]
@@ -215,6 +226,12 @@ fn native_room_health_events_keep_actual_deltas_and_hit_tag_availability_in_orde
     let changes = std::mem::take(&mut room.health_events.pending);
     assert_eq!(changes.len(), expected.ordered_outcomes.len());
     for (change, outcome) in changes.into_iter().zip(expected.ordered_outcomes) {
+        // Every damage on this fixture's ordinary pools reports a known empty
+        // list. Healing has no damage-loss records.
+        assert_eq!(
+            change.named_pool_losses.as_deref(),
+            (outcome.delta < 0.0).then_some(&[][..])
+        );
         let (target, impact_facts) = match outcome.target {
             Target::Bot => (bot, &bot_hit.damage.target_facts),
             Target::Player => (player.entity, &player_hit.damage.target_facts),
@@ -259,6 +276,62 @@ fn native_room_health_events_keep_actual_deltas_and_hit_tag_availability_in_orde
         player.runtime.as_ref().unwrap().vitals().unwrap().total(),
         expected.player_health
     );
+}
+
+#[test]
+fn room_events_carry_actual_named_shield_losses_for_weapon_and_direct_damage() {
+    let input = contract().input.named_damage;
+    let bots = fixture_bots();
+    let source = bots[0].entity;
+    let target = bots[1].entity;
+    let mut room = RoomSimulation::new(bots).unwrap();
+    room.enable_host_health_events();
+    let bot = room.state_mut(target).unwrap().unwrap();
+    for &(identifier, amount) in &input.grants {
+        assert!(
+            bot.vitals
+                .add_temporary_shield(identifier, amount, true)
+                .is_some()
+        );
+    }
+    let impact = fixture_impact(target, input.weapon_damage);
+    let hit = room
+        .apply_bot_impact(source, FIXTURE_CONTEXT.tick, FIXTURE_CONTEXT, &impact)
+        .unwrap()
+        .unwrap();
+    let dealer = Death {
+        killer: source,
+        frame: FIXTURE_CONTEXT.tick,
+        time: FIXTURE_CONTEXT.now.as_secs_f64(),
+    };
+    for effect in [
+        HealthEffect::Damage(input.scripted_damage),
+        HealthEffect::Heal(input.heal),
+        HealthEffect::Damage(input.ordinary_damage),
+    ] {
+        assert!(
+            room.settle_health(target, effect, dealer, FIXTURE_CONTEXT.now)
+                .unwrap()
+        );
+    }
+
+    assert_eq!(
+        room.health_events.pending.len(),
+        input.expected_losses.len()
+    );
+    assert_eq!(
+        room.health_events.pending[0].named_pool_losses.as_deref(),
+        Some(hit.damage.named_pool_losses.as_slice())
+    );
+    for (change, expected) in room.health_events.pending.iter().zip(input.expected_losses) {
+        let expected = expected.map(|losses| {
+            losses
+                .into_iter()
+                .map(|(identifier, amount)| NamedPoolLoss { identifier, amount })
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(change.named_pool_losses.as_deref(), expected.as_deref());
+    }
 }
 
 #[test]

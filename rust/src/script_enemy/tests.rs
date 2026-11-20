@@ -698,6 +698,7 @@ fn shared_self_damage_clock_contract() {
 
 #[test]
 fn local_health_events_capture_ai_self_damage_only_when_enabled() {
+    const SHIELD: u64 = 0x0d80_0000_0000_0791;
     let contract: Json = serde_json::from_str(include_str!(
         "../../../fixtures/behavior/script-local-health-outcomes-v1.json"
     ))
@@ -730,7 +731,7 @@ fn local_health_events_capture_ai_self_damage_only_when_enabled() {
         })
         .collect();
 
-    for enabled in [false, true] {
+    for (enabled, shield_amount) in [(false, 0.0), (true, 0.0), (true, 4.0)] {
         let extra = enabled.then(|| input["listener_graph"].clone());
         let (graphs, _, definition, _) = fixture_with_graphs(false, extra.as_slice());
         assert_eq!(graphs.uses_host_health_events(), enabled);
@@ -753,7 +754,11 @@ fn local_health_events_capture_ai_self_damage_only_when_enabled() {
             spawn_anchors: None,
             mode_voice_set: None,
         };
-        let mut vitals = Vitals::new(input["initial_health"].as_f64().unwrap(), 0.0, 0.0);
+        let mut vitals = Vitals::new(
+            input["initial_health"].as_f64().unwrap() - shield_amount,
+            0.0,
+            0.0,
+        );
         let mut scripts = EnemyScripts::start(
             Arc::clone(&graphs),
             &definition,
@@ -762,6 +767,11 @@ fn local_health_events_capture_ai_self_damage_only_when_enabled() {
             &mut vitals,
         )
         .unwrap();
+        if shield_amount > 0.0 {
+            vitals
+                .add_temporary_shield(SHIELD, shield_amount, false)
+                .unwrap();
+        }
         let empty = Variables::new();
         let mut world = EnemyWorld {
             retirement_requested: &mut scripts.retirement_requested,
@@ -794,9 +804,9 @@ fn local_health_events_capture_ai_self_damage_only_when_enabled() {
                 "{attempt}"
             );
         }
-        let changes: Vec<_> = scripts
-            .take_local_health_changes()
-            .into_iter()
+        let changes = scripts.take_local_health_changes();
+        let actual: Vec<_> = changes
+            .iter()
             .map(|change| (change.source, change.delta, change.killed))
             .collect();
         let expected = if enabled {
@@ -804,7 +814,18 @@ fn local_health_events_capture_ai_self_damage_only_when_enabled() {
         } else {
             &[]
         };
-        assert_eq!(changes.as_slice(), expected);
+        assert_eq!(actual.as_slice(), expected);
+        if enabled {
+            let first = (shield_amount > 0.0).then_some(NamedPoolLoss {
+                identifier: SHIELD,
+                amount: shield_amount,
+            });
+            assert_eq!(
+                changes[0].named_pool_losses.as_deref(),
+                Some(first.as_slice())
+            );
+            assert_eq!(changes[1].named_pool_losses.as_deref(), Some(&[][..]));
+        }
         assert!(scripts.take_local_health_changes().is_empty());
     }
 }

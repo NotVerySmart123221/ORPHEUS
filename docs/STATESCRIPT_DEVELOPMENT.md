@@ -689,11 +689,20 @@ and continue from `m_outPlug`.
 | 3 | Actual signed pool delta, positive for healing and negative for damage |
 | 4 | Whether damage killed the target |
 | 5 | Ordered hit tag assets, or null at a declared binding when unavailable |
+| 6 | Ordered records of named shield loss, or null at a declared binding when unavailable |
 
 The hit tag slot uses the list carried by the applied impact. A known
 empty list stays empty. Other settled effects that lack hit attribution
 omit the slot, so delivery clears any previous value in a declared
 binding. Tags preserve authored order and duplicates.
+
+Damage with pool accounting can bind slot 6 to an array of named shield
+loss records. Each record has an asset identifier at key `16056` and a
+positive amount at key `499`, rounded to native float precision. An
+empty array means a known result with no named loss. Healing and damage
+without pool accounting omit the slot. The compatibility charge message
+uses the same record encoder. A same-body GameMessage can carry the
+array as an explicit parameter.
 
 Weapon notifications carry the target's captured filter flags, target
 tags, and script variables. A room-settled health change from a distinct

@@ -315,7 +315,11 @@ now use the same actual pool loss. The prepared `0012` probe supplies
 explicit pool records to the original charge receiver and checks how
 matching identifiers affect the award. The room records each named
 temporary shield's actual loss in damage settlement and supplies the
-typed records to the compatibility route.
+typed records to the compatibility route. The authored `health_applied`
+event can also bind those records. Weapon and direct damage use the
+same settlement, including NPC-local self damage. Healing and damage
+with unavailable pool accounting omit the binding. Regression runs
+remain pending.
 Owner grants and their named current query use the shared pool lifecycle.
 A checked mode-2 effect drains only its own named pool at the authored
 rate and ends at zero. Native and VM regressions cover decay separately

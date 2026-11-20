@@ -212,8 +212,9 @@ pub use types::{
 pub use world::{
     AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, CreationKind,
     EmptyWorld, EntityCreation, HealthTargetFacts, HitTags, HostEvent, HostHealthContext,
-    LandingSelection, MovementSample, PlayScript, RoomBodyIdentity, RoomCue, RoomEntityStatus,
-    RoomMessage, Site, TargetTagEffect, TargetTagEffects, TargetTagSnapshot, World,
+    LandingSelection, MovementSample, NamedPoolLoss, PlayScript, RoomBodyIdentity, RoomCue,
+    RoomEntityStatus, RoomMessage, Site, TargetTagEffect, TargetTagEffects, TargetTagSnapshot,
+    World, named_pool_records,
 };
 
 use machine::{Event, Machine, Startup, StateKey, VarKey};
@@ -684,11 +685,11 @@ impl Component {
         )
     }
 
-    /// Notify a receiver with room-authenticated body generations and optional target facts.
+    /// Notify a receiver with room-authenticated body identities and settlement facts.
     pub fn queue_host_event_with_context(
         &mut self,
         event: HostEvent,
-        context: HostHealthContext,
+        mut context: HostHealthContext,
     ) -> Result<usize, InitFault> {
         if self.halted {
             return Err(InitFault::Halted);
@@ -709,7 +710,10 @@ impl Component {
         let Some(due_ms) = self.next_vm_frame_ms() else {
             return Ok(0);
         };
-        let Some((kind, parameters)) = event.bindings_for(self.machine.snapshot.entity) else {
+        let named_pool_losses = context.named_pool_losses.take();
+        let Some((kind, parameters)) =
+            event.bindings_for(self.machine.snapshot.entity, named_pool_losses.as_deref())
+        else {
             return Ok(0);
         };
         self.machine

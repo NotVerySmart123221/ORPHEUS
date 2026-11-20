@@ -10,7 +10,20 @@
     "ordered_hit_tags": [613, 101, 613],
     "unavailable_target_tag": 732,
     "generic_healing": 90.0,
-    "generic_damage": 25.0
+    "generic_damage": 25.0,
+    "named_damage": {
+      "grants": [[972777519512081729, 3.25], [972777519512081730, 4.0]],
+      "weapon_damage": 5.0,
+      "scripted_damage": 4.0,
+      "heal": 8.0,
+      "ordinary_damage": 2.0,
+      "expected_losses": [
+        [[972777519512081729, 3.25], [972777519512081730, 1.75]],
+        [[972777519512081730, 2.25]],
+        null,
+        []
+      ]
+    }
   },
   "expected": {
     "ordered_outcomes": [

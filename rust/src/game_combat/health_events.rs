@@ -11,6 +11,7 @@ use crate::{
         HealthTargetFacts, HitTags, HostEvent, HostHealthContext, RoomBodyIdentity,
         RoomEntityStatus,
     },
+    vitals::NamedPoolLoss,
 };
 
 use super::{BotState, PlayerBodyState, RoomSimulation};
@@ -68,9 +69,14 @@ impl SampledBody {
     }
 }
 
-pub(super) enum HealthEventContext<'a> {
-    Impact(HitTags, &'a HealthTargetFacts),
-    Settled(&'a World),
+pub(super) struct HealthDamageEvidence<'a> {
+    pub(super) impact: Option<(HitTags, &'a HealthTargetFacts)>,
+    pub(super) named_pool_losses: &'a [NamedPoolLoss],
+}
+
+pub(super) struct HealthEventContext<'a> {
+    pub(super) world: &'a World,
+    pub(super) damage: Option<HealthDamageEvidence<'a>>,
 }
 
 struct HealthApplied {
@@ -80,6 +86,7 @@ struct HealthApplied {
     killed: bool,
     hit_tags: Option<HitTags>,
     target_facts: Option<Arc<HealthTargetFacts>>,
+    named_pool_losses: Option<Arc<[NamedPoolLoss]>>,
 }
 
 impl HealthApplied {
@@ -127,14 +134,13 @@ impl RoomHealthEvents {
         {
             return;
         }
-        let (hit_tags, mut target_facts) = match context {
-            HealthEventContext::Impact(tags, facts) if facts.target == target.wire => {
-                (Some(tags), Some(facts.clone()))
-            }
+        let impact = context.damage.as_ref().and_then(|damage| damage.impact);
+        let (hit_tags, mut target_facts) = match impact {
+            Some((tags, facts)) if facts.target == target.wire => (Some(tags), Some(facts.clone())),
             // A settled change without weapon tags can still authenticate the
             // target facts seen by a distinct source.
-            HealthEventContext::Settled(world) if source.is_some_and(|source| source != target) => {
-                (None, target.health_target_facts(world))
+            None if source.is_some_and(|source| source != target) => {
+                (None, target.health_target_facts(context.world))
             }
             _ => (None, None),
         };
@@ -148,6 +154,9 @@ impl RoomHealthEvents {
             killed,
             hit_tags,
             target_facts: target_facts.map(Arc::new),
+            named_pool_losses: context
+                .damage
+                .map(|damage| Arc::from(damage.named_pool_losses)),
         });
     }
 }
@@ -163,7 +172,7 @@ impl RoomSimulation {
         target: u32,
         delta: f64,
         killed: bool,
-        impact: Option<(HitTags, &HealthTargetFacts)>,
+        damage: Option<HealthDamageEvidence<'_>>,
     ) {
         if !self.health_events.enabled {
             return;
@@ -172,11 +181,14 @@ impl RoomSimulation {
             return;
         };
         let source = self.sample_health_body(source);
-        let context = match impact {
-            Some((tags, facts)) => HealthEventContext::Impact(tags, facts),
-            None => HealthEventContext::Settled(&self.world),
+        let has_impact = damage
+            .as_ref()
+            .is_some_and(|damage| damage.impact.is_some());
+        let context = HealthEventContext {
+            world: &self.world,
+            damage,
         };
-        let room_status = if impact.is_some() || source.is_some_and(|source| source != target) {
+        let room_status = if has_impact || source.is_some_and(|source| source != target) {
             self.sample_health_target_room_status(target)
         } else {
             None
@@ -205,6 +217,7 @@ impl RoomSimulation {
                     source_body: source_body.map(SampledBody::identity),
                     target_body: Some(change.target.identity()),
                     target_facts: change.target_facts,
+                    named_pool_losses: change.named_pool_losses,
                 };
                 for body in receivers.into_iter().flatten() {
                     self.queue_health_event(body.entity, event, context.clone());
@@ -243,7 +256,16 @@ impl RoomSimulation {
                     target,
                     change.delta,
                     change.killed,
-                    HealthEventContext::Settled(&self.world),
+                    HealthEventContext {
+                        world: &self.world,
+                        damage: change
+                            .named_pool_losses
+                            .as_deref()
+                            .map(|named_pool_losses| HealthDamageEvidence {
+                                impact: None,
+                                named_pool_losses,
+                            }),
+                    },
                     room_status,
                 );
             }

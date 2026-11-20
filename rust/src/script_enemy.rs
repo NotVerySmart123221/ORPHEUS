@@ -23,7 +23,7 @@ use crate::{
         RoomMessage, Site, TargetTagEffect, TargetTagEffects, World,
     },
     script_wire::{Value, Variables},
-    vitals::{PoolKind, Vitals},
+    vitals::{NamedPoolLoss, PoolKind, Vitals},
     world::{GAME_MODE_ENTITY, Movement},
 };
 use indexmap::IndexMap;
@@ -67,11 +67,12 @@ pub(crate) struct AiControlRecords {
     ai_control_setting: Option<(f32, bool)>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LocalHealthChange {
     pub(crate) source: u32,
     pub(crate) delta: f64,
     pub(crate) killed: bool,
+    pub(crate) named_pool_losses: Option<Vec<NamedPoolLoss>>,
 }
 
 pub(crate) struct WitchStaffSource {

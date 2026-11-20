@@ -1873,6 +1873,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 .as_ref()
                 .filter(|facts| carries_entity(facts.target))
                 .cloned(),
+            named_pool_losses: None,
         }
     }
 

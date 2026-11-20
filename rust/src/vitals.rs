@@ -4,6 +4,7 @@
 //! validation of the armour reduction and healing order remains open.
 
 use crate::world::{Component, POOLS, pool, pool_component};
+pub use orpheus_statescript::script_init::NamedPoolLoss;
 pub use orpheus_statescript::script_runtime::PoolKind;
 use orpheus_statescript::script_runtime::{HEALTH_POOL, SHIELDS_POOL};
 
@@ -24,12 +25,6 @@ pub struct Damage {
     pub dealt: f64,
     pub killed: bool,
     pub named_pool_losses: Vec<NamedPoolLoss>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct NamedPoolLoss {
-    pub identifier: u64,
-    pub amount: f64,
 }
 
 #[derive(Debug, PartialEq)]

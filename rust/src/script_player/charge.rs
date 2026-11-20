@@ -8,9 +8,8 @@ use crate::{
     game_heroes::CASSIDY,
     game_replication::OwnerRoomActivity,
     script_expr::{Scope, Variable},
-    script_init::State,
+    script_init::{State, named_pool_records},
     script_wire::{Value, Variables},
-    vitals::NamedPoolLoss,
 };
 
 use super::{
@@ -129,23 +128,6 @@ impl PlayerBodyRuntime {
         self.world.damage_credit = None;
         result
     }
-}
-
-fn named_pool_records(losses: &[NamedPoolLoss]) -> Value {
-    Value::Array(
-        losses
-            .iter()
-            .filter_map(|loss| {
-                let amount = f64::from(loss.amount as f32);
-                (amount.is_finite() && amount > 0.0).then(|| {
-                    Value::Map(vec![
-                        (Value::Integer(16056), Value::Asset(loss.identifier)),
-                        (Value::Integer(499), Value::Float(amount)),
-                    ])
-                })
-            })
-            .collect(),
-    )
 }
 
 #[cfg(test)]

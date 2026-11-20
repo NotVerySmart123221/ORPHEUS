@@ -269,7 +269,7 @@ use encounter::{EncounterComponent, GateHandle};
 pub(crate) use encounter::{EncounterPhase, GateDamageStage, GateHealth};
 use enemy::{BotState, EnemyState};
 use health::HealthEffect;
-use health_events::{HealthEventContext, SampledBody};
+use health_events::{HealthDamageEvidence, HealthEventContext, SampledBody};
 pub(crate) use player::{PlayerBodyEvent, PlayerBodyHandle, PlayerBodyState};
 use script_requests::{PlayerRoomCue, RoomScriptTarget};
 pub(crate) use script_requests::{RoomScriptRequest, RoomScriptRequests};
@@ -1569,7 +1569,10 @@ impl RoomSimulation {
                 target,
                 healed,
                 false,
-                HealthEventContext::Settled(&self.world),
+                HealthEventContext {
+                    world: &self.world,
+                    damage: None,
+                },
                 room_status,
             );
         }
@@ -1816,7 +1819,10 @@ impl RoomSimulation {
             entity,
             -result.dealt,
             result.killed,
-            Some((hit.damage.tags, &hit.damage.target_facts)),
+            Some(HealthDamageEvidence {
+                impact: Some((hit.damage.tags, &hit.damage.target_facts)),
+                named_pool_losses: &hit.damage.named_pool_losses,
+            }),
         );
         Ok(Some(hit))
     }

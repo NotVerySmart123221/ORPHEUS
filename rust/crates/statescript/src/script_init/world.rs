@@ -96,6 +96,31 @@ impl HitTags {
     }
 }
 
+/// Damage drained from a named pool during settlement.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NamedPoolLoss {
+    pub identifier: u64,
+    pub amount: f64,
+}
+
+/// Encode the drained named pools in settlement order with native float precision.
+pub fn named_pool_records(losses: &[NamedPoolLoss]) -> Value {
+    Value::Array(
+        losses
+            .iter()
+            .filter_map(|loss| {
+                let amount = f64::from(loss.amount as f32);
+                (amount.is_finite() && amount > 0.0).then(|| {
+                    Value::Map(vec![
+                        (Value::Integer(16056), Value::Asset(loss.identifier)),
+                        (Value::Integer(499), Value::Float(amount)),
+                    ])
+                })
+            })
+            .collect(),
+    )
+}
+
 /// Authoritative notification emitted by the simulation after a health change.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum HostEvent {
@@ -121,7 +146,11 @@ impl HostEvent {
         target
     }
 
-    pub(super) fn bindings_for(self, receiver: u32) -> Option<(HostEventKind, Variables)> {
+    pub(super) fn bindings_for(
+        self,
+        receiver: u32,
+        named_pool_losses: Option<&[NamedPoolLoss]>,
+    ) -> Option<(HostEventKind, Variables)> {
         match self {
             Self::HealthApplied {
                 source,
@@ -151,6 +180,9 @@ impl HostEvent {
                         Value::Array(tags.as_slice().iter().copied().map(Value::Asset).collect()),
                     );
                 }
+                if let Some(losses) = named_pool_losses.filter(|_| delta < 0.0) {
+                    parameters.insert(6, named_pool_records(losses));
+                }
                 Some((HostEventKind::HealthApplied, parameters))
             }
         }
@@ -178,6 +210,8 @@ pub struct HostHealthContext {
     pub source_body: Option<RoomBodyIdentity>,
     pub target_body: Option<RoomBodyIdentity>,
     pub target_facts: Option<Arc<HealthTargetFacts>>,
+    /// Optional settlement records for damage parameter 6. None leaves it absent.
+    pub named_pool_losses: Option<Arc<[NamedPoolLoss]>>,
 }
 
 /// Room-sampled facts for the original target of a settled health event.
