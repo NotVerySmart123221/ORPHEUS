@@ -23,6 +23,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+mod npc_chunk_delivery;
 pub(crate) mod owner_effects;
 pub(crate) mod practice_observation;
 

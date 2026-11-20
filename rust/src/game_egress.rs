@@ -137,12 +137,28 @@ impl<T> GameEgress<T> {
         self.oldest_pending_reliable() > u64::from(ordinal)
     }
 
+    pub(crate) fn has_queued_reliable(&self) -> bool {
+        !self.reliable.is_empty()
+    }
+
     /// Select and attempt one frame. The transport owns packet sequence
     /// allocation and returns the sequence only after the datagram is sent.
     /// Record associations and queue removal follow that successful send.
     pub fn send_frame<E, Queued: Borrow<EntityUpdate>>(
         &mut self,
         records: FrameRecords<'_, Queued>,
+        ack_for_records: impl Fn(&[&EntityUpdate]) -> u32,
+        identify: impl FnMut(RecordSource) -> T,
+        send: impl FnOnce(Vec<u8>) -> Result<u32, E>,
+    ) -> Result<SentFrame, SendError<E>> {
+        self.send_frame_with_messages(records, true, ack_for_records, identify, send)
+    }
+
+    /// Send an ordinary frame or reserve its payload for world records.
+    pub(crate) fn send_frame_with_messages<E, Queued: Borrow<EntityUpdate>>(
+        &mut self,
+        records: FrameRecords<'_, Queued>,
+        include_messages: bool,
         ack_for_records: impl Fn(&[&EntityUpdate]) -> u32,
         mut identify: impl FnMut(RecordSource) -> T,
         send: impl FnOnce(Vec<u8>) -> Result<u32, E>,
@@ -155,8 +171,16 @@ impl<T> GameEgress<T> {
         } = select_frame(
             FrameCandidates {
                 tick: records.tick,
-                reliable: self.reliable.make_contiguous(),
-                unreliable: self.unreliable.make_contiguous(),
+                reliable: if include_messages {
+                    self.reliable.make_contiguous()
+                } else {
+                    &[]
+                },
+                unreliable: if include_messages {
+                    self.unreliable.make_contiguous()
+                } else {
+                    &[]
+                },
                 queued: records.queued,
                 movements: records.movements,
                 owner_correction: records.owner_correction,
