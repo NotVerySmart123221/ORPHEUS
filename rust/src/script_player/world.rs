@@ -765,7 +765,8 @@ impl World for BodyWorld {
                         .view_subjects
                         .get(&entity)
                         .and_then(|subject| subject.tags.presence(tag))
-                });
+                })
+                .or_else(|| self.room_entities()?.get(&entity)?.tags.presence(tag));
         }
         if let Some(present) = self.target_tag_effects.presence(tag) {
             return Some(present);

@@ -171,6 +171,8 @@ The Rust-only [assignment fallback fixture](../fixtures/behavior/script-assignme
 
 The Rust-only [room entity filter fixture](../fixtures/behavior/statescript-room-entity-filter-v1.json) checks affiliation, liveness, and tag presence for individual and spatial predicates. Component and room tests cover snapshot recovery and use of shared actor metadata.
 
+The Rust-only [direct actor tag fixture](../fixtures/behavior/actor-direct-target-tags-v1.json) checks that a server predicate with a foreign selector requests tag facts without enabling actor rays. The native room regression covers authored tags, live grants and suppressions, missing actors, and tag facts captured before and after body replacement.
+
 The Rust-only [observation fixture](../fixtures/behavior/script-observe-radius-v1.json) exercises the radius query in an authored state across VM frames and through state activation and abort.
 
 Public synthetic fixtures must never contain game binaries, raw captures, signing keys, or private credentials.

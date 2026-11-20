@@ -21,7 +21,7 @@ use crate::{
     script_expr::{
         EngineSetting, Scope, StackPriority, Variable, authored_stack_priority,
         authored_stack_variable, client_only_fallback, dynamic, native_entity_operand,
-        native_fields, native_shape,
+        native_fields, native_shape, native_target_tag_operand,
     },
     script_wire::{Value as ScriptValue, Variables},
 };
@@ -1652,10 +1652,7 @@ pub enum RoomSpatialNeeds {
     EntityTags,
 }
 
-fn native_pose_needs_queries(value: &Value, class: &str) -> bool {
-    let Some(mut entity) = native_entity_operand(value, class) else {
-        return false;
-    };
+fn may_query_foreign_entity(mut entity: &Value) -> bool {
     while entity.get("$").and_then(Value::as_str) == Some("ClientOnly") {
         let Ok(Some(fallback)) = client_only_fallback(entity) else {
             return false;
@@ -1707,9 +1704,16 @@ fn room_spatial_requirements(value: &Value) -> RoomSpatialRequirements {
                     | "EntityPosition" | "EntityDirection",
                 ) => Queries,
                 Some(class @ ("STU_21A13145" | "STU_2200A66D"))
-                    if native_pose_needs_queries(value, class) =>
+                    if native_entity_operand(value, class)
+                        .is_some_and(may_query_foreign_entity) =>
                 {
                     Queries
+                }
+                Some("STU_25ECB55F")
+                    if native_target_tag_operand(value)
+                        .is_some_and(|(_, entity)| may_query_foreign_entity(entity)) =>
+                {
+                    EntityTags
                 }
                 _ => NoQueries,
             };
@@ -3131,6 +3135,50 @@ mod tests {
         assert!(!load(&data).uses_spatial_actor_rays());
         assert!(!load(&data).uses_room_spatial_frame());
         assert!(load(&data).room_spatial_needs() < RoomSpatialNeeds::EntityFacts);
+    }
+
+    #[test]
+    fn native_direct_target_tags_request_frozen_facts_for_foreign_operands() {
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../fixtures/behavior/actor-direct-target-tags-v1.json"
+        ))
+        .unwrap();
+        let input = &contract["input"];
+        let predicate = |entity: &Value| json!({"$":"STU_25ECB55F", "m_entity":entity, "m_88B0050A":input["tags"]["base"]});
+        let owner = &input["owner"];
+        let foreign = &input["foreign"];
+        let client_only = |fallback: &Value| json!({"$":"ClientOnly", "value":foreign, "server_fallback":fallback});
+        let mut invalid_tag = predicate(foreign);
+        invalid_tag["m_88B0050A"] = json!("0x0400000000001101");
+        let mut invalid_header = predicate(foreign);
+        invalid_header["m_EE729DCB"] = json!(1);
+
+        let mut data = fixture();
+        for (case, config, client_only_node) in [
+            ("owner", predicate(owner), false),
+            ("foreign", predicate(foreign), false),
+            ("owner_fallback", predicate(&client_only(owner)), false),
+            ("foreign_fallback", predicate(&client_only(foreign)), false),
+            ("null_selector", predicate(&Value::Null), false),
+            ("invalid_tag", invalid_tag, false),
+            ("invalid_header", invalid_header, false),
+            ("client_only_node", predicate(foreign), true),
+        ] {
+            let node = &mut data["graphs"][0]["nodes"][0];
+            node["fields"]["native_tag"] = config;
+            node["client_only"] = json!(client_only_node);
+            let store = GraphStore::from_json(&serde_json::to_vec(&data).unwrap()).unwrap();
+            let needs = if contract["expected"]["requires_tags"][case]
+                .as_bool()
+                .unwrap()
+            {
+                RoomSpatialNeeds::EntityTags
+            } else {
+                RoomSpatialNeeds::None
+            };
+            assert_eq!(store.room_spatial_needs(), needs, "{case}");
+            assert!(!store.uses_spatial_actor_rays(), "{case}");
+        }
     }
 
     #[test]

@@ -27,6 +27,15 @@ pub(crate) fn native_entity_operand<'a>(config: &'a Json, expected: &str) -> Opt
         .filter(|_| native_shape(config, expected, Some("m_entity")))
 }
 
+pub(crate) fn native_target_tag_operand(config: &Json) -> Option<(u64, &Json)> {
+    if class(config) != Some("STU_25ECB55F") || !native_fields(config, &["m_entity", "m_88B0050A"])
+    {
+        return None;
+    }
+    let tag = target_tag_guid(child(config, "m_88B0050A"))?;
+    Some((tag, child(config, "m_entity")))
+}
+
 pub(crate) fn named_shield_identifier(config: &Json) -> Option<u64> {
     if class(config) != Some("STUConfigVarIdentifier")
         || !native_fields(config, &["m_identifier", "m_resourceKey"])

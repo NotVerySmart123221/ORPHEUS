@@ -1013,11 +1013,8 @@ impl Evaluator {
             "STU_B5A0CAF0" => context.owner(),
             "STU_25ECB55F" => {
                 let unsupported = || EvalError::UnsupportedConfig(class.into());
-                if !native_fields(config, &["m_entity", "m_88B0050A"]) {
-                    return Err(unsupported());
-                }
-                let tag = target_tag_guid(child(config, "m_88B0050A")).ok_or_else(unsupported)?;
-                match self.config(child(config, "m_entity"), context, nested)? {
+                let (tag, entity) = native_target_tag_operand(config).ok_or_else(unsupported)?;
+                match self.config(entity, context, nested)? {
                     Value::Entity(entity) if valid_entity(entity) => Value::Bool(
                         context
                             .has_target_tag(entity, tag)
