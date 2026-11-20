@@ -273,6 +273,7 @@ fn normal_cassidy_receives_victory_view_and_result() {
                 frame: FIRST_TICK,
                 pose: mover.pose(),
                 eye_position: script_eye_position(hero.guid, &mover),
+                skin: 0,
                 quanta: RETAIL_QUANTA,
             },
         )
@@ -531,6 +532,7 @@ pub(super) fn verify_normal_cassidy_damage_and_charge(heroes: &[u64], variants: 
                         frame: FIRST_TICK,
                         pose: mover.pose(),
                         eye_position: script_eye_position(cassidy.guid, &mover),
+                        skin: 0,
                         quanta: RETAIL_QUANTA,
                     },
                 )
@@ -993,6 +995,7 @@ fn normal_cassidy_flashbang_input_produces_authored_gravity_and_range_blast() {
                 frame: FIRST_TICK,
                 pose: mover.pose(),
                 eye_position: script_eye_position(hero.guid, &mover),
+                skin: 0,
                 quanta: RETAIL_QUANTA,
             },
         )
@@ -1198,6 +1201,7 @@ fn normal_cassidy_roll_moves_without_stopping_the_owner_vm() {
                     frame: FIRST_TICK,
                     pose: mover.pose(),
                     eye_position: script_eye_position(cassidy.guid, &mover),
+                    skin: 0,
                     quanta: RETAIL_QUANTA,
                 },
             )
@@ -1327,6 +1331,7 @@ fn normal_cassidy_charges_locks_and_fires_the_authored_deadeye() {
                 frame: FIRST_TICK,
                 pose: mover.pose(),
                 eye_position: script_eye_position(cassidy.guid, &mover),
+                skin: 0,
                 quanta: RETAIL_QUANTA,
             },
         )
@@ -1842,6 +1847,7 @@ fn junkenstein_room_clock_starts_countdown_once_after_cassidy_selection() {
                 frame: FIRST_TICK,
                 pose: mover.pose(),
                 eye_position: script_eye_position(cassidy.guid, &mover),
+                skin: 0,
                 quanta: RETAIL_QUANTA,
             },
         )

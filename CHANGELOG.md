@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Resolve owner StateScript hardpoint queries from optional model membership supplied for the selected body and skin. Treat missing model metadata as unavailable and preserve the current body when a replacement cannot initialize.
+
 - Taught parent-owned StateScript states to honor a finite, typed duration. The existing state timer runs the ordinary finish path and is cleared when the state or its parent exits.
 
 - Fixed NPC script direction sampling when navigation turns a body with an active authored facing claim. The room can publish the navigation pose on the frame the claim ends. Shared-branch verification is pending.

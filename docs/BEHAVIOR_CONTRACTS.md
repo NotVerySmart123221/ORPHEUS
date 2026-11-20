@@ -45,7 +45,7 @@ The Rust-only [movement edge fixture](../fixtures/behavior/script-movement-edges
 
 The Rust-only [stack claim fixture](../fixtures/behavior/script-stack-claim-v1.json) checks priority, ties, scope, dependent values and release through the production VM. The native room regression combines stack admission with a tag filter and verifies the lifetime of the input and movement effects.
 
-The [hardpoint membership fixture](../fixtures/behavior/statescript-hardpoint-membership-v1.json) checks a true or false model fact, an unavailable model, and malformed operands through the StateScript condition.
+The [hardpoint membership fixture](../fixtures/behavior/statescript-hardpoint-membership-v1.json) checks a true or false model fact, an unavailable model, and malformed operands through the StateScript condition. The [owner model fixture](../fixtures/behavior/owner-model-hardpoints-v1.json) checks the same condition on queued selection and skin replacement through the native owner factory. An unavailable model leaves the preceding body and runtime active.
 
 The [tagged target pair fixture](../fixtures/behavior/script-tagged-target-pair-v1.json) exercises literal include and exclude tags, output ordering, and a missing scene query at a synthetic placement.
 

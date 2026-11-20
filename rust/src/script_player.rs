@@ -47,6 +47,7 @@ pub(crate) struct OwnerBodySpawn {
     pub pose: Movement,
     pub eye_position: Option<[f64; 3]>,
     pub quanta: u32,
+    pub skin: u64,
 }
 
 #[derive(Clone, Default)]
@@ -61,6 +62,7 @@ pub(crate) struct PlayerBodyFactory {
     codecs: Arc<CodecTable>,
     mode: u64,
     hero: u64,
+    body: u64,
     roots: Vec<Root>,
     variables: Variables,
     pools: Option<HealthPools>,
@@ -152,6 +154,7 @@ impl PlayerBodyFactory {
             codecs,
             mode,
             hero: hero.guid,
+            body: hero.body,
             roots,
             variables,
             pools,
@@ -247,6 +250,11 @@ impl PlayerBodyFactory {
             },
             pool_types_known: self.pools.is_some() || has_authored_pools,
             target_tags: self.target_tags.clone(),
+            model_hardpoints: self
+                .graphs
+                .bodies()
+                .get(&self.body)
+                .and_then(|body| body.model_hardpoints(spawn.skin)),
             target_tag_effects: TargetTagEffects::default(),
             controller_on_fire: self.controller_on_fire,
             defenders: Arc::default(),
