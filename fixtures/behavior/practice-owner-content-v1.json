@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "case_id": "practice-owner-content-v1",
+  "evidence": "rust-headless-synthetic",
+  "hero": "0x02E000000000F401",
+  "catalog_body": "0x040000000000F411",
+  "cases": [
+    {
+      "name": "owner_inputs_absent",
+      "codecs": false,
+      "bodies": {},
+      "expected": "scriptless"
+    },
+    {
+      "name": "codec_table_only",
+      "codecs": true,
+      "bodies": {},
+      "expected": "missing_body"
+    },
+    {
+      "name": "catalog_body_only",
+      "codecs": false,
+      "bodies": {"0x040000000000F411": null},
+      "expected": "missing_codecs"
+    },
+    {
+      "name": "miskeyed_owner_declaration",
+      "codecs": false,
+      "bodies": {"0x040000000000F412": "0x02E000000000F401"},
+      "expected": "missing_codecs"
+    },
+    {
+      "name": "malformed_owner_declaration",
+      "codecs": false,
+      "bodies": {"0x040000000000F412": "invalid-actor-id"},
+      "expected": "missing_codecs"
+    },
+    {
+      "name": "unrelated_body_without_owner_declaration",
+      "codecs": false,
+      "bodies": {"0x040000000000F412": null},
+      "expected": "scriptless"
+    }
+  ]
+}

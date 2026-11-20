@@ -6,6 +6,115 @@ mod junkenstein;
 mod script_coverage;
 
 #[test]
+fn practice_only_omits_owner_runtime_when_all_owner_content_is_absent() {
+    use serde_json::json;
+
+    #[derive(Deserialize)]
+    struct Case {
+        name: String,
+        codecs: bool,
+        bodies: BTreeMap<String, Option<String>>,
+        expected: String,
+    }
+    #[derive(Deserialize)]
+    struct Contract {
+        schema_version: u32,
+        hero: String,
+        catalog_body: String,
+        cases: Vec<Case>,
+    }
+
+    let contract: Contract = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/practice-owner-content-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    let heroes = Arc::new(
+        HeroCatalog::from_json(
+            &json!({
+                (contract.hero.clone()): {
+                    "name": "Fixture owner", "class": "Damage", "body": contract.catalog_body,
+                },
+            })
+            .to_string(),
+        )
+        .unwrap(),
+    );
+    let hero = heroes.get(parse_guid(&contract.hero).unwrap()).unwrap();
+    let spawn = OwnerBodySpawn {
+        slot: 0,
+        controller: OWNER_PROBE_CONTROLLER,
+        entity: 0xa000_0101,
+        body_filter: team_bit(0).unwrap(),
+        frame: FIRST_TICK,
+        pose: Default::default(),
+        quanta: RETAIL_QUANTA,
+    };
+    for case in contract.cases {
+        let bodies: serde_json::Map<_, _> = case
+            .bodies
+            .into_iter()
+            .map(|(key, hero)| {
+                (
+                    key,
+                    json!({"hero": hero, "name": "Fixture", "graphs": [], "weapons": []}),
+                )
+            })
+            .collect();
+        let bundle = json!({"version": 1, "graphs": [], "bodies": bodies, "missing": []});
+        let assets = SceneAssets {
+            junkenstein_validation: None,
+            collision: PathBuf::new(),
+            junkenstein_map_world: PathBuf::new(),
+            last_collision: Mutex::default(),
+            trace_contacts: false,
+            mode_props: BTreeMap::new(),
+            graphs: Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap()),
+            codecs: case
+                .codecs
+                .then(|| Arc::new(CodecTable::from_json(r#"{"classes":{}}"#).unwrap())),
+            practice_owner_body: OnceLock::new(),
+            bots: BotCatalog::default(),
+            movers: Arc::new(MoverCatalog::default()),
+            stats: StatsCatalog::default(),
+            heroes: Arc::clone(&heroes),
+            pools: Arc::new(PoolCatalog::default()),
+        };
+        let mut scene = PreparedScene::fixture_for_bots(Vec::new());
+        scene.initial_board.index = crate::game_stats::GMP_STATS;
+        scene.owner_body_factory = assets.compile_practice_factories(&scene);
+        assert_eq!(
+            scene.owner_body_factory.is_none(),
+            case.expected == "scriptless",
+            "{}",
+            case.name
+        );
+        let runtime = scene.owner_body_runtime(hero, spawn);
+        if case.expected == "scriptless" {
+            assert!(matches!(runtime, Ok(None)), "{}", case.name);
+            continue;
+        }
+        let Err(error) = runtime else {
+            panic!(
+                "{} did not reject an incomplete owner configuration",
+                case.name
+            );
+        };
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported, "{}", case.name);
+        let source = error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<Arc<SceneOwnerPreparationError>>())
+            .map(Arc::as_ref);
+        match (case.expected.as_str(), source) {
+            ("missing_codecs", Some(SceneOwnerPreparationError::Codecs)) => {}
+            ("missing_body", Some(SceneOwnerPreparationError::Body(error)))
+                if matches!(error.as_ref(), OwnerBodyPreparationError::MissingBody) => {}
+            _ => panic!("{} produced unexpected rejection: {error}", case.name),
+        }
+    }
+}
+
+#[test]
 fn practice_owner_selector_starts_the_validated_actor_definition() {
     use serde_json::{Map, json};
 

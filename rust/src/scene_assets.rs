@@ -612,6 +612,17 @@ impl SceneAssets {
     }
 
     fn compile_practice_factories(&self, scene: &PreparedScene) -> Option<Arc<OwnerBodyFactory>> {
+        // A scriptless scene omits the entire owner configuration.
+        let bodies = self.graphs.bodies();
+        if self.codecs.is_none()
+            && bodies.values().all(|body| body.hero.is_none())
+            && self
+                .heroes
+                .heroes()
+                .all(|hero| !bodies.contains_key(&hero.body))
+        {
+            return None;
+        }
         // Cache graph layouts only. Each selected body starts with the current room context.
         let factories: BTreeMap<_, _> = self
             .heroes

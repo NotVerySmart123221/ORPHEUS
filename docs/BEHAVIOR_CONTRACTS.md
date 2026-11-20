@@ -67,6 +67,8 @@ The Rust-only [owner replacement fixture](../fixtures/behavior/owner-admission-t
 
 The Rust-only [Practice Range selection fixture](../fixtures/behavior/practice-owner-selector-v1.json) starts two distinct catalog definitions through the ordinary scene selector and checks their graph roots. It distinguishes an invalid authored definition from an identity absent from the selector.
 
+The Rust-only [Practice Range owner content fixture](../fixtures/behavior/practice-owner-content-v1.json) covers a scene with no owner script inputs. It also verifies explicit startup errors for a partial catalog, including misplaced and malformed owner body declarations.
+
 The Rust-only [reentrant button lock fixture](../fixtures/behavior/script-reentrant-button-lock-v1.json) has a press callback acquire a lock on its own button. The queued lock can take effect before the next branch runs. The nested release leaves the locked listener up and discards its superseded down branch. A same-frame input pulse still runs both branches in sequence when no lock applies.
 
 The Rust-only [player host facts fixture](../fixtures/behavior/script-player-host-facts-v1.json) checks known body and controller presence, unknown entities, the team slot assigned at spawn, and membership counts from the admitted player roster.
