@@ -613,6 +613,152 @@ fn authored_health_change_admits_live_operands_before_continuing() {
     }
 }
 
+#[test]
+fn authored_interval_composes_with_live_health_requests_until_aborted() {
+    const GRAPH: u32 = 113;
+    const INSTANCE: u16 = 1;
+    const ACTOR: u32 = 73;
+    const WAKE_MESSAGE: u64 = 53;
+
+    #[derive(Deserialize)]
+    struct Step {
+        frame: u32,
+        active: bool,
+        message: Option<u64>,
+        operands: Option<(u32, f64)>,
+        #[serde(default)]
+        wake_offsets: Vec<u64>,
+        request: Option<(u32, f64)>,
+    }
+
+    #[derive(Deserialize)]
+    struct Input {
+        bundle: Json,
+        start_frame: u32,
+        initial_operands: (u32, f64),
+        steps: Vec<Step>,
+        after_teardown_frame: u32,
+    }
+
+    #[derive(Deserialize)]
+    struct IntervalContract {
+        schema_version: u8,
+        case_id: String,
+        evidence: String,
+        input: Input,
+    }
+
+    #[derive(Default)]
+    struct RecordingWorld(Vec<(Site, u32, f64)>);
+
+    impl World for RecordingWorld {
+        fn entity_variable(&mut self, _: u32, _: u32) -> Option<Value> {
+            None
+        }
+
+        fn position(&mut self, _: u32) -> Option<[f64; 3]> {
+            None
+        }
+
+        fn queue_health_change(&mut self, site: Site, target: u32, delta: f64) -> bool {
+            self.0.push((site, target, delta));
+            true
+        }
+    }
+
+    let contract: IntervalContract = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/script-interval-health-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    assert_eq!(contract.case_id, "script-interval-health.synthetic.v1");
+    assert_eq!(contract.evidence, "synthetic-rust");
+
+    let graphs = Arc::new(
+        GraphStore::from_json(&serde_json::to_vec(&contract.input.bundle).unwrap()).unwrap(),
+    );
+    let graph = graphs.graph(GRAPH).unwrap();
+    assert!(
+        graph
+            .state(0)
+            .is_some_and(|node| node.server_only && !node.is_networked())
+    );
+
+    let (target, delta) = contract.input.initial_operands;
+    let mut world = RecordingWorld::default();
+    let mut component = Component::start(
+        graphs,
+        ACTOR,
+        Variables::from([(1, Value::Entity(target)), (2, Value::Float(delta))]),
+        vec![Root::listener(INSTANCE, GRAPH, Some(0))],
+        contract.input.start_frame,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    assert_eq!(active(component.snapshot().unwrap(), INSTANCE), [0]);
+    assert!(world.0.is_empty());
+
+    let site = Site {
+        entity: ACTOR,
+        instance: INSTANCE,
+        graph: GRAPH,
+        node: Some(1),
+    };
+    for step in contract.input.steps {
+        if let Some((target, delta)) = step.operands {
+            component
+                .set_entity_variable(1, Value::Entity(target), &mut world)
+                .unwrap();
+            component
+                .set_entity_variable(2, Value::Float(delta), &mut world)
+                .unwrap();
+        }
+        if let Some(message) = step.message {
+            assert_eq!(
+                component
+                    .queue_frame_message(step.frame, INSTANCE, message, Variables::new())
+                    .unwrap(),
+                1
+            );
+        }
+        for offset in step.wake_offsets {
+            let due = u64::from(step.frame) * crate::script_runtime::FRAME_MS + offset;
+            assert_eq!(
+                component
+                    .queue_message_at(due, INSTANCE, WAKE_MESSAGE, Variables::new())
+                    .unwrap(),
+                1
+            );
+        }
+        component.advance_frame(step.frame, &mut world).unwrap();
+        component.run_now(&mut world).unwrap();
+
+        let expected = step.request.map(|(target, delta)| (site, target, delta));
+        assert_eq!(
+            std::mem::take(&mut world.0).as_slice(),
+            expected.as_slice(),
+            "frame {}",
+            step.frame
+        );
+        let snapshot = component.snapshot().unwrap();
+        assert_eq!(snapshot.instances[&INSTANCE].states[&0].active, step.active);
+        assert!(
+            snapshot.diagnostics.is_empty(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+    }
+
+    component.teardown(&mut world).unwrap();
+    component
+        .advance_frame(contract.input.after_teardown_frame, &mut world)
+        .unwrap();
+    assert!(world.0.is_empty());
+    assert!(component.snapshot().unwrap().instances.is_empty());
+}
+
 #[cfg(feature = "node-observations")]
 #[test]
 fn node_observation_limit_counts_only_distinct_sites() {

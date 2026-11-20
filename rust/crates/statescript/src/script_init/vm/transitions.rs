@@ -1,10 +1,13 @@
 //! StateScript state ticking, timers, watches, switches, registration, and teardown.
 
+use std::num::NonZeroU32;
+
 use serde_json::Value as Json;
 
 use crate::{
     script_expr::{self, Scope, equal, truthy},
     script_graph::{Node, asset_guid},
+    script_runtime::frame_start,
     script_wire::{Value, Variables},
 };
 
@@ -338,6 +341,16 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             return Ok(());
         };
         let kind = state.kind;
+        if let StateKind::Interval {
+            period_frames,
+            next_frame: Some(next),
+        } = kind
+        {
+            if parameter == 1 && next <= self.machine.frame {
+                self.fire_interval(key, period_frames, next)?;
+            }
+            return Ok(());
+        }
         if kind == StateKind::Wait && parameter == 1 {
             self.post(key.instance, Event::Finish(key.raw))?;
         }
@@ -612,6 +625,48 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    pub(in crate::script_init) fn schedule_interval(
+        &mut self,
+        key: StateKey,
+        next_frame: Option<u32>,
+    ) -> Result<(), InitFault> {
+        if let Some(next) = next_frame {
+            let delay = frame_start(next).saturating_sub(self.machine.now_ms);
+            self.post_after(key.instance, delay, Event::Timer(key.raw, 1))?;
+        }
+        Ok(())
+    }
+
+    fn fire_interval(
+        &mut self,
+        key: StateKey,
+        period_frames: NonZeroU32,
+        scheduled_frame: u32,
+    ) -> Result<(), InitFault> {
+        let period = period_frames.get();
+        let frame = self.machine.frame;
+        // Drop missed pulses while keeping the original cadence.
+        let next_frame = frame.checked_add(period - (frame - scheduled_frame) % period);
+        self.state_mut(key).expect("active interval").kind = StateKind::Interval {
+            period_frames,
+            next_frame,
+        };
+        self.schedule_interval(key, next_frame)?;
+
+        let node = self
+            .graph(key.instance)
+            .state(usize::from(key.raw))
+            .expect("interval state");
+        self.follow(key.instance, node, "on_interval", Some(key), 0)?;
+        if self
+            .state(key)
+            .is_some_and(|state| state.active && !state.ending)
+        {
+            self.try_complete(key, node, 0)?;
         }
         Ok(())
     }

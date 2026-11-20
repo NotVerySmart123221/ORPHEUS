@@ -4,6 +4,7 @@ use std::{
     collections::{BTreeMap, HashSet},
     error::Error,
     fmt,
+    num::NonZeroU32,
 };
 
 use indexmap::IndexMap;
@@ -129,6 +130,10 @@ pub enum StateKind {
     Watch,
     Observe {
         sampled_frame: u32,
+    },
+    Interval {
+        period_frames: NonZeroU32,
+        next_frame: Option<u32>,
     },
     SpawnSearch,
     RecentInput,

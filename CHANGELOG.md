@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added authored interval states that use the VM timer queue to repeat outputs such as health changes. Intervals retain cadence across skipped frames and cancel on teardown. Consolidated the legacy NPC self-damage and health publication path while preserving its evaluation order and timing. Passed both locked workspace lanes, Rust 1.85, pinned Python public contracts, and the prepared 900-frame regression.
+
 - Added an authored action for targeted healing and damage. Player and AI requests share the room's body snapshot, generation checks, health publication, and death handling. Added synthetic VM and room coverage for admission, queue limits, health caps, and replaced targets. Validated with both locked workspace lanes, Rust 1.85, pinned Python public contracts, and the prepared 900-frame regression.
 
 - Documented how to match StateScript pseudocode labels to Inspector node positions and check exporter annotations against runtime evidence. Verified against the prepared graph bundle. Health-focused Rust tests passed.

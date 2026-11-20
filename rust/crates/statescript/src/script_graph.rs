@@ -4,6 +4,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs::File,
     io::{self, BufReader, Read},
+    num::NonZeroU32,
     path::Path,
 };
 
@@ -31,6 +32,7 @@ pub struct Header {
 enum StateBehavior {
     Plain,
     Observe,
+    Interval,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -80,6 +82,14 @@ impl Node {
 
     pub(crate) fn declares_observe_state(&self) -> bool {
         matches!(self.state_behavior, Some(StateBehavior::Observe))
+    }
+
+    pub(crate) fn interval_frames(&self) -> Option<NonZeroU32> {
+        if self.state_behavior != Some(StateBehavior::Interval) {
+            return None;
+        }
+        let frames = self.field("interval_frames")?.as_u64()?;
+        NonZeroU32::new(u32::try_from(frames).ok()?)
     }
 
     pub fn is_action(&self) -> bool {
@@ -269,6 +279,7 @@ impl Graph {
                 let state = match behavior {
                     StateBehavior::Plain => "plain state",
                     StateBehavior::Observe => "observe state",
+                    StateBehavior::Interval => "interval state",
                 };
                 let occupies_state_slot = node
                     .state
@@ -319,6 +330,21 @@ impl Graph {
                             )));
                         }
                         "StateObserve"
+                    }
+                    StateBehavior::Interval => {
+                        if node.interval_frames().is_none() {
+                            return Err(invalid(format!(
+                                "{state} in graph {} at node {} requires a nonzero u32 interval_frames",
+                                self.index, node.pos
+                            )));
+                        }
+                        if !node.field("on_interval").is_some_and(valid_output_plug) {
+                            return Err(invalid(format!(
+                                "{state} in graph {} at node {} requires a valid on_interval output plug",
+                                self.index, node.pos
+                            )));
+                        }
+                        "StateInterval"
                     }
                 }
                 .into();
@@ -661,6 +687,7 @@ struct AuthoredClass {
 enum AuthoredClassBehavior {
     PlainState,
     ObserveState,
+    IntervalState,
     ForwardAction,
     BranchAction,
     LocalMessageAction,
@@ -673,6 +700,7 @@ impl AuthoredClassBehavior {
         let (client_only, state, action) = match self {
             Self::PlainState => (false, Some(StateBehavior::Plain), None),
             Self::ObserveState => (false, Some(StateBehavior::Observe), None),
+            Self::IntervalState => (false, Some(StateBehavior::Interval), None),
             Self::ForwardAction => (false, None, Some(ActionBehavior::Forward)),
             Self::BranchAction => (false, None, Some(ActionBehavior::Branch)),
             Self::LocalMessageAction => (false, None, Some(ActionBehavior::LocalMessage)),
@@ -1595,6 +1623,104 @@ mod tests {
         node["server_only"] = json!(false);
         node["fields"]["on_change"] = Value::Null;
         assert!(load(&data).is_ok());
+    }
+
+    #[test]
+    fn interval_state_declarations_require_scope_period_and_output() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let rejects = |data: &Value, expected: &str| {
+            let error = load(data).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            let message = error.to_string();
+            assert!(message.contains("graph 42 at node 0"), "{message}");
+            assert!(message.contains(expected), "{message}");
+        };
+        let mut data = fixture();
+        data["graphs"][0]["states"][3] = Value::Null;
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state"] = json!(0);
+        node["server_only"] = json!(true);
+        node["state_behavior"] = json!("interval");
+        node["fields"] = json!({
+            "interval_frames": 1,
+            "on_interval": {"$": "Plug", "links": []},
+        });
+
+        let graph = load(&data).unwrap();
+        let interval = graph.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(interval.class, "StateInterval");
+        assert!(interval.is_state() && !interval.is_networked());
+        assert_eq!(interval.interval_frames().map(NonZeroU32::get), Some(1));
+
+        for period in [
+            Value::Null,
+            json!(0),
+            json!(-1),
+            json!(1.0),
+            json!(true),
+            json!("1"),
+            json!(u64::from(u32::MAX) + 1),
+        ] {
+            let mut bad = data.clone();
+            bad["graphs"][0]["nodes"][0]["fields"]["interval_frames"] = period;
+            rejects(&bad, "interval_frames");
+        }
+        for plug in [
+            Value::Null,
+            json!({"$": "Plug"}),
+            json!({"$": "Plug", "links": [[2, 3]]}),
+        ] {
+            let mut bad = data.clone();
+            bad["graphs"][0]["nodes"][0]["fields"]["on_interval"] = plug;
+            rejects(&bad, "on_interval");
+        }
+        let mut missing_plug = data.clone();
+        missing_plug["graphs"][0]["nodes"][0]["fields"]
+            .as_object_mut()
+            .unwrap()
+            .remove("on_interval");
+        rejects(&missing_plug, "on_interval");
+        for (field, invalid) in [
+            ("server_only", json!(false)),
+            ("client_only", json!(true)),
+            ("state", Value::Null),
+        ] {
+            let mut bad = data.clone();
+            bad["graphs"][0]["nodes"][0][field] = invalid;
+            rejects(&bad, "server-only and occupy its state slot exactly once");
+        }
+        let mut bad_lifecycle = data.clone();
+        bad_lifecycle["graphs"][0]["nodes"][0]["fields"]["m_onBeginPlug"] = json!(3);
+        rejects(&bad_lifecycle, "m_onBeginPlug");
+
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state_behavior"] = Value::Null;
+        node["class"] = json!("StateInterval");
+        let graph = load(&data).unwrap();
+        assert!(
+            graph
+                .graph(42)
+                .unwrap()
+                .state(0)
+                .unwrap()
+                .interval_frames()
+                .is_none()
+        );
+
+        data["authored_classes"] =
+            json!([{"class": "authored.timer", "behavior": "interval_state"}]);
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["class"] = json!("authored.timer");
+        node["server_only"] = json!(false);
+        node["fields"]["interval_frames"] = json!(u32::MAX);
+        let graph = load(&data).unwrap();
+        let interval = graph.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(interval.class, "StateInterval");
+        assert!(interval.server_only && !interval.client_only);
+        assert_eq!(
+            interval.interval_frames().map(NonZeroU32::get),
+            Some(u32::MAX)
+        );
     }
 
     #[test]

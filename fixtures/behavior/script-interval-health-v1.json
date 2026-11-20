@@ -1,0 +1,250 @@
+{
+  "schema_version": 1,
+  "case_id": "script-interval-health.synthetic.v1",
+  "source": {
+    "basis": "Original interval and health-action graph with an in-memory recording host."
+  },
+  "evidence": "synthetic-rust",
+  "input": {
+    "bundle": {
+      "version": 1,
+      "authored_classes": [
+        {
+          "class": "authored.pulse",
+          "behavior": "interval_state"
+        },
+        {
+          "class": "authored.adjust",
+          "behavior": "health_change_action"
+        }
+      ],
+      "graphs": [
+        {
+          "index": 113,
+          "items": 5,
+          "header": {
+            "m_nodesBitCount": 4,
+            "m_statesBitCount": 4,
+            "m_remoteSyncNodesBitCount": 4,
+            "m_syncVarsBitCount": 4
+          },
+          "fields": {},
+          "containers": {},
+          "nodes": [
+            {
+              "pos": 0,
+              "class": "authored.pulse",
+              "uid": 0,
+              "rid": 0,
+              "remote": -1,
+              "state": 0,
+              "client_only": false,
+              "server_only": false,
+              "fields": {
+                "interval_frames": 3,
+                "on_interval": {
+                  "$": "Plug",
+                  "links": [
+                    [
+                      1,
+                      "m_inPlug"
+                    ]
+                  ]
+                }
+              }
+            },
+            {
+              "pos": 1,
+              "class": "authored.adjust",
+              "uid": 1,
+              "rid": 1,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": false,
+              "fields": {
+                "target": {
+                  "$": "STUConfigVarDynamic",
+                  "m_identifier": 1,
+                  "m_60DB8F99": true
+                },
+                "delta": {
+                  "$": "STUConfigVarDynamic",
+                  "m_identifier": 2,
+                  "m_60DB8F99": true
+                },
+                "m_outPlug": {
+                  "$": "Plug",
+                  "links": []
+                }
+              }
+            },
+            {
+              "pos": 2,
+              "class": "STUStatescriptEntryGameMessage",
+              "uid": 2,
+              "rid": 2,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": false,
+              "fields": {
+                "m_gameMessage": {
+                  "m_gameMessage": "0x0000000000000033"
+                },
+                "m_outPlug": {
+                  "$": "Plug",
+                  "links": [
+                    [
+                      0,
+                      "m_F198FD3A"
+                    ]
+                  ]
+                }
+              }
+            },
+            {
+              "pos": 3,
+              "class": "STUStatescriptEntryGameMessage",
+              "uid": 3,
+              "rid": 3,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": false,
+              "fields": {
+                "m_gameMessage": {
+                  "m_gameMessage": "0x0000000000000034"
+                },
+                "m_outPlug": {
+                  "$": "Plug",
+                  "links": [
+                    [
+                      0,
+                      "m_beginPlug"
+                    ]
+                  ]
+                }
+              }
+            },
+            {
+              "pos": 4,
+              "class": "STUStatescriptEntryGameMessage",
+              "uid": 4,
+              "rid": 4,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": false,
+              "fields": {
+                "m_gameMessage": {
+                  "m_gameMessage": "0x0000000000000035"
+                },
+                "m_outPlug": {
+                  "$": "Plug",
+                  "links": []
+                }
+              }
+            }
+          ],
+          "unknown_nodes": [],
+          "states": [
+            0
+          ],
+          "entries": [
+            2,
+            3,
+            4
+          ],
+          "remote": [],
+          "sync_vars": []
+        }
+      ],
+      "bodies": {},
+      "missing": []
+    },
+    "start_frame": 30,
+    "initial_operands": [
+      41,
+      5.5
+    ],
+    "steps": [
+      {
+        "frame": 32,
+        "active": true
+      },
+      {
+        "frame": 33,
+        "active": true,
+        "request": [
+          41,
+          5.5
+        ]
+      },
+      {
+        "frame": 34,
+        "active": true,
+        "operands": [
+          52,
+          -2.25
+        ]
+      },
+      {
+        "frame": 40,
+        "active": true,
+        "wake_offsets": [
+          3,
+          9,
+          14
+        ],
+        "request": [
+          52,
+          -2.25
+        ]
+      },
+      {
+        "frame": 41,
+        "active": true
+      },
+      {
+        "frame": 42,
+        "active": true,
+        "request": [
+          52,
+          -2.25
+        ]
+      },
+      {
+        "frame": 44,
+        "active": false,
+        "message": 51
+      },
+      {
+        "frame": 49,
+        "active": false
+      },
+      {
+        "frame": 50,
+        "active": true,
+        "message": 52,
+        "operands": [
+          64,
+          2.0
+        ]
+      },
+      {
+        "frame": 51,
+        "active": true
+      },
+      {
+        "frame": 53,
+        "active": true,
+        "request": [
+          64,
+          2.0
+        ]
+      }
+    ],
+    "after_teardown_frame": 56
+  }
+}

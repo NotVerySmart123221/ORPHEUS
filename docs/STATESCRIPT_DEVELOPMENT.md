@@ -110,6 +110,21 @@ body snapshot in bundles that use no spatial expressions.
 
 See the [synthetic health contract](../fixtures/behavior/script-health-change-v1.json).
 
+## Run an output at a frame interval
+
+Set `state_behavior` to `"interval"` on a server-only state, or
+declare `"interval_state"` for an authored class. Provide a positive
+integer `interval_frames` within the `u32` range and a valid
+`on_interval` output plug. Connect this output to a health change action
+to apply a periodic effect. The action reads its target and amount at
+each pulse.
+
+The first pulse is due one period after activation. The ordinary VM timer
+queue runs the output once when a frame catches up to a due pulse. Missed
+pulses are dropped and the next deadline keeps the activation's cadence.
+Ending the state cancels its pending timer. Reactivation starts a new
+cadence. See the [synthetic interval and health contract](../fixtures/behavior/script-interval-health-v1.json).
+
 ## Declare a client-only operand
 
 Use `{"$": "ClientOnly", "value": ...}` for an authored operand that the

@@ -1032,6 +1032,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             return Ok(());
         }
         let mut registration = RegistrationChecks::default();
+        let interval_frames = node.interval_frames();
         let kind = match node.class.as_str() {
             // These client presentation states use the base state lifecycle on the server.
             "STUStatescriptState"
@@ -1470,6 +1471,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             _ if node.declares_observe_state() => StateKind::Observe {
                 sampled_frame: self.machine.frame,
             },
+            _ if interval_frames.is_some() => {
+                let period_frames = interval_frames.expect("checked authored interval");
+                StateKind::Interval {
+                    period_frames,
+                    next_frame: self.machine.frame.checked_add(period_frames.get()),
+                }
+            }
             "STU_BA2FCDEB" if registration.permits(self.graph(id).index == 0x0cba) => {
                 StateKind::SpawnSearch
             }
@@ -1709,6 +1717,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             StateKind::CosmeticEntity => self.begin_cosmetic(key, node, depth)?,
             StateKind::ChaseVar => self.begin_chase(key, node, depth)?,
             StateKind::Observe { .. } => self.register_tick(key, self.machine.now_ms),
+            StateKind::Interval { next_frame, .. } => self.schedule_interval(key, next_frame)?,
             StateKind::Watch => {
                 let seen = self.evaluate(id, node, field(&node.fields, "m_B7A3CF78"), Some(key));
                 self.state_mut(key).expect("active Watch").watch_seen = seen;

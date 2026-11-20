@@ -323,10 +323,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 return Ok(());
             }
             if !self.machine.owner_dead {
-                if !self.world.self_damage(site, 10_000.0) {
-                    self.report(site, Issue::UnsupportedField("NPC self damage service"));
-                }
-                self.publish_health_totals(site)?;
+                self.apply_npc_self_damage(site, 10_000.0)?;
             }
             return Ok(());
         }
@@ -370,11 +367,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             return Ok(());
         }
+        self.apply_npc_self_damage(site, amount)
+    }
+
+    fn apply_npc_self_damage(&mut self, site: Site, amount: f64) -> Result<(), InitFault> {
         if !self.world.self_damage(site, amount) {
             self.report(site, Issue::UnsupportedField("NPC self damage service"));
         }
-        self.publish_health_totals(site)?;
-        Ok(())
+        self.publish_health_totals(site)
     }
 
     pub(in crate::script_init) fn begin_shield_recharge(
