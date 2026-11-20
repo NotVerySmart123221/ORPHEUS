@@ -389,6 +389,17 @@ impl World for BodyWorld {
         self.spatial_frame.as_deref()?.line_clear(origin, target)
     }
 
+    fn spatial_ray_cast(
+        &self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+    ) -> Option<Option<crate::script_expr::SpatialRayHit>> {
+        self.spatial_frame
+            .as_deref()?
+            .ray_cast(origin, direction, max_distance)
+    }
+
     fn known_position(&self, entity: u32) -> Option<[f64; 3]> {
         (entity == self.entity).then_some(self.position)
     }

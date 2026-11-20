@@ -506,6 +506,16 @@ impl<W: World> Context for InstanceContext<'_, W> {
         self.world.spatial_line_clear(origin, target)
     }
 
+    fn spatial_ray_cast(
+        &mut self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+    ) -> Option<Option<script_expr::SpatialRayHit>> {
+        self.read_native = true;
+        self.world.spatial_ray_cast(origin, direction, max_distance)
+    }
+
     fn combat_targets(&mut self, config: &Json) -> Option<Vec<u32>> {
         self.read_native = true;
         self.world.combat_targets(self.site, config)

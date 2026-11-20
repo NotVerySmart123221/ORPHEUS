@@ -1235,9 +1235,10 @@ fn room_spatial_needs(value: &Value) -> RoomSpatialNeeds {
             {
                 EntityFacts
             }
-            Some("EntitiesInRadius" | "SegmentClear" | "EntityPosition" | "EntityDirection") => {
-                Queries
-            }
+            Some(
+                "EntitiesInRadius" | "SegmentClear" | "RayCast" | "EntityPosition"
+                | "EntityDirection",
+            ) => Queries,
             _ => NoQueries,
         }
     };
@@ -2236,6 +2237,10 @@ mod tests {
                 RoomSpatialNeeds::Queries,
             ),
             (
+                json!({"$":"RayCast","origin":null,"direction":null,"max_distance":1}),
+                RoomSpatialNeeds::Queries,
+            ),
+            (
                 json!({"$":"EntitiesInRadius","center":null,"radius":1,"filter":{"alive":true}}),
                 RoomSpatialNeeds::EntityFacts,
             ),
@@ -2266,6 +2271,10 @@ mod tests {
         assert_eq!(load(&data).room_spatial_needs(), RoomSpatialNeeds::None);
         data["graphs"][0]["nodes"][0]["fields"]["nested"][0]["value"]["server_fallback"] =
             json!({"$":"SegmentClear","origin":null,"target":null});
+        assert_eq!(load(&data).room_spatial_needs(), RoomSpatialNeeds::Queries);
+
+        data["graphs"][0]["nodes"][0]["fields"]["nested"][0]["value"]["server_fallback"] =
+            json!({"$":"RayCast","origin":null,"direction":null,"max_distance":1});
         assert_eq!(load(&data).room_spatial_needs(), RoomSpatialNeeds::Queries);
 
         data["graphs"][0]["nodes"][0]["client_only"] = json!(true);

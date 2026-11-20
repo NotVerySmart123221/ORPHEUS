@@ -755,6 +755,24 @@ not require the service.
 
 See the [synthetic segment contract](../fixtures/behavior/statescript-segment-clear-v1.json).
 
+## Read the nearest static ray hit
+
+Use `RayCast` as the `$` tag with `origin`, `direction`, and
+`max_distance` expressions. Supply a finite origin vector, a finite
+nonzero direction vector, and a positive finite distance. The VM evaluates
+them in that order, normalizes the direction, and spends one work unit on
+the geometry query.
+
+The result is `[distance, point, normal]` when the static scene has a hit
+at or before the distance limit, and `[]` when the bounded ray misses.
+Player and NPC queries use the same room collision scene and movement
+category. A missing room frame or an invalid or untraversable ray reports
+unavailable geometry. An `observe` state retains the last successful
+result until the service recovers. Static ray results exclude dynamic
+bodies and gameplay effects.
+
+See the [synthetic ray contract](../fixtures/behavior/statescript-ray-cast-v1.json).
+
 ## Match a room entity against authored conditions
 
 Use `EntityMatches` as the `$` tag and supply an `entity` expression

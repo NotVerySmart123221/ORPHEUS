@@ -673,6 +673,7 @@ impl Evaluator {
             "EntityMatches" => self.entity_matches(fields, context, nested)?,
             "EntitiesInRadius" => self.entities_in_radius(fields, context, nested)?,
             "SegmentClear" => self.segment_clear(fields, context, nested)?,
+            "RayCast" => self.ray_cast(fields, context, nested)?,
             "StackAllows" => {
                 let (variable, priority) = fields
                     .get("variable")
@@ -1685,6 +1686,66 @@ impl Evaluator {
         let target = self.segment_endpoint(target, context, depth)?;
         self.spatial_line_clear(context, origin, target)
             .map(Value::Bool)
+    }
+
+    fn ray_cast(
+        &mut self,
+        fields: &serde_json::Map<String, Json>,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<Value, EvalError> {
+        let Some(((origin, direction), max_distance)) = fields
+            .get("origin")
+            .zip(fields.get("direction"))
+            .zip(fields.get("max_distance"))
+            .filter(|_| fields.len() == 4)
+        else {
+            return Err(EvalError::MalformedConfig(
+                "expected RayCast origin, direction, and max_distance",
+            ));
+        };
+        let origin = self.segment_endpoint(origin, context, depth)?;
+        let direction_error = EvalError::MalformedConfig("expected a finite nonzero ray direction");
+        let Value::Vector(direction) = self.config(direction, context, depth)? else {
+            return Err(direction_error);
+        };
+        let scaled = SpatialCone::scale_direction(direction).ok_or(direction_error)?;
+        let magnitude = scaled.iter().map(|axis| axis * axis).sum::<f64>().sqrt();
+        let direction = scaled.map(|axis| axis / magnitude);
+        let max_distance = match self.config(max_distance, context, depth)? {
+            Value::Float(value) => value,
+            Value::Integer(value) => value as f64,
+            _ => {
+                return Err(EvalError::MalformedConfig(
+                    "expected a finite positive ray distance",
+                ));
+            }
+        };
+        if !max_distance.is_finite() || max_distance <= 0.0 {
+            return Err(EvalError::MalformedConfig(
+                "expected a finite positive ray distance",
+            ));
+        }
+        self.charge()?;
+        let hit = context
+            .spatial_ray_cast(origin, direction, max_distance)
+            .ok_or(EvalError::UnavailableSpatialRayCast)?;
+        let Some(hit) = hit else {
+            return Ok(Value::Array(Vec::new()));
+        };
+        if !hit.distance.is_finite()
+            || hit.distance <= 0.0
+            || hit.distance > max_distance
+            || !hit.point.iter().all(|axis| axis.is_finite())
+            || SpatialCone::scale_direction(hit.normal).is_none()
+        {
+            return Err(EvalError::UnavailableSpatialRayCast);
+        }
+        Ok(Value::Array(vec![
+            Value::Float(hit.distance),
+            Value::Vector(hit.point),
+            Value::Vector(hit.normal),
+        ]))
     }
 
     fn segment_endpoint(

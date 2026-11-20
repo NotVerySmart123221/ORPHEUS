@@ -3382,3 +3382,214 @@ fn segment_clear_queries_finite_endpoints_in_order_and_costs_one_step() {
         );
     }
 }
+
+#[test]
+fn ray_cast_distinguishes_hits_misses_invalid_inputs_and_unavailable_geometry() {
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct Contract {
+        schema_version: u8,
+        case_id: String,
+        evidence: String,
+        input: Input,
+        expected: Expected,
+    }
+
+    #[derive(Deserialize)]
+    struct Input {
+        query: Json,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: i64,
+        hit: Hit,
+    }
+
+    #[derive(Deserialize)]
+    struct Hit {
+        distance: f64,
+        point: [f64; 3],
+        normal: [f64; 3],
+    }
+
+    #[derive(Deserialize)]
+    struct Expected {
+        normalized_direction: [f64; 3],
+        hit: (f64, [f64; 3], [f64; 3]),
+        miss: Vec<()>,
+        query_steps: usize,
+    }
+
+    #[derive(Debug, PartialEq)]
+    enum Call {
+        Read(Variable),
+        Cast([f64; 3], [f64; 3], f64),
+    }
+
+    struct Host {
+        operands: [Value; 3],
+        reply: Option<Option<SpatialRayHit>>,
+        calls: Vec<Call>,
+    }
+
+    const VARIABLES: [Variable; 3] = [
+        Variable {
+            scope: Scope::Instance,
+            id: 40,
+        },
+        Variable {
+            scope: Scope::Entity,
+            id: 41,
+        },
+        Variable {
+            scope: Scope::Instance,
+            id: 42,
+        },
+    ];
+
+    impl Context for Host {
+        fn variable(&mut self, variable: Variable) -> Value {
+            self.calls.push(Call::Read(variable));
+            let index = VARIABLES.iter().position(|&item| item == variable).unwrap();
+            self.operands[index].clone()
+        }
+
+        fn spatial_ray_cast(
+            &mut self,
+            origin: [f64; 3],
+            direction: [f64; 3],
+            max_distance: f64,
+        ) -> Option<Option<SpatialRayHit>> {
+            self.calls.push(Call::Cast(origin, direction, max_distance));
+            self.reply
+        }
+    }
+
+    let contract: Contract = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/statescript-ray-cast-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    assert_eq!(contract.case_id, "statescript-ray-cast.synthetic.v1");
+    assert_eq!(contract.evidence, "synthetic-rust");
+    let Input {
+        query,
+        origin,
+        direction,
+        max_distance,
+        hit,
+    } = contract.input;
+    let Expected {
+        normalized_direction,
+        hit: (distance, point, normal),
+        miss,
+        query_steps,
+    } = contract.expected;
+    assert!(miss.is_empty());
+    assert_eq!(query_steps, 1);
+    let hit = SpatialRayHit {
+        distance: hit.distance,
+        point: hit.point,
+        normal: hit.normal,
+    };
+    let operands = [
+        Value::Vector(origin),
+        Value::Vector(direction),
+        Value::Integer(max_distance),
+    ];
+    let mut host = Host {
+        operands: operands.clone(),
+        reply: None,
+        calls: Vec::new(),
+    };
+    let unavailable = Err(EvalError::UnavailableSpatialRayCast);
+    for (reply, expected) in [
+        (
+            Some(Some(hit)),
+            Ok(Value::Array(vec![
+                Value::Float(distance),
+                Value::Vector(point),
+                Value::Vector(normal),
+            ])),
+        ),
+        (Some(None), Ok(Value::Array(Vec::new()))),
+        (None, unavailable.clone()),
+        (
+            Some(Some(SpatialRayHit {
+                distance: 7.0,
+                ..hit
+            })),
+            unavailable.clone(),
+        ),
+        (
+            Some(Some(SpatialRayHit {
+                point: [f64::NAN; 3],
+                ..hit
+            })),
+            unavailable.clone(),
+        ),
+        (
+            Some(Some(SpatialRayHit {
+                normal: [0.0; 3],
+                ..hit
+            })),
+            unavailable,
+        ),
+    ] {
+        host.reply = reply;
+        assert_eq!(
+            evaluate_with_budget(&query, &mut host, query_steps),
+            expected
+        );
+        assert_eq!(
+            std::mem::take(&mut host.calls),
+            [
+                Call::Read(VARIABLES[0]),
+                Call::Read(VARIABLES[1]),
+                Call::Read(VARIABLES[2]),
+                Call::Cast(origin, normalized_direction, max_distance as f64),
+            ]
+        );
+    }
+
+    let wrapped = json!({"$":"ClientOnly","value":null,"server_fallback":query});
+    assert_eq!(
+        evaluate_with_budget(&wrapped, &mut host, query_steps),
+        Err(EvalError::BudgetExceeded {
+            offset: 0,
+            limit: query_steps
+        })
+    );
+    assert_eq!(std::mem::take(&mut host.calls), VARIABLES.map(Call::Read));
+
+    for (index, invalid) in [
+        (0, Value::Vector([f64::NAN, 0.0, 0.0])),
+        (1, Value::Vector([0.0; 3])),
+        (1, Value::Vector([f64::INFINITY, 0.0, 0.0])),
+        (2, Value::Integer(0)),
+        (2, Value::Float(-1.0)),
+        (2, Value::Float(f64::INFINITY)),
+        (2, Value::Bool(true)),
+    ] {
+        host.operands = operands.clone();
+        host.operands[index] = invalid;
+        assert!(matches!(
+            evaluate(&query, &mut host),
+            Err(EvalError::MalformedConfig(_))
+        ));
+        let expected_reads: Vec<_> = VARIABLES[..=index]
+            .iter()
+            .copied()
+            .map(Call::Read)
+            .collect();
+        assert_eq!(std::mem::take(&mut host.calls), expected_reads);
+    }
+    let mut malformed = query.clone();
+    malformed["unexpected"] = Json::Null;
+    assert!(matches!(
+        evaluate(&malformed, &mut host),
+        Err(EvalError::MalformedConfig(_))
+    ));
+    assert!(host.calls.is_empty());
+}

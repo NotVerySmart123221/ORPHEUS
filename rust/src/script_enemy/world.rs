@@ -1032,6 +1032,18 @@ impl World for EnemyWorld<'_> {
             .line_clear(origin, target)
     }
 
+    fn spatial_ray_cast(
+        &self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+    ) -> Option<Option<crate::script_expr::SpatialRayHit>> {
+        self.binding
+            .spatial_frame
+            .as_deref()?
+            .ray_cast(origin, direction, max_distance)
+    }
+
     fn position(&mut self, entity: u32) -> Option<[f64; 3]> {
         self.known_position(entity)
     }

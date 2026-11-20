@@ -739,6 +739,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 | script_expr::EvalError::UnavailableEntityVariable { .. }
                 | script_expr::EvalError::UnavailableSpatialCandidates
                 | script_expr::EvalError::UnavailableSpatialVisibility
+                | script_expr::EvalError::UnavailableSpatialRayCast
                 | script_expr::EvalError::UnavailableRoomEntityFacts,
             ) => {
                 // A later sample can succeed as the scene updates.

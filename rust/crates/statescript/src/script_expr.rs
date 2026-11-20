@@ -119,6 +119,14 @@ pub struct SpatialCandidate {
     pub team: Option<u8>,
 }
 
+/// The first static surface reached by a bounded spatial ray.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpatialRayHit {
+    pub distance: f64,
+    pub point: [f64; 3],
+    pub normal: [f64; 3],
+}
+
 /// Authored query facts for a body in the current room snapshot.
 #[derive(Clone, Debug)]
 pub struct RoomEntityFacts {
@@ -317,6 +325,16 @@ pub trait Context {
         None
     }
 
+    /// None is unavailable, Some(None) is an available miss.
+    fn spatial_ray_cast(
+        &mut self,
+        _origin: [f64; 3],
+        _direction: [f64; 3],
+        _max_distance: f64,
+    ) -> Option<Option<SpatialRayHit>> {
+        None
+    }
+
     /// Ordered, still-bound combat bodies; None means the scene roster is unavailable.
     fn combat_targets(&mut self, _config: &Json) -> Option<Vec<u32>> {
         None
@@ -453,6 +471,7 @@ pub enum EvalError {
     UnavailableEntityDirection(u32),
     UnavailableSpatialCandidates,
     UnavailableSpatialVisibility,
+    UnavailableSpatialRayCast,
     UnavailableRoomEntityFacts,
     UnavailableStackAdmission,
     NestingExceeded,
@@ -492,6 +511,7 @@ impl fmt::Display for EvalError {
             }
             Self::UnavailableSpatialCandidates => f.write_str("unavailable spatial candidates"),
             Self::UnavailableSpatialVisibility => f.write_str("unavailable spatial visibility"),
+            Self::UnavailableSpatialRayCast => f.write_str("unavailable spatial ray cast"),
             Self::UnavailableRoomEntityFacts => f.write_str("unavailable room entity facts"),
             Self::UnavailableStackAdmission => f.write_str("unavailable stack admission"),
             Self::NestingExceeded => f.write_str("statescript config nesting limit exceeded"),

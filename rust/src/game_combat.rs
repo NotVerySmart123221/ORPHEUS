@@ -317,6 +317,23 @@ impl RoomSpatialFrame {
     pub(crate) fn line_clear(&self, origin: Vec3, target: Vec3) -> Option<bool> {
         self.ground.segment_clear(origin, target, MOVER_CATEGORY)
     }
+
+    pub(crate) fn ray_cast(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        max_distance: f64,
+    ) -> Option<Option<crate::script_expr::SpatialRayHit>> {
+        self.ground
+            .checked_cast_ray(origin, direction, max_distance, MOVER_CATEGORY)
+            .map(|hit| {
+                hit.map(|hit| crate::script_expr::SpatialRayHit {
+                    distance: hit.distance,
+                    point: hit.point,
+                    normal: hit.normal,
+                })
+            })
+    }
 }
 
 struct RoomSpatialQueries {

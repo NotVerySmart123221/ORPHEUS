@@ -213,6 +213,33 @@ impl CollisionScene {
             .map(|hit| hit.is_none_or(|hit| hit.distance >= length))
     }
 
+    /// A bounded query along a unit direction, distinguishing no hit from an
+    /// unavailable ray. Both endpoints must fit the collision grid.
+    pub fn checked_cast_ray(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        length: f64,
+        category: u16,
+    ) -> Option<Option<RayHit>> {
+        if length <= 0.0
+            || !length.is_finite()
+            || direction == [0.0; 3]
+            || !direction.into_iter().all(f64::is_finite)
+        {
+            return None;
+        }
+        let endpoint = std::array::from_fn(|axis| origin[axis] + direction[axis] * length);
+        for point in [origin, endpoint] {
+            if !point.into_iter().all(f64::is_finite) {
+                return None;
+            }
+            cell(point[0])?;
+            cell(point[2])?;
+        }
+        self.cast_ray(origin, direction, length, category).ok()
+    }
+
     /// First static hit along a unit direction. Triangles win exact ties.
     pub fn cast_ray(
         &self,
@@ -535,6 +562,38 @@ mod tests {
             scene.segment_clear([10.0, 0.0, 0.0], [10.0, 0.0, 1_000_000.0], TEAM0),
             None
         );
+    }
+
+    #[test]
+    fn checked_ray_distinguishes_bounded_hits_misses_and_unavailable_queries() {
+        let scene =
+            CollisionScene::expanded_rays(&fixture(true), &BTreeSet::from([MODE_PROP]), identity())
+                .unwrap();
+        let hit = scene
+            .checked_cast_ray(ORIGIN, FORWARD, 1.0, TEAM1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(hit.distance, 1.0);
+        assert_eq!(hit.point, [0.0, 0.0, 1.0]);
+        assert_eq!(hit.normal, [0.0, 0.0, -1.0]);
+        assert_eq!(
+            scene.checked_cast_ray(ORIGIN, FORWARD, 0.5, TEAM1),
+            Some(None)
+        );
+        for (origin, direction, length) in [
+            (ORIGIN, FORWARD, 0.0),
+            (ORIGIN, FORWARD, f64::NAN),
+            (ORIGIN, [0.0; 3], 1.0),
+            (ORIGIN, [f64::INFINITY, 0.0, 0.0], 1.0),
+            ([f64::MAX, 0.0, 0.0], FORWARD, 1.0),
+            (ORIGIN, [1.0, 0.0, 0.0], f64::MAX),
+            ([10.0, 0.0, 0.0], FORWARD, 1_000_000.0),
+        ] {
+            assert_eq!(
+                scene.checked_cast_ray(origin, direction, length, TEAM1),
+                None
+            );
+        }
     }
 
     #[test]

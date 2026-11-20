@@ -491,6 +491,36 @@ fn spatial_visibility_blocks_only_hits_before_the_target() {
 }
 
 #[test]
+fn spatial_rays_return_the_first_static_hit_and_preserve_query_availability() {
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    room.enable_spatial_queries(
+        false,
+        Arc::new(fixture_ground()),
+        crate::script_graph::RoomSpatialNeeds::Queries,
+    );
+    let spatial = room.capture_spatial_frame(1).unwrap().unwrap();
+    let origin = [-2.0, 0.5, 0.25];
+    let direction = [1.0, 0.0, 0.0];
+    let expected = crate::script_expr::SpatialRayHit {
+        distance: 1.0,
+        point: [-1.0, 0.5, 0.25],
+        normal: [-1.0, 0.0, 0.0],
+    };
+    assert_eq!(
+        spatial.ray_cast(origin, direction, 1.0),
+        Some(Some(expected))
+    );
+    assert_eq!(spatial.ray_cast(origin, direction, 0.5), Some(None));
+    assert_eq!(spatial.ray_cast(origin, [-1.0, 0.0, 0.0], 2.0), Some(None));
+    assert_eq!(spatial.ray_cast([f64::MAX, 0.0, 0.0], direction, 1.0), None);
+    assert_eq!(spatial.ray_cast(origin, direction, f64::MAX), None);
+    assert_eq!(
+        spatial.ray_cast([0.0; 3], [0.0, 0.0, 1.0], 1_000_000.0),
+        None
+    );
+}
+
+#[test]
 fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() {
     use crate::{
         game_clock::TICK_PERIOD,
