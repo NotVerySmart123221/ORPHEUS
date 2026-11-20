@@ -867,6 +867,40 @@ impl WorldDelivery {
         }
     }
 
+    pub(crate) fn player_script_halted(
+        &mut self,
+        owner: u32,
+        id: BodyId,
+        health: Option<WorldComponent>,
+    ) {
+        if owner == self.owner {
+            if self.active_body_id() != Some(id) {
+                return;
+            }
+            if self
+                .body_script
+                .as_ref()
+                .is_some_and(|script| script.id == id)
+            {
+                // The room already transferred the runtime and its health.
+                self.cancel_body_script(None);
+            }
+        } else {
+            if self.remote_players.get(&id.entity) != Some(&(id, BotLifetime::Live)) {
+                return;
+            }
+            self.scene_views.remove(&id.entity);
+            self.remove_stale();
+        }
+        if let Some(health) = health {
+            self.queue_health(EntityUpdate {
+                entity: id.entity,
+                operation: Some(Operation::Update(vec![health])),
+                ..EntityUpdate::default()
+            });
+        }
+    }
+
     pub(crate) fn start(
         &mut self,
         scene: &PreparedScene,

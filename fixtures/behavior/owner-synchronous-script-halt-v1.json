@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "case_id": "owner-synchronous-script-halt-v1",
+  "source": {"basis": "Synthetic defender receivers that halt while following a cyclic output."},
+  "evidence": "rust-synthetic",
+  "input": {"callbacks": ["message", "sighting"], "health": 180.0, "damage": 20.0, "actor_yaw": 4210},
+  "expected": {"health_after_fault": 160.0, "halt_events": 1}
+}
