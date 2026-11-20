@@ -90,6 +90,16 @@ impl EnemyScripts {
             .max(0.0)
     }
 
+    pub(crate) fn character_collision(
+        &self,
+        frame: u32,
+        settings: &crate::mover_settings::MoverSettings,
+    ) -> bool {
+        self.movement_modifiers
+            .at(frame)
+            .character_collision(settings)
+    }
+
     fn refresh_movement_modifiers(
         &mut self,
         graphs: &GraphStore,

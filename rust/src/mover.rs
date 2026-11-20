@@ -196,6 +196,13 @@ impl Mover {
         self.modifiers.track(frame, active);
     }
 
+    pub(crate) fn character_collision_for_snapshot(&self, admitted_at: u32) -> bool {
+        // Room ticks and input frames can diverge. Use the next frame on the
+        // capsule's own clock to include newly started or retired intervals.
+        let frame = self.pose.frame.unwrap_or(admitted_at).wrapping_add(1);
+        self.modifiers.at(frame).character_collision(&self.base)
+    }
+
     pub(crate) fn set_cinematic_aim(&mut self, aim: Option<[i32; 2]>) {
         self.cinematic_aim = aim;
     }
@@ -304,6 +311,13 @@ impl Mover {
         dt: f64,
         blockers: &[CapsulePose],
     ) -> Result<(), HullContactError> {
+        let active = self.modifiers.at(command.frame);
+        let settings = active.settings(&self.base);
+        let blockers = if settings.character_collision != 0 {
+            blockers
+        } else {
+            &[]
+        };
         self.swept_displacement_frame = None;
         let mut swept_changed = false;
         if self
@@ -326,8 +340,6 @@ impl Mover {
                 true
             }
         });
-        let active = self.modifiers.at(command.frame);
-        let settings = active.settings(&self.base);
         let mut input = MotionInput::from(&command).with_modifiers(&active);
         // The authored direction has already been packed by the server. Keep
         // its pitch, including straight up or down, when it supplies the pose.
@@ -894,17 +906,13 @@ mod tests {
         assert!(!blocked.has_swept_displacement());
     }
 
-    #[test]
-    fn swept_displacement_uses_the_existing_capsule_without_clipping_velocity() {
+    fn swept_wall_world(input: &serde_json::Value, category: u16) -> Arc<ContactWorld> {
         use crate::{
             collision_cache::{Mesh, Triangle},
             contact_mesh::ContactMesh,
             contact_world::{StaticGeometry, StaticShape},
         };
 
-        let fixture = swept_fixture();
-        let input = &fixture["input"];
-        let category: u16 = input["category"].as_u64().unwrap().try_into().unwrap();
         let wall = Mesh {
             vertices: serde_json::from_value(input["wall_vertices"].clone()).unwrap(),
             triangles: input["wall_triangles"]
@@ -921,13 +929,110 @@ mod tests {
         };
         let mesh = ContactMesh::new(wall, [1.0; 3], u16::MAX).unwrap();
         let shape = StaticShape::new(StaticGeometry::Mesh(Arc::new(mesh)), None).unwrap();
+        Arc::new(ContactWorld::new(vec![shape]).unwrap())
+    }
+
+    #[test]
+    fn effective_character_collision_controls_sweeps_and_regular_motion() {
+        let fixture = swept_fixture();
+        let input = &fixture["input"];
+        let category: u16 = input["category"].as_u64().unwrap().try_into().unwrap();
+        let settings = MoverSettings {
+            gravity_scale: 0.0,
+            decel_air_base: 0.0,
+            decel_air_per_speed: 0.0,
+            stand_height: input["stand_height"].as_f64().unwrap(),
+            stand_radius: input["stand_radius"].as_f64().unwrap(),
+            ..MoverSettings::default()
+        };
+        let world = swept_wall_world(input, category);
+        let rays = TriangleIndex::new([]).unwrap();
+        let wall_z = fixture["expected"]["wall_max_z"].as_f64().unwrap();
+        let actor_z = wall_z / 2.0;
+        let blocker = crate::mover_ground::standing_capsule(&settings, [0.0, 0.0, actor_z]);
+        let delta = [0.0, 0.0, wall_z * 2.0];
+        let dt = 0.25;
+        let collision_disabled = BTreeMap::from([(
+            ModifierKey {
+                instance: 1,
+                state: 1,
+                slot: 0,
+            },
+            Modifier {
+                index: crate::mover_modifiers::COLLISION,
+                operation: Operation::Set,
+                value: 0.0,
+                priority: 0.0,
+            },
+        )]);
+
+        for swept in [false, true] {
+            let mut mover =
+                Mover::new(settings, Arc::clone(&world), [0.0; 3], 0, category).unwrap();
+            let start = mover.body.position();
+            for (frame, collides) in [(1, true), (2, false), (3, true)] {
+                // Reset position to exercise each interval against the same
+                // blockers while keeping the real command and modifier clocks.
+                mover.pose.position = [0.0; 3];
+                mover.body = mover.body.fresh_at(start);
+                mover.pose.velocity = [0.0; 3];
+                if swept {
+                    assert!(
+                        mover.queue_swept_displacement(
+                            frame,
+                            SweptDisplacement::new(delta).unwrap()
+                        )
+                    );
+                } else {
+                    mover.queue_velocity_change(
+                        frame,
+                        VelocityChange::Delta(delta.map(|axis| axis / dt)),
+                    );
+                }
+                mover
+                    .step_against(
+                        &rays,
+                        Command {
+                            frame,
+                            ..Command::default()
+                        },
+                        dt,
+                        &[blocker],
+                        |_, _| {},
+                    )
+                    .unwrap();
+                let z = mover.pose.position[2];
+                let range = if collides {
+                    0.0..actor_z
+                } else {
+                    actor_z..wall_z
+                };
+                assert!(
+                    range.contains(&z) && z > range.start,
+                    "frame {frame}, swept {swept}, z {z}"
+                );
+                assert_eq!(mover.swept_displacement_at(frame), swept);
+                if frame == 1 {
+                    mover.track_modifiers(frame, &collision_disabled);
+                } else if frame == 2 {
+                    mover.track_modifiers(frame, &BTreeMap::new());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn swept_displacement_uses_the_existing_capsule_without_clipping_velocity() {
+        let fixture = swept_fixture();
+        let input = &fixture["input"];
+        let category: u16 = input["category"].as_u64().unwrap().try_into().unwrap();
         let mut mover = Mover::new(
             MoverSettings {
                 stand_height: input["stand_height"].as_f64().unwrap(),
                 stand_radius: input["stand_radius"].as_f64().unwrap(),
                 ..MoverSettings::default()
             },
-            Arc::new(ContactWorld::new(vec![shape]).unwrap()),
+            swept_wall_world(input, category),
             [0.0; 3],
             8192,
             category,

@@ -598,8 +598,10 @@ player poses, recovered inputs, NPC patrol and objective movement, and
 scripted sweeps use this snapshot with the same capsule solver. Teammates
 pass through one another in team modes. In free-for-all every other
 living actor can block movement. Each mover checks the other actors'
-sampled positions for the duration of that tick. Death and runtime
-retirement clear pending displacement.
+sampled positions for the duration of that tick. The body's character
+collision setting and its active movement modifiers control contact
+participation. Static map collision still applies when a body passes
+through actors. Death and runtime retirement clear pending displacement.
 
 An actual player displacement opens a bounded owner correction window at
 the moved pose. Delivery uses the existing create acknowledgement,
@@ -613,6 +615,8 @@ See the [script dispatch contract](../fixtures/behavior/script-swept-displacemen
 and the [native capsule contract](../fixtures/behavior/native-swept-displacement-v1.json).
 The [regular movement contract](../fixtures/behavior/native-regular-actor-contact-v1.json)
 covers player input recovery and NPC patrol and objective movement.
+The [contact participation contract](../fixtures/behavior/movement-contact-participation-v1.json)
+covers body settings and modifier start and retirement.
 The [owner motion contract](../fixtures/behavior/owner-swept-motion-v1.json)
 covers correction scheduling and a same-frame script failure.
 

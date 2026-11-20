@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Apply effective character-collision settings to player and NPC movement. Body defaults and timed modifiers determine actor contact participation while static geometry continues to block movement. Added synthetic coverage for modifier retirement and both movement paths. Shared-branch verification is pending.
+
 - Use one room-tick snapshot of living actor capsules for scripted displacement, ordinary player input, and NPC patrol and objective movement. Added synthetic coverage for recovered input frames, patrol catch-up, and stale snapshots. Shared-branch verification is pending.
 
 - Apply living actor contacts to authored player and NPC displacement through the shared capsule solver. Team modes allow allied bodies to pass through. Free-for-all admits all other living bodies as blockers. Added synthetic coverage for actor order, static occlusion, lifecycle, and room team filtering. Shared-branch verification is pending.
