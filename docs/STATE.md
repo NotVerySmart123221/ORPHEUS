@@ -84,12 +84,31 @@ individual trace validation. Every tick matched its preceding Windows
 capture. Strict comparison still reports the same four RNG model and
 seed differences between the implementations.
 
+At `39932467`, the shared owned-entity count stopped rejecting queries
+with an explicitly unbound owner. The old binary reproduced both count
+diagnostics on the same prepared pack. Two updated reports matched byte
+for byte, with **47 blocking sites** and **11 of 32** independent passes.
+Zarya passed independent startup, and Symmetra cleared her count
+diagnostic. The #72 capture matched across all 476 sites.
+
+Ordinary Practice Range attachment remains **1 of 32**. Scene
+preparation installs a Soldier-only factory there, and the factory
+returns no runtime for a different hero. The independent probe calls
+the per-hero factory builder directly. Ability coverage and original
+client acceptance require separate verification.
+
 Seven actor probes have one blocking site each. Mercy's tag query needs
 the tagged placement inventory and live actor tags. Orisa and Sigma
 still hit persistent message registration. Baptiste cannot read a
-controller variable. Zarya's deployable count, Torbjörn's hardpoint
-query, and Moira's voice stimulus each lack their supporting host
-service or context.
+controller variable. Torbjörn's hardpoint query and Moira's voice
+stimulus each lack their supporting host service or context. Symmetra
+still reports an unsupported state.
+
+The prepared 104319 bundle supplies voice stimulus references and gallery
+unlock metadata. It lacks an authored stimulus-to-line mapping and playback
+durations for the player voice service. The room already routes resolved
+cues to listeners by body generation. A player voice provider still needs
+the catalog and timing inputs before this startup site can be verified.
 
 | Workflow | Python reference | Rust implementation | Open client or parity gap |
 | --- | --- | --- | --- |
