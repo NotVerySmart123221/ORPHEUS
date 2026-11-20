@@ -257,6 +257,7 @@ pub(crate) struct BotReplacement {
 
 mod encounter;
 mod enemy;
+mod environment;
 mod health;
 mod health_events;
 mod movement;
@@ -526,6 +527,7 @@ pub(crate) struct RoomSimulation {
     spatial_queries: Option<RoomSpatialQueries>,
     spatial_frame: Option<(u32, Arc<RoomSpatialFrame>)>,
     movement_contacts: Option<movement::MovementContacts>,
+    environment: crate::map_environment::MapEnvironment,
     health_events: health_events::RoomHealthEvents,
     // Generation maps live for the room's lifetime so reconnects cannot reset history.
     player_generations: HashMap<u32, u64>,
@@ -843,6 +845,7 @@ impl RoomSimulation {
             spatial_queries: None,
             spatial_frame: None,
             movement_contacts: None,
+            environment: Default::default(),
             health_events: health_events::RoomHealthEvents::default(),
             player_generations: HashMap::new(),
             latest_wire_generations: HashMap::new(),
@@ -2093,6 +2096,7 @@ impl RoomSimulation {
         if !self.combat_active {
             self.collect_local_health_events();
             self.settle_authored_requests(tick, now)?;
+            self.settle_environment(tick, now)?;
             self.flush_health_events();
             return self.respawn_due(tick, now);
         }
@@ -2522,6 +2526,7 @@ impl RoomSimulation {
             self.sync_witch_staff_links()?;
             self.collect_local_health_events();
         }
+        self.settle_environment(tick, now)?;
         let replacements = self.respawn_due(tick, now);
         self.record_poses(queries, tick)?;
         let replacements = replacements?;
