@@ -16,7 +16,7 @@ use super::super::{
     machine::{Event, RegisteredClass, Startup, StateKey, VarKey},
     shapes::{
         array_field, branch_path, case_path, configured, field, is_unlinked_plug, pool_number,
-        raw_indices, registered_state, source_key,
+        raw_indices, registered_state, same, source_key, stored,
     },
     types::{InitFault, Issue, StateKind},
     world::{Site, World},
@@ -770,15 +770,38 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         {
             return Ok(());
         }
-        let node = self
-            .graph(key.instance)
-            .state(usize::from(key.raw))
-            .expect("active observation sample");
-        self.follow(key.instance, node, "on_sample", Some(key), 0)?;
-        if self
-            .state(key)
-            .is_some_and(|state| state.active && !state.ending && state.activation == activation)
-        {
+        let activation_is_live = |vm: &Self| {
+            vm.state(key).is_some_and(|state| {
+                state.active && !state.ending && state.activation == activation
+            })
+        };
+        let Some(sample) = self.state(key).and_then(|state| state.watch_seen.clone()) else {
+            return Ok(());
+        };
+        let Some(node) = self.graph(key.instance).state(usize::from(key.raw)) else {
+            return Ok(());
+        };
+        let Ok(Some(output)) = script_expr::lvalue(field(&node.fields, "output")) else {
+            return Ok(());
+        };
+        let output = source_key(key.instance, output);
+        // Other ticks and earlier plugs may have reused the output before
+        // this callback reached the queue. Publish the sample through the
+        // ordinary write path so existing bindings keep their priority.
+        let mut visible = same(&self.machine.value(output, None), &sample);
+        if !visible && !same(&stored(&self.machine.snapshot, output), &sample) {
+            self.write(output, sample.clone())?;
+            if !activation_is_live(self) {
+                return Ok(());
+            }
+            visible = same(&self.machine.value(output, None), &sample);
+        }
+        if visible {
+            self.follow(key.instance, node, "on_sample", Some(key), 0)?;
+        } else {
+            self.report(self.site(key.instance, node), Issue::ObservationUnavailable);
+        }
+        if activation_is_live(self) {
             self.try_complete(key, node, 0)?;
         }
         Ok(())

@@ -28,7 +28,14 @@ struct Input {
     body: u32,
     graph: u32,
     hit_distance: f64,
+    ownership: Ownership,
     steps: Vec<Step>,
+}
+
+#[derive(Deserialize)]
+struct Ownership {
+    samples: [i64; 2],
+    overwrite: i64,
 }
 
 #[derive(Deserialize)]
@@ -356,4 +363,225 @@ fn observation_sample_does_not_cross_retirement_or_reactivation() {
     component.run_now(&mut host).unwrap();
     assert!(!component.snapshot().unwrap().instances[&1].states[&0].active);
     assert!(host.callbacks.is_empty());
+}
+
+fn shared_output_bundle(graph_id: u32, ownership: &Ownership, predecessor: bool) -> Json {
+    let entry = node(
+        0,
+        "STUStatescriptEntry",
+        None,
+        json!({"m_outPlug":plug(&[(1,"m_beginPlug"),(2,"m_beginPlug")], &[])}),
+    );
+    let observe = |position, raw, value, callback| {
+        let mut observer = node(
+            position,
+            "AuthoredSharedSample",
+            Some(raw),
+            json!({
+                "value":value,
+                "output":var(OUTPUT,true),
+                "on_sample":plug(&[(callback,"m_inPlug")], &[])
+            }),
+        );
+        observer["state_behavior"] = json!("observe");
+        observer["server_only"] = json!(true);
+        observer
+    };
+    let copy = |position, destination, links: &[(u16, &str)]| {
+        node(
+            position,
+            "STUStatescriptActionSetVar",
+            None,
+            json!({
+                "m_out_Var":var(destination,true),
+                "m_value":var(OUTPUT,true),
+                "m_outPlug":plug(links, &[])
+            }),
+        )
+    };
+    let predecessor_links: &[(u16, &str)] = if predecessor { &[(5, "m_inPlug")] } else { &[] };
+    let overwrite = node(
+        5,
+        "STUStatescriptActionSetVar",
+        None,
+        json!({
+            "m_out_Var":var(OUTPUT,true),
+            "m_value":ownership.overwrite,
+            "m_outPlug":plug(&[(6,"m_inPlug")], &[])
+        }),
+    );
+    graph(
+        graph_id,
+        vec![
+            entry,
+            observe(1, 0, ownership.samples[0], 3),
+            observe(2, 1, ownership.samples[1], 4),
+            copy(3, 44, predecessor_links),
+            copy(4, 45, &[]),
+            overwrite,
+            copy(6, 46, &[]),
+        ],
+        json!([1, 2]),
+        json!([0]),
+    )
+}
+
+#[test]
+fn observation_samples_restore_each_shared_output_before_its_callback() {
+    let input = fixture().input;
+    let graph = shared_output_bundle(input.graph, &input.ownership, false);
+    let (mut component, mut host, _) = start(graph, input.body, input.hit_distance);
+    component.advance_frame(1, &mut host).unwrap();
+    let snapshot = component.snapshot().unwrap();
+    assert_eq!(
+        snapshot.variables[&44],
+        Value::Integer(input.ownership.samples[0])
+    );
+    assert_eq!(
+        snapshot.variables[&45],
+        Value::Integer(input.ownership.samples[1])
+    );
+    assert_eq!(
+        snapshot.variables[&OUTPUT],
+        Value::Integer(input.ownership.samples[1])
+    );
+    assert!(snapshot.diagnostics.is_empty());
+    assert_eq!(host.queries.get(), 0);
+}
+
+#[test]
+fn observation_sample_restores_output_after_predecessor_callback() {
+    let input = fixture().input;
+    let graph = shared_output_bundle(input.graph, &input.ownership, true);
+    let (mut component, mut host, _) = start(graph, input.body, input.hit_distance);
+    component.advance_frame(1, &mut host).unwrap();
+    let snapshot = component.snapshot().unwrap();
+    assert_eq!(
+        snapshot.variables[&44],
+        Value::Integer(input.ownership.samples[0])
+    );
+    assert_eq!(
+        snapshot.variables[&46],
+        Value::Integer(input.ownership.overwrite)
+    );
+    assert_eq!(
+        snapshot.variables[&45],
+        Value::Integer(input.ownership.samples[1])
+    );
+    assert_eq!(
+        snapshot.variables[&OUTPUT],
+        Value::Integer(input.ownership.samples[1])
+    );
+    assert!(snapshot.diagnostics.is_empty());
+}
+
+#[test]
+fn observation_sample_restores_output_after_change_callback() {
+    let input = fixture().input;
+    let mut graph = bundle(input.graph, true);
+    graph["nodes"][1]["fields"]["value"] = json!(input.ownership.samples[0]);
+    graph["nodes"][2]["fields"] = json!({
+        "m_ADEB6E05":true,
+        "m_out_Var":var(OUTPUT,true),
+        "m_value":input.ownership.overwrite,
+        "m_outPlug":plug(&[(3,"m_inPlug")], &[])
+    });
+    graph["nodes"][3] = node(
+        3,
+        "STUStatescriptActionSetVar",
+        None,
+        json!({
+            "m_out_Var":var(CHANGE_COPY,true),
+            "m_value":var(OUTPUT,true),
+            "m_outPlug":plug(&[], &[])
+        }),
+    );
+    let (mut component, mut host, _) = start(graph, input.body, input.hit_distance);
+    component.advance_frame(1, &mut host).unwrap();
+    let snapshot = component.snapshot().unwrap();
+    assert_eq!(
+        snapshot.variables[&CHANGE_COPY],
+        Value::Integer(input.ownership.overwrite)
+    );
+    assert_eq!(
+        snapshot.variables[&SAMPLE_COPY],
+        Value::Integer(input.ownership.samples[0])
+    );
+    assert_eq!(
+        snapshot.variables[&OUTPUT],
+        Value::Integer(input.ownership.samples[0])
+    );
+    assert_eq!(host.callbacks, [2.0]);
+    assert!(snapshot.diagnostics.is_empty());
+}
+
+#[test]
+fn observation_sample_waits_for_output_binding_to_release() {
+    let input = fixture().input;
+    let mut graph = bundle(input.graph, true);
+    graph["nodes"][0]["fields"]["m_outPlug"] = plug(&[(7, "m_beginPlug"), (1, "m_beginPlug")], &[]);
+    graph["nodes"][1]["fields"]["value"] = json!(input.ownership.samples[0]);
+    graph["nodes"][1]["fields"]["on_change"] = serde_json::Value::Null;
+    let mut claim = node(
+        7,
+        "AuthoredOutputClaim",
+        Some(1),
+        json!({
+            "variable":{"scope":"entity","id":OUTPUT},
+            "priority":{"level":10,"above_equals":true},
+            "value":input.ownership.overwrite
+        }),
+    );
+    claim["state_behavior"] = json!("stack_claim");
+    claim["server_only"] = json!(true);
+    graph["nodes"].as_array_mut().unwrap().push(claim);
+    graph["states"] = json!([1, 7]);
+    graph["items"] = json!(8);
+    let (mut component, mut host, _) = start(graph, input.body, input.hit_distance);
+    component.advance_frame(1, &mut host).unwrap();
+    let snapshot = component.snapshot().unwrap();
+    assert_eq!(
+        snapshot.variables[&OUTPUT],
+        Value::Integer(input.ownership.samples[0])
+    );
+    assert_eq!(
+        snapshot.resolved_bindings[&(0, OUTPUT)],
+        Value::Integer(input.ownership.overwrite)
+    );
+    assert!(!snapshot.variables.contains_key(&SAMPLE_COPY));
+    assert!(host.callbacks.is_empty());
+    assert!(matches!(
+        snapshot.diagnostics.as_slice(),
+        [Diagnostic {
+            issue: Issue::ObservationUnavailable,
+            ..
+        }]
+    ));
+    let blocked_diagnostics = snapshot.diagnostics.clone();
+
+    component
+        .run(&mut host, |vm| {
+            vm.end(
+                StateKey {
+                    instance: 1,
+                    raw: 1,
+                },
+                false,
+                0,
+            )
+        })
+        .unwrap();
+    component.advance_frame(2, &mut host).unwrap();
+    let snapshot = component.snapshot().unwrap();
+    assert_eq!(
+        snapshot.variables[&OUTPUT],
+        Value::Integer(input.ownership.samples[0])
+    );
+    assert_eq!(
+        snapshot.variables[&SAMPLE_COPY],
+        Value::Integer(input.ownership.samples[0])
+    );
+    assert_eq!(host.callbacks, [2.0]);
+    assert_eq!(snapshot.diagnostics, blocked_diagnostics);
+    assert!(snapshot.initialization_complete());
 }

@@ -25,22 +25,14 @@ fn sampled_aim_factory(spawn: OwnerBodySpawn) -> PlayerBodyFactory {
     };
     let output = json!({"$":"STUConfigVarDynamic","m_identifier":SAMPLE,"m_60DB8F99":true});
     let first = json!({"$":"STU_4BD39CFD","m_index":0,"m_814F8EC3":output});
-    let bundle = json!({
-        "version":1,"missing":[],
-        "bodies":{format!("0x{:016X}",hero.body):{
-            "hero":format!("0x{:016X}",hero.guid),"name":"Sampled aim fixture",
-            "graphs":[{"graph":93,"m_75408640":0}],"manager":null,"weapons":[]
-        }},
-        "graphs":[{
-            "index":93,"items":4,"entries":[0],"states":[1],"remote":[],
-            "sync_vars":[],"containers":{},"unknown_nodes":[],"fields":{},
-            "header":{"m_nodesBitCount":4,"m_statesBitCount":4,
-                "m_remoteSyncNodesBitCount":4,"m_syncVarsBitCount":4},
-            "nodes":[
-                {"pos":0,"rid":0,"uid":0,"remote":-1,"state":null,
-                    "class":"STUStatescriptEntry","server_only":true,"client_only":false,
-                    "fields":{"m_outPlug":{"$":"Plug","links":[[1,"m_beginPlug"]]}}},
-                {"pos":1,"rid":1,"uid":1,"remote":-1,"state":0,
+    // The change callback reuses the output before the fresh-sample hook.
+    let overwrite = json!({
+        "pos":4,"rid":4,"uid":4,"remote":-1,"state":null,
+        "class":"STUStatescriptActionSetVar","server_only":true,"client_only":false,
+        "fields":{"m_out_Var":output,"m_value":999,
+            "m_outPlug":{"$":"Plug","links":[]}}
+    });
+    let observation = json!({"pos":1,"rid":1,"uid":1,"remote":-1,"state":0,
                     "class":"authored.sampled_aim","server_only":true,"client_only":false,
                     "state_behavior":"observe","fields":{
                         "value":{"$":"EntityRayCast",
@@ -50,7 +42,24 @@ fn sampled_aim_factory(spawn: OwnerBodySpawn) -> PlayerBodyFactory {
                             "filter":{"alive":true,"relation":"opponent",
                                 "source":{"$":"STU_B5A0CAF0"}}},
                         "output":output,
-                        "on_sample":{"$":"Plug","links":[[2,"m_inPlug"]]}}},
+                        "on_change":{"$":"Plug","links":[[4,"m_inPlug"]]},
+                        "on_sample":{"$":"Plug","links":[[2,"m_inPlug"]]}}});
+    let bundle = json!({
+        "version":1,"missing":[],
+        "bodies":{format!("0x{:016X}",hero.body):{
+            "hero":format!("0x{:016X}",hero.guid),"name":"Sampled aim fixture",
+            "graphs":[{"graph":93,"m_75408640":0}],"manager":null,"weapons":[]
+        }},
+        "graphs":[{
+            "index":93,"items":5,"entries":[0],"states":[1],"remote":[],
+            "sync_vars":[],"containers":{},"unknown_nodes":[],"fields":{},
+            "header":{"m_nodesBitCount":4,"m_statesBitCount":4,
+                "m_remoteSyncNodesBitCount":4,"m_syncVarsBitCount":4},
+            "nodes":[
+                {"pos":0,"rid":0,"uid":0,"remote":-1,"state":null,
+                    "class":"STUStatescriptEntry","server_only":true,"client_only":false,
+                    "fields":{"m_outPlug":{"$":"Plug","links":[[1,"m_beginPlug"]]}}},
+                observation,
                 {"pos":2,"rid":2,"uid":2,"remote":-1,"state":null,
                     "class":"authored.has_fresh_target","server_only":true,"client_only":false,
                     "action_behavior":"branch","fields":{
@@ -61,7 +70,8 @@ fn sampled_aim_factory(spawn: OwnerBodySpawn) -> PlayerBodyFactory {
                     "class":"authored.small_health_effect","server_only":true,"client_only":false,
                     "action_behavior":"health_change","fields":{
                         "target":first,"delta":-3,
-                        "m_outPlug":{"$":"Plug","links":[]}}}
+                        "m_outPlug":{"$":"Plug","links":[]}}},
+                overwrite
             ]
         }]
     });

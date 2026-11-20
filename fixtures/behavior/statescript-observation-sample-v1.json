@@ -7,6 +7,10 @@
     "body": 941,
     "graph": 607,
     "hit_distance": 2,
+    "ownership": {
+      "samples": [1, 2],
+      "overwrite": 999
+    },
     "steps": [
       {"frame": 1, "queries": 1, "callbacks": [1, 2], "output": "hit"},
       {"frame": 2, "override_output": true, "queries": 1, "callbacks": [2], "output": "hit"},
