@@ -1380,6 +1380,18 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         Ok(())
     }
 
+    fn rejects_stack_value(&mut self, key: StateKey, node: &Node, value: &Value) -> bool {
+        if node.declares_stack_claim() && matches!(value, Value::Map(_) | Value::IdentifierMap(_)) {
+            self.report(
+                self.site(key.instance, node),
+                Issue::UnsupportedField("map-valued stack claim"),
+            );
+            true
+        } else {
+            false
+        }
+    }
+
     pub(in crate::script_init) fn begin_stack(
         &mut self,
         key: StateKey,
@@ -1387,24 +1399,47 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         depth: usize,
     ) -> Result<(), InitFault> {
         let id = key.instance;
-        let Some(value) = self.evaluate(id, node, field(&node.fields, "m_value"), Some(key)) else {
+        let Some(value) = self.evaluate(
+            id,
+            node,
+            node.stack_value().unwrap_or(&Json::Null),
+            Some(key),
+        ) else {
             return Ok(());
         };
-        let target = match script_expr::lvalue(field(&node.fields, "m_out_Var")) {
-            Ok(Some(target)) => source_key(id, target),
-            Ok(None) => return Ok(()),
-            Err(error) => {
-                self.report(self.site(id, node), Issue::Expression(error));
-                return Ok(());
+        if self.rejects_stack_value(key, node, &value) {
+            return Ok(());
+        }
+        let (variable, priority) = if let Some((variable, priority, duration)) = node.stack_claim()
+        {
+            if let Some(frames) = duration {
+                // The top subgraph can synchronously end its owner.
+                self.post_after(
+                    id,
+                    u64::from(frames.get()) * FRAME_MS,
+                    Event::Finish(key.raw),
+                )?;
             }
+            (variable, priority)
+        } else {
+            let variable = match script_expr::lvalue(field(&node.fields, "m_out_Var")) {
+                Ok(Some(variable)) => variable,
+                Ok(None) => return Ok(()),
+                Err(error) => {
+                    self.report(self.site(id, node), Issue::Expression(error));
+                    return Ok(());
+                }
+            };
+            let priority = match script_expr::stack_priority(field(&node.fields, "m_priority")) {
+                Ok(priority) => priority,
+                Err(error) => {
+                    self.report(self.site(id, node), Issue::Expression(error));
+                    return Ok(());
+                }
+            };
+            (variable, priority)
         };
-        let priority = match script_expr::stack_priority(field(&node.fields, "m_priority")) {
-            Ok(priority) => priority,
-            Err(error) => {
-                self.report(self.site(id, node), Issue::Expression(error));
-                return Ok(());
-            }
-        };
+        let target = source_key(id, variable);
         self.state_mut(key).expect("active stack").linked_variable = Some(target);
         self.insert_link(
             target,
@@ -2032,13 +2067,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .graph(id)
             .state(usize::from(key.raw))
             .expect("stack state");
-        let value = field(&node.fields, "m_value");
-        if value.is_null() {
+        let Some(value) = node.stack_value().filter(|config| !config.is_null()) else {
             return Ok(());
-        }
+        };
         let Some(value) = self.evaluate(id, node, value, Some(key)) else {
             return Ok(());
         };
+        if self.rejects_stack_value(key, node, &value) {
+            return Ok(());
+        }
         let old = self.machine.value(target, None);
         if let Some(LinkValue::Fixed(current)) = self
             .machine

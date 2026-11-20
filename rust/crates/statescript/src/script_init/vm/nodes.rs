@@ -1323,10 +1323,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             "STUStatescriptStateLogicalButton" => StateKind::LogicalButton { down: false },
             "STU_E4A30BCF" => StateKind::ButtonBlock(None),
             _ if button_lock.is_some() => StateKind::ButtonBlock(None),
-            "STUStatescriptStateStack" | "STU_A97E6999" => StateKind::Stack {
-                top: false,
-                under: false,
-            },
+            class
+                if matches!(class, "STUStatescriptStateStack" | "STU_A97E6999")
+                    || node.declares_stack_claim() =>
+            {
+                StateKind::Stack {
+                    top: false,
+                    under: false,
+                }
+            }
             "STUStatescriptStateAbility" => StateKind::Ability { flags: 0 },
             "STU_316CFEF2" => StateKind::MovementMod,
             _ if movement_scale.is_some() => StateKind::MovementMod,

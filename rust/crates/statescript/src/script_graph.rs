@@ -15,6 +15,10 @@ use serde_json::{Map, Value};
 
 use rulesets::{ModeRulesetDefinition, ModeRulesets};
 
+use crate::script_expr::{
+    StackPriority, Variable, authored_stack_priority, authored_stack_variable,
+};
+
 mod rulesets;
 
 const GRAPH_TYPE: u64 = 0x0580;
@@ -40,6 +44,7 @@ enum StateBehavior {
     Interval,
     ButtonLock,
     MovementScale,
+    StackClaim,
     TrackEntities,
 }
 
@@ -137,6 +142,27 @@ impl Node {
             return None;
         }
         Some((factor, self.optional_duration_frames()?))
+    }
+
+    pub(crate) fn declares_stack_claim(&self) -> bool {
+        self.state_behavior == Some(StateBehavior::StackClaim)
+    }
+
+    pub(crate) fn stack_claim(&self) -> Option<(Variable, StackPriority, Option<NonZeroU32>)> {
+        if !self.declares_stack_claim() {
+            return None;
+        }
+        let variable = authored_stack_variable(self.field("variable")?).ok()?;
+        let priority = authored_stack_priority(self.field("priority")?).ok()?;
+        Some((variable, priority, self.optional_duration_frames()?))
+    }
+
+    pub(crate) fn stack_value(&self) -> Option<&Value> {
+        if self.declares_stack_claim() {
+            self.field("value")
+        } else {
+            self.field("m_value")
+        }
     }
 
     fn optional_duration_frames(&self) -> Option<Option<NonZeroU32>> {
@@ -398,6 +424,7 @@ impl Graph {
                     StateBehavior::Interval => "interval state",
                     StateBehavior::ButtonLock => "button lock state",
                     StateBehavior::MovementScale => "movement scale state",
+                    StateBehavior::StackClaim => "stack claim state",
                     StateBehavior::TrackEntities => "track entities state",
                 };
                 let occupies_state_slot = node
@@ -415,6 +442,11 @@ impl Graph {
                         self.index, node.pos
                     )));
                 }
+                let stack_outputs: &[&str] = if behavior == StateBehavior::StackClaim {
+                    &["m_topSubgraphPlug", "m_underSubgraphPlug"]
+                } else {
+                    &[]
+                };
                 for path in [
                     "m_onBeginPlug",
                     "m_onEndPlug",
@@ -423,6 +455,7 @@ impl Graph {
                 ]
                 .into_iter()
                 .chain(node.declares_observe_state().then_some("on_change"))
+                .chain(stack_outputs.iter().copied())
                 {
                     if node
                         .field(path)
@@ -482,6 +515,15 @@ impl Graph {
                             )));
                         }
                         "StateMovementScale"
+                    }
+                    StateBehavior::StackClaim => {
+                        if node.stack_claim().is_none() || node.stack_value().is_none() {
+                            return Err(invalid(format!(
+                                "{state} in graph {} at node {} requires a valid variable, priority and value, with an optional nonzero u32 duration_frames",
+                                self.index, node.pos
+                            )));
+                        }
+                        "StateStackClaim"
                     }
                     StateBehavior::TrackEntities => {
                         if node.field("targets").is_none_or(Value::is_null) {
@@ -911,6 +953,7 @@ enum AuthoredClassBehavior {
     IntervalState,
     ButtonLockState,
     MovementScaleState,
+    StackClaimState,
     TrackEntitiesState,
     ForwardAction,
     BranchAction,
@@ -929,6 +972,7 @@ impl AuthoredClassBehavior {
             Self::IntervalState => (false, Some(StateBehavior::Interval), None),
             Self::ButtonLockState => (false, Some(StateBehavior::ButtonLock), None),
             Self::MovementScaleState => (false, Some(StateBehavior::MovementScale), None),
+            Self::StackClaimState => (false, Some(StateBehavior::StackClaim), None),
             Self::TrackEntitiesState => (false, Some(StateBehavior::TrackEntities), None),
             Self::ForwardAction => (false, None, Some(ActionBehavior::Forward)),
             Self::BranchAction => (false, None, Some(ActionBehavior::Branch)),
@@ -2341,6 +2385,83 @@ mod tests {
             Some((1.0, NonZeroU32::new(u32::MAX)))
         );
         assert!(scale.server_only && !scale.client_only);
+    }
+
+    #[test]
+    fn authored_stack_claim_validates_binding_and_keeps_null_as_a_value() {
+        use crate::script_expr::Scope;
+
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let mut data = fixture();
+        data["graphs"][0]["states"][3] = Value::Null;
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state"] = json!(0);
+        node["server_only"] = json!(true);
+        node["state_behavior"] = json!("stack_claim");
+        node["fields"] = json!({
+            "variable":{"scope":"entity","id":9},
+            "priority":{"level":-3,"above_equals":true},
+            "value":null,
+            "duration_frames":3,
+            "m_topSubgraphPlug":{"$":"Plug","links":[]},
+            "m_underSubgraphPlug":null
+        });
+        let graphs = load(&data).unwrap();
+        let claim = graphs.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(claim.class, "StateStackClaim");
+        assert!(claim.is_state() && !claim.is_networked());
+        assert_eq!(claim.stack_value(), Some(&Value::Null));
+        assert_eq!(
+            claim.stack_claim(),
+            Some((
+                Variable {
+                    scope: Scope::Entity,
+                    id: 9
+                },
+                StackPriority {
+                    level: -3,
+                    above_equals: true
+                },
+                NonZeroU32::new(3),
+            ))
+        );
+        for (field, bad_value) in [
+            ("variable", json!({"scope":"entity","id":0})),
+            ("priority", json!({"level":128,"above_equals":true})),
+            ("duration_frames", json!(0)),
+            ("m_topSubgraphPlug", json!({"$":"Plug","links":[[0,false]]})),
+        ] {
+            let mut bad = data.clone();
+            bad["graphs"][0]["nodes"][0]["fields"][field] = bad_value;
+            let error = load(&bad).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("stack claim state in graph 42 at node 0")
+            );
+        }
+        let mut missing = data.clone();
+        missing["graphs"][0]["nodes"][0]["fields"]
+            .as_object_mut()
+            .unwrap()
+            .remove("value");
+        assert_eq!(
+            load(&missing).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+
+        data["authored_classes"] =
+            json!([{"class":"authored.claim","behavior":"stack_claim_state"}]);
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["class"] = json!("authored.claim");
+        node["server_only"] = json!(false);
+        node["state_behavior"] = Value::Null;
+        node["fields"]["variable"]["scope"] = json!("instance");
+        let graphs = load(&data).unwrap();
+        let claim = graphs.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(claim.class, "StateStackClaim");
+        assert!(claim.server_only && !claim.client_only);
+        assert_eq!(claim.stack_claim().unwrap().0.scope, Scope::Instance);
     }
 
     #[test]

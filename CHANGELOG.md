@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added graph-authored, optionally timed stack claims and a local admission predicate. They share the VM's existing priority, tie order, variable scopes and top or under subgraphs. Synthetic coverage checks displacement, expiry and teardown, and the native room regression checks tag and priority admission before an input lock and movement scale start. Passed 653 default and 660 Inspector workspace tests, both locked Clippy lanes, Rust 1.85, 12 pinned Python behavior contracts, and the prepared 900-frame headless regression.
+
 - Added server-only movement speed scales with optional frame durations. They reuse the player and AI movement modifier timeline. Destroying an instance now removes its movement modifiers while preserving other instances' modifiers. Synthetic tests cover overlap, expiry and teardown, plus a directed room message reaching the receiver's movement timeline. Passed 649 default and 656 Inspector workspace tests, both locked Clippy lanes, Rust 1.85, 12 pinned Python behavior contracts, and the prepared 900-frame headless regression.
 
 - Added authored timed and untimed logical-button locks. They share the VM's existing counted button state and cleanup, and discard buffered ability presses for the acquired button. A room-message receiver can start the lock on its own VM timeline. Passed 647 default and 654 Inspector workspace tests, both locked Clippy lanes, the Rust 1.85 compatibility check, 12 pinned Python behavior contracts, and the prepared 900-frame headless regression.

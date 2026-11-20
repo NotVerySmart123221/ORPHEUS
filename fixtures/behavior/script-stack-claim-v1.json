@@ -1,0 +1,385 @@
+{
+  "schema_version": 1,
+  "case_id": "script-stack-claim.synthetic.v1",
+  "source": {
+    "basis": "Original graph-local and entity-wide stack claims with controlled priorities."
+  },
+  "evidence": "synthetic-rust",
+  "input": {
+    "bundle": {
+      "version": 1,
+      "authored_classes": [
+        {
+          "class": "authored.tie_claim",
+          "behavior": "stack_claim_state"
+        }
+      ],
+      "graphs": [
+        {
+          "index": 480,
+          "items": 18,
+          "header": {
+            "m_nodesBitCount": 5,
+            "m_statesBitCount": 3,
+            "m_remoteSyncNodesBitCount": 5,
+            "m_syncVarsBitCount": 3
+          },
+          "fields": {},
+          "containers": {},
+          "nodes": [
+            {
+              "pos": 0,
+              "class": "STUStatescriptEntryGameMessage",
+              "uid": 0,
+              "rid": 0,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_gameMessage": {
+                  "m_gameMessage": "0x000000000000A029"
+                },
+                "m_outPlug": {"$": "Plug", "links": [[1, "m_beginPlug"]]}
+              }
+            },
+            {
+              "pos": 1,
+              "class": "authored.claim",
+              "uid": 1,
+              "rid": 1,
+              "remote": -1,
+              "state": 0,
+              "client_only": false,
+              "server_only": true,
+              "state_behavior": "stack_claim",
+              "fields": {
+                "variable": {
+                  "scope": "entity",
+                  "id": 90
+                },
+                "value": {"$": "STUConfigVarDynamic", "m_identifier": 91, "m_60DB8F99": true},
+                "priority": {
+                  "level": 2,
+                  "above_equals": false
+                },
+                "m_topSubgraphPlug": {"$": "Plug", "links": [[16, "m_inPlug"]]},
+                "m_underSubgraphPlug": {"$": "Plug", "links": [[17, "m_inPlug"]]}
+              }
+            },
+            {
+              "pos": 2,
+              "class": "STUStatescriptEntryGameMessage",
+              "uid": 2,
+              "rid": 2,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_gameMessage": {
+                  "m_gameMessage": "0x000000000000A02A"
+                },
+                "m_outPlug": {"$": "Plug", "links": [[3, "m_beginPlug"]]}
+              }
+            },
+            {
+              "pos": 3,
+              "class": "authored.tie_claim",
+              "uid": 3,
+              "rid": 3,
+              "remote": -1,
+              "state": 1,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "variable": {
+                  "scope": "entity",
+                  "id": 90
+                },
+                "value": 24,
+                "priority": {
+                  "level": 2,
+                  "above_equals": true
+                },
+                "m_topSubgraphPlug": {"$": "Plug", "links": [[16, "m_inPlug"]]},
+                "m_underSubgraphPlug": {"$": "Plug", "links": [[17, "m_inPlug"]]},
+                "duration_frames": 3,
+                "m_onFinishedPlug": {"$": "Plug", "links": [[15, "m_inPlug"]]}
+              }
+            },
+            {
+              "pos": 4,
+              "class": "STUStatescriptEntryGameMessage",
+              "uid": 4,
+              "rid": 4,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_gameMessage": {
+                  "m_gameMessage": "0x000000000000A02B"
+                },
+                "m_outPlug": {"$": "Plug", "links": [[5, "m_beginPlug"]]}
+              }
+            },
+            {
+              "pos": 5,
+              "class": "authored.claim",
+              "uid": 5,
+              "rid": 5,
+              "remote": -1,
+              "state": 2,
+              "client_only": false,
+              "server_only": true,
+              "state_behavior": "stack_claim",
+              "fields": {
+                "variable": {
+                  "scope": "entity",
+                  "id": 90
+                },
+                "value": 40,
+                "priority": {
+                  "level": 4,
+                  "above_equals": false
+                },
+                "m_topSubgraphPlug": {"$": "Plug", "links": [[16, "m_inPlug"]]},
+                "m_underSubgraphPlug": {"$": "Plug", "links": [[17, "m_inPlug"]]}
+              }
+            },
+            {
+              "pos": 6,
+              "class": "STUStatescriptEntryGameMessage",
+              "uid": 6,
+              "rid": 6,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_gameMessage": {
+                  "m_gameMessage": "0x000000000000A02C"
+                },
+                "m_outPlug": {"$": "Plug", "links": [[7, "m_beginPlug"]]}
+              }
+            },
+            {
+              "pos": 7,
+              "class": "authored.claim",
+              "uid": 7,
+              "rid": 7,
+              "remote": -1,
+              "state": 3,
+              "client_only": false,
+              "server_only": true,
+              "state_behavior": "stack_claim",
+              "fields": {
+                "variable": {
+                  "scope": "instance",
+                  "id": 90
+                },
+                "value": 110,
+                "priority": {
+                  "level": 9,
+                  "above_equals": false
+                }
+              }
+            },
+            {
+              "pos": 8,
+              "class": "STUStatescriptEntryGameMessage",
+              "uid": 8,
+              "rid": 8,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_gameMessage": {
+                  "m_gameMessage": "0x000000000000A02D"
+                },
+                "m_outPlug": {"$": "Plug", "links": [[9, "m_beginPlug"]]}
+              }
+            },
+            {
+              "pos": 9,
+              "class": "authored.claim",
+              "uid": 9,
+              "rid": 9,
+              "remote": -1,
+              "state": 4,
+              "client_only": false,
+              "server_only": true,
+              "state_behavior": "stack_claim",
+              "fields": {
+                "variable": {
+                  "scope": "instance",
+                  "id": 90
+                },
+                "value": 220,
+                "priority": {
+                  "level": 1,
+                  "above_equals": false
+                }
+              }
+            },
+            {
+              "pos": 10,
+              "class": "STUStatescriptEntryGameMessage",
+              "uid": 10,
+              "rid": 10,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_gameMessage": {
+                  "m_gameMessage": "0x000000000000A031"
+                },
+                "m_outPlug": {"$": "Plug", "links": [[11, "m_inPlug"], [12, "m_inPlug"], [13, "m_inPlug"]]}
+              }
+            },
+            {
+              "pos": 11,
+              "class": "STUStatescriptActionSetVar",
+              "uid": 11,
+              "rid": 11,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_ADEB6E05": true,
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 83, "m_60DB8F99": false},
+                "m_value": {"$": "StackAllows", "variable": {"scope": "entity", "id": 90}, "priority": {"level": 2, "above_equals": false}}
+              }
+            },
+            {
+              "pos": 12,
+              "class": "STUStatescriptActionSetVar",
+              "uid": 12,
+              "rid": 12,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_ADEB6E05": true,
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 84, "m_60DB8F99": false},
+                "m_value": {"$": "StackAllows", "variable": {"scope": "entity", "id": 90}, "priority": {"level": 2, "above_equals": true}}
+              }
+            },
+            {
+              "pos": 13,
+              "class": "STUStatescriptActionSetVar",
+              "uid": 13,
+              "rid": 13,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_ADEB6E05": true,
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 85, "m_60DB8F99": false},
+                "m_value": {"$": "StackAllows", "variable": {"scope": "instance", "id": 90}, "priority": {"level": 3, "above_equals": true}}
+              }
+            },
+            {
+              "pos": 14,
+              "class": "STUStatescriptEntryGameMessage",
+              "uid": 14,
+              "rid": 14,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_gameMessage": {
+                  "m_gameMessage": "0x000000000000A02E"
+                },
+                "m_outPlug": {"$": "Plug", "links": [[1, "m_F198FD3A"]]}
+              }
+            },
+            {
+              "pos": 15,
+              "class": "STUStatescriptActionSetVar",
+              "uid": 15,
+              "rid": 15,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_ADEB6E05": true,
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 82, "m_60DB8F99": false},
+                "m_value": true
+              }
+            },
+            {
+              "pos": 16,
+              "class": "STUStatescriptActionSetVar",
+              "uid": 16,
+              "rid": 16,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_ADEB6E05": true,
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 80, "m_60DB8F99": false},
+                "m_value": true
+              }
+            },
+            {
+              "pos": 17,
+              "class": "STUStatescriptActionSetVar",
+              "uid": 17,
+              "rid": 17,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_ADEB6E05": true,
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 80, "m_60DB8F99": false},
+                "m_value": false
+              }
+            }
+          ],
+          "unknown_nodes": [],
+          "states": [1, 3, 5, 7, 9],
+          "entries": [0, 2, 4, 6, 8, 10, 14],
+          "remote": [],
+          "sync_vars": []
+        }
+      ],
+      "bodies": {},
+      "missing": []
+    },
+    "graph": 480,
+    "stack_variable": 90,
+    "live_variable": 91,
+    "query": 41009,
+    "steps": [
+      {"frame": 0, "messages": [[1, 41001], [1, 41004], [2, 41005]]},
+      {"frame": 1, "messages": [[2, 41002]]},
+      {"frame": 2, "messages": [[3, 41003]]},
+      {"frame": 3, "value": 12, "destroy": 3},
+      {"frame": 4},
+      {"frame": 5, "value": 16},
+      {"frame": 6, "messages": [[1, 41006]]},
+      {"frame": 7, "destroy": 2}
+    ]
+  },
+  "expected": [
+    {"entity": 10, "owner": 1, "finished": false, "instances": [[1, 110, true, [false, true, false]], [2, 220, null, [false, true, true]], [3, 103, null, [false, true, true]]]},
+    {"entity": 24, "owner": 2, "finished": false, "instances": [[1, 110, false, [false, true, false]], [2, 220, true, [false, true, true]], [3, 103, null, [false, true, true]]]},
+    {"entity": 40, "owner": 3, "finished": false, "instances": [[1, 110, false, [false, false, false]], [2, 220, false, [false, false, true]], [3, 103, true, [false, false, true]]]},
+    {"entity": 24, "owner": 2, "finished": false, "instances": [[1, 110, false, [false, true, false]], [2, 220, true, [false, true, true]]]},
+    {"entity": 12, "owner": 1, "finished": true, "instances": [[1, 110, true, [false, true, false]], [2, 220, true, [false, true, true]]]},
+    {"entity": 16, "owner": 1, "finished": true, "instances": [[1, 110, true, [false, true, false]], [2, 220, true, [false, true, true]]]},
+    {"entity": 7, "owner": null, "finished": true, "instances": [[1, 110, true, [true, true, false]], [2, 220, true, [true, true, true]]]},
+    {"entity": 7, "owner": null, "finished": false, "instances": [[1, 110, true, [true, true, false]]]}
+  ]
+}

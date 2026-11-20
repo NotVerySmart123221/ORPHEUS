@@ -187,55 +187,106 @@ fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() 
     const PAYLOAD_SLOT: u32 = 8;
     const PARAMETER: u32 = 9;
     const HOST_DELTA_SLOT: u32 = 18;
+    const ADMITTED_SLOT: u32 = 19;
+    const CONTROL_SLOT: u32 = 20;
+    const EXCLUDED_TAG: &str = "0x0D60000000500114";
 
     let entity_var = |id| json!({"$":"STUConfigVarDynamic","m_identifier":id,"m_60DB8F99":true});
+    let priority = json!({"level":3,"above_equals":false});
+    let variable = json!({"scope":"entity","id":CONTROL_SLOT});
+    let nodes = [
+        json!({
+            "pos":0,"uid":0,"rid":0,"remote":-1,"state":null,
+            "class":"STUStatescriptEntryGameMessage","server_only":true,"client_only":false,
+            "room_message_entry":true,"fields":{
+                "m_gameMessage":{"m_gameMessage":format!("0x{MESSAGE:016X}")},
+                "m_B60ABDA4":entity_var(SENDER_SLOT),
+                "m_params":[{"m_B5051BCE":format!("0x{PARAMETER:016X}"),
+                    "m_out_Var":entity_var(PAYLOAD_SLOT)}],
+                "m_outPlug":{"$":"Plug","links":[[4,"m_inPlug"]]}
+            }
+        }),
+        json!({
+            "pos":1,"uid":1,"rid":1,"remote":-1,"state":null,
+            "class":"EntryHostEvent","server_only":true,"client_only":false,
+            "host_event_entry":"health_applied","fields":{
+                "m_params":[{"m_B5051BCE":"0x0000000000000003",
+                    "m_out_Var":entity_var(HOST_DELTA_SLOT)}],
+                "m_outPlug":{"$":"Plug","links":[]}
+            }
+        }),
+        json!({
+            "pos":2,"uid":2,"rid":2,"remote":-1,"state":0,
+            "class":"authored.input_lock","server_only":true,"client_only":false,
+            "state_behavior":"button_lock","fields":{"button":1}
+        }),
+        json!({
+            "pos":3,"uid":3,"rid":3,"remote":-1,"state":1,
+            "class":"authored.speed_scale","server_only":true,"client_only":false,
+            "state_behavior":"movement_scale","fields":{"factor":0.5}
+        }),
+        json!({
+            "pos":4,"uid":4,"rid":4,"remote":-1,"state":null,
+            "class":"authored.sender_filter","server_only":true,"client_only":false,
+            "action_behavior":"branch","fields":{
+                "m_condition":{"$":"EntityMatches","entity":entity_var(SENDER_SLOT),
+                    "filter":{"alive":true,"tags":{"none":[EXCLUDED_TAG]}}},
+                "m_truePlug":{"$":"Plug","links":[[5,"m_inPlug"]]},
+                "m_falsePlug":{"$":"Plug","links":[]}
+            }
+        }),
+        json!({
+            "pos":5,"uid":5,"rid":5,"remote":-1,"state":null,
+            "class":"authored.priority_gate","server_only":true,"client_only":false,
+            "action_behavior":"branch","fields":{
+                "m_condition":{"$":"StackAllows","variable":variable,"priority":priority},
+                "m_truePlug":{"$":"Plug","links":[[6,"m_beginPlug"],[7,"m_inPlug"]]},
+                "m_falsePlug":{"$":"Plug","links":[]}
+            }
+        }),
+        json!({
+            "pos":6,"uid":6,"rid":6,"remote":-1,"state":2,
+            "class":"authored.control_claim","server_only":true,"client_only":false,
+            "state_behavior":"stack_claim","fields":{
+                "variable":variable,"priority":priority,"value":true,"duration_frames":2,
+                "m_topSubgraphPlug":{"$":"Plug","links":[[2,"m_beginPlug"],[3,"m_beginPlug"]],
+                    "m_FF3DAF1E":[0,1]}
+            }
+        }),
+        json!({
+            "pos":7,"uid":7,"rid":7,"remote":-1,"state":null,
+            "class":"STUStatescriptActionSetVar","server_only":true,"client_only":false,
+            "fields":{"m_value":entity_var(PAYLOAD_SLOT),"m_out_Var":entity_var(ADMITTED_SLOT)}
+        }),
+    ];
     let bundle = json!({
         "version":1,"bodies":{},"missing":[],
         "graphs":[{
-            "index":123,"items":4,"states":[2,3],"entries":[0,1],"remote":[],"sync_vars":[],
+            "index":123,"items":8,"states":[2,3,6],"entries":[0,1],"remote":[],"sync_vars":[],
             "fields":{},"containers":{},"unknown_nodes":[],
             "header":{"m_nodesBitCount":4,"m_statesBitCount":4,
                 "m_remoteSyncNodesBitCount":4,"m_syncVarsBitCount":4},
-            "nodes":[{
-                "pos":0,"uid":0,"rid":0,"remote":-1,"state":null,
-                "class":"STUStatescriptEntryGameMessage","server_only":true,"client_only":false,
-                "room_message_entry":true,"fields":{
-                    "m_gameMessage":{"m_gameMessage":format!("0x{MESSAGE:016X}")},
-                    "m_B60ABDA4":entity_var(SENDER_SLOT),
-                    "m_params":[{"m_B5051BCE":format!("0x{PARAMETER:016X}"),
-                        "m_out_Var":entity_var(PAYLOAD_SLOT)}],
-                    "m_outPlug":{"$":"Plug","links":[[2,"m_beginPlug"],[3,"m_beginPlug"]]}
-                }
-            },{
-                "pos":1,"uid":1,"rid":1,"remote":-1,"state":null,
-                "class":"EntryHostEvent","server_only":true,"client_only":false,
-                "host_event_entry":"health_applied","fields":{
-                    "m_params":[{"m_B5051BCE":"0x0000000000000003",
-                        "m_out_Var":entity_var(HOST_DELTA_SLOT)}],
-                    "m_outPlug":{"$":"Plug","links":[]}
-                }
-            },{
-                "pos":2,"uid":2,"rid":2,"remote":-1,"state":0,
-                "class":"authored.input_lock","server_only":true,"client_only":false,
-                "state_behavior":"button_lock","fields":{"button":1,"duration_frames":2}
-            },{
-                "pos":3,"uid":3,"rid":3,"remote":-1,"state":1,
-                "class":"authored.speed_scale","server_only":true,"client_only":false,
-                "state_behavior":"movement_scale","fields":{"factor":0.5,"duration_frames":2}
-            }]
+            "nodes":nodes
         }],
         "junkenstein":{
             "pairs":{"0x02E0000000500101":{"body":"0x0400000000500102",
                 "controller":"0x0400000000500103"}},
             "entities":{
                 "0x0400000000500102":{"hero":"0x02E0000000500101","name":"Body",
-                    "manager":null,"weapons":[],"graphs":[{"graph":123,"m_75408640":0}]},
+                    "manager":null,"weapons":[],"target_tags":[],"graphs":[{"graph":123,"m_75408640":0}]},
                 "0x0400000000500103":{"hero":null,"name":"Controller",
                     "manager":null,"weapons":[],"graphs":[{"graph":123,"m_75408640":0}]}
             }
         }
     });
-    let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    let load = |bundle: &serde_json::Value| {
+        Arc::new(GraphStore::from_json(&serde_json::to_vec(bundle).unwrap()).unwrap())
+    };
+    let graphs = load(&bundle);
+    let mut tagged_bundle = bundle;
+    tagged_bundle["junkenstein"]["entities"]["0x0400000000500102"]["target_tags"] =
+        json!([EXCLUDED_TAG]);
+    let tagged_graphs = load(&tagged_bundle);
     let codecs = Arc::new(CodecTable::from_json(r#"{"classes":{}}"#).unwrap());
     let definition = NpcDefinition {
         hero: HERO,
@@ -260,9 +311,9 @@ fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() 
     };
     let context = FIXTURE_CONTEXT;
     let mut room = RoomSimulation::new(Vec::new()).unwrap();
-    let mut spawn = || {
+    let mut spawn = |graphs| {
         room.create_enemy(EnemySpawn {
-            graphs: Arc::clone(&graphs),
+            graphs,
             codecs: Arc::clone(&codecs),
             definition: &definition,
             request: &request,
@@ -274,29 +325,31 @@ fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() 
         })
         .unwrap()
     };
-    let sender = spawn();
-    let receiver = spawn();
+    let sender = spawn(Arc::clone(&graphs));
+    let receiver = spawn(Arc::clone(&graphs));
+    let excluded_sender = spawn(tagged_graphs);
     let ground = Arc::new(fixture_ground());
     let movers = MoverCatalog::default();
     let queries = BotQueries::new(false, &movers, &ground, None);
-    room.enable_spatial_queries(
-        false,
-        Arc::clone(&ground),
-        crate::script_graph::RoomSpatialNeeds::Queries,
-    );
+    let needs = graphs.room_spatial_needs();
+    assert_eq!(needs, crate::script_graph::RoomSpatialNeeds::EntityTags);
+    room.enable_spatial_queries(false, Arc::clone(&ground), needs);
     room.prepare_spatial_frame(context.tick).unwrap();
 
-    let frame = &room.spatial_frame.as_ref().unwrap().1;
-    let mut outbox = RoomScriptRequests::default();
-    let message = RoomMessage {
-        id: MESSAGE,
-        parameters: Variables::from([(PARAMETER, Value::Integer(17))]),
+    let send = |room: &mut RoomSimulation, source, payload, when, now| {
+        let frame = &room.spatial_frame.as_ref().unwrap().1;
+        let mut outbox = RoomScriptRequests::default();
+        let message = RoomMessage {
+            id: MESSAGE,
+            parameters: Variables::from([(PARAMETER, Value::Integer(payload))]),
+        };
+        assert!(!outbox.queue_message(frame, receiver + 1, message.clone()));
+        assert!(outbox.queue_message(frame, receiver, message));
+        let envelope = outbox.take().pop().unwrap();
+        room.settle_script_request(envelope, source, when, now)
+            .unwrap();
     };
-    assert!(!outbox.queue_message(frame, receiver + 1, message.clone()));
-    assert!(outbox.queue_message(frame, receiver, message));
-    let envelope = outbox.take().pop().unwrap();
-    room.settle_script_request(envelope, sender, context.tick, context.now)
-        .unwrap();
+    send(&mut room, sender, 17, context.tick, context.now);
 
     let observed = |room: &RoomSimulation, wire, controller| {
         let enemy = state(room, wire).unwrap().enemy.as_ref().unwrap();
@@ -310,6 +363,7 @@ fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() 
         (
             variables.get(&SENDER_SLOT).cloned(),
             variables.get(&PAYLOAD_SLOT).cloned(),
+            variables.get(&ADMITTED_SLOT).cloned(),
         )
     };
     let lock_active = |room: &RoomSimulation, wire, controller| {
@@ -334,20 +388,24 @@ fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() 
             .movement_speed_scale(frame)
     };
     assert!(!lock_active(&room, receiver, false));
-    assert_eq!(observed(&room, receiver, false), (None, None));
+    assert_eq!(observed(&room, receiver, false), (None, None, None));
     assert_eq!(speed_scale(&room, receiver, context.tick), 1.0);
     room.finish_tick(&queries, context.tick, context.now)
         .unwrap();
     assert!(!lock_active(&room, receiver, false));
-    assert_eq!(observed(&room, receiver, false), (None, None));
+    assert_eq!(observed(&room, receiver, false), (None, None, None));
     room.finish_tick(&queries, context.tick + 1, context.now + TICK_PERIOD)
         .unwrap();
     assert_eq!(
         observed(&room, receiver, false),
-        (Some(Value::Entity(sender)), Some(Value::Integer(17)))
+        (
+            Some(Value::Entity(sender)),
+            Some(Value::Integer(17)),
+            Some(Value::Integer(17))
+        )
     );
-    assert_eq!(observed(&room, receiver, true), (None, None));
-    assert_eq!(observed(&room, sender, false), (None, None));
+    assert_eq!(observed(&room, receiver, true), (None, None, None));
+    assert_eq!(observed(&room, sender, false), (None, None, None));
     assert!(lock_active(&room, receiver, false));
     assert!(!lock_active(&room, receiver, true));
     assert!(!lock_active(&room, sender, false));
@@ -370,6 +428,7 @@ fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() 
     room.enable_host_health_events();
     let tick = context.tick + 2;
     let now = context.now + 2 * TICK_PERIOD;
+    send(&mut room, sender, 18, tick - 1, now - TICK_PERIOD);
     room.settle_health(
         receiver,
         HealthEffect::Damage(25.0),
@@ -384,6 +443,14 @@ fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() 
     room.finish_tick(&queries, tick, now).unwrap();
     assert_eq!(host_delta(&room, receiver), (None, None));
     assert_eq!(host_delta(&room, sender), (None, None));
+    assert_eq!(
+        observed(&room, receiver, false),
+        (
+            Some(Value::Entity(sender)),
+            Some(Value::Integer(18)),
+            Some(Value::Integer(17))
+        )
+    );
     assert!(lock_active(&room, receiver, false));
     room.finish_tick(&queries, tick + 1, now + TICK_PERIOD)
         .unwrap();
@@ -395,6 +462,20 @@ fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() 
     assert!(!lock_active(&room, receiver, false));
     assert_eq!(speed_scale(&room, receiver, tick + 1), 0.5);
     assert_eq!(speed_scale(&room, receiver, tick + 2), 1.0);
+
+    send(&mut room, excluded_sender, 19, tick + 1, now + TICK_PERIOD);
+    room.finish_tick(&queries, tick + 2, now + 2 * TICK_PERIOD)
+        .unwrap();
+    assert_eq!(
+        observed(&room, receiver, false),
+        (
+            Some(Value::Entity(excluded_sender)),
+            Some(Value::Integer(19)),
+            Some(Value::Integer(17))
+        )
+    );
+    assert!(!lock_active(&room, receiver, false));
+    assert_eq!(speed_scale(&room, receiver, tick + 3), 1.0);
 }
 
 #[test]

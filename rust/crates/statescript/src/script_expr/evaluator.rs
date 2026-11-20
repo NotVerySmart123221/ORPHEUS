@@ -660,6 +660,22 @@ impl Evaluator {
             }
             "EntityMatches" => self.entity_matches(fields, context, nested)?,
             "EntitiesInRadius" => self.entities_in_radius(fields, context, nested)?,
+            "StackAllows" => {
+                let (variable, priority) = fields
+                    .get("variable")
+                    .zip(fields.get("priority"))
+                    .filter(|_| fields.len() == 3)
+                    .ok_or(EvalError::MalformedConfig(
+                        "expected StackAllows variable and priority",
+                    ))?;
+                let variable = authored_stack_variable(variable)?;
+                let priority = authored_stack_priority(priority)?;
+                self.charge()?;
+                let admitted = context
+                    .would_stack_to_top(variable, priority)
+                    .ok_or(EvalError::UnavailableStackAdmission)?;
+                Value::Bool(admitted)
+            }
             "STU_71A87E92" if native_shape(config, class, Some("m_entity")) => {
                 if let Some(value) = context.native(config) {
                     return Ok(value);

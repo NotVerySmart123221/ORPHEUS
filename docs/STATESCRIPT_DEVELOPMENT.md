@@ -84,6 +84,37 @@ rules.
 
 See the [synthetic movement scale contract](../fixtures/behavior/script-movement-scale-v1.json).
 
+## Use priorities for control effects
+
+A server-only state can declare `"state_behavior": "stack_claim"`, or use
+an authored class with `stack_claim_state`. Set `fields.variable` to an
+object with `scope` set to `"entity"` or `"instance"` and a nonzero integer
+`id`. Entity scope is shared by graph instances on the same body.
+Instance scope is local to the running graph.
+
+Set `fields.priority` to an object containing an integer `level` from
+-128 through 127 and a boolean `above_equals`. A higher level wins. An
+incoming claim at the same level wins only if it declares
+`above_equals: true`. Set `fields.value` to the value expression that the
+claim contributes. A positive `fields.duration_frames` schedules the
+claim's end. Claims also release on abort or instance destruction.
+Maps have no supported stack snapshot representation. A map result
+produces a diagnostic and leaves the current binding untouched.
+
+Use `{"$":"StackAllows","variable":...,"priority":...}` with the same
+variable and priority objects in an authored branch. It checks whether
+the new claim would lead the current stack at the point of evaluation.
+For a directed room message, run the check in the recipient's graph.
+The predicate reads the stack and leaves it untouched. An unavailable
+context produces a diagnostic.
+
+Use the existing `m_topSubgraphPlug` and `m_underSubgraphPlug` outputs to
+start effects at the corresponding stack position. Each output's
+`m_FF3DAF1E` array lists the state slots it owns, so the VM can end those
+states when the claim changes position or ends.
+
+See the [synthetic stack claim contract](../fixtures/behavior/script-stack-claim-v1.json).
+
 ## Share class behavior across a graph bundle
 
 Add `authored_classes` to a version 1 bundle and use those names in the

@@ -42,6 +42,55 @@ pub struct StackPriority {
     pub above_equals: bool,
 }
 
+pub(crate) fn authored_stack_variable(config: &Json) -> Result<Variable, EvalError> {
+    let malformed = || {
+        EvalError::MalformedConfig(
+            "expected a stack variable with entity or instance scope and a nonzero u32 id",
+        )
+    };
+    let fields = config
+        .as_object()
+        .filter(|fields| fields.len() == 2)
+        .ok_or_else(malformed)?;
+    let scope = match fields.get("scope").and_then(Json::as_str) {
+        Some("entity") => Scope::Entity,
+        Some("instance") => Scope::Instance,
+        _ => return Err(malformed()),
+    };
+    let id = fields
+        .get("id")
+        .and_then(Json::as_u64)
+        .and_then(|id| u32::try_from(id).ok())
+        .filter(|&id| id != 0)
+        .ok_or_else(malformed)?;
+    Ok(Variable { scope, id })
+}
+
+pub(crate) fn authored_stack_priority(config: &Json) -> Result<StackPriority, EvalError> {
+    let malformed = || {
+        EvalError::MalformedConfig(
+            "expected a stack priority with an i8 level and boolean above_equals",
+        )
+    };
+    let fields = config
+        .as_object()
+        .filter(|fields| fields.len() == 2)
+        .ok_or_else(malformed)?;
+    let level = fields
+        .get("level")
+        .and_then(Json::as_i64)
+        .and_then(|level| i8::try_from(level).ok())
+        .ok_or_else(malformed)?;
+    let above_equals = fields
+        .get("above_equals")
+        .and_then(Json::as_bool)
+        .ok_or_else(malformed)?;
+    Ok(StackPriority {
+        level,
+        above_equals,
+    })
+}
+
 /// Availability of the engine table is distinct from a missing hash or a computed null.
 #[derive(Clone, Debug, PartialEq)]
 pub enum EngineSetting {
@@ -395,6 +444,7 @@ pub enum EvalError {
     UnavailableSpatialCandidates,
     UnavailableSpatialVisibility,
     UnavailableRoomEntityFacts,
+    UnavailableStackAdmission,
     NestingExceeded,
 }
 
@@ -433,6 +483,7 @@ impl fmt::Display for EvalError {
             Self::UnavailableSpatialCandidates => f.write_str("unavailable spatial candidates"),
             Self::UnavailableSpatialVisibility => f.write_str("unavailable spatial visibility"),
             Self::UnavailableRoomEntityFacts => f.write_str("unavailable room entity facts"),
+            Self::UnavailableStackAdmission => f.write_str("unavailable stack admission"),
             Self::NestingExceeded => f.write_str("statescript config nesting limit exceeded"),
         }
     }

@@ -7,6 +7,7 @@ mod arrays_and_boss;
 mod authored_classes;
 mod destination_and_victory;
 mod local_message;
+mod stack_controls;
 mod states_and_switches;
 
 pub(super) use std::path::PathBuf;

@@ -1132,7 +1132,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             || site
                 .node
                 .and_then(|position| self.graphs.graph(site.graph)?.node(position))
-                .is_some_and(|node| node.target_child_binding().is_some());
+                .is_some_and(|node| {
+                    node.target_child_binding().is_some() || node.declares_stack_claim()
+                });
         self.record_diagnostic(Diagnostic {
             site,
             issue,

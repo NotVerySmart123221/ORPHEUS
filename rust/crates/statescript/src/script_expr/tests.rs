@@ -1775,6 +1775,122 @@ fn authored_spatial_queries_read_current_entity_vectors() {
 }
 
 #[test]
+fn authored_stack_admission_passes_strict_scoped_inputs_to_the_context() {
+    #[derive(Default)]
+    struct StackContext {
+        admitted: Option<bool>,
+        calls: Vec<(Variable, StackPriority)>,
+    }
+
+    impl Context for StackContext {
+        fn would_stack_to_top(
+            &mut self,
+            variable: Variable,
+            priority: StackPriority,
+        ) -> Option<bool> {
+            self.calls.push((variable, priority));
+            self.admitted
+        }
+
+        fn reference_native(&mut self, class: &str) {
+            panic!("authored stack admission was treated as a native expression: {class}");
+        }
+    }
+
+    let entity = json!({
+        "$":"StackAllows",
+        "variable":{"scope":"entity","id":u32::MAX},
+        "priority":{"level":-128,"above_equals":false}
+    });
+    let instance = json!({
+        "$":"StackAllows",
+        "variable":{"scope":"instance","id":7},
+        "priority":{"level":127,"above_equals":true}
+    });
+    let mut context = StackContext {
+        admitted: Some(true),
+        ..Default::default()
+    };
+    assert_eq!(evaluate(&entity, &mut context), Ok(Value::Bool(true)));
+    context.admitted = Some(false);
+    assert_eq!(evaluate(&instance, &mut context), Ok(Value::Bool(false)));
+    assert_eq!(
+        context.calls,
+        [
+            (
+                Variable {
+                    scope: Scope::Entity,
+                    id: u32::MAX
+                },
+                StackPriority {
+                    level: -128,
+                    above_equals: false
+                }
+            ),
+            (
+                Variable {
+                    scope: Scope::Instance,
+                    id: 7
+                },
+                StackPriority {
+                    level: 127,
+                    above_equals: true
+                }
+            )
+        ]
+    );
+    assert_eq!(
+        evaluate(&entity, &mut EmptyContext),
+        Err(EvalError::UnavailableStackAdmission)
+    );
+
+    context.calls.clear();
+    for invalid in [
+        json!({"$":"StackAllows","priority":entity["priority"]}),
+        json!({"$":"StackAllows","variable":entity["variable"]}),
+        json!({ "$":"StackAllows","variable":entity["variable"],"priority":entity["priority"],"extra":true }),
+    ] {
+        assert!(matches!(
+            evaluate(&invalid, &mut context),
+            Err(EvalError::MalformedConfig(_))
+        ));
+    }
+    for invalid in [
+        Json::Null,
+        json!({"scope":"entity"}),
+        json!({"scope":"parent","id":1}),
+        json!({"scope":"entity","id":0}),
+        json!({"scope":"entity","id":1.0}),
+        json!({"scope":"instance","id":u64::from(u32::MAX) + 1}),
+        json!({"scope":"entity","id":1,"extra":false}),
+    ] {
+        let mut config = entity.clone();
+        config["variable"] = invalid;
+        assert!(matches!(
+            evaluate(&config, &mut context),
+            Err(EvalError::MalformedConfig(_))
+        ));
+    }
+    for invalid in [
+        Json::Null,
+        json!({"level":1}),
+        json!({"level":-129,"above_equals":false}),
+        json!({"level":128,"above_equals":false}),
+        json!({"level":1.0,"above_equals":true}),
+        json!({"level":1,"above_equals":1}),
+        json!({"level":1,"above_equals":false,"extra":0}),
+    ] {
+        let mut config = entity.clone();
+        config["priority"] = invalid;
+        assert!(matches!(
+            evaluate(&config, &mut context),
+            Err(EvalError::MalformedConfig(_))
+        ));
+    }
+    assert!(context.calls.is_empty());
+}
+
+#[test]
 fn authored_room_predicates_share_radius_relation_and_tag_checks() {
     use crate::script_init::{TargetTagEffect, TargetTagEffects};
     use std::collections::BTreeSet;
