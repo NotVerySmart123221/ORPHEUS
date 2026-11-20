@@ -3,7 +3,10 @@
 use bevy_ecs::entity::Entity;
 
 use super::*;
-use crate::{game_combat::RoomSimulation, game_replication::BodyId};
+use crate::{
+    game_combat::{PlayerDeath, RoomSimulation},
+    game_replication::BodyId,
+};
 
 const MAX_PENDING_COMBAT_NOTICES: usize = 256;
 
@@ -23,7 +26,7 @@ pub(super) struct Peer {
 #[derive(Default)]
 pub(super) struct CombatUi {
     notices: VecDeque<PendingCombatNotice>,
-    pub(super) replacements: VecDeque<(Duration, BotReplacement)>,
+    replacements: VecDeque<(Duration, BotReplacement)>,
 }
 
 struct AuthoredCueIdentity {
@@ -33,7 +36,13 @@ struct AuthoredCueIdentity {
 
 struct PendingCombatNotice {
     notice: CombatNotice,
-    authored: Option<AuthoredCueIdentity>,
+    audience: CombatAudience,
+}
+
+enum CombatAudience {
+    Legacy,
+    Victim(BodyId),
+    Authored(AuthoredCueIdentity),
 }
 
 impl PendingCombatNotice {
@@ -43,26 +52,29 @@ impl PendingCombatNotice {
         owner: u32,
         simulation: Option<&RoomSimulation>,
     ) -> bool {
-        let Some(cue) = &self.authored else {
-            return match self.notice {
+        match &self.audience {
+            CombatAudience::Legacy => match self.notice {
                 CombatNotice::Voice { listener, .. } => {
                     body.is_some_and(|body| body.entity == listener)
                 }
                 _ => true,
-            };
-        };
-        let CombatNotice::Voice {
-            anchor, listener, ..
-        } = self.notice
-        else {
-            return false;
-        };
-        body == Some(cue.listener)
-            && cue.listener.entity == listener
-            && simulation.is_some_and(|room| {
-                room.room_cue_source_current(anchor, cue.source)
-                    && room.room_cue_listener_current(owner, cue.listener)
-            })
+            },
+            CombatAudience::Victim(victim) => body == Some(*victim),
+            CombatAudience::Authored(cue) => {
+                let CombatNotice::Voice {
+                    anchor, listener, ..
+                } = self.notice
+                else {
+                    return false;
+                };
+                body == Some(cue.listener)
+                    && cue.listener.entity == listener
+                    && simulation.is_some_and(|room| {
+                        room.room_cue_source_current(anchor, cue.source)
+                            && room.room_cue_listener_current(owner, cue.listener)
+                    })
+            }
+        }
     }
 }
 
@@ -135,14 +147,45 @@ impl Peer {
         }
     }
 
+    pub(super) fn queue_bot_replacement(&mut self, replacement: BotReplacement, expires: Duration) {
+        if let Some((_, pending)) = self
+            .combat_ui
+            .replacements
+            .iter_mut()
+            .find(|(_, pending)| pending.created.entity == replacement.retired)
+        {
+            // Intermediate generations held here were never published to this peer.
+            pending.created = replacement.created;
+        } else if self.world.tracks_current_bot(replacement.retired) {
+            self.combat_ui
+                .replacements
+                .push_back((expires, replacement));
+        }
+    }
+
     pub(super) fn queue_combat_notice(&mut self, notice: CombatNotice) {
+        self.queue_notice(notice, CombatAudience::Legacy);
+    }
+
+    pub(super) fn queue_player_death(&mut self, death: PlayerDeath) {
+        if self.world.owner() == death.owner && self.world.active_body_id() == Some(death.body) {
+            self.queue_notice(
+                CombatNotice::Death {
+                    source: death.source,
+                    killed_by: death.killed_by,
+                },
+                CombatAudience::Victim(death.body),
+            );
+        }
+    }
+
+    fn queue_notice(&mut self, notice: CombatNotice, audience: CombatAudience) {
         if self.combat_ui.notices.len() == MAX_PENDING_COMBAT_NOTICES {
             self.combat_ui.notices.pop_front();
         }
-        self.combat_ui.notices.push_back(PendingCombatNotice {
-            notice,
-            authored: None,
-        });
+        self.combat_ui
+            .notices
+            .push_back(PendingCombatNotice { notice, audience });
     }
 
     pub(super) fn queue_player_cue(
@@ -156,7 +199,7 @@ impl Peer {
         }
         self.combat_ui.notices.push_back(PendingCombatNotice {
             notice,
-            authored: Some(AuthoredCueIdentity { listener, source }),
+            audience: CombatAudience::Authored(AuthoredCueIdentity { listener, source }),
         });
     }
 
@@ -185,7 +228,11 @@ impl Peer {
                 continue;
             }
             let notice = pending.notice;
-            if pending.authored.as_ref().is_some_and(|cue| {
+            let authored = match &pending.audience {
+                CombatAudience::Authored(cue) => Some(cue),
+                _ => None,
+            };
+            if authored.is_some_and(|cue| {
                 !self.world.identity_ready(cue.listener.entity)
                     || self.authored_cue_ordinal.is_some_and(|ordinal| {
                         self.egress.oldest_pending_reliable() <= u64::from(ordinal)
@@ -204,7 +251,7 @@ impl Peer {
             }
             let bytes = notice.encode(schemas)?;
             let ordinal = self.egress.queue_reliable(bytes)?;
-            if pending.authored.is_some() {
+            if authored.is_some() {
                 self.authored_cue_ordinal = Some(ordinal);
             }
             for entity in notice.referenced_entities() {
@@ -218,14 +265,20 @@ impl Peer {
                 .pop_front()
                 .ok_or(RoomError::Invariant("pending bot replacement disappeared"))?;
             let entity = replacement.retired;
+            if !self.world.tracks_current_bot(entity) {
+                continue;
+            }
             let has_notice = self
                 .combat_ui
                 .notices
                 .iter()
                 .any(|pending| pending.notice.required_identity() == Some(entity));
             let waiting_for_reliable = self.world.pending_entity_notice(entity, &self.egress);
-            if now < expires
-                && (has_notice || waiting_for_reliable || self.world.health_pending(entity))
+            // A live replacement can itself have a pending create behind the
+            // earlier generation's destroy. Keep that ordering across respawns.
+            if !self.world.identity_ready(entity)
+                || (now < expires
+                    && (has_notice || waiting_for_reliable || self.world.health_pending(entity)))
             {
                 self.combat_ui
                     .replacements
@@ -457,7 +510,7 @@ mod tests {
             Some(&simulation),
         ));
 
-        let (_, killed, _) = simulation
+        let (_, outcome, _) = simulation
             .damage_player_body_by_wire(
                 listener,
                 input["late_damage"].as_f64().unwrap(),
@@ -469,7 +522,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        assert!(killed);
+        assert!(outcome.killed);
         assert_eq!(
             simulation.player_handle_for_wire(listener.entity),
             Some(listener)

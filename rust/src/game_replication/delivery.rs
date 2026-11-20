@@ -180,9 +180,13 @@ impl WorldDelivery {
         self.health_updates.contains_key(&entity)
     }
 
+    pub(crate) fn tracks_current_bot(&self, entity: u32) -> bool {
+        self.bots.get(&entity) == Some(&BotLifetime::Live)
+    }
+
     pub(crate) fn queue_health(&mut self, update: EntityUpdate) {
         let entity = update.entity;
-        let live_bot = self.bots.get(&entity) == Some(&BotLifetime::Live);
+        let live_bot = self.tracks_current_bot(entity);
         let live_remote = self
             .remote_players
             .get(&entity)
@@ -258,7 +262,7 @@ impl WorldDelivery {
     pub(crate) fn replace_bot(&mut self, replacement: BotReplacement) {
         let old = replacement.retired;
         let new = replacement.created.entity;
-        if self.bots.get(&old) != Some(&BotLifetime::Live) || self.bots.contains_key(&new) {
+        if !self.tracks_current_bot(old) || self.bots.contains_key(&new) {
             return;
         }
         self.bots.insert(old, BotLifetime::Retiring);
@@ -770,15 +774,7 @@ impl WorldDelivery {
                 .next_record(runtime, created);
             (health, next)
         };
-        if let Some(health) = health {
-            let update = EntityUpdate {
-                entity: id.entity,
-                operation: Some(Operation::Update(vec![health])),
-                ..EntityUpdate::default()
-            };
-            simulation.record_observer_player_health(self.owner, update.clone());
-            self.queue_health(update);
-        }
+        self.publish_owner_health(simulation, id, health);
         let (record, replaced) = match next {
             Ok(Some(record)) => record,
             Ok(None) => return,
@@ -807,6 +803,23 @@ impl WorldDelivery {
         self.push(record);
     }
 
+    fn publish_owner_health(
+        &mut self,
+        simulation: &mut RoomSimulation,
+        id: BodyId,
+        health: Option<WorldComponent>,
+    ) {
+        if let Some(health) = health {
+            let update = EntityUpdate {
+                entity: id.entity,
+                operation: Some(Operation::Update(vec![health])),
+                ..EntityUpdate::default()
+            };
+            simulation.record_observer_player_health(self.owner, update.clone());
+            self.queue_health(update);
+        }
+    }
+
     pub(super) fn cancel_body_script(&mut self, simulation: Option<&mut RoomSimulation>) {
         if let Some(mut script) = self.body_script.take() {
             if self.body.is_some_and(|body| body.id == script.id) {
@@ -820,6 +833,10 @@ impl WorldDelivery {
             script.stream.retire();
             if let Some(sim) = simulation {
                 sim.clear_player_runtime(script.id);
+                let health = sim
+                    .player_body_mut(script.id)
+                    .and_then(PlayerBodyState::take_health_update);
+                self.publish_owner_health(sim, script.id, health);
             }
             if let Some(projectiles) = &mut script.projectiles {
                 self.queue_projectiles(script.id, projectiles.retire())
@@ -1183,7 +1200,7 @@ impl WorldDelivery {
     }
 
     pub(crate) fn take_hitscan(&self, simulation: &mut RoomSimulation) -> Vec<PosedHitscan> {
-        let Some(id) = self.body_script.as_ref().map(|script| script.id) else {
+        let Some(id) = self.active_body_id() else {
             return Vec::new();
         };
         simulation.take_player_hitscan(id)
@@ -1406,6 +1423,17 @@ impl WorldDelivery {
             let Some(work) = self.input.work.pop_front() else {
                 break;
             };
+            // Let the room settle these shots before a selection despawns
+            // the body that owns them, even if its script has stopped.
+            if matches!(work, InputWork::Message { .. } | InputWork::Skin { .. })
+                && self
+                    .active_body_id()
+                    .and_then(|id| scene.simulation().player_body(id))
+                    .is_some_and(|body| !body.hitscan.is_empty())
+            {
+                self.input.work.push_front(work);
+                break;
+            }
             match work {
                 InputWork::Message {
                     message,
@@ -1630,6 +1658,7 @@ impl WorldDelivery {
                     frame: start_frame,
                     pose: movement,
                     eye_position: crate::game_combat::script_eye_position(hero.guid, &mover),
+                    skin: skin.guid,
                     quanta,
                 },
             )

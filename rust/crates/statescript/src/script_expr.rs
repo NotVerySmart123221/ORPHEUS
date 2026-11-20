@@ -342,6 +342,14 @@ pub trait Context {
         None
     }
 
+    /// Facts sampled for a specific foreign target when settling a health event.
+    fn settled_health_target(
+        &self,
+        _entity: u32,
+    ) -> Option<&crate::script_init::HealthTargetFacts> {
+        None
+    }
+
     /// Whether static geometry leaves the segment clear. None is unavailable.
     fn spatial_line_clear(&mut self, _origin: [f64; 3], _target: [f64; 3]) -> Option<bool> {
         None

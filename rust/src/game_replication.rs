@@ -32,7 +32,7 @@ use crate::{
     mover_modifiers::{Modifier, ModifierKey},
     projectile_flight::ProjectileFlight,
     scene_assets::PreparedScene,
-    script_init::{HealthTargetFacts, HostEvent, InitFault, RoomMessage, Snapshot},
+    script_init::{HostEvent, HostHealthContext, InitFault, RoomMessage, Snapshot},
     script_player::OwnerBodySpawn,
     script_snapshot_wire::CountdownFrame,
     script_snapshot_wire::{ProjectedSnapshot, SnapshotEncoder, View},
@@ -121,7 +121,7 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
     fn receive_host_event(
         &mut self,
         _event: HostEvent,
-        _target_facts: Option<Arc<HealthTargetFacts>>,
+        _context: HostHealthContext,
     ) -> Result<usize, InitFault> {
         Ok(0)
     }
@@ -184,6 +184,9 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
     fn vitals(&self) -> Option<&Vitals> {
         None
     }
+
+    /// Transfer modeled health to the native body when this runtime is retired.
+    fn take_vitals(&mut self) -> Option<Vitals>;
 
     fn heal(&mut self, _amount: f64) -> f64 {
         0.0

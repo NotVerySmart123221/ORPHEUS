@@ -4,16 +4,18 @@ Use the current `rust` module boundaries when extending the VM. This guide integ
 
 ## Shared Rust integration
 
-Use `work/statescript-integration` as the common local checkpoint for
-verified StateScript batches. Keep the working branches for the separate
-lanes and merge their completed commits after the focused checks. Review
-the shared checkpoint before changing a module that another lane also uses.
+Use `work/statescript-integration` for all local integration updates.
+Phase 2 and Phase 3 keep their existing worktrees for development and
+hand off commit IDs, scope, and known risks. The integration maintainer
+merges those commits, resolves conflicts, validates each shared update,
+and owns actor admission and gameplay diagnosis. Run checks once on the
+shared candidate.
 
 | Working branch | Scope |
 | --- | --- |
 | `work/phase2-generic-vm` | Shared VM primitives, mode rules, voice and message dispatch |
 | `work/statescript-local` | Phase 3 targeting, movement and owner projection |
-| `work/statescript-integration` | Combined checks, native actor admission and weapon readiness |
+| `work/statescript-integration` | Integration, verification, actor admission, and gameplay fixes |
 
 Run the workspace checks and prepared input and startup regressions on
 the combined source before treating it as the next shared baseline.
@@ -78,6 +80,20 @@ workspace.
 ```text
 python scripts/build_runtime_state_metadata.py --graph-bundle path/to/game_graphs_174.json.gz --evidence path/to/classification.zip --output path/to/new/game_graphs_174.json.gz
 ```
+
+## Supply model hardpoint membership
+
+An external graph bundle can include `model_hardpoints` in a body entry.
+Use one record per selected skin with `skin` and `hardpoints` fields.
+The zero skin GUID denotes the stock selection. Each list contains the
+complete hardpoint keys for that selected model. An empty list declares
+that the model has no hardpoints. An omitted record keeps the query
+unavailable for that skin, even if the stock model has a record. Use
+this data only when the model seen by the spawning body is known.
+The server reads membership for the current owner body and rebuilds the
+binding when the body is replaced. A synthetic example lives in the
+[owner model contract](../fixtures/behavior/owner-model-hardpoints-v1.json).
+Supply the enriched bundle through `prepare_server_runtime --game-graphs`.
 
 ## Build the private evidence reports
 
@@ -166,7 +182,14 @@ ability support.
 - The native `STU_9028E035` linked state uses its reciprocal state
   slot and known authored types to enter and leave the shared registry.
   Links cross instances in entry order and skip server-only destinations.
+  The self-targeted `STU_43994F1B` and `STU_93B8758C` forms with no
+  resource operand use the same registry and keep their own class lists.
+  Authored subgraph links still follow the ordinary state lifecycle.
   The linked codec remains the source of wire layout.
+- Static model protection requires a reciprocal state and remote slot,
+  a single protected-entity rule, and a host that owns the body's model
+  mask. Overlapping states retain protection until the last one retires.
+  The current encounter host supplies the verified boss-body capability.
 - A server-owned `ModifyHealth` state can declare periodic self shield
   recovery through its validated operands. The encounter host restores
   attached shield pools from the live rate on the VM clock. A host without
@@ -181,6 +204,13 @@ ability support.
   This action preserves vertical velocity and uses the existing mover
   and NPC motion primitives.
 
+- Native `PhysicsExplosion` uses the ordinary state lifecycle when its
+  authored operands, visibility and compiled slots match and the room
+  confirms that it has no dynamic map rigid bodies. The VM keeps the
+  authored transitions, including timers, and uses the existing empty
+  state payload. The static path leaves the impulse operands dormant.
+  A dynamic-body implementation and original-client acceptance remain open.
+
 Native target tracking still needs ordered samples, optional typed
 output bindings, and the lifecycle of its embedded state slots. The
 authored `track_entities` node owns separate child graph instances.
@@ -193,8 +223,8 @@ health effects, spatial queries, control effects, and voice recipients.
 Phase 2 still tracks three groups. The common charge route needs prepared
 coverage for the stock damage, healing, passive and bonus messages and
 migration of the legacy admission bridge. The core graph states still
-need the remaining `TrackTargets`, `ModifyHealth`, and
-`PhysicsExplosion` shapes and the other linked and timed states. The
+need the remaining `TrackTargets` and `ModifyHealth` shapes,
+dynamic map impulse behavior, and the other linked and timed states. The
 handoff's `SpatialQuery` ID, `STU_B5C87F3D`, uses the native local
 combat accumulator lifecycle. Its spatial operands stay dormant with
 explicitly absent context. Present-context behavior still needs native
@@ -704,6 +734,28 @@ space rejects the whole batch of matching listeners.
 
 See the [synthetic room message contract](../fixtures/behavior/script-room-message-v1.json).
 
+A private prepared bundle can declare a reviewed native numeric topic
+under `runtime_state_metadata.directed_numeric_messages`. Each record
+has a full `topic` GUID and full `parameter` GUID. The loader requires a
+matching native action with one instance-scoped target variable and a
+matching standalone server receiver. The receiver also continues to
+accept ordinary local messages. A foreign send requires a bound entity
+and exactly one finite numeric payload item. The room checks both body
+generations at settlement and delivers on the recipient's next VM
+frame.
+
+Use the preparation tool to append metadata to a fresh output file.
+The following example opts in the reviewed `00EB` route. The targeted
+probe isolates the two original sender actions and the original bonus
+receiver. Natural target binding and native timing in a running game
+require separate verification.
+
+```powershell
+python scripts/build_runtime_state_metadata.py --graph-bundle private/input.json.gz --directed-numeric-message 0x02400000000000EB:0x0A4000000000002A --output private/directed.json.gz
+$env:ORPHEUS_DIRECTED_GRAPH_BUNDLE = 'private/directed.json.gz'
+cargo test --locked -p orpheus-statescript --test stock_charge -- --ignored --exact prepared_bonus_actions_preserve_local_and_directed_delivery
+```
+
 ## Send a cue to selected players
 
 A server-only action can declare `"action_behavior": "room_cue"` or use
@@ -822,13 +874,34 @@ empty list stays empty. Other settled effects that lack hit attribution
 omit the slot, so delivery clears any previous value in a declared
 binding. Tags preserve authored order and duplicates.
 
-Weapon notifications also carry the target's captured filter flags,
-target tags, and script variables. An immediate foreign query about
-that target reads the captured values. Own-body queries, watched
-expressions, and other entities continue through their usual host.
+Weapon notifications carry the target's captured filter flags, target
+tags, and script variables. A settled room heal from a distinct sampled
+source can carry the same facts from the healed body. The room captures
+those facts after applying the positive pool delta. Healing tag
+attribution stays unavailable. An immediate foreign query about
+that target reads the captured values. A direct `EntityMatches` tag
+filter uses the captured tags and, when available, the target's
+room affiliation and post-settlement liveness. This permits credit for
+a retired target while an explicit alive filter rejects a lethal
+outcome. Relationship sources and spatial searches use the current
+room frame. Own-body queries, watchers and other entities use their
+usual host.
 Unavailable captured facts stay unavailable. The room checks body
 generation when dispatching the event, and the VM clears the snapshot
 at the end of each delivery.
+For NPC-local heals, publication samples the committed target after the
+local VM step. The queued delta remains the actual amount for each heal.
+
+An immediate follow-up request to the event's foreign target uses the
+generation recorded by the room. The VM verifies it against the same room
+frame used for admission. An expired target is skipped for directed
+messages and direct health changes. This keeps historical target facts
+usable by the source after the original body retires. Radial effects
+still select present candidates through their normal spatial query.
+An immediate same-body GameMessage carries the context when a top-level
+entity parameter names the health event target. Numeric parameters,
+incoming room messages, externally scheduled messages and later graph
+work use their own context.
 
 The enabled room records successful weapon damage, room-settled script
 and AI requests, field healing, and VM-local AI damage and healing.
@@ -927,6 +1000,53 @@ and target snapshot. Its timing, target flags, and mitigation records
 need separate validation before switching routes.
 
 See the [synthetic charge route contract](../fixtures/behavior/script-authored-charge-route-v1.json).
+
+To check the stock timing and bonus receiver, point
+`ORPHEUS_RUNTIME_DIR` at the private 104319 graph bundle and run:
+
+```text
+cargo test --locked -p orpheus-statescript --test stock_charge -- --ignored --exact prepared_stock_charge_uses_authored_passive_clock_and_bonus_entry
+```
+
+The probe starts the stock passive subtree with a detached typed host
+and uses the original bonus receiver. It verifies the one-second
+deadline, cancellation and re-arm, and the configured cap. Room
+admission, stock hit and healing attribution, and original-client
+presentation have separate verification.
+
+The [settled bonus contract](../fixtures/behavior/script-settled-bonus-v1.json)
+binds the actual healed delta and target from `health_applied` to a
+declared numeric message in a synthetic graph. The room delivers the
+message in the recipient's next VM frame after routing. The recipient
+graph owns admission and capping. A body replacement between request
+admission and room settlement discards the pending grant.
+
+The prepared local probe exercises the isolated original admission
+claim, stock sender, receiver and cap from the available body binding.
+
+```text
+cargo test --locked -p orpheus-statescript --test stock_charge -- --ignored --exact prepared_stock_admission_controls_local_bonus_credit
+```
+
+This probe supplies the admission trigger and bonus amount. Room-origin
+native `0D9A` emission and the previously unbound foreign operands still
+need independent evidence.
+
+To exercise incoming stock damage credit with explicit pool records, use
+the same private runtime:
+
+```text
+cargo test --locked -p orpheus-statescript --test stock_charge -- --ignored --exact prepared_stock_damage_credit_consumes_typed_pool_records
+```
+
+The probe keeps its target facts fixed and compares empty, unrelated
+and matching records in slot `0624`. The authored fold reads a typed
+pool identifier and a numeric amount, then deducts matching records
+before capping the award. Current player hits use the actual pool loss,
+following the pinned Python settlement path. The compatibility bridge
+still supplies an empty pool list. Temporary named pools and the
+native producer's exact output and timing need independent evidence.
+[Pinned damage settlement](https://github.com/leafall903/ORPHEUS/blob/c73e5a499ec73d499c97eaae46357af30c9e4b39/src/ow174/game/combat.py#L1870-L1896)
 
 ## Apply a radial health change
 

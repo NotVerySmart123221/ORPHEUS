@@ -242,6 +242,7 @@ pub(crate) struct BotHit {
 #[derive(Clone)]
 pub(crate) struct AppliedDamage {
     pub source: u32,
+    /// Actual pool loss, including armour reduction and remaining health limits.
     pub amount: f64,
     pub tags: crate::game_hitscan::DamageTags,
     pub target_facts: HealthTargetFacts,
@@ -268,8 +269,8 @@ use encounter::{EncounterComponent, GateHandle};
 pub(crate) use encounter::{EncounterPhase, GateDamageStage, GateHealth};
 use enemy::{BotState, EnemyState};
 use health::HealthEffect;
-use health_events::SampledBody;
-pub(crate) use player::{PlayerBodyEvent, PlayerBodyHandle, PlayerBodyState};
+use health_events::{HealthEventContext, SampledBody};
+pub(crate) use player::{PlayerBodyEvent, PlayerBodyHandle, PlayerBodyState, PlayerDeath};
 use script_requests::{PlayerRoomCue, RoomScriptTarget};
 pub(crate) use script_requests::{RoomScriptRequest, RoomScriptRequests};
 
@@ -310,6 +311,10 @@ pub(crate) struct RoomSpatialFrame {
 }
 
 impl RoomSpatialFrame {
+    pub(crate) fn body_generation(&self, wire: u32) -> Option<u64> {
+        Some(self.script_targets.get(&wire)?.entity.to_bits())
+    }
+
     pub(crate) fn candidates(&self) -> &[SpatialCandidate] {
         &self.candidates
     }
@@ -1005,10 +1010,7 @@ impl RoomSimulation {
                         candidate_index: candidates.len(),
                         angles: [pose.yaw, pose.pitch],
                         eye_position: state.script_eye_position(),
-                        health: state
-                            .runtime
-                            .as_ref()
-                            .is_some_and(|runtime| runtime.vitals().is_some()),
+                        health: state.vitals().is_some(),
                         messages: state.runtime.is_some(),
                         cue_listener: true,
                     },
@@ -1756,8 +1758,16 @@ impl RoomSimulation {
                 operation: Some(Operation::Update(vec![component])),
                 ..EntityUpdate::default()
             });
-            self.health_events
-                .stage(source, SampledBody { wire, entity }, healed, false, None);
+            let target = SampledBody { wire, entity };
+            let room_status = self.sample_health_target_room_status(target);
+            self.health_events.stage(
+                source,
+                target,
+                healed,
+                false,
+                HealthEventContext::Healing(&self.world),
+                room_status,
+            );
         }
         self.heal_player_bodies(team, skip_player_wire, source, pulses, &mut updates);
         Ok(updates)
@@ -1979,16 +1989,7 @@ impl RoomSimulation {
                 source,
                 amount: result.dealt,
                 tags: impact.tags,
-                target_facts: HealthTargetFacts {
-                    target: entity,
-                    filter_flags: crate::match_scene::team_bit(state.bot.spawn.team)
-                        .ok()
-                        .map(|team| 1 | team | if state.bot.dead { 0x10 } else { 0 }),
-                    tags: state.enemy.as_ref().map_or_else(Default::default, |enemy| {
-                        enemy.scripts.target_tags(&enemy.graphs, &enemy.binding)
-                    }),
-                    script_state: state.script_state(),
-                },
+                target_facts: state.health_target_facts(),
             },
             notices: [
                 Some(CombatNotice::Hit {
@@ -2010,7 +2011,7 @@ impl RoomSimulation {
             entity,
             -result.dealt,
             result.killed,
-            Some(&hit.damage),
+            Some((hit.damage.tags, &hit.damage.target_facts)),
         );
         Ok(Some(hit))
     }
@@ -2090,7 +2091,7 @@ impl RoomSimulation {
             self.collect_local_health_events();
             self.settle_authored_requests(tick, now)?;
             self.flush_health_events();
-            return Ok(Vec::new());
+            return self.respawn_due(tick, now);
         }
         let external_and_players = self.collect_player_enemy_targets();
         let has_roster = self.player_targets_active

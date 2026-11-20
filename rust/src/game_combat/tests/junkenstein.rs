@@ -54,6 +54,7 @@ pub(super) fn verify_natural_ending(ending: NormalEnding) {
                 frame: FIRST_TICK,
                 pose: mover.pose(),
                 eye_position: crate::game_combat::script_eye_position(hero.guid, &mover),
+                skin: 0,
                 quanta: RETAIL_QUANTA,
             },
         )
@@ -777,6 +778,7 @@ pub(super) fn normal_encounter_first_reaper_finishes_intro_and_pursues_live_defe
                 frame: FIRST_TICK,
                 pose: mover.pose(),
                 eye_position: crate::game_combat::script_eye_position(cassidy.guid, &mover),
+                skin: 0,
                 quanta: RETAIL_QUANTA,
             },
         )
@@ -1137,6 +1139,7 @@ fn normal_street_wave_keeps_the_zomnic_body_running_after_setup() {
                 frame: 2700,
                 pose: mover.pose(),
                 eye_position: crate::game_combat::script_eye_position(cassidy.guid, &mover),
+                skin: 0,
                 quanta: RETAIL_QUANTA,
             },
         )

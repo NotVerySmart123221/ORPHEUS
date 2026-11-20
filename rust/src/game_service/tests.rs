@@ -1,6 +1,8 @@
 use super::*;
 
 mod benchmark;
+mod bot_replacement;
+mod death_notice;
 mod harness;
 mod isolation;
 mod junkenstein_validation;

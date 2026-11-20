@@ -173,3 +173,63 @@ fn parent_owned_state_rejects_configured_predicates_duration_and_alternate_graph
         assert!(snapshot.pending_timers.get(&1).is_none_or(Vec::is_empty));
     }
 }
+
+#[test]
+fn parent_owned_typed_duration_finishes_and_cancels_with_its_scope() {
+    let contract: Json = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/script-parent-owned-duration-v1.json"
+    )))
+    .unwrap();
+    let input = &contract["input"];
+    let fields = json!({
+        "m_ED97A97C": {"$": "STUConfigVarFloat", "m_value": input["seconds"]},
+    });
+    for (graph, position, cancel) in [(113, 3, false), (173, 6, true)] {
+        let mut component = fixture(graph, position, &fields, false);
+        let snapshot = component.snapshot().unwrap();
+        assert!(
+            snapshot.initialization_complete(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        assert_eq!(snapshot.instances[&1].states[&2].kind, StateKind::Plain);
+        assert!(snapshot.pending_timers[&1].iter().any(|timer| {
+            timer.raw_state == 2
+                && !timer.finish
+                && u64::from(timer.parameter)
+                    == contract["expected"]["timer_parameter"].as_u64().unwrap()
+                && timer.due_ms == contract["expected"]["timer_ms"].as_u64().unwrap()
+        }));
+        if cancel {
+            component
+                .advance_frame(
+                    input["cancel_frame"].as_u64().unwrap() as u32,
+                    &mut EmptyWorld,
+                )
+                .unwrap();
+            let now = component.now_ms();
+            component
+                .machine
+                .queues
+                .push(1, now, Event::Abort(0))
+                .unwrap();
+            component.run_now(&mut EmptyWorld).unwrap();
+        } else {
+            component
+                .advance_frame(
+                    input["before_deadline_frame"].as_u64().unwrap() as u32,
+                    &mut EmptyWorld,
+                )
+                .unwrap();
+            assert!(component.snapshot().unwrap().instances[&1].states[&2].active);
+            component
+                .advance_frame(
+                    input["finish_frame"].as_u64().unwrap() as u32,
+                    &mut EmptyWorld,
+                )
+                .unwrap();
+        }
+        assert_cleaned(&mut component, !cancel);
+    }
+}

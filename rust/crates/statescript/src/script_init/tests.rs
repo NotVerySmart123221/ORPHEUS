@@ -20,13 +20,16 @@ mod movement_edges;
 mod observation_sample;
 mod observer_eye_position;
 mod parent_owned_state;
+mod physics_explosion;
 mod projected_messages;
 mod room_cue;
 mod runtime_state_metadata;
+mod self_damage;
 mod shield_recharge;
 mod stack_controls;
 mod stat_state;
 mod states_and_switches;
+mod static_model_protection;
 mod swept_displacement;
 
 pub(super) use std::path::PathBuf;

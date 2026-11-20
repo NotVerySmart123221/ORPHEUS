@@ -18,13 +18,38 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Preserve observation inputs through a committed StateScript logical-button branch. Its child states use current values if the source expires, so finishing a sample does not interrupt the listener's held or idle lifecycle. Shared-branch verification is pending.
 
-- Fixed StateScript logical-button listeners that retained a held effect after a live binding change. Listeners discard the previous button's buffer and reconcile against the new button's held and admission state. Shared-branch verification is pending.
+- Process training bot respawn deadlines after authored damage, including before normal room combat starts. Preserve bot replacement order for each peer while its old body records are being acknowledged.
 
-- Preserve a StateScript observation's output through queued state initialization. Starts from a stale activation or frame are discarded, and higher-priority bindings continue to control visibility. Shared-branch verification is pending.
+- Replaced fixed PhysicsExplosion placements with authored state checks and an explicit map physics capability. Static rooms retain the ordinary state lifecycle and transitions. Unknown and dynamic map physics still produce a diagnostic. Added a synthetic regression for scope, lifecycle, and unsupported fields. Integration validation pending.
 
-- Added room-actor identity tracking for authored target scopes. The opted-in tracker retires an old body's child scripts and timers before dispatch when the room reuses its entity ID. Shared-branch verification is pending.
+- Preserve already generated hitscan and current health pools when an owner script stops. The room can settle prior shots and continue damage, healing, and death for the same body until it is replaced.
 
-- Fixed NPC script direction sampling when navigation turns a body with an active authored facing claim. The room can publish the navigation pose on the frame the claim ends. Shared-branch verification is pending.
+- Applied the settled target's tags, affiliation and liveness to direct `EntityMatches` filters in a health event. A lethal impact retains its original target's qualification after the body retires. Source membership and spatial searches still use the current room frame. Validated in shared candidate `29df13cb`.
+
+- Keep the settled target context when an immediate same-body GameMessage carries the target as a typed entity parameter. The synthetic contract checks relayed requests across replacement and independent messages on the same VM frame. Integration validation pending.
+
+- Use actual player damage for attacker credit and hit notices. The settled-hit contract compares an overkill impact against the same capped result in the deferred event. A prepared probe checks the stock damage receiver's typed pool deductions, floor and cap. Integration validation pending.
+
+
+- Kept a settled health event bound to its original target generation through the next VM frame. Direct awards and health requests skip an expired target. Added a room regression for same-wire replacement before the source VM handles the event and a fresh award after replacement. Validated in shared candidate `e2123b35`.
+
+- Carried target facts with positive NPC-local health events at VM publication. Added room coverage for a capped heal issuing one configured bonus on the recipient's next VM frame and for dropping the award when that recipient is replaced. A prepared probe exercises original local admission, award, and revocation through the graph. Validated in shared candidate `29df13cb`.
+
+- Settle pending hitscan before replacing the owner's hero or skin, including when both inputs arrive in one worker turn. Scope queued player death notices to the victim body's generation so they cannot follow a replacement.
+
+- Resolve owner StateScript hardpoint queries from optional model membership supplied for the selected body and skin. Treat missing model metadata as unavailable and preserve the current body when a replacement cannot initialize.
+
+- Taught parent-owned StateScript states to honor a finite, typed duration. The existing state timer runs the ordinary finish path and is cleared when the state or its parent exits.
+
+- Fixed NPC script direction sampling when navigation turns a body with an active authored facing claim. The room can publish the navigation pose on the frame the claim ends. Validated in shared candidate `6027a713`.
+
+- Preserve observation inputs through a committed StateScript logical-button branch. Its child states use current values if the source expires, so finishing a sample does not interrupt the listener's held or idle lifecycle. Validated in shared candidate `55c6f6fb`.
+
+- Fixed StateScript logical-button listeners that retained a held effect after a live binding change. Listeners discard the previous button's buffer and reconcile against the new button's held and admission state. Validated in shared candidate `55c6f6fb`.
+
+- Preserve a StateScript observation's output through queued state initialization. Starts from a stale activation or frame are discarded, and higher-priority bindings continue to control visibility. Validated in shared candidate `55c6f6fb`.
+
+- Added room-actor identity tracking for authored target scopes. The opted-in tracker retires an old body's child scripts and timers before dispatch when the room reuses its entity ID. Validated in shared candidate `55c6f6fb`.
 
 - Added Inspector traces for StateScript ray queries. Player and NPC queries share the room's bounded ray history with weapon rays. Each script sample includes the graph, node, instance, VM frame and room capture tick. The overlay distinguishes actor hits, walls, misses and unavailable samples. The Phase 3A branch verified this on `05ab525e` against its synced `131dfdae` baseline.
 
@@ -60,6 +85,11 @@ This log records tested changes and their acceptance status. Entries are grouped
 - Validated both views of a candidate body's initial script snapshot before publishing the replacement. The owner and observer startup checks use the existing full-frame encoder and datagram budget. The synthetic input regression reproduced the old replacement after an observer-only link failure and verified rejection followed by a successful retry. Workspace tests with script coverage, Python script tests, and the prepared input-gap replacement passed. Both prepared 104319 reports matched the preceding startup results, and the #72 capture matched all 476 observations.
 
 - Kept the current player body active when a candidate script fails to initialize or encode its first owner snapshot. The room records a new body generation and commits the controller stream only after successful replacement. A synthetic input regression reproduced the old failure and exercised three rejections followed by a successful retry. Workspace tests with script coverage, Clippy, and the Python script tests passed. Prepared input-gap replacement passed, both 104319 startup reports matched the preceding results, and the #72 capture matched all 476 observations.
+- Matched two immediate StateScript self-damage forms from their authored fields instead of fixed graph positions. Both use the current NPC vitals callback, retaining the distinct cleanup death rule and native integer rounding. Synthetic regression added. Validated in shared candidate `6027a713`.
+
+- Added opt-in native directed numeric messages with same-generation source and target checks. The prepared bonus probe exercises the original local and foreign actions against the original receiver. Static model protection now uses validated state fields and an explicit body capability, preserving the mask until the last protecting state retires.
+
+- Registered two resource-free linked state classes by their authored shape and raw state slot. Room heals now provide the healed target's captured flags, tags, and script state to a distinct sampled source, with the actual settled amount and unavailable hit attribution. Added an opt-in prepared probe for the stock passive charge clock and bonus receiver. The locked workspace suite with script coverage passed, including 382 native and 228 portable StateScript library tests.
 
 - Applied the native horizontal velocity cap by authored selector and bounds at any supported host site, including integer bounds, through the next-frame movement queue. Settled impact events now share their original target's filter flags, target tags, and script state with immediate foreign queries in subscribed graphs. Tests cover target replacement and isolation between consecutive events. The locked workspace suite with script coverage passed, including 382 native and 226 portable StateScript library tests.
 
@@ -1217,7 +1247,6 @@ hosted-CI result is added.
   gameplay/presentation checklist still require static work before client
   verification. No client was launched and no push occurred.
 
-
 #### Restore strict shared voice-state callbacks
 
 - Add the 40E05F6B begin/poll/timer lifecycle with explicit context, manager,
@@ -1725,7 +1754,6 @@ hosted-CI result is added.
   full hit-effect execution. Deferred execution, immunity and native
   control/reaction projection remain static gaps. No client is started.
 
-
 #### Bridge Flashbang hit control into NPC combat
 
 - Read Flashbang effect 0079's duration override from authored 0228/7 rather
@@ -1756,7 +1784,6 @@ hosted-CI result is added.
   remain open static work. Flashbang and broader boss acceptance stay open;
   no original client is started while the static checklist is incomplete.
 
-
 #### Admit Cassidy Flashbang flight and range-end blast
 
 - The owner projectile bridge now accepts Cassidy 01E9/7's known single
@@ -1781,7 +1808,6 @@ hosted-CI result is added.
   interruption, recovery, impact/control replication and broader Flashbang
   acceptance remain open. Per the user's updated instruction, all listed
   static gaps must be resolved before the next original-client session.
-
 
 #### Restore authored common-NPC movement inputs
 
@@ -1810,7 +1836,6 @@ hosted-CI result is added.
   defender. Common attackers are retired through normal damage in this
   isolated replay to keep the gate alive. This does not establish visible
   intro/camera playback, native speed presentation or full boss acceptance.
-
 
 #### Verify basic Roll in the original client
 
@@ -1928,7 +1953,6 @@ hosted-CI result is added.
   The recap still shows Victory / 0.0; outcome UI acceptance remains open.
   Both owned test processes have stopped (server exit 0).
 
-
 #### Preserve the post-match manager inputs
 
 - The authorized Normal/Cassidy failure replay reaches zero gate health and
@@ -1944,7 +1968,6 @@ hosted-CI result is added.
   This closes the missing manager input only. Outcome UI acceptance, the full
   boss run, voices, intros, win line and gallery remain open. Both owned test
   sessions stopped cleanly on the server; local captures stay outside Git.
-
 
 #### Keep mission updates running after the HUD announcement
 
@@ -2009,7 +2032,6 @@ hosted-CI result is added.
   Narration, Boss intro count and gallery acceptance remain open. The owned
   test client and server were stopped.
 
-
 #### Preserve notification inputs and countdown delivery
 
 - The authorized original-client probe at a68f5d6c enters Arcade > Junkenstein
@@ -2055,7 +2077,6 @@ hosted-CI result is added.
   dependency; live notification rendering, ongoing notification delivery,
   top timer/gate HUD and complete outcome acceptance remain open.
 
-
 #### Original-client checkpoint and local source delivery
 
 - Rebuilt clean integration revision 970c6162 with `cargo build --locked --bin
@@ -2077,7 +2098,6 @@ hosted-CI result is added.
 - No Python ORPHEUS/main or combined-server checkout was edited. No remote
   push was performed. Remote rust remains 13acf152; publication audit and
   complete acceptance remain outstanding.
-
 
 #### Run the Summoner's Junkenstein weapons
 
@@ -3194,7 +3214,6 @@ hosted-CI result is added.
 - Arcade, Gallery, Boss behavior, dialogue and result presentation remain
   unverified. The line stopped its own client and service and retained private
   logs outside Git. This combined worktree did not launch the original client.
-
 
 #### Normalize combined mover stances and pass the prepared merge check
 

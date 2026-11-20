@@ -8,7 +8,7 @@ The Rust-only [runtime state fixture](../fixtures/behavior/script-runtime-state-
 
 The Rust-only [inherited base factory fixture](../fixtures/behavior/script-inherited-base-factory-v1.json) checks the base lifecycle at two new graph placements in both tagged and legacy bundles. It also checks client-only exclusion and diagnostics for an unrelated unknown class.
 
-The Rust-only fixtures for [parent-owned state](../fixtures/behavior/script-parent-owned-state-v1.json), [native direction](../fixtures/behavior/statescript-native-direction-v1.json), and [placement collection](../fixtures/behavior/script-tagged-placement-collection-v1.json) use synthetic graphs or host inputs. They cover child cleanup, pitched direction lookup, and ordered scene placement queries. The tests check unsupported operands and missing host data at the same entry points.
+The Rust-only fixtures for [parent-owned state](../fixtures/behavior/script-parent-owned-state-v1.json), [native direction](../fixtures/behavior/statescript-native-direction-v1.json), and [placement collection](../fixtures/behavior/script-tagged-placement-collection-v1.json) use synthetic graphs or host inputs. They cover child cleanup, pitched direction lookup, and ordered scene placement queries. The [parent-owned duration fixture](../fixtures/behavior/script-parent-owned-duration-v1.json) checks the authored timer and cancellation through the same lifecycle. The tests check unsupported operands and missing host data at the same entry points.
 
 The [meter activity contract](../fixtures/behavior/script-meter-body-activity-v1.json) checks gain and deferred health awards across activity changes. The [owner activity contract](../fixtures/behavior/script-owner-room-activity-v1.json) exercises the native room and body factory at startup, death, and same-wire replacement.
 
@@ -22,13 +22,15 @@ The Rust-only [class declaration fixture](../fixtures/behavior/script-authored-c
 
 The Rust-only [local message fixture](../fixtures/behavior/script-local-message-v1.json) checks parameter capture, continuation, graph-order delivery and client-only scope through the production VM. It also checks that a malformed receiver binding leaves earlier outputs and the active receiver branch intact. It needs no prepared runtime.
 
-The Rust-only [room message fixture](../fixtures/behavior/script-room-message-v1.json) checks typed admission and payload capture, explicit listener scope, and delivery in the recipient's next VM frame. Native room tests cover generation checks and the shared request order.
+The Rust-only [room message fixture](../fixtures/behavior/script-room-message-v1.json) checks typed admission and payload capture, explicit listener scope, and delivery in the recipient's next VM frame. Native room tests cover sender and target generation checks, shared request order, and next-frame delivery. Portable coverage validates the opt-in native numeric route and ordinary local handling.
 
 The Rust-only [projected message topics fixture](../fixtures/behavior/script-projected-message-topics-v1.json) checks explicit client scope, loading conflicts, ordinary state entry and exit, and server dispatch exclusion. The native test compares owner and observer activation frames and removal deltas with the existing send codec.
 
 The Rust-only [room cue fixture](../fixtures/behavior/script-room-cue-v1.json) covers authored audience selection and host admission. Native coverage checks selected player generations, late listener death, and reliable notice admission.
 
 The Rust-only [health action fixture](../fixtures/behavior/script-health-change-v1.json) checks signed health request admission, continuation, and rejection diagnostics. Room tests cover player and bot settlement, stale body identity, and death and health updates.
+
+The Rust-only [scripted training bot respawn fixture](../fixtures/behavior/training-bot-scripted-respawn-v1.json) checks the ordinary replacement deadline even when authored damage is processed before room combat starts. The [bot respawn delivery fixture](../fixtures/behavior/training-bot-respawn-delivery-v1.json) covers successive replacements behind delayed health or identity acknowledgements, while independent bots continue through their own delivery order.
 
 The Rust-only [ordinary health pool placement fixture](../fixtures/behavior/script-base-health-pool-placement-v1.json) exercises the same health pool shape at two positions through the VM and Vitals. It covers registration, remaining health on exit, cleanup, and rejection of an unsupported shape.
 
@@ -45,7 +47,7 @@ The Rust-only [movement edge fixture](../fixtures/behavior/script-movement-edges
 
 The Rust-only [stack claim fixture](../fixtures/behavior/script-stack-claim-v1.json) checks priority, ties, scope, dependent values and release through the production VM. The native room regression combines stack admission with a tag filter and verifies the lifetime of the input and movement effects.
 
-The [hardpoint membership fixture](../fixtures/behavior/statescript-hardpoint-membership-v1.json) checks a true or false model fact, an unavailable model, and malformed operands through the StateScript condition.
+The [hardpoint membership fixture](../fixtures/behavior/statescript-hardpoint-membership-v1.json) checks a true or false model fact, an unavailable model, and malformed operands through the StateScript condition. The [owner model fixture](../fixtures/behavior/owner-model-hardpoints-v1.json) checks the same condition on queued selection and skin replacement through the native owner factory. An unavailable model leaves the preceding body and runtime active.
 
 The [tagged target pair fixture](../fixtures/behavior/script-tagged-target-pair-v1.json) exercises literal include and exclude tags, output ordering, and a missing scene query at a synthetic placement.
 
@@ -53,8 +55,13 @@ The [voice projection fixture](../fixtures/behavior/statescript-voice-empty-proj
 
 The [linked state fixture](../fixtures/behavior/script-linked-state-lifecycle-v1.json)
 covers cross-instance link order, server-only entries, retirement, and invalid types.
+The [static model protection fixture](../fixtures/behavior/script-static-model-protection-v1.json)
+covers authored slot validation, host admission, and restoration after the last state retires.
 The [self shield recharge fixture](../fixtures/behavior/script-self-shield-recharge-v1.json)
 covers field-based admission, ticking, rate changes, and retirement.
+The [immediate self-damage fixture](../fixtures/behavior/script-immediate-self-damage-v1.json)
+checks admission at invented positions, native integer rounding, one-shot
+execution, the different death rules, and rejection of unreviewed modifiers.
 The [mode entity fixture](../fixtures/behavior/script-mode-entity-query-v1.json)
 covers available, absent, and unknown mode script context through the owner VM.
 
@@ -63,8 +70,9 @@ The Rust-only [server root allocation fixture](../fixtures/behavior/script-serve
 The Rust-only [authored resource meter fixture](../fixtures/behavior/script-authored-meter-v1.json) checks body-specific settings on one shared graph. It exercises settled health events, affiliation filtering, passive gains and saturation in the production loader and VM. The [authored charge route](../fixtures/behavior/script-authored-charge-route-v1.json) checks private mount validation, deferred health events, and owner and observer projection.
 
 The Rust-only [local health outcomes fixture](../fixtures/behavior/script-local-health-outcomes-v1.json) checks actual damage from AI callbacks and capped field healing. Room tests also exercise source provenance across body replacement.
+The [settled bonus fixture](../fixtures/behavior/script-settled-bonus-v1.json) follows actual room healing through a configured directed numeric message and an authored recipient meter. It checks frame order, recipients, capping, same-wire replacement on both sides of request admission, and an award from a fresh event after replacement.
 
-The Rust-only [host health event fixture](../fixtures/behavior/script-host-health-events-v1.json) checks authenticated delivery through the ordinary VM event timeline, typed receipt parameters, and separation from script-sent messages. It distinguishes ordered hit tags, an explicitly empty list, and clearing the binding when tags are unavailable. The [settled hit fixture](../fixtures/behavior/script-settled-hit-tags-v1.json) exercises native player and bot impact settlement and the captured tag list. It also checks which target facts survive settlement and how the room handles source and target replacement. Portable coverage checks that those facts are scoped to their own host event.
+The Rust-only [host health event fixture](../fixtures/behavior/script-host-health-events-v1.json) checks authenticated delivery through the ordinary VM event timeline, typed receipt parameters, and separation from script-sent messages. It distinguishes ordered hit tags, an explicitly empty list, and clearing the binding when tags are unavailable. The [settled hit fixture](../fixtures/behavior/script-settled-hit-tags-v1.json) exercises native player and bot impact settlement and the captured tag list. It also checks which target facts survive settlement and how the room handles source and target replacement. Portable coverage checks native queries and direct `EntityMatches` filters with the original target's tags, affiliation and liveness. Native coverage checks delivery after target retirement and distinguishes team modes, free-for-all and unavailable room state. The portable relay case compares a typed target parameter, a numeric alias, and independent same-frame messages after replacement. The native test also captures the healed target with a distinct current source and checks the capped amount and absent hit attribution.
 
 The Rust-only [mode ruleset fixture](../fixtures/behavior/script-mode-rulesets-v1.json) checks mode isolation, actor overrides, typed values, and explicit null results through the production StateScript loader. The same fixture covers the separate engine settings table, including an omitted table, an empty table, and an absent key. The owner host reads these values through its bound mode.
 
@@ -88,6 +96,10 @@ The Rust-only [owner startup spatial fixture](../fixtures/behavior/script-owner-
 
 The Rust-only [owner replacement fixture](../fixtures/behavior/owner-admission-transaction-v1.json) drives the room input queue through a factory error, an invalid runtime identity, an initial snapshot packing error, an observer-only link error, and a successful retry. The observer-only candidate has a valid owner baseline that fits the datagram. The fixture checks the current body and script, controller counters, replication records, and room events while input continues.
 
+The Rust-only [owner fault hitscan fixture](../fixtures/behavior/owner-script-fault-hitscan-v1.json) compares split and batched input across a VM fault and queued replacement. Only completed hitscan steps reach room settlement. The [owner fault vitals fixture](../fixtures/behavior/owner-script-fault-vitals-v1.json) checks cumulative health updates, later healing and death, and body identity after script retirement. Bodies without modeled vitals still leave health queries unavailable.
+
+The Rust-only [hitscan order fixture](../fixtures/behavior/owner-hitscan-before-switch-v1.json) checks that an acknowledged shot settles once before a queued hero or skin replacement, under split and shared input budgets. The [owner death notice fixture](../fixtures/behavior/owner-death-notice-v1.json) checks that a waiting notice stays with the victim generation and that a current death can still enter the reliable queue after mode UI readiness.
+
 The Rust-only [Practice Range selection fixture](../fixtures/behavior/practice-owner-selector-v1.json) starts two distinct catalog definitions through the ordinary scene selector and checks their graph roots. It distinguishes an invalid authored definition from an identity absent from the selector.
 
 The Rust-only [Practice Range owner content fixture](../fixtures/behavior/practice-owner-content-v1.json) covers a scene with no owner script inputs. It also verifies explicit startup errors for a partial catalog, including misplaced and malformed owner body declarations.
@@ -97,6 +109,8 @@ The Rust-only [reentrant button lock fixture](../fixtures/behavior/script-reentr
 The Rust-only [buffered button readiness fixture](../fixtures/behavior/script-buffered-button-readiness-v1.json) starts a dormant input listener within its authored buffer. The press can queue a readiness change in time for the down branch to see it. The same queue lets an input lock invalidate that branch.
 
 The Rust-only [clock-driven readiness fixture](../fixtures/behavior/script-clock-driven-readiness-v1.json) checks a BooleanSwitch reading a linked countdown. The ready branch runs when the clock brings the value to zero, even in the absence of an authored variable write.
+
+The Rust-only [static map explosion fixture](../fixtures/behavior/script-static-map-explosion-v1.json) checks the native state lifecycle in a host that confirms the absence of dynamic map rigid bodies. It covers relocated states, authored transitions and unsupported contexts through the production VM.
 
 The [local combat accumulator fixture](../fixtures/behavior/script-local-combat-accumulator-v1.json) checks that the VM keeps the state lifecycle and skips tick operands when the host confirms the context is absent. Available and unknown contexts remain diagnostic.
 

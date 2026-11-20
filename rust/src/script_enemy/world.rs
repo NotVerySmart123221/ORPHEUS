@@ -40,6 +40,11 @@ impl World for EnemyWorld<'_> {
             .then_some(false)
     }
 
+    fn has_dynamic_map_rigid_bodies(&self, site: Site) -> Option<bool> {
+        (site.entity == self.binding.body && crate::script_expr::valid_entity(site.entity))
+            .then_some(false)
+    }
+
     fn cap_horizontal_velocity(&mut self, site: Site, frame: u32, cap: f64) -> bool {
         if site.entity != self.binding.body
             || !is_junkenstein_mode(self.binding.mode)
@@ -590,16 +595,15 @@ impl World for EnemyWorld<'_> {
     fn outline_context_available(&self, _site: Site) -> Option<bool> {
         Some(false)
     }
+    fn supports_static_model_protection(&self, site: Site) -> bool {
+        site.entity == self.binding.body
+            && is_junkenstein_mode(self.binding.mode)
+            && crate::npc_catalog::is_junkenstein_boss(self.binding.hero)
+    }
+
     fn set_encounter_model_enabled(&mut self, site: Site, enabled: bool) -> bool {
         const MASK: u64 = (1 << 45) | (1 << 15);
-        if site.entity != self.binding.body
-            || !is_junkenstein_mode(self.binding.mode)
-            || !crate::npc_catalog::is_junkenstein_boss(self.binding.hero)
-            || !matches!(
-                (site.graph, site.node),
-                (0x01cb, Some(20)) | (0x0ce0, Some(17)) | (0x0d03, Some(2))
-            )
-        {
+        if !self.supports_static_model_protection(site) {
             return false;
         }
         if enabled {
@@ -1022,6 +1026,10 @@ impl World for EnemyWorld<'_> {
                 .script_requests
                 .queue_health_changes(frame, changes)
         })
+    }
+
+    fn room_body_generation(&self, wire: u32) -> Option<u64> {
+        self.binding.spatial_frame.as_deref()?.body_generation(wire)
     }
 
     fn queue_room_message(&mut self, site: Site, target: u32, message: RoomMessage) -> bool {

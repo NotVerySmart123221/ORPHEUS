@@ -6,6 +6,7 @@ use std::{
     io::{self, BufReader, Read},
     num::NonZeroU32,
     path::Path,
+    sync::Arc,
 };
 
 use flate2::bufread::MultiGzDecoder;
@@ -16,9 +17,13 @@ use orpheus_runtime::format::{
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-use crate::script_expr::{
-    EngineSetting, StackPriority, Variable, authored_stack_priority, authored_stack_variable,
-    client_only_fallback, native_entity_operand, native_fields, native_shape,
+use crate::{
+    script_expr::{
+        EngineSetting, Scope, StackPriority, Variable, authored_stack_priority,
+        authored_stack_variable, client_only_fallback, dynamic, native_entity_operand,
+        native_fields, native_shape,
+    },
+    script_wire::{Value as ScriptValue, Variables},
 };
 
 const GRAPH_TYPE: u64 = 0x0580;
@@ -75,6 +80,12 @@ pub(crate) enum EntryTopic {
     Host(HostEventKind),
 }
 
+#[derive(Clone, Copy, Debug)]
+enum DirectedNumericRoute {
+    Sender(u32),
+    Receiver(u32),
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Node {
     pub pos: u16,
@@ -96,6 +107,8 @@ pub struct Node {
     runtime_plain_state: bool,
     #[serde(skip)]
     runtime_client_state: bool,
+    #[serde(skip)]
+    directed_numeric_route: Option<DirectedNumericRoute>,
     pub fields: Value,
 }
 
@@ -243,6 +256,20 @@ impl Node {
         self.room_message_entry
     }
 
+    pub(crate) fn directed_numeric_parameter(&self) -> Option<u32> {
+        match self.directed_numeric_route {
+            Some(DirectedNumericRoute::Sender(slot)) => Some(slot),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn accepts_directed_numeric_message(&self, parameters: &Variables) -> bool {
+        matches!(
+            self.directed_numeric_route,
+            Some(DirectedNumericRoute::Receiver(slot)) if directed_numeric_payload(slot, parameters)
+        )
+    }
+
     pub(crate) fn host_event_kind(&self) -> Option<HostEventKind> {
         self.host_event_entry
     }
@@ -355,6 +382,27 @@ impl Node {
         collect_plugs(&self.fields, "", &mut found);
         found
     }
+}
+
+/// The native directed subset carries exactly one finite numeric value.
+pub(crate) fn directed_numeric_payload(slot: u32, parameters: &Variables) -> bool {
+    parameters.len() == 1
+        && match parameters.get(&slot) {
+            Some(ScriptValue::Integer(_)) => true,
+            Some(ScriptValue::Float(value)) => value.is_finite(),
+            _ => false,
+        }
+}
+
+fn directed_instance_variable(value: &Value) -> bool {
+    native_fields(value, &["m_identifier", "m_60DB8F99"])
+        && neutral_flag(&value["m_60DB8F99"])
+        && dynamic(value)
+            .is_ok_and(|var| var.is_some_and(|var| var.scope == Scope::Instance && var.id != 0))
+}
+
+fn neutral_flag(value: &Value) -> bool {
+    value.is_null() || value.as_bool() == Some(false) || value.as_u64() == Some(0)
 }
 
 fn raw_plug_links(field: &Value) -> impl Iterator<Item = &Value> {
@@ -1167,6 +1215,15 @@ pub struct Body {
     /// An omitted list means the source definition was unavailable.
     #[serde(default, deserialize_with = "body_target_tags")]
     pub target_tags: Option<BTreeSet<u64>>,
+    #[serde(default, deserialize_with = "body_model_hardpoints")]
+    model_hardpoints: ModelHardpointsBySkin,
+}
+
+impl Body {
+    /// Complete authored launch-model inventory for the exact skin. Skin zero is stock.
+    pub fn model_hardpoints(&self, skin: u64) -> Option<Arc<BTreeSet<u64>>> {
+        self.model_hardpoints.get(&skin).cloned()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1362,6 +1419,15 @@ struct RuntimeStateMetadata {
     client_states: Vec<RuntimeClientState>,
     #[serde(default)]
     projected_message_topics: Vec<String>,
+    #[serde(default)]
+    directed_numeric_messages: Vec<RuntimeDirectedNumericMessage>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeDirectedNumericMessage {
+    topic: String,
+    parameter: String,
 }
 
 #[derive(Deserialize)]
@@ -1435,6 +1501,111 @@ fn validate_projected_message_topics(
         )));
     }
     Ok(topics)
+}
+
+fn directed_numeric_shape(node: &Node, parameter: u64) -> Option<DirectedNumericRoute> {
+    let sender = match node.class.as_str() {
+        "STUStatescriptActionSendGameMessage" if node.is_networked() && node.is_action() => true,
+        "STUStatescriptEntryGameMessage" if node.server_only && !node.is_action() => false,
+        _ => return None,
+    };
+    if !node.runs_on_server()
+        || node.remote != -1
+        || node.state.is_some()
+        || node.is_state()
+        || node.declares_room_message_entry()
+        || !node.field("m_outPlug").is_some_and(valid_output_plug)
+        || !node
+            .fields
+            .as_object()?
+            .iter()
+            .all(|(key, value)| match key.as_str() {
+                "m_gameMessage" | "m_outPlug" | "m_params" => true,
+                "m_ADEB6E05" if sender => {
+                    value.as_bool() == Some(true) || value.as_u64() == Some(1)
+                }
+                "m_ADEB6E05" | "m_2BBEEAB8" | "m_A2287776" | "m_AED90719" => neutral_flag(value),
+                "m_8BF03679" | "m_BF5B22B7" => value.is_null(),
+                "m_targets" | "m_inPlug" if sender => true,
+                "m_8B34E9C3" if sender => value.is_null(),
+                "m_44D0D060" | "m_B60ABDA4" | "m_FF703F20" | "m_filter" if !sender => {
+                    value.is_null()
+                }
+                "m_5AEA0A51" | "m_FDBDCB70" if !sender => neutral_flag(value),
+                _ => false,
+            })
+    {
+        return None;
+    }
+    let [row] = node.field("m_params")?.as_array()?.as_slice() else {
+        return None;
+    };
+    let (class, value_field) = if sender {
+        ("STU_814D595E", "m_value")
+    } else {
+        ("STU_EF930FD7", "m_out_Var")
+    };
+    if !native_fields(row, &["m_B5051BCE", value_field])
+        || row.get("$").and_then(Value::as_str) != Some(class)
+        || row.get("m_B5051BCE").and_then(asset_guid) != Some(parameter)
+    {
+        return None;
+    }
+    let value = row.get(value_field)?;
+    let slot = u32::from(parameter as u16);
+    if sender {
+        (!value.is_null() && directed_instance_variable(node.field("m_targets")?))
+            .then_some(DirectedNumericRoute::Sender(slot))
+    } else {
+        directed_instance_variable(value).then_some(DirectedNumericRoute::Receiver(slot))
+    }
+}
+
+fn compile_directed_numeric_messages(
+    declarations: Vec<RuntimeDirectedNumericMessage>,
+    graphs: &mut BTreeMap<u32, Graph>,
+) -> io::Result<()> {
+    let mut topics = BTreeMap::new();
+    for declaration in declarations {
+        let topic = asset_guid(&Value::String(declaration.topic))
+            .filter(|&id| id >> 48 == 0x0240 && id as u16 != 0)
+            .ok_or_else(|| invalid("invalid directed numeric message topic"))?;
+        let parameter = asset_guid(&Value::String(declaration.parameter))
+            .filter(|&id| id >> 16 == 0x0a40_0000_0000 && id as u16 != 0)
+            .ok_or_else(|| invalid("invalid directed numeric message parameter"))?;
+        if topics.insert(topic, (parameter, false, false)).is_some() {
+            return Err(invalid(format!(
+                "duplicate directed numeric message topic {topic:#018X}"
+            )));
+        }
+    }
+    if topics.is_empty() {
+        return Ok(());
+    }
+    for node in graphs.values_mut().flat_map(|graph| &mut graph.nodes) {
+        let Some((parameter, found_sender, found_receiver)) = node
+            .literal_game_message_id()
+            .and_then(|topic| topics.get_mut(&topic))
+        else {
+            continue;
+        };
+        let route = directed_numeric_shape(node, *parameter);
+        match route {
+            Some(DirectedNumericRoute::Sender(_)) => *found_sender = true,
+            Some(DirectedNumericRoute::Receiver(_)) => *found_receiver = true,
+            None => (),
+        }
+        node.directed_numeric_route = route;
+    }
+    if let Some((topic, _)) = topics
+        .iter()
+        .find(|(_, (_, sender, receiver))| !sender || !receiver)
+    {
+        return Err(invalid(format!(
+            "directed numeric message topic {topic:#018X} requires a matching native sender and receiver",
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -1735,6 +1906,10 @@ impl GraphStore {
             bundle.runtime_state_metadata.projected_message_topics,
             &graphs,
         )?;
+        compile_directed_numeric_messages(
+            bundle.runtime_state_metadata.directed_numeric_messages,
+            &mut graphs,
+        )?;
         let room_spatial_requirements = graphs
             .values()
             .flat_map(|graph| &graph.nodes)
@@ -1744,6 +1919,7 @@ impl GraphStore {
                 if node.declares_health_change_action()
                     || node.declares_room_message_action()
                     || node.declares_room_cue_action()
+                    || node.directed_numeric_parameter().is_some()
                     || node.tracks_room_actor_identity()
                 {
                     requirements.needs = requirements.needs.max(RoomSpatialNeeds::Queries);
@@ -1918,6 +2094,40 @@ fn body_target_tags<'de, D: serde::Deserializer<'de>>(
                 .collect()
         })
         .transpose()
+}
+
+type ModelHardpointsBySkin = BTreeMap<u64, Arc<BTreeSet<u64>>>;
+
+fn body_model_hardpoints<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> Result<ModelHardpointsBySkin, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ModelHardpoints {
+        skin: Value,
+        hardpoints: Vec<Value>,
+    }
+
+    let mut by_skin = BTreeMap::new();
+    for entry in Vec::<ModelHardpoints>::deserialize(decoder)? {
+        let skin = asset_guid(&entry.skin)
+            .ok_or_else(|| serde::de::Error::custom("model skin must be a canonical GUID"))?;
+        let hardpoints = entry
+            .hardpoints
+            .iter()
+            .map(|value| {
+                asset_guid(value)
+                    .filter(|guid| guid >> 48 == 0x0dc0 && (guid & 0x0000_ffff_ffff_ffff) != 0)
+                    .ok_or_else(|| {
+                        serde::de::Error::custom("model hardpoint must be a nonzero .0DC GUID")
+                    })
+            })
+            .collect::<Result<BTreeSet<_>, D::Error>>()?;
+        if by_skin.insert(skin, Arc::new(hardpoints)).is_some() {
+            return Err(serde::de::Error::custom("duplicate model skin"));
+        }
+    }
+    Ok(by_skin)
 }
 
 pub fn field_at<'a>(fields: &'a Value, path: &str) -> Option<&'a Value> {
@@ -2503,6 +2713,47 @@ mod tests {
         );
         data["bodies"][body]["target_tags"] = json!(["0x0400000000000109"]);
         assert_eq!(load(&data).unwrap_err().kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn body_model_hardpoints_keep_exact_skin_membership_and_validate_catalog() {
+        const BODY: u64 = 0x0400_0000_0000_0001;
+        const SKIN: u64 = 0x0a60_0000_0000_002a;
+        const HARDPOINT: u64 = 0x0dc0_0000_0000_0042;
+        let mut data = fixture();
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let body = format!("0x{BODY:016X}");
+        assert!(
+            load(&data).unwrap().bodies()[&BODY]
+                .model_hardpoints(0)
+                .is_none()
+        );
+
+        data["bodies"][&body]["model_hardpoints"] = json!([
+            {"skin": "0x0000000000000000", "hardpoints": []},
+            {"skin": "0x0A6000000000002A", "hardpoints": ["0x0DC0000000000042"]},
+        ]);
+        let parsed = load(&data).unwrap();
+        let definition = &parsed.bodies()[&BODY];
+        assert!(definition.model_hardpoints(0).unwrap().is_empty());
+        assert_eq!(
+            *definition.model_hardpoints(SKIN).unwrap(),
+            BTreeSet::from([HARDPOINT])
+        );
+        assert!(definition.model_hardpoints(SKIN + 1).is_none());
+
+        for invalid in [
+            json!([
+                {"skin": "0x0000000000000000", "hardpoints": []},
+                {"skin": "0x0000000000000000", "hardpoints": ["0x0DC0000000000042"]},
+            ]),
+            json!([{"skin": "0x0A6000000000002A", "hardpoints": ["0x0400000000000042"]}]),
+            json!([{"skin": "0x0A6000000000002A", "hardpoints": ["0x0DC0000000000000"]}]),
+            json!([{"skin": "0xINVALID", "hardpoints": []}]),
+        ] {
+            data["bodies"][&body]["model_hardpoints"] = invalid;
+            assert_eq!(load(&data).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        }
     }
 
     #[test]

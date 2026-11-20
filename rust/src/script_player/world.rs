@@ -154,6 +154,7 @@ pub(super) struct BodyWorld {
     pub(super) vitals: Vitals,
     pub(super) pool_types_known: bool,
     pub(super) target_tags: Option<BTreeSet<u64>>,
+    pub(super) model_hardpoints: Option<Arc<BTreeSet<u64>>>,
     pub(super) target_tag_effects: TargetTagEffects,
     pub(super) controller_on_fire: bool,
     pub(super) defenders: Arc<[u32]>,
@@ -173,6 +174,11 @@ impl World for BodyWorld {
 
     fn local_combat_context_available(&self, site: Site) -> Option<bool> {
         // The headless owner body has no client-local combat accumulator.
+        self.is_player_site(site).then_some(false)
+    }
+
+    fn has_dynamic_map_rigid_bodies(&self, site: Site) -> Option<bool> {
+        // Native rooms load only static map collision, including during startup.
         self.is_player_site(site).then_some(false)
     }
 
@@ -341,6 +347,15 @@ impl World for BodyWorld {
             .map(|variables| variables.get(&id).copied().map_or(Value::Null, Value::from))
     }
 
+    fn body_has_hardpoint(&self, site: Site, entity: u32, hardpoint: u64) -> Option<bool> {
+        if entity != self.entity || !self.is_player_site(site) {
+            return None;
+        }
+        self.model_hardpoints
+            .as_ref()
+            .map(|hardpoints| hardpoints.contains(&hardpoint))
+    }
+
     fn body_angle(
         &self,
         entity: u32,
@@ -411,6 +426,10 @@ impl World for BodyWorld {
         self.spatial_frame
             .as_deref()
             .is_some_and(|frame| self.script_requests.queue_health_changes(frame, changes))
+    }
+
+    fn room_body_generation(&self, wire: u32) -> Option<u64> {
+        self.spatial_frame.as_deref()?.body_generation(wire)
     }
 
     fn queue_room_message(&mut self, site: Site, target: u32, message: RoomMessage) -> bool {

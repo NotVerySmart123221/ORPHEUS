@@ -690,6 +690,7 @@ impl SceneAssets {
                     frame: FIRST_TICK,
                     pose: mover.pose(),
                     eye_position: script_eye_position(hero.guid, &mover),
+                    skin: 0,
                     quanta: RETAIL_QUANTA,
                 },
                 setup,

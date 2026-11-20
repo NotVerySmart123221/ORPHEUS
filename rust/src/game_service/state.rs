@@ -1162,12 +1162,10 @@ impl State {
                     if let Some(replacements) =
                         spawned.get(&id).filter(|_| peer.world.world_started())
                     {
-                        peer.combat_ui.replacements.extend(
-                            replacements
-                                .iter()
-                                .cloned()
-                                .map(|bot| (room_now.saturating_add(SILENCE_TIME), bot)),
-                        );
+                        let expires = room_now.saturating_add(SILENCE_TIME);
+                        for replacement in replacements {
+                            peer.queue_bot_replacement(replacement.clone(), expires);
+                        }
                     }
                     Ok(leave)
                 })

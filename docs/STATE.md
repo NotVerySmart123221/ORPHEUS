@@ -21,6 +21,25 @@ The [pinned Python → Rust parity matrix](https://github.com/leafall903/ORPHEUS
 
 ## Shared StateScript integration
 
+
+At `55c6f6fb`, the shared branch validated actor-scoped child retirement, held
+button rebinding, and observation capture for queued state starts and committed
+input branches. The coverage-enabled server and StateScript libraries passed
+666 tests, strict Clippy passed, and both prepared 104319 reports matched
+`e2123b35` after excluding their source revision. The earlier `e2123b35`
+candidate passed 663 tests across the libraries and message/health integration
+tests, including the prepared owner trace and actor input matrix. That
+candidate validated hitscan settlement and death notice ordering at body
+replacement, plus the settled health target generation guard.
+
+
+The shared branch validated Phase 2 settled bonus credit and direct target filters
+at `29df13cb`. The coverage-enabled server and StateScript library tests passed
+(656 total), as did strict Clippy. The 900-frame owner trace and 32-actor input
+matrix matched `6027a713` after excluding revision metadata. The matrix remained
+at 12 admitted actors and four completed 311-frame schedules. Three charge
+probes passed in the same handoff cycle with the annotated prepared graph pack.
+
 The local `work/statescript-integration` checkpoint `79e8a5b9` combines
 Phase 2 `90702e42`, Phase 3A `055adca3`, and native Practice Range
 admission. The prepared 104319 matrix completed independent startup and
@@ -329,6 +348,86 @@ independent starts**, one ordinary room attachment, and **46 blocking
 sites**. All actor rows and the 476 observations in the #72 capture
 matched the previous run. Both #131 schedules reproduced 339 ticks
 per implementation, with the same four RNG setup differences.
+
+At `001cd3ea`, the room captures the target of a positive heal when the
+event has a distinct sampled source. Target facts use the same capture
+path as impacts, with the actual healed delta and unavailable hit
+attribution. Two resource-free state classes now register by checked
+fields and raw state slots. The prepared boss graph probe passed its
+successor, owner and observer codec, and retirement checks. The locked
+workspace suite and Clippy passed with script coverage.
+
+The unaltered `0B8B` passive subtree and `00EB` bonus receiver passed
+the prepared graph-runner probe with a detached host. It reproduced the
+one-second passive deadline, admission cancellation and re-arm, and
+bonus capping. Admission and attribution for a running room remain
+separate from this graph execution.
+
+Two same-pack 104319 startup reports matched with all 32 actor rows
+unchanged, including **12 independent starts**, one ordinary room
+attachment, and **46 blocking sites**. The #72 trace retained its
+476 observations. Both #131 schedules reproduced the previous 339
+ticks per implementation and the same four RNG setup differences.
+
+The opt-in directed numeric route preserves ordinary local delivery
+and uses the room queue for a validated foreign target. The prepared
+probe passed for the original `00EB` sender actions and receiver with
+provided caller inputs. Room tests checked source and target generation
+at settlement and delivery on the next receiver VM frame. Natural
+target binding and native foreign timing remain unverified.
+
+The shared bonus path can derive its payload from the actual settled
+heal and bind the target in an authored graph. The room regression covers
+a grant on the recipient's VM frame after routing, the meter cap, and
+discarding a request for a replaced body. Positive NPC-local health
+events collect committed target facts after the VM's local mutations.
+Direct target filters use the event's tags and, in a configured room,
+the original target's affiliation and post-settlement liveness. The
+room preserves these facts if a lethal target retires before delivery.
+The health event also carries the original body identity through VM
+delivery. A subsequent direct request to that same wire expires if the
+room now identifies a different body. The room regression includes a
+fresh award to the replacement to exercise the normal path. An
+immediate same-body message can relay the original target's context
+through a typed entity parameter. The portable regression exercises
+both direct and relayed awards across body replacement.
+A prepared probe uses the original admission claim and local sender
+with the stock cap. These additions are pending integration verification.
+
+The full pseudocode and prepared bundle both show seven `0D9A` receivers
+and no literal sender. The `0B9E` entry binds different slots from the
+three instance operands read by its outgoing grant. The original
+dispatcher, the origin of those three values, and the order relative
+to health settlement still need original-build evidence.
+
+Player hit notices, immediate damage credit and deferred notifications
+now use the same actual pool loss. The prepared `0012` probe supplies
+explicit pool records to the original charge receiver and checks how
+matching identifiers affect the award. Native production of those
+records and temporary named-pool admission still require evidence.
+
+Static model protection now uses the authored state slots and an
+explicit host capability. The prepared boss graph regression passed its
+link, encoding, and final restoration checks. The current encounter
+host owns the model mask bookkeeping. Runtime rendering and collision
+effects have separate verification.
+
+The workspace suite, Clippy, Python bundle and coverage tests, and
+the three prepared graph probes above passed before handoff on this
+Phase 2 worktree. Shared-branch verification belongs to integration.
+
+Immediate self damage uses validated local state fields for two encounter
+forms. The self-instigated form reads a positive native integer amount.
+The no-instigator cleanup form retains the reference's 10,000 validation
+and skips an already dead VM owner. The existing NPC host still owns health
+settlement. Other no-instigator amounts, external targets, and compound
+modifiers require their own evidence. Integration verification is pending.
+
+Two of the three remaining native target-tracking startup sites have
+empty embedded plugs. One configures a second filter and an entity list
+output. The other configures a count output. Both read a dynamic radius.
+The remaining site links embedded states. Each configuration still needs
+its native query and output semantics verified.
 
 The following Phase 3A results were measured on its standalone revisions.
 

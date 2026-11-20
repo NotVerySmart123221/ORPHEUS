@@ -24,6 +24,7 @@ use std::sync::{
 };
 
 pub(crate) mod owner_effects;
+mod owner_model;
 mod owner_swept_motion;
 pub(crate) mod practice_observation;
 
@@ -960,6 +961,8 @@ struct SyntheticOwner {
     received_room_messages: Arc<Mutex<Vec<(u32, crate::script_init::RoomMessage)>>>,
     script_requests: crate::game_combat::RoomScriptRequests,
     authored_facing: Arc<Mutex<Option<[i32; 2]>>>,
+    queued_hitscan: Option<PosedHitscan>,
+    hitscan_fault: Option<(u32, PosedHitscan)>,
 }
 
 impl OwnerBodyRuntime for SyntheticOwner {
@@ -1007,6 +1010,13 @@ impl OwnerBodyRuntime for SyntheticOwner {
     }
 
     fn advance(&mut self, command: Command, _mover: &Mover, _step: BodyStep) -> io::Result<()> {
+        if let Some((_, shot)) = self
+            .hitscan_fault
+            .filter(|(frame, _)| *frame == command.frame)
+        {
+            self.queued_hitscan = Some(shot);
+            return Err(io::Error::other("fixture owner input fault"));
+        }
         self.component
             .advance_command(command, &mut EmptyWorld)
             .map_err(invalid)
@@ -1018,6 +1028,10 @@ impl OwnerBodyRuntime for SyntheticOwner {
 
     fn vitals(&self) -> Option<&crate::vitals::Vitals> {
         self.vitals.as_ref()
+    }
+
+    fn take_vitals(&mut self) -> Option<crate::vitals::Vitals> {
+        self.vitals.take()
     }
 
     fn heal(&mut self, amount: f64) -> f64 {
@@ -1050,6 +1064,24 @@ impl OwnerBodyRuntime for SyntheticOwner {
 
     fn movement_modifiers(&self) -> Option<&BTreeMap<ModifierKey, Modifier>> {
         Some(&self.modifiers)
+    }
+
+    fn take_shots(&mut self, command: Option<Command>, _mover: &Mover) -> Vec<PosedShot> {
+        let Some(command) = command.filter(|command| command.buttons & crate::commands::FIRE != 0)
+        else {
+            return Vec::new();
+        };
+        self.queued_hitscan
+            .take()
+            .map(|shot| {
+                PosedShot::Hitscan(Box::new(PosedHitscan {
+                    command,
+                    shot_frame: command.frame,
+                    ..shot
+                }))
+            })
+            .into_iter()
+            .collect()
     }
 }
 
@@ -1094,6 +1126,8 @@ fn synthetic_owner_with_vitals(
         received_room_messages: Arc::default(),
         script_requests: Default::default(),
         authored_facing: Arc::default(),
+        queued_hitscan: None,
+        hitscan_fault: None,
     }
 }
 
@@ -1224,6 +1258,397 @@ fn activate_script(
         None,
     );
     simulation.spawn_player_body(state).unwrap();
+}
+
+#[test]
+fn queued_hitscan_settles_before_a_hero_or_skin_replacement() {
+    use crate::{
+        game_combat::ShotContext,
+        game_heroes::HeroCatalog,
+        game_hitscan::{DamageTags, HitDefinition},
+    };
+
+    #[derive(serde::Deserialize)]
+    struct Contract {
+        schema_version: u32,
+        input: Input,
+        expected: Expected,
+    }
+    #[derive(serde::Deserialize)]
+    struct Input {
+        heroes: [u64; 2],
+        skin: u64,
+        target_position: [f64; 3],
+        target_health: f64,
+        damage: f64,
+        input_budgets: [usize; 2],
+    }
+    #[derive(serde::Deserialize)]
+    struct Expected {
+        target_health_after_shot: f64,
+        generation_after_switch: u64,
+    }
+
+    let Contract {
+        schema_version,
+        input,
+        expected,
+    } = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/owner-hitscan-before-switch-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(schema_version, 1);
+    let [first, second] = input.heroes;
+    let heroes = serde_json::json!({
+        format!("0x{first:016X}"): {
+            "name": "Fixture shooter", "class": "Damage", "body": "0x0400000000000001",
+        },
+        format!("0x{second:016X}"): {
+            "name": "Fixture replacement", "class": "Damage", "body": "0x0400000000000001",
+        },
+    })
+    .to_string();
+    let skin = SkinTheme {
+        guid: input.skin,
+        ..SkinTheme::default()
+    };
+    let mut card = PlayerCard::default();
+    card.skins.insert(first, skin);
+    let viewer = PlayerAppearance {
+        entity: OWNER,
+        slot: 0,
+        team: 0,
+        card: &card,
+    };
+    let target_owner = OWNER + 0x100;
+    let target = BodyId {
+        entity: target_owner | 1,
+        generation: 1,
+    };
+    let frame = FIRST_TICK + 1;
+
+    for budget in input.input_budgets {
+        for change_skin in [false, true] {
+            let mut scene = PreparedScene::fixture_for_owner_admission(
+                HeroCatalog::from_json(&heroes).unwrap(),
+            );
+            let damage = input.damage;
+            scene.owner_body_factory = Some(Arc::new(move |_, spawn, _| {
+                let mut runtime = synthetic_owner(spawn.entity, spawn.frame, Arc::default());
+                runtime.queued_hitscan = Some(PosedHitscan {
+                    source: spawn.entity,
+                    origin: [0.0, 1.0, 0.0],
+                    direction: [1.0, 0.0, 0.0],
+                    command: Command::default(),
+                    shot_frame: 0,
+                    reach: 20.0,
+                    hit: HitDefinition {
+                        tags: DamageTags::EMPTY,
+                        amount: damage,
+                        loadout: None,
+                        critical: 1.0,
+                        falloff: None,
+                    },
+                });
+                Ok(Some(Box::new(runtime)))
+            }));
+            scene
+                .simulation_mut()
+                .spawn_player_body(fixture_player_state(
+                    target,
+                    target_owner,
+                    1,
+                    1,
+                    input.target_position,
+                    input.target_health,
+                    false,
+                ))
+                .unwrap();
+
+            let mut world = WorldDelivery::new(OWNER);
+            world.started = Some(FIRST_TICK);
+            world.created.insert(OWNER);
+            world.input.processed = Some(FIRST_TICK);
+            world
+                .controller
+                .full_owner(FIRST_TICK, |_| Ok(crate::bits::BitWriter::new()))
+                .unwrap();
+            let hero = scene.heroes().get(first).unwrap().clone();
+            world
+                .switch(
+                    &mut scene,
+                    &viewer,
+                    FIRST_TICK,
+                    RETAIL_QUANTA,
+                    OWNER | 1,
+                    (&hero, SkinTheme::default()),
+                )
+                .unwrap();
+            let shot_body = world.active_body_id().unwrap();
+
+            world.queue_commands(
+                frame,
+                &[Command {
+                    frame,
+                    buttons: crate::commands::FIRE,
+                    ..Command::default()
+                }],
+            );
+            if change_skin {
+                world.queue_skin(first, frame, Duration::ZERO);
+            } else {
+                world.queue_game_message(frame, Duration::ZERO, pick_hero(OWNER, second));
+            }
+            assert_eq!(
+                world
+                    .advance_input(&mut scene, &viewer, RETAIL_QUANTA, budget)
+                    .unwrap(),
+                (1, false)
+            );
+            assert_eq!(world.command_ack(frame), frame);
+            assert_eq!(world.active_body_id(), Some(shot_body));
+            let shots = world.take_hitscan(scene.simulation_mut());
+            let [shot] = shots.as_slice() else {
+                panic!("expected exactly one pending shot from the old player body");
+            };
+            assert_eq!((shot.source, shot.shot_frame), (shot_body.entity, frame));
+            let (simulation, queries) = scene.bot_simulation();
+            let hit = simulation
+                .hitscan(
+                    &queries,
+                    *shot,
+                    ShotContext {
+                        team: viewer.team,
+                        quanta: RETAIL_QUANTA,
+                        tick: frame,
+                        now: Duration::ZERO,
+                    },
+                    |entity| entity == target.entity,
+                )
+                .unwrap()
+                .unwrap();
+            assert_eq!(hit.health.entity, target.entity);
+
+            assert_eq!(
+                world
+                    .advance_input(&mut scene, &viewer, RETAIL_QUANTA, budget)
+                    .unwrap(),
+                (1, false)
+            );
+            assert!(!world.has_input_work());
+            let replacement = world.body.unwrap();
+            let (expected_hero, expected_skin) = if change_skin {
+                (first, skin)
+            } else {
+                (second, SkinTheme::default())
+            };
+            assert_eq!(
+                (replacement.hero, replacement.skin),
+                (expected_hero, expected_skin)
+            );
+            assert_eq!(replacement.id.generation, expected.generation_after_switch);
+            assert!(scene.simulation().player_body(shot_body).is_none());
+            assert!(world.take_hitscan(scene.simulation_mut()).is_empty());
+            assert_eq!(
+                scene
+                    .simulation()
+                    .player_body(target)
+                    .unwrap()
+                    .runtime
+                    .as_ref()
+                    .unwrap()
+                    .vitals()
+                    .unwrap()
+                    .total(),
+                expected.target_health_after_shot
+            );
+        }
+    }
+}
+
+#[test]
+fn successful_hitscan_survives_owner_vm_fault_before_body_replacement() {
+    use crate::{
+        game_combat::ShotContext,
+        game_heroes::HeroCatalog,
+        game_hitscan::{DamageTags, HitDefinition},
+    };
+
+    #[derive(serde::Deserialize)]
+    struct Contract {
+        schema_version: u32,
+        input: Input,
+        expected: Expected,
+    }
+    #[derive(serde::Deserialize)]
+    struct Input {
+        heroes: [u64; 2],
+        target_position: [f64; 3],
+        target_health: f64,
+        shot_damage: f64,
+        input_budgets: [usize; 2],
+    }
+    #[derive(serde::Deserialize)]
+    struct Expected {
+        hits: usize,
+        target_health_after_shot: f64,
+        replacement_generation: u64,
+    }
+
+    let Contract {
+        schema_version,
+        input,
+        expected,
+    } = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/owner-script-fault-hitscan-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(schema_version, 1);
+    let [first, next] = input.heroes;
+    let heroes = serde_json::json!({
+        format!("0x{first:016X}"): {
+            "name": "Fixture shooter", "class": "Damage", "body": "0x0400000000000001",
+        },
+        format!("0x{next:016X}"): {
+            "name": "Fixture replacement", "class": "Damage", "body": "0x0400000000000001",
+        },
+    })
+    .to_string();
+    let viewer = PlayerAppearance {
+        entity: OWNER,
+        slot: 0,
+        team: 0,
+        card: &PlayerCard::default(),
+    };
+    let target_owner = OWNER + 0x100;
+    let target = BodyId {
+        entity: target_owner | 1,
+        generation: 1,
+    };
+    let shot_frame = FIRST_TICK + 1;
+    let fault_frame = shot_frame + 1;
+    let context = ShotContext {
+        team: viewer.team,
+        quanta: RETAIL_QUANTA,
+        tick: fault_frame,
+        now: Duration::ZERO,
+    };
+
+    for budget in input.input_budgets {
+        let mut scene =
+            PreparedScene::fixture_for_owner_admission(HeroCatalog::from_json(&heroes).unwrap());
+        let amount = input.shot_damage;
+        scene.owner_body_factory = Some(Arc::new(move |hero, spawn, _| {
+            let mut runtime = synthetic_owner(spawn.entity, spawn.frame, Arc::default());
+            if hero.guid == first {
+                let shot = PosedHitscan {
+                    source: spawn.entity,
+                    origin: [0.0, 1.0, 0.0],
+                    direction: [1.0, 0.0, 0.0],
+                    command: Command::default(),
+                    shot_frame: 0,
+                    reach: 20.0,
+                    hit: HitDefinition {
+                        tags: DamageTags::EMPTY,
+                        amount,
+                        loadout: None,
+                        critical: 1.0,
+                        falloff: None,
+                    },
+                };
+                runtime.queued_hitscan = Some(shot);
+                runtime.hitscan_fault = Some((fault_frame, shot));
+            }
+            Ok(Some(Box::new(runtime)))
+        }));
+        scene
+            .simulation_mut()
+            .spawn_player_body(fixture_player_state(
+                target,
+                target_owner,
+                1,
+                1,
+                input.target_position,
+                input.target_health,
+                false,
+            ))
+            .unwrap();
+
+        let mut world = WorldDelivery::new(OWNER);
+        world.started = Some(FIRST_TICK);
+        world.created.insert(OWNER);
+        world.input.processed = Some(FIRST_TICK);
+        world
+            .controller
+            .full_owner(FIRST_TICK, |_| Ok(crate::bits::BitWriter::new()))
+            .unwrap();
+        let hero = scene.heroes().get(first).unwrap().clone();
+        world
+            .switch(
+                &mut scene,
+                &viewer,
+                FIRST_TICK,
+                RETAIL_QUANTA,
+                OWNER | 1,
+                (&hero, SkinTheme::default()),
+            )
+            .unwrap();
+        let shooter = world.active_body_id().unwrap();
+
+        world.queue_commands(
+            fault_frame,
+            &[shot_frame, fault_frame].map(|frame| Command {
+                frame,
+                buttons: crate::commands::FIRE,
+                ..Command::default()
+            }),
+        );
+        world.queue_game_message(fault_frame, Duration::ZERO, pick_hero(OWNER, next));
+
+        let mut settled = 0;
+        for _ in 0..3 {
+            if !world.has_input_work() {
+                break;
+            }
+            let (used, leave) = world
+                .advance_input(&mut scene, &viewer, RETAIL_QUANTA, budget)
+                .unwrap();
+            assert!((1..=budget).contains(&used));
+            assert!(!leave);
+            for shot in world.take_hitscan(scene.simulation_mut()) {
+                assert_eq!(world.active_body_id(), Some(shooter));
+                assert_eq!((shot.source, shot.shot_frame), (shooter.entity, shot_frame));
+                let (simulation, queries) = scene.bot_simulation();
+                let hit = simulation
+                    .hitscan(&queries, shot, context, |entity| entity == target.entity)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(hit.health.entity, target.entity);
+                settled += 1;
+            }
+        }
+        assert_eq!(settled, expected.hits, "budget {budget}");
+        assert_eq!(world.command_ack(fault_frame), fault_frame);
+        let fault = world.owner_script_fault.as_ref().unwrap();
+        assert_eq!((fault.id, fault.frame), (shooter, fault_frame));
+        assert_eq!(fault.step, Some(BodyStep::Posed));
+        assert!(!world.has_input_work());
+        let replacement = world.body.unwrap();
+        assert_eq!(replacement.hero, next);
+        assert_eq!(replacement.id.generation, expected.replacement_generation);
+        assert!(scene.simulation().player_body(shooter).is_none());
+        assert!(world.take_hitscan(scene.simulation_mut()).is_empty());
+        assert_eq!(
+            scene
+                .simulation()
+                .player_body(target)
+                .unwrap()
+                .vitals()
+                .unwrap()
+                .total(),
+            expected.target_health_after_shot
+        );
+    }
 }
 
 #[test]

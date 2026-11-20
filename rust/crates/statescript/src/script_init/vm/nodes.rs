@@ -14,14 +14,15 @@ use super::super::{
     machine::{ArrayInsertion, Event, StateKey},
     shapes::{
         array_field, array_insertion_index, case_path, configured, encounter_base_state_shape,
-        excluded_target_tags, field, is_bare_header_action, is_base_health_pool,
-        is_cinematic_time_scale_envelope, is_client_subgraph_controller, is_elapsed_wait, is_entry,
-        is_horizontal_velocity_clamp, is_literal_frame_wait, is_message_recipient_set,
-        is_networked_for_code_synced, is_owner_movement_sampler, is_parent_owned_timed_graph,
-        is_projected_self_message, is_self_shield_recharge, is_self_stat_timer, is_self_target,
-        is_wave_health_pool, living_body_array_shape, participant_filter, persistent_message,
-        placement_collection_tag, pool_number, raw_indices, registered_state, source_key,
-        static_target_operand, stored,
+        excluded_target_tags, field, immediate_self_damage, is_bare_header_action,
+        is_base_health_pool, is_cinematic_time_scale_envelope, is_client_subgraph_controller,
+        is_elapsed_wait, is_entry, is_horizontal_velocity_clamp, is_literal_frame_wait,
+        is_message_recipient_set, is_networked_for_code_synced, is_owner_movement_sampler,
+        is_parent_owned_timed_graph, is_projected_self_message, is_self_shield_recharge,
+        is_self_stat_timer, is_self_target, is_static_map_explosion, is_wave_health_pool,
+        living_body_array_shape, parent_owned_graph_duration, participant_filter,
+        persistent_message, placement_collection_tag, pool_number, raw_indices, registered_state,
+        source_key, static_target_operand, stored,
     },
     types::{InitFault, Issue, SpawnSearch, SpawnSearchKey, State, StateKind},
     world::{CreationKind, EntityCreation, Site, SweptDisplacement, World},
@@ -171,7 +172,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         return Ok(false);
                     }
                 };
-                if !self.world.queue_health_change(site, entity, delta) {
+                if !self.expired_health_target(entity)
+                    && !self.world.queue_health_change(site, entity, delta)
+                {
                     self.report(site, Issue::UnsupportedField("health change request"));
                     return Ok(false);
                 }
@@ -1121,6 +1124,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let interval_frames = node.interval_frames();
         let button_lock = node.button_lock();
         let movement_scale = node.movement_scale();
+        let legacy_timed_graph =
+            node.class == "STU_54FEB21C" && (self.graph(id).index, node.pos) == (0x01f0, 14);
+        let timed_graph_duration = if legacy_timed_graph {
+            None
+        } else {
+            parent_owned_graph_duration(node)
+        };
         let mut wave_bonus = false;
         let kind = match node.class.as_str() {
             // These client presentation states use the base state lifecycle on the server.
@@ -1150,12 +1160,30 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 // when 978A30 cannot resolve the auxiliary client owner.
                 StateKind::Plain
             }
-            "STU_9028E035"
+            "STU_9028E035" | "STU_43994F1B" | "STU_93B8758C"
                 if registration.shape(registered_state(self.graph(id), node).is_some()) =>
             {
                 StateKind::Registered { next: None }
             }
-            "STU_33A46033" | "STU_43994F1B" | "STU_93B8758C" | "STU_9935FBC8"
+            "STU_33A46033" => {
+                let site = self.site(id, node);
+                let Some(entry) = registered_state(self.graph(id), node) else {
+                    self.report(site, Issue::UnsupportedState(node.class.clone()));
+                    return Ok(());
+                };
+                if entry.suppresses_model
+                    && (self.machine.snapshot.instances[&id].is_server_only()
+                        || !self.world.supports_static_model_protection(site))
+                {
+                    self.report(
+                        site,
+                        Issue::UnsupportedField("static model protection context"),
+                    );
+                    return Ok(());
+                }
+                StateKind::Registered { next: None }
+            }
+            "STU_9935FBC8"
                 if registration.permits(registered_state(self.graph(id), node).is_some()) =>
             {
                 StateKind::Registered { next: None }
@@ -1356,25 +1384,28 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             },
             "STUStatescriptStateMoveTo" => StateKind::MoveTo { movement: None },
             "STU_54FEB21C"
-                if registration.shape(is_parent_owned_timed_graph(node))
-                    || (registration.permits((self.graph(id).index, node.pos) == (0x01f0, 14))
+                if registration
+                    .shape(is_parent_owned_timed_graph(node) || timed_graph_duration.is_some())
+                    || (registration.permits(legacy_timed_graph)
                         && ["m_7C8AD485", "m_C7A42E2A", "m_F8CE386A", "m_C46403A5"]
                             .iter()
                             .all(|name| field(&node.fields, name).is_null())
                         && node.links("m_E5790891").next().is_none()) =>
             {
-                // Field-free instances use the base lifecycle. Retain the
-                // historical placement's compatibility for its timing fields.
+                // This class uses the base lifecycle and wire state. The
+                // duration shape arms a regular state-owned timer on entry.
                 StateKind::Plain
             }
             "STUStatescriptStatePhysicsExplosion"
-                if registration.permits(matches!(
-                    (self.graph(id).index, node.pos),
-                    (0x01f0, 34) | (0x0043, 43 | 64)
-                )) =>
+                if registration.shape(is_static_map_explosion(self.graph(id), node, key.raw)) =>
             {
-                // This host has no dynamic map rigid bodies. Preserve the
-                // networked lifecycle; this does not apply actor damage.
+                let site = self.site(id, node);
+                if self.world.has_dynamic_map_rigid_bodies(site) != Some(false) {
+                    self.report(site, Issue::UnsupportedState(node.class.clone()));
+                    return Ok(());
+                }
+                // No map body can receive the impulse. The ordinary lifecycle
+                // still drives authored transitions and boundary projection.
                 StateKind::Plain
             }
             "STU_D74D4F47" => StateKind::WaitFrames { target: 0 },
@@ -1468,10 +1499,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::ShieldRecharge
             }
             "STUStatescriptStateModifyHealth"
-                if registration.permits(matches!(
-                    (self.graph(id).index, node.pos),
-                    (0x0c89, 38 | 46 | 48) | (0x0cbc, 69) | (0x0b27, 93)
-                )) =>
+                if registration.shape(immediate_self_damage(node, key.raw).is_some())
+                    || registration.permits(matches!(
+                        (self.graph(id).index, node.pos),
+                        (0x0c89, 38 | 48) | (0x0b27, 93)
+                    )) =>
             {
                 StateKind::ModifyHealth
             }
@@ -1632,6 +1664,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 ..State::dormant(kind)
             },
         );
+        if let Some(duration) = timed_graph_duration {
+            self.arm_parent_owned_duration(key, node, duration)?;
+        }
         match kind {
             StateKind::Registered { .. } => self.register_state(key, node)?,
             StateKind::GamePadVibration => self.post(id, Event::Finish(key.raw))?,

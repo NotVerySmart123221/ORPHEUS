@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "case_id": "owner-death-notice-v1",
+  "evidence": "rust-headless-synthetic",
+  "input": {
+    "heroes": [
+      207165582859063517,
+      207165582859063518
+    ],
+    "lethal_damage": 1000
+  },
+  "expected": {
+    "held_before_mode_ack": 1,
+    "pending_after_replacement": 0,
+    "admitted_after_mode_ack": 1
+  }
+}

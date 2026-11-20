@@ -345,6 +345,7 @@ fn charge_admission_preserves_profile_scope_and_requires_a_live_instance_for_cre
         tags: DamageTags::EMPTY,
         target_facts: crate::script_init::HealthTargetFacts {
             target: spawn.entity + 1,
+            room_status: None,
             filter_flags: None,
             tags: Default::default(),
             script_state: EntityScriptState::Unavailable,
@@ -446,7 +447,7 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
         game_content::JUNKENSTEIN_REVENGE,
         game_hitscan::DamageTags,
         script_entity_state::EntityScriptState,
-        script_init::{HealthTargetFacts, HostEvent},
+        script_init::{HealthTargetFacts, HostEvent, HostHealthContext},
     };
     use serde_json::json;
 
@@ -544,6 +545,7 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
         tags: DamageTags::EMPTY,
         target_facts: crate::script_init::HealthTargetFacts {
             target: spawn.entity + 1,
+            room_status: None,
             filter_flags: None,
             tags: Default::default(),
             script_state: EntityScriptState::Unavailable,
@@ -572,12 +574,16 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
                     killed: false,
                     hit_tags: Some(hit_tags),
                 },
-                Some(Arc::new(HealthTargetFacts {
-                    target: spawn.entity + 1,
-                    filter_flags: None,
-                    tags: Default::default(),
-                    script_state: EntityScriptState::Unavailable,
-                })),
+                HostHealthContext {
+                    target_body: None,
+                    target_facts: Some(Arc::new(HealthTargetFacts {
+                        target: spawn.entity + 1,
+                        room_status: None,
+                        filter_flags: None,
+                        tags: Default::default(),
+                        script_state: EntityScriptState::Unavailable,
+                    })),
+                },
             )
             .unwrap(),
         1
@@ -1610,7 +1616,7 @@ fn authored_body_activity_reads_room_bootstrap_and_current_generation() {
         frame += 1;
         sample_next_frame(room, first, frame, sample);
     }
-    let (_, killed, _) = room
+    let (_, outcome, _) = room
         .damage_player_body_by_wire(
             first,
             contract["input"]["lethal_damage"].as_f64().unwrap(),
@@ -1622,7 +1628,7 @@ fn authored_body_activity_reads_room_bootstrap_and_current_generation() {
             None,
         )
         .unwrap();
-    assert!(killed);
+    assert!(outcome.killed);
     sample_next_frame(room, first, frame + 1, &expected["after_death"]);
 
     let replacement = BodyId {
@@ -2740,6 +2746,7 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
         vitals: Vitals::empty(),
         pool_types_known: true,
         target_tags: tagged.then(|| body.target_tags.clone().unwrap()),
+        model_hardpoints: None,
         target_tag_effects: TargetTagEffects::default(),
         controller_on_fire: false,
         defenders: Arc::default(),
@@ -3168,6 +3175,7 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             vitals: Vitals::empty(),
             pool_types_known: true,
             target_tags: body.target_tags.clone(),
+            model_hardpoints: None,
             target_tag_effects: TargetTagEffects::default(),
             controller_on_fire: false,
             defenders: Arc::default(),

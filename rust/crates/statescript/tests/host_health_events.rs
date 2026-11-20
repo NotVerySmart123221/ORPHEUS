@@ -1,11 +1,16 @@
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use orpheus_statescript::{
     script_entity_state::EntityScriptState,
+    script_expr::RoomEntityFacts,
     script_graph::GraphStore,
     script_init::{
-        Component, EmptyWorld, HealthTargetFacts, HitTags, HostEvent, MAX_INIT_WORK, RoomMessage,
-        Root, Site, TargetTagEffects, World,
+        Component, EmptyWorld, HealthTargetFacts, HitTags, HostEvent, HostHealthContext,
+        MAX_INIT_WORK, RoomBodyIdentity, RoomEntityStatus, RoomMessage, Root, Site,
+        TargetTagEffects, World,
     },
     script_wire::{Value, Variables},
 };
@@ -63,6 +68,24 @@ struct Expected {
     room_variable: u32,
     host_variables: [u32; 6],
     deliveries: Vec<Option<Delivery>>,
+    target_tag_query: ExpectedTargetTagQuery,
+    target_generation_relay: ExpectedTargetGenerationRelay,
+}
+
+#[derive(Deserialize)]
+struct ExpectedTargetTagQuery {
+    settled_match: bool,
+    ordinary_match: bool,
+    unrelated_match: bool,
+    retired_match: bool,
+    retired_alive_match: bool,
+    unavailable_fact_diagnostics: usize,
+}
+
+#[derive(Deserialize)]
+struct ExpectedTargetGenerationRelay {
+    stable: Vec<f64>,
+    replaced_with_ordinary_deliveries: Vec<f64>,
 }
 
 fn variables(body: &Component) -> Option<&Variables> {
@@ -217,7 +240,12 @@ fn settled_target_facts_are_scoped_to_immediate_host_delivery() {
     const MESSAGE: u64 = 197;
     const TAG: u64 = 0x0d60_0000_0000_5521;
 
-    struct LiveWorld;
+    let fixture: Contract = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/script-host-health-events-v1.json"
+    ))
+    .unwrap();
+    let expected = fixture.expected.target_tag_query;
+    struct LiveWorld(BTreeMap<u32, RoomEntityFacts>);
     impl World for LiveWorld {
         fn position(&mut self, _: u32) -> Option<[f64; 3]> {
             None
@@ -234,11 +262,25 @@ fn settled_target_facts_are_scoped_to_immediate_host_delivery() {
         fn entity_filter_flags(&self, _: Site, _: u32) -> Option<u64> {
             Some(2)
         }
+
+        fn room_entities(&self) -> Option<&BTreeMap<u32, RoomEntityFacts>> {
+            Some(&self.0)
+        }
     }
 
     let var = |id| json!({"$":"STUConfigVarDynamic","m_identifier":id,"m_60DB8F99":false});
     let tag =
         |entity| json!({"$":"STU_25ECB55F","m_entity":entity,"m_88B0050A":format!("0x{TAG:016X}")});
+    let matches_opponent_tag = |entity, alive: Option<bool>| {
+        let mut filter = json!({
+            "relation":"opponent", "source":{"$":"STU_B5A0CAF0"},
+            "tags":{"all":[format!("0x{TAG:016X}")]}
+        });
+        if let Some(alive) = alive {
+            filter["alive"] = json!(alive);
+        }
+        json!({"$":"EntityMatches", "entity":entity, "filter":filter})
+    };
     let outputs = [
         json!({"$":"STU_919FD47C","m_configVars":[{"$":"STUConfigVarInt","m_value":7}],
             "m_expression":{"m_opcodes":[8,0,14,0,15,0],"m_dynamicVars":[var(1)]}}),
@@ -246,10 +288,15 @@ fn settled_target_facts_are_scoped_to_immediate_host_delivery() {
         json!({"$":"STU_AC829876","m_entity":var(1),
             "m_filter":{"$":"STUConfigVarFilter","m_84065FD1":1}}),
         tag(var(2)),
+        matches_opponent_tag(var(1), None),
+        matches_opponent_tag(var(2), Some(true)),
+        matches_opponent_tag(var(1), Some(true)),
     ];
     let parameter = json!({"m_B5051BCE":"0x0000000000000002","m_out_Var":var(1)});
-    let links =
-        json!({"$":"Plug","links":[[2,"m_inPlug"],[3,"m_inPlug"],[4,"m_inPlug"],[5,"m_inPlug"]]});
+    let links: Vec<_> = (2..2 + outputs.len())
+        .map(|pos| (pos, "m_inPlug"))
+        .collect();
+    let links = json!({"$":"Plug","links":links});
     let mut nodes = vec![
         json!({"pos":0,"rid":0,"uid":0,"class":"EntryHostEvent","state":null,
             "remote":-1,"client_only":false,"server_only":true,"host_event_entry":"health_applied",
@@ -268,12 +315,23 @@ fn settled_target_facts_are_scoped_to_immediate_host_delivery() {
     let bundle = json!({"version":1,"bodies":{},"missing":[],"graphs":[{
         "index":GRAPH,"items":nodes.len(),"nodes":nodes,"fields":{},"containers":{},"entries":[1],
         "states":[],"remote":[],"sync_vars":[],"unknown_nodes":[],
-        "header":{"m_nodesBitCount":3,"m_statesBitCount":3,"m_remoteSyncNodesBitCount":3,"m_syncVarsBitCount":3}
+        "header":{"m_nodesBitCount":4,"m_statesBitCount":3,"m_remoteSyncNodesBitCount":3,"m_syncVarsBitCount":3}
     }]});
     let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
     let mut root = Root::new(ROOT, GRAPH);
     root.variables.insert(2, Value::Entity(OTHER));
-    let mut world = LiveWorld;
+    let live_facts = |team, tags: &BTreeSet<u64>| RoomEntityFacts {
+        team: Some(team),
+        alive: true,
+        tags: TargetTagEffects::default().snapshot(Some(tags)),
+    };
+    let without_tag = BTreeSet::new();
+    let with_tag = BTreeSet::from([TAG]);
+    let mut world = LiveWorld(BTreeMap::from([
+        (SOURCE, live_facts(0, &without_tag)),
+        (TARGET, live_facts(1, &without_tag)),
+        (OTHER, live_facts(1, &with_tag)),
+    ]));
     let mut body = Component::start(
         graphs,
         SOURCE,
@@ -284,7 +342,9 @@ fn settled_target_facts_are_scoped_to_immediate_host_delivery() {
         MAX_INIT_WORK,
     )
     .unwrap();
-    let reads = |body: &Component| [10, 11, 12, 13].map(|id| variables(body).unwrap()[&id].clone());
+    let reads = |body: &Component| {
+        [10, 11, 12, 13, 14, 15, 16].map(|id| variables(body).unwrap()[&id].clone())
+    };
     let event = HostEvent::HealthApplied {
         source: Some(SOURCE),
         target: TARGET,
@@ -294,6 +354,7 @@ fn settled_target_facts_are_scoped_to_immediate_host_delivery() {
     };
     let sampled = HealthTargetFacts {
         target: TARGET,
+        room_status: None,
         filter_flags: Some(1),
         tags: TargetTagEffects::default().snapshot(Some(&BTreeSet::from([TAG]))),
         script_state: EntityScriptState::Running(Arc::new(Variables::from([(
@@ -311,7 +372,7 @@ fn settled_target_facts_are_scoped_to_immediate_host_delivery() {
         0
     );
     assert_eq!(
-        body.queue_host_event_with_target_facts(event, Some(Arc::new(sampled)))
+        body.queue_host_event_with_target_facts(event, Some(Arc::new(sampled.clone())))
             .unwrap(),
         1
     );
@@ -322,7 +383,10 @@ fn settled_target_facts_are_scoped_to_immediate_host_delivery() {
             Value::Integer(9),
             Value::Bool(true),
             Value::Bool(true),
-            Value::Bool(true)
+            Value::Bool(true),
+            Value::Bool(expected.settled_match),
+            Value::Bool(expected.unrelated_match),
+            Value::Bool(expected.settled_match),
         ]
     );
 
@@ -331,6 +395,9 @@ fn settled_target_facts_are_scoped_to_immediate_host_delivery() {
         Value::Bool(false),
         Value::Bool(false),
         Value::Bool(true),
+        Value::Bool(expected.ordinary_match),
+        Value::Bool(expected.unrelated_match),
+        Value::Bool(expected.ordinary_match),
     ];
     body.queue_host_event(event).unwrap();
     body.advance_frame(2, &mut world).unwrap();
@@ -339,6 +406,7 @@ fn settled_target_facts_are_scoped_to_immediate_host_delivery() {
 
     let unavailable = HealthTargetFacts {
         target: TARGET,
+        room_status: None,
         filter_flags: None,
         tags: Default::default(),
         script_state: EntityScriptState::Unavailable,
@@ -355,5 +423,232 @@ fn settled_target_facts_are_scoped_to_immediate_host_delivery() {
     );
     body.advance_frame(3, &mut world).unwrap();
     assert_eq!(reads(&body), plain_event_values);
-    assert_eq!(body.snapshot().unwrap().diagnostics.len(), 3);
+    assert_eq!(
+        body.snapshot().unwrap().diagnostics.len(),
+        expected.unavailable_fact_diagnostics
+    );
+
+    world.0.remove(&TARGET).unwrap();
+    let retired = HealthTargetFacts {
+        room_status: Some(RoomEntityStatus {
+            team: Some(1),
+            alive: false,
+        }),
+        ..sampled
+    };
+    let killing_blow = HostEvent::HealthApplied {
+        source: Some(SOURCE),
+        target: TARGET,
+        delta: -2.5,
+        killed: true,
+        hit_tags: None,
+    };
+    body.queue_host_event_with_target_facts(killing_blow, Some(Arc::new(retired)))
+        .unwrap();
+    body.advance_frame(4, &mut world).unwrap();
+    let tags_and_liveness = &reads(&body)[4..];
+    assert_eq!(
+        tags_and_liveness,
+        [
+            Value::Bool(expected.retired_match),
+            Value::Bool(expected.unrelated_match),
+            Value::Bool(expected.retired_alive_match),
+        ]
+    );
+    assert_eq!(
+        body.snapshot().unwrap().diagnostics.len(),
+        expected.unavailable_fact_diagnostics
+    );
+}
+
+#[test]
+fn health_delivery_checks_original_target_generation_for_direct_and_relayed_requests() {
+    const SOURCE: u32 = 741;
+    const TARGET: u32 = 742;
+    const OTHER: u32 = 743;
+    const INCOMING: u64 = 198;
+    const OUTGOING: u64 = 199;
+    const TYPED_RELAY: u64 = 200;
+    const NUMERIC_RELAY: u64 = 201;
+    const GENERATION: u64 = 7;
+
+    let fixture: Contract = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/script-host-health-events-v1.json"
+    ))
+    .unwrap();
+    let expected = fixture.expected.target_generation_relay;
+
+    struct Room {
+        target_generation: u64,
+        messages: Vec<(u32, RoomMessage)>,
+        health: Vec<(u32, f64)>,
+    }
+
+    impl World for Room {
+        fn entity_variable(&mut self, _: u32, _: u32) -> Option<Value> {
+            None
+        }
+
+        fn position(&mut self, _: u32) -> Option<[f64; 3]> {
+            None
+        }
+
+        fn room_body_generation(&self, wire: u32) -> Option<u64> {
+            (wire == TARGET).then_some(self.target_generation)
+        }
+
+        fn queue_room_message(&mut self, _: Site, target: u32, message: RoomMessage) -> bool {
+            self.messages.push((target, message));
+            true
+        }
+
+        fn queue_health_change(&mut self, _: Site, target: u32, delta: f64) -> bool {
+            self.health.push((target, delta));
+            true
+        }
+    }
+
+    let var = |id| json!({"$":"STUConfigVarDynamic","m_identifier":id,"m_60DB8F99":false});
+    let parameters = json!([
+        {"m_B5051BCE":"0x0000000000000002","m_out_Var":var(1)},
+        {"m_B5051BCE":"0x0000000000000003","m_out_Var":var(2)}
+    ]);
+    let requests = json!({"$":"Plug","links":[[2,"m_inPlug"],[3,"m_inPlug"]]});
+    let host_requests =
+        json!({"$":"Plug","links":[[2,"m_inPlug"],[3,"m_inPlug"],[4,"m_inPlug"],[5,"m_inPlug"]]});
+    let empty = json!({"$":"Plug","links":[]});
+    let relay = |pos, topic, parameters: Json| {
+        json!({"pos":pos,"rid":pos,"uid":pos,"class":"STUStatescriptActionSendGameMessage",
+            "state":null,"remote":-1,"client_only":false,"server_only":true,
+            "fields":{"m_ADEB6E05":1,"m_gameMessage":{"m_gameMessage":format!("0x{topic:016X}")},
+                "m_params":parameters,"m_outPlug":empty}})
+    };
+    let relay_entry = |pos, topic, parameters: Json| {
+        json!({"pos":pos,"rid":pos,"uid":pos,"class":"STUStatescriptEntryGameMessage",
+            "state":null,"remote":-1,"client_only":false,"server_only":true,
+            "fields":{"m_gameMessage":{"m_gameMessage":format!("0x{topic:016X}")},
+                "m_params":parameters,"m_outPlug":requests}})
+    };
+    let outgoing_target = json!({"m_B5051BCE":"0x0000000000000002","m_value":var(1)});
+    let outgoing_delta = json!({"m_B5051BCE":"0x0000000000000003","m_value":var(2)});
+    let nodes = json!([
+        {"pos":0,"rid":0,"uid":0,"class":"EntryHostEvent","state":null,"remote":-1,
+            "client_only":false,"server_only":true,"host_event_entry":"health_applied",
+            "fields":{"m_params":parameters,"m_outPlug":host_requests}},
+        {"pos":1,"rid":1,"uid":1,"class":"STUStatescriptEntryGameMessage","state":null,"remote":-1,
+            "client_only":false,"server_only":true,"room_message_entry":true,
+            "fields":{"m_gameMessage":{"m_gameMessage":format!("0x{INCOMING:016X}")},
+                "m_params":parameters,"m_outPlug":requests}},
+        {"pos":2,"rid":2,"uid":2,"class":"authored.send","state":null,"remote":-1,
+            "client_only":false,"server_only":true,"action_behavior":"room_message",
+            "fields":{"m_gameMessage":{"m_gameMessage":format!("0x{OUTGOING:016X}")},
+                "m_target":var(1),"m_params":[{"m_B5051BCE":"0x0000000000000003","m_value":var(2)}],
+                "m_outPlug":empty}},
+        {"pos":3,"rid":3,"uid":3,"class":"authored.health","state":null,"remote":-1,
+            "client_only":false,"server_only":true,"action_behavior":"health_change",
+            "fields":{"target":var(1),"delta":var(2),"m_outPlug":empty}},
+        relay(4, TYPED_RELAY, json!([outgoing_target, outgoing_delta])),
+        relay(5, NUMERIC_RELAY, json!([
+            {"m_B5051BCE":"0x0000000000000002",
+                "m_value":{"$":"STUConfigVarInt","m_value":TARGET}},
+            {"m_B5051BCE":"0x0000000000000003",
+                "m_value":{"$":"STUConfigVarFloat","m_value":-1.75}}
+        ])),
+        relay_entry(6, TYPED_RELAY, parameters.clone()),
+        // The numeric relay can still read the target from a stored variable.
+        // Without a typed target parameter it has no event-time provenance.
+        relay_entry(7, NUMERIC_RELAY, json!([
+            {"m_B5051BCE":"0x0000000000000003","m_out_Var":var(2)}
+        ]))
+    ]);
+    let bundle = json!({"version":1,"bodies":{},"missing":[],"graphs":[{
+        "index":GRAPH,"items":8,"nodes":nodes,"fields":{},"containers":{},"entries":[1,6,7],
+        "states":[],"remote":[],"sync_vars":[],"unknown_nodes":[],
+        "header":{"m_nodesBitCount":3,"m_statesBitCount":3,"m_remoteSyncNodesBitCount":3,"m_syncVarsBitCount":3}
+    }]});
+    let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    let mut world = Room {
+        target_generation: GENERATION,
+        messages: Vec::new(),
+        health: Vec::new(),
+    };
+    let mut body = Component::start(
+        graphs,
+        SOURCE,
+        Variables::new(),
+        vec![Root::new(ROOT, GRAPH)],
+        0,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let event = HostEvent::HealthApplied {
+        source: Some(SOURCE),
+        target: TARGET,
+        delta: -2.5,
+        killed: false,
+        hit_tags: None,
+    };
+    let context = || HostHealthContext {
+        target_body: Some(RoomBodyIdentity {
+            wire: TARGET,
+            generation: GENERATION,
+        }),
+        target_facts: None,
+    };
+    let message = |id, amount| RoomMessage {
+        id,
+        parameters: Variables::from([(3, Value::Float(amount))]),
+    };
+    let assert_deliveries = |world: &mut Room, amounts: &[f64]| {
+        let messages: Vec<_> = amounts
+            .iter()
+            .map(|&amount| (TARGET, message(OUTGOING, amount)))
+            .collect();
+        let health: Vec<_> = amounts.iter().map(|&amount| (TARGET, amount)).collect();
+        assert_eq!(std::mem::take(&mut world.messages), messages);
+        assert_eq!(std::mem::take(&mut world.health), health);
+    };
+
+    assert_eq!(
+        body.queue_host_event_with_context(event, context())
+            .unwrap(),
+        1
+    );
+    body.advance_frame(1, &mut world).unwrap();
+    assert_deliveries(&mut world, &expected.stable);
+
+    assert_eq!(
+        body.queue_host_event_with_context(event, context())
+            .unwrap(),
+        1
+    );
+    world.target_generation += 1;
+    let mut ordinary = message(TYPED_RELAY, 0.75);
+    ordinary.parameters.insert(2, Value::Entity(TARGET));
+    assert_eq!(
+        body.queue_entity_frame_message(2, TYPED_RELAY, ordinary.parameters)
+            .unwrap(),
+        1
+    );
+    let mut external = message(INCOMING, 1.25);
+    external.parameters.insert(2, Value::Entity(TARGET));
+    assert_eq!(body.queue_room_message_from(OTHER, external).unwrap(), 1);
+    body.advance_frame(2, &mut world).unwrap();
+
+    assert_deliveries(&mut world, &expected.replaced_with_ordinary_deliveries);
+    assert!(body.snapshot().unwrap().diagnostics.is_empty());
+
+    let wrong_target = HostHealthContext {
+        target_body: Some(RoomBodyIdentity {
+            wire: OTHER,
+            generation: GENERATION,
+        }),
+        ..context()
+    };
+    assert_eq!(
+        body.queue_host_event_with_context(event, wrong_target)
+            .unwrap(),
+        0
+    );
 }

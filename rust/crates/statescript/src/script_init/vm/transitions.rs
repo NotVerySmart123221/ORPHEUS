@@ -18,8 +18,9 @@ use super::super::{
         UnavailableSample, VarKey,
     },
     shapes::{
-        array_field, branch_path, case_path, configured, field, is_unlinked_plug, pool_number,
-        raw_indices, registered_state, same, source_key, stored,
+        array_field, branch_path, case_path, configured, field, is_unlinked_plug,
+        parent_owned_graph_duration, pool_number, raw_indices, registered_state, same, source_key,
+        stored,
     },
     types::{InitFault, Issue, StateKind},
     world::{Site, World},
@@ -269,6 +270,26 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         None
     }
 
+    pub(super) fn arm_parent_owned_duration(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+        duration: &Json,
+    ) -> Result<(), InitFault> {
+        let Some(Value::Float(seconds)) = self.evaluate(key.instance, node, duration, None) else {
+            return Ok(());
+        };
+        let milliseconds = ((seconds * 1000.0) as f32).round().max(0.0);
+        if f64::from(milliseconds) >= u64::MAX as f64 {
+            self.report(
+                self.site(key.instance, node),
+                Issue::UnsupportedField("parent-owned graph duration"),
+            );
+            return Ok(());
+        }
+        self.post_after(key.instance, milliseconds as u64, Event::Timer(key.raw, 1))
+    }
+
     pub(in crate::script_init) fn arm_animation(
         &mut self,
         key: StateKey,
@@ -411,13 +432,16 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             return Ok(());
         }
-        if kind == StateKind::Wait && parameter == 1 {
-            self.post(key.instance, Event::Finish(key.raw))?;
-        }
         let node = self
             .graph(key.instance)
             .state(usize::from(key.raw))
             .expect("active timer state");
+        if parameter == 1
+            && (kind == StateKind::Wait
+                || (kind == StateKind::Plain && parent_owned_graph_duration(node).is_some()))
+        {
+            self.post(key.instance, Event::Finish(key.raw))?;
+        }
         if kind == StateKind::VoiceStimulus {
             return self.voice_timer(key, node, parameter);
         }

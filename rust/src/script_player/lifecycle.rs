@@ -26,7 +26,7 @@ use crate::{
     script_control::LEGACY_PROJECTILE_CONTROL,
     script_expr::to_float,
     script_init::{
-        Component, HealthTargetFacts, HostEvent, InitFault, RoomMessage, Snapshot,
+        Component, HostEvent, HostHealthContext, InitFault, RoomMessage, Snapshot,
         SweptDisplacement,
     },
     script_runtime::FRAME_MS,
@@ -167,13 +167,16 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         Some(&self.world.vitals)
     }
 
+    fn take_vitals(&mut self) -> Option<Vitals> {
+        Some(std::mem::replace(&mut self.world.vitals, Vitals::empty()))
+    }
+
     fn receive_host_event(
         &mut self,
         event: HostEvent,
-        target_facts: Option<Arc<HealthTargetFacts>>,
+        context: HostHealthContext,
     ) -> Result<usize, InitFault> {
-        self.component
-            .queue_host_event_with_target_facts(event, target_facts)
+        self.component.queue_host_event_with_context(event, context)
     }
 
     fn heal(&mut self, amount: f64) -> f64 {
@@ -193,12 +196,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
     }
 
     fn take_health_update(&mut self) -> Option<EntityComponent> {
-        let vitals = &mut self.world.vitals;
-        if !vitals.has_changed() {
-            return None;
-        }
-        vitals.clear_changed();
-        Some(vitals.cumulative_component())
+        self.world.vitals.take_cumulative_update()
     }
 
     fn snapshot(&self) -> Option<&Snapshot> {

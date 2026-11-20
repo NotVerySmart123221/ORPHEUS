@@ -178,11 +178,35 @@ impl HostEvent {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RoomEntityStatus {
+    /// None means an independent participant.
+    pub team: Option<u8>,
+    /// Liveness after the authoritative health mutation.
+    pub alive: bool,
+}
+
+/// A room-resolved body identity. Generations are opaque to StateScript.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RoomBodyIdentity {
+    pub wire: u32,
+    pub generation: u64,
+}
+
+/// Host-only context scoped to the immediate health event delivery.
+#[derive(Clone, Default)]
+pub struct HostHealthContext {
+    pub target_body: Option<RoomBodyIdentity>,
+    pub target_facts: Option<Arc<HealthTargetFacts>>,
+}
+
 /// Room-sampled facts for the original target of a settled health event.
 #[derive(Clone, Debug)]
 pub struct HealthTargetFacts {
     pub target: u32,
     pub filter_flags: Option<u64>,
+    /// None means no room affiliation or liveness was sampled.
+    pub room_status: Option<RoomEntityStatus>,
     pub tags: TargetTagSnapshot,
     pub script_state: EntityScriptState,
 }
@@ -369,6 +393,12 @@ pub trait World {
     fn body_display_name(&self, _site: Site, _entity: u32) -> Option<String> {
         None
     }
+    /// Whether this site's map physics backend has dynamic rigid bodies.
+    /// None means the host cannot resolve the site or its backend.
+    fn has_dynamic_map_rigid_bodies(&self, _site: Site) -> Option<bool> {
+        None
+    }
+
     fn objective_route_active(&self, _site: Site) -> Option<bool> {
         None
     }
@@ -498,6 +528,11 @@ pub trait World {
     fn outline_context_available(&self, _site: Site) -> Option<bool> {
         None
     }
+    /// The current body supports the static protected-entity rule with an enabled baseline.
+    fn supports_static_model_protection(&self, _site: Site) -> bool {
+        false
+    }
+
     fn set_encounter_model_enabled(&mut self, _site: Site, _enabled: bool) -> bool {
         false
     }
@@ -886,6 +921,11 @@ pub trait World {
     }
 
     fn selects_ai_behavior(&mut self, _site: Site) -> Option<bool> {
+        None
+    }
+
+    /// Resolve the generation in the room snapshot used to admit script effects.
+    fn room_body_generation(&self, _wire: u32) -> Option<u64> {
         None
     }
 
