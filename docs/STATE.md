@@ -287,6 +287,13 @@ The workspace suite, Clippy, Python bundle and coverage tests, and
 the three prepared graph probes above passed before handoff on this
 Phase 2 worktree. Shared-branch verification belongs to integration.
 
+Immediate self damage uses validated local state fields for two encounter
+forms. The self-instigated form reads a positive native integer amount.
+The no-instigator cleanup form retains the reference's 10,000 validation
+and skips an already dead VM owner. The existing NPC host still owns health
+settlement. Other no-instigator amounts, external targets, and compound
+modifiers require their own evidence. Integration verification is pending.
+
 Two of the three remaining native target-tracking startup sites have
 empty embedded plugs. One configures a second filter and an entity list
 output. The other configures a count output. Both read a dynamic radius.

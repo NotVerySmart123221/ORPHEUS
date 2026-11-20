@@ -218,6 +218,92 @@ pub(super) fn is_self_target(node: &Node, name: &str) -> bool {
     script_expr::native_shape(field(&node.fields, name), "STU_B5A0CAF0", None)
 }
 
+pub(super) struct ImmediateSelfDamage {
+    pub(super) amount: f64,
+    pub(super) skip_dead_owner: bool,
+}
+
+pub(super) fn immediate_self_damage(node: &Node, state: u16) -> Option<ImmediateSelfDamage> {
+    let fields = &node.fields;
+    let effect = field(fields, "m_modifyHealth");
+    let amount = field(effect, "m_amount");
+    let source = field(effect, "m_724CBA57");
+    if !node.is_networked()
+        || node.state != Some(state)
+        || node.remote != -1
+        || !node.is_state()
+        || node.is_action()
+        || field(fields, "m_DD792FF0").as_u64() != Some(3)
+        || field(fields, "m_7B2B3F5C").as_u64() != Some(0)
+        || field(fields, "m_8B707686").as_u64() != Some(1)
+        || !is_self_target(node, "m_FA3ECC43")
+        || field(effect, "$").as_str() != Some("STUStatescriptModifyHealth")
+        || field(effect, "m_93CDFD2F").as_u64() != Some(1)
+        || !script_expr::native_shape(source, "STU_B5A0CAF0", None)
+        || !script_expr::native_shape(amount, "STUConfigVarInt", Some("m_value"))
+    {
+        return None;
+    }
+
+    let amount = i32::try_from(field(amount, "m_value").as_i64()?).ok()?;
+    if amount <= 0 {
+        return None;
+    }
+    let instigator = field(effect, "m_instigator");
+    let skip_dead_owner = instigator.is_null();
+    // The reference only handles the no-instigator cleanup at this amount.
+    if (skip_dead_owner && amount != 10_000)
+        || (!skip_dead_owner && !script_expr::native_shape(instigator, "STU_B5A0CAF0", None))
+        || !effect.as_object()?.iter().all(|(name, value)| {
+            value.is_null()
+                || match name.as_str() {
+                    "$" | "m_93CDFD2F" | "m_amount" | "m_724CBA57" | "m_instigator" => true,
+                    "m_EE729DCB" | "m_430E83BE" => value.as_u64() == Some(0),
+                    _ => false,
+                }
+        })
+        || !fields.as_object()?.iter().all(|(name, value)| {
+            value.is_null()
+                || match name.as_str() {
+                    "m_DD792FF0" | "m_7B2B3F5C" | "m_8B707686" | "m_modifyHealth"
+                    | "m_FA3ECC43" => true,
+                    "m_2BBEEAB8" => value.as_bool() == Some(true) || value.as_u64() == Some(1),
+                    "m_A2287776" | "m_AED90719" | "m_ADEB6E05" => {
+                        value.as_bool() == Some(false) || value.as_u64() == Some(0)
+                    }
+                    "m_79758CE9" | "m_FF9E82FA" | "m_48BED081" => {
+                        script_expr::native_shape(value, "STUConfigVarBool", Some("m_value"))
+                            && (field(value, "m_value").as_bool() == Some(false)
+                                || field(value, "m_value").as_u64() == Some(0))
+                    }
+                    "m_beginPlug" => is_unlinked_plug(fields, name, "STUStatescriptInputPlug"),
+                    "m_F198FD3A" => is_unlinked_plug(fields, name, "STU_1CCEA5F7"),
+                    "m_onBeginPlug" => is_unlinked_plug(fields, name, "STU_DA98CA6D"),
+                    "m_onAbortPlug" | "m_onFinishedPlug" | "m_onEndPlug" => {
+                        is_unlinked_plug(fields, name, "STUStatescriptOutputPlug")
+                    }
+                    "m_subgraphPlug" => {
+                        field(value, "$").as_str() == Some("STU_904BFCEC")
+                            && field(value, "links").as_array().is_some_and(Vec::is_empty)
+                            && field(value, "m_FF3DAF1E").is_null()
+                            && value.as_object().is_some_and(|plug| {
+                                plug.keys()
+                                    .all(|key| matches!(key.as_str(), "$" | "links" | "m_FF3DAF1E"))
+                            })
+                    }
+                    _ => false,
+                }
+        })
+    {
+        return None;
+    }
+
+    Some(ImmediateSelfDamage {
+        amount: f64::from(amount as f32),
+        skip_dead_owner,
+    })
+}
+
 pub(super) fn is_self_shield_recharge(node: &Node, state: u16) -> bool {
     let fields = &node.fields;
     let effect = field(fields, "m_modifyHealth");

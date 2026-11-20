@@ -14,14 +14,14 @@ use super::super::{
     machine::{ArrayInsertion, Event, StateKey},
     shapes::{
         array_field, array_insertion_index, case_path, configured, encounter_base_state_shape,
-        excluded_target_tags, field, is_bare_header_action, is_base_health_pool,
-        is_cinematic_time_scale_envelope, is_client_subgraph_controller, is_elapsed_wait, is_entry,
-        is_horizontal_velocity_clamp, is_literal_frame_wait, is_message_recipient_set,
-        is_networked_for_code_synced, is_owner_movement_sampler, is_parent_owned_timed_graph,
-        is_projected_self_message, is_self_shield_recharge, is_self_stat_timer, is_self_target,
-        is_wave_health_pool, living_body_array_shape, participant_filter, persistent_message,
-        placement_collection_tag, pool_number, raw_indices, registered_state, source_key,
-        static_target_operand, stored,
+        excluded_target_tags, field, immediate_self_damage, is_bare_header_action,
+        is_base_health_pool, is_cinematic_time_scale_envelope, is_client_subgraph_controller,
+        is_elapsed_wait, is_entry, is_horizontal_velocity_clamp, is_literal_frame_wait,
+        is_message_recipient_set, is_networked_for_code_synced, is_owner_movement_sampler,
+        is_parent_owned_timed_graph, is_projected_self_message, is_self_shield_recharge,
+        is_self_stat_timer, is_self_target, is_wave_health_pool, living_body_array_shape,
+        participant_filter, persistent_message, placement_collection_tag, pool_number, raw_indices,
+        registered_state, source_key, static_target_operand, stored,
     },
     types::{InitFault, Issue, SpawnSearch, SpawnSearchKey, State, StateKind},
     world::{CreationKind, EntityCreation, Site, World},
@@ -1450,10 +1450,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::ShieldRecharge
             }
             "STUStatescriptStateModifyHealth"
-                if registration.permits(matches!(
-                    (self.graph(id).index, node.pos),
-                    (0x0c89, 38 | 46 | 48) | (0x0cbc, 69) | (0x0b27, 93)
-                )) =>
+                if registration.shape(immediate_self_damage(node, key.raw).is_some())
+                    || registration.permits(matches!(
+                        (self.graph(id).index, node.pos),
+                        (0x0c89, 38 | 48) | (0x0b27, 93)
+                    )) =>
             {
                 StateKind::ModifyHealth
             }

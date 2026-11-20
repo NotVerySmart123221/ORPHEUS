@@ -19,6 +19,7 @@ mod parent_owned_state;
 mod projected_messages;
 mod room_cue;
 mod runtime_state_metadata;
+mod self_damage;
 mod shield_recharge;
 mod stack_controls;
 mod stat_state;

@@ -18,8 +18,8 @@ use super::super::{
     MAX_PLUG_DEPTH, OWNER_HEALTH, SCRIPT_SOURCE,
     machine::{Event, LinkValue, StateKey, VarKey, VariableLink, Volley},
     shapes::{
-        array_field, chase_lerp, chase_step, chase_value, configured, field, pool_kind,
-        pool_number, same, shot_delay, source_key, stored,
+        array_field, chase_lerp, chase_step, chase_value, configured, field, immediate_self_damage,
+        pool_kind, pool_number, same, shot_delay, source_key, stored,
     },
     types::{ChasePayload, InitFault, Issue, ShotEvent, StateKind},
     world::{
@@ -289,6 +289,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             self.register_tick(key, self.machine.now_ms);
             return Ok(());
         }
+        if let Some(damage) = immediate_self_damage(node, key.raw) {
+            if !damage.skip_dead_owner || !self.machine.owner_dead {
+                return self.apply_npc_self_damage(site, damage.amount);
+            }
+            return Ok(());
+        }
         let Some(target) = self.creation_scalar(
             key.instance,
             node,
@@ -306,31 +312,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             self.report(site, Issue::UnsupportedField("NPC damage target"));
             return Ok(());
         };
-        if (site.graph, node.pos) == (0x0cbc, 69) {
-            let source =
-                self.creation_scalar(key.instance, node, field(config, "m_724CBA57"), Value::Null)?;
-            let amount = self
-                .creation_scalar(key.instance, node, field(config, "m_amount"), Value::Null)?
-                .and_then(pool_number);
-            if target != site.entity
-                || source != Some(Value::Entity(site.entity))
-                || amount != Some(10_000.0)
-                || field(config, "m_93CDFD2F").as_u64() != Some(1)
-                || !field(config, "m_instigator").is_null()
-                || field(&node.fields, "m_8B707686").as_u64() != Some(1)
-            {
-                self.report(site, Issue::UnsupportedField("Junkenstein cleanup damage"));
-                return Ok(());
-            }
-            if !self.machine.owner_dead {
-                self.apply_npc_self_damage(site, 10_000.0)?;
-            }
-            return Ok(());
-        }
-        let self_hit = node.pos == 46 && target == site.entity;
-        let other_hit =
-            node.pos == 38 && target != site.entity && script_expr::valid_entity(target);
-        if !(self_hit || other_hit)
+        if node.pos != 38
+            || target == site.entity
+            || !script_expr::valid_entity(target)
             || field(config, "m_93CDFD2F").as_u64() != Some(1)
             || !field(&node.fields, "m_95F1FB0B").is_null()
         {
@@ -348,26 +332,21 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let Some(amount) = self
             .creation_scalar(key.instance, node, field(config, "m_amount"), Value::Null)?
             .and_then(pool_number)
-            .filter(|amount| {
-                (0.0..=f64::from(f32::MAX)).contains(amount) && (!self_hit || *amount > 0.0)
-            })
+            .filter(|amount| (0.0..=f64::from(f32::MAX)).contains(amount))
         else {
             self.report(site, Issue::UnsupportedField("NPC damage amount"));
             return Ok(());
         };
         let amount = f64::from(amount as f32);
-        if other_hit {
-            if self.world.explosion_damage(site, target, amount) {
-                self.post(key.instance, Event::Finish(key.raw))?;
-            } else {
-                self.report(
-                    site,
-                    Issue::UnsupportedField("NPC explosion damage service"),
-                );
-            }
-            return Ok(());
+        if self.world.explosion_damage(site, target, amount) {
+            self.post(key.instance, Event::Finish(key.raw))?;
+        } else {
+            self.report(
+                site,
+                Issue::UnsupportedField("NPC explosion damage service"),
+            );
         }
-        self.apply_npc_self_damage(site, amount)
+        Ok(())
     }
 
     fn apply_npc_self_damage(&mut self, site: Site, amount: f64) -> Result<(), InitFault> {

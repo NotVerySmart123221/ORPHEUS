@@ -57,6 +57,9 @@ The [static model protection fixture](../fixtures/behavior/script-static-model-p
 covers authored slot validation, host admission, and restoration after the last state retires.
 The [self shield recharge fixture](../fixtures/behavior/script-self-shield-recharge-v1.json)
 covers field-based admission, ticking, rate changes, and retirement.
+The [immediate self-damage fixture](../fixtures/behavior/script-immediate-self-damage-v1.json)
+checks admission at invented positions, native integer rounding, one-shot
+execution, the different death rules, and rejection of unreviewed modifiers.
 The [mode entity fixture](../fixtures/behavior/script-mode-entity-query-v1.json)
 covers available, absent, and unknown mode script context through the owner VM.
 
