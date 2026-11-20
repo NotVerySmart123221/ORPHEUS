@@ -642,6 +642,7 @@ fn actor_rays_sample_capsules_once_and_respect_occlusion_and_replacement() {
         Some(Some(SpatialActorRayHit {
             entity: 7,
             distance: 0.75,
+            normal: [-1.0, 0.0, 0.0],
         }))
     );
     assert_eq!(
@@ -656,6 +657,7 @@ fn actor_rays_sample_capsules_once_and_respect_occlusion_and_replacement() {
         Some(Some(SpatialActorRayHit {
             entity: bot_ids[0].min(bot_ids[1]),
             distance: 0.75,
+            normal: [-1.0, 0.0, 0.0],
         }))
     );
     assert_eq!(
@@ -682,6 +684,7 @@ fn actor_rays_sample_capsules_once_and_respect_occlusion_and_replacement() {
         Some(Some(SpatialActorRayHit {
             entity: 7,
             distance: 1.0,
+            normal: [0.0, 1.0, 0.0],
         }))
     );
     let mut incomplete = first.as_ref().clone();
@@ -730,7 +733,8 @@ fn actor_rays_sample_capsules_once_and_respect_occlusion_and_replacement() {
         first.actor_ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 4.0, &[7]),
         Some(Some(SpatialActorRayHit {
             entity: 7,
-            distance: 0.75
+            distance: 0.75,
+            normal: [-1.0, 0.0, 0.0],
         }))
     );
     let standing_ground = TriangleIndex::new([SceneTriangle {
@@ -785,7 +789,8 @@ fn actor_rays_sample_capsules_once_and_respect_occlusion_and_replacement() {
         next.actor_ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 4.0, &[bot_ids[1]]),
         Some(Some(SpatialActorRayHit {
             entity: bot_ids[1],
-            distance: 2.0
+            distance: 2.0,
+            normal: [-1.0, 0.0, 0.0],
         }))
     );
 }
