@@ -250,6 +250,26 @@ sites**. All actor rows and the 476 observations in the #72 capture
 matched the previous run. Both #131 schedules reproduced 339 ticks
 per implementation, with the same four RNG setup differences.
 
+At `001cd3ea`, the room captures the target of a positive heal when the
+event has a distinct sampled source. Target facts use the same capture
+path as impacts, with the actual healed delta and unavailable hit
+attribution. Two resource-free state classes now register by checked
+fields and raw state slots. The prepared boss graph probe passed its
+successor, owner and observer codec, and retirement checks. The locked
+workspace suite and Clippy passed with script coverage.
+
+The unaltered `0B8B` passive subtree and `00EB` bonus receiver passed
+the prepared graph-runner probe with a detached host. It reproduced the
+one-second passive deadline, admission cancellation and re-arm, and
+bonus capping. Admission and attribution for a running room remain
+separate from this graph execution.
+
+Two same-pack 104319 startup reports matched with all 32 actor rows
+unchanged, including **12 independent starts**, one ordinary room
+attachment, and **46 blocking sites**. The #72 trace retained its
+476 observations. Both #131 schedules reproduced the previous 339
+ticks per implementation and the same four RNG setup differences.
+
 Two of the three remaining native target-tracking startup sites have
 empty embedded plugs. One configures a second filter and an entity list
 output. The other configures a count output. Both read a dynamic radius.
