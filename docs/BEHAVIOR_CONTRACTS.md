@@ -47,6 +47,8 @@ The [horizontal cap fixture](../fixtures/behavior/flashbang-horizontal-cap-v1.js
 
 The [vertical impulse fixture](../fixtures/behavior/script-vertical-velocity-impulse-v1.json) covers an ordered vertical reset followed by a world-space velocity addition. The VM admits the complete edit before following its continuation. The native mover consumes it at the next pose, lets positive lift leave supported ground, and runs ordinary collision and gravity. The authored row shape was checked against the project's Python reference at `b0e0f09f`.
 
+The [degree trigonometry fixture](../fixtures/behavior/script-degree-trigonometry-v1.json) covers single-precision results, null coercion and vector composition through the expression evaluator. A companion test checks empty stacks and infinite operands. The operator meanings come from the project's Python evaluator at `b0e0f09f`.
+
 The Rust-only [movement edge fixture](../fixtures/behavior/script-movement-edges-v1.json) checks flag writes before takeoff and landing, landing before a renewed takeoff, and event deduplication when the VM samples a retained pose. A renewed takeoff in the air requires a new source movement frame. Unknown movement samples retain a diagnostic.
 
 The Rust-only [stack claim fixture](../fixtures/behavior/script-stack-claim-v1.json) checks priority, ties, scope, dependent values and release through the production VM. The native room regression combines stack admission with a tag filter and verifies the lifetime of the input and movement effects.

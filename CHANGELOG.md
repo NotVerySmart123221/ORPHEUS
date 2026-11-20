@@ -12,6 +12,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Apply effective character-collision settings to player and NPC movement. Body defaults and timed modifiers determine actor contact participation while static geometry continues to block movement. Added synthetic coverage for modifier retirement and both movement paths. Shared-branch verification is pending.
 
+- Separate NPC StateScript chunks from reliable messages under contention. A peer alternates sends so delayed or lost NPC chunks and sustained combat notices can both make progress. Added synthetic coverage for the wire payload and retry order. Original-client verification is pending.
+
 - Use one room-tick snapshot of living actor capsules for scripted displacement, ordinary player input, and NPC patrol and objective movement. Added synthetic coverage for recovered input frames, patrol catch-up, and stale snapshots. Shared-branch verification is pending.
 
 - Apply living actor contacts to authored player and NPC displacement through the shared capsule solver. Team modes allow allied bodies to pass through. Free-for-all admits all other living bodies as blockers. Added synthetic coverage for actor order, static occlusion, lifecycle, and room team filtering. Shared-branch verification is pending.
@@ -24,7 +26,7 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Preserve observation inputs through a committed StateScript logical-button branch. Its child states use current values if the source expires, so finishing a sample does not interrupt the listener's held or idle lifecycle. Shared-branch verification is pending.
 
-- Separate NPC StateScript chunks from reliable messages under contention. A peer alternates sends so delayed or lost NPC chunks and sustained combat notices can both make progress. Added synthetic coverage for the wire payload and retry order. Original-client verification is pending.
+- Preserve observation inputs through a committed StateScript logical-button branch. Its child states use current values if the source expires, so finishing a sample does not interrupt the listener's held or idle lifecycle. Shared-branch verification is pending.
 
 - Process training bot respawn deadlines after authored damage, including before normal room combat starts. Preserve bot replacement order for each peer while its old body records are being acknowledged.
 
@@ -54,6 +56,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 - Taught parent-owned StateScript states to honor a finite, typed duration. The existing state timer runs the ordinary finish path and is cleared when the state or its parent exits.
 
 - Added an authored velocity action that resets vertical speed and then adds a world-space impulse. Player bodies use their current heading for operand evaluation and apply the edit on the next movement frame. Added synthetic coverage for the action and ground takeoff. Prepared and original-client acceptance are pending.
+
+- Added degree-based sine, cosine and tangent to the shared expression evaluator. This covers the first unsupported operand reported in the prepared velocity input trace. Added synthetic scalar, vector and malformed-input checks. Prepared input acceptance is pending.
 
 - Fixed NPC script direction sampling when navigation turns a body with an active authored facing claim. The room can publish the navigation pose on the frame the claim ends. Validated in shared candidate `6027a713`.
 

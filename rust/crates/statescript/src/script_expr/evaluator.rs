@@ -2399,6 +2399,21 @@ impl Evaluator {
                         0.0
                     })
                 }
+                46..=48 => {
+                    // The degree operators round the result after applying trig.
+                    let degrees = to_float(&pop(&mut stack, pc)?);
+                    if degrees.is_infinite() {
+                        return Err(malformed(pc, "infinite degree operand"));
+                    }
+                    let radians = degrees.to_radians();
+                    let value = match opcode {
+                        46 => radians.sin(),
+                        47 => radians.cos(),
+                        48 => radians.tan(),
+                        _ => unreachable!(),
+                    };
+                    Value::Float(rounded(value))
+                }
                 50 | 51 => {
                     let value = pop(&mut stack, pc)?;
                     Value::Float(
