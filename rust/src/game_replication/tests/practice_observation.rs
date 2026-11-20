@@ -1,5 +1,5 @@
 use super::*;
-use crate::script_graph::Graph;
+use crate::script_graph::{Graph, GraphStore};
 use crate::script_wire::Value as ScriptValue;
 use crate::{
     commands::{FIRE, SECONDARY},
@@ -7,6 +7,8 @@ use crate::{
     script_snapshot_wire::SnapshotError,
 };
 use serde_json::{Value as Json, json};
+
+mod fault_shapes;
 
 fn declared_reload_flag(graph: &Graph) -> bool {
     let reload = Variable {
@@ -439,7 +441,7 @@ fn prepared_practice_catalog_observes_input_survival_and_owner_egress() {
     );
 }
 
-fn script_fault_record(fault: OwnerScriptFault) -> Json {
+fn script_fault_record(fault: OwnerScriptFault, shapes: Option<&GraphStore>) -> Json {
     let diagnostics = match fault
         .error
         .get_ref()
@@ -447,13 +449,7 @@ fn script_fault_record(fault: OwnerScriptFault) -> Json {
     {
         Some(SnapshotError::Incomplete { diagnostics, .. }) => diagnostics
             .iter()
-            .map(|diagnostic| {
-                json!({
-                    "graph": diagnostic.site.graph,
-                    "node": diagnostic.site.node,
-                    "issue": format!("{:?}", diagnostic.issue),
-                })
-            })
+            .map(|diagnostic| fault_shapes::diagnostic_record(diagnostic, shapes))
             .collect(),
         _ => Vec::new(),
     };
@@ -479,6 +475,9 @@ fn prepared_practice_actor_input_matrix() {
     assert!(!path.try_exists().unwrap(), "input report must be new");
     let runtime = env::var_os("ORPHEUS_RUNTIME_DIR").unwrap();
     let assets = SceneAssets::load(runtime).unwrap();
+    let shapes = env::var("ORPHEUS_ACTOR_INPUT_NODE_SHAPES")
+        .is_ok_and(|setting| setting == "1")
+        .then(|| assets.graphs());
     let mut rows = Vec::new();
     for hero in assets.heroes().heroes() {
         let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
@@ -498,7 +497,7 @@ fn prepared_practice_actor_input_matrix() {
             "hitscan": observation.hitscan,
             "launches": observation.launches,
             "failure": failure,
-            "script_fault": observation.script_fault.map(script_fault_record),
+            "script_fault": observation.script_fault.map(|fault| script_fault_record(fault, shapes)),
         }));
     }
     let schedule: Vec<_> = WEAPON_PHASES

@@ -8,6 +8,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Load optional per-map lethal volumes and settle deaths through room health without assigning a killer. Add synthetic checks for safe lower positions and the existing training bot replacement deadline. Verified map regions, automatic player respawn, and shared regression remain open.
 
+- Added an opt-in node-shape section to the prepared actor input report. It describes the schema and registration at a failing graph site while omitting raw operand values. The default report stays compatible with earlier comparisons.
+
 - Separate NPC StateScript chunks from reliable messages under contention. A peer alternates sends so delayed or lost NPC chunks and sustained combat notices can both make progress. Added synthetic coverage for the wire payload and retry order. Original-client verification is pending.
 
 - Add an authored point relocation action with destination capsule clearance for players and NPCs. It shares the motion queue and owner corrections with swept displacement. Added original fixtures for placement, queue admission, and correction. Shared-branch verification is pending.
