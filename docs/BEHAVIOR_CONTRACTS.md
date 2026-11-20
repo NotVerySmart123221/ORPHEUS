@@ -10,7 +10,7 @@ For the proposed private, per-tick Python/Rust gameplay comparison and its evide
 
 ## Opt-in Soldier wire reader check
 
-The Sprint HUD variable check reads Rust-produced prepared Soldier chunks with the Python client-reader model at the same pinned commit as `shared-behavior-contracts`. Supply a clean Python `main` checkout at `b28139d4fa230480c0cea147d369724f97569c30` explicitly; the scripts verify its contents before import and do not download it. These commands use isolated Python and do not require changes to CI:
+The Sprint HUD and rifle ammo/reload variable check reads Rust-produced prepared Soldier chunks with the Python client-reader model at the same pinned commit as `shared-behavior-contracts`. Supply a clean Python `main` checkout at `b28139d4fa230480c0cea147d369724f97569c30` explicitly; the scripts verify its contents before import and do not download it. These commands use isolated Python and do not require changes to CI:
 
 ```sh
 # From an existing Python repository containing the pinned commit:
@@ -26,7 +26,9 @@ python3 -I -S -B scripts/check_sprint_wire.py \
   --python-reference /path/to/pinned-python-checkout --runtime /path/to/runtime
 ```
 
-Without `ORPHEUS_PYTHON_REFERENCE`, the synthetic test is explicitly skipped; a checkout at the wrong revision or with modified reference sources fails. The prepared check writes private chunks only to a fresh temporary directory, which it removes. It checks the direct owner `BodyStream` rather than queued transport, and does not establish original-client behavior or state-link coverage.
+Without `ORPHEUS_PYTHON_REFERENCE`, the reader-dependent synthetic tests are explicitly skipped; the standalone validator tests still run. A checkout at the wrong revision or with modified reference sources fails. The prepared check writes private chunks only to a fresh temporary directory, which it removes. It checks the direct owner `BodyStream` rather than queued transport, and does not establish original-client behavior or state-link coverage.
+
+In the prepared schedule, the independent reader finds one parentless rifle graph `0x0254`. Variable `53` is an unbound integer: baseline 30, repeated 30 at tick 188, 29 at tick 189, 16 at tick 278, 30 at tick 347, and 20 at tick 634. Variable `51` is absent until unbound boolean `true` at tick 300, then `false` at tick 393. The check asserts every write and cumulative value across all chunks, including later firing and repeated values; these wire ticks need not coincide with the Rust projection transitions. The pinned `src/ow174/game/script/decode.py` reads full presence and delta mask/named variables in `_instance_vars`, decodes types and bindings in `read_value`/`read_var`, and persists values in `ClientBody.apply`; `graph.py` defines the graph sync-variable entries. In the prepared graph, `53` is an instance sync variable while `51` is read from the named list. A control flips a real encoded ammo payload bit and must fail specifically on `53 writes`; existing Sprint and framing controls remain in place. This is evidence for this owner stream and prepared runtime only, not transport, game behavior, or cross-OS acceptance.
 
 ### Synthetic two-instance state-link wire check
 
