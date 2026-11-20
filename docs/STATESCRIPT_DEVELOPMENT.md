@@ -22,6 +22,7 @@ nodes with a reciprocal state slot and no explicit behavior override.
 VM handlers and their existing guards run before the plain fallback.
 For legacy bundles, the loader also records the 104319 inherited base
 factory classification for `STU_F08E1453` through the same path.
+[Pinned factory research](https://github.com/leafall903/ORPHEUS/blob/c73e5a499ec73d499c97eaae46357af30c9e4b39/docs/ENTITY_CONTROL_STATE.txt#L109-L117)
 
 The `client_states` list identifies instances by graph index, state
 slot, RID, and raw class. All four must match. A client classification

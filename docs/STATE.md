@@ -43,6 +43,10 @@ The `c2e75f7c` matrix cleared one ordinary health query diagnostic for Moira. Bo
 
 At `eff202e3`, the loader routed an inherited base state through the class metadata path at arbitrary placements. The same-pack reports retained 51 blockers and 10 of 32 independent passes. The #72 capture matched across all 476 observed sites.
 
+The `d747f926` reports matched byte for byte and cleared both remaining selected-pool health query diagnostics for Zenyatta. The 32 independent probes reported **49 blocking sites**, with **10** passing. The ordinary Practice Range factory still attached one player script. The #72 capture matched at all 476 observed sites. Original-client acceptance has a separate gate.
+
+The Windows paired room checks at `d747f926` used 339 ticks each for idle and single-shot reload. Python `45044d0d` and Rust produced two repeatable, individually valid traces in each case. Strict comparison returned `incompatible` for the host and player VM RNG model and seed. The RNG diagnostic found no first difference in the recorded tick fields. The manifest and schedule digests matched the earlier ARM64 runs. The effective input tree digest differed.
+
 | Workflow | Python reference | Rust implementation | Open client or parity gap |
 | --- | --- | --- | --- |
 | **Login, Profiles & Lobby** | Battle.net/JAM auth, profiles, settings (`22200`–`22204`), queues, Windows launcher + TLS relay. | Native BNet/JAM lobby, `profile-settings-v1` (CI verified), encrypted UDP seat handoff. | Standalone Rust launcher & public client connection flow open. |
