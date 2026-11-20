@@ -1184,12 +1184,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             {
                 StateKind::Plain
             }
-            "STU_B5C87F3D"
-                if self
-                    .world
-                    .local_combat_context_available(self.site(id, node))
-                    == Some(false) =>
-            {
+            "STU_B5C87F3D" => {
+                // The native state skips tick registration when its local context is absent.
+                let site = self.site(id, node);
+                if self.world.local_combat_context_available(site) != Some(false) {
+                    self.report(site, Issue::UnsupportedState(node.class.clone()));
+                    return Ok(());
+                }
                 StateKind::Plain
             }
             "STU_76F3EAEF"
@@ -1482,15 +1483,6 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     && node.server_only =>
             {
                 // This effect tracks player criteria. The NPC caster has no player stats.
-                StateKind::Plain
-            }
-            "STU_B5C87F3D"
-                if registration.permits(matches!(
-                    (self.graph(id).index, node.pos),
-                    (0x0043, 24) | (0x022f, 85)
-                )) =>
-            {
-                // The headless owner has no local combat accumulator.
                 StateKind::Plain
             }
             "STU_E3CEF6B9" if registration.shape(is_literal_frame_wait(node)) => {

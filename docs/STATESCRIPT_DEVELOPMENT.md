@@ -113,12 +113,26 @@ ability support.
 - Native eye-position operands use the player's simulation eye anchor.
   Native eye and direction expressions with potential foreign selectors
   request a frozen room pose.
+- A native local combat accumulator enters as a plain state when its host
+  confirms the local service is absent. It leaves spatial operands dormant.
+  Hosts that report the service present or return an unknown result still
+  produce an unsupported-state diagnostic.
 
-Native target tracking still needs the lifecycle of its embedded
-per-target subgraph and both output bindings. The authored
-`track_entities` node owns separate child graph instances. The other
-pending paths include migration of the legacy charge bindings, health
-effects, spatial queries, control effects, and voice recipients.
+Native target tracking still needs ordered samples, optional typed
+output bindings, and the lifecycle of its embedded state slots. The
+authored `track_entities` node owns separate child graph instances.
+Start with a validated query-only shape and an empty embedded plug.
+Preserve the difference between unavailable queries and empty results,
+then verify the output lifetime and owner and observer projections.
+The other pending paths include migration of the legacy charge bindings,
+health effects, spatial queries, control effects, and voice recipients.
+
+The prepared Python ordinary sender trace takes its compatibility branch.
+That branch leaves the persistent recipient wrapper unresolved, so it
+supplies no evidence of delivery or registration. Keep the existing
+persistent registration diagnostic until host policy is modeled or the
+topic has a verified client-only receiver set. Use projected message
+topic declarations for the latter case.
 
 ### Generate the static reports
 

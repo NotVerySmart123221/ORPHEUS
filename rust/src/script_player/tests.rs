@@ -192,6 +192,32 @@ fn engine_table_is_available_only_on_the_encounter_owner_host() {
 }
 
 #[test]
+fn owner_reports_absent_combat_accumulator_only_for_valid_own_body() {
+    let (factory, spawn) = fixture_body_factory();
+    let mut runtime = factory.start(spawn).unwrap();
+    let world = &mut runtime.world;
+    let site = Site {
+        entity: spawn.entity,
+        instance: 1,
+        graph: 42,
+        node: Some(7),
+    };
+    assert_eq!(world.local_combat_context_available(site), Some(false));
+    for entity in [spawn.controller, spawn.entity + 1, 0] {
+        assert_eq!(
+            world.local_combat_context_available(Site { entity, ..site }),
+            None
+        );
+    }
+
+    world.entity = 0;
+    assert_eq!(
+        world.local_combat_context_available(Site { entity: 0, ..site }),
+        None
+    );
+}
+
+#[test]
 fn cassidy_junkenstein_rules_enable_fan_without_changing_other_hero_defaults() {
     let (factory, spawn) = fixture_body_factory();
     let mut runtime = factory.start(spawn).unwrap();

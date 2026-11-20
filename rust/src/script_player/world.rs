@@ -167,6 +167,11 @@ impl World for BodyWorld {
         self.is_player_site(site).then_some(false)
     }
 
+    fn local_combat_context_available(&self, site: Site) -> Option<bool> {
+        // The headless owner body has no client-local combat accumulator.
+        self.is_player_site(site).then_some(false)
+    }
+
     fn team_members(&self, team: u8) -> Option<u32> {
         self.team_member_counts?.count(team)
     }

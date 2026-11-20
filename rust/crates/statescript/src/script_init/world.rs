@@ -504,6 +504,8 @@ pub trait World {
     fn player_stats_available(&self, _site: Site) -> Option<bool> {
         None
     }
+    /// Whether the local combat accumulator is available to this state's owner.
+    /// `None` means the host cannot establish availability for this binding.
     fn local_combat_context_available(&self, _site: Site) -> Option<bool> {
         None
     }
