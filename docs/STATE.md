@@ -116,6 +116,17 @@ independent passes, **one** ordinary Practice Range attachment, and
 **47** blocking sites. All 476 #72 observation sites matched.
 The Phase 3A ability states still require integration and acceptance.
 
+At `5a56304c`, the authored facing claim passed its StateScript
+lifecycle contract and native player movement regressions. The tests
+cover priority ties, refresh and release on the following pose,
+vertical directions, runtime removal and failure, and replacement
+bodies. The legacy NPC-facing regression passed with two existing
+prepared packs containing its boss graph. The prepared 104319 startup
+matrix matched the preceding capture at **11 of 32** independent passes,
+**one** ordinary Practice Range attachment, and **47** blocking sites.
+All 476 #72 observation sites matched. Client zoom presentation and
+specific ability integration remain open.
+
 Seven actor probes have one blocking site each. Mercy's tag query needs
 the tagged placement inventory and live actor tags. Orisa and Sigma
 still hit persistent message registration. Baptiste cannot read a
