@@ -21,7 +21,6 @@ pub const CROUCH_INTENT: u8 = 21;
 pub const LAND_LIMIT: u8 = 36;
 pub(crate) const CAP_TINY: f64 = 1.1920929e-5;
 
-const SPEED: usize = 0;
 const ACCEL_GROUND: usize = 1;
 const ACCEL_AIR: usize = 2;
 const ACCEL_TOUCHING: usize = 3;
@@ -40,8 +39,8 @@ const GROUND_DECEL: usize = 16;
 const COLLISION: usize = 22;
 const STEP_DOWN: usize = 38;
 
-pub(crate) use orpheus_statescript::script_modifiers::narrow;
 pub use orpheus_statescript::script_modifiers::{Modifier, ModifierKey, Operation};
+pub(crate) use orpheus_statescript::script_modifiers::{SPEED_SLOT, narrow};
 
 #[derive(Clone, Copy, Debug)]
 pub struct DirectionModifier {
@@ -232,7 +231,7 @@ impl ActiveModifiers {
         }
         let slot = |index: usize| slots[index].expect("initialized movement scalar");
         let nonnegative = |index| slot(index).max(0.0);
-        let speed = nonnegative(SPEED);
+        let speed = nonnegative(usize::from(SPEED_SLOT));
         let ground_decel = nonnegative(DECEL_GROUND);
         let air_decel = nonnegative(DECEL_AIR);
         MoverSettings {
@@ -278,7 +277,7 @@ mod tests {
 
     fn modifier(operation: Operation, value: f64, priority: f64) -> Modifier {
         Modifier {
-            index: SPEED as u8,
+            index: SPEED_SLOT,
             operation,
             value,
             priority,
@@ -379,11 +378,11 @@ mod tests {
         active.insert(key(2), modifier(Operation::Add, 1.0, 0.0));
         active.insert(key(1), modifier(Operation::Minimum, 1.0, 1.0));
         timeline.track(2, &active);
-        assert_eq!(timeline.at(2).intent(SPEED as u8, 1.0), 3.0);
-        assert_eq!(timeline.at(3).intent(SPEED as u8, 1.0), 1.0);
+        assert_eq!(timeline.at(2).intent(SPEED_SLOT, 1.0), 3.0);
+        assert_eq!(timeline.at(3).intent(SPEED_SLOT, 1.0), 1.0);
         active.remove(&key(1));
         active.get_mut(&key(9)).unwrap().value = 2.0;
         timeline.track(3, &active);
-        assert_eq!(timeline.at(4).intent(SPEED as u8, 1.0), 9.0);
+        assert_eq!(timeline.at(4).intent(SPEED_SLOT, 1.0), 9.0);
     }
 }

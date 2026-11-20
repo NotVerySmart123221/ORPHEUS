@@ -1659,6 +1659,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             self.machine.snapshot.instances.shift_remove(&id);
             self.machine
+                .movement_modifiers
+                .retain(|key, _| key.instance != id);
+            self.machine
                 .disabled_start_entries
                 .retain(|(instance, _)| *instance != id);
             self.machine.queues.remove(id);

@@ -164,7 +164,10 @@ impl EnemyScripts {
     }
 
     pub(crate) fn movement_speed_scale(&self, frame: u32) -> f64 {
-        self.movement_modifiers.at(frame).intent(0, 1.0).max(0.0)
+        self.movement_modifiers
+            .at(frame)
+            .intent(crate::mover_modifiers::SPEED_SLOT, 1.0)
+            .max(0.0)
     }
 
     fn refresh_movement_modifiers(

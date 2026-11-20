@@ -65,6 +65,25 @@ continue to follow the component's event order.
 
 See the [synthetic button lock contract](../fixtures/behavior/script-button-lock-v1.json).
 
+## Scale movement speed for a state
+
+Set `"state_behavior": "movement_scale"` on a server-only state, or declare
+`movement_scale_state` for an authored class. Set `fields.factor` to a
+finite number from zero through one. An optional positive integer
+`fields.duration_frames` finishes the state on the VM timeline. With
+no duration, the state stays active until it ends, aborts, or its instance
+is destroyed.
+
+The state adds one multiplier in the existing speed slot. Overlapping
+scales multiply under the normal modifier order. Each claim belongs to
+its own instance and state. Movement consumers see additions and
+removals at their next frame boundary. Player movement and scripted AI
+gate approaches read this slot. A factor of zero scales the speed limit
+to zero. Acceleration, momentum and collision still follow their mover
+rules.
+
+See the [synthetic movement scale contract](../fixtures/behavior/script-movement-scale-v1.json).
+
 ## Share class behavior across a graph bundle
 
 Add `authored_classes` to a version 1 bundle and use those names in the

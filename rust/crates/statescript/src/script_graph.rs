@@ -39,6 +39,7 @@ enum StateBehavior {
     Observe,
     Interval,
     ButtonLock,
+    MovementScale,
     TrackEntities,
 }
 
@@ -124,11 +125,25 @@ impl Node {
         if button == 0 {
             return None;
         }
-        let duration = match self.field("duration_frames") {
-            Some(value) => Some(NonZeroU32::new(u32::try_from(value.as_u64()?).ok()?)?),
-            None => None,
-        };
-        Some((button, duration))
+        Some((button, self.optional_duration_frames()?))
+    }
+
+    pub(crate) fn movement_scale(&self) -> Option<(f64, Option<NonZeroU32>)> {
+        if self.state_behavior != Some(StateBehavior::MovementScale) {
+            return None;
+        }
+        let factor = self.field("factor")?.as_f64()?;
+        if !(0.0..=1.0).contains(&factor) {
+            return None;
+        }
+        Some((factor, self.optional_duration_frames()?))
+    }
+
+    fn optional_duration_frames(&self) -> Option<Option<NonZeroU32>> {
+        match self.field("duration_frames") {
+            Some(value) => NonZeroU32::new(u32::try_from(value.as_u64()?).ok()?).map(Some),
+            None => Some(None),
+        }
     }
 
     pub(crate) fn target_child_binding(&self) -> Option<(u32, u32)> {
@@ -382,6 +397,7 @@ impl Graph {
                     StateBehavior::Observe => "observe state",
                     StateBehavior::Interval => "interval state",
                     StateBehavior::ButtonLock => "button lock state",
+                    StateBehavior::MovementScale => "movement scale state",
                     StateBehavior::TrackEntities => "track entities state",
                 };
                 let occupies_state_slot = node
@@ -457,6 +473,15 @@ impl Graph {
                             )));
                         }
                         "StateButtonLock"
+                    }
+                    StateBehavior::MovementScale => {
+                        if node.movement_scale().is_none() {
+                            return Err(invalid(format!(
+                                "{state} in graph {} at node {} requires a finite factor in 0..=1 and an optional nonzero u32 duration_frames",
+                                self.index, node.pos
+                            )));
+                        }
+                        "StateMovementScale"
                     }
                     StateBehavior::TrackEntities => {
                         if node.field("targets").is_none_or(Value::is_null) {
@@ -885,6 +910,7 @@ enum AuthoredClassBehavior {
     ObserveState,
     IntervalState,
     ButtonLockState,
+    MovementScaleState,
     TrackEntitiesState,
     ForwardAction,
     BranchAction,
@@ -902,6 +928,7 @@ impl AuthoredClassBehavior {
             Self::ObserveState => (false, Some(StateBehavior::Observe), None),
             Self::IntervalState => (false, Some(StateBehavior::Interval), None),
             Self::ButtonLockState => (false, Some(StateBehavior::ButtonLock), None),
+            Self::MovementScaleState => (false, Some(StateBehavior::MovementScale), None),
             Self::TrackEntitiesState => (false, Some(StateBehavior::TrackEntities), None),
             Self::ForwardAction => (false, None, Some(ActionBehavior::Forward)),
             Self::BranchAction => (false, None, Some(ActionBehavior::Branch)),
@@ -2253,6 +2280,67 @@ mod tests {
         assert_eq!(lock.class, "StateButtonLock");
         assert_eq!(lock.button_lock(), Some((1, NonZeroU32::new(u32::MAX))));
         assert!(lock.server_only && !lock.client_only);
+    }
+
+    #[test]
+    fn authored_movement_scale_validates_scope_factor_duration_and_alias() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let mut data = fixture();
+        data["graphs"][0]["states"][3] = Value::Null;
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state"] = json!(0);
+        node["server_only"] = json!(true);
+        node["state_behavior"] = json!("movement_scale");
+        node["fields"] = json!({"factor": 0});
+
+        let graphs = load(&data).unwrap();
+        let scale = graphs.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(scale.class, "StateMovementScale");
+        assert_eq!(scale.movement_scale(), Some((0.0, None)));
+        assert!(scale.is_state() && !scale.is_networked());
+
+        for fields in [
+            json!({}),
+            json!({"factor":-0.01}),
+            json!({"factor":1.01}),
+            json!({"factor":"0.5"}),
+            json!({"factor":true}),
+            json!({"factor":null}),
+            json!({"factor":0.5,"duration_frames":null}),
+            json!({"factor":0.5,"duration_frames":0}),
+            json!({"factor":0.5,"duration_frames":1.0}),
+            json!({"factor":0.5,"duration_frames":u64::from(u32::MAX) + 1}),
+        ] {
+            let mut bad = data.clone();
+            bad["graphs"][0]["nodes"][0]["fields"] = fields;
+            let error = load(&bad).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(
+                error
+                    .to_string()
+                    .contains("movement scale state in graph 42 at node 0"),
+                "{error}"
+            );
+        }
+        let mut bad = data.clone();
+        bad["graphs"][0]["nodes"][0]["server_only"] = json!(false);
+        assert!(load(&bad).unwrap_err().to_string().contains("server-only"));
+
+        data["authored_classes"] =
+            json!([{"class": "authored.scale", "behavior": "movement_scale_state"}]);
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["class"] = json!("authored.scale");
+        node["state_behavior"] = Value::Null;
+        node["server_only"] = json!(false);
+        node["fields"] = json!({"factor": 1.0, "duration_frames": u32::MAX});
+        let graphs = load(&data).unwrap();
+        let scale = graphs.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(scale.class, "StateMovementScale");
+        assert_eq!(
+            scale.movement_scale(),
+            Some((1.0, NonZeroU32::new(u32::MAX)))
+        );
+        assert!(scale.server_only && !scale.client_only);
     }
 
     #[test]

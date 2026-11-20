@@ -649,6 +649,122 @@ fn target_tag_snapshot_preserves_unknown_base_and_effect_lifetimes() {
 }
 
 #[test]
+fn authored_movement_scales_overlap_and_end_with_their_own_states() {
+    use crate::script_modifiers::Operation;
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct Step {
+        frame: u32,
+        message: Option<(u16, u64)>,
+        destroy: Option<u16>,
+    }
+
+    #[derive(Deserialize)]
+    struct Sample {
+        rows: Vec<(u16, f64)>,
+        finished: Vec<u16>,
+        aborted: Vec<u16>,
+    }
+
+    #[derive(Deserialize)]
+    struct Input {
+        bundle: Json,
+        roots: Vec<(u16, u32)>,
+        steps: Vec<Step>,
+    }
+
+    #[derive(Deserialize)]
+    struct Contract {
+        schema_version: u8,
+        case_id: String,
+        evidence: String,
+        input: Input,
+        expected: Vec<Sample>,
+    }
+
+    let contract: Contract = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/script-movement-scale-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    assert_eq!(contract.case_id, "script-movement-scale.synthetic.v1");
+    assert_eq!(contract.evidence, "synthetic-rust");
+    assert_eq!(contract.input.steps.len(), contract.expected.len());
+
+    let graphs = Arc::new(
+        GraphStore::from_json(&serde_json::to_vec(&contract.input.bundle).unwrap()).unwrap(),
+    );
+    let roots = contract
+        .input
+        .roots
+        .into_iter()
+        .map(|(instance, graph)| Root::new(instance, graph))
+        .collect();
+    let mut world = EmptyWorld;
+    let mut component = Component::start(
+        graphs,
+        52,
+        Variables::new(),
+        roots,
+        0,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let mut frame = 0;
+    for (step, expected) in contract.input.steps.into_iter().zip(contract.expected) {
+        if let Some((instance, message)) = step.message {
+            assert_eq!(
+                component
+                    .queue_frame_message(step.frame, instance, message, Variables::new())
+                    .unwrap(),
+                1
+            );
+        }
+        if step.frame != frame {
+            assert!(step.frame > frame);
+            component.advance_frame(step.frame, &mut world).unwrap();
+            frame = step.frame;
+        }
+        if let Some(instance) = step.destroy {
+            component
+                .run(&mut world, |vm| vm.destroy(instance))
+                .unwrap();
+            let snapshot = component.snapshot().unwrap();
+            assert!(!snapshot.instances.contains_key(&instance));
+            assert!(!snapshot.pending_timers.contains_key(&instance));
+        }
+        let rows = component.movement_modifiers(&mut world).unwrap().unwrap();
+        let movement: Vec<_> = rows
+            .iter()
+            .map(|(key, row)| {
+                assert_eq!((key.state, key.slot), (0, 0));
+                assert_eq!(row.index, 0);
+                assert_eq!(row.operation, Operation::Multiply);
+                (key.instance, row.value)
+            })
+            .collect();
+        assert_eq!(movement, expected.rows, "movement rows at frame {frame}");
+
+        let snapshot = component.snapshot().unwrap();
+        let marked = |variable| {
+            snapshot
+                .instances
+                .iter()
+                .filter(|(_, instance)| {
+                    instance.variables.get(&variable) == Some(&Value::Bool(true))
+                })
+                .map(|(&id, _)| id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(marked(61), expected.finished, "finish at frame {frame}");
+        assert_eq!(marked(62), expected.aborted, "abort at frame {frame}");
+    }
+}
+
+#[test]
 fn movement_modifier_values_follow_lifecycle_and_dependencies_without_read_side_effects() {
     for per_frame in [false, true] {
         let graphs = Arc::new(store(vec![graph(

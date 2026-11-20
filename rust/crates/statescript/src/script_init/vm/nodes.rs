@@ -1048,6 +1048,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let mut registration = RegistrationChecks::default();
         let interval_frames = node.interval_frames();
         let button_lock = node.button_lock();
+        let movement_scale = node.movement_scale();
         let kind = match node.class.as_str() {
             // These client presentation states use the base state lifecycle on the server.
             "STUStatescriptState"
@@ -1328,6 +1329,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             },
             "STUStatescriptStateAbility" => StateKind::Ability { flags: 0 },
             "STU_316CFEF2" => StateKind::MovementMod,
+            _ if movement_scale.is_some() => StateKind::MovementMod,
             "STU_9C9A422A" => StateKind::Defer,
             "STU_75D1C308"
                 if registration
@@ -1717,10 +1719,18 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 }
             }
             StateKind::MovementMod => {
+                if let Some((_, Some(frames))) = movement_scale {
+                    self.post_after(
+                        id,
+                        u64::from(frames.get()) * FRAME_MS,
+                        Event::Finish(key.raw),
+                    )?;
+                }
                 self.refresh_movement_modifier(key, node)?;
-                if self
-                    .evaluate(id, node, field(&node.fields, "m_485109CB"), Some(key))
-                    .is_some_and(|value| script_expr::truthy(&value))
+                if movement_scale.is_none()
+                    && self
+                        .evaluate(id, node, field(&node.fields, "m_485109CB"), Some(key))
+                        .is_some_and(|value| script_expr::truthy(&value))
                 {
                     self.register_tick(key, self.machine.now_ms);
                 }

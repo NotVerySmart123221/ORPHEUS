@@ -8,7 +8,7 @@ use serde_json::Value as Json;
 use crate::{
     script_expr::{self, truthy},
     script_graph::{Node, asset_guid},
-    script_modifiers::{Modifier, ModifierKey, Operation},
+    script_modifiers::{Modifier, ModifierKey, Operation, SPEED_SLOT, narrow},
     script_runtime::{FRAME_MS, GAME_MODE_ENTITY, MAX_MOVEMENT_AXIS, PoolKind},
     script_wire::{Value, Variables},
 };
@@ -2063,6 +2063,23 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         node: &Node,
     ) -> Result<(), InitFault> {
         let id = key.instance;
+        if let Some((factor, _)) = node.movement_scale() {
+            self.spend("movement modifier")?;
+            self.machine.movement_modifiers.insert(
+                ModifierKey {
+                    instance: id,
+                    state: key.raw,
+                    slot: 0,
+                },
+                Modifier {
+                    index: SPEED_SLOT,
+                    operation: Operation::Multiply,
+                    value: narrow(factor),
+                    priority: 0.0,
+                },
+            );
+            return Ok(());
+        }
         let mut modifiers = BTreeMap::new();
         for (slot, config) in array_field(&node.fields, "m_BC5E91CF").iter().enumerate() {
             self.spend("movement modifier")?;
