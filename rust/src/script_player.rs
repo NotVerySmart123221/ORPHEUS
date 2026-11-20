@@ -47,6 +47,7 @@ pub(crate) struct OwnerBodySpawn {
     pub pose: Movement,
     pub eye_position: Option<[f64; 3]>,
     pub quanta: u32,
+    /// The selected skin asset. Zero selects the stock model.
     pub skin: u64,
 }
 
@@ -347,6 +348,7 @@ pub(crate) fn fixture_body_factory() -> (PlayerBodyFactory, OwnerBodySpawn) {
             ..Movement::default()
         },
         eye_position: None,
+        skin: 0,
         quanta: RETAIL_QUANTA,
     };
     let factory = PlayerBodyFactory::prepare(
