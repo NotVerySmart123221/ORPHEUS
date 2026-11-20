@@ -70,6 +70,18 @@ pub(super) struct ObservedSample {
     pub(super) input: Option<(VarKey, Value)>,
 }
 
+#[derive(Clone)]
+pub(super) struct ObservationInput {
+    pub(super) sample: Arc<ObservedSample>,
+    pub(super) on_unavailable: UnavailableSample,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum UnavailableSample {
+    CancelStart,
+    ReadCurrent,
+}
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum RegisteredClass {
     CinematicAim,
@@ -159,7 +171,7 @@ pub(super) enum Event {
     Begin(u16),
     BeginObserved {
         state: u16,
-        sample: Arc<ObservedSample>,
+        input: ObservationInput,
     },
     Finish(u16),
     Abort(u16),
@@ -171,6 +183,7 @@ pub(super) enum Event {
         state: u16,
         activation: u16,
         down: bool,
+        sample: Option<Arc<ObservedSample>>,
     },
     AbilityCheck(u16),
     CheckTransitions(u16),

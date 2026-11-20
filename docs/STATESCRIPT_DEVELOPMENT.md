@@ -1184,6 +1184,12 @@ in the callback affects starts queued after that write. A start is
 discarded when its source activation ends or the sample frame advances.
 The capture lasts for initialization and its synchronous actions.
 
+When a sampled callback starts or changes a logical-button listener's
+held or idle branch, the branch and its starting states use the sample
+while it is current and visible. If the observation ends or a higher
+binding hides the sample, the committed branch continues with current
+values. The listener's own cancellation still stops the branch.
+
 Sampling starts in the VM frame after activation and runs at most once
 per VM frame. That lets a body initialize before the room publishes its
 candidate snapshot. Unavailable scene data records an observation diagnostic

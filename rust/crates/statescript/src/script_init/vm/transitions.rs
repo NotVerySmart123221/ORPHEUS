@@ -13,7 +13,10 @@ use crate::{
 
 use super::super::{
     ABILITY_HELD, MAX_PLUG_DEPTH, SUBGRAPH_STATES, SWITCH_TO_FALSE, SWITCH_TO_TRUE,
-    machine::{Event, ObservedSample, RegisteredClass, Startup, StateKey, VarKey},
+    machine::{
+        Event, ObservationInput, ObservedSample, RegisteredClass, Startup, StateKey,
+        UnavailableSample, VarKey,
+    },
     shapes::{
         array_field, branch_path, case_path, configured, field, is_unlinked_plug, pool_number,
         raw_indices, registered_state, same, source_key, stored,
@@ -812,13 +815,16 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             && configured(node, "on_change")
             && self.is_current_observation(key, activation, frame)
         {
-            let sample = Arc::new(ObservedSample {
-                source: key,
-                activation,
-                frame,
-                input: Some((output, self.machine.value(output, None))),
-            });
-            self.with_observed_sample(sample, |vm| vm.follow(id, node, "on_change", Some(key), 0))?;
+            self.run_observation_callback(
+                ObservedSample {
+                    source: key,
+                    activation,
+                    frame,
+                    input: Some((output, self.machine.value(output, None))),
+                },
+                node,
+                "on_change",
+            )?;
         }
         if !self
             .state(key)
@@ -880,28 +886,30 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 visible = same(&self.machine.value(output, None), &sample);
             }
             if visible {
-                let sample = Arc::new(ObservedSample {
-                    source: key,
-                    activation,
-                    frame,
-                    input: Some((output, sample)),
-                });
-                self.with_observed_sample(sample, |vm| {
-                    vm.follow(key.instance, node, "on_sample", Some(key), 0)
-                })?;
+                self.run_observation_callback(
+                    ObservedSample {
+                        source: key,
+                        activation,
+                        frame,
+                        input: Some((output, sample)),
+                    },
+                    node,
+                    "on_sample",
+                )?;
             } else {
                 self.report(self.site(key.instance, node), Issue::ObservationUnavailable);
             }
         } else {
-            let sample = Arc::new(ObservedSample {
-                source: key,
-                activation,
-                frame,
-                input: None,
-            });
-            self.with_observed_sample(sample, |vm| {
-                vm.follow(key.instance, node, "on_unavailable", Some(key), 0)
-            })?;
+            self.run_observation_callback(
+                ObservedSample {
+                    source: key,
+                    activation,
+                    frame,
+                    input: None,
+                },
+                node,
+                "on_unavailable",
+            )?;
         }
         if activation_is_live(self) {
             self.try_complete(key, node, 0)?;
@@ -922,24 +930,53 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             })
     }
 
-    fn with_observed_sample<T>(
+    fn run_observation_callback(
         &mut self,
-        sample: Arc<ObservedSample>,
-        run: impl FnOnce(&mut Self) -> Result<T, InitFault>,
-    ) -> Result<T, InitFault> {
-        let previous = self.observed_sample.replace(sample);
+        sample: ObservedSample,
+        node: &Node,
+        path: &str,
+    ) -> Result<(), InitFault> {
+        let source = sample.source;
+        self.with_observation_input(
+            Some(ObservationInput {
+                sample: Arc::new(sample),
+                on_unavailable: UnavailableSample::CancelStart,
+            }),
+            |vm| {
+                vm.follow(source.instance, node, path, Some(source), 0)
+                    .map(|_| ())
+            },
+        )
+    }
+
+    fn with_observation_input(
+        &mut self,
+        input: Option<ObservationInput>,
+        run: impl FnOnce(&mut Self) -> Result<(), InitFault>,
+    ) -> Result<(), InitFault> {
+        let previous = std::mem::replace(&mut self.observed_input, input);
         let result = run(self);
-        self.observed_sample = previous;
+        self.observed_input = previous;
         result
     }
 
-    pub(super) fn begin_from_sample(
+    pub(super) fn resume_observed(
         &mut self,
-        key: StateKey,
-        sample: Arc<ObservedSample>,
+        input: ObservationInput,
+        run: impl FnOnce(&mut Self) -> Result<(), InitFault>,
     ) -> Result<(), InitFault> {
+        if self.observation_input_available(&input.sample) {
+            self.with_observation_input(Some(input), run)
+        } else if input.on_unavailable == UnavailableSample::ReadCurrent {
+            self.with_observation_input(None, run)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn observation_input_available(&mut self, sample: &ObservedSample) -> bool {
         if !self.is_current_observation(sample.source, sample.activation, sample.frame) {
-            return Ok(());
+            return false;
         }
         if sample.input.as_ref().is_some_and(|(output, value)| {
             self.machine
@@ -955,9 +992,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     Issue::ObservationUnavailable,
                 );
             }
-            return Ok(());
+            return false;
         }
-        self.with_observed_sample(sample, |vm| vm.begin(key, 0))
+        true
     }
 
     pub(super) fn observation_value(&mut self, site: Site, value: &Json) -> Option<Value> {

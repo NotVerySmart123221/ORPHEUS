@@ -20,6 +20,19 @@
       "frame": 1,
       "ordinary_message": 84
     },
+    "held_branch": {
+      "button": 20,
+      "command_mask": 1,
+      "press_frame": 1,
+      "sample_frame": 2,
+      "lock_frames": 2,
+      "cases": [
+        {"retirement": "none", "idle_direction": 0, "held_after_unlock": true},
+        {"retirement": "before_branch", "idle_direction": 1, "held_after_unlock": true},
+        {"retirement": "before_child", "idle_direction": 1, "held_after_unlock": true},
+        {"retirement": "listener", "idle_direction": null, "held_after_unlock": false}
+      ]
+    },
     "steps": [
       {"frame": 1, "queries": 1, "callbacks": [1, 2], "output": "hit"},
       {"frame": 2, "override_output": true, "queries": 1, "callbacks": [2], "output": "hit"},

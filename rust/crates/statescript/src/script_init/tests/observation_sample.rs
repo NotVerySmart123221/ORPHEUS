@@ -6,6 +6,8 @@ use super::*;
 use crate::script_expr::SpatialRayHit;
 use crate::script_init::machine::Event;
 
+mod held_input;
+
 const OUTPUT: u32 = 42;
 const CHANGE_COPY: u32 = 43;
 const SAMPLE_COPY: u32 = 44;
@@ -31,6 +33,7 @@ struct Input {
     unavailable_callback_delta: f64,
     ownership: Ownership,
     deferred_facing: DeferredFacing,
+    held_branch: held_input::HeldBranch,
     steps: Vec<Step>,
 }
 
@@ -926,6 +929,18 @@ fn start_deferred_facing(
     hook: &str,
     indirect: bool,
 ) -> (Component, DeferredFacingHost) {
+    start_deferred_model(
+        input,
+        deferred_facing_graph(input, hook, indirect),
+        Variables::new(),
+    )
+}
+
+fn start_deferred_model(
+    input: &Input,
+    model: Json,
+    initial: Variables,
+) -> (Component, DeferredFacingHost) {
     let fields = &input.deferred_facing;
     let mut host = DeferredFacingHost {
         directions: fields.directions,
@@ -934,14 +949,16 @@ fn start_deferred_facing(
         queries: Cell::new(0),
         active: Vec::new(),
     };
+    let mut variables = Variables::from([
+        (31, Value::Vector([0.0; 3])),
+        (32, Value::Vector(fields.directions[0])),
+        (33, Value::Vector(fields.directions[1])),
+    ]);
+    variables.extend(initial);
     let component = Component::start(
-        Arc::new(store(vec![deferred_facing_graph(input, hook, indirect)])),
+        Arc::new(store(vec![model])),
         input.body,
-        Variables::from([
-            (31, Value::Vector([0.0; 3])),
-            (32, Value::Vector(fields.directions[0])),
-            (33, Value::Vector(fields.directions[1])),
-        ]),
+        variables,
         vec![Root::new(1, input.graph)],
         0,
         &mut host,
