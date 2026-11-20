@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added authored StateScript facing claims for player and NPC bodies. A claim supplies a normalized direction while active and follows the existing priority rules. Finishing, aborting or tearing down the state releases its claim. Formatting, default workspace tests, and Clippy passed, including 365 native-server tests and 209 StateScript tests. The prepared #72 900-frame test passed.
+
 - Added an authored actor ray query to StateScript. It finds the first eligible room actor using frozen collision capsules and static occlusion. Player and NPC scripts share the query and existing room filters. Replacement views exclude the previous actor capsule. Formatting, default workspace tests, and Clippy passed, including 362 native-server tests and 207 StateScript tests. The prepared #72 900-frame test passed.
 
 - Added an authored static ray query to StateScript. Player and NPC scripts use the room's existing collision scene to get the nearest hit's distance, point, and normal. A clear ray returns an empty result, and an observation retains its last successful result while geometry is unavailable. The default workspace tests and Clippy passed, including 361 native-server tests and 206 StateScript tests. The prepared #72 900-frame test passed.

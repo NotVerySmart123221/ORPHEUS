@@ -195,11 +195,12 @@ impl PlayerBodyState {
     }
 
     fn receive_damage(&mut self, amount: f64, source: Death) -> Damage {
-        self.runtime
-            .as_mut()
-            .map_or_else(Damage::default, |runtime| {
-                runtime.receive_damage(amount, source)
-            })
+        let Some(runtime) = self.runtime.as_mut() else {
+            return Damage::default();
+        };
+        let result = runtime.receive_damage(amount, source);
+        self.mover.set_authored_facing(runtime.authored_facing());
+        result
     }
 
     pub(crate) fn projection(&self) -> Option<SceneProjection<'_>> {
@@ -297,10 +298,12 @@ impl RoomSimulation {
         self.spawned_player_generations.insert(owner, id.generation);
         self.latest_wire_generations
             .insert(id.entity, id.generation);
+        state.mover.set_authored_facing(None);
         if let Some(runtime) = state.runtime.as_mut() {
             if let Some(frame) = self.owner_startup_spatial_frame(owner) {
                 runtime.set_spatial_frame(frame);
             }
+            state.mover.set_authored_facing(runtime.authored_facing());
         }
         let observer_create = state.observer_create.take();
         let entity = self.world.spawn(state).id();
@@ -393,6 +396,7 @@ impl RoomSimulation {
         let frame = state.mover.pose().frame.unwrap_or(state.frame);
         state.mover.track_modifiers(frame, &BTreeMap::new());
         state.mover.set_cinematic_aim(None);
+        state.mover.set_authored_facing(None);
         state.runtime = None;
         state.fields.clear();
         state.launches.clear();
@@ -640,9 +644,11 @@ impl RoomSimulation {
         match runtime.receive_defender_message(message) {
             Ok(_) => {
                 state.mover.set_cinematic_aim(runtime.cinematic_aim());
+                state.mover.set_authored_facing(runtime.authored_facing());
                 true
             }
             Err(error) => {
+                state.mover.set_authored_facing(None);
                 eprintln!(
                     "Junkenstein defender message failed for {:08x}: {error}",
                     id.entity

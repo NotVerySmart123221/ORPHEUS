@@ -334,6 +334,29 @@ rules.
 
 See the [synthetic movement scale contract](../fixtures/behavior/script-movement-scale-v1.json).
 
+## Control a body's facing for a state
+
+Set `state_behavior` to `"facing_claim"` on a server-only state or
+declare `facing_claim_state` for an authored class. Provide a
+`direction` expression and a `priority` with an integer `level` in
+the range -128 to 127 and a boolean `above_equals`. The state's own
+body is the target. The VM evaluates and normalizes the finite nonzero
+direction on entry and refresh.
+
+The highest priority claim supplies the body's facing. A later claim
+at the same level wins when it sets `above_equals`. Refreshing a claim
+preserves its place in that order. Area queries can supply inputs through
+the usual StateScript expressions and variables.
+
+Finishing, aborting or tearing down the state releases its claim.
+An invalid direction or a refused host refresh aborts the state and
+releases its previous claim. Players apply the accepted direction at
+the next processed pose. NPCs apply it through the room's existing aim
+update. Server-facing claims support vertical directions. An active
+cinematic aim has precedence.
+
+See the [synthetic facing claim contract](../fixtures/behavior/statescript-facing-claim-v1.json).
+
 ## Use priorities for control effects
 
 A server-only state can declare `"state_behavior": "stack_claim"`, or use

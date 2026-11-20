@@ -138,6 +138,14 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         self.world.cinematic_aim.map(|(_, aim)| aim)
     }
 
+    fn authored_facing(&self) -> Option<[i32; 2]> {
+        if self.world.vitals.death().is_some() {
+            return None;
+        }
+        let (_, record) = crate::facing::winner(self.world.facing_claims.iter())?;
+        crate::facing::angles(record.direction)
+    }
+
     fn vitals(&self) -> Option<&Vitals> {
         Some(&self.world.vitals)
     }

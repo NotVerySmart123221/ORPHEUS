@@ -45,6 +45,7 @@ enum StateBehavior {
     ButtonLock,
     MovementScale,
     StackClaim,
+    FacingClaim,
     TrackEntities,
 }
 
@@ -151,6 +152,18 @@ impl Node {
             return None;
         }
         Some((factor, self.optional_duration_frames()?))
+    }
+
+    /// Whether authored metadata declares a self-facing claim.
+    pub fn declares_facing_claim(&self) -> bool {
+        self.state_behavior == Some(StateBehavior::FacingClaim)
+    }
+
+    pub(crate) fn facing_claim_priority(&self) -> Option<StackPriority> {
+        if !self.declares_facing_claim() {
+            return None;
+        }
+        authored_stack_priority(self.field("priority")?).ok()
     }
 
     pub(crate) fn declares_stack_claim(&self) -> bool {
@@ -509,6 +522,7 @@ impl Graph {
                     StateBehavior::ButtonLock => "button lock state",
                     StateBehavior::MovementScale => "movement scale state",
                     StateBehavior::StackClaim => "stack claim state",
+                    StateBehavior::FacingClaim => "facing claim state",
                     StateBehavior::TrackEntities => "track entities state",
                 };
                 let occupies_state_slot = node
@@ -608,6 +622,17 @@ impl Graph {
                             )));
                         }
                         "StateStackClaim"
+                    }
+                    StateBehavior::FacingClaim => {
+                        if node.field("direction").is_none_or(Value::is_null)
+                            || node.facing_claim_priority().is_none()
+                        {
+                            return Err(invalid(format!(
+                                "{state} in graph {} at node {} requires a direction expression and explicit i8 level and boolean above_equals priority",
+                                self.index, node.pos
+                            )));
+                        }
+                        "StateFacingClaim"
                     }
                     StateBehavior::TrackEntities => {
                         if node.field("targets").is_none_or(Value::is_null) {
@@ -1054,6 +1079,7 @@ enum AuthoredClassBehavior {
     ButtonLockState,
     MovementScaleState,
     StackClaimState,
+    FacingClaimState,
     TrackEntitiesState,
     ForwardAction,
     BranchAction,
@@ -1074,6 +1100,7 @@ impl AuthoredClassBehavior {
             Self::ButtonLockState => (false, Some(StateBehavior::ButtonLock), None),
             Self::MovementScaleState => (false, Some(StateBehavior::MovementScale), None),
             Self::StackClaimState => (false, Some(StateBehavior::StackClaim), None),
+            Self::FacingClaimState => (false, Some(StateBehavior::FacingClaim), None),
             Self::TrackEntitiesState => (false, Some(StateBehavior::TrackEntities), None),
             Self::ForwardAction => (false, None, Some(ActionBehavior::Forward)),
             Self::BranchAction => (false, None, Some(ActionBehavior::Branch)),
@@ -2851,6 +2878,79 @@ mod tests {
             Some((1.0, NonZeroU32::new(u32::MAX)))
         );
         assert!(scale.server_only && !scale.client_only);
+    }
+
+    #[test]
+    fn authored_facing_claim_requires_direction_and_explicit_priority() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let mut data = fixture();
+        data["graphs"][0]["states"][3] = Value::Null;
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state"] = json!(0);
+        node["server_only"] = json!(true);
+        node["state_behavior"] = json!("facing_claim");
+        node["fields"] = json!({
+            "direction":{"$":"EntityDirection","entity":null},
+            "priority":{"level":-3,"above_equals":true}
+        });
+        let graphs = load(&data).unwrap();
+        let claim = graphs.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(claim.class, "StateFacingClaim");
+        assert!(claim.declares_facing_claim() && claim.is_state() && !claim.is_networked());
+        assert_eq!(
+            claim.facing_claim_priority(),
+            Some(StackPriority {
+                level: -3,
+                above_equals: true
+            })
+        );
+
+        for (field, value) in [
+            ("direction", Value::Null),
+            ("priority", Value::Null),
+            ("priority", json!({"level":128,"above_equals":true})),
+            ("priority", json!({"level":-129,"above_equals":true})),
+            ("priority", json!({"level":1.5,"above_equals":true})),
+            ("priority", json!({"level":1,"above_equals":1})),
+            ("priority", json!({"level":1})),
+            (
+                "priority",
+                json!({"level":1,"above_equals":true,"extra":false}),
+            ),
+            ("m_onAbortPlug", json!({"$":"Plug","links":[[0,false]]})),
+        ] {
+            let mut bad = data.clone();
+            bad["graphs"][0]["nodes"][0]["fields"][field] = value;
+            let error = load(&bad).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(
+                error
+                    .to_string()
+                    .contains("facing claim state in graph 42 at node 0")
+            );
+        }
+        for field in ["direction", "priority"] {
+            let mut bad = data.clone();
+            bad["graphs"][0]["nodes"][0]["fields"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert_eq!(load(&bad).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        }
+        let mut bad = data.clone();
+        bad["graphs"][0]["nodes"][0]["server_only"] = json!(false);
+        assert!(load(&bad).unwrap_err().to_string().contains("server-only"));
+
+        data["authored_classes"] =
+            json!([{"class":"authored.facing","behavior":"facing_claim_state"}]);
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["class"] = json!("authored.facing");
+        node["state_behavior"] = Value::Null;
+        node["server_only"] = json!(false);
+        let graphs = load(&data).unwrap();
+        let claim = graphs.graph(42).unwrap().state(0).unwrap();
+        assert!(claim.declares_facing_claim() && claim.server_only && !claim.client_only);
+        assert_eq!(claim.class, "StateFacingClaim");
     }
 
     #[test]

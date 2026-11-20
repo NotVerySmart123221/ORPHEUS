@@ -880,6 +880,29 @@ impl World for EnemyWorld<'_> {
         }
         Some(true)
     }
+    fn set_facing_claim(
+        &mut self,
+        site: Site,
+        record: script_init::AiFacing,
+        active: bool,
+    ) -> Option<bool> {
+        if site.entity != self.binding.body {
+            return None;
+        }
+        if active {
+            if record.target != self.binding.body
+                || self.vitals.death().is_some()
+                || crate::facing::angles(record.direction).is_none()
+            {
+                return Some(false);
+            }
+            self.control_records.facing.insert(site, record);
+        } else {
+            self.control_records.facing.shift_remove(&site);
+        }
+        Some(true)
+    }
+
     fn ai_facing(
         &mut self,
         site: Site,

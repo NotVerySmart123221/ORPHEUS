@@ -832,9 +832,14 @@ struct SyntheticOwner {
     authored_room_message: Option<(u32, crate::script_init::RoomMessage)>,
     received_room_messages: Arc<Mutex<Vec<(u32, crate::script_init::RoomMessage)>>>,
     script_requests: crate::game_combat::RoomScriptRequests,
+    authored_facing: Arc<Mutex<Option<[i32; 2]>>>,
 }
 
 impl OwnerBodyRuntime for SyntheticOwner {
+    fn authored_facing(&self) -> Option<[i32; 2]> {
+        *self.authored_facing.lock().unwrap()
+    }
+
     fn set_spatial_frame(&mut self, frame: Arc<crate::game_combat::RoomSpatialFrame>) {
         if let Some((target, delta)) = self.authored_health_change.take() {
             assert!(self.script_requests.queue_health(&frame, target, delta));
@@ -956,6 +961,7 @@ fn synthetic_owner_with_vitals(
         authored_room_message: None,
         received_room_messages: Arc::default(),
         script_requests: Default::default(),
+        authored_facing: Arc::default(),
     }
 }
 
@@ -976,6 +982,84 @@ fn mover_at(position: [f64; 3]) -> Mover {
 
 fn empty_mover() -> Mover {
     mover_at([0.0; 3])
+}
+
+#[test]
+fn authored_facing_refreshes_after_each_pose_and_releases_after_failure() {
+    let id = BodyId {
+        entity: 71,
+        generation: 1,
+    };
+    let failed = Arc::new(AtomicBool::new(false));
+    let mut runtime = synthetic_owner(id.entity, 100, Arc::clone(&failed));
+    let facing = Arc::clone(&runtime.authored_facing);
+    *facing.lock().unwrap() = Some([16_384, 0]);
+    let mut script = BodyScript::new(body(id), 100, None, &runtime).unwrap();
+    let mut mover = empty_mover();
+    mover.set_authored_facing(runtime.authored_facing());
+    let rays = TriangleIndex::new(Vec::new()).unwrap();
+    let mut frame = 100;
+    let mut fields = Vec::new();
+    let mut launches = Vec::new();
+    let mut hitscan = Vec::new();
+    let mut run = |frame_number| {
+        let mut buffers = StepBuffers {
+            frame: &mut frame,
+            fields: &mut fields,
+            launches: &mut launches,
+            hitscan: &mut hitscan,
+        };
+        let mut result = Ok(());
+        mover
+            .step(
+                &rays,
+                Command {
+                    frame: frame_number,
+                    yaw: 1234,
+                    pitch: -5678,
+                    ..Command::default()
+                },
+                0.016,
+                |mover, command| {
+                    result = script.advance_step(
+                        &mut runtime,
+                        mover,
+                        &mut buffers,
+                        command,
+                        BodyStep::Posed,
+                    );
+                },
+            )
+            .unwrap();
+        ([mover.pose().yaw, mover.pose().pitch], result)
+    };
+    let (pose, result) = run(101);
+    result.unwrap();
+    assert_eq!(pose, [16_384, 0]);
+    *facing.lock().unwrap() = Some([0, -16_384]);
+    let (pose, result) = run(102);
+    result.unwrap();
+    assert_eq!(pose, [16_384, 0]);
+    let (pose, result) = run(103);
+    result.unwrap();
+    assert_eq!(pose, [0, -16_384]);
+    *facing.lock().unwrap() = None;
+    let (pose, result) = run(104);
+    result.unwrap();
+    assert_eq!(pose, [0, -16_384]);
+    let (pose, result) = run(105);
+    result.unwrap();
+    assert_eq!(pose, [1234, -5678]);
+    *facing.lock().unwrap() = Some([-16_384, 0]);
+    let (_, result) = run(106);
+    result.unwrap();
+    failed.store(true, Ordering::Relaxed);
+    let (pose, result) = run(107);
+    assert_eq!(pose, [-16_384, 0]);
+    assert!(result.is_err());
+    let (pose, result) = run(108);
+    assert!(result.is_err());
+    assert_eq!(pose, [1234, -5678]);
 }
 
 fn activate_script(

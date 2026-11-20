@@ -521,6 +521,10 @@ pub trait World {
     fn ai_facing(&mut self, _site: Site, _record: AiFacing, _active: bool) -> Option<bool> {
         None
     }
+    /// Admit or release an authored self-facing claim, keyed by its originating site.
+    fn set_facing_claim(&mut self, _site: Site, _record: AiFacing, _active: bool) -> Option<bool> {
+        None
+    }
     /// None: unavailable; false: the declared controller has no matching slot;
     /// true: the record was installed and must be removed on state teardown.
     fn ai_weapon_override(

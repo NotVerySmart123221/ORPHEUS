@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "case_id": "statescript-facing-claim.synthetic.v1",
+  "source": {"basis": "Original direction inputs, body identity, and state lifetime."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "body": 701,
+    "graph": 467,
+    "work_budget": 24,
+    "priority": {"level": 17, "above_equals": true},
+    "initial": [0, 0, 5],
+    "refresh": [1e300, 0, 0],
+    "invalid": [0, 0, 0]
+  },
+  "expected": {
+    "initial": [0, 0, 1],
+    "refresh": [1, 0, 0]
+  }
+}

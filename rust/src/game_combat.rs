@@ -2139,6 +2139,8 @@ impl RoomSimulation {
                     enemy.fault = Some(error);
                 } else if let Some(aim) = enemy.scripts.cinematic_aim() {
                     bot.apply_encounter_aim(aim, tick);
+                } else if let Some(aim) = enemy.scripts.authored_facing(enemy.binding.body) {
+                    bot.apply_encounter_aim(aim, tick);
                 } else if crate::npc_catalog::is_junkenstein_boss(enemy.binding.hero) {
                     if let Some(direction) = enemy.scripts.facing_direction() {
                         bot.apply_encounter_facing(direction, tick);

@@ -1018,6 +1018,20 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         }
     }
 
+    pub(in crate::script_init) fn publish_facing_record(
+        &mut self,
+        node: &Node,
+        site: Site,
+        record: AiFacing,
+        active: bool,
+    ) -> Option<bool> {
+        if node.declares_facing_claim() {
+            self.world.set_facing_claim(site, record, active)
+        } else {
+            self.world.ai_facing(site, record, active)
+        }
+    }
+
     pub(in crate::script_init) fn update_ai_facing(
         &mut self,
         key: StateKey,
@@ -1025,7 +1039,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         previous: Option<AiFacing>,
     ) -> Result<(), InitFault> {
         let site = self.site(key.instance, node);
-        let (target, priority) = if let Some(previous) = previous {
+        let authored = node.declares_facing_claim();
+        let (target, priority) = if authored {
+            (
+                site.entity,
+                node.facing_claim_priority()
+                    .expect("validated facing claim priority"),
+            )
+        } else if let Some(previous) = previous {
             (previous.target, previous.priority)
         } else {
             let priority = field(&node.fields, "m_priority");
@@ -1047,31 +1068,69 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 script_expr::stack_priority(priority).expect("validated priority asset"),
             )
         };
-        let Some(direction) =
-            self.evaluate(key.instance, node, field(&node.fields, "m_7CCD8B4B"), None)
+        let operand = if authored { "direction" } else { "m_7CCD8B4B" };
+        let Some(direction) = self.evaluate(key.instance, node, field(&node.fields, operand), None)
         else {
+            if authored {
+                self.post(key.instance, Event::Abort(key.raw))?;
+            }
             return Ok(());
         };
         let direction = match direction {
             Value::Vector(direction) if direction.iter().all(|axis| axis.is_finite()) => direction,
             _ => {
-                self.report(site, Issue::UnsupportedField("AI facing direction"));
+                self.report(
+                    site,
+                    Issue::UnsupportedField(if authored {
+                        "facing claim direction"
+                    } else {
+                        "AI facing direction"
+                    }),
+                );
+                if authored {
+                    self.post(key.instance, Event::Abort(key.raw))?;
+                }
                 return Ok(());
             }
+        };
+        let direction = if authored {
+            let scale = direction.into_iter().map(f64::abs).fold(0.0, f64::max);
+            if scale == 0.0 {
+                self.report(site, Issue::UnsupportedField("facing claim direction"));
+                self.post(key.instance, Event::Abort(key.raw))?;
+                return Ok(());
+            }
+            let scaled = direction.map(|axis| axis / scale);
+            let magnitude = scaled.iter().map(|axis| axis * axis).sum::<f64>().sqrt();
+            scaled.map(|axis| axis / magnitude)
+        } else {
+            direction
         };
         let record = AiFacing {
             target,
             direction,
             priority,
         };
-        match self.world.ai_facing(site, record, true) {
+        match self.publish_facing_record(node, site, record, true) {
             Some(true) => {
                 self.state_mut(key).expect("active AI facing").kind =
                     StateKind::AiFacing(Some(record));
                 self.register_tick(key, self.machine.now_ms);
             }
             Some(false) => self.post(key.instance, Event::Abort(key.raw))?,
-            None => self.report(site, Issue::UnsupportedField("AI facing component")),
+            None => {
+                self.report(
+                    site,
+                    Issue::UnsupportedField(if authored {
+                        "facing claim component"
+                    } else {
+                        "AI facing component"
+                    }),
+                );
+                if authored {
+                    self.post(key.instance, Event::Abort(key.raw))?;
+                }
+            }
         }
         Ok(())
     }

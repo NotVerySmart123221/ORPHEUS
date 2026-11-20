@@ -155,6 +155,7 @@ pub(super) struct BodyWorld {
     pub(super) sightings: Vec<DefenderSighting>,
     pub(super) sighting_source: Option<SightingSource>,
     pub(super) cinematic_aim: Option<(Site, [i32; 2])>,
+    pub(super) facing_claims: indexmap::IndexMap<Site, crate::script_init::AiFacing>,
     pub(super) deadeye_scene: DeadeyeScene,
     pub(super) velocity_changes: Vec<(u32, crate::mover::VelocityChange)>,
 }
@@ -260,6 +261,29 @@ impl World for BodyWorld {
             self.cinematic_aim = None;
         }
         true
+    }
+
+    fn set_facing_claim(
+        &mut self,
+        site: Site,
+        record: crate::script_init::AiFacing,
+        active: bool,
+    ) -> Option<bool> {
+        if !self.is_player_site(site) {
+            return None;
+        }
+        if active {
+            if record.target != self.entity
+                || self.vitals.death().is_some()
+                || crate::facing::angles(record.direction).is_none()
+            {
+                return Some(false);
+            }
+            self.facing_claims.insert(site, record);
+        } else {
+            self.facing_claims.shift_remove(&site);
+        }
+        Some(true)
     }
 
     fn ruleset(&mut self, id: u32) -> Option<Value> {

@@ -1257,7 +1257,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     .ai_control_override(self.site(id, node), record, false);
             }
             StateKind::AiFacing(Some(record)) => {
-                self.world.ai_facing(self.site(id, node), record, false);
+                self.publish_facing_record(node, self.site(id, node), record, false);
             }
             StateKind::AiWeaponOverride {
                 record: Some(record),
@@ -1608,7 +1608,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         .graph(id)
                         .state(usize::from(raw))
                         .expect("AI facing state");
-                    self.world.ai_facing(self.site(id, node), record, false);
+                    self.publish_facing_record(node, self.site(id, node), record, false);
                 } else if let StateKind::AiWeaponOverride {
                     record: Some(record),
                 } = kind

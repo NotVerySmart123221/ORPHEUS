@@ -1252,6 +1252,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::AiControlSetting
             }
             "STU_473549CA" | "STU_CF8C7CC5" => StateKind::AiControlOverride { record: None },
+            "StateFacingClaim" if node.declares_facing_claim() => StateKind::AiFacing(None),
             "STU_FC16FF45"
                 if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
