@@ -2088,7 +2088,7 @@ impl RoomSimulation {
             self.collect_local_health_events();
             self.settle_authored_requests(tick, now)?;
             self.flush_health_events();
-            return Ok(Vec::new());
+            return self.respawn_due(tick, now);
         }
         let external_and_players = self.collect_player_enemy_targets();
         let has_roster = self.player_targets_active
