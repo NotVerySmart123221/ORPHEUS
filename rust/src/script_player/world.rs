@@ -153,6 +153,7 @@ pub(super) struct BodyWorld {
     pub(super) vitals: Vitals,
     pub(super) pool_types_known: bool,
     pub(super) target_tags: Option<BTreeSet<u64>>,
+    pub(super) model_hardpoints: Option<Arc<BTreeSet<u64>>>,
     pub(super) target_tag_effects: TargetTagEffects,
     pub(super) controller_on_fire: bool,
     pub(super) defenders: Arc<[u32]>,
@@ -326,6 +327,15 @@ impl World for BodyWorld {
         self.graphs
             .mode_variables(self.mode)
             .map(|variables| variables.get(&id).copied().map_or(Value::Null, Value::from))
+    }
+
+    fn body_has_hardpoint(&self, site: Site, entity: u32, hardpoint: u64) -> Option<bool> {
+        if entity != self.entity || !self.is_player_site(site) {
+            return None;
+        }
+        self.model_hardpoints
+            .as_ref()
+            .map(|hardpoints| hardpoints.contains(&hardpoint))
     }
 
     fn body_angle(

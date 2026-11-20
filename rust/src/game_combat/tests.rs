@@ -1939,6 +1939,7 @@ fn authored_zomnic_attack_updates_gate_damage_and_retires_the_pair() {
                 frame: 5900,
                 pose,
                 eye_position: None,
+                skin: 0,
                 quanta: RETAIL_QUANTA,
             },
         )

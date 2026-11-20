@@ -25,6 +25,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Settle pending hitscan before replacing the owner's hero or skin, including when both inputs arrive in one worker turn. Scope queued player death notices to the victim body's generation so they cannot follow a replacement.
 
+- Resolve owner StateScript hardpoint queries from optional model membership supplied for the selected body and skin. Treat missing model metadata as unavailable and preserve the current body when a replacement cannot initialize.
+
 - Taught parent-owned StateScript states to honor a finite, typed duration. The existing state timer runs the ordinary finish path and is cleared when the state or its parent exits.
 
 - Fixed NPC script direction sampling when navigation turns a body with an active authored facing claim. The room can publish the navigation pose on the frame the claim ends. Validated in shared candidate `6027a713`.
