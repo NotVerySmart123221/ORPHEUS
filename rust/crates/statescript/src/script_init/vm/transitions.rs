@@ -736,6 +736,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             Err(
                 script_expr::EvalError::UnavailableEntityPosition(_)
                 | script_expr::EvalError::UnavailableEntityDirection(_)
+                | script_expr::EvalError::UnavailableBodyEyePosition(_)
                 | script_expr::EvalError::UnavailableEntityVariable { .. }
                 | script_expr::EvalError::UnavailableSpatialCandidates
                 | script_expr::EvalError::UnavailableSpatialVisibility

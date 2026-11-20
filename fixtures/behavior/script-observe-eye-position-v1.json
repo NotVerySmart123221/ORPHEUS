@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "case_id": "script-observe-eye-position.synthetic.v1",
+  "source": {"basis": "Original room samples and eye anchors for the synthetic radius observer."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "center": {"$": "STU_21A13145", "m_entity": {"$": "STU_B5A0CAF0"}},
+    "malformed_center": {"$": "STU_21A13145"},
+    "radius": 3.0,
+    "candidates": [[512, [33.0, 4.0, -7.0]], [601, [51.0, 4.0, -7.0]]],
+    "eye_positions": [null, [31.0, 4.0, -7.0], null, [42.0, 4.0, -7.0]]
+  },
+  "expected": [
+    {"targets": null, "changed": false},
+    {"targets": [512], "changed": true},
+    {"targets": [512], "changed": false},
+    {"targets": [], "changed": true}
+  ]
+}
