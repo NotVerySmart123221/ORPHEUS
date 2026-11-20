@@ -823,21 +823,53 @@ struct Bundle {
     missing: Vec<u32>,
 }
 
-fn uses_radius_query(value: &Value) -> bool {
-    match value {
-        Value::Object(fields) => {
-            fields.get("$").and_then(Value::as_str) == Some("EntitiesInRadius")
-                || fields.values().any(uses_radius_query)
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum RoomSpatialNeeds {
+    None,
+    Queries,
+    EntityFacts,
+    EntityTags,
+}
+
+fn room_spatial_needs(value: &Value) -> RoomSpatialNeeds {
+    use RoomSpatialNeeds::{EntityFacts, EntityTags, None as NoQueries, Queries};
+
+    let requirements = |fields: &Map<String, Value>| {
+        let filter = fields.get("filter").and_then(Value::as_object);
+        let tags = filter.is_some_and(|filter| filter.contains_key("tags"));
+        match fields.get("$").and_then(Value::as_str) {
+            Some("EntityMatches" | "EntitiesInRadius") if tags => EntityTags,
+            Some("EntityMatches") => EntityFacts,
+            Some("EntitiesInRadius")
+                if filter.is_some_and(|filter| filter.contains_key("alive")) =>
+            {
+                EntityFacts
+            }
+            Some("EntitiesInRadius") => Queries,
+            _ => NoQueries,
         }
-        Value::Array(values) => values.iter().any(uses_radius_query),
-        _ => false,
+    };
+    match value {
+        Value::Object(fields) => requirements(fields).max(
+            fields
+                .values()
+                .map(room_spatial_needs)
+                .max()
+                .unwrap_or(NoQueries),
+        ),
+        Value::Array(values) => values
+            .iter()
+            .map(room_spatial_needs)
+            .max()
+            .unwrap_or(NoQueries),
+        _ => NoQueries,
     }
 }
 
 #[derive(Debug)]
 pub struct GraphStore {
     graphs: BTreeMap<u32, Graph>,
-    uses_room_spatial_frame: bool,
+    room_spatial_needs: RoomSpatialNeeds,
     bodies: BTreeMap<u64, Body>,
     entities: BTreeMap<u64, Body>,
     mode_variables: BTreeMap<u64, BTreeMap<u32, ModeValue>>,
@@ -915,17 +947,23 @@ impl GraphStore {
                 }
             }
         }
-        let uses_room_spatial_frame = graphs.values().any(|graph| {
-            graph.nodes.iter().any(|node| {
-                node.runs_on_server()
-                    && (node.declares_health_change_action()
-                        || node.declares_room_message_action()
-                        || uses_radius_query(&node.fields))
+        let room_spatial_needs = graphs
+            .values()
+            .flat_map(|graph| &graph.nodes)
+            .filter(|node| node.runs_on_server())
+            .map(|node| {
+                let needs = room_spatial_needs(&node.fields);
+                if node.declares_health_change_action() || node.declares_room_message_action() {
+                    needs.max(RoomSpatialNeeds::Queries)
+                } else {
+                    needs
+                }
             })
-        });
+            .max()
+            .unwrap_or(RoomSpatialNeeds::None);
         Ok(Self {
             graphs,
-            uses_room_spatial_frame,
+            room_spatial_needs,
             bodies: keyed_by_guid(bundle.bodies)?,
             entities: keyed_by_guid(bundle.entities)?,
             mode_variables: keyed_by_guid(bundle.mode_variables)?
@@ -946,7 +984,12 @@ impl GraphStore {
 
     /// Whether any server graph uses the room's living body snapshot.
     pub fn uses_room_spatial_frame(&self) -> bool {
-        self.uses_room_spatial_frame
+        self.room_spatial_needs != RoomSpatialNeeds::None
+    }
+
+    /// The most detailed room data requested by any server graph.
+    pub fn room_spatial_needs(&self) -> RoomSpatialNeeds {
+        self.room_spatial_needs
     }
 
     pub fn graph(&self, index: u32) -> Option<&Graph> {
@@ -1504,13 +1547,44 @@ mod tests {
         let load =
             |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap()).unwrap();
         assert!(!load(&data).uses_room_spatial_frame());
+        assert!(load(&data).room_spatial_needs() < RoomSpatialNeeds::EntityFacts);
 
         data["graphs"][0]["nodes"][0]["fields"]["nested"] =
             json!([{"value":{"$":"EntitiesInRadius","center":null,"radius":1}}]);
         assert!(load(&data).uses_room_spatial_frame());
+        assert!(load(&data).room_spatial_needs() < RoomSpatialNeeds::EntityFacts);
+
+        let value = &mut data["graphs"][0]["nodes"][0]["fields"]["nested"][0]["value"];
+        value["filter"] = json!({"relation":"ally","source":null});
+        assert!(load(&data).room_spatial_needs() < RoomSpatialNeeds::EntityFacts);
+
+        for (predicate, needs) in [
+            (
+                json!({"$":"EntitiesInRadius","center":null,"radius":1,"filter":{"alive":true}}),
+                RoomSpatialNeeds::EntityFacts,
+            ),
+            (
+                json!({"$":"EntitiesInRadius","center":null,"radius":1,"filter":{"tags":{}}}),
+                RoomSpatialNeeds::EntityTags,
+            ),
+            (
+                json!({"$":"EntityMatches","entity":null,"filter":{"alive":true}}),
+                RoomSpatialNeeds::EntityFacts,
+            ),
+            (
+                json!({"$":"EntityMatches","entity":null,"filter":{"tags":{}}}),
+                RoomSpatialNeeds::EntityTags,
+            ),
+        ] {
+            data["graphs"][0]["nodes"][0]["fields"]["nested"][0]["value"] = predicate;
+            let parsed = load(&data);
+            assert!(parsed.uses_room_spatial_frame());
+            assert_eq!(parsed.room_spatial_needs(), needs);
+        }
 
         data["graphs"][0]["nodes"][0]["client_only"] = json!(true);
         assert!(!load(&data).uses_room_spatial_frame());
+        assert!(load(&data).room_spatial_needs() < RoomSpatialNeeds::EntityFacts);
     }
 
     #[test]

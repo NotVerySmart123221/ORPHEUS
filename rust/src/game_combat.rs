@@ -4,7 +4,12 @@
 //! the command and pose at consumption, and owns identity-gated delivery.
 //! Hit selection, damage, and respawn order follow ow174/game/combat.py.
 
-use std::{collections::HashMap, io, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    io,
+    sync::Arc,
+    time::Duration,
+};
 
 use bevy_ecs::{component::Component, entity::Entity, world::World};
 use indexmap::IndexMap;
@@ -26,7 +31,8 @@ use crate::{
     match_scene::bot_create,
     projectile_flight::{ProjectileBallistics, ProjectileFlight},
     scene_assets::{BotQueries, MOVER_CATEGORY},
-    script_expr::SpatialCandidate,
+    script_expr::{RoomEntityFacts, SpatialCandidate},
+    script_graph::RoomSpatialNeeds,
     script_init::ShotEvent,
     static_ray::{Vec3, norm, segment_separation},
     vitals::Death,
@@ -273,9 +279,10 @@ struct FlightBatch {
     order: Vec<Entity>,
 }
 
-/// A room frame's living candidate rows and the shared static collision view.
+/// One room frame's living candidates, optional body facts and static collision view.
 pub(crate) struct RoomSpatialFrame {
     candidates: Box<[SpatialCandidate]>,
+    entity_facts: Option<BTreeMap<u32, RoomEntityFacts>>,
     script_targets: HashMap<u32, RoomScriptTarget>,
     ground: Arc<CollisionScene>,
 }
@@ -285,9 +292,19 @@ impl RoomSpatialFrame {
         &self.candidates
     }
 
+    pub(crate) fn entity_facts(&self) -> Option<&BTreeMap<u32, RoomEntityFacts>> {
+        self.entity_facts.as_ref()
+    }
+
     pub(crate) fn line_clear(&self, origin: Vec3, target: Vec3) -> Option<bool> {
         self.ground.segment_clear(origin, target, MOVER_CATEGORY)
     }
+}
+
+struct RoomSpatialQueries {
+    free_for_all: bool,
+    ground: Arc<CollisionScene>,
+    needs: RoomSpatialNeeds,
 }
 
 /// Room-authoritative bot bodies, player bodies, and in-flight projectiles.
@@ -297,7 +314,7 @@ pub(crate) struct RoomSimulation {
     by_wire: IndexMap<u32, Entity>,
     players_by_wire: IndexMap<u32, Entity>,
     players_by_owner: IndexMap<u32, PlayerBodyHandle>,
-    spatial_queries: Option<(bool, Arc<CollisionScene>)>,
+    spatial_queries: Option<RoomSpatialQueries>,
     spatial_frame: Option<(u32, Arc<RoomSpatialFrame>)>,
     // Generation maps live for the room's lifetime so reconnects cannot reset history.
     player_generations: HashMap<u32, u64>,
@@ -662,13 +679,18 @@ impl RoomSimulation {
         &mut self,
         free_for_all: bool,
         ground: Arc<CollisionScene>,
+        needs: RoomSpatialNeeds,
     ) {
-        self.spatial_queries = Some((free_for_all, ground));
+        self.spatial_queries = Some(RoomSpatialQueries {
+            free_for_all,
+            ground,
+            needs,
+        });
     }
 
-    /// Capture the living room bodies on the first use of this room frame.
+    /// Freeze room queries at the first use of this room frame.
     pub(crate) fn prepare_spatial_frame(&mut self, frame: u32) -> Result<(), CombatError> {
-        let Some((free_for_all, ground)) = &self.spatial_queries else {
+        let Some(queries) = &self.spatial_queries else {
             return Ok(());
         };
         if self
@@ -681,12 +703,26 @@ impl RoomSimulation {
 
         let capacity = self.players_by_wire.len() + self.by_wire.len();
         let mut candidates = Vec::with_capacity(capacity);
+        let mut entity_facts = (queries.needs >= RoomSpatialNeeds::EntityFacts).then(BTreeMap::new);
+        let include_tags = queries.needs == RoomSpatialNeeds::EntityTags;
         let mut script_targets = HashMap::with_capacity(capacity);
         for (state, &entity) in self.states().zip(self.by_wire.values()) {
             let state = state?;
             let bot = &state.bot;
+            let alive = !bot.dead && state.vitals.death().is_none();
+            let team = (!queries.free_for_all).then_some(bot.spawn.team);
+            if let Some(facts) = &mut entity_facts {
+                let tags = if include_tags {
+                    state.enemy.as_ref().map_or_else(Default::default, |enemy| {
+                        enemy.scripts.target_tags(&enemy.graphs, &enemy.binding)
+                    })
+                } else {
+                    Default::default()
+                };
+                facts.insert(bot.entity, RoomEntityFacts { team, alive, tags });
+            }
             if !bot.dead {
-                if state.vitals.death().is_none() {
+                if alive {
                     script_targets.insert(
                         bot.entity,
                         RoomScriptTarget {
@@ -701,7 +737,7 @@ impl RoomSimulation {
                 candidates.push(SpatialCandidate {
                     entity: bot.entity,
                     position: bot.position,
-                    team: (!*free_for_all).then_some(bot.spawn.team),
+                    team,
                 });
             }
         }
@@ -716,7 +752,20 @@ impl RoomSimulation {
                     actual: state.id.entity,
                 });
             }
-            if state.alive() {
+            let alive = state.alive();
+            let team = (!queries.free_for_all).then_some(state.team);
+            if let Some(facts) = &mut entity_facts {
+                let tags = if include_tags {
+                    state
+                        .runtime
+                        .as_ref()
+                        .map_or_else(Default::default, |runtime| runtime.target_tags())
+                } else {
+                    Default::default()
+                };
+                facts.insert(wire, RoomEntityFacts { team, alive, tags });
+            }
+            if alive {
                 if let Some(runtime) = &state.runtime {
                     script_targets.insert(
                         wire,
@@ -730,15 +779,16 @@ impl RoomSimulation {
                 candidates.push(SpatialCandidate {
                     entity: wire,
                     position: state.mover.pose().position,
-                    team: (!*free_for_all).then_some(state.team),
+                    team,
                 });
             }
         }
 
         let spatial = Arc::new(RoomSpatialFrame {
             candidates: candidates.into_boxed_slice(),
+            entity_facts,
             script_targets,
-            ground: Arc::clone(ground),
+            ground: Arc::clone(&queries.ground),
         });
         for &entity in self.players_by_wire.values() {
             if let Some(mut state) = self.world.get_mut::<PlayerBodyState>(entity) {

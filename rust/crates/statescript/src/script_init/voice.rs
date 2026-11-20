@@ -1,5 +1,7 @@
 //! Voice stimulus host and StateScript expression evaluation context.
 
+use std::collections::BTreeMap;
+
 use serde_json::Value as Json;
 
 use crate::{
@@ -482,6 +484,11 @@ impl<W: World> Context for InstanceContext<'_, W> {
     fn spatial_candidates(&mut self) -> Option<&[script_expr::SpatialCandidate]> {
         self.read_native = true;
         self.world.spatial_candidates()
+    }
+
+    fn room_entities(&mut self) -> Option<&BTreeMap<u32, script_expr::RoomEntityFacts>> {
+        self.read_native = true;
+        self.world.room_entities()
     }
 
     fn spatial_line_clear(&mut self, origin: [f64; 3], target: [f64; 3]) -> Option<bool> {

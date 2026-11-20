@@ -93,7 +93,11 @@ mod tests {
         let source = bots[0].entity;
         let target = bots[1].entity;
         let mut room = RoomSimulation::new(bots).unwrap();
-        room.enable_spatial_queries(false, Arc::new(fixture_ground()));
+        room.enable_spatial_queries(
+            false,
+            Arc::new(fixture_ground()),
+            crate::script_graph::RoomSpatialNeeds::Queries,
+        );
         let tick = 3;
         let now = Duration::from_millis(48);
         room.prepare_spatial_frame(tick).unwrap();
@@ -130,7 +134,11 @@ mod tests {
         let bots = fixture_bots();
         let target = bots[0].entity;
         let mut room = RoomSimulation::new(bots).unwrap();
-        room.enable_spatial_queries(false, Arc::new(fixture_ground()));
+        room.enable_spatial_queries(
+            false,
+            Arc::new(fixture_ground()),
+            crate::script_graph::RoomSpatialNeeds::Queries,
+        );
         room.prepare_spatial_frame(3).unwrap();
         let frame = &room.spatial_frame.as_ref().unwrap().1;
         let mut requests = RoomScriptRequests::default();

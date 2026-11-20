@@ -1,4 +1,7 @@
+use std::collections::BTreeMap;
+
 use super::{policy::body_has_target_tag, *};
+use crate::script_expr::RoomEntityFacts;
 
 impl EnemyWorld<'_> {
     fn live_staff_source(&self, source: u32) -> bool {
@@ -962,6 +965,10 @@ impl World for EnemyWorld<'_> {
 
     fn spatial_candidates(&self) -> Option<&[crate::script_expr::SpatialCandidate]> {
         Some(self.binding.spatial_frame.as_deref()?.candidates())
+    }
+
+    fn room_entities(&self) -> Option<&BTreeMap<u32, RoomEntityFacts>> {
+        self.binding.spatial_frame.as_deref()?.entity_facts()
     }
 
     fn spatial_line_clear(&self, origin: [f64; 3], target: [f64; 3]) -> Option<bool> {

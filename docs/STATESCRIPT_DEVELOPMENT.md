@@ -232,6 +232,33 @@ visibility error and leaves the observation's previous value in place.
 
 See the [synthetic radius contract](../fixtures/behavior/statescript-entities-in-radius-v1.json).
 
+## Match a room entity against authored conditions
+
+Use `EntityMatches` as the `$` tag and supply an `entity` expression
+that yields a bound entity reference. An optional `filter` can specify
+`alive`, a team `relation` with its `source` expression, and `tags`.
+A known entity that satisfies the configured conditions returns true.
+An entity absent from an available room snapshot returns false once the
+filter source, if supplied, is resolved. An `alive` condition can select
+either living bodies or registered dead bodies in that snapshot.
+
+Tag conditions are `all`, `any`, and `none`. Each takes a list of
+nonzero hexadecimal tag IDs. Empty lists impose no condition. A known
+mismatch rejects the entity. An unresolved condition returns an unavailable
+query instead of assuming a tag is missing. Use the same conditions in
+`EntitiesInRadius.filter` to narrow its living candidates before visibility
+checks. A relative radius query still needs a living source. Both
+expressions use the same affiliation rule and room frame.
+
+The room collects body metadata when a server graph uses these conditions.
+It copies tag data only for graphs that request tag checks. Player and AI
+scripts read the same snapshot, including tag grants and suppressions
+that were active when that frame began. An observation can
+retry on the next frame and keep its previous result while facts are
+unavailable.
+
+See the [synthetic entity filter contract](../fixtures/behavior/statescript-room-entity-filter-v1.json).
+
 ## Observe an expression across frames
 
 Declare `"state_behavior": "observe"` on a server-only state or use

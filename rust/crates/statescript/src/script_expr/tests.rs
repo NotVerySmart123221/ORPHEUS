@@ -1775,6 +1775,294 @@ fn authored_spatial_queries_read_current_entity_vectors() {
 }
 
 #[test]
+fn authored_room_predicates_share_radius_relation_and_tag_checks() {
+    use crate::script_init::{TargetTagEffect, TargetTagEffects};
+    use std::collections::BTreeSet;
+
+    #[derive(serde::Deserialize)]
+    struct Actor {
+        id: u32,
+        team: Option<u8>,
+        alive: bool,
+        tags: Option<Vec<String>>,
+        #[serde(default)]
+        granted: Vec<String>,
+        #[serde(default)]
+        suppressed: Vec<String>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        entity: Json,
+        source: Json,
+        center: Json,
+        actors: Vec<Actor>,
+        candidates: Vec<(u32, [f64; 3])>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Predicate {
+        entity: u32,
+        source: Option<u32>,
+        filter: Option<Json>,
+        result: Option<bool>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Radius {
+        source: Option<u32>,
+        filter: Json,
+        result: Option<Vec<u32>>,
+        #[serde(default)]
+        without_facts: bool,
+        missing_facts_entity: Option<u32>,
+        #[serde(default)]
+        spatial_unavailable: bool,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Expected {
+        predicates: Vec<Predicate>,
+        radii: Vec<Radius>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Contract {
+        schema_version: u8,
+        case_id: String,
+        evidence: String,
+        input: Input,
+        expected: Expected,
+    }
+
+    struct Host {
+        entity: Value,
+        source: u32,
+        facts: BTreeMap<u32, RoomEntityFacts>,
+        provide_facts: bool,
+        candidates: Vec<SpatialCandidate>,
+        metadata_reads: usize,
+        rays: usize,
+    }
+
+    impl Context for Host {
+        fn variable(&mut self, variable: Variable) -> Value {
+            assert_eq!(variable.scope, Scope::Instance);
+            match variable.id {
+                1 => self.entity.clone(),
+                2 => Value::Entity(self.source),
+                3 => Value::Vector([0.0; 3]),
+                id => panic!("unknown fixture operand {id}"),
+            }
+        }
+
+        fn spatial_candidates(&mut self) -> Option<&[SpatialCandidate]> {
+            Some(&self.candidates)
+        }
+
+        fn room_entities(&mut self) -> Option<&BTreeMap<u32, RoomEntityFacts>> {
+            self.metadata_reads += 1;
+            self.provide_facts.then_some(&self.facts)
+        }
+
+        fn spatial_line_clear(&mut self, _origin: [f64; 3], _target: [f64; 3]) -> Option<bool> {
+            self.rays += 1;
+            Some(true)
+        }
+    }
+
+    let contract: Contract = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/statescript-room-entity-filter-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    assert_eq!(
+        contract.case_id,
+        "statescript-room-entity-filter.synthetic.v1"
+    );
+    assert_eq!(contract.evidence, "synthetic-rust");
+
+    let input = contract.input;
+    let facts: BTreeMap<_, _> = input
+        .actors
+        .into_iter()
+        .map(|actor| {
+            let authored = actor.tags.map(|tags| {
+                tags.iter()
+                    .map(|tag| parse_guid(tag).unwrap())
+                    .collect::<BTreeSet<_>>()
+            });
+            let mut effects = TargetTagEffects::default();
+            for (present, tags) in [(true, actor.granted), (false, actor.suppressed)] {
+                for tag in tags {
+                    assert!(effects.apply(
+                        TargetTagEffect {
+                            entity: actor.id,
+                            tag: parse_guid(&tag).unwrap(),
+                            present,
+                        },
+                        true,
+                    ));
+                }
+            }
+            (
+                actor.id,
+                RoomEntityFacts {
+                    team: actor.team,
+                    alive: actor.alive,
+                    tags: effects.snapshot(authored.as_ref()),
+                },
+            )
+        })
+        .collect();
+    let candidates = input
+        .candidates
+        .into_iter()
+        .map(|(entity, position)| SpatialCandidate {
+            entity,
+            position,
+            team: facts[&entity].team,
+        })
+        .collect();
+    let mut host = Host {
+        entity: Value::Null,
+        source: 0,
+        facts,
+        provide_facts: true,
+        candidates,
+        metadata_reads: 0,
+        rays: 0,
+    };
+
+    let predicate = json!({"$":"EntityMatches","entity":input.entity});
+    for case in contract.expected.predicates {
+        host.entity = Value::Entity(case.entity);
+        host.source = case.source.unwrap_or_default();
+        let mut query = predicate.clone();
+        if let Some(mut filter) = case.filter {
+            if case.source.is_some() {
+                filter["source"] = input.source.clone();
+            }
+            query["filter"] = filter;
+        }
+        assert_eq!(
+            evaluate(&query, &mut host),
+            case.result
+                .map(Value::Bool)
+                .ok_or(EvalError::UnavailableRoomEntityFacts),
+            "entity {} predicate {query}",
+            case.entity,
+        );
+    }
+
+    for case in contract.expected.radii {
+        host.source = case.source.unwrap_or_default();
+        host.provide_facts = !case.without_facts;
+        let removed_facts = case
+            .missing_facts_entity
+            .map(|entity| (entity, host.facts.remove(&entity).unwrap()));
+        let mut filter = case.filter;
+        if case.source.is_some() {
+            filter["source"] = input.source.clone();
+        }
+        let mut query = json!({
+            "$":"EntitiesInRadius",
+            "center":input.center,
+            "radius":5,
+            "filter":filter,
+        });
+        if case.result.is_none() && !case.spatial_unavailable {
+            // Unknown fact aborts the whole query before any visibility requests.
+            query["line_of_sight"] = Json::Bool(true);
+        }
+        host.metadata_reads = 0;
+        host.rays = 0;
+        let expected = case
+            .result
+            .map(|ids| Value::Array(ids.into_iter().map(Value::Entity).collect()))
+            .ok_or(if case.spatial_unavailable {
+                EvalError::UnavailableSpatialCandidates
+            } else {
+                EvalError::UnavailableRoomEntityFacts
+            });
+        assert_eq!(evaluate(&query, &mut host), expected, "radius {query}");
+        assert_eq!(host.rays, 0);
+        if case.without_facts || case.spatial_unavailable {
+            assert_eq!(host.metadata_reads, 0, "radius {query}");
+        }
+        if let Some((entity, facts)) = removed_facts {
+            host.facts.insert(entity, facts);
+        }
+    }
+
+    host.entity = Value::Entity(34);
+    host.source = 700;
+    host.metadata_reads = 0;
+    let mut left = predicate.clone();
+    left["filter"] = json!({"alive":true});
+    let mut right = predicate.clone();
+    right["filter"] = json!({"relation":"ally","source":input.source});
+    let combined = expression(json!([14, 0, 2, 4, 14, 1, 0]), &[], &[], &[left, right]);
+    assert_eq!(evaluate(&combined, &mut host), Ok(Value::Bool(false)));
+    assert_eq!(host.metadata_reads, 1);
+    host.entity = Value::Entity(41);
+    assert_eq!(
+        evaluate(&combined, &mut host),
+        Err(EvalError::UnavailableRoomEntityFacts)
+    );
+    assert_eq!(host.metadata_reads, 3);
+
+    for filter in [
+        Json::Null,
+        json!({"relation":"ally"}),
+        json!({"source":input.source}),
+        json!({"alive":0}),
+        json!({"tags":{"all":["0x0000000000000000"]}}),
+        json!({"tags":{"any":"0xF100000000000001"}}),
+        json!({"tags":{"unknown":[]}}),
+        json!({"depth":2}),
+    ] {
+        let mut query = predicate.clone();
+        query["filter"] = filter;
+        assert!(matches!(
+            evaluate(&query, &mut host),
+            Err(EvalError::MalformedConfig(_))
+        ));
+    }
+    for invalid in [
+        Value::Entity(0),
+        Value::Entity(0x1fff_ffff),
+        Value::Integer(41),
+    ] {
+        host.entity = invalid;
+        assert!(matches!(
+            evaluate(&predicate, &mut host),
+            Err(EvalError::MalformedConfig(_))
+        ));
+    }
+
+    host.entity = Value::Entity(41);
+    host.provide_facts = false;
+    assert_eq!(
+        evaluate(&predicate, &mut host),
+        Err(EvalError::UnavailableRoomEntityFacts)
+    );
+    host.provide_facts = true;
+    let mut query = predicate.clone();
+    query["filter"] = json!({"tags":{"all":["0xF100000000000001"]}});
+    assert_eq!(
+        evaluate_with_budget(&query, &mut host, 2),
+        Err(EvalError::BudgetExceeded {
+            offset: 0,
+            limit: 2
+        })
+    );
+    host.facts.clear();
+    assert_eq!(evaluate(&predicate, &mut host), Ok(Value::Bool(false)));
+}
+
+#[test]
 fn authored_radius_query_filters_and_bounds_spatial_candidates() {
     type CandidateRows = Vec<(u32, [f64; 3])>;
     type RelationRows = Vec<(u32, [f64; 3], Option<u8>)>;

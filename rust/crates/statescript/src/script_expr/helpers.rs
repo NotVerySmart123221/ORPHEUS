@@ -331,6 +331,7 @@ pub(super) fn reference_native_class(config: &Json) -> Option<&str> {
         | "STUConfigVarVec3"
         | "EntityPosition"
         | "EntityDirection"
+        | "EntityMatches"
         | "EntitiesInRadius" => false,
         "STU_B40ACFBA" | "STU_4BD39CFD" => false,
         "STU_45EDF12D" if child(config, "m_key").is_null() => false,

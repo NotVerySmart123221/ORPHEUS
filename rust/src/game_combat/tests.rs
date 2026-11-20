@@ -69,7 +69,11 @@ fn check_spatial_candidates_frame(free_for_all: bool) {
     room.prepare_spatial_frame(frame).unwrap();
     assert!(room.spatial_frame.is_none());
 
-    room.enable_spatial_queries(free_for_all, Arc::new(fixture_ground()));
+    room.enable_spatial_queries(
+        free_for_all,
+        Arc::new(fixture_ground()),
+        crate::script_graph::RoomSpatialNeeds::EntityTags,
+    );
     room.prepare_spatial_frame(frame).unwrap();
     let (captured, initial) = room.spatial_frame.as_ref().unwrap();
     assert_eq!(*captured, frame);
@@ -93,6 +97,14 @@ fn check_spatial_candidates_frame(free_for_all: bool) {
         position: player_position,
         team: (!free_for_all).then_some(0),
     }));
+    let initial_facts = initial.entity_facts().unwrap();
+    assert_eq!(initial_facts.len(), 3);
+    assert_eq!(initial_facts[&moving_bot].team, bot_team);
+    assert!(initial_facts[&dying_bot].alive);
+    assert_eq!(
+        initial_facts[&player.entity].team,
+        (!free_for_all).then_some(0)
+    );
     let initial = Arc::clone(initial);
 
     let new_position = [10.0, 0.0, -2.0];
@@ -122,14 +134,24 @@ fn check_spatial_candidates_frame(free_for_all: bool) {
         }]
     );
     assert!(initial.candidates().contains(&initial_bot));
+    let next_facts = next.entity_facts().unwrap();
+    assert!(!next_facts[&dying_bot].alive);
+    assert_eq!(next_facts[&dying_bot].team, bot_team);
+    assert!(!next_facts.contains_key(&player.entity));
+    assert!(initial.entity_facts().unwrap()[&dying_bot].alive);
 }
 
 #[test]
 fn spatial_visibility_blocks_only_hits_before_the_target() {
     let mut room = RoomSimulation::new(Vec::new()).unwrap();
-    room.enable_spatial_queries(false, Arc::new(fixture_ground()));
+    room.enable_spatial_queries(
+        false,
+        Arc::new(fixture_ground()),
+        crate::script_graph::RoomSpatialNeeds::Queries,
+    );
     room.prepare_spatial_frame(1).unwrap();
     let (_, spatial) = room.spatial_frame.as_ref().unwrap();
+    assert!(spatial.entity_facts().is_none());
     let origin = [-2.0, 0.5, 0.25];
 
     assert_eq!(spatial.line_clear(origin, [0.0, 0.5, 0.25]), Some(false));
@@ -240,7 +262,11 @@ fn authored_room_message_reaches_only_the_npc_body_on_its_next_frame() {
     let ground = Arc::new(fixture_ground());
     let movers = MoverCatalog::default();
     let queries = BotQueries::new(false, &movers, &ground, None);
-    room.enable_spatial_queries(false, Arc::clone(&ground));
+    room.enable_spatial_queries(
+        false,
+        Arc::clone(&ground),
+        crate::script_graph::RoomSpatialNeeds::Queries,
+    );
     room.prepare_spatial_frame(context.tick).unwrap();
 
     let frame = &room.spatial_frame.as_ref().unwrap().1;

@@ -34,6 +34,49 @@ impl SpatialCone {
     }
 }
 
+#[derive(Clone, Copy)]
+enum TeamRelation {
+    Ally,
+    Opponent,
+}
+
+impl TeamRelation {
+    fn matches(self, source: Option<u8>, target: Option<u8>) -> bool {
+        let same_team = source.is_some() && source == target;
+        match self {
+            Self::Ally => same_team,
+            Self::Opponent => !same_team,
+        }
+    }
+}
+
+#[derive(Default)]
+struct RoomEntityFilter {
+    relation: Option<(u32, TeamRelation)>,
+    alive: Option<bool>,
+    tags: Option<RoomTagFilter>,
+}
+
+impl RoomEntityFilter {
+    fn needs_facts(&self) -> bool {
+        self.alive.is_some() || self.tags.is_some()
+    }
+}
+
+#[derive(Default)]
+struct RoomTagFilter {
+    all: Vec<u64>,
+    any: Vec<u64>,
+    none: Vec<u64>,
+}
+
+#[derive(Clone, Copy)]
+enum RoomTagClause {
+    All,
+    Any,
+    None,
+}
+
 pub(super) struct Evaluator {
     pub(super) limit: usize,
     pub(super) steps: usize,
@@ -604,6 +647,7 @@ impl Evaluator {
                         .ok_or(unavailable)?,
                 )
             }
+            "EntityMatches" => self.entity_matches(fields, context, nested)?,
             "EntitiesInRadius" => self.entities_in_radius(fields, context, nested)?,
             "STU_71A87E92" if native_shape(config, class, Some("m_entity")) => {
                 if let Some(value) = context.native(config) {
@@ -1359,6 +1403,199 @@ impl Evaluator {
         Ok(Value::Bool(true))
     }
 
+    fn entity_matches(
+        &mut self,
+        fields: &serde_json::Map<String, Json>,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<Value, EvalError> {
+        let filter = fields.get("filter");
+        let entity = fields
+            .get("entity")
+            .filter(|_| fields.len() == 2 + usize::from(filter.is_some()))
+            .ok_or(EvalError::MalformedConfig(
+                "expected an entity and optional filter",
+            ))?;
+        self.charge()?;
+        let entity = self.room_filter_entity(entity, context, depth, "expected a bound entity")?;
+        let filter = self.room_entity_filter(filter, context, depth)?;
+        let entities = context
+            .room_entities()
+            .ok_or(EvalError::UnavailableRoomEntityFacts)?;
+        let source = filter
+            .relation
+            .map(|(source, relation)| {
+                let facts = entities
+                    .get(&source)
+                    .ok_or(EvalError::UnavailableRoomEntityFacts)?;
+                Ok::<_, EvalError>((source, facts.team, relation))
+            })
+            .transpose()?;
+        let Some(facts) = entities.get(&entity) else {
+            return Ok(Value::Bool(false));
+        };
+        if source.is_some_and(|(source, team, relation)| {
+            source == entity || !relation.matches(team, facts.team)
+        }) {
+            return Ok(Value::Bool(false));
+        }
+        self.room_facts_match(&filter, facts).map(Value::Bool)
+    }
+
+    fn room_filter_entity(
+        &mut self,
+        expression: &Json,
+        context: &mut impl Context,
+        depth: usize,
+        error: &'static str,
+    ) -> Result<u32, EvalError> {
+        match self.config(expression, context, depth)? {
+            Value::Entity(entity) if valid_entity(entity) => Ok(entity),
+            _ => Err(EvalError::MalformedConfig(error)),
+        }
+    }
+
+    fn room_entity_filter(
+        &mut self,
+        filter: Option<&Json>,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<RoomEntityFilter, EvalError> {
+        let Some(filter) = filter else {
+            return Ok(RoomEntityFilter::default());
+        };
+        let malformed = EvalError::MalformedConfig("expected a relation and source filter");
+        let fields = filter.as_object().ok_or_else(|| malformed.clone())?;
+        if fields
+            .keys()
+            .any(|key| !matches!(key.as_str(), "relation" | "source" | "alive" | "tags"))
+        {
+            return Err(malformed);
+        }
+        let relation = match (fields.get("relation"), fields.get("source")) {
+            (None, None) => None,
+            (Some(relation), Some(source)) => {
+                let relation = match relation.as_str() {
+                    Some("ally") => TeamRelation::Ally,
+                    Some("opponent") => TeamRelation::Opponent,
+                    _ => return Err(malformed),
+                };
+                let source = self.room_filter_entity(
+                    source,
+                    context,
+                    depth,
+                    "expected a bound filter source",
+                )?;
+                Some((source, relation))
+            }
+            _ => return Err(malformed),
+        };
+        let alive = fields
+            .get("alive")
+            .map(|alive| {
+                alive.as_bool().ok_or(EvalError::MalformedConfig(
+                    "expected a boolean alive filter",
+                ))
+            })
+            .transpose()?;
+        let tags = fields
+            .get("tags")
+            .map(|tags| self.room_tag_filter(tags))
+            .transpose()?;
+        Ok(RoomEntityFilter {
+            relation,
+            alive,
+            tags,
+        })
+    }
+
+    fn room_tag_filter(&mut self, tags: &Json) -> Result<RoomTagFilter, EvalError> {
+        let mut result = RoomTagFilter::default();
+        let tags = tags.as_object().ok_or(EvalError::MalformedConfig(
+            "expected a room tag filter object",
+        ))?;
+        for (key, values) in tags {
+            let clause = match key.as_str() {
+                "all" => &mut result.all,
+                "any" => &mut result.any,
+                "none" => &mut result.none,
+                _ => {
+                    return Err(EvalError::MalformedConfig(
+                        "expected all, any or none tag lists",
+                    ));
+                }
+            };
+            let values = values.as_array().ok_or(EvalError::MalformedConfig(
+                "expected an array of room tag GUIDs",
+            ))?;
+            for tag in values {
+                self.charge()?;
+                let tag =
+                    asset_guid(tag)
+                        .filter(|&tag| tag != 0)
+                        .ok_or(EvalError::MalformedConfig(
+                            "expected a nonzero room tag GUID",
+                        ))?;
+                clause.push(tag);
+            }
+        }
+        Ok(result)
+    }
+
+    fn room_facts_match(
+        &mut self,
+        filter: &RoomEntityFilter,
+        facts: &RoomEntityFacts,
+    ) -> Result<bool, EvalError> {
+        if filter.alive.is_some_and(|alive| alive != facts.alive) {
+            return Ok(false);
+        }
+        let Some(tags) = &filter.tags else {
+            return Ok(true);
+        };
+        let mut unresolved = false;
+        for (clause, tags) in [
+            (RoomTagClause::All, &tags.all),
+            (RoomTagClause::Any, &tags.any),
+            (RoomTagClause::None, &tags.none),
+        ] {
+            match self.room_tag_clause(clause, tags, &facts.tags)? {
+                Some(false) => return Ok(false),
+                None => unresolved = true,
+                Some(true) => (),
+            }
+        }
+        if unresolved {
+            Err(EvalError::UnavailableRoomEntityFacts)
+        } else {
+            Ok(true)
+        }
+    }
+
+    fn room_tag_clause(
+        &mut self,
+        clause: RoomTagClause,
+        tags: &[u64],
+        facts: &crate::script_init::TargetTagSnapshot,
+    ) -> Result<Option<bool>, EvalError> {
+        if tags.is_empty() {
+            return Ok(Some(true));
+        }
+        let mut unresolved = false;
+        for &tag in tags {
+            self.charge()?;
+            match (clause, facts.presence(tag)) {
+                (RoomTagClause::All, Some(false)) | (RoomTagClause::None, Some(true)) => {
+                    return Ok(Some(false));
+                }
+                (RoomTagClause::Any, Some(true)) => return Ok(Some(true)),
+                (_, None) => unresolved = true,
+                _ => (),
+            }
+        }
+        Ok((!unresolved).then_some(!matches!(clause, RoomTagClause::Any)))
+    }
+
     fn entities_in_radius(
         &mut self,
         fields: &serde_json::Map<String, Json>,
@@ -1406,30 +1643,7 @@ impl Evaluator {
                 ));
             }
         };
-        let filter = filter
-            .map(|filter| {
-                let malformed = EvalError::MalformedConfig("expected a relation and source filter");
-                let Some((relation, source)) = filter
-                    .as_object()
-                    .filter(|fields| fields.len() == 2)
-                    .and_then(|fields| fields.get("relation").zip(fields.get("source")))
-                else {
-                    return Err(malformed);
-                };
-                let allies_only = match relation.as_str() {
-                    Some("ally") => true,
-                    Some("opponent") => false,
-                    _ => return Err(malformed),
-                };
-                let Value::Entity(source) = self.config(source, context, depth)? else {
-                    return Err(EvalError::MalformedConfig("expected a bound filter source"));
-                };
-                if !valid_entity(source) {
-                    return Err(EvalError::MalformedConfig("expected a bound filter source"));
-                }
-                Ok((source, allies_only))
-            })
-            .transpose()?;
+        let filter = self.room_entity_filter(filter, context, depth)?;
 
         let cone = cone
             .map(|cone| self.spatial_cone(cone, context, depth))
@@ -1438,6 +1652,7 @@ impl Evaluator {
             .spatial_candidates()
             .ok_or(EvalError::UnavailableSpatialCandidates)?;
         let mut source_team: Option<Option<u8>> = None;
+        let room_matches;
         let mut matches = Vec::new();
         for candidate in candidates {
             let SpatialCandidate {
@@ -1449,7 +1664,7 @@ impl Evaluator {
             if !valid_entity(entity) || !position.iter().all(|axis| axis.is_finite()) {
                 return Err(EvalError::UnavailableSpatialCandidates);
             }
-            if filter.is_some_and(|(source, _)| entity == source) {
+            if filter.relation.is_some_and(|(source, _)| entity == source) {
                 if source_team
                     .replace(team)
                     .is_some_and(|previous| previous != team)
@@ -1466,11 +1681,31 @@ impl Evaluator {
                 matches.push(candidate);
             }
         }
-        if let Some((_, allies_only)) = filter {
+        if let Some((_, relation)) = filter.relation {
             let source_team = source_team.ok_or(EvalError::UnavailableSpatialCandidates)?;
-            matches.retain(|candidate| {
-                (source_team.is_some() && candidate.team == source_team) == allies_only
-            });
+            matches.retain(|candidate| relation.matches(source_team, candidate.team));
+        }
+        if filter.needs_facts() {
+            // Copy only this query's survivors before borrowing the host again.
+            room_matches = matches.into_iter().copied().collect::<Vec<_>>();
+            let entities = context
+                .room_entities()
+                .ok_or(EvalError::UnavailableRoomEntityFacts)?;
+            if filter
+                .relation
+                .is_some_and(|(source, _)| !entities.get(&source).is_some_and(|facts| facts.alive))
+            {
+                return Err(EvalError::UnavailableRoomEntityFacts);
+            }
+            matches = Vec::with_capacity(room_matches.len());
+            for candidate in &room_matches {
+                let facts = entities
+                    .get(&candidate.entity)
+                    .ok_or(EvalError::UnavailableRoomEntityFacts)?;
+                if facts.alive && self.room_facts_match(&filter, facts)? {
+                    matches.push(candidate);
+                }
+            }
         }
         matches.sort_unstable_by_key(|candidate| candidate.entity);
         if !line_of_sight {

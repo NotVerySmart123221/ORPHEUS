@@ -2658,7 +2658,11 @@ fn authored_player_health_settles_once_for_the_accepted_body() {
         simulation.spawn_player_body(source_state).unwrap();
         simulation.spawn_player_body(target_state(target)).unwrap();
         simulation.activate_combat();
-        simulation.enable_spatial_queries(false, Arc::clone(&ground));
+        simulation.enable_spatial_queries(
+            false,
+            Arc::clone(&ground),
+            crate::script_graph::RoomSpatialNeeds::Queries,
+        );
         simulation.prepare_spatial_frame(frame).unwrap();
 
         if replace_target {
@@ -2779,7 +2783,11 @@ fn authored_room_message_targets_the_sampled_player_generation() {
         let mut simulation = RoomSimulation::new(Vec::new()).unwrap();
         simulation.spawn_player_body(source_state).unwrap();
         simulation.spawn_player_body(target_state(target)).unwrap();
-        simulation.enable_spatial_queries(false, Arc::clone(&ground));
+        simulation.enable_spatial_queries(
+            false,
+            Arc::clone(&ground),
+            crate::script_graph::RoomSpatialNeeds::Queries,
+        );
         simulation.prepare_spatial_frame(frame).unwrap();
         assert!(delivered.lock().unwrap().is_empty());
 

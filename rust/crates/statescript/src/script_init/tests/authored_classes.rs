@@ -347,6 +347,119 @@ fn authored_observer_samples_radius_once_per_frame_until_aborted() {
 }
 
 #[test]
+fn authored_observer_recovers_when_room_entity_facts_return() {
+    use crate::script_expr::RoomEntityFacts;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    const GRAPH: u32 = 94;
+    const INSTANCE: u16 = 1;
+    const SOURCE: u32 = 61;
+    const TARGET: u32 = 62;
+    const TAG: u64 = 0x9;
+    const OUTPUT: u32 = 81;
+    const FIRED: u32 = 82;
+
+    #[derive(Default)]
+    struct FactsWorld(Option<BTreeMap<u32, RoomEntityFacts>>);
+
+    impl World for FactsWorld {
+        fn entity_variable(&mut self, _entity: u32, _id: u32) -> Option<Value> {
+            None
+        }
+
+        fn position(&mut self, _entity: u32) -> Option<[f64; 3]> {
+            None
+        }
+
+        fn room_entities(&self) -> Option<&BTreeMap<u32, RoomEntityFacts>> {
+            self.0.as_ref()
+        }
+    }
+
+    let input: Json = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/script-observe-radius-v1.json"
+    )))
+    .unwrap();
+    let mut bundle = input["input"]["bundle"].clone();
+    bundle["graphs"][0]["nodes"][1]["fields"]["value"] = json!({
+        "$": "EntityMatches",
+        "entity": {"$": "STUConfigVarDynamic", "m_identifier": 1, "m_60DB8F99": true},
+        "filter": {
+            "alive": true,
+            "relation": "opponent",
+            "source": {"$": "STUConfigVarDynamic", "m_identifier": 2, "m_60DB8F99": true},
+            "tags": {"all": ["0x0000000000000009"]}
+        },
+    });
+    let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    assert!(graphs.uses_room_spatial_frame());
+
+    let mut world = FactsWorld::default();
+    let mut component = Component::start(
+        graphs,
+        SOURCE,
+        Variables::from([
+            (1, Value::Entity(TARGET)),
+            (2, Value::Entity(SOURCE)),
+            (FIRED, Value::Bool(false)),
+        ]),
+        vec![Root::new(INSTANCE, GRAPH)],
+        0,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+
+    let facts = |alive, tags| {
+        Some(BTreeMap::from([
+            (
+                SOURCE,
+                RoomEntityFacts {
+                    team: Some(0),
+                    alive: true,
+                    tags: Default::default(),
+                },
+            ),
+            (
+                TARGET,
+                RoomEntityFacts {
+                    team: Some(1),
+                    alive,
+                    tags,
+                },
+            ),
+        ]))
+    };
+    let granted = TargetTagEffects::default().snapshot(Some(&BTreeSet::from([TAG])));
+    for (index, (sample, matched, changed)) in [
+        (facts(true, granted.clone()), true, true),
+        (None, true, false),
+        (facts(false, granted.clone()), false, true),
+        (facts(true, Default::default()), false, false),
+        (facts(true, granted.clone()), true, true),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        component
+            .set_entity_variable(FIRED, Value::Bool(false), &mut world)
+            .unwrap();
+        world.0 = sample;
+        component
+            .advance_frame(u32::try_from(index + 1).unwrap(), &mut world)
+            .unwrap();
+        let snapshot = component.snapshot().unwrap();
+        assert_eq!(snapshot.variables[&OUTPUT], Value::Bool(matched));
+        assert_eq!(snapshot.variables[&FIRED], Value::Bool(changed));
+        assert!(snapshot.initialization_complete());
+    }
+    let snapshot = component.snapshot().unwrap();
+    assert_eq!(snapshot.diagnostics.len(), 1);
+    assert_eq!(snapshot.diagnostics[0].issue, Issue::ObservationUnavailable);
+}
+
+#[test]
 fn authored_spatial_operands_read_live_world_data_on_each_message() {
     const SUBJECT: u32 = 27;
     const SAMPLE: u64 = 0x29;

@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use serde_json::Value as Json;
 
 use crate::{
-    script_expr::{self, EntityRelation, OnFire, SpatialCandidate, StackPriority},
+    script_expr::{self, EntityRelation, OnFire, RoomEntityFacts, SpatialCandidate, StackPriority},
     script_graph::{MAX_ROOM_MESSAGE_PARAMETERS, Node},
     script_runtime::PoolKind,
     script_voice::IntroCue,
@@ -498,6 +498,11 @@ pub trait World {
 
     /// None means the current candidate snapshot is unavailable.
     fn spatial_candidates(&self) -> Option<&[SpatialCandidate]> {
+        None
+    }
+
+    /// Includes registered bodies that are dead. None means no facts are available.
+    fn room_entities(&self) -> Option<&BTreeMap<u32, RoomEntityFacts>> {
         None
     }
 

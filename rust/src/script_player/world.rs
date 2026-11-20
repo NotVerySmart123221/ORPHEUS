@@ -16,7 +16,7 @@ use crate::{
     junkenstein_messages::{self, DefenderSighting, SIGHTING, SIGHTING_TAGS, SightingSource},
     mover::sample_movement_flags,
     scene_assets::MOVER_CATEGORY,
-    script_expr::{EntityRelation, OnFire, native_shape, valid_entity},
+    script_expr::{EntityRelation, OnFire, RoomEntityFacts, native_shape, valid_entity},
     script_graph::GraphStore,
     script_init::{MAX_INIT_WORK, RoomMessage, Site, TargetTagEffect, TargetTagEffects, World},
     script_wire::{Value, Variables},
@@ -348,6 +348,10 @@ impl World for BodyWorld {
 
     fn spatial_candidates(&self) -> Option<&[crate::script_expr::SpatialCandidate]> {
         Some(self.spatial_frame.as_deref()?.candidates())
+    }
+
+    fn room_entities(&self) -> Option<&BTreeMap<u32, RoomEntityFacts>> {
+        self.spatial_frame.as_deref()?.entity_facts()
     }
 
     fn spatial_line_clear(&self, origin: [f64; 3], target: [f64; 3]) -> Option<bool> {

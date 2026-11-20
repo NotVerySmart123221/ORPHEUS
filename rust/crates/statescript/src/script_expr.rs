@@ -1,6 +1,6 @@
 //! Typed config and expression evaluation for server-side graph initialization.
 
-use std::{error::Error, fmt};
+use std::{collections::BTreeMap, error::Error, fmt};
 
 use orpheus_runtime::format::parse_guid;
 use serde_json::Value as Json;
@@ -68,6 +68,15 @@ pub struct SpatialCandidate {
     pub position: [f64; 3],
     /// Team affiliation. None is an independent participant.
     pub team: Option<u8>,
+}
+
+/// Authored query facts for a body in the current room snapshot.
+#[derive(Clone, Debug)]
+pub struct RoomEntityFacts {
+    /// None means an independent participant.
+    pub team: Option<u8>,
+    pub alive: bool,
+    pub tags: crate::script_init::TargetTagSnapshot,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -239,6 +248,11 @@ pub trait Context {
         None
     }
 
+    /// None means the room's actor facts are unavailable.
+    fn room_entities(&mut self) -> Option<&BTreeMap<u32, RoomEntityFacts>> {
+        None
+    }
+
     /// Whether static geometry leaves the segment clear. None is unavailable.
     fn spatial_line_clear(&mut self, _origin: [f64; 3], _target: [f64; 3]) -> Option<bool> {
         None
@@ -380,6 +394,7 @@ pub enum EvalError {
     UnavailableEntityDirection(u32),
     UnavailableSpatialCandidates,
     UnavailableSpatialVisibility,
+    UnavailableRoomEntityFacts,
     NestingExceeded,
 }
 
@@ -417,6 +432,7 @@ impl fmt::Display for EvalError {
             }
             Self::UnavailableSpatialCandidates => f.write_str("unavailable spatial candidates"),
             Self::UnavailableSpatialVisibility => f.write_str("unavailable spatial visibility"),
+            Self::UnavailableRoomEntityFacts => f.write_str("unavailable room entity facts"),
             Self::NestingExceeded => f.write_str("statescript config nesting limit exceeded"),
         }
     }
