@@ -212,6 +212,16 @@ retained all 476 observations. The two #131 schedules each reproduced
 339 ticks per implementation and kept the same four RNG setup differences
 in strict comparison.
 
+At `f031b4c1`, the linked state, periodic self shield recharge and
+mode script entity query use the shared VM and host paths. The locked
+workspace tests and Clippy passed with script coverage. Two same-pack
+104319 startup reports matched byte for byte, with all 32 rows
+unchanged from `3dbfd5e4`. They retained **12 independent starts**,
+one ordinary room attachment, and **46 blocking sites**. The #72 Soldier
+owner trace kept all 476 observations. The local pack lacks the
+Junkenstein NPC and map inputs, so the encounter shield lifecycle
+has synthetic coverage in this batch.
+
 Two of the three remaining native target-tracking startup sites have
 empty embedded plugs. One configures a second filter and an entity list
 output. The other configures a count output. Both read a dynamic radius.
