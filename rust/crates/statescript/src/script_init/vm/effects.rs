@@ -16,7 +16,7 @@ use crate::{
 use super::super::{
     ABILITY_PUSHED, ABILITY_RUNNING, HUD_HEALTH, HUD_MAX_HEALTH, LINK_PRIORITY, MAX_PENDING_SHOTS,
     MAX_PLUG_DEPTH, OWNER_HEALTH, SCRIPT_SOURCE,
-    machine::{Event, LinkValue, Startup, StateKey, VarKey, VariableLink, Volley},
+    machine::{Event, LinkValue, StateKey, VarKey, VariableLink, Volley},
     shapes::{
         array_field, chase_lerp, chase_step, chase_value, configured, field, pool_kind,
         pool_number, same, shot_delay, source_key, stored,
@@ -773,41 +773,16 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 .collect::<Vec<_>>(),
             _ => Vec::new(),
         };
-        let mut children = std::mem::take(
-            &mut self
-                .state_mut(key)
-                .expect("Deadeye effect state")
-                .deadeye_children,
-        );
-        let mut removed = Vec::new();
-        children.retain(|entity, child| {
-            if !self.machine.snapshot.instances.contains_key(child) {
-                return false;
-            }
-            if selected.contains(entity) {
-                return true;
-            }
-            removed.push(*child);
-            false
-        });
-        for child in removed {
-            self.destroy(child)?;
-        }
+        self.retain_target_children(key, &selected)?;
         for entity in selected {
-            let child = if let Some(&child) = children.get(&entity) {
-                child
-            } else {
-                let child = u16::try_from(self.machine.next_id)
-                    .map_err(|_| InitFault::InstanceIdExhausted)?;
-                let variables = Variables::from([
+            let Some(child) = self.ensure_target_child(key, entity, TARGET_GRAPH, false, || {
+                Variables::from([
                     (536, Value::Entity(entity)),
                     (SCRIPT_SOURCE, Value::Entity(site.entity)),
-                ]);
-                if !self.create(child, TARGET_GRAPH, None, variables, Startup::Ordinary)? {
-                    continue;
-                }
-                children.insert(entity, child);
-                child
+                ])
+            })?
+            else {
+                continue;
             };
             self.machine.queue_entries_from(
                 self.graphs,
@@ -818,9 +793,6 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.machine.now_ms,
             )?;
         }
-        self.state_mut(key)
-            .expect("Deadeye effect state")
-            .deadeye_children = children;
         self.register_tick(key, self.machine.now_ms);
         Ok(())
     }

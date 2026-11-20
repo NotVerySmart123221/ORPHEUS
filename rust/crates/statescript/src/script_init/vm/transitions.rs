@@ -19,7 +19,7 @@ use super::super::{
         raw_indices, registered_state, source_key,
     },
     types::{InitFault, Issue, StateKind},
-    world::World,
+    world::{Site, World},
 };
 use super::Vm;
 
@@ -159,6 +159,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         if sampled_frame < self.machine.frame =>
                     {
                         self.sample_observed_value(key)?;
+                    }
+                    Some(StateKind::TrackEntities { sampled_frame })
+                        if sampled_frame < self.machine.frame =>
+                    {
+                        self.sample_target_children(key)?;
                     }
                     Some(StateKind::LivingBodyArray) => self.refresh_living_body_array(key)?,
                     Some(StateKind::AiFacing(Some(record))) => {
@@ -526,7 +531,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         }
         let child =
             u16::try_from(self.machine.next_id).map_err(|_| InitFault::InstanceIdExhausted)?;
-        if self.create(child, graph, Some((id, key.raw)), vars, Startup::Ordinary)? {
+        if self.create(
+            child,
+            graph,
+            Some((id, key.raw)),
+            vars,
+            Startup::Ordinary,
+            false,
+        )? {
             // The reference sets child binding bases directly before Entry.
             self.machine.snapshot.variables.extend(entity_vars);
             return Ok(Some(child));
@@ -684,29 +696,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             sampled_frame: frame,
         };
         let site = self.site(id, node);
-        let value = match self.evaluate_with_context(
-            site,
-            field(&node.fields, "value"),
-            None,
-            Value::Null,
-            false,
-        ) {
-            Ok(value) => value,
-            Err(
-                script_expr::EvalError::UnavailableEntityPosition(_)
-                | script_expr::EvalError::UnavailableEntityDirection(_)
-                | script_expr::EvalError::UnavailableEntityVariable { .. }
-                | script_expr::EvalError::UnavailableSpatialCandidates
-                | script_expr::EvalError::UnavailableSpatialVisibility,
-            ) => {
-                // A later sample can succeed as the scene updates.
-                self.report(site, Issue::ObservationUnavailable);
-                return Ok(());
-            }
-            Err(error) => {
-                self.report(site, Issue::Expression(error));
-                return Ok(());
-            }
+        let Some(value) = self.observation_value(site, field(&node.fields, "value")) else {
+            return Ok(());
         };
         let Some(state) = self
             .state_mut(key)
@@ -741,6 +732,27 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             self.try_complete(key, node, 0)?;
         }
         Ok(())
+    }
+
+    pub(super) fn observation_value(&mut self, site: Site, value: &Json) -> Option<Value> {
+        match self.evaluate_with_context(site, value, None, Value::Null, false) {
+            Ok(value) => Some(value),
+            Err(
+                script_expr::EvalError::UnavailableEntityPosition(_)
+                | script_expr::EvalError::UnavailableEntityDirection(_)
+                | script_expr::EvalError::UnavailableEntityVariable { .. }
+                | script_expr::EvalError::UnavailableSpatialCandidates
+                | script_expr::EvalError::UnavailableSpatialVisibility,
+            ) => {
+                // A later sample can succeed as the scene updates.
+                self.report(site, Issue::ObservationUnavailable);
+                None
+            }
+            Err(error) => {
+                self.report(site, Issue::Expression(error));
+                None
+            }
+        }
     }
 
     pub(in crate::script_init) fn check_watch(&mut self, key: StateKey) -> Result<(), InitFault> {
@@ -1322,18 +1334,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             StateKind::WitchStaffEffect => {
                 self.world.set_witch_staff_effect(self.site(id, node), None);
             }
-            StateKind::DeadeyeEffects => {
-                let children = std::mem::take(
-                    &mut self
-                        .state_mut(key)
-                        .expect("ending Deadeye effect state")
-                        .deadeye_children,
-                );
-                for child in children.into_values() {
-                    if self.machine.snapshot.instances.contains_key(&child) {
-                        self.destroy(child)?;
-                    }
-                }
+            StateKind::DeadeyeEffects | StateKind::TrackEntities { .. } => {
+                self.retain_target_children(key, &[])?;
             }
             StateKind::SubScript { child: Some(child) } => self.destroy(child)?,
             StateKind::MessageIdle | StateKind::BossPauseReceiver { .. } => {
@@ -1368,7 +1370,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             _ => (),
         }
         let state = self.state_mut(key).expect("ending state");
-        if kind == StateKind::TrackedTargets {
+        if matches!(
+            kind,
+            StateKind::TrackedTargets | StateKind::TrackEntities { .. }
+        ) {
             state.tracked_targets.clear();
         }
         state.active = false;
@@ -1485,12 +1490,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
     pub(in crate::script_init) fn destroy(&mut self, id: u16) -> Result<(), InitFault> {
         let mut pending = vec![(id, false)];
         while let Some((id, children_done)) = pending.pop() {
+            if !self.machine.snapshot.instances.contains_key(&id) {
+                continue;
+            }
             if !children_done {
                 self.spend("instance teardown")?;
                 let mut effects = Vec::new();
                 for state in self.machine.snapshot.instances[&id].states.values_mut() {
                     state.ending = true;
-                    effects.extend(std::mem::take(&mut state.deadeye_children).into_values());
+                    effects.extend(std::mem::take(&mut state.target_children).into_values());
                 }
                 pending.push((id, true));
                 pending.extend(

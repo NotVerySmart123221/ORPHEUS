@@ -33,6 +33,7 @@ enum StateBehavior {
     Plain,
     Observe,
     Interval,
+    TrackEntities,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -90,6 +91,15 @@ impl Node {
         }
         let frames = self.field("interval_frames")?.as_u64()?;
         NonZeroU32::new(u32::try_from(frames).ok()?)
+    }
+
+    pub(crate) fn target_child_binding(&self) -> Option<(u32, u32)> {
+        if self.state_behavior != Some(StateBehavior::TrackEntities) {
+            return None;
+        }
+        let graph = u32::try_from(self.field("child_graph")?.as_u64()?).ok()?;
+        let variable = u32::try_from(self.field("target_variable")?.as_u64()?).ok()?;
+        (variable != 0).then_some((graph, variable))
     }
 
     pub fn is_action(&self) -> bool {
@@ -280,6 +290,7 @@ impl Graph {
                     StateBehavior::Plain => "plain state",
                     StateBehavior::Observe => "observe state",
                     StateBehavior::Interval => "interval state",
+                    StateBehavior::TrackEntities => "track entities state",
                 };
                 let occupies_state_slot = node
                     .state
@@ -345,6 +356,21 @@ impl Graph {
                             )));
                         }
                         "StateInterval"
+                    }
+                    StateBehavior::TrackEntities => {
+                        if node.field("targets").is_none_or(Value::is_null) {
+                            return Err(invalid(format!(
+                                "{state} in graph {} at node {} requires a targets expression",
+                                self.index, node.pos
+                            )));
+                        }
+                        if node.target_child_binding().is_none() {
+                            return Err(invalid(format!(
+                                "{state} in graph {} at node {} requires a u32 child_graph and nonzero u32 target_variable",
+                                self.index, node.pos
+                            )));
+                        }
+                        "StateTrackEntities"
                     }
                 }
                 .into();
@@ -688,6 +714,7 @@ enum AuthoredClassBehavior {
     PlainState,
     ObserveState,
     IntervalState,
+    TrackEntitiesState,
     ForwardAction,
     BranchAction,
     LocalMessageAction,
@@ -701,6 +728,7 @@ impl AuthoredClassBehavior {
             Self::PlainState => (false, Some(StateBehavior::Plain), None),
             Self::ObserveState => (false, Some(StateBehavior::Observe), None),
             Self::IntervalState => (false, Some(StateBehavior::Interval), None),
+            Self::TrackEntitiesState => (false, Some(StateBehavior::TrackEntities), None),
             Self::ForwardAction => (false, None, Some(ActionBehavior::Forward)),
             Self::BranchAction => (false, None, Some(ActionBehavior::Branch)),
             Self::LocalMessageAction => (false, None, Some(ActionBehavior::LocalMessage)),
@@ -820,6 +848,19 @@ impl GraphStore {
                 return Err(invalid(format!(
                     "bundle defines graph {index} more than once"
                 )));
+            }
+        }
+        for graph in graphs.values() {
+            for node in &graph.nodes {
+                if let Some((child, _)) = node
+                    .target_child_binding()
+                    .filter(|(child, _)| !graphs.contains_key(child))
+                {
+                    return Err(invalid(format!(
+                        "track entities state in graph {} at node {} references missing child_graph {child}",
+                        graph.index, node.pos
+                    )));
+                }
             }
         }
         let uses_room_spatial_frame = graphs.values().any(|graph| {
@@ -1721,6 +1762,85 @@ mod tests {
             interval.interval_frames().map(NonZeroU32::get),
             Some(u32::MAX)
         );
+    }
+
+    #[test]
+    fn track_entities_state_validates_child_bindings_after_loading_all_graphs() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let rejects = |data: &Value, expected: &str| {
+            let error = load(data).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            let message = error.to_string();
+            assert!(message.contains("graph 42 at node 0"), "{message}");
+            assert!(message.contains(expected), "{message}");
+        };
+
+        let mut data = fixture();
+        let mut child = data["graphs"][0].clone();
+        child["index"] = json!(0);
+        data["graphs"][0]["states"][3] = Value::Null;
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state"] = json!(0);
+        node["server_only"] = json!(true);
+        node["state_behavior"] = json!("track_entities");
+        node["fields"] = json!({
+            "targets": {"$": "STUConfigVarDynamic", "m_identifier": 3, "m_60DB8F99": false},
+            "child_graph": 0,
+            "target_variable": u32::MAX,
+        });
+        rejects(&data, "references missing child_graph 0");
+        data["graphs"].as_array_mut().unwrap().push(child);
+
+        let graphs = load(&data).unwrap();
+        let node = graphs.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(node.class, "StateTrackEntities");
+        assert_eq!(node.target_child_binding(), Some((0, u32::MAX)));
+        assert!(node.is_state() && !node.is_networked());
+
+        for (field, invalid) in [
+            ("targets", Value::Null),
+            ("child_graph", json!(-1)),
+            ("child_graph", json!(0.0)),
+            ("child_graph", json!(u64::from(u32::MAX) + 1)),
+            ("target_variable", json!(0)),
+            ("target_variable", json!(true)),
+            ("target_variable", json!(u64::from(u32::MAX) + 1)),
+        ] {
+            let mut bad = data.clone();
+            bad["graphs"][0]["nodes"][0]["fields"][field] = invalid;
+            rejects(&bad, field);
+        }
+        let mut bad_scope = data.clone();
+        bad_scope["graphs"][0]["nodes"][0]["client_only"] = json!(true);
+        rejects(
+            &bad_scope,
+            "server-only and occupy its state slot exactly once",
+        );
+
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state_behavior"] = Value::Null;
+        node["class"] = json!("StateTrackEntities");
+        let graphs = load(&data).unwrap();
+        assert!(
+            graphs
+                .graph(42)
+                .unwrap()
+                .state(0)
+                .unwrap()
+                .target_child_binding()
+                .is_none()
+        );
+
+        data["authored_classes"] =
+            json!([{"class": "authored.members", "behavior": "track_entities_state"}]);
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["class"] = json!("authored.members");
+        node["server_only"] = json!(false);
+        let graphs = load(&data).unwrap();
+        let node = graphs.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(node.class, "StateTrackEntities");
+        assert_eq!(node.target_child_binding(), Some((0, u32::MAX)));
+        assert!(node.server_only && !node.client_only);
     }
 
     #[test]

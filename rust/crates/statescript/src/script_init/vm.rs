@@ -34,6 +34,7 @@ use super::{
 
 mod effects;
 mod nodes;
+mod target_tracking;
 mod transitions;
 
 pub(super) struct Vm<'graph, 'world, 'machine, W> {
@@ -72,7 +73,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             } else {
                 Startup::Passive
             };
-            if self.create(root.id, root.graph, None, root.variables, startup)? {
+            if self.create(root.id, root.graph, None, root.variables, startup, false)? {
                 if let Some(raw) = root.initial_state {
                     self.post(root.id, Event::Begin(raw))?;
                 }
@@ -103,6 +104,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         parent: Option<(u16, u16)>,
         mut variables: Variables,
         startup: Startup,
+        server_only: bool,
     ) -> Result<bool, InitFault> {
         self.spend("instance creation")?;
         let Some(definition) = self.graphs.graph(graph) else {
@@ -119,6 +121,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         };
         let apply_schema =
             self.machine.public_schemas && !matches!(startup, Startup::Played { .. });
+        let server_only = server_only
+            || parent
+                .and_then(|(parent, _)| self.machine.snapshot.instances.get(&parent))
+                .is_some_and(Instance::is_server_only);
         self.machine.next_id = self.machine.next_id.max(u32::from(id) + 1);
         self.machine.snapshot.instances.insert(
             id,
@@ -127,6 +133,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 start_ms: self.machine.now_ms,
                 retire_after_frame: matches!(startup, Startup::Played { auto_retire: true })
                     .then(|| self.machine.frame.saturating_add(1)),
+                server_only,
                 parent,
                 variables: if apply_schema {
                     Variables::new()
@@ -1080,10 +1087,21 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
     }
 
     fn report_diagnostic(&mut self, site: Site, issue: Issue, registration_rejected: bool) {
+        let server_only = self
+            .machine
+            .snapshot
+            .instances
+            .get(&site.instance)
+            .is_some_and(Instance::is_server_only)
+            || site
+                .node
+                .and_then(|position| self.graphs.graph(site.graph)?.node(position))
+                .is_some_and(|node| node.target_child_binding().is_some());
         let diagnostic = Diagnostic {
             site,
             issue,
             registration_rejected,
+            server_only,
         };
         if !self
             .machine
@@ -1390,12 +1408,20 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             self.report(site, Issue::UnsupportedField("PlayScript policy"));
             return Ok(());
         }
+        let server_only = self
+            .machine
+            .snapshot
+            .instances
+            .get(&site.instance)
+            .is_some_and(Instance::is_server_only);
         let matches: Vec<_> = self
             .machine
             .snapshot
             .instances
             .iter()
-            .filter_map(|(&id, instance)| (instance.graph == *graph).then_some(id))
+            .filter_map(|(&id, instance)| {
+                (instance.graph == *graph && instance.is_server_only() == server_only).then_some(id)
+            })
             .collect();
         if *policy == 0 && !matches.is_empty() {
             return Ok(());
@@ -1430,6 +1456,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Startup::Played {
                     auto_retire: *auto_retire,
                 },
+                server_only,
             )?;
             id
         };
@@ -1643,6 +1670,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Some((id, key.raw)),
                 values,
                 Startup::Passive,
+                false,
             )? {
                 self.follow(child, node, "m_C41A9BE2", None, 0)?;
             }
@@ -1695,6 +1723,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             Some((id, key.raw)),
             values,
             Startup::Played { auto_retire: false },
+            false,
         )? {
             self.queue_script_start(child, graph, site.entity, &parameters)?;
         }

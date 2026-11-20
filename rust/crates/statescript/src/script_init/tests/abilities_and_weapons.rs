@@ -1642,6 +1642,7 @@ fn missing_world_queries_report_expression_sites_without_writing_guessed_values(
                 },
                 issue: Issue::Expression(expected),
                 registration_rejected: false,
+                server_only: false,
             }],
         );
     }

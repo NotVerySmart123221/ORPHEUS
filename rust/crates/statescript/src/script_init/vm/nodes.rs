@@ -1471,6 +1471,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             _ if node.declares_observe_state() => StateKind::Observe {
                 sampled_frame: self.machine.frame,
             },
+            _ if node.target_child_binding().is_some() => StateKind::TrackEntities {
+                sampled_frame: self.machine.frame,
+            },
             _ if interval_frames.is_some() => {
                 let period_frames = interval_frames.expect("checked authored interval");
                 StateKind::Interval {
@@ -1716,7 +1719,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             StateKind::CosmeticEntity => self.begin_cosmetic(key, node, depth)?,
             StateKind::ChaseVar => self.begin_chase(key, node, depth)?,
-            StateKind::Observe { .. } => self.register_tick(key, self.machine.now_ms),
+            StateKind::Observe { .. } | StateKind::TrackEntities { .. } => {
+                self.register_tick(key, self.machine.now_ms);
+            }
             StateKind::Interval { next_frame, .. } => self.schedule_interval(key, next_frame)?,
             StateKind::Watch => {
                 let seen = self.evaluate(id, node, field(&node.fields, "m_B7A3CF78"), Some(key));

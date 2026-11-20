@@ -125,6 +125,27 @@ pulses are dropped and the next deadline keeps the activation's cadence.
 Ending the state cancels its pending timer. Reactivation starts a new
 cadence. See the [synthetic interval and health contract](../fixtures/behavior/script-interval-health-v1.json).
 
+## Track entities with child graphs
+
+Set `state_behavior` to `"track_entities"` on a server-only state, or
+declare `"track_entities_state"` for an authored class. Supply a
+`targets` expression yielding a flat array of entity references, a
+`child_graph` index in the same bundle, and a positive `target_variable`
+ID. Each selected entity receives one child instance. Its local target
+variable is available before the child runs its startup entries.
+
+The tracker samples once per VM frame after activation and accepts up
+to 64 unique targets. It deduplicates each valid sample and opens new
+children in ascending entity ID order. Membership is keyed by VM entity ID.
+A retained reference keeps its child. A later sample can create a new child
+after removing that reference. Unavailable or invalid samples leave the
+previous set in place.
+A successful empty result removes all children. Removing an entity or
+ending the tracker tears down the corresponding child, scoped descendants
+and timers. The tracker and its child instances execute on the server.
+
+See the [synthetic target child contract](../fixtures/behavior/script-target-children-v1.json).
+
 ## Declare a client-only operand
 
 Use `{"$": "ClientOnly", "value": ...}` for an authored operand that the

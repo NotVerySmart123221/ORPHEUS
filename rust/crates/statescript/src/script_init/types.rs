@@ -131,6 +131,9 @@ pub enum StateKind {
     Observe {
         sampled_frame: u32,
     },
+    TrackEntities {
+        sampled_frame: u32,
+    },
     Interval {
         period_frames: NonZeroU32,
         next_frame: Option<u32>,
@@ -165,7 +168,7 @@ pub(super) struct BufferedPress {
 #[derive(Clone, Debug)]
 pub struct State {
     pub tracked_targets: Vec<u32>,
-    pub(super) deadeye_children: BTreeMap<u32, u16>,
+    pub(super) target_children: BTreeMap<u32, u16>,
     pub active: bool,
     pub activation: u16,
     pub start_ms: u64,
@@ -208,7 +211,7 @@ impl State {
     pub(super) fn dormant(kind: StateKind) -> Self {
         Self {
             tracked_targets: Vec::new(),
-            deadeye_children: BTreeMap::new(),
+            target_children: BTreeMap::new(),
             active: false,
             activation: 0,
             start_ms: 0,
@@ -295,11 +298,18 @@ pub struct Instance {
     pub graph: u32,
     pub(super) start_ms: u64,
     pub(super) retire_after_frame: Option<u32>,
+    pub(super) server_only: bool,
     /// Parent instance and raw state index, as carried on the wire.
     pub parent: Option<(u16, u16)>,
     pub variables: Variables,
     pub states: IndexMap<u16, State>,
     pub(super) join_inputs: BTreeMap<u16, HashSet<(u16, String)>>,
+}
+
+impl Instance {
+    pub fn is_server_only(&self) -> bool {
+        self.server_only
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -322,6 +332,8 @@ pub struct Diagnostic {
     pub issue: Issue,
     /// An existing placement or registration guard rejected this node.
     pub registration_rejected: bool,
+    /// Retained for server diagnostics without blocking client projection.
+    pub server_only: bool,
 }
 
 /// A read-only checkpoint of a component's random stream.

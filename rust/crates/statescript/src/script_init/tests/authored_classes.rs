@@ -333,6 +333,7 @@ fn authored_observer_samples_radius_once_per_frame_until_aborted() {
                     },
                     issue: Issue::ObservationUnavailable,
                     registration_rejected: false,
+                    server_only: false,
                 }]
             );
         } else {
@@ -599,6 +600,7 @@ fn authored_health_change_admits_live_operands_before_continuing() {
                 site,
                 issue,
                 registration_rejected: false,
+                server_only: false,
             };
             if !diagnostics.contains(&diagnostic) {
                 diagnostics.push(diagnostic);
@@ -757,6 +759,217 @@ fn authored_interval_composes_with_live_health_requests_until_aborted() {
         .unwrap();
     assert!(world.0.is_empty());
     assert!(component.snapshot().unwrap().instances.is_empty());
+}
+
+#[test]
+fn authored_target_children_reuse_instances_and_clear_retired_schedules() {
+    use std::{cell::Cell, collections::BTreeSet};
+
+    use crate::script_expr::SpatialCandidate;
+
+    const GRAPH: u32 = 115;
+    const CHILD_GRAPH: u32 = 116;
+    const ROOT: u16 = 1;
+    const WAKE: u64 = 51;
+    const CHILD_MESSAGE: u64 = 52;
+
+    #[derive(Deserialize)]
+    struct Step {
+        frame: u32,
+        values: Option<Vec<Json>>,
+        unique_count: Option<u32>,
+        candidates: Option<Vec<u32>>,
+        reads: Option<usize>,
+        message: Option<u64>,
+        #[serde(default)]
+        wake_offsets: Vec<u64>,
+        active: Option<bool>,
+        children: Vec<(u32, u16)>,
+    }
+
+    #[derive(Deserialize)]
+    struct Case {
+        name: String,
+        #[serde(default)]
+        radius: bool,
+        steps: Vec<Step>,
+    }
+
+    #[derive(Deserialize)]
+    struct Input {
+        bundle: Json,
+        radius_expression: Json,
+        cases: Vec<Case>,
+    }
+
+    #[derive(Deserialize)]
+    struct TargetContract {
+        schema_version: u8,
+        case_id: String,
+        evidence: String,
+        input: Input,
+    }
+
+    #[derive(Default)]
+    struct TargetWorld {
+        reads: Cell<usize>,
+        candidates: Option<Vec<SpatialCandidate>>,
+    }
+
+    impl World for TargetWorld {
+        fn entity_variable(&mut self, _: u32, _: u32) -> Option<Value> {
+            None
+        }
+
+        fn position(&mut self, _: u32) -> Option<[f64; 3]> {
+            None
+        }
+
+        fn spatial_candidates(&self) -> Option<&[SpatialCandidate]> {
+            self.reads.set(self.reads.get() + 1);
+            self.candidates.as_deref()
+        }
+    }
+
+    let contract: TargetContract = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/script-target-children-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    assert_eq!(contract.case_id, "script-target-children.synthetic.v1");
+    assert_eq!(contract.evidence, "synthetic-rust");
+
+    for case in contract.input.cases {
+        let mut bundle = contract.input.bundle.clone();
+        if case.radius {
+            bundle["graphs"][0]["nodes"][0]["fields"]["targets"] =
+                contract.input.radius_expression.clone();
+        }
+        let graphs = GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap();
+        let mut world = TargetWorld::default();
+        let mut component = Component::start(
+            Arc::new(graphs),
+            91,
+            Variables::from([
+                (1, Value::Array(vec![Value::Entity(99)])),
+                (2, Value::Vector([0.0; 3])),
+            ]),
+            vec![Root::listener(ROOT, GRAPH, Some(0))],
+            0,
+            &mut world,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        assert_eq!(component.snapshot().unwrap().instances.len(), 1);
+        assert_eq!(world.reads.get(), 0);
+        let mut seen_children = BTreeSet::new();
+
+        for step in case.steps {
+            world.reads.set(0);
+            world.candidates = step.candidates.map(|entities| {
+                entities
+                    .into_iter()
+                    .map(|entity| SpatialCandidate {
+                        entity,
+                        position: [1.0, 0.0, 0.0],
+                        team: None,
+                    })
+                    .collect()
+            });
+            if let Some(values) = step.values {
+                let values = values
+                    .into_iter()
+                    .map(|value| match value {
+                        Json::Bool(value) => Value::Bool(value),
+                        value => Value::Entity(u32::try_from(value.as_u64().unwrap()).unwrap()),
+                    })
+                    .collect();
+                component
+                    .set_entity_variable(1, Value::Array(values), &mut world)
+                    .unwrap();
+            }
+            if let Some(count) = step.unique_count {
+                let values = (100..100 + count).map(Value::Entity).collect();
+                component
+                    .set_entity_variable(1, Value::Array(values), &mut world)
+                    .unwrap();
+            }
+            if let Some(message) = step.message {
+                assert_eq!(
+                    component
+                        .queue_frame_message(step.frame, ROOT, message, Variables::new())
+                        .unwrap(),
+                    1
+                );
+            }
+            for offset in step.wake_offsets {
+                let due = u64::from(step.frame) * crate::script_runtime::FRAME_MS + offset;
+                assert_eq!(
+                    component
+                        .queue_message_at(due, ROOT, WAKE, Variables::new())
+                        .unwrap(),
+                    1
+                );
+            }
+            component.advance_frame(step.frame, &mut world).unwrap();
+            if let Some(reads) = step.reads {
+                assert_eq!(
+                    world.reads.get(),
+                    reads,
+                    "{} frame {}",
+                    case.name,
+                    step.frame
+                );
+            }
+
+            let snapshot = component.snapshot().unwrap();
+            assert_eq!(
+                snapshot.instances[&ROOT].states[&0].active,
+                step.active.unwrap_or(true)
+            );
+            let mut children = Vec::new();
+            for (&id, instance) in &snapshot.instances {
+                if instance.graph == CHILD_GRAPH {
+                    let Value::Entity(target) = instance.variables[&7] else {
+                        panic!("target was not bound before child startup");
+                    };
+                    assert_eq!(instance.variables[&8], Value::Entity(target));
+                    assert!(instance.is_server_only());
+                    assert!(instance.states[&0].active);
+                    assert!(!snapshot.pending_timers[&id].is_empty());
+                    children.push((target, id));
+                }
+            }
+            children.sort_unstable();
+            assert_eq!(
+                children, step.children,
+                "{} frame {}",
+                case.name, step.frame
+            );
+
+            let live_children: BTreeSet<_> = children.into_iter().map(|(_, id)| id).collect();
+            for &child in &live_children {
+                if seen_children.insert(child) {
+                    assert_eq!(
+                        component
+                            .queue_frame_message(200, child, CHILD_MESSAGE, Variables::new())
+                            .unwrap(),
+                        1
+                    );
+                }
+            }
+            for child in seen_children.difference(&live_children) {
+                assert!(!component.machine.ticking.contains_key(child));
+                assert!(component.machine.queues.iter(*child).next().is_none());
+            }
+        }
+
+        component.teardown(&mut world).unwrap();
+        assert!(component.snapshot().unwrap().instances.is_empty());
+        assert!(component.machine.ticking.is_empty());
+        assert!(component.machine.queues.next_due().is_none());
+    }
 }
 
 #[cfg(feature = "node-observations")]

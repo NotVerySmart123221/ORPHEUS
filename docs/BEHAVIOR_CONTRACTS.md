@@ -1,6 +1,6 @@
 # Shared Behavior Contracts (`rust`)
 
-ORPHEUS stores language-neutral JSON contracts under `fixtures/behavior/` (`56` files total). Cross-language consumers compare Python (`main`) and Rust (`rust`) through production code paths; Rust-only regression contracts identify their narrower scope explicitly. Fixtures do not bundle game assets or captures.
+ORPHEUS stores language-neutral JSON contracts under `fixtures/behavior/` (`57` files total). Cross-language consumers compare Python (`main`) and Rust (`rust`) through production code paths; Rust-only regression contracts identify their narrower scope explicitly. Fixtures do not bundle game assets or captures.
 
 The Rust-only `script-actions-v1.json` adds 15 historical assignment/branch cases pinned to `f763beb`. Both `orpheus-statescript` public workspace lanes run `script_init::tests::actions_contract::actions_preserve_the_pinned_synthetic_reference_contract`; it is not registered in the Python/Rust differential job. See the [action development guide](STATESCRIPT_DEVELOPMENT.md) for provenance, current module boundaries and the synthetic benchmark.
 
@@ -11,6 +11,8 @@ The Rust-only [local message fixture](../fixtures/behavior/script-local-message-
 The Rust-only [health action fixture](../fixtures/behavior/script-health-change-v1.json) checks signed health request admission, continuation, and rejection diagnostics. Room tests cover player and bot settlement, stale body identity, and death and health updates.
 
 The Rust-only [interval and health fixture](../fixtures/behavior/script-interval-health-v1.json) composes the authored interval and health action. It exercises scheduling, skipped frames, live operands, cancellation and reactivation through the component VM.
+
+The Rust-only [target child fixture](../fixtures/behavior/script-target-children-v1.json) checks target ordering, duplicate removal, child reuse, invalid and unavailable samples, and cleanup on target removal, abort and teardown.
 
 The Rust-only [entity spatial fixture](../fixtures/behavior/statescript-entity-spatial-v1.json) checks authored position and direction reads at two host snapshots. An in-memory VM test also exercises these operands through the ordinary component message queue.
 

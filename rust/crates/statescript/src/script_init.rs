@@ -676,7 +676,7 @@ impl Component {
         let id = u16::try_from(self.machine.next_id).map_err(|_| InitFault::InstanceIdExhausted)?;
         self.run(world, |vm| {
             let variables = Variables::from([(SCRIPT_SOURCE, Value::Entity(source))]);
-            vm.create(id, 0x0079, None, variables, Startup::Ordinary)?;
+            vm.create(id, 0x0079, None, variables, Startup::Ordinary, false)?;
             vm.machine.queue_entries_from(
                 vm.graphs,
                 Some(id),

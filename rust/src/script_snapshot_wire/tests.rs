@@ -640,6 +640,7 @@ fn unsupported_active_states_and_initialization_diagnostics_are_explicit() {
         },
         issue: Issue::UnsupportedAction("fixture".into()),
         registration_rejected: false,
+        server_only: false,
     });
     snapshot.diagnostics.push(Diagnostic {
         site: Site {
@@ -650,6 +651,7 @@ fn unsupported_active_states_and_initialization_diagnostics_are_explicit() {
         },
         issue: Issue::UnsupportedState("later".into()),
         registration_rejected: false,
+        server_only: false,
     });
     let error = encoder.project(&snapshot, View::Observer).unwrap_err();
     assert_eq!(
@@ -1905,6 +1907,109 @@ fn initialized_waits_supply_owner_timers_and_remote_frame_targets() {
         151,
         "040000302701b604801f0000004800863d3000",
     );
+}
+
+#[test]
+fn tracked_entity_children_and_descendants_stay_out_of_both_wire_views() {
+    use std::sync::Arc;
+
+    use crate::script_init::Component;
+
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-target-children-v1.json"
+    ))
+    .unwrap();
+    let mut bundle = contract["input"]["bundle"].clone();
+    let child = &mut bundle["graphs"][1];
+    child["items"] = json!(5);
+    child["states"].as_array_mut().unwrap().push(json!(4));
+    child["nodes"][0]["fields"]["m_outPlug"]["links"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!([4, "m_beginPlug"]));
+    child["nodes"].as_array_mut().unwrap().push(node(
+        4,
+        "STU_37D754C8",
+        Some(1),
+        json!({"m_36F7B64C":{"m_36F7B64C":{"m_C974E369":{"m_graph":"0x0580000000000075"}}}}),
+    ));
+    bundle["graphs"].as_array_mut().unwrap().push(graph(
+        117,
+        Vec::new(),
+        json!([]),
+        json!([]),
+        json!([]),
+        json!([]),
+    ));
+    let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    let codecs = CodecTable::from_json(CODECS).unwrap();
+    let encoder = SnapshotEncoder::new(&graphs, &codecs);
+    let mut component = Component::start(
+        Arc::clone(&graphs),
+        ENTITY,
+        Variables::from([(1, Value::Array(vec![Value::Entity(19)]))]),
+        vec![Root::listener(1, 115, None), Root::listener(2, 116, None)],
+        0,
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    component.begin_state(1, 0, &mut EmptyWorld).unwrap();
+    let before = component.snapshot().unwrap().clone();
+    assert!(!before.instances[&2].is_server_only());
+    component.advance_frame(1, &mut EmptyWorld).unwrap();
+    let mut after = component.snapshot().unwrap().clone();
+    assert!(after.initialization_complete(), "{:?}", after.diagnostics);
+
+    let (&child, instance) = after
+        .instances
+        .iter()
+        .find(|(id, instance)| **id != 2 && instance.graph == 116)
+        .unwrap();
+    assert!(instance.is_server_only());
+    assert!(instance.parent.is_none());
+    assert_eq!(instance.variables[&7], Value::Entity(19));
+    assert!(!after.pending_timers[&child].is_empty());
+    let descendant = after
+        .instances
+        .values()
+        .find(|instance| instance.graph == 117)
+        .unwrap();
+    assert!(descendant.is_server_only());
+    assert_eq!(descendant.parent, Some((child, 1)));
+
+    let hidden_diagnostic = Diagnostic {
+        site: Site {
+            entity: ENTITY,
+            instance: child,
+            graph: 116,
+            node: None,
+        },
+        issue: Issue::UnsupportedField("synthetic private diagnostic"),
+        registration_rejected: false,
+        server_only: true,
+    };
+    after.diagnostics.push(hidden_diagnostic.clone());
+    for view in [View::Owner, View::Observer] {
+        let baseline = encoder.project(&before, view).unwrap();
+        let full = encoder.project(&after, view).unwrap();
+        let next = encoder.project_next(&after, &baseline).unwrap();
+        for projected in [&baseline, &full, &next] {
+            assert_eq!(
+                projected.instances.keys().copied().collect::<Vec<_>>(),
+                [1, 2]
+            );
+            encoder.full(projected).unwrap();
+        }
+    }
+
+    // Diagnostics survive child removal, but remain private to the server.
+    component.queue_message(1, 49, Variables::new()).unwrap();
+    component.run_now(&mut EmptyWorld).unwrap();
+    let mut after = component.snapshot().unwrap().clone();
+    assert!(!after.instances.contains_key(&child));
+    after.diagnostics.push(hidden_diagnostic);
+    assert!(encoder.project(&after, View::Owner).is_ok());
 }
 
 #[test]
