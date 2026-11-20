@@ -683,7 +683,7 @@ fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() 
     room.enable_spatial_queries(false, Arc::clone(&ground), needs);
     room.prepare_spatial_frame(context.tick).unwrap();
 
-    let send = |room: &mut RoomSimulation, source, payload, when, now| {
+    let stage = |room: &RoomSimulation, payload| {
         let frame = &room.spatial_frame.as_ref().unwrap().1;
         let mut outbox = RoomScriptRequests::default();
         let message = RoomMessage {
@@ -692,11 +692,16 @@ fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() 
         };
         assert!(!outbox.queue_message(frame, receiver + 1, message.clone()));
         assert!(outbox.queue_message(frame, receiver, message));
-        let envelope = outbox.take().pop().unwrap();
+        outbox.take().pop().unwrap()
+    };
+    let send = |room: &mut RoomSimulation, source, payload, when, now| {
+        let envelope = stage(room, payload);
         room.settle_script_request(envelope, source, when, now)
             .unwrap();
     };
-    send(&mut room, sender, 17, context.tick, context.now);
+    let sender_body = room.sample_health_body(sender).unwrap();
+    let excluded_body = room.sample_health_body(excluded_sender).unwrap();
+    send(&mut room, sender_body, 17, context.tick, context.now);
 
     let observed = |room: &RoomSimulation, wire, controller| {
         let enemy = state(room, wire).unwrap().enemy.as_ref().unwrap();
@@ -775,7 +780,7 @@ fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() 
     room.enable_host_health_events();
     let tick = context.tick + 2;
     let now = context.now + 2 * TICK_PERIOD;
-    send(&mut room, sender, 18, tick - 1, now - TICK_PERIOD);
+    send(&mut room, sender_body, 18, tick - 1, now - TICK_PERIOD);
     room.settle_health(
         receiver,
         HealthEffect::Damage(25.0),
@@ -810,7 +815,7 @@ fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() 
     assert_eq!(speed_scale(&room, receiver, tick + 1), 0.5);
     assert_eq!(speed_scale(&room, receiver, tick + 2), 1.0);
 
-    send(&mut room, excluded_sender, 19, tick + 1, now + TICK_PERIOD);
+    send(&mut room, excluded_body, 19, tick + 1, now + TICK_PERIOD);
     room.finish_tick(&queries, tick + 2, now + 2 * TICK_PERIOD)
         .unwrap();
     assert_eq!(
@@ -823,6 +828,40 @@ fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() 
     );
     assert!(!lock_active(&room, receiver, false));
     assert_eq!(speed_scale(&room, receiver, tick + 3), 1.0);
+
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-room-message-v1.json"
+    ))
+    .unwrap();
+    let generations = &fixture["native_sender_generation"];
+    let stale = stage(&room, generations["stale_payload"].as_i64().unwrap());
+    let previous = observed(&room, receiver, false);
+    let body = room
+        .world
+        .entity_mut(sender_body.entity)
+        .take::<BotState>()
+        .unwrap();
+    assert!(room.world.despawn(sender_body.entity));
+    let replacement = room.world.spawn(body).id();
+    assert_ne!(replacement, sender_body.entity);
+    assert_eq!(
+        room.by_wire.insert(sender, replacement),
+        Some(sender_body.entity)
+    );
+    room.settle_script_request(stale, sender_body, tick + 2, now + 2 * TICK_PERIOD)
+        .unwrap();
+    room.finish_tick(&queries, tick + 3, now + 3 * TICK_PERIOD)
+        .unwrap();
+    assert_eq!(observed(&room, receiver, false), previous);
+
+    let current = room.sample_health_body(sender).unwrap();
+    let payload = generations["current_payload"].as_i64().unwrap();
+    send(&mut room, current, payload, tick + 3, now + 3 * TICK_PERIOD);
+    room.finish_tick(&queries, tick + 4, now + 4 * TICK_PERIOD)
+        .unwrap();
+    let (actual_sender, actual_payload, _) = observed(&room, receiver, false);
+    assert_eq!(actual_sender, Some(Value::Entity(sender)));
+    assert_eq!(actual_payload, Some(Value::Integer(payload)));
 }
 
 #[test]

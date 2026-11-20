@@ -1120,7 +1120,25 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             {
                 StateKind::Registered { next: None }
             }
-            "STU_33A46033" | "STU_9935FBC8"
+            "STU_33A46033" => {
+                let site = self.site(id, node);
+                let Some(entry) = registered_state(self.graph(id), node) else {
+                    self.report(site, Issue::UnsupportedState(node.class.clone()));
+                    return Ok(());
+                };
+                if entry.suppresses_model
+                    && (self.machine.snapshot.instances[&id].is_server_only()
+                        || !self.world.supports_static_model_protection(site))
+                {
+                    self.report(
+                        site,
+                        Issue::UnsupportedField("static model protection context"),
+                    );
+                    return Ok(());
+                }
+                StateKind::Registered { next: None }
+            }
+            "STU_9935FBC8"
                 if registration.permits(registered_state(self.graph(id), node).is_some()) =>
             {
                 StateKind::Registered { next: None }

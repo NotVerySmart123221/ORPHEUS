@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "case_id": "script-static-model-protection.synthetic.v1",
+  "source": {"basis": "Invented actor and graph identities exercise the static host contract."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "owner": 3151,
+    "allowed_body": 3151,
+    "active_roots": [
+      {"graph": 58312, "position": 7, "rule": true},
+      {"graph": 58313, "position": 9, "rule": 1}
+    ],
+    "rejected_roots": [
+      {
+        "graph": 58314, "position": 11, "rule": true,
+        "other_rules": {"m_D82DB14B": {"$": "STUConfigVarBool", "m_value": true}}
+      },
+      {
+        "graph": 58315, "position": 13, "rule": true,
+        "other_rules": {"m_069FD7A5": {"$": "STUConfigVarFloat", "m_value": 2.5}}
+      },
+      {"graph": 58316, "position": 15, "rule": false},
+      {"graph": 58317, "position": 17, "rule": true, "without_remote_slot": true},
+      {"graph": 58318, "position": 19, "rule": true, "isolated": true, "needs_context": true}
+    ]
+  }
+}

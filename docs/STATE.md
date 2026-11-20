@@ -270,6 +270,23 @@ attachment, and **46 blocking sites**. The #72 trace retained its
 476 observations. Both #131 schedules reproduced the previous 339
 ticks per implementation and the same four RNG setup differences.
 
+The opt-in directed numeric route preserves ordinary local delivery
+and uses the room queue for a validated foreign target. The prepared
+probe passed for the original `00EB` sender actions and receiver with
+provided caller inputs. Room tests checked source and target generation
+at settlement and delivery on the next receiver VM frame. Natural
+target binding and native foreign timing remain unverified.
+
+Static model protection now uses the authored state slots and an
+explicit host capability. The prepared boss graph regression passed its
+link, encoding, and final restoration checks. The current encounter
+host owns the model mask bookkeeping. Runtime rendering and collision
+effects have separate verification.
+
+The workspace suite, Clippy, Python bundle and coverage tests, and
+the three prepared graph probes above passed before handoff on this
+Phase 2 worktree. Shared-branch verification belongs to integration.
+
 Two of the three remaining native target-tracking startup sites have
 empty embedded plugs. One configures a second filter and an entity list
 output. The other configures a count output. Both read a dynamic radius.

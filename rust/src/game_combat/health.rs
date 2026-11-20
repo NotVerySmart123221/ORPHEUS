@@ -106,6 +106,7 @@ mod tests {
         let source = bots[0].entity;
         let target = bots[1].entity;
         let mut room = RoomSimulation::new(bots).unwrap();
+        let source_body = room.sample_health_body(source).unwrap();
         room.enable_spatial_queries(
             false,
             Arc::new(fixture_ground()),
@@ -128,7 +129,7 @@ mod tests {
         ] {
             assert!(requests.queue_health(&frame, target, amount));
             for request in requests.take() {
-                room.settle_script_request(request, source, tick, now)
+                room.settle_script_request(request, source_body, tick, now)
                     .unwrap();
             }
             assert_eq!(room.body_healths().unwrap()[&target], expected);
@@ -171,6 +172,7 @@ mod tests {
         let first = bots[0].entity;
         let second = bots[1].entity;
         let mut room = RoomSimulation::new(bots).unwrap();
+        let source = room.sample_health_body(first).unwrap();
         room.enable_spatial_queries(
             false,
             Arc::new(fixture_ground()),
@@ -185,7 +187,8 @@ mod tests {
         assert_eq!(room.body_healths().unwrap()[&first], 100.0);
         assert_eq!(room.body_healths().unwrap()[&second], 100.0);
         for request in requests.take() {
-            room.settle_script_request(request, 7, tick, now).unwrap();
+            room.settle_script_request(request, source, tick, now)
+                .unwrap();
         }
         assert_eq!(
             room.take_scripted_health()
@@ -206,7 +209,7 @@ mod tests {
         assert_ne!(previous, replacement);
         assert_eq!(room.by_wire.insert(second, replacement), Some(previous));
         for request in requests.take() {
-            room.settle_script_request(request, 7, tick + 1, now)
+            room.settle_script_request(request, source, tick + 1, now)
                 .unwrap();
         }
         assert_eq!(room.body_healths().unwrap()[&first], 85.0);

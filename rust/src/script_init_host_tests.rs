@@ -1599,6 +1599,10 @@ mod tests {
     fn authored_boss_control_links_active_instances_and_releases_the_model() {
         struct Model(Vec<bool>);
         impl World for Model {
+            fn supports_static_model_protection(&self, site: Site) -> bool {
+                site.entity == 0xc000_1000
+            }
+
             fn set_encounter_model_enabled(&mut self, _: Site, enabled: bool) -> bool {
                 self.0.push(enabled);
                 true

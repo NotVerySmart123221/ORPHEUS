@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added opt-in native directed numeric messages with same-generation source and target checks. The prepared bonus probe exercises the original local and foreign actions against the original receiver. Static model protection now uses validated state fields and an explicit body capability, preserving the mask until the last protecting state retires.
+
 - Registered two resource-free linked state classes by their authored shape and raw state slot. Room heals now provide the healed target's captured flags, tags, and script state to a distinct sampled source, with the actual settled amount and unavailable hit attribution. Added an opt-in prepared probe for the stock passive charge clock and bonus receiver. The locked workspace suite with script coverage passed, including 382 native and 228 portable StateScript library tests.
 
 - Applied the native horizontal velocity cap by authored selector and bounds at any supported host site, including integer bounds, through the next-frame movement queue. Settled impact events now share their original target's filter flags, target tags, and script state with immediate foreign queries in subscribed graphs. Tests cover target replacement and isolation between consecutive events. The locked workspace suite with script coverage passed, including 382 native and 226 portable StateScript library tests.

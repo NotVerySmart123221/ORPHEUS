@@ -12,7 +12,9 @@ use serde_json::Value as Json;
 
 use crate::{
     script_expr::{self, EvalError, Scope, StackPriority, truthy},
-    script_graph::{Graph, GraphStore, Node, asset_guid, message_parameter_id},
+    script_graph::{
+        Graph, GraphStore, Node, asset_guid, directed_numeric_payload, message_parameter_id,
+    },
     script_runtime::{ButtonEdge, FRAME_MS, button_edges, frame_start},
     script_wire::{Value, Variables},
 };
@@ -1863,6 +1865,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             };
             value
         };
+        let directed_parameter = node.directed_numeric_parameter();
+        if directed_parameter.is_some() && !matches!(value, Value::Entity(_) | Value::Null) {
+            self.report(
+                site,
+                Issue::UnsupportedField("directed numeric message target"),
+            );
+            return Ok(false);
+        }
         let entities: Vec<_> = match value {
             Value::Entity(entity) if entity != 0 => vec![entity],
             Value::Array(items) => items
@@ -1896,12 +1906,28 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     parameters.clone(),
                     self.machine.now_ms,
                 )?;
-            } else if !self.world.send_message(site, entity, message, &parameters) {
-                self.report(
-                    site,
-                    Issue::UnsupportedField("external game message delivery"),
-                );
-                return Ok(false);
+            } else {
+                let delivered = if let Some(slot) = directed_parameter {
+                    script_expr::valid_entity(entity)
+                        && directed_numeric_payload(slot, &parameters)
+                        && self.world.queue_room_message(
+                            site,
+                            entity,
+                            RoomMessage {
+                                id: message,
+                                parameters: parameters.clone(),
+                            },
+                        )
+                } else {
+                    self.world.send_message(site, entity, message, &parameters)
+                };
+                if !delivered {
+                    self.report(
+                        site,
+                        Issue::UnsupportedField("external game message delivery"),
+                    );
+                    return Ok(false);
+                }
             }
         }
         Ok(true)

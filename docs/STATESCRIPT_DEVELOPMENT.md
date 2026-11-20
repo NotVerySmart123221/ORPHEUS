@@ -153,6 +153,10 @@ ability support.
   resource operand use the same registry and keep their own class lists.
   Authored subgraph links still follow the ordinary state lifecycle.
   The linked codec remains the source of wire layout.
+- Static model protection requires a reciprocal state and remote slot,
+  a single protected-entity rule, and a host that owns the body's model
+  mask. Overlapping states retain protection until the last one retires.
+  The current encounter host supplies the verified boss-body capability.
 - A server-owned `ModifyHealth` state can declare periodic self shield
   recovery through its validated operands. The encounter host restores
   attached shield pools from the live rate on the VM clock. A host without
@@ -546,6 +550,28 @@ the recipient has no matching listener. A receiver with too little queue
 space rejects the whole batch of matching listeners.
 
 See the [synthetic room message contract](../fixtures/behavior/script-room-message-v1.json).
+
+A private prepared bundle can declare a reviewed native numeric topic
+under `runtime_state_metadata.directed_numeric_messages`. Each record
+has a full `topic` GUID and full `parameter` GUID. The loader requires a
+matching native action with one instance-scoped target variable and a
+matching standalone server receiver. The receiver also continues to
+accept ordinary local messages. A foreign send requires a bound entity
+and exactly one finite numeric payload item. The room checks both body
+generations at settlement and delivers on the recipient's next VM
+frame.
+
+Use the preparation tool to append metadata to a fresh output file.
+The following example opts in the reviewed `00EB` route. The targeted
+probe isolates the two original sender actions and the original bonus
+receiver. Natural target binding and native timing in a running game
+require separate verification.
+
+```powershell
+python scripts/build_runtime_state_metadata.py --graph-bundle private/input.json.gz --directed-numeric-message 0x02400000000000EB:0x0A4000000000002A --output private/directed.json.gz
+$env:ORPHEUS_DIRECTED_GRAPH_BUNDLE = 'private/directed.json.gz'
+cargo test --locked -p orpheus-statescript --test stock_charge -- --ignored --exact prepared_bonus_actions_preserve_local_and_directed_delivery
+```
 
 ## Send a cue to selected players
 

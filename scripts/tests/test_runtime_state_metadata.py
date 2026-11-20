@@ -70,5 +70,60 @@ class RuntimeStateMetadataTest(unittest.TestCase):
             self.assertEqual(output.read_bytes(), finished)
 
 
+    def test_directed_numeric_messages_extend_classified_bundle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "input.gz"
+            output = root / "output.gz"
+            bundle = {
+                "version": 1,
+                "graphs": [],
+                "runtime_state_metadata": {"plain_classes": ["SyntheticClass"]},
+            }
+            with gzip.open(source, "wt", encoding="utf-8") as file:
+                json.dump(bundle, file)
+            before = source.read_bytes()
+            command = [sys.executable, str(SCRIPT), "--graph-bundle", str(source)]
+            route = "0x0240000000001F01:0x0a40000000001a02"
+            duplicate = ["--directed-numeric-message", route] * 2
+            for args in [
+                [],
+                ["--directed-numeric-message", "0x0240000000001f01:0x0A40000000000000"],
+                duplicate,
+            ]:
+                result = subprocess.run(
+                    command + args + ["--output", str(output)],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(result.returncode, 0, args)
+                self.assertFalse(output.exists())
+            subprocess.run(
+                command + ["--directed-numeric-message", route, "--output", str(output)],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            with gzip.open(output, "rt", encoding="utf-8") as file:
+                imported = json.load(file)
+            self.assertEqual(
+                imported["runtime_state_metadata"].pop("directed_numeric_messages"),
+                [{"topic": "0x0240000000001F01", "parameter": "0x0A40000000001A02"}],
+            )
+            self.assertEqual(imported, bundle)
+            self.assertEqual(source.read_bytes(), before)
+            second_output = root / "second.gz"
+            result = subprocess.run(
+                [
+                    sys.executable, str(SCRIPT), "--graph-bundle", str(output),
+                    "--directed-numeric-message", route, "--output", str(second_output),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(second_output.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

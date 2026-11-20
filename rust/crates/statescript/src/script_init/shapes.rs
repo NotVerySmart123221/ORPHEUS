@@ -67,17 +67,32 @@ pub(super) fn registered_state(graph: &Graph, node: &Node) -> Option<RegisteredS
     if !node.runs_on_server() || (!node.is_networked() && !linked_state) {
         return None;
     }
-    let suppresses_model = node.class == "STU_33A46033"
-        && matches!(placement, (0x01cb, 20) | (0x0ce0, 17) | (0x0d03, 2));
-    let has_local_state_slot = || {
+    let fields = &node.fields;
+    let flag = |name, expected| {
+        let config = field(fields, name);
+        script_expr::native_shape(config, "STUConfigVarBool", Some("m_value"))
+            && (field(config, "m_value").as_bool() == Some(expected)
+                || field(config, "m_value").as_u64() == Some(u64::from(expected)))
+    };
+    let has_raw_state_slot = || {
         node.is_state()
             && !node.is_action()
-            && node.remote == -1
             && node
                 .state
                 .and_then(|slot| graph.state(usize::from(slot)))
                 .is_some_and(|linked| linked.pos == node.pos)
     };
+    let has_local_state_slot = || node.remote == -1 && has_raw_state_slot();
+    // The static form has only the protected-entity rule. A phase-model rule
+    // or any other configured field needs its own verified consumer.
+    let suppresses_model = node.class == "STU_33A46033"
+        && has_raw_state_slot()
+        && usize::try_from(node.remote)
+            .ok()
+            .and_then(|slot| graph.remote_node(slot))
+            .is_some_and(|linked| linked.pos == node.pos)
+        && flag("m_7E42F868", true)
+        && registered_state_fields(node, "m_7E42F868");
     let class = match node.class.as_str() {
         "STU_9935FBC8" if placement == (0x224e, 34) && captured_aim_lock_shape(node) => {
             RegisteredClass::CinematicAim
@@ -99,21 +114,10 @@ pub(super) fn registered_state(graph: &Graph, node: &Node) -> Option<RegisteredS
         "STU_43994F1B" | "STU_93B8758C" if has_local_state_slot() => {
             resource_free_linked_class(node)?
         }
-        "STU_33A46033" if suppresses_model || placement == (0x0ca5, 61) => {
-            let fields = &node.fields;
-            let flag = |name, expected| {
-                let config = field(fields, name);
-                script_expr::native_shape(config, "STUConfigVarBool", Some("m_value"))
-                    && (field(config, "m_value").as_bool() == Some(expected)
-                        || field(config, "m_value").as_u64() == Some(u64::from(expected)))
-            };
-            let model_flag = if suppresses_model {
-                field(fields, "m_D82DB14B").is_null()
-            } else {
-                flag("m_D82DB14B", false)
-            };
-            if !flag("m_7E42F868", suppresses_model)
-                || !model_flag
+        "STU_33A46033" if suppresses_model => RegisteredClass::EntityControl,
+        "STU_33A46033" if placement == (0x0ca5, 61) => {
+            if !flag("m_7E42F868", false)
+                || !flag("m_D82DB14B", false)
                 || [
                     "m_069FD7A5",
                     "m_72FD7742",
@@ -149,21 +153,26 @@ fn resource_free_linked_class(node: &Node) -> Option<RegisteredClass> {
     // A configured contact or material resource requires a separate host effect.
     (is_self_target(node, "m_4A5CA514")
         && field(&node.fields, resource).is_null()
-        && node.fields.as_object().is_some_and(|fields| {
-            fields.iter().all(|(name, value)| {
-                value.is_null()
-                    || match name.as_str() {
-                        "m_4A5CA514" | "m_beginPlug" | "m_F198FD3A" | "m_onBeginPlug"
-                        | "m_onEndPlug" | "m_subgraphPlug" => true,
-                        "m_A2287776" | "m_AED90719" | "m_ADEB6E05" => {
-                            value.as_bool() == Some(false) || value.as_u64() == Some(0)
-                        }
-                        "m_2BBEEAB8" => value.as_bool() == Some(true) || value.as_u64() == Some(1),
-                        _ => false,
-                    }
-            })
-        }))
+        && registered_state_fields(node, "m_4A5CA514"))
     .then_some(class)
+}
+
+fn registered_state_fields(node: &Node, operand: &str) -> bool {
+    node.fields.as_object().is_some_and(|fields| {
+        fields.iter().all(|(name, value)| {
+            value.is_null()
+                || name == operand
+                || match name.as_str() {
+                    "m_beginPlug" | "m_F198FD3A" | "m_onBeginPlug" | "m_onEndPlug"
+                    | "m_subgraphPlug" => true,
+                    "m_A2287776" | "m_AED90719" | "m_ADEB6E05" => {
+                        value.as_bool() == Some(false) || value.as_u64() == Some(0)
+                    }
+                    "m_2BBEEAB8" => value.as_bool() == Some(true) || value.as_u64() == Some(1),
+                    _ => false,
+                }
+        })
+    })
 }
 
 pub(super) fn captured_aim_lock_shape(node: &Node) -> bool {

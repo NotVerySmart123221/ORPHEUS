@@ -462,6 +462,11 @@ pub trait World {
     fn outline_context_available(&self, _site: Site) -> Option<bool> {
         None
     }
+    /// The current body supports the static protected-entity rule with an enabled baseline.
+    fn supports_static_model_protection(&self, _site: Site) -> bool {
+        false
+    }
+
     fn set_encounter_model_enabled(&mut self, _site: Site, _enabled: bool) -> bool {
         false
     }

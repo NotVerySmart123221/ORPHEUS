@@ -15,9 +15,13 @@ use serde_json::{Map, Value};
 
 use rulesets::{ModeRulesetDefinition, ModeRulesets};
 
-use crate::script_expr::{
-    EngineSetting, StackPriority, Variable, authored_stack_priority, authored_stack_variable,
-    client_only_fallback, native_entity_operand, native_fields, native_shape,
+use crate::{
+    script_expr::{
+        EngineSetting, Scope, StackPriority, Variable, authored_stack_priority,
+        authored_stack_variable, client_only_fallback, dynamic, native_entity_operand,
+        native_fields, native_shape,
+    },
+    script_wire::{Value as ScriptValue, Variables},
 };
 
 mod rulesets;
@@ -73,6 +77,12 @@ pub(crate) enum EntryTopic {
     Host(HostEventKind),
 }
 
+#[derive(Clone, Copy, Debug)]
+enum DirectedNumericRoute {
+    Sender(u32),
+    Receiver(u32),
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Node {
     pub pos: u16,
@@ -94,6 +104,8 @@ pub struct Node {
     runtime_plain_state: bool,
     #[serde(skip)]
     runtime_client_state: bool,
+    #[serde(skip)]
+    directed_numeric_route: Option<DirectedNumericRoute>,
     pub fields: Value,
 }
 
@@ -224,6 +236,20 @@ impl Node {
         self.room_message_entry
     }
 
+    pub(crate) fn directed_numeric_parameter(&self) -> Option<u32> {
+        match self.directed_numeric_route {
+            Some(DirectedNumericRoute::Sender(slot)) => Some(slot),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn accepts_directed_numeric_message(&self, parameters: &Variables) -> bool {
+        matches!(
+            self.directed_numeric_route,
+            Some(DirectedNumericRoute::Receiver(slot)) if directed_numeric_payload(slot, parameters)
+        )
+    }
+
     pub(crate) fn host_event_kind(&self) -> Option<HostEventKind> {
         self.host_event_entry
     }
@@ -332,6 +358,27 @@ impl Node {
         collect_plugs(&self.fields, "", &mut found);
         found
     }
+}
+
+/// The native directed subset carries exactly one finite numeric value.
+pub(crate) fn directed_numeric_payload(slot: u32, parameters: &Variables) -> bool {
+    parameters.len() == 1
+        && match parameters.get(&slot) {
+            Some(ScriptValue::Integer(_)) => true,
+            Some(ScriptValue::Float(value)) => value.is_finite(),
+            _ => false,
+        }
+}
+
+fn directed_instance_variable(value: &Value) -> bool {
+    native_fields(value, &["m_identifier", "m_60DB8F99"])
+        && neutral_flag(&value["m_60DB8F99"])
+        && dynamic(value)
+            .is_ok_and(|var| var.is_some_and(|var| var.scope == Scope::Instance && var.id != 0))
+}
+
+fn neutral_flag(value: &Value) -> bool {
+    value.is_null() || value.as_bool() == Some(false) || value.as_u64() == Some(0)
 }
 
 fn raw_plug_links(field: &Value) -> impl Iterator<Item = &Value> {
@@ -1115,6 +1162,15 @@ struct RuntimeStateMetadata {
     client_states: Vec<RuntimeClientState>,
     #[serde(default)]
     projected_message_topics: Vec<String>,
+    #[serde(default)]
+    directed_numeric_messages: Vec<RuntimeDirectedNumericMessage>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeDirectedNumericMessage {
+    topic: String,
+    parameter: String,
 }
 
 #[derive(Deserialize)]
@@ -1188,6 +1244,111 @@ fn validate_projected_message_topics(
         )));
     }
     Ok(topics)
+}
+
+fn directed_numeric_shape(node: &Node, parameter: u64) -> Option<DirectedNumericRoute> {
+    let sender = match node.class.as_str() {
+        "STUStatescriptActionSendGameMessage" if node.is_networked() && node.is_action() => true,
+        "STUStatescriptEntryGameMessage" if node.server_only && !node.is_action() => false,
+        _ => return None,
+    };
+    if !node.runs_on_server()
+        || node.remote != -1
+        || node.state.is_some()
+        || node.is_state()
+        || node.declares_room_message_entry()
+        || !node.field("m_outPlug").is_some_and(valid_output_plug)
+        || !node
+            .fields
+            .as_object()?
+            .iter()
+            .all(|(key, value)| match key.as_str() {
+                "m_gameMessage" | "m_outPlug" | "m_params" => true,
+                "m_ADEB6E05" if sender => {
+                    value.as_bool() == Some(true) || value.as_u64() == Some(1)
+                }
+                "m_ADEB6E05" | "m_2BBEEAB8" | "m_A2287776" | "m_AED90719" => neutral_flag(value),
+                "m_8BF03679" | "m_BF5B22B7" => value.is_null(),
+                "m_targets" | "m_inPlug" if sender => true,
+                "m_8B34E9C3" if sender => value.is_null(),
+                "m_44D0D060" | "m_B60ABDA4" | "m_FF703F20" | "m_filter" if !sender => {
+                    value.is_null()
+                }
+                "m_5AEA0A51" | "m_FDBDCB70" if !sender => neutral_flag(value),
+                _ => false,
+            })
+    {
+        return None;
+    }
+    let [row] = node.field("m_params")?.as_array()?.as_slice() else {
+        return None;
+    };
+    let (class, value_field) = if sender {
+        ("STU_814D595E", "m_value")
+    } else {
+        ("STU_EF930FD7", "m_out_Var")
+    };
+    if !native_fields(row, &["m_B5051BCE", value_field])
+        || row.get("$").and_then(Value::as_str) != Some(class)
+        || row.get("m_B5051BCE").and_then(asset_guid) != Some(parameter)
+    {
+        return None;
+    }
+    let value = row.get(value_field)?;
+    let slot = u32::from(parameter as u16);
+    if sender {
+        (!value.is_null() && directed_instance_variable(node.field("m_targets")?))
+            .then_some(DirectedNumericRoute::Sender(slot))
+    } else {
+        directed_instance_variable(value).then_some(DirectedNumericRoute::Receiver(slot))
+    }
+}
+
+fn compile_directed_numeric_messages(
+    declarations: Vec<RuntimeDirectedNumericMessage>,
+    graphs: &mut BTreeMap<u32, Graph>,
+) -> io::Result<()> {
+    let mut topics = BTreeMap::new();
+    for declaration in declarations {
+        let topic = asset_guid(&Value::String(declaration.topic))
+            .filter(|&id| id >> 48 == 0x0240 && id as u16 != 0)
+            .ok_or_else(|| invalid("invalid directed numeric message topic"))?;
+        let parameter = asset_guid(&Value::String(declaration.parameter))
+            .filter(|&id| id >> 16 == 0x0a40_0000_0000 && id as u16 != 0)
+            .ok_or_else(|| invalid("invalid directed numeric message parameter"))?;
+        if topics.insert(topic, (parameter, false, false)).is_some() {
+            return Err(invalid(format!(
+                "duplicate directed numeric message topic {topic:#018X}"
+            )));
+        }
+    }
+    if topics.is_empty() {
+        return Ok(());
+    }
+    for node in graphs.values_mut().flat_map(|graph| &mut graph.nodes) {
+        let Some((parameter, found_sender, found_receiver)) = node
+            .literal_game_message_id()
+            .and_then(|topic| topics.get_mut(&topic))
+        else {
+            continue;
+        };
+        let route = directed_numeric_shape(node, *parameter);
+        match route {
+            Some(DirectedNumericRoute::Sender(_)) => *found_sender = true,
+            Some(DirectedNumericRoute::Receiver(_)) => *found_receiver = true,
+            None => (),
+        }
+        node.directed_numeric_route = route;
+    }
+    if let Some((topic, _)) = topics
+        .iter()
+        .find(|(_, (_, sender, receiver))| !sender || !receiver)
+    {
+        return Err(invalid(format!(
+            "directed numeric message topic {topic:#018X} requires a matching native sender and receiver",
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -1470,6 +1631,10 @@ impl GraphStore {
             bundle.runtime_state_metadata.projected_message_topics,
             &graphs,
         )?;
+        compile_directed_numeric_messages(
+            bundle.runtime_state_metadata.directed_numeric_messages,
+            &mut graphs,
+        )?;
         let room_spatial_needs = graphs
             .values()
             .flat_map(|graph| &graph.nodes)
@@ -1479,6 +1644,7 @@ impl GraphStore {
                 if node.declares_health_change_action()
                     || node.declares_room_message_action()
                     || node.declares_room_cue_action()
+                    || node.directed_numeric_parameter().is_some()
                 {
                     needs.max(RoomSpatialNeeds::Queries)
                 } else {

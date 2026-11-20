@@ -1,7 +1,7 @@
 //! Deferred script operations for generation-checked room bodies.
 
 use super::{
-    BotState, CombatError, PlayerBodyState, RoomSimulation, RoomSpatialFrame, Vec3,
+    BotState, CombatError, PlayerBodyState, RoomSimulation, RoomSpatialFrame, SampledBody, Vec3,
     health::HealthEffect,
 };
 use crate::{
@@ -177,17 +177,17 @@ impl RoomSimulation {
             return Ok(());
         }
         let mut batches = Vec::new();
-        for (&source, &entity) in &self.players_by_wire {
+        for (&wire, &entity) in &self.players_by_wire {
             if let Some(mut state) = self.world.get_mut::<PlayerBodyState>(entity) {
                 if let Some(runtime) = state.runtime.as_mut() {
                     let requests = runtime.take_script_requests();
                     if !requests.is_empty() {
-                        batches.push((source, requests));
+                        batches.push((SampledBody { wire, entity }, requests));
                     }
                 }
             }
         }
-        for (&source, &entity) in &self.by_wire {
+        for (&wire, &entity) in &self.by_wire {
             if let Some(mut state) = self.world.get_mut::<BotState>(entity) {
                 if let Some(enemy) = &mut state.enemy {
                     let requests = enemy.scripts.take_script_requests();
@@ -195,7 +195,7 @@ impl RoomSimulation {
                         && enemy.fault.is_none()
                         && !enemy.scripts.retirement_requested
                     {
-                        batches.push((source, requests));
+                        batches.push((SampledBody { wire, entity }, requests));
                     }
                 }
             }
@@ -211,15 +211,11 @@ impl RoomSimulation {
     pub(super) fn settle_script_request(
         &mut self,
         request: RoomScriptRequest,
-        source: u32,
+        source: SampledBody,
         tick: u32,
         now: Duration,
     ) -> Result<(), CombatError> {
-        let current = self
-            .by_wire
-            .get(&request.wire)
-            .or_else(|| self.players_by_wire.get(&request.wire));
-        if current != Some(&request.entity) {
+        if !self.room_body_generation_current(request.wire, request.entity) {
             return Ok(());
         }
         match request.effect {
@@ -230,16 +226,18 @@ impl RoomSimulation {
                     Death {
                         time: now.as_secs_f64(),
                         frame: tick,
-                        killer: source,
+                        killer: source.wire,
                     },
                     now,
                 )?;
             }
             ScriptEffect::Message(message) => {
-                self.route_room_message(request.entity, source, message)
+                if self.room_body_generation_current(source.wire, source.entity) {
+                    self.route_room_message(request.entity, source.wire, message);
+                }
             }
             ScriptEffect::Cue(cue, source_entity) => {
-                if !self.room_cue_source_current(source, source_entity) {
+                if !self.room_cue_source_current(source.wire, source_entity) {
                     return Ok(());
                 }
                 if let Some(player) = self
@@ -252,8 +250,8 @@ impl RoomSimulation {
                         listener: player.id,
                         source: source_entity,
                         notice: CombatNotice::Voice {
-                            anchor: source,
-                            speaker: source,
+                            anchor: source.wire,
+                            speaker: source.wire,
                             listener: request.wire,
                             stimulus: cue.stimulus,
                             line: cue.line,
@@ -266,10 +264,14 @@ impl RoomSimulation {
     }
 
     pub(crate) fn room_cue_source_current(&self, wire: u32, source: Entity) -> bool {
+        self.room_body_generation_current(wire, source)
+    }
+
+    fn room_body_generation_current(&self, wire: u32, entity: Entity) -> bool {
         self.by_wire
             .get(&wire)
             .or_else(|| self.players_by_wire.get(&wire))
-            .is_some_and(|entity| *entity == source)
+            == Some(&entity)
     }
 
     pub(crate) fn room_cue_listener_current(&self, owner: u32, listener: BodyId) -> bool {
@@ -362,6 +364,10 @@ mod tests {
 
         let frame = &room.spatial_frame.as_ref().unwrap().1;
         let source = frame.script_targets[&speaker].entity;
+        let sender = SampledBody {
+            wire: speaker,
+            entity: source,
+        };
         let cue = RoomCue {
             stimulus: 41,
             line: 42,
@@ -381,7 +387,7 @@ mod tests {
         assert_eq!(expires_after_settlement.wire, second.entity);
 
         for request in [valid, expires_after_settlement] {
-            room.settle_script_request(request, speaker, 1, Duration::ZERO)
+            room.settle_script_request(request, sender, 1, Duration::ZERO)
                 .unwrap();
         }
         assert!(room.retire_player_body(second));
@@ -394,7 +400,7 @@ mod tests {
             3,
             1,
         );
-        room.settle_script_request(expires_before_settlement, speaker, 1, Duration::ZERO)
+        room.settle_script_request(expires_before_settlement, sender, 1, Duration::ZERO)
             .unwrap();
         assert_eq!(
             room.take_player_cues(),
@@ -417,7 +423,8 @@ mod tests {
         let frame = &room.spatial_frame.as_ref().unwrap().1;
         assert!(outbox.queue_cue(frame, outsider.entity, &[first.entity], cue));
         let request = outbox.take().pop().unwrap();
-        room.settle_script_request(request, outsider.entity, 2, Duration::ZERO)
+        let outsider_sender = room.sample_health_body(outsider.entity).unwrap();
+        room.settle_script_request(request, outsider_sender, 2, Duration::ZERO)
             .unwrap();
         assert!(room.retire_player_body(outsider));
         spawn(

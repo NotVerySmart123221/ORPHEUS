@@ -519,7 +519,10 @@ impl Machine {
                 .entry_handlers(topic)
                 .filter(|node| match destination {
                     MessageDestination::Host(_) => true,
-                    MessageDestination::Room(_) => node.declares_room_message_entry(),
+                    MessageDestination::Room(_) => {
+                        node.declares_room_message_entry()
+                            || node.accepts_directed_numeric_message(&parameters)
+                    }
                     MessageDestination::Ordinary(_, _) => {
                         !node.declares_room_message_entry()
                             && (node.is_message_entry()

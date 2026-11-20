@@ -1,13 +1,14 @@
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{collections::BTreeMap, fs::File, path::PathBuf, sync::Arc};
 
+use flate2::read::GzDecoder;
 use orpheus_statescript::{
     script_expr::{EntityRelation, native_shape, to_float},
     script_graph::{GraphStore, ModeValue},
-    script_init::{Component, MAX_INIT_WORK, Root, Site, World},
+    script_init::{Component, MAX_INIT_WORK, RoomMessage, Root, Site, World},
     script_runtime::{FRAME_MS, GAME_MODE_ENTITY},
     script_wire::{Value, Variables},
 };
-use serde_json::Value as Json;
+use serde_json::{Value as Json, json};
 
 const GRAPH: u32 = 0x0b8b;
 const ROOT: u16 = 1;
@@ -25,6 +26,7 @@ const INHIBITED: u32 = 842;
 
 struct ChargeHost<'a> {
     mode_variables: &'a BTreeMap<u32, ModeValue>,
+    outgoing: Vec<(u32, RoomMessage)>,
 }
 
 impl World for ChargeHost<'_> {
@@ -49,6 +51,11 @@ impl World for ChargeHost<'_> {
                 .copied()
                 .map_or(Value::Null, Value::from)
         })
+    }
+
+    fn queue_room_message(&mut self, _: Site, target: u32, message: RoomMessage) -> bool {
+        self.outgoing.push((target, message));
+        true
     }
 
     fn player_stats_available(&self, site: Site) -> Option<bool> {
@@ -99,6 +106,7 @@ fn prepared_stock_charge_uses_authored_passive_clock_and_bonus_entry() {
         mode_variables: graphs
             .mode_variables(PRACTICE_MODE)
             .expect("prepared Practice mode variables"),
+        outgoing: Vec::new(),
     };
     let variables = Variables::from([
         (METER_CAP, Value::Float(11.0)),
@@ -159,4 +167,151 @@ fn prepared_stock_charge_uses_authored_passive_clock_and_bonus_entry() {
     assert_eq!(body.random_checkpoint(), initial_rng);
     let diagnostics = &body.snapshot().unwrap().diagnostics;
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+// A synthetic entry isolates one stock action from the surrounding ability.
+// Its original inputs, parameter expression and output plug are preserved.
+fn bonus_sender_probe(
+    bundle: &Json,
+    stock_graph: u32,
+    position: u16,
+    probe_graph: u32,
+    trigger: u64,
+) -> Json {
+    let graph = bundle["graphs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|graph| graph["index"] == stock_graph)
+        .expect("prepared sender graph");
+    let mut action = graph["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["pos"] == position)
+        .expect("prepared sender action")
+        .clone();
+    assert_eq!(action["class"], "STUStatescriptActionSendGameMessage");
+    for key in ["pos", "rid", "uid"] {
+        action[key] = json!(1);
+    }
+    json!({
+        "index": probe_graph, "items": 2, "fields": {}, "containers": {},
+        "states": [], "entries": [0], "remote": [], "sync_vars": [], "unknown_nodes": [],
+        "header": {
+            "m_nodesBitCount": 2, "m_statesBitCount": 2,
+            "m_remoteSyncNodesBitCount": 2, "m_syncVarsBitCount": 2
+        },
+        "nodes": [{
+            "pos": 0, "rid": 0, "uid": 0, "class": "STUStatescriptEntryGameMessage",
+            "state": null, "remote": -1, "client_only": false, "server_only": true,
+            "fields": {
+                "m_gameMessage": {
+                    "$": "STUConfigVarGameMessage",
+                    "m_gameMessage": format!("0x{trigger:016X}")
+                },
+                "m_outPlug": {"$": "Plug", "links": [[1, "m_inPlug"]]}
+            }
+        }, action]
+    })
+}
+
+#[test]
+#[ignore = "requires a private 104319 bundle with a directed 00EB declaration"]
+fn prepared_bonus_actions_preserve_local_and_directed_delivery() {
+    const LOCAL: u32 = 61243;
+    const FOREIGN: u32 = 61244;
+    const TRIGGER: u64 = 0x0240_0000_0000_fa19;
+    const SENDER: u32 = 781;
+
+    let path = PathBuf::from(
+        std::env::var_os("ORPHEUS_DIRECTED_GRAPH_BUNDLE")
+            .expect("set ORPHEUS_DIRECTED_GRAPH_BUNDLE to the annotated private pack"),
+    );
+    let mut bundle: Json =
+        serde_json::from_reader(GzDecoder::new(File::open(path).unwrap())).unwrap();
+    let local = bonus_sender_probe(&bundle, 0x006b, 189, LOCAL, TRIGGER);
+    let foreign = bonus_sender_probe(&bundle, 0x0b9e, 80, FOREIGN, TRIGGER);
+    bundle["graphs"]
+        .as_array_mut()
+        .unwrap()
+        .extend([local, foreign]);
+    let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    let mut world = ChargeHost {
+        mode_variables: graphs.mode_variables(PRACTICE_MODE).unwrap(),
+        outgoing: Vec::new(),
+    };
+    let mut local = Root::listener(2, LOCAL, None);
+    local.variables.insert(476, Value::Float(2.0));
+    let mut receiver = Component::start(
+        Arc::clone(&graphs),
+        OWNER,
+        Variables::from([
+            (METER_CAP, Value::Float(11.0)),
+            (METER, Value::Float(0.0)),
+            (ADMITTED, Value::Bool(true)),
+            (INHIBITED, Value::Bool(false)),
+        ]),
+        vec![Root::listener(ROOT, GRAPH, None), local],
+        0,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    assert_eq!(
+        receiver
+            .queue_message(2, TRIGGER, Variables::new())
+            .unwrap(),
+        1
+    );
+    receiver.run_now(&mut world).unwrap();
+    assert_eq!(meter(&receiver), 2.0);
+    assert!(
+        world.outgoing.is_empty(),
+        "the stock self sender stays local"
+    );
+
+    let mut foreign = Root::listener(ROOT, FOREIGN, None);
+    foreign.variables = Variables::from([
+        (41, Value::Entity(OWNER)),
+        (499, Value::Float(4.0)),
+        (174, Value::Float(1.5)),
+    ]);
+    let mut sender = Component::start(
+        Arc::clone(&graphs),
+        SENDER,
+        Variables::new(),
+        vec![foreign],
+        0,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    assert_eq!(
+        sender
+            .queue_message(ROOT, TRIGGER, Variables::new())
+            .unwrap(),
+        1
+    );
+    sender.run_now(&mut world).unwrap();
+    assert_eq!(world.outgoing.len(), 1);
+    let (target, message) = world.outgoing.pop().unwrap();
+    assert_eq!(target, OWNER);
+    assert_eq!(message.id, BONUS);
+    assert_eq!(
+        message.parameters,
+        Variables::from([(BONUS_AMOUNT, Value::Float(6.0))])
+    );
+    assert_eq!(
+        receiver.queue_room_message_from(SENDER, message).unwrap(),
+        1
+    );
+    receiver.run_now(&mut world).unwrap();
+    assert_eq!(meter(&receiver), 2.0);
+    receiver.advance_frame(1, &mut world).unwrap();
+    assert_eq!(meter(&receiver), 8.0);
+    for component in [&receiver, &sender] {
+        let diagnostics = &component.snapshot().unwrap().diagnostics;
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
 }
