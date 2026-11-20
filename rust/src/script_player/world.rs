@@ -217,6 +217,18 @@ impl World for BodyWorld {
             && self.queue_velocity_change(frame, VelocityChange::HorizontalCap(cap))
     }
 
+    fn apply_velocity_impulse(
+        &mut self,
+        site: Site,
+        frame: u32,
+        vertical: f64,
+        delta: [f64; 3],
+    ) -> bool {
+        self.is_player_site(site)
+            && self
+                .queue_velocity_change(frame, VelocityChange::VerticalImpulse { vertical, delta })
+    }
+
     fn deadeye_target_alive(&self, site: Site, entity: u32) -> bool {
         self.has_deadeye()
             && site.entity == self.entity
@@ -538,7 +550,7 @@ impl World for BodyWorld {
     }
 
     fn forward(&self, entity: u32) -> Option<[f64; 3]> {
-        if entity == self.entity && is_junkenstein_mode(self.mode) {
+        if entity == self.entity {
             let yaw = f64::from(self.movement.yaw) * std::f64::consts::TAU / 65_536.0;
             let (sin, cos) = yaw.sin_cos();
             Some([sin, 0.0, cos])

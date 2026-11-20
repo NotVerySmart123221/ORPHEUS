@@ -357,6 +357,18 @@ pub trait World {
     fn cap_horizontal_velocity(&mut self, _site: Site, _frame: u32, _cap: f64) -> bool {
         false
     }
+
+    /// Queue a vertical reset and a world-space impulse as one movement edit.
+    fn apply_velocity_impulse(
+        &mut self,
+        _site: Site,
+        _frame: u32,
+        _vertical: f64,
+        _delta: [f64; 3],
+    ) -> bool {
+        false
+    }
+
     fn summoner_beam_contact(&self, _site: Site) -> Option<BeamContact> {
         None
     }
