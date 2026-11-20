@@ -73,6 +73,7 @@ pub mod lobby_presence;
 pub mod lobby_ranked;
 pub mod lobby_session;
 pub mod lobby_transport;
+mod map_environment;
 pub mod match_handoff;
 pub mod match_scene;
 pub mod mover;

@@ -640,6 +640,33 @@ An occupied destination leaves the body in place and consumes the
 request. The owner correction starts only when a pose actually moves.
 See the [portable action contract](../fixtures/behavior/script-relocation-v1.json)
 and [physical destination contract](../fixtures/behavior/native-capsule-relocation-v1.json).
+
+### Declare map lethal volumes
+
+A prepared runtime can supply `data/map_environment_174.json`. Version 1
+maps hexadecimal map GUIDs to a list of world-space boxes. This example
+uses an original test map and coordinates.
+
+```json
+{
+  "version": 1,
+  "maps": {
+    "0x42": {
+      "lethal_volumes": [
+        {"min": [-2.0, -18.0, -2.0], "max": [2.0, -8.0, 2.0]}
+      ]
+    }
+  }
+}
+```
+
+The server allows up to 64 volumes per map. Each axis requires two
+finite, strictly ordered endpoints. The room checks the final sampled
+feet position, including the box faces, and settles lethal damage with
+no killer credit. Training bots use their existing replacement timer.
+Player death notices use the ordinary health path. Automatic player
+respawn and verified Practice Range regions remain open.
+Missing files and unlisted maps have no configured lethal volumes.
 The [owner motion contract](../fixtures/behavior/owner-swept-motion-v1.json)
 covers correction scheduling and a same-frame script failure.
 
