@@ -315,6 +315,7 @@ impl BotState {
     pub(super) fn health_target_facts(&self) -> crate::script_init::HealthTargetFacts {
         crate::script_init::HealthTargetFacts {
             target: self.bot.entity,
+            room_status: None,
             filter_flags: crate::match_scene::team_bit(self.bot.spawn.team)
                 .ok()
                 .map(|team| 1 | team | if self.bot.dead { 0x10 } else { 0 }),

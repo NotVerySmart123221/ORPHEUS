@@ -6,7 +6,7 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
-- Applied the settled target's tag snapshot to direct `EntityMatches` tag filters in a health event. The regression distinguishes sampled tags, current room tags and unavailable data. Shared-branch validation pending.
+- Applied the settled target's tags, affiliation and liveness to direct `EntityMatches` filters in a health event. A lethal impact retains its original target's qualification after the body retires. Source membership and spatial searches still use the current room frame. Shared-branch validation pending.
 
 - Carried target facts with positive NPC-local health events at VM publication. Added room coverage for a capped heal issuing one configured bonus on the recipient's next VM frame and for dropping the award when that recipient is replaced. A prepared probe exercises original local admission, award, and revocation through the graph. Shared-branch validation pending.
 

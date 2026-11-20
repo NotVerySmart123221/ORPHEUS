@@ -111,6 +111,7 @@ impl PlayerBodyState {
     pub(super) fn health_target_facts(&self) -> HealthTargetFacts {
         HealthTargetFacts {
             target: self.id.entity,
+            room_status: None,
             filter_flags: crate::match_scene::team_bit(self.team)
                 .ok()
                 .map(|team| 1 | team | if self.alive() { 0 } else { 0x10 }),

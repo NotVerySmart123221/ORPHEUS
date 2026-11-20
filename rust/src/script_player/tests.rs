@@ -345,6 +345,7 @@ fn charge_admission_preserves_profile_scope_and_requires_a_live_instance_for_cre
         tags: DamageTags::EMPTY,
         target_facts: crate::script_init::HealthTargetFacts {
             target: spawn.entity + 1,
+            room_status: None,
             filter_flags: None,
             tags: Default::default(),
             script_state: EntityScriptState::Unavailable,
@@ -544,6 +545,7 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
         tags: DamageTags::EMPTY,
         target_facts: crate::script_init::HealthTargetFacts {
             target: spawn.entity + 1,
+            room_status: None,
             filter_flags: None,
             tags: Default::default(),
             script_state: EntityScriptState::Unavailable,
@@ -574,6 +576,7 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
                 },
                 Some(Arc::new(HealthTargetFacts {
                     target: spawn.entity + 1,
+                    room_status: None,
                     filter_flags: None,
                     tags: Default::default(),
                     script_state: EntityScriptState::Unavailable,

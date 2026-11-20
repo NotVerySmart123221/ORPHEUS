@@ -101,7 +101,9 @@
       "settled_match": true,
       "ordinary_match": false,
       "unrelated_match": true,
-      "unavailable_fact_diagnostics": 4
+      "retired_match": true,
+      "retired_alive_match": false,
+      "unavailable_fact_diagnostics": 5
     },
     "deliveries": [
       [701, 702, -12.5, true, [808, 807, 808]],

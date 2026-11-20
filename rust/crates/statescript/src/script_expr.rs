@@ -327,9 +327,11 @@ pub trait Context {
         None
     }
 
-    /// Tags sampled for a specific foreign target when settling a health event.
-    /// None uses the current room's tags.
-    fn settled_target_tags(&self, _entity: u32) -> Option<&crate::script_init::TargetTagSnapshot> {
+    /// Facts sampled for a specific foreign target when settling a health event.
+    fn settled_health_target(
+        &self,
+        _entity: u32,
+    ) -> Option<&crate::script_init::HealthTargetFacts> {
         None
     }
 

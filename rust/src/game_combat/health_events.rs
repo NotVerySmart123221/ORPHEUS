@@ -7,7 +7,7 @@ use indexmap::IndexMap;
 
 use crate::{
     script_expr::valid_entity,
-    script_init::{HealthTargetFacts, HitTags, HostEvent},
+    script_init::{HealthTargetFacts, HitTags, HostEvent, RoomEntityStatus},
 };
 
 use super::{AppliedDamage, BotState, PlayerBodyState, RoomSimulation};
@@ -31,6 +31,22 @@ impl SampledBody {
         }
         let &entity = bots.get(&wire).or_else(|| players.get(&wire))?;
         Some(Self { wire, entity })
+    }
+
+    fn room_status(self, world: &World, free_for_all: bool) -> Option<RoomEntityStatus> {
+        let (team, alive) = if let Some(state) = world.get::<BotState>(self.entity) {
+            (state.bot.entity == self.wire).then_some((
+                state.bot.spawn.team,
+                !state.bot.dead && state.vitals.death().is_none(),
+            ))?
+        } else {
+            let state = world.get::<PlayerBodyState>(self.entity)?;
+            (state.id.entity == self.wire).then(|| (state.team, state.alive()))?
+        };
+        Some(RoomEntityStatus {
+            team: (!free_for_all).then_some(team),
+            alive,
+        })
     }
 
     fn health_target_facts(self, world: &World) -> Option<HealthTargetFacts> {
@@ -92,6 +108,7 @@ impl RoomHealthEvents {
         delta: f64,
         killed: bool,
         context: HealthEventContext<'_>,
+        room_status: Option<RoomEntityStatus>,
     ) {
         if !self.enabled
             || self.pending.len() >= MAX_ROOM_HEALTH_EVENTS
@@ -101,7 +118,7 @@ impl RoomHealthEvents {
         {
             return;
         }
-        let (hit_tags, target_facts) = match context {
+        let (hit_tags, mut target_facts) = match context {
             HealthEventContext::Impact(impact) if impact.target_facts.target == target.wire => {
                 (Some(impact.tags), Some(impact.target_facts.clone()))
             }
@@ -114,6 +131,9 @@ impl RoomHealthEvents {
             }
             _ => (None, None),
         };
+        if let Some(facts) = &mut target_facts {
+            facts.room_status = room_status;
+        }
         self.pending.push_back(HealthApplied {
             source,
             target,
@@ -150,8 +170,13 @@ impl RoomSimulation {
             None if delta > 0.0 => HealthEventContext::Healing(&self.world),
             None => HealthEventContext::Unattributed,
         };
+        let room_status = self
+            .spatial_queries
+            .as_ref()
+            .filter(|_| !matches!(context, HealthEventContext::Unattributed))
+            .and_then(|queries| target.room_status(&self.world, queries.free_for_all));
         self.health_events
-            .stage(source, target, delta, killed, context);
+            .stage(source, target, delta, killed, context, room_status);
     }
 
     /// Queue each event for the recipients' next VM frames, in settlement order.
@@ -193,8 +218,19 @@ impl RoomSimulation {
                 } else {
                     HealthEventContext::Unattributed
                 };
-                self.health_events
-                    .stage(source, target, change.delta, change.killed, context);
+                let room_status = self
+                    .spatial_queries
+                    .as_ref()
+                    .filter(|_| change.delta > 0.0)
+                    .and_then(|queries| target.room_status(&self.world, queries.free_for_all));
+                self.health_events.stage(
+                    source,
+                    target,
+                    change.delta,
+                    change.killed,
+                    context,
+                    room_status,
+                );
             }
         }
     }

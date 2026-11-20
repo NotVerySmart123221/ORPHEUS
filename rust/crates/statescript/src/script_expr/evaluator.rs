@@ -1563,11 +1563,11 @@ impl Evaluator {
         self.charge()?;
         let entity = self.room_filter_entity(entity, context, depth, "expected a bound entity")?;
         let filter = self.room_entity_filter(filter, context, depth)?;
-        let settled_tags = filter
-            .tags
-            .as_ref()
-            .and_then(|_| context.settled_target_tags(entity))
-            .cloned();
+        let sampled_target = context.settled_health_target(entity);
+        let settled_status = sampled_target.and_then(|facts| facts.room_status);
+        let settled_tags = sampled_target
+            .filter(|_| filter.tags.is_some())
+            .map(|facts| facts.tags.clone());
         let entities = context
             .room_entities()
             .ok_or(EvalError::UnavailableRoomEntityFacts)?;
@@ -1580,16 +1580,22 @@ impl Evaluator {
                 Ok::<_, EvalError>((source, facts.team, relation))
             })
             .transpose()?;
-        let Some(facts) = entities.get(&entity) else {
+        let live_target = entities.get(&entity);
+        let Some((target_team, target_alive)) = settled_status
+            .map(|status| (status.team, status.alive))
+            .or_else(|| live_target.map(|facts| (facts.team, facts.alive)))
+        else {
             return Ok(Value::Bool(false));
         };
         if source.is_some_and(|(source, team, relation)| {
-            source == entity || !relation.matches(team, facts.team)
+            source == entity || !relation.matches(team, target_team)
         }) {
             return Ok(Value::Bool(false));
         }
-        let tags = settled_tags.as_ref().unwrap_or(&facts.tags);
-        self.room_facts_match(&filter, facts.alive, tags)
+        let tags = settled_tags
+            .as_ref()
+            .or_else(|| live_target.map(|facts| &facts.tags));
+        self.room_facts_match(&filter, target_alive, tags)
             .map(Value::Bool)
     }
 
@@ -1697,7 +1703,7 @@ impl Evaluator {
         &mut self,
         filter: &RoomEntityFilter,
         entity_alive: bool,
-        entity_tags: &crate::script_init::TargetTagSnapshot,
+        entity_tags: Option<&crate::script_init::TargetTagSnapshot>,
     ) -> Result<bool, EvalError> {
         if filter.alive.is_some_and(|alive| alive != entity_alive) {
             return Ok(false);
@@ -1705,6 +1711,7 @@ impl Evaluator {
         let Some(tags) = &filter.tags else {
             return Ok(true);
         };
+        let entity_tags = entity_tags.ok_or(EvalError::UnavailableRoomEntityFacts)?;
         let mut unresolved = false;
         for (clause, tags) in [
             (RoomTagClause::All, &tags.all),
@@ -1971,7 +1978,7 @@ impl Evaluator {
                 let facts = entities
                     .get(&candidate.entity)
                     .ok_or(EvalError::UnavailableRoomEntityFacts)?;
-                if facts.alive && self.room_facts_match(&filter, facts.alive, &facts.tags)? {
+                if facts.alive && self.room_facts_match(&filter, facts.alive, Some(&facts.tags))? {
                     matches.push((candidate, *distance));
                 }
             }
