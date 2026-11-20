@@ -68,6 +68,33 @@ Shared tests use original graphs and values.
    shape and lifecycle outline. Use invented values, graphs, IDs and
    expected results derived from the server contract.
 
+### Generate the first two reports
+
+```text
+python scripts/summarize_statescript_evidence.py --evidence path/to/classification.zip --graph-bundle path/to/game_graphs_174.json.gz --families path/to/capability-families.json --output-dir path/to/new-private-report
+```
+
+The output directory holds `field-contracts.json`,
+`gamemessage-catalog.json`, and `evidence-manifest.json`. The manifest
+identifies the normalized source and report version. The command accepts
+an extracted evidence directory as well as a ZIP. It requires a new
+output directory.
+
+Field shapes from confidently attributable listing constructors appear
+under `listing`. Missing rendering stays distinct from field absence.
+The optional prepared bundle adds exact matches by graph, RID, slot,
+class, and scope. Its field counts use the matched state population.
+Prepared shapes include array-element paths and one example per kind.
+Use an optional JSON object under `--families` to group raw classes by
+capability. Values are arrays of class names.
+
+The message catalog groups literal IDs and reports sender and receiver
+locations, observed parameter GUIDs, low-16-bit slots, and direct
+variable bindings. Dynamic and unresolved endpoints retain their own
+records. Treat endpoint pairs as candidate routes. Runtime traces
+establish delivery. Reports retain message IDs and binding slots.
+Other field values are reduced to structural kinds.
+
 ## Declare an ordinary server state
 
 An authored node can opt into the plain state lifecycle with

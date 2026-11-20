@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added private field-shape and GameMessage reports for local StateScript listings. The field report separates rendered constructor shapes from exact prepared-state observations and supports capability grouping. The message catalog records endpoint and parameter evidence with explicit dynamic and unresolved entries. Workspace check and script unittest discovery passed (12 passed, four skipped). The 1,587-graph ZIP and extracted directory produced identical reports with 11,707 prepared state matches and 1,419 literal message IDs.
+
 - Added optional runtime state classifications for prepared bundles. Plain classes use ordinary lifecycle fallback after native dispatch. Exact client instances skip execution with their raw scope and wire slots intact. An offline importer creates a separate annotated bundle from local evidence. Passed 662 default workspace tests, locked Clippy, script unittest discovery, and the #72 prepared 900-frame regression on both the base and annotated bundles.
 
 - Added authored room cues with a graph-selected audience and literal cue identifiers. Player and NPC hosts use the same bounded room outbox. Only selected players with current body generations receive a cue, through the existing reliable notice path. Both source and listener identities are checked before reliable delivery. Passed 658 default and 665 Inspector workspace tests, both locked Clippy lanes, 12 pinned Python behavior contracts, and the #72 prepared 900-frame headless regression.
