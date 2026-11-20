@@ -7,14 +7,14 @@
     "pool_identifier": "0x0D800000000071A4",
     "amount": 18.0,
     "decay": {
-      "initial_amount": 3.0,
+      "initial_amount": 2.875,
       "rates_per_second": [125.0, 62.5]
     }
   },
   "expected": {
     "current_after_grant": 18.0,
     "current_after_removal": 0.0,
-    "decay_amounts": [0.0, 2.0, 1.0],
+    "decay_amounts": [0.0, 1.875, 1.0],
     "after_decay_frames": [1.0, 0.0]
   }
 }
