@@ -6,7 +6,7 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
-- Replaced the frame-wait placement guard with a validated literal duration and unbound remote slot. The state uses the existing VM frame clock. The synthetic regression covers both server-running scopes, completion timing, zero duration, and rejection of unsupported shapes. With script coverage, the StateScript and native library suites passed with 197 and 360 tests respectively.
+- Replaced the frame-wait placement guard with a validated literal duration and unbound remote slot. The state uses the existing VM frame clock. The synthetic regression covers both server-running scopes, completion timing, zero duration, and rejection of unsupported shapes. Two prepared runs at `9485d72e` matched. Wrecking Ball lost one registration diagnostic, taking the total from 53 to 52. Independent startup remained at 10 of 32. The #72 capture matched across all 476 observed sites. Formatting, the locked workspace check, and the StateScript and native library suites with script coverage passed. The suites reported 197 and 360 passes respectively.
 
 - Replaced three stat-timer placements with two verified selector shapes and a shared player-stat capability check. The encounter NPC host reports explicit absence for its bound body. Unknown or present stats context retains a diagnostic. The original fixture reproduced rejection at a new placement before the fix. With script coverage, the StateScript and native library suites passed with 196 and 360 tests respectively. Formatting, the locked workspace check, and all-targets Clippy with script coverage passed.
 
