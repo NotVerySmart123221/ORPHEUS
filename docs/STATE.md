@@ -202,24 +202,35 @@ Windows #131 schedules repeated and matched their preceding 339-tick
 captures for each implementation. Strict comparison retained the four
 RNG setup differences.
 
+At `3dbfd5e4`, the native voice state keeps its lifecycle when the local
+host explicitly has no voice context. Its verified empty state codec
+preserves owner and observer projection. Two same-pack 104319 reports
+matched byte for byte. Moira raised independent actor startup to
+**12 of 32** and the blocking-site count fell to **46**. Ordinary Practice
+Range admission still attached one actor. The #72 Soldier owner trace
+retained all 476 observations. The two #131 schedules each reproduced
+339 ticks per implementation and kept the same four RNG setup differences
+in strict comparison.
+
 Two of the three remaining native target-tracking startup sites have
 empty embedded plugs. One configures a second filter and an entity list
 output. The other configures a count output. Both read a dynamic radius.
 The remaining site links embedded states. Each configuration still needs
 its native query and output semantics verified.
 
-Seven actor probes have one blocking site each. Mercy's tag query needs
+Six actor probes have one blocking site each. Mercy's paired tag query
+now selects its shared VM path by authored fields. Its host still needs
 the tagged placement inventory and live actor tags. Orisa and Sigma
 still hit persistent message registration. Baptiste cannot read a
-controller variable. Torbjörn's hardpoint query and Moira's voice
-stimulus each lack their supporting host service or context. Symmetra
-still reports an unsupported state.
+controller variable. Torbjörn's hardpoint query now reaches the shared
+host interface and reports unavailable active-model membership.
+Symmetra still reports an unsupported state.
 
 The prepared 104319 bundle supplies voice stimulus references and gallery
 unlock metadata. It lacks an authored stimulus-to-line mapping and playback
 durations for the player voice service. The room already routes resolved
 cues to listeners by body generation. A player voice provider still needs
-the catalog and timing inputs before this startup site can be verified.
+the catalog and timing inputs before active-context playback can be verified.
 
 | Workflow | Python reference | Rust implementation | Open client or parity gap |
 | --- | --- | --- | --- |
