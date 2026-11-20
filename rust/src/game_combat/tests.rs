@@ -1,6 +1,13 @@
 use super::*;
 use crate::{game_content::GameMap, game_instance::RETAIL_QUANTA, scene_assets::SceneAssets};
 
+const SCRIPT_RAY_SITE: crate::script_init::Site = crate::script_init::Site {
+    entity: 91,
+    instance: 2,
+    graph: 93,
+    node: Some(4),
+};
+
 pub(super) fn fixture_bots() -> Vec<Bot> {
     crate::game_bots::BotCatalog::from_json(
         r#"{
@@ -529,15 +536,27 @@ fn spatial_rays_return_the_first_static_hit_and_preserve_query_availability() {
         normal: [-1.0, 0.0, 0.0],
     };
     assert_eq!(
-        spatial.ray_cast(origin, direction, 1.0),
+        spatial.ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 1.0),
         Some(Some(expected))
     );
-    assert_eq!(spatial.ray_cast(origin, direction, 0.5), Some(None));
-    assert_eq!(spatial.ray_cast(origin, [-1.0, 0.0, 0.0], 2.0), Some(None));
-    assert_eq!(spatial.ray_cast([f64::MAX, 0.0, 0.0], direction, 1.0), None);
-    assert_eq!(spatial.ray_cast(origin, direction, f64::MAX), None);
     assert_eq!(
-        spatial.ray_cast([0.0; 3], [0.0, 0.0, 1.0], 1_000_000.0),
+        spatial.ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 0.5),
+        Some(None)
+    );
+    assert_eq!(
+        spatial.ray_cast(SCRIPT_RAY_SITE, 17, origin, [-1.0, 0.0, 0.0], 2.0),
+        Some(None)
+    );
+    assert_eq!(
+        spatial.ray_cast(SCRIPT_RAY_SITE, 17, [f64::MAX, 0.0, 0.0], direction, 1.0),
+        None
+    );
+    assert_eq!(
+        spatial.ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, f64::MAX),
+        None
+    );
+    assert_eq!(
+        spatial.ray_cast(SCRIPT_RAY_SITE, 17, [0.0; 3], [0.0, 0.0, 1.0], 1_000_000.0),
         None
     );
 }
@@ -564,7 +583,10 @@ fn actor_rays_sample_capsules_once_and_respect_occlusion_and_replacement() {
     let targets = [7, bot_ids[1], bot_ids[0]];
     let missing = room.capture_spatial_frame(1).unwrap().unwrap();
     assert!(missing.actor_capsules.is_none());
-    assert_eq!(missing.actor_ray_cast(origin, direction, 4.0, &[]), None);
+    assert_eq!(
+        missing.actor_ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 4.0, &[]),
+        None
+    );
 
     let movers = Arc::new(
         MoverCatalog::from_json(r#"{"0x02":{"stand_height":1,"stand_radius":0.25}}"#).unwrap(),
@@ -610,30 +632,47 @@ fn actor_rays_sample_capsules_once_and_respect_occlusion_and_replacement() {
     assert_eq!(capsules[&7].radius, 0.25);
     assert_eq!(capsules[&bot_ids[0]].height, 1.0);
     assert_eq!(
-        first.actor_ray_cast(origin, direction, 0.75, &targets),
+        first.actor_ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 0.75, &targets),
         Some(Some(SpatialActorRayHit {
             entity: 7,
             distance: 0.75,
         }))
     );
     assert_eq!(
-        first.actor_ray_cast(origin, direction, 4.0, &[bot_ids[1], bot_ids[0]]),
+        first.actor_ray_cast(
+            SCRIPT_RAY_SITE,
+            17,
+            origin,
+            direction,
+            4.0,
+            &[bot_ids[1], bot_ids[0]]
+        ),
         Some(Some(SpatialActorRayHit {
             entity: bot_ids[0].min(bot_ids[1]),
             distance: 0.75,
         }))
     );
     assert_eq!(
-        first.actor_ray_cast(origin, direction, 0.5, &targets),
+        first.actor_ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 0.5, &targets),
         Some(None)
     );
     assert_eq!(
-        first.actor_ray_cast(origin, direction, 4.0, &[]),
+        first.actor_ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 4.0, &[]),
         Some(None)
     );
-    assert_eq!(first.actor_ray_cast(origin, direction, 4.0, &[99]), None);
     assert_eq!(
-        first.actor_ray_cast([-2.0, 2.0, 0.25], [0.0, -1.0, 0.0], 1.0, &targets),
+        first.actor_ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 4.0, &[99]),
+        None
+    );
+    assert_eq!(
+        first.actor_ray_cast(
+            SCRIPT_RAY_SITE,
+            17,
+            [-2.0, 2.0, 0.25],
+            [0.0, -1.0, 0.0],
+            1.0,
+            &targets
+        ),
         Some(Some(SpatialActorRayHit {
             entity: 7,
             distance: 1.0,
@@ -646,7 +685,7 @@ fn actor_rays_sample_capsules_once_and_respect_occlusion_and_replacement() {
         .unwrap()
         .remove(&bot_ids[0]);
     assert_eq!(
-        incomplete.actor_ray_cast(origin, direction, 4.0, &[bot_ids[0]]),
+        incomplete.actor_ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 4.0, &[bot_ids[0]]),
         None
     );
 
@@ -665,7 +704,7 @@ fn actor_rays_sample_capsules_once_and_respect_occlusion_and_replacement() {
                 .contains_key(&7)
         );
         assert_eq!(
-            replacement.actor_ray_cast(origin, direction, 4.0, &[7]),
+            replacement.actor_ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 4.0, &[7]),
             None
         );
         assert_eq!(
@@ -676,7 +715,7 @@ fn actor_rays_sample_capsules_once_and_respect_occlusion_and_replacement() {
     room.prepare_spatial_frame(1).unwrap();
     assert!(Arc::ptr_eq(&first, &room.spatial_frame.as_ref().unwrap().1));
     assert_eq!(
-        first.actor_ray_cast(origin, direction, 4.0, &[7]),
+        first.actor_ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 4.0, &[7]),
         Some(Some(SpatialActorRayHit {
             entity: 7,
             distance: 0.75
@@ -714,15 +753,149 @@ fn actor_rays_sample_capsules_once_and_respect_occlusion_and_replacement() {
     assert_eq!(next.actor_capsules.as_ref().unwrap()[&7].radius, 0.125);
     assert_ne!(next.script_targets[&7].entity, old_entity);
     assert_eq!(
-        next.actor_ray_cast(origin, direction, 4.0, &[7, bot_ids[0]]),
+        next.actor_ray_cast(
+            SCRIPT_RAY_SITE,
+            17,
+            origin,
+            direction,
+            4.0,
+            &[7, bot_ids[0]]
+        ),
         Some(None)
     );
     assert_eq!(
-        next.actor_ray_cast(origin, direction, 4.0, &[bot_ids[1]]),
+        next.actor_ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 4.0, &[bot_ids[1]]),
         Some(Some(SpatialActorRayHit {
             entity: bot_ids[1],
             distance: 2.0
         }))
+    );
+}
+
+#[test]
+fn script_ray_diagnostics_preserve_capture_identity_and_distinguish_query_outcomes() {
+    use crate::{game_debug::DebugScriptRay, mover_settings::MoverCatalog};
+
+    let mut bots = fixture_bots();
+    let visible = bots[0].entity;
+    let hidden = bots[1].entity;
+    bots[0].position = [-2.0, 0.0, 0.25];
+    bots[1].position = [0.0, 0.0, 0.25];
+    let mut room = RoomSimulation::new(bots).unwrap();
+    room.enable_spatial_queries(false, Arc::new(fixture_ground()), RoomSpatialNeeds::Queries);
+    let origin = [-3.0, 0.5, 0.25];
+    let direction = [1.0, 0.0, 0.0];
+    let missing = room.capture_spatial_frame(41).unwrap().unwrap();
+    assert_eq!(
+        missing.actor_ray_cast(SCRIPT_RAY_SITE, 42, origin, direction, 4.0, &[visible]),
+        None
+    );
+    room.enable_spatial_actor_rays(Arc::new(
+        MoverCatalog::from_json(r#"{"0x02":{"stand_height":1,"stand_radius":0.25}}"#).unwrap(),
+    ));
+    let spatial = room.capture_spatial_frame(41).unwrap().unwrap();
+    assert_eq!(
+        spatial
+            .ray_cast(SCRIPT_RAY_SITE, 43, origin, direction, 4.0)
+            .unwrap()
+            .unwrap()
+            .distance,
+        2.0
+    );
+    assert_eq!(
+        spatial
+            .actor_ray_cast(SCRIPT_RAY_SITE, 44, origin, direction, 4.0, &[visible])
+            .unwrap()
+            .unwrap()
+            .entity,
+        visible
+    );
+    assert_eq!(
+        spatial.actor_ray_cast(SCRIPT_RAY_SITE, 45, origin, direction, 4.0, &[hidden]),
+        Some(None)
+    );
+    // A wall alone does not establish that an unchecked actor was occluded.
+    assert_eq!(
+        spatial.actor_ray_cast(SCRIPT_RAY_SITE, 46, origin, direction, 4.0, &[]),
+        Some(None)
+    );
+    assert_eq!(
+        spatial.ray_cast(SCRIPT_RAY_SITE, 47, origin, [-1.0, 0.0, 0.0], 0.25),
+        Some(None)
+    );
+    let mut incomplete = spatial.as_ref().clone();
+    incomplete.actor_capsules.as_mut().unwrap().remove(&visible);
+    assert_eq!(
+        incomplete.actor_ray_cast(SCRIPT_RAY_SITE, 48, origin, direction, 4.0, &[visible]),
+        None
+    );
+
+    room.prepare_spatial_frame(49).unwrap();
+    // A retained frame shares the room history, but keeps its own capture tick.
+    spatial
+        .ray_cast(SCRIPT_RAY_SITE, 50, origin, direction, 4.0)
+        .unwrap()
+        .unwrap();
+    room.spatial_frame
+        .as_ref()
+        .unwrap()
+        .1
+        .ray_cast(SCRIPT_RAY_SITE, 51, origin, direction, 4.0)
+        .unwrap()
+        .unwrap();
+    let overlay = room.debug_physics().unwrap().unwrap();
+    assert!(!overlay.truncated.rays);
+    let expected = [
+        ("script_actor", "unavailable", 42, [1.0, 0.5, 0.25], None),
+        ("script_static", "world", 43, [-1.0, 0.5, 0.25], None),
+        (
+            "script_actor",
+            "actor",
+            44,
+            [-2.25, 0.5, 0.25],
+            Some(visible),
+        ),
+        ("script_actor", "world", 45, [-1.0, 0.5, 0.25], None),
+        ("script_actor", "none", 46, [1.0, 0.5, 0.25], None),
+        ("script_static", "none", 47, [-3.25, 0.5, 0.25], None),
+        ("script_actor", "unavailable", 48, [1.0, 0.5, 0.25], None),
+        ("script_static", "world", 50, [-1.0, 0.5, 0.25], None),
+        ("script_static", "world", 51, [-1.0, 0.5, 0.25], None),
+    ];
+    assert_eq!(overlay.rays.len(), expected.len());
+    for (index, (ray, (kind, hit, frame, end, target))) in
+        overlay.rays.iter().zip(expected).enumerate()
+    {
+        assert_eq!(ray.tick, if index == expected.len() - 1 { 49 } else { 41 });
+        assert_eq!(
+            (ray.source, ray.kind, ray.hit, ray.end, ray.target),
+            (SCRIPT_RAY_SITE.entity, kind, hit, end, target)
+        );
+        assert_eq!(ray.origin, origin);
+        assert!(!ray.critical);
+        assert_eq!(
+            ray.script,
+            Some(DebugScriptRay {
+                graph: SCRIPT_RAY_SITE.graph,
+                instance: SCRIPT_RAY_SITE.instance,
+                node: SCRIPT_RAY_SITE.node,
+                vm_frame: frame,
+            })
+        );
+    }
+    let encoded = serde_json::to_value(&overlay).unwrap();
+    assert_eq!(encoded["rays"][0]["script"]["vm_frame"], 42);
+    assert_eq!(encoded["rays"][0]["script"]["graph"], SCRIPT_RAY_SITE.graph);
+    assert_eq!(encoded["rays"][8]["tick"], 49);
+
+    // Invalid nonfinite coordinates cannot leak into a serialized debug segment.
+    assert_eq!(
+        spatial.ray_cast(SCRIPT_RAY_SITE, 52, [f64::NAN, 0.0, 0.0], direction, 4.0),
+        None
+    );
+    assert_eq!(
+        room.debug_physics().unwrap().unwrap().rays.len(),
+        expected.len()
     );
 }
 
@@ -2843,6 +3016,25 @@ fn debug_physics_records_hitscan_rays_and_enforces_ring_cap() {
     assert!((overlay.rays[1].end[0] - 10.0).abs() < 1e-6);
     assert_eq!(overlay.rays[2].hit, "none");
     assert_eq!(overlay.rays[2].end, [-25.0, 1.0, 0.0]);
+    assert!(overlay.rays.iter().all(|ray| ray.script.is_none()));
+
+    room.enable_spatial_queries(false, Arc::new(fixture_ground()), RoomSpatialNeeds::Queries);
+    let captured = room.capture_spatial_frame(13).unwrap().unwrap();
+    captured
+        .ray_cast(SCRIPT_RAY_SITE, 14, [-2.0, 0.5, 0.25], [1.0, 0.0, 0.0], 1.0)
+        .unwrap()
+        .unwrap();
+    let shared = room.debug_physics().unwrap().unwrap();
+    assert_eq!(shared.rays.len(), 4);
+    assert_eq!(shared.rays[3].kind, "script_static");
+    assert_eq!(shared.rays[3].tick, 13);
+    assert_eq!(shared.rays[3].script.unwrap().vm_frame, 14);
+    assert!(
+        serde_json::to_value(shared.rays[0])
+            .unwrap()
+            .get("script")
+            .is_none()
+    );
 
     // Overflow ring buffer and assert truncation flag + newest ticks retained.
     for i in 0..(MAX_DEBUG_RAYS + 5) {

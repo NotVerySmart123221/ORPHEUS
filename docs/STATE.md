@@ -35,6 +35,34 @@ observations across 900 frames. Phase 3A also matched that replay on its
 standalone `055adca3` checkpoint. Original-client skill, aiming, and
 audio acceptance remain open.
 
+### Movement, health and scoped input integration
+
+Shared checkpoint `950100f1` combines Phase 2 `5d3a4727` with the Phase 3A
+scoped input checkpoint `b9883400`. The server and StateScript library
+suites passed 395 and 251 tests with script coverage. Clippy passed.
+The 311-frame input matrix matched `527d3c60` across all actor rows
+after normalizing the source revision. It recorded 12 ordinary
+attachments and four completed schedules. The #72 reference replay
+matched all 476 observations across 900 frames.
+
+### Phase 3A ray diagnostics
+
+Phase 3A checkpoint `05ab525e` includes the synced `131dfdae`
+baseline, the held-input changes, and the Inspector ray overlay. Native
+tests exercised captured-frame and VM-frame provenance, actor and wall
+hits, misses, unavailable queries, source retirement, and the 64-entry
+history shared with weapon rays. The Inspector JavaScript syntax,
+workspace formatting, and both Clippy configurations passed.
+
+The locked all-target suites passed **768** default tests and **775**
+Inspector tests, with 137 opt-in cases skipped per suite. Two separate
+104319 actor matrices matched each other byte for byte and matched
+`79e8a5b9` apart from the source revision. Both independent startup and
+ordinary admission passed for **12 of 32** actors, with **46** blocking
+sites. The transactional admission test also passed at 12 of 32. The #72
+900-frame capture matched all 476 observation sites. Original-client
+aiming and ability acceptance remain open.
+
 ### Weapon readiness comparison
 
 Checkpoint `79e8a5b9` ran the same prepared owner-input schedule twice
@@ -397,9 +425,10 @@ Practice Range attachment, and **47** blocking sites. The #72 replay
 matched all 476 observation sites across 900 frames. Original ability
 mappings and client zoom acceptance remain open.
 
-At `3c87fd49`, the held-input contract passed automatic registration,
-held and idle ownership, cancellation of sibling starts queued during
-release, and rejection of buffered presses from a previous button binding.
+At standalone Phase 3A revision `3c87fd49`, the held-input contract passed
+automatic registration, held and idle ownership, cancellation of sibling
+starts queued during release, and rejection of buffered presses from a
+previous button binding.
 Both listener forms passed the same native held-aim scenario, including
 owner-only status, observer bytes, movement cleanup, and body replacement.
 
@@ -412,9 +441,17 @@ at **11 of 32** independent starts, **one** ordinary attachment, and **47**
 blocking sites. The #72 replay matched all 476 sites across 900 frames.
 The original ability mappings and client zoom still require acceptance.
 
-The combined checkpoint measurements are recorded above. The newer
-integration with the Phase 2 and Phase 3A follow-ups still needs
-startup, room admission, and input measurements.
+At that standalone checkpoint, seven actor probes had one blocking site
+each. Mercy's tag query needed the tagged placement inventory and live
+actor tags. Orisa and Sigma still hit persistent message registration.
+Baptiste could not read a controller variable. Torbjörn's hardpoint query
+and Moira's voice stimulus each lacked their supporting host service or
+context. Symmetra still reported an unsupported state.
+
+The shared checkpoint above and the Phase 3A Inspector checkpoint use
+separate revisions. Combining the latest Phase 2 follow-up, the actor
+input matrix, and the Inspector ray work still requires startup, room
+admission, and input measurements.
 
 Two of the three remaining native target-tracking startup sites in the
 Phase 2 run have empty embedded plugs. One configures a second filter
@@ -422,13 +459,13 @@ and an entity list output. The other configures a count output. Both read
 a dynamic radius. The remaining site links embedded states. Each
 configuration still needs its native query and output semantics verified.
 
-The standalone Phase 3A run retained seven actors with a single blocking
-site each. The Phase 2 run left six. Mercy's paired tag query selects its
-shared VM path by authored fields. Its host still needs the tagged
-placement inventory and live actor tags. Orisa and Sigma still hit
-persistent message registration. Baptiste cannot read a
-controller variable. Torbjörn's hardpoint query now reaches the shared
-host interface and reports unavailable active-model membership.
+The Phase 2 run left six actor probes with one blocking site each.
+Mercy's paired tag query selects its shared VM path by authored fields.
+Its host still needs the tagged placement inventory and live actor
+tags. Orisa and Sigma still hit persistent message registration.
+Baptiste cannot read a controller variable. Torbjörn's hardpoint query
+now reaches the shared host interface and reports unavailable
+active-model membership.
 Symmetra still reports an unsupported state.
 
 The prepared 104319 bundle supplies voice stimulus references and gallery

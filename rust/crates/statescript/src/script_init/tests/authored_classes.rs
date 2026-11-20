@@ -289,6 +289,8 @@ fn authored_observer_retries_ray_cast_and_stops_after_abort() {
 
         fn spatial_ray_cast(
             &self,
+            _site: Site,
+            _vm_frame: u32,
             origin: [f64; 3],
             direction: [f64; 3],
             max_distance: f64,

@@ -1103,6 +1103,20 @@ a health or message operation in that frame, the room captures the
 target's identity and checks its generation at settlement. See the
 [synthetic actor ray contract](../fixtures/behavior/statescript-entity-ray-cast-v1.json).
 
+## Inspect StateScript ray samples
+
+In an Inspector build, enable **Rays & probes** to see script queries
+from both player and NPC bodies. Open **Script ray samples** to compare the
+room capture tick with the requesting VM frame and locate the graph,
+instance, and node. The overlay distinguishes actor hits, walls, misses,
+and unavailable host samples. A wall can hide an eligible actor while the
+script receives the normal empty actor result.
+
+The room retains its newest 64 ray samples across script and weapon
+queries. A request that fails before reaching a captured room frame still
+has its normal VM error path. The overlay records results from the same
+queries the VM uses.
+
 ## Match a room entity against authored conditions
 
 Use `EntityMatches` as the `$` tag and supply an `entity` expression

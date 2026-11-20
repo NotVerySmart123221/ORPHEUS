@@ -462,6 +462,8 @@ mod tests {
             ]),
             player_wires: HashMap::new(),
             ground: Arc::new(fixture_ground()),
+            captured_tick: 0,
+            debug_rays: Arc::default(),
         };
         let mut outbox = RoomScriptRequests::default();
         let message = RoomMessage {

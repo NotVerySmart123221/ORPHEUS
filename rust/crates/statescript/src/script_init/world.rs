@@ -672,6 +672,8 @@ pub trait World {
     /// None is unavailable, Some(None) is an available miss.
     fn spatial_ray_cast(
         &self,
+        _site: Site,
+        _vm_frame: u32,
         _origin: [f64; 3],
         _direction: [f64; 3],
         _max_distance: f64,
@@ -682,6 +684,8 @@ pub trait World {
     /// None is unavailable, Some(None) is an available miss.
     fn spatial_actor_ray_cast(
         &self,
+        _site: Site,
+        _vm_frame: u32,
         _origin: [f64; 3],
         _direction: [f64; 3],
         _max_distance: f64,

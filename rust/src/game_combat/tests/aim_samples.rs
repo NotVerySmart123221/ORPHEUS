@@ -702,4 +702,35 @@ fn assert_held_aim_lifecycle(authored_listener: bool) {
             .contains_key(&2)
     );
     held_aim_projection(&room, replacement, false);
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/statescript-entity-ray-cast-v1.json"
+    ))
+    .unwrap();
+    let expected = &fixture["expected"]["inspector_held_samples"];
+    let overlay = room.debug_physics().unwrap().unwrap();
+    let rays = serde_json::to_value(overlay.rays).unwrap();
+    let rays = rays.as_array().unwrap();
+    for expected_sample in expected["frames"].as_array().unwrap() {
+        let tick = &expected_sample[0];
+        let hit = &expected_sample[1];
+        let sample = rays
+            .iter()
+            .find(|sample| &sample["tick"] == tick && &sample["hit"] == hit)
+            .unwrap_or_else(|| panic!("missing inspector ray for {expected_sample}: {rays:?}"));
+        assert_eq!(sample["source"], source.entity);
+        assert_eq!(sample["kind"], "script_actor");
+        assert_eq!(sample["script"]["graph"], expected["graph"]);
+        assert_eq!(sample["script"]["instance"], expected["instance"]);
+        assert_eq!(sample["script"]["node"], expected["node"]);
+        assert_eq!(sample["script"]["vm_frame"], *tick);
+        if hit == "actor" {
+            assert_eq!(sample["target"], target.entity);
+        } else {
+            assert!(sample.get("target").is_none());
+        }
+    }
+    assert!(
+        rays.iter()
+            .all(|sample| sample["tick"] != expected["retired_frame"])
+    );
 }

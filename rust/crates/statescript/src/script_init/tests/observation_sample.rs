@@ -75,6 +75,8 @@ impl World for Host {
 
     fn spatial_ray_cast(
         &self,
+        _site: Site,
+        _vm_frame: u32,
         origin: [f64; 3],
         direction: [f64; 3],
         max_distance: f64,
