@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added static visibility to authored radius queries. Player and AI scripts share the room collision scene, and visibility checks run after the other filters with their own expression budget charge. Both locked workspace lanes, Rust 1.85, pinned Python public contracts, and the prepared 900-frame regression passed.
+
 - Added optional directional cones to authored radius queries. The same bounded query can combine radius, angle, and team conditions. Both locked workspace lanes, Rust 1.85, pinned Python public contracts, and the prepared 900-frame regression passed.
 
 - Added an optional ally or opponent filter to authored radius queries. Player and AI scripts use source and candidate affiliations from the same frame snapshot, respecting the room's free-for-all rule. Both locked workspace lanes, Rust 1.85, pinned Python public contracts, and the prepared 900-frame regression passed.

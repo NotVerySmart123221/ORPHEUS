@@ -1800,6 +1800,7 @@ fn authored_radius_query_filters_and_bounds_spatial_candidates() {
         cone_direction: Json,
         cone_candidates: RelationRows,
         cone_queries: Vec<ConeQuery>,
+        visibility_responses: Vec<([f64; 3], bool)>,
     }
 
     #[derive(serde::Deserialize)]
@@ -1808,6 +1809,7 @@ fn authored_radius_query_filters_and_bounds_spatial_candidates() {
         large_matches: Vec<u32>,
         relation_matches: Vec<Option<Vec<u32>>>,
         cone_matches: Vec<Vec<u32>>,
+        visible_matches: Vec<u32>,
     }
 
     #[derive(serde::Deserialize)]
@@ -1824,6 +1826,8 @@ fn authored_radius_query_filters_and_bounds_spatial_candidates() {
         source: u32,
         direction: [f64; 3],
         candidates: Option<Vec<SpatialCandidate>>,
+        visibility: Vec<([f64; 3], bool)>,
+        rays: Vec<([f64; 3], [f64; 3])>,
     }
 
     impl Context for Host {
@@ -1840,6 +1844,14 @@ fn authored_radius_query_filters_and_bounds_spatial_candidates() {
 
         fn spatial_candidates(&mut self) -> Option<&[SpatialCandidate]> {
             self.candidates.as_deref()
+        }
+
+        fn spatial_line_clear(&mut self, origin: [f64; 3], target: [f64; 3]) -> Option<bool> {
+            self.rays.push((origin, target));
+            self.visibility
+                .iter()
+                .find(|(point, _)| *point == target)
+                .map(|(_, clear)| *clear)
         }
     }
 
@@ -1868,6 +1880,7 @@ fn authored_radius_query_filters_and_bounds_spatial_candidates() {
         cone_direction,
         cone_candidates,
         cone_queries,
+        visibility_responses,
     } = contract.input;
     let spatial_candidates = |rows: CandidateRows| {
         rows.into_iter()
@@ -1885,6 +1898,8 @@ fn authored_radius_query_filters_and_bounds_spatial_candidates() {
         source: 0,
         direction: [0.0; 3],
         candidates: Some(spatial_candidates(candidates)),
+        visibility: Vec::new(),
+        rays: Vec::new(),
     };
     assert_eq!(
         evaluate(&config, &mut host),
@@ -2066,6 +2081,78 @@ fn authored_radius_query_filters_and_bounds_spatial_candidates() {
             Err(EvalError::MalformedConfig(_))
         ));
     }
+
+    assert!(
+        host.rays.is_empty(),
+        "omission must leave visibility unused"
+    );
+    host.direction = [0.0, 0.0, 1.0];
+    host.source = 31;
+    filtered["cone"] = cone(json!(45));
+    filtered["filter"] = filter("opponent");
+    filtered["line_of_sight"] = json!(false);
+    assert_eq!(
+        evaluate(&filtered, &mut host),
+        Ok(entities(vec![15, 17, 23]))
+    );
+    assert!(host.rays.is_empty(), "false must leave visibility unused");
+
+    for malformed in [Json::Null, json!(1), json!("true")] {
+        filtered["line_of_sight"] = malformed;
+        assert!(matches!(
+            evaluate(&filtered, &mut host),
+            Err(EvalError::MalformedConfig(_))
+        ));
+    }
+    assert!(host.rays.is_empty());
+
+    filtered["line_of_sight"] = json!(true);
+    let expected_rays: Vec<_> = visibility_responses
+        .iter()
+        .map(|&(target, _)| (center, target))
+        .collect();
+    assert_eq!(
+        evaluate(&filtered, &mut host),
+        Err(EvalError::UnavailableSpatialVisibility)
+    );
+    assert_eq!(std::mem::take(&mut host.rays), expected_rays[..1]);
+
+    host.visibility = visibility_responses.clone();
+    assert_eq!(
+        evaluate(&filtered, &mut host),
+        Ok(entities(contract.expected.visible_matches))
+    );
+    assert_eq!(std::mem::take(&mut host.rays), expected_rays);
+
+    // An unavailable final ray cannot return the visible prefix.
+    host.visibility.pop().unwrap();
+    assert_eq!(
+        evaluate(&filtered, &mut host),
+        Err(EvalError::UnavailableSpatialVisibility)
+    );
+    assert_eq!(std::mem::take(&mut host.rays), expected_rays);
+
+    host.visibility = visibility_responses;
+    // One query step, every candidate, then one ray before exhaustion.
+    let limit = limit + 2;
+    assert_eq!(
+        evaluate_with_budget(&filtered, &mut host, limit),
+        Err(EvalError::BudgetExceeded { offset: 0, limit })
+    );
+    assert_eq!(std::mem::take(&mut host.rays), expected_rays[..1]);
+
+    let conflicting_position = [0.0, 0.0, 3.0];
+    host.visibility.push((conflicting_position, true));
+    host.candidates.as_mut().unwrap().push(SpatialCandidate {
+        entity: 23,
+        position: conflicting_position,
+        team: Some(1),
+    });
+    assert_eq!(
+        evaluate(&filtered, &mut host),
+        Err(EvalError::UnavailableSpatialVisibility)
+    );
+    assert!(host.rays.is_empty(), "conflicts precede visibility reads");
 }
 
 #[test]

@@ -132,7 +132,7 @@ pub(super) fn target_delta(origin: Vec3, target: TargetPose) -> Vec3 {
 pub(super) struct BodyWorld {
     pub(super) damage_credit: Option<crate::game_combat::AppliedDamage>,
     pub(super) graphs: Arc<GraphStore>,
-    pub(super) spatial_candidates: Option<Arc<[crate::script_expr::SpatialCandidate]>>,
+    pub(super) spatial_frame: Option<Arc<crate::game_combat::RoomSpatialFrame>>,
     pub(super) controller: u32,
     pub(super) entity: u32,
     pub(super) body_filter: u64,
@@ -328,7 +328,11 @@ impl World for BodyWorld {
     }
 
     fn spatial_candidates(&self) -> Option<&[crate::script_expr::SpatialCandidate]> {
-        self.spatial_candidates.as_deref()
+        Some(self.spatial_frame.as_deref()?.candidates())
+    }
+
+    fn spatial_line_clear(&self, origin: [f64; 3], target: [f64; 3]) -> Option<bool> {
+        self.spatial_frame.as_deref()?.line_clear(origin, target)
     }
 
     fn position(&mut self, entity: u32) -> Option<[f64; 3]> {

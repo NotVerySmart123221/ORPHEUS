@@ -174,8 +174,8 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         self.world.deadeye_scene = scene;
     }
 
-    fn set_spatial_candidates(&mut self, candidates: Arc<[crate::script_expr::SpatialCandidate]>) {
-        self.world.spatial_candidates = Some(candidates);
+    fn set_spatial_frame(&mut self, frame: Arc<crate::game_combat::RoomSpatialFrame>) {
+        self.world.spatial_frame = Some(frame);
     }
 
     fn set_defenders(&mut self, defenders: Arc<[u32]>) {

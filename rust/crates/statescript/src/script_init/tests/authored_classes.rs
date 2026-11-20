@@ -154,6 +154,10 @@ fn authored_observer_samples_radius_once_per_frame_until_aborted() {
         frame: u32,
         candidates: Option<Vec<CandidateRow>>,
         direction: Option<[f64; 3]>,
+        #[serde(default)]
+        geometry_unavailable: bool,
+        #[serde(default)]
+        blocked: Vec<[f64; 3]>,
         message: Option<u64>,
         override_output: Option<Vec<u32>>,
         #[serde(default)]
@@ -190,6 +194,8 @@ fn authored_observer_samples_radius_once_per_frame_until_aborted() {
     struct SpatialWorld {
         candidates: Option<Vec<SpatialCandidate>>,
         direction: [f64; 3],
+        geometry_unavailable: bool,
+        blocked: Vec<[f64; 3]>,
         reads: Cell<usize>,
     }
 
@@ -209,6 +215,11 @@ fn authored_observer_samples_radius_once_per_frame_until_aborted() {
         fn spatial_candidates(&self) -> Option<&[SpatialCandidate]> {
             self.reads.set(self.reads.get() + 1);
             self.candidates.as_deref()
+        }
+
+        fn spatial_line_clear(&self, origin: [f64; 3], target: [f64; 3]) -> Option<bool> {
+            assert_eq!(origin, [0.0; 3]);
+            (!self.geometry_unavailable).then_some(!self.blocked.contains(&target))
         }
     }
 
@@ -251,6 +262,8 @@ fn authored_observer_samples_radius_once_per_frame_until_aborted() {
         if let Some(direction) = step.direction {
             world.direction = direction;
         }
+        world.geometry_unavailable = step.geometry_unavailable;
+        world.blocked = step.blocked;
         world.candidates = step.candidates.map(|rows| {
             rows.into_iter()
                 .chain(common_candidates.iter().copied())

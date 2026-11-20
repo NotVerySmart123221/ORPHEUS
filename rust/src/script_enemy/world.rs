@@ -938,7 +938,14 @@ impl World for EnemyWorld<'_> {
         Some(variables.get(&id).cloned().unwrap_or(Value::Null))
     }
     fn spatial_candidates(&self) -> Option<&[crate::script_expr::SpatialCandidate]> {
-        self.binding.spatial_candidates.as_deref()
+        Some(self.binding.spatial_frame.as_deref()?.candidates())
+    }
+
+    fn spatial_line_clear(&self, origin: [f64; 3], target: [f64; 3]) -> Option<bool> {
+        self.binding
+            .spatial_frame
+            .as_deref()?
+            .line_clear(origin, target)
     }
 
     fn position(&mut self, entity: u32) -> Option<[f64; 3]> {

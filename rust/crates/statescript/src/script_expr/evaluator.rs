@@ -1367,13 +1367,26 @@ impl Evaluator {
     ) -> Result<Value, EvalError> {
         let filter = fields.get("filter");
         let cone = fields.get("cone");
-        let expected_fields = 3 + usize::from(filter.is_some()) + usize::from(cone.is_some());
+        let visibility = fields.get("line_of_sight");
+        let expected_fields = 3
+            + usize::from(filter.is_some())
+            + usize::from(cone.is_some())
+            + usize::from(visibility.is_some());
         let Some((center, radius)) = fields
             .get("center")
             .zip(fields.get("radius"))
             .filter(|_| fields.len() == expected_fields)
         else {
             return Err(EvalError::MalformedConfig("expected a center and radius"));
+        };
+        let line_of_sight = match visibility {
+            None => false,
+            Some(Json::Bool(required)) => *required,
+            _ => {
+                return Err(EvalError::MalformedConfig(
+                    "expected a boolean line_of_sight",
+                ));
+            }
         };
         self.charge()?;
         let center = match self.config(center, context, depth)? {
@@ -1426,12 +1439,12 @@ impl Evaluator {
             .ok_or(EvalError::UnavailableSpatialCandidates)?;
         let mut source_team: Option<Option<u8>> = None;
         let mut matches = Vec::new();
-        for &SpatialCandidate {
-            entity,
-            position,
-            team,
-        } in candidates
-        {
+        for candidate in candidates {
+            let SpatialCandidate {
+                entity,
+                position,
+                team,
+            } = *candidate;
             self.charge()?;
             if !valid_entity(entity) || !position.iter().all(|axis| axis.is_finite()) {
                 return Err(EvalError::UnavailableSpatialCandidates);
@@ -1450,22 +1463,46 @@ impl Evaluator {
             if dx.hypot(dy).hypot(dz) <= radius
                 && cone.as_ref().is_none_or(|cone| cone.contains(offset))
             {
-                matches.push((entity, team));
+                matches.push(candidate);
             }
         }
         if let Some((_, allies_only)) = filter {
             let source_team = source_team.ok_or(EvalError::UnavailableSpatialCandidates)?;
-            matches
-                .retain(|&(_, team)| (source_team.is_some() && team == source_team) == allies_only);
+            matches.retain(|candidate| {
+                (source_team.is_some() && candidate.team == source_team) == allies_only
+            });
         }
-        matches.sort_unstable_by_key(|&(entity, _)| entity);
-        matches.dedup_by_key(|(entity, _)| *entity);
-        Ok(Value::Array(
-            matches
-                .into_iter()
-                .map(|(entity, _)| Value::Entity(entity))
-                .collect(),
-        ))
+        matches.sort_unstable_by_key(|candidate| candidate.entity);
+        if !line_of_sight {
+            matches.dedup_by_key(|candidate| candidate.entity);
+            return Ok(Value::Array(
+                matches
+                    .into_iter()
+                    .map(|candidate| Value::Entity(candidate.entity))
+                    .collect(),
+            ));
+        }
+
+        // Own only the surviving segments before calling into the host again.
+        let mut segments = Vec::new();
+        for group in matches.chunk_by(|a, b| a.entity == b.entity) {
+            let candidate = group[0];
+            if group.iter().any(|row| row.position != candidate.position) {
+                return Err(EvalError::UnavailableSpatialVisibility);
+            }
+            segments.push((candidate.entity, candidate.position));
+        }
+        let mut entities = Vec::new();
+        for (entity, position) in segments {
+            self.charge()?;
+            if context
+                .spatial_line_clear(center, position)
+                .ok_or(EvalError::UnavailableSpatialVisibility)?
+            {
+                entities.push(Value::Entity(entity));
+            }
+        }
+        Ok(Value::Array(entities))
     }
 
     fn spatial_cone(

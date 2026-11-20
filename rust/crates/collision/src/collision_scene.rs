@@ -11,8 +11,9 @@ use std::fmt;
 use crate::collision_cache::{
     CacheError, CollisionCache, Hull, Mesh, Placement, RayCacheIdentity, Shape,
 };
+use crate::collision_grid::cell;
 use crate::collision_index::{IndexError, RayHit, SceneTriangle, TriangleIndex};
-use crate::static_ray::{Vec3, round_hit};
+use crate::static_ray::{Vec3, norm, round_hit};
 
 const PRISM_SIDES: usize = 12;
 const MAX_SCENE_SHAPES: usize = 2_000_000;
@@ -180,6 +181,36 @@ impl CollisionScene {
 
     pub fn triangles(&self) -> &TriangleIndex {
         &self.triangles
+    }
+
+    /// Whether geometry leaves the segment clear before its target endpoint.
+    /// None means the endpoints or the ray traversal are outside the query domain.
+    pub fn segment_clear(&self, origin: Vec3, target: Vec3, category: u16) -> Option<bool> {
+        for point in [origin, target] {
+            if !point.into_iter().all(f64::is_finite) {
+                return None;
+            }
+            cell(point[0])?;
+            cell(point[2])?;
+        }
+        let delta: Vec3 = std::array::from_fn(|axis| target[axis] - origin[axis]);
+        let scale = delta.into_iter().map(f64::abs).fold(0.0, f64::max);
+        if scale == 0.0 {
+            return Some(true);
+        }
+        if !scale.is_finite() {
+            return None;
+        }
+        let scaled = delta.map(|component| component / scale);
+        let magnitude = norm(scaled);
+        let length = scale * magnitude;
+        if !length.is_finite() {
+            return None;
+        }
+        let direction = scaled.map(|component| component / magnitude);
+        self.cast_ray(origin, direction, length, category)
+            .ok()
+            .map(|hit| hit.is_none_or(|hit| hit.distance >= length))
     }
 
     /// First static hit along a unit direction. Triangles win exact ties.
@@ -491,6 +522,19 @@ mod tests {
             ]],
             placements: vec![placement(1, [2.0; 3])],
         }
+    }
+
+    #[test]
+    fn segment_visibility_reports_unaddressable_or_over_budget_rays() {
+        let scene = CollisionScene::movement_probe(&fixture(false), &BTreeSet::new()).unwrap();
+        let outside = [f64::MAX, 0.0, 0.0];
+        assert_eq!(scene.segment_clear(ORIGIN, outside, TEAM0), None);
+        assert_eq!(scene.segment_clear(outside, ORIGIN, TEAM0), None);
+        assert_eq!(scene.segment_clear(outside, outside, TEAM0), None);
+        assert_eq!(
+            scene.segment_clear([10.0, 0.0, 0.0], [10.0, 0.0, 1_000_000.0], TEAM0),
+            None
+        );
     }
 
     #[test]

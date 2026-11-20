@@ -144,6 +144,14 @@ excludes bodies exactly at its center because they have no bearing.
 Use `EntityDirection` to read a direction supplied by the host. A cone
 can be combined with a team filter and uses the same candidate budget.
 
+Set `"line_of_sight": true` to require a clear segment from the query
+center to each remaining body position. The query runs through the prepared
+room's static collision scene after applying radius, cone, and team
+conditions. Bodies use the same snapshot and geometry for both player and
+AI scripts. Each surviving entity spends one extra work unit for visibility.
+An unavailable segment or conflicting candidate positions returns a
+visibility error and leaves the observation's previous value in place.
+
 See the [synthetic radius contract](../fixtures/behavior/statescript-entities-in-radius-v1.json).
 
 ## Observe an expression across frames

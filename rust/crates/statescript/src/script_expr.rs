@@ -239,6 +239,11 @@ pub trait Context {
         None
     }
 
+    /// Whether static geometry leaves the segment clear. None is unavailable.
+    fn spatial_line_clear(&mut self, _origin: [f64; 3], _target: [f64; 3]) -> Option<bool> {
+        None
+    }
+
     /// Ordered, still-bound combat bodies; None means the scene roster is unavailable.
     fn combat_targets(&mut self, _config: &Json) -> Option<Vec<u32>> {
         None
@@ -374,6 +379,7 @@ pub enum EvalError {
     UnavailableEntityPosition(u32),
     UnavailableEntityDirection(u32),
     UnavailableSpatialCandidates,
+    UnavailableSpatialVisibility,
     NestingExceeded,
 }
 
@@ -410,6 +416,7 @@ impl fmt::Display for EvalError {
                 write!(f, "unavailable entity direction {entity:08X}")
             }
             Self::UnavailableSpatialCandidates => f.write_str("unavailable spatial candidates"),
+            Self::UnavailableSpatialVisibility => f.write_str("unavailable spatial visibility"),
             Self::NestingExceeded => f.write_str("statescript config nesting limit exceeded"),
         }
     }

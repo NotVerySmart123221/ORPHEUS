@@ -120,7 +120,7 @@ impl PlayerBodyFactory {
         }
         let has_authored_pools = self.roots.iter().any(|root| root.graph == BODY_GRAPH);
         let mut world = BodyWorld {
-            spatial_candidates: None,
+            spatial_frame: None,
             graphs: Arc::clone(&self.graphs),
             controller: spawn.controller,
             entity: spawn.entity,

@@ -69,14 +69,15 @@ fn check_spatial_candidates_frame(free_for_all: bool) {
     room.prepare_spatial_frame(frame).unwrap();
     assert!(room.spatial_frame.is_none());
 
-    room.enable_spatial_queries(free_for_all);
+    room.enable_spatial_queries(free_for_all, Arc::new(fixture_ground()));
     room.prepare_spatial_frame(frame).unwrap();
     let (captured, initial) = room.spatial_frame.as_ref().unwrap();
     assert_eq!(*captured, frame);
-    assert_eq!(initial.len(), 3);
+    assert_eq!(initial.candidates().len(), 3);
     let bot_team = (!free_for_all).then_some(1);
     assert!(
         initial
+            .candidates()
             .iter()
             .any(|row| row.entity == dying_bot && row.team == bot_team)
     );
@@ -85,8 +86,8 @@ fn check_spatial_candidates_frame(free_for_all: bool) {
         position: initial_bot_position,
         team: bot_team,
     };
-    assert!(initial.contains(&initial_bot));
-    assert!(initial.contains(&SpatialCandidate {
+    assert!(initial.candidates().contains(&initial_bot));
+    assert!(initial.candidates().contains(&SpatialCandidate {
         entity: player.entity,
         position: player_position,
         team: (!free_for_all).then_some(0),
@@ -112,14 +113,33 @@ fn check_spatial_candidates_frame(free_for_all: bool) {
     let (captured, next) = room.spatial_frame.as_ref().unwrap();
     assert_eq!(*captured, frame + 1);
     assert_eq!(
-        next.as_ref(),
+        next.candidates(),
         &[SpatialCandidate {
             entity: moving_bot,
             position: new_position,
             team: bot_team,
         }]
     );
-    assert!(initial.contains(&initial_bot));
+    assert!(initial.candidates().contains(&initial_bot));
+}
+
+#[test]
+fn spatial_visibility_blocks_only_hits_before_the_target() {
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    room.enable_spatial_queries(false, Arc::new(fixture_ground()));
+    room.prepare_spatial_frame(1).unwrap();
+    let (_, spatial) = room.spatial_frame.as_ref().unwrap();
+    let origin = [-2.0, 0.5, 0.25];
+
+    assert_eq!(spatial.line_clear(origin, [0.0, 0.5, 0.25]), Some(false));
+    assert_eq!(spatial.line_clear(origin, [-1.0, 0.5, 0.25]), Some(true));
+    assert_eq!(spatial.line_clear(origin, [-1.5, 0.5, 0.25]), Some(true));
+    assert_eq!(spatial.line_clear(origin, origin), Some(true));
+    assert_eq!(spatial.line_clear(origin, [f64::NAN, 0.0, 0.0]), None);
+    assert_eq!(
+        spatial.line_clear([0.0; 3], [f64::from_bits(1), 0.0, 0.0]),
+        Some(true)
+    );
 }
 
 #[test]

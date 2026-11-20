@@ -10,7 +10,7 @@ The Rust-only [local message fixture](../fixtures/behavior/script-local-message-
 
 The Rust-only [entity spatial fixture](../fixtures/behavior/statescript-entity-spatial-v1.json) checks authored position and direction reads at two host snapshots. An in-memory VM test also exercises these operands through the ordinary component message queue.
 
-The Rust-only [radius query fixture](../fixtures/behavior/statescript-entities-in-radius-v1.json) checks the inclusive boundary, sorting, deduplication, and optional team and directional filtering. Room coverage checks shared per-frame samples in team and free-for-all modes.
+The Rust-only [radius query fixture](../fixtures/behavior/statescript-entities-in-radius-v1.json) checks the inclusive boundary, sorting, deduplication, and optional team, directional, and static visibility filtering. Room coverage checks shared per-frame samples in team and free-for-all modes.
 
 The Rust-only [observation fixture](../fixtures/behavior/script-observe-radius-v1.json) exercises the radius query in an authored state across VM frames and through state activation and abort.
 

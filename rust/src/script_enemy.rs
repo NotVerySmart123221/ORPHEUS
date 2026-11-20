@@ -221,7 +221,7 @@ pub(crate) struct EnemyBinding {
     pub pose: Movement,
     pub gate: Option<EnemyGate>,
     pub roster: Option<Arc<Vec<EnemyTarget>>>,
-    pub spatial_candidates: Option<Arc<[crate::script_expr::SpatialCandidate]>>,
+    pub spatial_frame: Option<Arc<crate::game_combat::RoomSpatialFrame>>,
     /// Explicit room retirement facts; absence from a target roster alone is unknown.
     pub retired_entities: Arc<BTreeSet<u32>>,
     /// Authoritative room clock, independent of optional movement wire fields.

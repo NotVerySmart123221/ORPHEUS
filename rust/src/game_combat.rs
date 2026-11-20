@@ -11,6 +11,7 @@ use indexmap::IndexMap;
 
 use crate::{
     collision_index::IndexError,
+    collision_scene::CollisionScene,
     commands::Command,
     game_bots::{BOT_ENTITY, BOT_RECORD_DELAY, BOT_RESPAWN_TIME, Bot},
     game_combat_messages::CombatNotice,
@@ -24,7 +25,7 @@ use crate::{
     },
     match_scene::bot_create,
     projectile_flight::{ProjectileBallistics, ProjectileFlight},
-    scene_assets::BotQueries,
+    scene_assets::{BotQueries, MOVER_CATEGORY},
     script_expr::SpatialCandidate,
     script_init::ShotEvent,
     static_ray::{Vec3, norm, segment_separation},
@@ -267,6 +268,22 @@ struct FlightBatch {
     order: Vec<Entity>,
 }
 
+/// A room frame's living candidate rows and the shared static collision view.
+pub(crate) struct RoomSpatialFrame {
+    candidates: Box<[SpatialCandidate]>,
+    ground: Arc<CollisionScene>,
+}
+
+impl RoomSpatialFrame {
+    pub(crate) fn candidates(&self) -> &[SpatialCandidate] {
+        &self.candidates
+    }
+
+    pub(crate) fn line_clear(&self, origin: Vec3, target: Vec3) -> Option<bool> {
+        self.ground.segment_clear(origin, target, MOVER_CATEGORY)
+    }
+}
+
 /// Room-authoritative bot bodies, player bodies, and in-flight projectiles.
 pub(crate) struct RoomSimulation {
     world: World,
@@ -274,8 +291,8 @@ pub(crate) struct RoomSimulation {
     by_wire: IndexMap<u32, Entity>,
     players_by_wire: IndexMap<u32, Entity>,
     players_by_owner: IndexMap<u32, PlayerBodyHandle>,
-    spatial_free_for_all: Option<bool>,
-    spatial_frame: Option<(u32, Arc<[SpatialCandidate]>)>,
+    spatial_queries: Option<(bool, Arc<CollisionScene>)>,
+    spatial_frame: Option<(u32, Arc<RoomSpatialFrame>)>,
     // Generation maps live for the room's lifetime so reconnects cannot reset history.
     player_generations: HashMap<u32, u64>,
     spawned_player_generations: HashMap<u32, u64>,
@@ -396,10 +413,10 @@ impl RoomSimulation {
             pose: bot.movement(tick),
             gate,
             roster: None,
-            spatial_candidates: self
+            spatial_frame: self
                 .spatial_frame
                 .as_ref()
-                .map(|(_, rows)| Arc::clone(rows)),
+                .map(|(_, frame)| Arc::clone(frame)),
             retired_entities: Arc::clone(&self.retired_entity_ids),
             frame: tick,
             now_secs: 0.0,
@@ -590,7 +607,7 @@ impl RoomSimulation {
             by_wire,
             players_by_wire: IndexMap::new(),
             players_by_owner: IndexMap::new(),
-            spatial_free_for_all: None,
+            spatial_queries: None,
             spatial_frame: None,
             player_generations: HashMap::new(),
             spawned_player_generations: HashMap::new(),
@@ -635,13 +652,17 @@ impl RoomSimulation {
         self.spawn_anchors.as_ref()
     }
 
-    pub(crate) fn enable_spatial_queries(&mut self, free_for_all: bool) {
-        self.spatial_free_for_all = Some(free_for_all);
+    pub(crate) fn enable_spatial_queries(
+        &mut self,
+        free_for_all: bool,
+        ground: Arc<CollisionScene>,
+    ) {
+        self.spatial_queries = Some((free_for_all, ground));
     }
 
     /// Capture the living room bodies on the first use of this room frame.
     pub(crate) fn prepare_spatial_frame(&mut self, frame: u32) -> Result<(), CombatError> {
-        let Some(free_for_all) = self.spatial_free_for_all else {
+        let Some((free_for_all, ground)) = &self.spatial_queries else {
             return Ok(());
         };
         if self
@@ -659,7 +680,7 @@ impl RoomSimulation {
                 candidates.push(SpatialCandidate {
                     entity: bot.entity,
                     position: bot.position,
-                    team: (!free_for_all).then_some(bot.spawn.team),
+                    team: (!*free_for_all).then_some(bot.spawn.team),
                 });
             }
         }
@@ -678,27 +699,30 @@ impl RoomSimulation {
                 candidates.push(SpatialCandidate {
                     entity: wire,
                     position: state.mover.pose().position,
-                    team: (!free_for_all).then_some(state.team),
+                    team: (!*free_for_all).then_some(state.team),
                 });
             }
         }
 
-        let candidates = Arc::<[SpatialCandidate]>::from(candidates);
+        let spatial = Arc::new(RoomSpatialFrame {
+            candidates: candidates.into_boxed_slice(),
+            ground: Arc::clone(ground),
+        });
         for &entity in self.players_by_wire.values() {
             if let Some(mut state) = self.world.get_mut::<PlayerBodyState>(entity) {
                 if let Some(runtime) = state.runtime.as_mut() {
-                    runtime.set_spatial_candidates(Arc::clone(&candidates));
+                    runtime.set_spatial_frame(Arc::clone(&spatial));
                 }
             }
         }
         for &entity in self.by_wire.values() {
             if let Some(mut state) = self.world.get_mut::<BotState>(entity) {
                 if let Some(enemy) = state.enemy.as_mut() {
-                    enemy.binding.spatial_candidates = Some(Arc::clone(&candidates));
+                    enemy.binding.spatial_frame = Some(Arc::clone(&spatial));
                 }
             }
         }
-        self.spatial_frame = Some((frame, candidates));
+        self.spatial_frame = Some((frame, spatial));
         Ok(())
     }
 

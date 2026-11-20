@@ -641,7 +641,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 script_expr::EvalError::UnavailableEntityPosition(_)
                 | script_expr::EvalError::UnavailableEntityDirection(_)
                 | script_expr::EvalError::UnavailableEntityVariable { .. }
-                | script_expr::EvalError::UnavailableSpatialCandidates,
+                | script_expr::EvalError::UnavailableSpatialCandidates
+                | script_expr::EvalError::UnavailableSpatialVisibility,
             ) => {
                 // A later sample can succeed as the scene updates.
                 self.report(site, Issue::ObservationUnavailable);

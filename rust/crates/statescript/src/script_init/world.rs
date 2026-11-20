@@ -472,6 +472,11 @@ pub trait World {
         None
     }
 
+    /// Whether static geometry leaves the segment clear. None is unavailable.
+    fn spatial_line_clear(&self, _origin: [f64; 3], _target: [f64; 3]) -> Option<bool> {
+        None
+    }
+
     /// The implicit owner's movement sample, if the world knows all its bits.
     fn movement_sample(&self, _site: Site) -> Option<u16> {
         None

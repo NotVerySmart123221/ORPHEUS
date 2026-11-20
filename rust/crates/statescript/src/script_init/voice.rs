@@ -484,6 +484,11 @@ impl<W: World> Context for InstanceContext<'_, W> {
         self.world.spatial_candidates()
     }
 
+    fn spatial_line_clear(&mut self, origin: [f64; 3], target: [f64; 3]) -> Option<bool> {
+        self.read_native = true;
+        self.world.spatial_line_clear(origin, target)
+    }
+
     fn combat_targets(&mut self, config: &Json) -> Option<Vec<u32>> {
         self.read_native = true;
         self.world.combat_targets(self.site, config)

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "case_id": "script-observe-radius.synthetic.v1",
   "source": {
-    "basis": "Original synthetic graph and samples of candidates, affiliations and facing for observing a radius query."
+    "basis": "Original synthetic graph and samples of candidates, affiliations, facing and visibility for observing a radius query."
   },
   "evidence": "synthetic-rust",
   "input": {
@@ -50,7 +50,8 @@
                       "entity": {"$": "STUConfigVarDynamic", "m_identifier": 1, "m_60DB8F99": true}
                     },
                     "half_angle_degrees": 50
-                  }
+                  },
+                  "line_of_sight": true
                 },
                 "output": {"$": "STUConfigVarDynamic", "m_identifier": 81, "m_60DB8F99": true},
                 "on_change": {"$": "Plug", "links": [[2, "m_inPlug"]], "m_FF3DAF1E": []}
@@ -108,13 +109,15 @@
       {"frame": 1, "candidates": [[17, [0, 0, 1], 1]], "subframe_due_ms": [18, 25]},
       {"frame": 2, "candidates": [[23, [1, 0, 0], null], [17, [0, 0, 1], 1]]},
       {"frame": 3, "candidates": [[17, [0, 0, 1], 1], [23, [1, 0, 0], null], [17, [0, 0, 1], 1]], "override_output": [99]},
-      {"frame": 4, "candidates": null},
+      {"frame": 4, "candidates": [[17, [0, 0, 1], 1], [23, [1, 0, 0], null]], "geometry_unavailable": true},
       {"frame": 5, "candidates": [[17, [0, 0, 1], 1], [23, [1, 0, 0], null]]},
       {"frame": 6, "candidates": [[17, [0, 0, 1], 0], [23, [1, 0, 0], null]]},
-      {"frame": 7, "candidates": [[17, [0, 0, 1], 0], [23, [1, 0, 0], null]], "direction": [0, 0, 1]},
-      {"frame": 8, "candidates": [[31, [0, 0, 1], 1]], "message": 11},
-      {"frame": 9, "candidates": [], "message": 12},
-      {"frame": 10, "candidates": []}
+      {"frame": 7, "candidates": [[17, [0, 0, 1], 0], [23, [1, 0, 0], null]], "blocked": [[1, 0, 0]]},
+      {"frame": 8, "candidates": [[17, [0, 0, 1], 0], [23, [1, 0, 0], null]]},
+      {"frame": 9, "candidates": [[17, [0, 0, 1], 0], [23, [1, 0, 0], null]], "direction": [0, 0, 1]},
+      {"frame": 10, "candidates": [[31, [0, 0, 1], 1]], "message": 11},
+      {"frame": 11, "candidates": [], "message": 12},
+      {"frame": 12, "candidates": []}
     ]
   },
   "expected": [
@@ -124,6 +127,8 @@
     {"reads": 1, "output": [99], "fired": false, "active": true, "unavailable": false},
     {"reads": 1, "output": [99], "fired": false, "active": true, "unavailable": true},
     {"reads": 1, "output": [99], "fired": false, "active": true, "unavailable": true},
+    {"reads": 1, "output": [23], "fired": true, "active": true, "unavailable": true},
+    {"reads": 1, "output": [], "fired": true, "active": true, "unavailable": true},
     {"reads": 1, "output": [23], "fired": true, "active": true, "unavailable": true},
     {"reads": 1, "output": [], "fired": true, "active": true, "unavailable": true},
     {"reads": 0, "output": [], "fired": false, "active": false, "unavailable": true},
