@@ -89,6 +89,7 @@ impl WorldDelivery {
             remote_players: HashMap::new(),
             input: InputQueue::default(),
             body_script: None,
+            detached_motion: None,
             #[cfg(test)]
             owner_script_fault: None,
             projectile_destroys: HashMap::new(),
@@ -121,6 +122,7 @@ impl WorldDelivery {
         self.encounter_result_queued = false;
         self.encounter_outcome_queued = false;
         self.body_script = None;
+        self.detached_motion = None;
         self.projectile_destroys.clear();
         self.biotic_views.clear();
         self.scene_views.clear();
@@ -671,12 +673,23 @@ impl WorldDelivery {
             }
         }
         let script = self.body_script.as_ref();
-        let history = script.and_then(|script| script.corrections.as_ref());
+        let script_history = script.and_then(|script| {
+            script
+                .corrections
+                .as_ref()
+                .map(|history| (script.id, history))
+        });
+        let detached = script_history.is_none();
+        let owner_history = script_history.or_else(|| {
+            let (id, history) = self.detached_motion.as_ref()?;
+            (self.body.is_some_and(|body| body.id == *id)).then_some((*id, history))
+        });
+        let history = owner_history.map(|(_, history)| history);
         let correction = if reliable_only {
             None
         } else {
-            script.and_then(|script| {
-                history?.candidate(tick, self.created.contains(&script.id.entity))
+            owner_history.and_then(|(id, history)| {
+                history.candidate(tick, self.created.contains(&id.entity))
             })
         };
         let owner_index = correction.map(|correction| {
@@ -736,12 +749,16 @@ impl WorldDelivery {
         let selected = owner_index
             .zip(correction)
             .filter(|(index, _)| sent.records.contains(&RecordSource::Movement(*index)));
-        let history = self
-            .body_script
-            .as_mut()
-            .and_then(|script| script.corrections.as_mut());
-        if let (Some((_, correction)), Some(history)) = (selected, history) {
-            history.sent(&correction);
+        if let Some((_, correction)) = selected {
+            if detached {
+                if let Some((_, history)) = &mut self.detached_motion {
+                    if history.sent(&correction) && history.impulse_correction().is_none() {
+                        self.detached_motion = None;
+                    }
+                }
+            } else if let Some(script) = &mut self.body_script {
+                script.correction_sent(&correction);
+            }
         }
         Ok(sent)
     }
@@ -826,6 +843,13 @@ impl WorldDelivery {
 
     pub(super) fn cancel_body_script(&mut self, simulation: Option<&mut RoomSimulation>) {
         if let Some(mut script) = self.body_script.take() {
+            if self.body.is_some_and(|body| body.id == script.id) {
+                self.detached_motion = script
+                    .corrections
+                    .take()
+                    .filter(|history| history.impulse_correction().is_some())
+                    .map(|history| (script.id, history));
+            }
             self.retire_biotic_views(|_| false);
             script.stream.retire();
             if let Some(sim) = simulation {
@@ -1415,7 +1439,6 @@ impl WorldDelivery {
         quanta: u32,
         budget: usize,
     ) -> io::Result<(usize, bool)> {
-        let dt = f64::from(quanta) / 1_000_000.0;
         let mut remaining = budget;
         while remaining != 0 {
             let Some(work) = self.input.work.pop_front() else {
@@ -1463,7 +1486,7 @@ impl WorldDelivery {
                         }
                     }
                     let (used, complete) =
-                        self.advance_command(scene, command, &mut pending, dt, remaining)?;
+                        self.advance_command(scene, command, &mut pending, quanta, remaining)?;
                     remaining -= used;
                     if !complete {
                         self.input
@@ -1484,13 +1507,14 @@ impl WorldDelivery {
         scene: &mut PreparedScene,
         command: Command,
         pending: &mut Option<PendingCommand>,
-        dt: f64,
+        frame_us: u32,
         budget: usize,
     ) -> io::Result<(usize, bool)> {
         let Some(id) = self.body.map(|body| body.id) else {
             return Ok((1, true));
         };
         let (simulation, rays) = scene.simulation_and_rays();
+        let motion_frame = simulation.movement_contact_frame();
         let Some(state) = simulation.player_body_mut(id) else {
             return Ok((1, true));
         };
@@ -1502,7 +1526,14 @@ impl WorldDelivery {
         });
         let mut used = 0;
         let mut fault = None;
+        let team = state.team;
+        let previously_processed = self.input.processed;
         let script = &mut self.body_script;
+        let mut detached_motion = self
+            .detached_motion
+            .as_mut()
+            .filter(|(owner, _)| *owner == id)
+            .map(|(_, history)| history);
         let PlayerBodyState {
             mover,
             runtime,
@@ -1528,18 +1559,46 @@ impl WorldDelivery {
                 if let Err(error) = script.advance_step(runtime, mover, &mut buffers, neutral, step)
                 {
                     mover.track_modifiers(frame, &BTreeMap::new());
+                    mover.clear_swept_displacement();
                     pending.gap = ScriptGap::default();
                     fault = Some((frame, step, error));
                     break;
                 }
             }
         }
+        if fault.is_none() && used < budget && pending.poses.len() != 0 {
+            if let Some(runtime) = runtime.as_deref_mut() {
+                stage_swept_displacement(runtime, mover);
+            }
+        }
         let stepped = mover.step_pending(
             rays,
             &mut pending.poses,
-            dt,
+            f64::from(frame_us) / 1_000_000.0,
             budget - used,
+            || {
+                motion_frame
+                    .as_ref()
+                    .map_or_else(Vec::new, |frame| frame.blockers(id.entity, team))
+            },
             |mover, command| {
+                if let Some(history) = detached_motion.as_deref_mut() {
+                    history.record(mover.pose());
+                }
+                if let Some(script) = script.as_mut() {
+                    // The pose already moved even if the state's next update fails.
+                    script.record_swept_movement(
+                        mover,
+                        command.frame,
+                        frame_us,
+                        previously_processed,
+                    );
+                    if fault.is_some() {
+                        if let Some(history) = script.swept_history() {
+                            history.record(mover.pose());
+                        }
+                    }
+                }
                 if let Some((script, runtime)) = script
                     .as_mut()
                     .zip(runtime.as_deref_mut())
@@ -1549,6 +1608,7 @@ impl WorldDelivery {
                         script.advance_step(runtime, mover, &mut buffers, command, BodyStep::Posed)
                     {
                         mover.track_modifiers(command.frame, &BTreeMap::new());
+                        mover.clear_swept_displacement();
                         fault = Some((command.frame, BodyStep::Posed, error));
                     }
                 }
@@ -1727,6 +1787,13 @@ impl WorldDelivery {
     }
 
     pub(super) fn retire_body(&mut self, id: BodyId) {
+        if self
+            .detached_motion
+            .as_ref()
+            .is_some_and(|(owner, _)| *owner == id)
+        {
+            self.detached_motion = None;
+        }
         self.created.remove(&id.entity);
         self.health_updates.remove(&id.entity);
         self.bodies

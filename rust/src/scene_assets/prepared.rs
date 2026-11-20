@@ -468,9 +468,14 @@ impl PreparedScene {
         tick: u32,
         patrol: &PatrolScript,
     ) -> Result<(), CombatError> {
+        self.simulation.prepare_movement_frame(tick)?;
+        let contacts = self.simulation.movement_contact_frame();
         let floor = self.ground.triangles();
         let map = &self.map;
         self.simulation.for_each_body_mut(|bot| {
+            if let Some(contacts) = contacts.as_ref().filter(|_| bot.patrol_active()) {
+                contacts.stage_bot(bot, tick);
+            }
             if let Err(error) = bot.step(
                 tick,
                 patrol,

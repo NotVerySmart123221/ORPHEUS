@@ -213,7 +213,8 @@ pub use world::{
     AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, CreationKind,
     EmptyWorld, EntityCreation, HealthTargetFacts, HitTags, HostEvent, HostHealthContext,
     LandingSelection, MovementSample, PlayScript, RoomBodyIdentity, RoomCue, RoomEntityStatus,
-    RoomMessage, Site, TargetTagEffect, TargetTagEffects, TargetTagSnapshot, World,
+    RoomMessage, Site, SweptDisplacement, TargetTagEffect, TargetTagEffects, TargetTagSnapshot,
+    World,
 };
 
 use machine::{Event, Machine, Startup, StateKey, VarKey};

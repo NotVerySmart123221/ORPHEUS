@@ -266,6 +266,9 @@ impl PlayerBodyState {
         };
         let result = runtime.receive_damage(amount, source);
         self.mover.set_authored_facing(runtime.authored_facing());
+        if result.killed {
+            self.mover.clear_swept_displacement();
+        }
         result
     }
 
@@ -446,6 +449,7 @@ impl RoomSimulation {
         state.mover.track_modifiers(frame, &BTreeMap::new());
         state.mover.set_cinematic_aim(None);
         state.mover.set_authored_facing(None);
+        state.mover.clear_swept_displacement();
         if let Some(mut runtime) = state.runtime.take() {
             state.halted_vitals = runtime.take_vitals();
         }

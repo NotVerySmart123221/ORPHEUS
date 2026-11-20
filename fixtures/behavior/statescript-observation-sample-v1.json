@@ -27,10 +27,11 @@
       "sample_frame": 2,
       "lock_frames": 2,
       "cases": [
-        {"retirement": "none", "idle_direction": 0, "held_after_unlock": true},
-        {"retirement": "before_branch", "idle_direction": 1, "held_after_unlock": true},
-        {"retirement": "before_child", "idle_direction": 1, "held_after_unlock": true},
-        {"retirement": "listener", "idle_direction": null, "held_after_unlock": false}
+        {"scenario": "current_sample", "idle_direction": 0, "held_after_unlock": true},
+        {"scenario": "source_ends_before_branch", "idle_direction": 1, "held_after_unlock": true},
+        {"scenario": "source_ends_before_child", "idle_direction": 1, "held_after_unlock": true},
+        {"scenario": "listener_ends", "idle_direction": null, "held_after_unlock": false},
+        {"scenario": "replace_lock_in_same_update", "idle_direction": 1, "held_after_unlock": true}
       ]
     },
     "steps": [

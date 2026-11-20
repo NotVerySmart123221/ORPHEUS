@@ -8,12 +8,23 @@ pub(super) struct StepBuffers<'a> {
     pub(super) hitscan: &'a mut Vec<PosedHitscan>,
 }
 
+pub(super) fn stage_swept_displacement(runtime: &mut dyn OwnerBodyRuntime, mover: &mut Mover) {
+    if mover.has_swept_displacement() {
+        return;
+    }
+    if let Some((frame, displacement)) = runtime.take_swept_displacement() {
+        mover.queue_swept_displacement(frame, displacement);
+    }
+}
+
 pub(super) struct BodyScript {
     pub(super) id: BodyId,
     pub(super) stream: BodyStream<ProjectedSnapshot>,
     pub(super) frame: u32,
     pub(super) unsent_delta: Option<(u32, DeltaKind)>,
     pub(super) corrections: Option<CorrectionHistory>,
+    continuous_corrections: bool,
+    processed_at_spawn: Option<u32>,
     pub(super) projectiles: Option<OwnerProjectiles>,
 }
 
@@ -61,9 +72,9 @@ impl BodyScript {
         runtime: &dyn OwnerBodyRuntime,
     ) -> io::Result<Self> {
         startup_snapshot(runtime, body.id.entity)?;
-        let corrections = (matches!(body.hero, SOLDIER | CASSIDY)
-            && runtime.movement_modifiers().is_some())
-        .then(|| {
+        let continuous_corrections =
+            matches!(body.hero, SOLDIER | CASSIDY) && runtime.movement_modifiers().is_some();
+        let corrections = continuous_corrections.then(|| {
             CorrectionHistory::new(body.id.entity, body.id.generation)
                 .with_processed_at_spawn(processed_at_spawn)
         });
@@ -77,8 +88,45 @@ impl BodyScript {
             frame,
             unsent_delta: None,
             corrections,
+            continuous_corrections,
+            processed_at_spawn,
             projectiles,
         })
+    }
+
+    pub(super) fn record_swept_movement(
+        &mut self,
+        mover: &Mover,
+        frame: u32,
+        frame_us: u32,
+        previously_processed: Option<u32>,
+    ) {
+        if frame_us == 0 || !mover.swept_displacement_at(frame) {
+            return;
+        }
+        let history = self.corrections.get_or_insert_with(|| {
+            CorrectionHistory::new(self.id.entity, self.id.generation)
+                .with_processed_at_spawn(self.processed_at_spawn.max(previously_processed))
+        });
+        history.swept_motion(frame, frame_us);
+        history.record(mover.pose());
+    }
+
+    pub(super) fn swept_history(&mut self) -> Option<&mut CorrectionHistory> {
+        self.corrections
+            .as_mut()
+            .filter(|history| history.impulse_correction().is_some())
+    }
+
+    pub(super) fn correction_sent(&mut self, correction: &crate::mover_correction::Correction) {
+        if let Some(history) = &mut self.corrections {
+            if history.sent(correction)
+                && !self.continuous_corrections
+                && history.impulse_correction().is_none()
+            {
+                self.corrections = None;
+            }
+        }
     }
 
     pub(super) fn advance_step(
@@ -127,7 +175,7 @@ impl BodyScript {
         }
         if let Some(modifiers) = runtime.movement_modifiers() {
             mover.track_modifiers(command.frame, modifiers);
-        } else if self.corrections.is_some() {
+        } else if self.continuous_corrections {
             return Err(invalid("body VM lost its movement projection"));
         }
         if let Some(history) = self
@@ -143,6 +191,9 @@ impl BodyScript {
                 PosedShot::Projectile(shot) => self.launch_projectile(*shot, buffers.launches),
                 PosedShot::BioticField(shot) => self.launch_biotic_field(shot, buffers.fields),
             }
+        }
+        if step == BodyStep::Posed {
+            stage_swept_displacement(runtime, mover);
         }
         Ok(())
     }

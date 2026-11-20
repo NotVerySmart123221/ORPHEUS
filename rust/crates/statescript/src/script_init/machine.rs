@@ -163,6 +163,13 @@ pub(super) struct AbilityPress {
     pub(super) activation: u16,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct LogicalButtonStage {
+    pub(super) activation: u16,
+    pub(super) revision: u32,
+    pub(super) down: bool,
+}
+
 #[derive(Clone)]
 pub(super) enum Event {
     Entry(u16),
@@ -181,8 +188,7 @@ pub(super) enum Event {
     Button(ButtonEdge),
     LogicalButtonBranch {
         state: u16,
-        activation: u16,
-        down: bool,
+        stage: LogicalButtonStage,
         sample: Option<Arc<ObservedSample>>,
     },
     AbilityCheck(u16),

@@ -21,7 +21,8 @@ use crate::{
     script_expr::{EntityRelation, OnFire, RoomEntityFacts, native_shape, valid_entity},
     script_graph::GraphStore,
     script_init::{
-        MAX_INIT_WORK, MovementSample, RoomMessage, Site, TargetTagEffect, TargetTagEffects, World,
+        MAX_INIT_WORK, MovementSample, RoomMessage, Site, SweptDisplacement, TargetTagEffect,
+        TargetTagEffects, World,
     },
     script_wire::{Value, Variables},
     static_ray::{Vec3, capsule_entry_distance, norm},
@@ -163,6 +164,7 @@ pub(super) struct BodyWorld {
     pub(super) facing_claims: indexmap::IndexMap<Site, crate::script_init::AiFacing>,
     pub(super) deadeye_scene: DeadeyeScene,
     pub(super) velocity_changes: Vec<(u32, crate::mover::VelocityChange)>,
+    pub(super) swept_displacement: Option<(u32, SweptDisplacement)>,
 }
 
 impl World for BodyWorld {
@@ -215,6 +217,22 @@ impl World for BodyWorld {
     fn cap_horizontal_velocity(&mut self, site: Site, frame: u32, cap: f64) -> bool {
         self.is_player_site(site)
             && self.queue_velocity_change(frame, VelocityChange::HorizontalCap(cap))
+    }
+
+    fn queue_swept_displacement(
+        &mut self,
+        site: Site,
+        frame: u32,
+        displacement: SweptDisplacement,
+    ) -> Option<bool> {
+        if !self.is_player_site(site) {
+            return None;
+        }
+        if self.vitals.death().is_some() || self.swept_displacement.is_some() {
+            return Some(false);
+        }
+        self.swept_displacement = Some((frame, displacement));
+        Some(true)
     }
 
     fn deadeye_target_alive(&self, site: Site, entity: u32) -> bool {

@@ -30,6 +30,32 @@ pub struct MovementSample {
     pub pose_frame: Option<u32>,
 }
 
+/// A finite, nonzero movement request bounded to 32 world units.
+/// The host applies it through its ordinary collision and movement path.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SweptDisplacement {
+    delta: [f32; 3],
+}
+
+impl SweptDisplacement {
+    pub fn new(delta: [f64; 3]) -> Option<Self> {
+        const MAX_DISTANCE: f64 = 32.0;
+        let length = delta.into_iter().fold(0.0_f64, f64::hypot);
+        if !length.is_finite() || length <= 0.0 || length > MAX_DISTANCE {
+            return None;
+        }
+        let delta = delta.map(|axis| axis as f32);
+        let length = delta
+            .into_iter()
+            .fold(0.0_f64, |length, axis| length.hypot(f64::from(axis)));
+        (length.is_finite() && length > 0.0 && length <= MAX_DISTANCE).then_some(Self { delta })
+    }
+
+    pub fn delta(self) -> [f32; 3] {
+        self.delta
+    }
+}
+
 /// A bounded, typed message evaluated by the sending StateScript VM.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RoomMessage {
@@ -439,6 +465,16 @@ pub trait World {
     /// Admit every signed change together or leave the host queue unchanged.
     fn queue_health_changes(&mut self, _site: Site, _changes: &[(u32, f64)]) -> bool {
         false
+    }
+    /// Admit movement for the bound body at the supplied future simulation frame.
+    /// None means unavailable; Some(false) is an ordinary supported refusal.
+    fn queue_swept_displacement(
+        &mut self,
+        _site: Site,
+        _frame: u32,
+        _displacement: SweptDisplacement,
+    ) -> Option<bool> {
+        None
     }
     /// Restore the owner's shield pools. A zero amount checks support without changing health.
     fn recharge_shields(&mut self, _site: Site, _amount: f64) -> bool {

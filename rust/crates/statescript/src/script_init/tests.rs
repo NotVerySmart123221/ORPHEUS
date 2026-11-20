@@ -31,6 +31,7 @@ mod stack_controls;
 mod stat_state;
 mod states_and_switches;
 mod static_model_protection;
+mod swept_displacement;
 
 pub(super) use std::path::PathBuf;
 

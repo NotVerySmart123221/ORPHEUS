@@ -756,6 +756,61 @@ fn shared_horizontal_cap_queues_on_a_live_player_without_a_roll_profile() {
 }
 
 #[test]
+fn swept_displacement_requests_belong_to_the_live_player_body() {
+    use crate::script_init::SweptDisplacement;
+
+    let (factory, spawn) = fixture_body_factory();
+    let mut body = factory.start(spawn).unwrap();
+    let displacement = SweptDisplacement::new([2.25, 0.0, 0.0]).unwrap();
+    let alternate = SweptDisplacement::new([0.0, 0.0, 1.0]).unwrap();
+    let site = Site {
+        entity: spawn.entity,
+        instance: 1,
+        graph: 1_783,
+        node: Some(4),
+    };
+    let foreign = Site {
+        entity: spawn.controller,
+        ..site
+    };
+    assert_eq!(
+        body.world
+            .queue_swept_displacement(foreign, 31, displacement),
+        None
+    );
+    assert_eq!(
+        body.world.queue_swept_displacement(site, 31, displacement),
+        Some(true)
+    );
+    assert_eq!(
+        body.world.queue_swept_displacement(site, 32, alternate),
+        Some(false)
+    );
+    assert_eq!(body.take_swept_displacement(), Some((31, displacement)));
+    assert_eq!(body.take_swept_displacement(), None);
+    assert_eq!(
+        body.world.queue_swept_displacement(site, 32, alternate),
+        Some(true)
+    );
+    assert!(
+        body.receive_damage(
+            10_000.0,
+            crate::vitals::Death {
+                time: 0.5,
+                frame: 31,
+                killer: spawn.controller,
+            }
+        )
+        .killed
+    );
+    assert_eq!(body.take_swept_displacement(), None);
+    assert_eq!(
+        body.world.queue_swept_displacement(site, 33, alternate),
+        Some(false)
+    );
+}
+
+#[test]
 fn player_natives_follow_the_verified_owner_and_override_shapes() {
     use crate::script_expr::EvalError;
     use serde_json::json;
@@ -2704,6 +2759,7 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
         facing_claims: Default::default(),
         deadeye_scene: DeadeyeScene::default(),
         velocity_changes: Vec::new(),
+        swept_displacement: None,
         damage_credit: None,
         uses_authored_charge: false,
     };
@@ -3132,6 +3188,7 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             facing_claims: Default::default(),
             deadeye_scene: DeadeyeScene::default(),
             velocity_changes: Vec::new(),
+            swept_displacement: None,
             damage_credit: None,
             uses_authored_charge: false,
         };

@@ -1319,6 +1319,7 @@ mod encounter_ecs;
 mod faulted_owner_vitals;
 mod junkenstein;
 mod settled_bonus;
+mod swept_displacement;
 
 #[test]
 fn scene_enemy_creation_is_atomic_and_retains_late_join_health_and_skin() {

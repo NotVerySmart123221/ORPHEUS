@@ -147,7 +147,7 @@ impl ReaperExit {
         };
         let elapsed = tick.saturating_sub(*start);
         mover
-            .step(
+            .step_against(
                 rays,
                 Command {
                     frame: tick,
@@ -160,6 +160,7 @@ impl ReaperExit {
                     ..Command::default()
                 },
                 TICK_PERIOD.as_secs_f64(),
+                bot.movement_blockers(tick),
                 |_, _| {},
             )
             .map_err(std::io::Error::other)?;

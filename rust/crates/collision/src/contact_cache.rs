@@ -438,44 +438,55 @@ impl ConvexContact {
             radius: pose.radius,
             frame: body_frame,
         };
-        let options = CastOptions {
-            translation,
-            max_fraction: 1.0,
-            hit_touching: false,
-            shrink: true,
-        };
-        let hit = match &self.geometry {
-            StaticGeometry::Hull(hull) => shape_cast(
+        match &self.geometry {
+            StaticGeometry::Hull(hull) => Ok(shape_cast(
                 CastShape {
                     points: &hull.vertices,
                     radius: SKIN,
                     frame: static_frame,
                 },
                 body,
-                options,
-            )?,
+                body_cast_options(translation),
+            )?
+            .map(|hit| hit.fraction)),
             StaticGeometry::Round { shape, .. } => {
-                let (points, len, radius) = match shape {
-                    RoundShape::Sphere(sphere) => ([sphere.center, [0.0; 3]], 1, sphere.radius),
-                    RoundShape::Capsule(capsule) => ([capsule.a, capsule.b], 2, capsule.radius),
-                };
-                shape_cast(
-                    body,
-                    CastShape {
-                        points: &points[..len],
-                        radius,
-                        frame: static_frame,
-                    },
-                    CastOptions {
-                        translation: translation.map(|lane| -lane),
-                        ..options
-                    },
-                )?
+                cast_round(body, *shape, static_frame, translation)
             }
             StaticGeometry::Mesh(_) => unreachable!("mesh state belongs to MeshContact"),
-        };
-        Ok(hit.map(|hit| hit.fraction))
+        }
     }
+}
+
+fn body_cast_options(translation: Vec3) -> CastOptions {
+    CastOptions {
+        translation,
+        max_fraction: 1.0,
+        hit_touching: false,
+        shrink: true,
+    }
+}
+
+pub(crate) fn cast_round(
+    body: CastShape<'_>,
+    shape: RoundShape,
+    frame: Option<CastFrame>,
+    translation: Vec3,
+) -> Result<Option<f32>, HullContactError> {
+    let (points, len, radius) = match shape {
+        RoundShape::Sphere(sphere) => ([sphere.center, [0.0; 3]], 1, sphere.radius),
+        RoundShape::Capsule(capsule) => ([capsule.a, capsule.b], 2, capsule.radius),
+    };
+    // Round contacts put the character in A. The cast translates B instead.
+    Ok(shape_cast(
+        body,
+        CastShape {
+            points: &points[..len],
+            radius,
+            frame,
+        },
+        body_cast_options(translation.map(|lane| -lane)),
+    )?
+    .map(|hit| hit.fraction))
 }
 
 pub enum ProxyContact {

@@ -6,12 +6,15 @@
 use std::{collections::HashSet, fmt, sync::Arc};
 
 use crate::{
-    contact_cache::{CapsulePose, LOOSE, ProxyContact, encloses},
-    contact_gjk::{PointSetSize, SimplexCache, gjk, sweep::MeshProbe},
+    contact_cache::{CapsulePose, LOOSE, ProxyContact, cast_round, encloses},
+    contact_gjk::{
+        PointSetSize, SimplexCache, gjk,
+        sweep::{CastShape, MeshProbe},
+    },
     contact_hull::HullContactError,
     contact_math::{TINY, Vec3, add, dot, maxps, minps, scale, sub},
     contact_mesh::ContactBounds,
-    contact_round::{RoundShape, splat_tiny},
+    contact_round::{ContactPoint, RoundShape, capsule_capsule, splat_tiny},
     contact_solver::{Constraint, ContactPlane, project_target},
     contact_triangle::{SKIN, TOUCH, closest_parameters},
     contact_world::{ContactWorld, PROXY_MARGIN, StaticGeometry, StaticShape, WorldHit, overlaps},
@@ -74,6 +77,10 @@ impl CharacterBody {
 
     pub fn position(&self) -> Vec3 {
         self.pose.position
+    }
+
+    pub fn capsule_pose(&self) -> CapsulePose {
+        self.pose
     }
 
     pub fn radius(&self) -> f32 {
@@ -159,7 +166,18 @@ impl CharacterBody {
         displacement: Vec3,
         dt: f32,
     ) -> Result<BodyMove<'_>, HullContactError> {
-        self.move_capsule_inner::<false>(displacement, dt, &mut None)
+        self.move_capsule_against(displacement, dt, &[])
+    }
+
+    /// Move against the map and an ordered snapshot of eligible actor capsules.
+    /// The caller excludes this body and supplies valid, finite capsule poses.
+    pub fn move_capsule_against(
+        &mut self,
+        displacement: Vec3,
+        dt: f32,
+        actors: &[CapsulePose],
+    ) -> Result<BodyMove<'_>, HullContactError> {
+        self.move_capsule_inner::<false>(displacement, dt, actors, &mut None)
     }
 
     /// Observe the first clipped solver sweep of this move.
@@ -169,14 +187,27 @@ impl CharacterBody {
         dt: f32,
         clip: &mut Option<SweepClip>,
     ) -> Result<BodyMove<'_>, HullContactError> {
+        self.move_capsule_against_traced(displacement, dt, &[], clip)
+    }
+
+    /// As `move_capsule_against`, retaining static-proxy trace evidence.
+    /// A nearer actor clip has no static proxy ID and leaves `clip` empty.
+    pub fn move_capsule_against_traced(
+        &mut self,
+        displacement: Vec3,
+        dt: f32,
+        actors: &[CapsulePose],
+        clip: &mut Option<SweepClip>,
+    ) -> Result<BodyMove<'_>, HullContactError> {
         *clip = None;
-        self.move_capsule_inner::<true>(displacement, dt, clip)
+        self.move_capsule_inner::<true>(displacement, dt, actors, clip)
     }
 
     fn move_capsule_inner<const TRACE: bool>(
         &mut self,
         displacement: Vec3,
         dt: f32,
+        actors: &[CapsulePose],
         clip: &mut Option<SweepClip>,
     ) -> Result<BodyMove<'_>, HullContactError> {
         let rounds = self.budget;
@@ -195,19 +226,32 @@ impl CharacterBody {
                     } else {
                         normal.map(|axis| -axis)
                     };
-                    let deepest = points[1..]
-                        .iter()
-                        .fold(points[0].separation, |depth, point| {
-                            minps(depth, point.separation)
-                        });
-                    let offset = dot(normal, current) - deepest;
                     self.constraints
-                        .push(ContactPlane { normal, offset }.into());
+                        .push(contact_constraint(current, normal, points));
+                }
+            }
+            if !actors.is_empty() {
+                let bounds = self.pose.bounds();
+                let low = bounds.low.map(f64::from);
+                let high = bounds.high.map(f64::from);
+                let moving = self.pose.world_capsule();
+                for actor in actors {
+                    if !overlaps(low, high, actor.bounds()) {
+                        continue;
+                    }
+                    let manifold = capsule_capsule(moving, actor.world_capsule());
+                    if !manifold.points().is_empty() {
+                        self.constraints.push(contact_constraint(
+                            current,
+                            manifold.normal.map(|axis| -axis),
+                            manifold.points(),
+                        ));
+                    }
                 }
             }
             let (projected, passes) = project_target(target, &mut self.constraints);
             passes_total += passes;
-            let moved = self.set_position::<TRACE>(projected, clip)?;
+            let moved = self.set_position::<TRACE>(projected, actors, clip)?;
             let step = sub(moved, current);
             current = moved;
             if dot(step, step) < TOUCH * TOUCH {
@@ -266,6 +310,7 @@ impl CharacterBody {
     fn set_position<const TRACE: bool>(
         &mut self,
         target: Vec3,
+        actors: &[CapsulePose],
         clip: &mut Option<SweepClip>,
     ) -> Result<Vec3, HullContactError> {
         let swept = self.pose.swept_bounds(target);
@@ -293,6 +338,33 @@ impl CharacterBody {
                     }
                 }
             }
+            if !actors.is_empty() {
+                let low = swept.low.map(f64::from);
+                let high = swept.high.map(f64::from);
+                let capsule = self.pose.world_capsule();
+                let endpoints = [capsule.a, capsule.b];
+                let moving = CastShape {
+                    points: &endpoints,
+                    radius: capsule.radius,
+                    frame: None,
+                };
+                for actor in actors {
+                    if !overlaps(low, high, actor.bounds()) {
+                        continue;
+                    }
+                    if let Some(candidate) = cast_round(
+                        moving,
+                        RoundShape::Capsule(actor.world_capsule()),
+                        None,
+                        translation,
+                    )? {
+                        if TRACE && candidate < fraction {
+                            proxy_id = None;
+                        }
+                        fraction = minps(fraction, candidate);
+                    }
+                }
+            }
         }
         if TRACE && clip.is_none() && fraction < 1.0 {
             *clip = proxy_id.map(|proxy_id| SweepClip {
@@ -307,6 +379,16 @@ impl CharacterBody {
         }
         Ok(self.pose.position)
     }
+}
+
+fn contact_constraint(current: Vec3, normal: Vec3, points: &[ContactPoint]) -> Constraint {
+    let deepest = points[1..]
+        .iter()
+        .fold(points[0].separation, |depth, point| {
+            minps(depth, point.separation)
+        });
+    let offset = dot(normal, current) - deepest;
+    ContactPlane { normal, offset }.into()
 }
 
 fn expanded(bounds: ContactBounds, margin: f32) -> ContactBounds {
@@ -440,6 +522,131 @@ mod tests {
         let geometry =
             StaticGeometry::Mesh(Arc::new(ContactMesh::new(mesh, [1.0; 3], 0x18).unwrap()));
         Arc::new(ContactWorld::new(vec![StaticShape::new(geometry, None).unwrap()]).unwrap())
+    }
+
+    fn standing(position: Vec3) -> CapsulePose {
+        CapsulePose {
+            position,
+            radius: 0.5,
+            top: 1.5,
+        }
+    }
+
+    #[test]
+    fn empty_dynamic_snapshot_preserves_static_contact_and_trace_order() {
+        let world = room();
+        let start = standing([0.0, 0.1, 0.0]);
+        let mut legacy = CharacterBody::new(Arc::clone(&world), start, 0x18);
+        let mut dynamic = CharacterBody::new(world, start, 0x18);
+        for displacement in [[-4.0, 0.0, 0.0], [0.0, 0.0, 3.0], [2.0, -1.0, 0.0]] {
+            let mut legacy_clip = None;
+            let mut dynamic_clip = None;
+            let expected = legacy
+                .move_capsule_traced(displacement, 0.016, &mut legacy_clip)
+                .unwrap();
+            let actual = dynamic
+                .move_capsule_against_traced(displacement, 0.016, &[], &mut dynamic_clip)
+                .unwrap();
+            assert_eq!(actual.position, expected.position);
+            assert_eq!(actual.planes, expected.planes);
+            assert_eq!(actual.touching, expected.touching);
+            let trace = |clip: Option<SweepClip>| {
+                clip.map(|clip| (clip.proxy_id, clip.category, clip.fraction))
+            };
+            assert_eq!(trace(dynamic_clip), trace(legacy_clip));
+        }
+        assert_eq!(dynamic.capsule_pose(), legacy.capsule_pose());
+    }
+
+    #[test]
+    fn dynamic_capsules_choose_nearest_impact_without_static_trace_identity() {
+        let world = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+        let near = standing([2.0, 0.0, 0.0]);
+        let far = standing([3.5, 0.0, 0.0]);
+        let mut positions = Vec::new();
+        for actors in [[near, far], [far, near]] {
+            let mut body = CharacterBody::new(Arc::clone(&world), standing([0.0; 3]), 0x18);
+            let mut clip = None;
+            let movement = body
+                .move_capsule_against_traced([5.0, 0.0, 0.0], 0.016, &actors, &mut clip)
+                .unwrap();
+            assert!((0.95..=1.02).contains(&movement.position[0]));
+            assert!(clip.is_none());
+            positions.push(movement.position);
+        }
+        assert_eq!(positions[0], positions[1]);
+    }
+
+    #[test]
+    fn dynamic_capsule_stops_fast_approach_and_clips_inward_velocity() {
+        let world = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+        let mut body = CharacterBody::new(world, standing([0.0; 3]), 0x18);
+        let actor = standing([2.0, 0.0, 0.0]);
+        let movement = body
+            .move_capsule_against([4.0, 0.0, 0.0], 0.016, &[actor])
+            .unwrap();
+        assert!(
+            (0.95..=1.02).contains(&movement.position[0]),
+            "{movement:?}",
+            movement = movement.position
+        );
+        assert!(movement.touching);
+        let clipped = clip_velocity([4.0, 0.0, 0.0], movement.planes);
+        assert!(clipped.into_iter().all(|axis| axis.abs() < 1e-4));
+        assert_eq!(body.capsule_pose().radius, 0.5);
+    }
+
+    #[test]
+    fn dynamic_capsule_on_separate_floor_does_not_block() {
+        let world = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+        let mut body = CharacterBody::new(world, standing([0.0; 3]), 0x18);
+        let actor = standing([2.0, 2.5, 0.0]);
+        let movement = body
+            .move_capsule_against([4.0, 0.0, 0.0], 0.016, &[actor])
+            .unwrap();
+        assert_eq!(movement.position, [4.0, 0.0, 0.0]);
+        assert!(movement.planes.is_empty());
+        assert!(!movement.touching);
+    }
+
+    #[test]
+    fn static_wall_and_dynamic_capsule_share_first_impact() {
+        let world = room();
+        let start = standing([0.0, 0.1, 0.0]);
+        let mut body = CharacterBody::new(Arc::clone(&world), start, 0x18);
+        let displacement = [-4.0, 0.0, 0.0];
+        let wall = body.move_capsule(displacement, 0.016).unwrap().position;
+        assert!((-1.4..=-1.2).contains(&wall[0]), "{wall:?}");
+
+        let mut body = CharacterBody::new(Arc::clone(&world), start, 0x18);
+        let beyond_wall = standing([-3.5, 0.1, 0.0]);
+        let blocked = body
+            .move_capsule_against(displacement, 0.016, &[beyond_wall])
+            .unwrap();
+        assert_eq!(blocked.position, wall);
+
+        let mut body = CharacterBody::new(world, start, 0x18);
+        let before_wall = standing([-1.2, 0.1, 0.0]);
+        let blocked = body
+            .move_capsule_against(displacement, 0.016, &[before_wall])
+            .unwrap();
+        assert!(
+            (-0.25..=-0.15).contains(&blocked.position[0]),
+            "{:?}",
+            blocked.position,
+        );
+    }
+
+    #[test]
+    fn initially_overlapping_dynamic_capsule_allows_escape() {
+        let world = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+        let mut body = CharacterBody::new(world, standing([0.0; 3]), 0x18);
+        let actor = standing([0.75, 0.0, 0.0]);
+        let movement = body
+            .move_capsule_against([-1.0, 0.0, 0.0], 0.016, &[actor])
+            .unwrap();
+        assert_eq!(movement.position, [-1.0, 0.0, 0.0]);
+        assert!(!movement.touching);
     }
 
     #[test]
