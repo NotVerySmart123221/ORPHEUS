@@ -63,7 +63,11 @@ fn logical_button_buffer_keeps_its_original_input_owner_after_rebinding() {
     );
     model["fields"]["m_680A2CB2"] = json!([0]);
     let graphs = Arc::new(store(vec![model]));
-    for (binding, expected) in [(button, true), (new_button, false)] {
+    for (binding, expected, rebind_active) in [
+        (button, true, false),
+        (new_button, false, false),
+        (button, true, true),
+    ] {
         let mut component = Component::start(
             Arc::clone(&graphs),
             body,
@@ -127,6 +131,23 @@ fn logical_button_buffer_keeps_its_original_input_owner_after_rebinding() {
                 .len(),
             usize::from(expected)
         );
+        if rebind_active {
+            component
+                .set_entity_variable(BINDING, Value::Integer(new_button), &mut EmptyWorld)
+                .unwrap();
+            component.run_now(&mut EmptyWorld).unwrap();
+            let states = &component.snapshot().unwrap().instances[&1].states;
+            assert_eq!(states[&0].kind, StateKind::LogicalButton { down: false });
+            assert!(states[&0].buffered_press.is_none());
+            assert!(!states[&1].active);
+            assert!(
+                !component
+                    .machine
+                    .queues
+                    .iter(1)
+                    .any(|(_, event)| { matches!(event, Event::Timer(0, 1)) })
+            );
+        }
         component.advance_frame(3, &mut EmptyWorld).unwrap();
         assert_eq!(
             component.snapshot().unwrap().instances[&1].states[&0].kind,
@@ -140,6 +161,125 @@ fn logical_button_buffer_keeps_its_original_input_owner_after_rebinding() {
                 .is_empty()
         );
     }
+}
+
+#[test]
+fn active_logical_button_rebinding_reconciles_the_held_branch() {
+    const BINDING: u32 = 71;
+    const EDGE: u32 = 72;
+
+    let fixture = lifecycle_fixture();
+    let input = &fixture["input"]["live_rebinding"];
+    let graph_index = u32::try_from(input["graph"].as_u64().unwrap()).unwrap();
+    let body = u32::try_from(input["body"].as_u64().unwrap()).unwrap();
+    let mark_edge = |position, held| {
+        node(
+            position,
+            "STUStatescriptActionSetVar",
+            None,
+            json!({"m_out_Var": var(EDGE, true), "m_value": held}),
+        )
+    };
+    let mut listener = node(
+        1,
+        "STUStatescriptStateLogicalButton",
+        Some(0),
+        json!({
+            "m_logicalButton": var(BINDING, true),
+            "m_onGoingDownPlug": plug(&[(3, "m_inPlug")], &[]),
+            "m_onComingUpPlug": plug(&[(4, "m_inPlug")], &[]),
+            "m_80AF45FB": plug(&[(2, "m_beginPlug")], &[1]),
+        }),
+    );
+    listener["server_only"] = json!(true);
+    let mut scale = node(2, "AuthoredReboundScale", Some(1), json!({"factor": 0.5}));
+    scale["state_behavior"] = json!("movement_scale");
+    scale["server_only"] = json!(true);
+    let mut model = graph(
+        graph_index,
+        vec![
+            node(
+                0,
+                "STUStatescriptEntry",
+                None,
+                json!({"m_outPlug": plug(&[(1, "m_beginPlug")], &[])}),
+            ),
+            listener,
+            scale,
+            mark_edge(3, true),
+            mark_edge(4, false),
+        ],
+        json!([1, 2]),
+        json!([0]),
+    );
+    model["fields"]["m_680A2CB2"] = json!([0]);
+    let mut component = Component::start(
+        Arc::new(store(vec![model])),
+        body,
+        Variables::from([
+            (
+                BINDING,
+                Value::Integer(input["initial_button"].as_i64().unwrap()),
+            ),
+            (EDGE, Value::Bool(false)),
+        ]),
+        vec![Root::new(1, graph_index)],
+        0,
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    for (index, step) in input["steps"].as_array().unwrap().iter().enumerate() {
+        if let Some(binding) = step["binding"].as_i64() {
+            component
+                .set_entity_variable(BINDING, Value::Integer(binding), &mut EmptyWorld)
+                .unwrap();
+            component.run_now(&mut EmptyWorld).unwrap();
+        } else {
+            component
+                .advance_command(
+                    Command {
+                        frame: u32::try_from(step["frame"].as_u64().unwrap()).unwrap(),
+                        buttons: u32::try_from(step["buttons"].as_u64().unwrap()).unwrap(),
+                        ..Command::default()
+                    },
+                    &mut EmptyWorld,
+                )
+                .unwrap();
+        }
+        let held = step["held"].as_bool().unwrap();
+        let snapshot = component.snapshot().unwrap();
+        let states = &snapshot.instances[&1].states;
+        assert_eq!(
+            states[&0].kind,
+            StateKind::LogicalButton { down: held },
+            "step {index}"
+        );
+        assert_eq!(snapshot.variables[&EDGE], Value::Bool(held), "step {index}");
+        assert_eq!(states[&1].active, held, "step {index}");
+        assert_eq!(
+            u64::from(states[&1].activation),
+            step["held_starts"].as_u64().unwrap(),
+            "step {index}"
+        );
+        assert_eq!(
+            component
+                .movement_modifiers(&mut EmptyWorld)
+                .unwrap()
+                .unwrap()
+                .len(),
+            usize::from(held),
+            "step {index}"
+        );
+    }
+    assert!(component.machine.held_buttons.is_empty());
+    component.debug_end_state(1, 0, &mut EmptyWorld).unwrap();
+    assert!(
+        !component
+            .machine
+            .watchers
+            .contains_key(&VarKey::Entity(BINDING))
+    );
 }
 
 #[test]

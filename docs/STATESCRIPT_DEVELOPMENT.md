@@ -497,6 +497,11 @@ Set optional `allow_dead` to true to admit input while the owner is dead.
 Otherwise owner death releases the held branch before the next observation
 update, and the existing logical-button lock also controls admission.
 
+For logical-button nodes that read a binding expression, a change to the
+resolved button discards a buffered press from the old button and checks the
+new button against current held input, death admission, and button locks. If
+both bindings are held and admitted, the active branch keeps its state.
+
 See the [synthetic held input contract](../fixtures/behavior/script-logical-input-owner-lifecycle-v1.json).
 
 ## Scale movement speed for a state

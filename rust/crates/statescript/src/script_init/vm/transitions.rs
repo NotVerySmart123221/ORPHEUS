@@ -105,6 +105,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             .expect("movement modifier");
                         self.refresh_movement_modifier(key, node)?;
                     }
+                    Some(StateKind::LogicalButton { .. }) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("logical button state");
+                        self.refresh_logical_button_binding(key, node)?;
+                    }
                     Some(StateKind::MovementSample { .. }) => {
                         let node = self
                             .graph(id)
@@ -641,6 +648,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     .state(usize::from(key.raw))
                     .expect("movement modifier");
                 self.refresh_movement_modifier(key, node)?;
+            } else if state.active && matches!(state.kind, StateKind::LogicalButton { .. }) {
+                let node = self
+                    .graph(key.instance)
+                    .state(usize::from(key.raw))
+                    .expect("logical button state");
+                self.refresh_logical_button_binding(key, node)?;
             } else if state.active && state.kind == StateKind::ExplosionContact {
                 let node = self
                     .graph(key.instance)
