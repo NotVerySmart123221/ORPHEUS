@@ -63,7 +63,7 @@ The Rust-only [room actor pose fixture](../fixtures/behavior/script-room-actor-p
 
 The Rust-only [owner startup spatial fixture](../fixtures/behavior/script-owner-startup-spatial-v1.json) checks a one-shot query through scene admission before body publication. It covers unavailable context, an available empty room, and another actor's frozen pose with a separate owner command clock.
 
-The Rust-only [owner replacement fixture](../fixtures/behavior/owner-admission-transaction-v1.json) drives the room input queue through a factory error, an invalid runtime identity, an initial snapshot packing error, and a successful retry. It checks the current body and script, controller counters, replication records, and room events while input continues.
+The Rust-only [owner replacement fixture](../fixtures/behavior/owner-admission-transaction-v1.json) drives the room input queue through a factory error, an invalid runtime identity, an initial snapshot packing error, an observer-only link error, and a successful retry. The observer-only candidate has a valid owner baseline that fits the datagram. The fixture checks the current body and script, controller counters, replication records, and room events while input continues.
 
 The Rust-only [player host facts fixture](../fixtures/behavior/script-player-host-facts-v1.json) checks known body and controller presence, unknown entities, the team slot assigned at spawn, and membership counts from the admitted player roster.
 

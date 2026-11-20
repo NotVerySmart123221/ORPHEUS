@@ -822,6 +822,7 @@ fn eligible(world: &WorldDelivery) -> Vec<usize> {
 
 struct SyntheticOwner {
     component: Component,
+    snapshot_override: Option<Snapshot>,
     graphs: Arc<GraphStore>,
     codecs: CodecTable,
     modifiers: BTreeMap<ModifierKey, Modifier>,
@@ -862,7 +863,11 @@ impl OwnerBodyRuntime for SyntheticOwner {
 
     fn snapshot(&self) -> Option<&Snapshot> {
         (!self.failed.load(Ordering::Relaxed))
-            .then(|| self.component.snapshot())
+            .then(|| {
+                self.snapshot_override
+                    .as_ref()
+                    .or_else(|| self.component.snapshot())
+            })
             .flatten()
     }
 
@@ -946,6 +951,7 @@ fn synthetic_owner_with_vitals(
     .unwrap();
     SyntheticOwner {
         component,
+        snapshot_override: None,
         graphs,
         codecs: CodecTable::from_json(r#"{"classes":{}}"#).unwrap(),
         modifiers: BTreeMap::new(),
@@ -1018,6 +1024,7 @@ fn rejected_owner_replacements_preserve_body_and_input_progress() {
         FactoryError,
         WrongEntity,
         InvalidInitialEncoding,
+        InvalidObserverProjection,
         Ready,
     }
     #[derive(serde::Deserialize)]
@@ -1027,6 +1034,7 @@ fn rejected_owner_replacements_preserve_body_and_input_progress() {
         active_wire_suffix: u32,
         active_generation: u64,
         factory_outcomes: Vec<FactoryOutcome>,
+        observer_graph: serde_json::Value,
     }
     #[derive(serde::Deserialize)]
     struct Expected {
@@ -1044,6 +1052,8 @@ fn rejected_owner_replacements_preserve_body_and_input_progress() {
     use crate::bits::BitWriter;
     use crate::game_combat::PlayerBodyEvent;
     use crate::game_heroes::HeroCatalog;
+    use crate::script_codecs::PayloadError;
+    use crate::script_init::StateKind;
     use crate::script_snapshot_wire::SnapshotError;
     use crate::script_wire::{Value as ScriptValue, WireError};
 
@@ -1106,17 +1116,26 @@ fn rejected_owner_replacements_preserve_body_and_input_progress() {
     let factory = Arc::new(Mutex::new(VecDeque::from(input.factory_outcomes)));
     let factory_input = Arc::clone(&factory);
     let candidate_hero = input.candidate_hero;
+    let observer_graph = u32::try_from(input.observer_graph["index"].as_u64().unwrap()).unwrap();
+    let observer_graphs = Arc::new(
+        GraphStore::from_json(
+            &serde_json::to_vec(&serde_json::json!({
+                "version": 1, "bodies": {}, "missing": [], "graphs": [input.observer_graph],
+            }))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
     scene.owner_body_factory = Some(Arc::new(move |hero, spawn, _| {
         assert_eq!((hero.guid, spawn.entity), (candidate_hero, candidate_wire));
         let outcome = factory_input.lock().unwrap().pop_front().unwrap();
-        let (entity, invalid_initial_encoding) = match outcome {
+        let entity = match outcome {
             FactoryOutcome::FactoryError => return Err(io::Error::other("fixture start error")),
-            FactoryOutcome::WrongEntity => (spawn.entity + 1, false),
-            FactoryOutcome::InvalidInitialEncoding => (spawn.entity, true),
-            FactoryOutcome::Ready => (spawn.entity, false),
+            FactoryOutcome::WrongEntity => spawn.entity + 1,
+            _ => spawn.entity,
         };
         let mut runtime = synthetic_owner(entity, spawn.frame, Arc::default());
-        if invalid_initial_encoding {
+        if let FactoryOutcome::InvalidInitialEncoding = outcome {
             runtime.component = Component::start(
                 Arc::clone(&runtime.graphs),
                 entity,
@@ -1134,6 +1153,50 @@ fn rejected_owner_replacements_preserve_body_and_input_progress() {
             assert!(matches!(
                 encoder.full(&projected),
                 Err(SnapshotError::Wire(WireError::InvalidVariable))
+            ));
+        }
+        if let FactoryOutcome::InvalidObserverProjection = outcome {
+            runtime.graphs = Arc::clone(&observer_graphs);
+            runtime.codecs = CodecTable::from_json(
+                r#"{"classes":{"12340001":{"name":"STUStatescriptState","codec":"link",
+                    "layout":[],"stec":false,"status":"VERIFIED"}}}"#,
+            )
+            .unwrap();
+            runtime.component = Component::start(
+                Arc::clone(&runtime.graphs),
+                entity,
+                Default::default(),
+                vec![Root::new(1, observer_graph)],
+                spawn.frame,
+                &mut EmptyWorld,
+                MAX_INIT_WORK,
+            )
+            .unwrap();
+            let mut snapshot = runtime.component.snapshot().unwrap().clone();
+            let source = snapshot
+                .instances
+                .get_mut(&1)
+                .unwrap()
+                .states
+                .get_mut(&0)
+                .unwrap();
+            assert!(source.active);
+            source.kind = StateKind::Registered { next: Some((1, 1)) };
+            runtime.snapshot_override = Some(snapshot);
+
+            let snapshot = runtime.snapshot().unwrap();
+            let encoder = runtime.encoder();
+            let owner = encoder.project(snapshot, View::Owner).unwrap();
+            let baseline = encoder
+                .queue_full(&mut BodyStream::new(entity), &owner)
+                .unwrap();
+            let packet = frame(u32::MAX, u32::MAX, &[], &[], &[&baseline.update]).unwrap();
+            assert!(packet.len() <= MAX_PAYLOAD);
+            assert!(matches!(
+                encoder.project(snapshot, View::Observer),
+                Err(SnapshotError::Payload { site, source: PayloadError::Field(field) })
+                    if site.instance == 1 && site.graph == observer_graph && site.state == 0
+                        && field == "link"
             ));
         }
         Ok(Some(Box::new(runtime)))

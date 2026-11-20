@@ -899,13 +899,10 @@ impl WorldDelivery {
             Some(encoder.queue_full(stream, &snapshot).map_err(invalid)?)
         };
         if let Some(chunk) = chunk {
-            if frame(u32::MAX, u32::MAX, &[], &[], &[&chunk.update])
-                .map_err(invalid)?
-                .len()
-                > MAX_PAYLOAD
-            {
-                return Err(invalid("scene script chunk exceeds the datagram budget"));
-            }
+            ensure_script_chunk_fits(
+                &chunk.update,
+                "scene script chunk exceeds the datagram budget",
+            )?;
             self.push(Record {
                 update: chunk.update,
                 delivery: Delivery::SceneScript { last: chunk.last },
@@ -1763,6 +1760,14 @@ pub(super) fn command_prefix(
     let limit = tick.saturating_add(MAX_INPUT_LEAD);
     fresh.truncate(fresh.partition_point(|command| command.frame <= limit));
     (fresh, boundary)
+}
+
+pub(super) fn ensure_script_chunk_fits(update: &EntityUpdate, error: &str) -> io::Result<()> {
+    let packet = frame(u32::MAX, u32::MAX, &[], &[], &[update]).map_err(invalid)?;
+    if packet.len() > MAX_PAYLOAD {
+        return Err(invalid(error));
+    }
+    Ok(())
 }
 
 pub(super) fn invalid(error: impl std::fmt::Display) -> io::Error {

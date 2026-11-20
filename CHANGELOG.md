@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Validated both views of a candidate body's initial script snapshot before publishing the replacement. The owner and observer startup checks use the existing full-frame encoder and datagram budget. The synthetic input regression reproduces an observer-only link failure after a valid owner baseline.
+
 - Kept the current player body active when a candidate script fails to initialize or encode its first owner snapshot. The room records a new body generation and commits the controller stream only after successful replacement. A synthetic input regression reproduced the old failure and exercised three rejections followed by a successful retry. Workspace tests with script coverage, Clippy, and the Python script tests passed. Prepared input-gap replacement passed, both 104319 startup reports matched the preceding results, and the #72 capture matched all 476 observations.
 
 - Recognized explicitly unbound owners in the shared StateScript entity count expression. The expression keeps its caller's initial value in that case. Valid bound queries still use the existing host provider, and unavailable or malformed inputs remain diagnostic. The locked workspace suite with script coverage passed, including 366 native tests and 205 StateScript tests. Two same-pack reports at `39932467` cleared two diagnostics and raised independent startup from 10 of 32 to 11 of 32. Zarya is the new independent pass. The ordinary Practice Range factory still attaches Soldier only. The #72 capture matched all 476 sites.
