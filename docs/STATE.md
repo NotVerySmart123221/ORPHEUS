@@ -35,6 +35,25 @@ observations across 900 frames. Phase 3A also matched that replay on its
 standalone `055adca3` checkpoint. Original-client skill, aiming, and
 audio acceptance remain open.
 
+### Weapon readiness comparison
+
+Checkpoint `79e8a5b9` ran the same prepared owner-input schedule twice
+with the same executable. The second pack supplied the existing neutral
+rule `0x2819` through `mode_rulesets` for the known actor profiles.
+Both runs admitted 12 of 32 actors. The number with weapon output rose
+from one to four. Reaper and Cassidy each emitted one hitscan request
+and Sombra emitted eight. Soldier retained four hitscan requests and
+one launch request. These observations cover server output.
+
+The authored rule also exposed unsupported states on the first primary
+input at frame 1017. Winston reached target tracking and physics
+explosion states, and Zarya reached a ray tracking state. Winston
+completed the original schedule. Zarya's original run first halted on
+secondary input at frame 1064. Completed schedules fell from 11 to 10
+of the 12 admitted actors with the rule. The alternate rule pack remains
+a local experiment. The state blockers belong to the shared combat
+states and Phase 3A ray tracking work.
+
 ## Implementation and prepared-runtime observations
 
 Local integration check (2026-11-16): rifle/reload and controller/training-bot startup prepared tests passed with the target-tagged base pack, as did runtime preflight and headless startup. The longer `scene_assets::tests::stock_soldier_owner_session_idles_fires_reloads_and_sprints` test failed its fixed-instance assertion: instance `24` contained graph `0x0F82`, not `0x05AD`. The message table was present elsewhere; diagnostic inspection also found switch instance `19` versus expected `18`. At that revision the fixed instance assertion prevented the later frame checks from running.

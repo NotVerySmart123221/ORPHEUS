@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Recorded a controlled weapon readiness comparison using the existing graph-bundle rules. Three more actors emitted server weapon requests, and two primary input paths exposed unsupported states. Both runs admitted the same 12 actors. The alternate rule pack stays in local verification.
+
 - Integrated checked Phase 2 and Phase 3A commits with the native Practice Range admission branch. The combined 104319 matrix passed independent startup and room attachment for 12 of 32 actors, adding Moira in both. The locked workspace tests, Clippy, and transactional admission check passed.
 
 - Applied logical button death admission consistently on presses, state entry, and lock changes. Held scopes that require a living owner release before the next VM update samples their observations.
