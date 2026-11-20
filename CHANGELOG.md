@@ -6,7 +6,7 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
-- Added an opt-in headless startup matrix that records prepared input digests, room admission, and body factory results for each catalog actor. The report retains typed startup diagnostics and available observation sites for local investigation.
+- Added an opt-in headless startup matrix that records prepared input digests, room admission, and body factory results for each catalog actor. Two runs at `574958c0` produced identical reports. All 32 actors had their direct roots and spawn inputs available. Nine passed independent startup, 23 returned an unsupported factory result, and the current room admitted one. The separate #72 900-frame regression passed with all 476 previously observed sites retained.
 
 - Added the authored SegmentClear expression for finite endpoints and shared room geometry. It uses the same visibility query and work accounting as radius filtering. Spatial service detection now follows only the server fallback of client-only operands. The StateScript suite passed with 187 tests and 13 private-runtime tests skipped.
 
