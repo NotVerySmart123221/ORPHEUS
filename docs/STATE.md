@@ -120,6 +120,17 @@ matched each other byte for byte and matched the preceding 32 actor
 results after removing the revision field. The #72 capture matched
 all 476 observations.
 
+At `0d1d6ef4`, the same input regression added a candidate whose owner
+baseline fits the wire budget and whose observer projection has an
+invalid remote state link. The preceding revision replaced the body.
+The fixed revision rejected the candidate, preserved the current body
+and its delivery state, and accepted the retry. Both startup views use
+the existing full-frame encoder and datagram check. The prepared
+input-gap replacement passed. Two 104319 startup reports matched each
+other byte for byte and retained the preceding 11 independent passes,
+one ordinary Practice Range attachment, and 47 blocking sites. The #72
+capture matched all 476 observations.
+
 | Workflow | Python reference | Rust implementation | Open client or parity gap |
 | --- | --- | --- | --- |
 | **Login, Profiles & Lobby** | Battle.net/JAM auth, profiles, settings (`22200`–`22204`), queues, Windows launcher + TLS relay. | Native BNet/JAM lobby, `profile-settings-v1` (CI verified), encrypted UDP seat handoff. | Standalone Rust launcher & public client connection flow open. |
