@@ -42,6 +42,12 @@ pub(super) struct EnemyState {
 }
 
 impl EnemyState {
+    pub(super) fn halt(&mut self, bot: &mut Bot, error: String) {
+        self.scripts.clear_pending_script_motion();
+        bot.clear_velocity_changes();
+        self.fault = Some(error);
+    }
+
     pub(super) fn select_witch_targets(
         &mut self,
         bot: &mut Bot,

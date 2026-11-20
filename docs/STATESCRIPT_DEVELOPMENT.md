@@ -601,7 +601,10 @@ living actor can block movement. Each mover checks the other actors'
 sampled positions for the duration of that tick. The body's character
 collision setting and its active movement modifiers control contact
 participation. Static map collision still applies when a body passes
-through actors. Death and runtime retirement clear pending displacement.
+through actors. Death and runtime retirement clear pending displacement
+and velocity requests, including work already passed to the native mover.
+If a player script fails while recovering input frames, later poses use
+the settled motion and current input.
 
 An actual player displacement opens a bounded owner correction window at
 the moved pose. Delivery uses the existing create acknowledgement,
@@ -617,6 +620,8 @@ The [regular movement contract](../fixtures/behavior/native-regular-actor-contac
 covers player input recovery and NPC patrol and objective movement.
 The [contact participation contract](../fixtures/behavior/movement-contact-participation-v1.json)
 covers body settings and modifier start and retirement.
+The [pending motion contract](../fixtures/behavior/owner-script-motion-cancellation-v1.json)
+covers a script fault during recovered player input.
 The [owner motion contract](../fixtures/behavior/owner-swept-motion-v1.json)
 covers correction scheduling and a same-frame script failure.
 

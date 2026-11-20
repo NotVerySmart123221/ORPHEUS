@@ -1559,7 +1559,7 @@ impl WorldDelivery {
                 if let Err(error) = script.advance_step(runtime, mover, &mut buffers, neutral, step)
                 {
                     mover.track_modifiers(frame, &BTreeMap::new());
-                    mover.clear_swept_displacement();
+                    mover.clear_pending_script_motion();
                     pending.gap = ScriptGap::default();
                     fault = Some((frame, step, error));
                     break;
@@ -1608,7 +1608,7 @@ impl WorldDelivery {
                         script.advance_step(runtime, mover, &mut buffers, command, BodyStep::Posed)
                     {
                         mover.track_modifiers(command.frame, &BTreeMap::new());
-                        mover.clear_swept_displacement();
+                        mover.clear_pending_script_motion();
                         fault = Some((command.frame, BodyStep::Posed, error));
                     }
                 }

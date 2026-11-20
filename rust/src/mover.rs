@@ -230,9 +230,10 @@ impl Mover {
         true
     }
 
-    pub(crate) fn clear_swept_displacement(&mut self) {
+    /// Drop script work that has not reached a pose on this body.
+    pub(crate) fn clear_pending_script_motion(&mut self) {
+        self.velocity_changes.clear();
         self.swept_displacement = None;
-        self.swept_displacement_frame = None;
     }
 
     pub(crate) fn has_swept_displacement(&self) -> bool {
@@ -634,7 +635,7 @@ mod tests {
             }
             if frame == due + 1 {
                 assert!(moved.queue_swept_displacement(frame, second));
-                moved.clear_swept_displacement();
+                moved.clear_pending_script_motion();
                 assert!(!moved.has_swept_displacement());
                 assert!(!moved.swept_displacement_at(due));
             }
@@ -686,7 +687,7 @@ mod tests {
         assert!(
             mover.queue_swept_displacement(2, SweptDisplacement::new([2.0, 0.0, 0.0]).unwrap())
         );
-        mover.clear_swept_displacement();
+        mover.clear_pending_script_motion();
         mover
             .step(
                 &rays,
@@ -777,7 +778,7 @@ mod tests {
         assert!(!mover.has_swept_displacement());
         let before = mover.pose.position;
         assert!(mover.queue_swept_displacement(due + 2, displacement));
-        mover.clear_swept_displacement();
+        mover.clear_pending_script_motion();
         let mut pending = mover.pending_poses(Command {
             frame: due + 2,
             ..Command::default()

@@ -998,6 +998,7 @@ impl Bot {
     pub fn died(&mut self, tick: u32) {
         self.dead = true;
         self.movement_blockers = None;
+        self.clear_velocity_changes();
         self.keys = false;
         self.held = [0; 2];
         self.stand();
@@ -1050,6 +1051,11 @@ impl Bot {
         changes: Vec<(u32, crate::mover::VelocityChange)>,
     ) {
         self.velocity_changes.extend(changes);
+    }
+
+    /// Cancel pending script edits without changing already resolved motion.
+    pub(crate) fn clear_velocity_changes(&mut self) {
+        self.velocity_changes.clear();
     }
 
     /// Freeze the room's actor-contact admission for this update tick.
@@ -1586,6 +1592,41 @@ mod tests {
             stopped.velocity_changes.is_empty(),
             "control pause expires the edit without deferred catch-up"
         );
+    }
+
+    #[test]
+    fn pending_velocity_edits_cancel_on_death_and_do_not_follow_replacement() {
+        use crate::mover::VelocityChange;
+
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/native-regular-actor-contact-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(fixture["evidence"], "synthetic-native");
+        let input = &fixture["input"];
+        let before_due: u32 = input["warmup_frame"].as_u64().unwrap().try_into().unwrap();
+        let due: u32 = input["final_frame"].as_u64().unwrap().try_into().unwrap();
+        assert!(before_due < due);
+        let velocity: [f64; 3] = serde_json::from_value(input["velocity"].clone()).unwrap();
+        let change = (due, VelocityChange::Delta(velocity));
+        let mut bot = walker([0.0, 0.0, 10.0]);
+        bot.velocity = velocity;
+        bot.queue_velocity_changes(vec![change]);
+        let resolved = bot.movement(before_due);
+        bot.clear_velocity_changes();
+        assert!(bot.velocity_changes.is_empty());
+        assert_eq!(bot.movement(before_due), resolved);
+
+        bot.queue_velocity_changes(vec![change]);
+        let fresh = bot.respawned(BOT_ENTITY + 1, due);
+        assert!(fresh.velocity_changes.is_empty());
+        assert_eq!(bot.velocity_changes, vec![change]);
+        let position = bot.position;
+        bot.died(before_due);
+        assert!(bot.velocity_changes.is_empty());
+        assert_eq!(bot.position, position);
+        assert_eq!(bot.velocity, [0.0; 3]);
+        assert!(bot.dead);
     }
 
     #[test]

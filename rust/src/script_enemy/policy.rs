@@ -65,6 +65,11 @@ impl EnemyScripts {
         std::mem::take(&mut self.control_records.velocity_changes)
     }
 
+    pub(crate) fn clear_pending_script_motion(&mut self) {
+        self.control_records.velocity_changes.clear();
+        self.control_records.swept_displacement = None;
+    }
+
     pub(crate) fn take_swept_displacement(
         &mut self,
         tick: u32,
@@ -885,7 +890,7 @@ impl EnemyScripts {
         critical: bool,
         loadout: Option<u64>,
     ) -> Result<(), String> {
-        self.control_records.swept_displacement = None;
+        self.clear_pending_script_motion();
         self.body.set_owner_dead(true);
         let parameters = Variables::from([
             (0x12, Value::Entity(source.killer)),
