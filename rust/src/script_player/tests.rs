@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    lifecycle::flashbang_duration,
     world::{BodyWorld, target_delta},
     *,
 };
@@ -15,6 +14,7 @@ use crate::{
     game_replication::BodyStep,
     mover::{Mover, sample_movement_flags},
     scene_assets::MOVER_CATEGORY,
+    script_control::LEGACY_PROJECTILE_CONTROL,
     script_expr::to_float,
     script_init::{Site, TargetTagEffect},
     script_wire::Value,
@@ -1044,7 +1044,7 @@ fn authored_flashbang_duration_follows_both_mode_branches() {
     use serde_json::json;
     let root = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
     let graphs = GraphStore::load(root.join("data/game_graphs_174.json.gz")).unwrap();
-    let config = flashbang_duration(&graphs).unwrap();
+    let config = LEGACY_PROJECTILE_CONTROL.duration(&graphs).unwrap();
     for (flag, ticks) in [(false, 50), (true, 107)] {
         let (_, spawn) = fixture_body_factory();
         let mut runtime = fixture_volley_factory(29, true, fixture_projectile_fields(40.0))

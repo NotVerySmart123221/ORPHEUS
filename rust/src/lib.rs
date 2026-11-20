@@ -89,6 +89,7 @@ pub mod retail_templates;
 mod weapon_spread;
 pub use orpheus_runtime as runtime;
 pub mod scene_assets;
+mod script_control;
 mod script_enemy;
 #[cfg(test)]
 mod script_init_host_tests;

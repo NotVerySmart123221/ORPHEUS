@@ -115,6 +115,12 @@ states when the claim changes position or ends.
 
 See the [synthetic stack claim contract](../fixtures/behavior/script-stack-claim-v1.json).
 
+The existing timed projectile bridge shares one native compatibility binding
+for the shot, wrapper, duration override, and NPC guards. Recipient scripts
+queue the existing wrapper and hit notification in order. The room can
+suppress its native control timer while the graph still handles the
+notification.
+
 ## Share class behavior across a graph bundle
 
 Add `authored_classes` to a version 1 bundle and use those names in the

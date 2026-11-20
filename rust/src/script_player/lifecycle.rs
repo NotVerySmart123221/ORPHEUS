@@ -22,8 +22,8 @@ use crate::{
     mover_modifiers::{Modifier, ModifierKey},
     projectile_flight::{ProjectileBallistics, authored_gravity, lifted_direction},
     script_codecs::CodecTable,
+    script_control::LEGACY_PROJECTILE_CONTROL,
     script_expr::to_float,
-    script_graph::GraphStore,
     script_init::{Component, HostEvent, InitFault, RoomMessage, Snapshot},
     script_runtime::FRAME_MS,
     script_snapshot_wire::SnapshotEncoder,
@@ -40,21 +40,6 @@ pub(crate) struct PlayerBodyRuntime {
     pub(super) modifiers: Option<BTreeMap<ModifierKey, Modifier>>,
     pub(super) leases: ProjectileLeases,
     pub(super) frame: u32,
-}
-
-pub(super) fn flashbang_duration(graphs: &GraphStore) -> Option<&Json> {
-    graphs
-        .graph(0x0228)?
-        .node(7)?
-        .field("m_69F4B52C.m_6525E98B.m_1EB5A024")?
-        .as_array()?
-        .iter()
-        .find(|row| {
-            row.get("m_0D09D2D9")
-                .and_then(crate::script_graph::asset_guid)
-                == Some(0x0d80_0000_0000_00d7)
-        })?
-        .get("m_value")
 }
 
 pub(super) const DEADEYE_GRAPH: u32 = 0x022f;
@@ -258,10 +243,13 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
             .into_iter()
             .filter_map(|shot| {
                 let node = self.component.shot_node(&shot)?;
-                // 0228/7 supplies the duration override for the Flashbang effect,
-                // including the mode-dependent branch. Keep policy in authored data.
-                let stun_duration = (hero == CASSIDY && (shot.graph, node.pos) == (0x01e9, 7))
-                    .then(|| flashbang_duration(&self.world.graphs).cloned())
+                let flashbang = LEGACY_PROJECTILE_CONTROL.matches_shot(hero, shot.graph, node.pos);
+                let stun_duration = flashbang
+                    .then(|| {
+                        LEGACY_PROJECTILE_CONTROL
+                            .duration(&self.world.graphs)
+                            .cloned()
+                    })
                     .flatten();
                 // Python e1128509 declares this primary-only implicit policy;
                 // it is not a recovered global native critical default.
@@ -296,7 +284,6 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                 if !speed.is_null() && to_float(&evaluate(speed).ok()?) != 0.0 {
                     // Admit only the known unconditional gravity path for Flashbang;
                     // other projectile motion/aim configurations remain unsupported.
-                    let flashbang = hero == CASSIDY && (shot.graph, node.pos) == (0x01e9, 7);
                     let gravity = flashbang
                         .then(|| authored_gravity(&node.fields, &mut evaluate))
                         .flatten();
@@ -352,7 +339,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                     }
                     let stun = if flashbang {
                         let effect = node.field("m_D2D11CE9.m_modifyHealth.m_277A4ECA")?;
-                        if evaluate(effect).ok()? != Value::Asset(0x04a0_0000_0000_0079) {
+                        if !LEGACY_PROJECTILE_CONTROL.has_effect_marker(&evaluate(effect).ok()?) {
                             return None;
                         }
                         Some(Stun::from_seconds(to_float(

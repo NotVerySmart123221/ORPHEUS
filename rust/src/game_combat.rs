@@ -1602,31 +1602,24 @@ impl RoomSimulation {
                             if let Some(stun) = stun {
                                 if let Some(state) = self.state_mut(impact.entity)? {
                                     let mut control_allowed = true;
-                                    if !state.bot.dead {
-                                        if let Some(caller) = hit_effect {
-                                            if let Some(enemy) = state
+                                    let reaction =
+                                        hit_effect.filter(|_| !state.bot.dead).and_then(|caller| {
+                                            state
                                                 .enemy
                                                 .as_mut()
                                                 .filter(|enemy| enemy.fault.is_none())
-                                            {
-                                                if crate::game_content::is_junkenstein_mode(
-                                                    enemy.binding.mode,
-                                                ) {
-                                                    match enemy.scripts.flashbang_control_allowed(
-                                                        &enemy.graphs,
-                                                        &enemy.binding,
-                                                    ) {
-                                                        Ok(allowed) => control_allowed = allowed,
-                                                        Err(error) => {
-                                                            control_allowed = false;
-                                                            enemy.fault = Some(error);
-                                                        }
-                                                    }
-                                                    enemy.scripts.queue_flashbang_effect(
-                                                        &enemy.binding,
-                                                        caller,
-                                                    );
-                                                }
+                                                .map(|enemy| (caller, enemy))
+                                        });
+                                    if let Some((caller, enemy)) = reaction {
+                                        match enemy.scripts.apply_legacy_projectile_control(
+                                            &enemy.graphs,
+                                            &enemy.binding,
+                                            caller,
+                                        ) {
+                                            Ok(allowed) => control_allowed = allowed,
+                                            Err(error) => {
+                                                control_allowed = false;
+                                                enemy.fault = Some(error);
                                             }
                                         }
                                     }

@@ -1,4 +1,5 @@
 use super::{delivery::*, *};
+use crate::script_control::LEGACY_PROJECTILE_CONTROL;
 
 pub(super) struct StepBuffers<'a> {
     pub(super) frame: &'a mut u32,
@@ -165,13 +166,9 @@ impl BodyScript {
                 token,
                 flight,
                 stun: projectile.stun,
-                hit_effect: (projectile.stun.is_some() && projectile.shot.graph == 0x01e9)
-                    .then_some(crate::script_init::Site {
-                        entity: projectile.shot.entity,
-                        instance: projectile.shot.instance,
-                        graph: projectile.shot.graph,
-                        node: Some(7),
-                    }),
+                hit_effect: projectile
+                    .stun
+                    .and_then(|_| LEGACY_PROJECTILE_CONTROL.flight_site(&projectile.shot)),
             });
         }
     }

@@ -1,4 +1,5 @@
 use super::{policy::*, *};
+use crate::script_control::LEGACY_PROJECTILE_CONTROL;
 
 #[test]
 fn shared_captured_aim_lifecycle_contract() {
@@ -653,14 +654,19 @@ fn shared_flashbang_exclusion_guard_contract() {
             .map(|tag| 0x0d60_0000_0000_0000 | tag.as_u64().unwrap())
             .collect();
         let mut effects = TargetTagEffects::default();
-        let actual = flashbang_exclusions_admit(&filter, |tag| {
-            effects
-                .presence(tag)
-                .or_else(|| Some(inventory.contains(&tag)))
-        })
-        .unwrap();
+        let actual = LEGACY_PROJECTILE_CONTROL
+            .exclusions_admit(&filter, |tag| {
+                effects
+                    .presence(tag)
+                    .or_else(|| Some(inventory.contains(&tag)))
+            })
+            .unwrap();
         assert_eq!(actual, case["accepted"].as_bool().unwrap(), "{case}");
-        assert!(flashbang_exclusions_admit(&filter, |_| None).is_err());
+        assert!(
+            LEGACY_PROJECTILE_CONTROL
+                .exclusions_admit(&filter, |_| None)
+                .is_err()
+        );
         let grant = TargetTagEffect {
             entity: 1,
             tag: 0x0d60_0000_0000_02cb,
@@ -668,12 +674,13 @@ fn shared_flashbang_exclusion_guard_contract() {
         };
         assert!(effects.apply(grant, true));
         assert!(
-            !flashbang_exclusions_admit(&filter, |tag| {
-                effects
-                    .presence(tag)
-                    .or_else(|| Some(inventory.contains(&tag)))
-            })
-            .unwrap()
+            !LEGACY_PROJECTILE_CONTROL
+                .exclusions_admit(&filter, |tag| {
+                    effects
+                        .presence(tag)
+                        .or_else(|| Some(inventory.contains(&tag)))
+                })
+                .unwrap()
         );
         assert!(effects.apply(grant, false));
         // A live suppression masks an immutable tag and releasing that
@@ -689,12 +696,13 @@ fn shared_flashbang_exclusion_guard_contract() {
             ));
         }
         assert!(
-            flashbang_exclusions_admit(&filter, |tag| {
-                effects
-                    .presence(tag)
-                    .or_else(|| Some(inventory.contains(&tag)))
-            })
-            .unwrap()
+            LEGACY_PROJECTILE_CONTROL
+                .exclusions_admit(&filter, |tag| {
+                    effects
+                        .presence(tag)
+                        .or_else(|| Some(inventory.contains(&tag)))
+                })
+                .unwrap()
         );
         for &tag in &inventory {
             assert!(effects.apply(
@@ -707,12 +715,13 @@ fn shared_flashbang_exclusion_guard_contract() {
             ));
         }
         assert_eq!(
-            flashbang_exclusions_admit(&filter, |tag| {
-                effects
-                    .presence(tag)
-                    .or_else(|| Some(inventory.contains(&tag)))
-            })
-            .unwrap(),
+            LEGACY_PROJECTILE_CONTROL
+                .exclusions_admit(&filter, |tag| {
+                    effects
+                        .presence(tag)
+                        .or_else(|| Some(inventory.contains(&tag)))
+                })
+                .unwrap(),
             actual
         );
         checked += 1;
@@ -826,7 +835,7 @@ fn shared_flashbang_entry_guard_contract() {
         )
         .unwrap();
         assert!(component.snapshot().unwrap().initialization_complete());
-        let actual = flashbang_entry_admits(&graphs, |variable| {
+        let actual = LEGACY_PROJECTILE_CONTROL.entry_admits(&graphs, |variable| {
             assert_eq!(variable.scope, crate::script_expr::Scope::Entity);
             assert_eq!(variable.id, 2547);
             if case["unavailable"] == true {
@@ -848,6 +857,42 @@ fn shared_flashbang_entry_guard_contract() {
     }
 }
 
+fn projectile_control_fixture(
+    mode: u64,
+    extra: &[Json],
+) -> (Arc<GraphStore>, EnemyBinding, EnemyScripts, Vitals) {
+    let (graphs, _, definition, _) = fixture_with_graphs(false, extra);
+    let binding = EnemyBinding {
+        body: 0xc0001000,
+        controller: 0xc0001001,
+        hero: definition.hero,
+        pair: graphs.enemy_pair(definition.hero).unwrap(),
+        mode,
+        mode_variables: Arc::default(),
+        team: 1,
+        skin: None,
+        pose: Default::default(),
+        gate: None,
+        spatial_frame: None,
+        roster: None,
+        retired_entities: Arc::default(),
+        frame: 0,
+        now_secs: 0.0,
+        spawn_anchors: None,
+        mode_voice_set: None,
+    };
+    let mut vitals = definition.pools.vitals();
+    let scripts = EnemyScripts::start(
+        Arc::clone(&graphs),
+        &definition,
+        &binding,
+        1000,
+        &mut vitals,
+    )
+    .unwrap();
+    (graphs, binding, scripts, vitals)
+}
+
 #[test]
 fn shared_flashbang_effect_dispatch_contract() {
     use serde_json::json;
@@ -858,37 +903,10 @@ fn shared_flashbang_effect_dispatch_contract() {
     assert_eq!(contract["schema_version"], 1);
     assert_eq!(contract["case_id"], "flashbang.effect-dispatch.v1");
     for case in contract["input"]["cases"].as_array().unwrap() {
-        let (graphs, _, definition, _) =
-            fixture_with_graphs(false, &[contract["input"]["graph"].clone()]);
-        let binding = EnemyBinding {
-            body: 0xc0001000,
-            controller: 0xc0001001,
-            hero: definition.hero,
-            pair: graphs.enemy_pair(definition.hero).unwrap(),
-            mode: crate::accounts::parse_guid(case["mode"].as_str().unwrap()).unwrap(),
-            mode_variables: Arc::default(),
-            team: 1,
-            skin: None,
-            pose: Default::default(),
-            gate: None,
-            spatial_frame: None,
-            roster: None,
-            retired_entities: Arc::default(),
-            frame: 0,
-            now_secs: 0.0,
-            spawn_anchors: None,
-            mode_voice_set: None,
-        };
-        let mut vitals = definition.pools.vitals();
-        let mut scripts = EnemyScripts::start(
-            Arc::clone(&graphs),
-            &definition,
-            &binding,
-            1000,
-            &mut vitals,
-        )
-        .unwrap();
-        scripts.queue_flashbang_effect(
+        let mode = crate::accounts::parse_guid(case["mode"].as_str().unwrap()).unwrap();
+        let (graphs, binding, mut scripts, mut vitals) =
+            projectile_control_fixture(mode, &[contract["input"]["graph"].clone()]);
+        scripts.queue_legacy_projectile_effect(
             &binding,
             Site {
                 entity: u32::try_from(case["source"].as_u64().unwrap()).unwrap(),
@@ -915,6 +933,133 @@ fn shared_flashbang_effect_dispatch_contract() {
             "{}",
             case["name"]
         );
+    }
+}
+
+#[test]
+fn legacy_projectile_control_keeps_effect_delivery_separate_from_admission() {
+    use serde_json::json;
+
+    let dispatch: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/flashbang-effect-dispatch-v1.json"
+    ))
+    .unwrap();
+    let guard: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/flashbang-entry-guard-v1.json"
+    ))
+    .unwrap();
+    let normal = &dispatch["input"]["cases"][0];
+    assert_eq!(normal["name"], "normal");
+    let other_mode = &dispatch["input"]["cases"][1];
+    assert_eq!(other_mode["name"], "other-mode");
+    let mode = |case: &Json| crate::accounts::parse_guid(case["mode"].as_str().unwrap()).unwrap();
+    let caller = Site {
+        entity: u32::try_from(normal["source"].as_u64().unwrap()).unwrap(),
+        instance: 1,
+        graph: u32::try_from(normal["graph"].as_u64().unwrap()).unwrap(),
+        node: Some(u16::try_from(normal["node"].as_u64().unwrap()).unwrap()),
+    };
+    let mut wrapper = dispatch["input"]["graph"].clone();
+    let wrapper_index = u32::try_from(wrapper["index"].as_u64().unwrap()).unwrap();
+    let hit = asset_guid(&wrapper["nodes"][0]["fields"]["m_gameMessage"]["m_gameMessage"]).unwrap();
+    let test_node = |position, fields| {
+        json!({
+            "pos": position, "class": "FixtureDescriptor", "uid": position, "rid": position,
+            "remote": -1, "state": null, "client_only": false, "server_only": false, "fields": fields,
+        })
+    };
+    let mut effect = wrapper.clone();
+    effect["index"] = json!(0x224e);
+    effect["items"] = json!(123);
+    effect["header"]["m_nodesBitCount"] = json!(7);
+    effect["entries"] = json!([]);
+    effect["nodes"] = json!([
+        test_node(4, json!({"m_condition":guard["condition"]})),
+        test_node(
+            9,
+            json!({"m_condition":{"m_filter":{"$":"STUConfigVarFilter"}}})
+        ),
+        test_node(
+            122,
+            json!({"m_condition":{
+                "$":"STU_3ACE35FB",
+                "m_E50CF556":{"$":"STUConfigVarDynamic","m_identifier":668,"m_60DB8F99":true}
+            }})
+        )
+    ]);
+    effect["fields"] = json!({
+        "m_publicSchema":{"m_entries":[{
+            "m_0D09D2D9":"0x0D80000000007312",
+            "m_value":false
+        }]}
+    });
+    wrapper["items"] = json!(8);
+    wrapper["nodes"].as_array_mut().unwrap().push(test_node(
+        7,
+        json!({"m_69F4B52C":{"m_6525E98B":{"m_1EB5A024":[{
+            "m_0D09D2D9":"0x0D800000000000D7","m_value":1.25
+        }]}}}),
+    ));
+
+    let compatible_mode = mode(normal);
+    for (mode, include_guard, blocked, expected) in [
+        (compatible_mode, true, false, Ok(true)),
+        (compatible_mode, true, true, Ok(false)),
+        (compatible_mode, false, false, Err(())),
+        (mode(other_mode), false, false, Ok(true)),
+    ] {
+        let mut extra = vec![wrapper.clone()];
+        if include_guard {
+            extra.push(effect.clone());
+        }
+        let (graphs, binding, mut scripts, mut vitals) = projectile_control_fixture(mode, &extra);
+        assert_eq!(
+            LEGACY_PROJECTILE_CONTROL.duration(&graphs),
+            Some(&json!(1.25))
+        );
+        scripts
+            .body
+            .set_entity_variable(2547, Value::Bool(blocked), &mut script_init::EmptyWorld)
+            .unwrap();
+        let admitted = scripts.apply_legacy_projectile_control(&graphs, &binding, caller);
+        assert_eq!(admitted.map_err(|_| ()), expected);
+
+        if mode != compatible_mode {
+            assert!(scripts.messages.is_empty());
+            assert!(
+                !scripts
+                    .body
+                    .snapshot()
+                    .unwrap()
+                    .variables
+                    .contains_key(&900)
+            );
+            continue;
+        }
+
+        assert_eq!(scripts.messages.len(), 2);
+        let play = &scripts.messages[0];
+        assert_eq!(play.target, binding.body);
+        assert!(matches!(
+            &play.input,
+            PairInput::PlayScript { caller: site, request }
+                if *site == caller && request.graph == wrapper_index && request.source == caller.entity
+        ));
+        let message = &scripts.messages[1];
+        assert_eq!(message.target, binding.body);
+        assert!(matches!(
+            &message.input,
+            PairInput::Message { sender, message, required_graph, .. }
+                if *sender == caller.entity && *message == hit && *required_graph == Some(wrapper_index)
+        ));
+        if expected.is_ok() {
+            scripts
+                .deliver_messages(&graphs, &binding, &mut vitals)
+                .unwrap();
+            let snapshot = scripts.body.snapshot().unwrap();
+            assert_eq!(snapshot.variables[&900], Value::Integer(1));
+            assert_eq!(snapshot.variables[&901], Value::Entity(caller.entity));
+        }
     }
 }
 
@@ -1127,13 +1272,7 @@ fn authored_flashbang_wrapper_sets_the_loaded_hit_effect_schema() {
             MAX_INIT_WORK,
         )
         .unwrap();
-        let exclusion_filter = graphs
-            .graph(0x224e)
-            .unwrap()
-            .node(9)
-            .unwrap()
-            .field("m_condition.m_filter")
-            .unwrap();
+        let exclusion_filter = LEGACY_PROJECTILE_CONTROL.exclusion_filter(&graphs).unwrap();
         let tag_site = Site {
             entity: binding.body,
             instance: 0,
@@ -1141,10 +1280,11 @@ fn authored_flashbang_wrapper_sets_the_loaded_hit_effect_schema() {
             node: Some(9),
         };
         assert!(
-            flashbang_exclusions_admit(exclusion_filter, |tag| {
-                world.has_target_tag(tag_site, binding.body, tag)
-            })
-            .unwrap()
+            LEGACY_PROJECTILE_CONTROL
+                .exclusions_admit(exclusion_filter, |tag| {
+                    world.has_target_tag(tag_site, binding.body, tag)
+                })
+                .unwrap()
         );
         let immunity = TargetTagEffect {
             entity: binding.body,
@@ -1153,17 +1293,19 @@ fn authored_flashbang_wrapper_sets_the_loaded_hit_effect_schema() {
         };
         assert!(world.set_target_tag_effect(tag_site, immunity, true));
         assert!(
-            !flashbang_exclusions_admit(exclusion_filter, |tag| {
-                world.has_target_tag(tag_site, binding.body, tag)
-            })
-            .unwrap()
+            !LEGACY_PROJECTILE_CONTROL
+                .exclusions_admit(exclusion_filter, |tag| {
+                    world.has_target_tag(tag_site, binding.body, tag)
+                })
+                .unwrap()
         );
         assert!(world.set_target_tag_effect(tag_site, immunity, false));
         assert!(
-            flashbang_exclusions_admit(exclusion_filter, |tag| {
-                world.has_target_tag(tag_site, binding.body, tag)
-            })
-            .unwrap()
+            LEGACY_PROJECTILE_CONTROL
+                .exclusions_admit(exclusion_filter, |tag| {
+                    world.has_target_tag(tag_site, binding.body, tag)
+                })
+                .unwrap()
         );
         if entry_rejected {
             component
@@ -1181,8 +1323,9 @@ fn authored_flashbang_wrapper_sets_the_loaded_hit_effect_schema() {
         let native_entry = component
             .evaluate_state_config(1, 0, entry_guard, &mut world)
             .unwrap();
-        let admitted =
-            flashbang_entry_admits(&graphs, |var| component.resolved_variable(0, var)).unwrap();
+        let admitted = LEGACY_PROJECTILE_CONTROL
+            .entry_admits(&graphs, |var| component.resolved_variable(0, var))
+            .unwrap();
         assert_eq!(admitted, crate::script_expr::truthy(&native_entry));
         if entry_rejected {
             assert!(!admitted);
@@ -1195,7 +1338,9 @@ fn authored_flashbang_wrapper_sets_the_loaded_hit_effect_schema() {
             .field("m_condition")
             .unwrap();
         assert_eq!(
-            flashbang_stack_admits(&component, &graphs).unwrap(),
+            LEGACY_PROJECTILE_CONTROL
+                .stack_admits(&component, &graphs)
+                .unwrap(),
             !control_immune
         );
         assert_eq!(
