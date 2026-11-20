@@ -10,6 +10,7 @@ mod facing_claim;
 mod frame_wait;
 mod local_command;
 mod local_message;
+mod logical_button_lifecycle;
 mod movement_edges;
 mod observation_sample;
 mod projected_messages;

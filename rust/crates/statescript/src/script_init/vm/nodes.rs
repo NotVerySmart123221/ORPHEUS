@@ -1745,7 +1745,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     self.state_mut(key).expect("active button block").kind =
                         StateKind::ButtonBlock(Some(button));
                     self.machine.button_blocks[usize::from(button)] += 1;
-                    self.resync_logical_buttons(button, depth + 1)?;
+                    self.resync_logical_buttons(Some(button), depth + 1)?;
                 }
             }
             StateKind::Stack { .. } => self.begin_stack(key, node, depth)?,

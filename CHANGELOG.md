@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Applied logical button death admission consistently on presses, state entry, and lock changes. Held scopes that require a living owner release before the next VM update samples their observations.
+- Added an optional StateScript `on_unavailable` observation plug for clearing derived target state when a host sample is temporarily unavailable.
 - Isolated queued StateScript observation callbacks from intervening output writes. A callback receives its own successful sample and stays inactive while a higher-priority binding hides that sample.
 - Added opt-in owner-only StateScript instance variables. The existing snapshot encoder carries their resolved values to the owner and excludes them from observer full snapshots and deltas.
 - Added the optional StateScript observation `on_sample` plug. It follows each successful current sample and stays inactive when the host cannot supply a fresh value. This lets aimed effects use the current ray result while display variables retain their last successful value on a transient query failure.

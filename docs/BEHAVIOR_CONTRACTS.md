@@ -78,8 +78,13 @@ The Rust-only [static ray fixture](../fixtures/behavior/statescript-ray-cast-v1.
 The Rust-only [actor ray fixture](../fixtures/behavior/statescript-entity-ray-cast-v1.json) checks team and tag selection, stable candidate IDs, budget exhaustion, a zero-distance hit, and unavailable geometry. Native room tests exercise frozen capsules and static occlusion.
 
 The Rust-only observation sample contract checks repeated successful values,
-unavailable geometry, known misses, and retirement before callback dispatch.
+unavailable geometry, known misses, failure callbacks, and retirement before
+callback dispatch.
 [Synthetic observation sample fixture](../fixtures/behavior/statescript-observation-sample-v1.json)
+
+The Rust-only held input lifecycle contract verifies behavior on late
+listener entry, lock release, and owner death during a timer-only update.
+[Synthetic logical input fixture](../fixtures/behavior/script-logical-input-owner-lifecycle-v1.json)
 
 The Rust-only owner instance visibility contract verifies owner and observer
 wire frames, resolved stack claims, and child instances.

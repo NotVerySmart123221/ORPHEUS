@@ -155,6 +155,7 @@ pub(super) enum Event {
         raw: u16,
         activation: u16,
         frame: u32,
+        available: bool,
     },
     SpawnResult {
         key: SpawnSearchKey,
@@ -230,6 +231,7 @@ pub(super) struct Machine {
     pub(super) held_buttons: Vec<u8>,
     pub(super) button_blocks: [usize; 256],
     pub(super) owner_dead: bool,
+    pub(super) logical_buttons_need_resync: bool,
     pub(super) control_blocked: bool,
     pub(super) disabled_start_entries: HashSet<(u16, u16)>,
 }
@@ -266,6 +268,7 @@ impl Clone for Machine {
             held_buttons: self.held_buttons.clone(),
             button_blocks: self.button_blocks,
             owner_dead: self.owner_dead,
+            logical_buttons_need_resync: self.logical_buttons_need_resync,
             control_blocked: self.control_blocked,
             disabled_start_entries: self.disabled_start_entries.clone(),
         }
@@ -347,6 +350,7 @@ impl Machine {
             held_buttons: Vec::new(),
             button_blocks: [0; 256],
             owner_dead: false,
+            logical_buttons_need_resync: false,
             control_blocked: false,
             disabled_start_entries: HashSet::new(),
             public_schemas: false,

@@ -968,6 +968,7 @@ impl Component {
     }
 
     pub fn set_owner_dead(&mut self, dead: bool) {
+        self.machine.logical_buttons_need_resync |= dead && !self.machine.owner_dead;
         self.machine.owner_dead = dead;
     }
 

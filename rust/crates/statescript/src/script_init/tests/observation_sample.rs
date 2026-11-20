@@ -28,6 +28,7 @@ struct Input {
     body: u32,
     graph: u32,
     hit_distance: f64,
+    unavailable_callback_delta: f64,
     ownership: Ownership,
     steps: Vec<Step>,
 }
@@ -324,6 +325,7 @@ fn observation_sample_does_not_cross_retirement_or_reactivation() {
                     raw: 0,
                     activation: initial,
                     frame: 1,
+                    available: true,
                 },
             )
         })
@@ -340,6 +342,7 @@ fn observation_sample_does_not_cross_retirement_or_reactivation() {
                     raw: 0,
                     activation: current,
                     frame: 0,
+                    available: true,
                 },
             )
         })
@@ -356,6 +359,7 @@ fn observation_sample_does_not_cross_retirement_or_reactivation() {
                     raw: 0,
                     activation: current,
                     frame: 1,
+                    available: true,
                 },
             )
         })
@@ -584,4 +588,187 @@ fn observation_sample_waits_for_output_binding_to_release() {
     assert_eq!(host.callbacks, [2.0]);
     assert_eq!(snapshot.diagnostics, blocked_diagnostics);
     assert!(snapshot.initialization_complete());
+}
+
+fn unavailable_bundle(input: &Input) -> Json {
+    let mut graph = bundle(input.graph, true);
+    graph["nodes"][1]["fields"]["on_unavailable"] = plug(&[(7, "m_inPlug")], &[]);
+    let mut callback = node(
+        7,
+        "AuthoredUnavailableCallback",
+        None,
+        json!({
+            "target":var(1,true),
+            "delta":input.unavailable_callback_delta,
+            "m_outPlug":plug(&[], &[])
+        }),
+    );
+    callback["action_behavior"] = json!("health_change");
+    callback["server_only"] = json!(true);
+    graph["nodes"].as_array_mut().unwrap().push(callback);
+    graph["items"] = json!(8);
+    graph
+}
+
+#[test]
+fn observation_unavailable_hook_runs_without_a_previous_value_and_recovers() {
+    let input = fixture().input;
+    let (mut component, mut host, hit_value) =
+        start(unavailable_bundle(&input), input.body, input.hit_distance);
+    let hit = host.reply;
+    let sentinel = Value::Integer(input.ownership.overwrite);
+    component
+        .set_entity_variable(OUTPUT, sentinel.clone(), &mut host)
+        .unwrap();
+    host.reply = None;
+    for frame in 1..=2 {
+        host.callbacks.clear();
+        let queries = host.queries.get();
+        component.advance_frame(frame, &mut host).unwrap();
+        let snapshot = component.snapshot().unwrap();
+        assert_eq!(host.queries.get() - queries, 1);
+        assert_eq!(host.callbacks, [input.unavailable_callback_delta]);
+        assert_eq!(snapshot.variables[&OUTPUT], sentinel);
+        assert_eq!(snapshot.instances[&1].states[&0].watch_seen, None);
+    }
+    let diagnostics = component.snapshot().unwrap().diagnostics.clone();
+    assert!(matches!(
+        diagnostics.as_slice(),
+        [Diagnostic {
+            issue: Issue::ObservationUnavailable,
+            ..
+        }]
+    ));
+    host.reply = hit;
+    host.callbacks.clear();
+    component.advance_frame(3, &mut host).unwrap();
+    assert_eq!(host.callbacks, [1.0, 2.0]);
+    assert_eq!(component.snapshot().unwrap().variables[&OUTPUT], hit_value);
+    let snapshot = component.snapshot().unwrap();
+    assert_eq!(snapshot.diagnostics, diagnostics);
+    assert!(snapshot.initialization_complete());
+
+    host.reply = None;
+    host.callbacks.clear();
+    component.advance_frame(4, &mut host).unwrap();
+    assert_eq!(host.callbacks, [input.unavailable_callback_delta]);
+    assert_eq!(component.snapshot().unwrap().variables[&OUTPUT], hit_value);
+
+    host.reply = Some(None);
+    host.callbacks.clear();
+    component.advance_frame(5, &mut host).unwrap();
+    assert_eq!(host.callbacks, [1.0, 2.0]);
+    assert_eq!(
+        component.snapshot().unwrap().variables[&OUTPUT],
+        Value::Array(Vec::new())
+    );
+    let snapshot = component.snapshot().unwrap();
+    assert_eq!(snapshot.diagnostics, diagnostics);
+    assert!(snapshot.initialization_complete());
+}
+
+#[test]
+fn observation_unavailable_hook_excludes_invalid_expressions() {
+    let input = fixture().input;
+    for unsupported in [false, true] {
+        let mut graph = unavailable_bundle(&input);
+        if unsupported {
+            graph["nodes"][1]["fields"]["value"] = json!({"$":"authored.unknown_operand"});
+        }
+        let (mut component, mut host, _) = start(graph, input.body, input.hit_distance);
+        if !unsupported {
+            component
+                .set_entity_variable(32, Value::Vector([0.0; 3]), &mut host)
+                .unwrap();
+        }
+        let sentinel = Value::Integer(input.ownership.overwrite);
+        component
+            .set_entity_variable(OUTPUT, sentinel.clone(), &mut host)
+            .unwrap();
+        component.advance_frame(1, &mut host).unwrap();
+        let snapshot = component.snapshot().unwrap();
+        assert!(host.callbacks.is_empty());
+        assert_eq!(host.queries.get(), 0);
+        assert_eq!(snapshot.variables[&OUTPUT], sentinel);
+        assert!(matches!(
+            snapshot.diagnostics.as_slice(),
+            [Diagnostic {
+                issue: Issue::Expression(_),
+                ..
+            }]
+        ));
+    }
+}
+
+#[test]
+fn observation_unavailable_hook_respects_frame_activation_and_retirement() {
+    let input = fixture().input;
+    let (mut component, mut host, _) =
+        start(unavailable_bundle(&input), input.body, input.hit_distance);
+    host.reply = None;
+    component.advance_frame(1, &mut host).unwrap();
+    assert_eq!(host.callbacks, [input.unavailable_callback_delta]);
+    let initial = component.snapshot().unwrap().instances[&1].states[&0].activation;
+    host.callbacks.clear();
+    component
+        .run(&mut host, |vm| {
+            vm.post(
+                1,
+                Event::ObserveSample {
+                    raw: 0,
+                    activation: initial,
+                    frame: 1,
+                    available: false,
+                },
+            )?;
+            vm.end(KEY, false, 0)?;
+            vm.begin(KEY, 0)?;
+            vm.post(
+                1,
+                Event::ObserveSample {
+                    raw: 0,
+                    activation: initial,
+                    frame: 1,
+                    available: false,
+                },
+            )
+        })
+        .unwrap();
+    component.run_now(&mut host).unwrap();
+    let current = component.snapshot().unwrap().instances[&1].states[&0].activation;
+    assert_ne!(initial, current);
+    assert!(host.callbacks.is_empty());
+    component
+        .run(&mut host, |vm| {
+            vm.post(
+                1,
+                Event::ObserveSample {
+                    raw: 0,
+                    activation: current,
+                    frame: 0,
+                    available: false,
+                },
+            )
+        })
+        .unwrap();
+    component.run_now(&mut host).unwrap();
+    assert!(host.callbacks.is_empty());
+    component
+        .run(&mut host, |vm| {
+            vm.end(KEY, true, 0)?;
+            vm.post(
+                1,
+                Event::ObserveSample {
+                    raw: 0,
+                    activation: current,
+                    frame: 1,
+                    available: false,
+                },
+            )
+        })
+        .unwrap();
+    component.run_now(&mut host).unwrap();
+    assert!(!component.snapshot().unwrap().instances[&1].states[&0].active);
+    assert!(host.callbacks.is_empty());
+    assert_eq!(host.queries.get(), 1);
 }
