@@ -2,9 +2,9 @@ use std::{collections::BTreeMap, fs::File, path::PathBuf, sync::Arc};
 
 use flate2::read::GzDecoder;
 use orpheus_statescript::{
-    script_expr::{EntityRelation, native_shape, to_float},
+    script_expr::{EntityRelation, Scope, Variable, native_shape, to_float},
     script_graph::{GraphStore, ModeValue},
-    script_init::{Component, MAX_INIT_WORK, RoomMessage, Root, Site, World},
+    script_init::{Component, MAX_INIT_WORK, RoomMessage, Root, Site, World, body_roots},
     script_runtime::{FRAME_MS, GAME_MODE_ENTITY},
     script_wire::{Value, Variables},
 };
@@ -314,4 +314,106 @@ fn prepared_bonus_actions_preserve_local_and_directed_delivery() {
         let diagnostics = &component.snapshot().unwrap().diagnostics;
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
+}
+
+#[test]
+#[ignore = "requires an authorized 104319 graph pack in ORPHEUS_RUNTIME_DIR"]
+fn prepared_stock_admission_controls_local_bonus_credit() {
+    const STOCK_BODY: u64 = 0x0400_0000_0000_03cf;
+    const CAP_GRAPH: u32 = 0x004b;
+    const ADMISSION_GRAPH: u32 = 0x01c7;
+    const ADMISSION_ROOT: u16 = 2;
+    const ADMISSION_RECEIVER: u16 = 23;
+    const ADMISSION_CLAIM: u16 = 24;
+    const OPEN_ADMISSION: u64 = 0x0240_0000_0000_0700;
+    const DONOR_ROOT: u16 = 3;
+    const DONOR_GRAPH: u32 = 61245;
+    const DONOR_TRIGGER: u64 = 0x0240_0000_0000_fa1a;
+    const DONOR_AMOUNT: u32 = 476;
+
+    let runtime =
+        PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").expect("set ORPHEUS_RUNTIME_DIR"));
+    let pack = File::open(runtime.join("data/game_graphs_174.json.gz")).unwrap();
+    let mut bundle: Json = serde_json::from_reader(GzDecoder::new(pack)).unwrap();
+    let donor = bonus_sender_probe(&bundle, 0x006b, 189, DONOR_GRAPH, DONOR_TRIGGER);
+    bundle["graphs"].as_array_mut().unwrap().push(donor);
+    let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+
+    let stock_roots = body_roots(&graphs.bodies()[&STOCK_BODY]).unwrap();
+    let cap_binding = stock_roots
+        .iter()
+        .find(|root| root.graph == CAP_GRAPH)
+        .expect("stock charge cap binding");
+    let cap = cap_binding.variables[&METER_CAP].clone();
+    let maximum = to_float(&cap);
+    assert!(maximum.is_finite() && maximum > 0.0);
+    let credit = maximum * 0.75;
+    let mut donor = Root::listener(DONOR_ROOT, DONOR_GRAPH, None);
+    donor.variables.insert(DONOR_AMOUNT, Value::Float(credit));
+    let mut world = ChargeHost {
+        mode_variables: graphs.mode_variables(PRACTICE_MODE).unwrap(),
+        outgoing: Vec::new(),
+    };
+    // Isolate the native admission provider and bonus receiver from room startup
+    // and passive credit. The admission variable is written only by the stock graph.
+    let mut body = Component::start(
+        Arc::clone(&graphs),
+        OWNER,
+        Variables::from([(METER_CAP, cap), (METER, Value::Float(0.0))]),
+        vec![
+            Root::listener(ROOT, GRAPH, None),
+            Root::listener(ADMISSION_ROOT, ADMISSION_GRAPH, Some(ADMISSION_RECEIVER)),
+            donor,
+        ],
+        0,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let admission = Variable {
+        scope: Scope::Entity,
+        id: ADMITTED,
+    };
+    let send_bonus = |body: &mut Component, world: &mut ChargeHost<'_>| {
+        assert_eq!(
+            body.queue_message(DONOR_ROOT, DONOR_TRIGGER, Variables::new())
+                .unwrap(),
+            1
+        );
+        body.run_now(world).unwrap();
+        assert!(
+            world.outgoing.is_empty(),
+            "the stock self sender stays local"
+        );
+    };
+
+    assert_eq!(body.resolved_variable(ROOT, admission), Some(Value::Null));
+    send_bonus(&mut body, &mut world);
+    assert_eq!(meter(&body), 0.0);
+
+    assert_eq!(
+        body.queue_message(ADMISSION_ROOT, OPEN_ADMISSION, Variables::new())
+            .unwrap(),
+        1
+    );
+    body.run_now(&mut world).unwrap();
+    assert_eq!(
+        body.resolved_variable(ROOT, admission),
+        Some(Value::Bool(true))
+    );
+    send_bonus(&mut body, &mut world);
+    assert_eq!(meter(&body), credit);
+    send_bonus(&mut body, &mut world);
+    assert_eq!(meter(&body), maximum);
+
+    // Spend some charge so the cap cannot mask a stale admission claim.
+    body.set_entity_variable(METER, Value::Float(credit), &mut world)
+        .unwrap();
+    body.debug_end_state(ADMISSION_ROOT, ADMISSION_CLAIM, &mut world)
+        .unwrap();
+    assert_eq!(body.resolved_variable(ROOT, admission), Some(Value::Null));
+    send_bonus(&mut body, &mut world);
+    assert_eq!(meter(&body), credit);
+    let diagnostics = &body.snapshot().unwrap().diagnostics;
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
 }

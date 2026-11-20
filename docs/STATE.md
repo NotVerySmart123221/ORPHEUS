@@ -357,6 +357,20 @@ provided caller inputs. Room tests checked source and target generation
 at settlement and delivery on the next receiver VM frame. Natural
 target binding and native foreign timing remain unverified.
 
+The shared bonus path can derive its payload from the actual settled
+heal and bind the target in an authored graph. The room regression covers
+a grant on the recipient's VM frame after routing, the meter cap, and
+discarding a request for a replaced body. Positive NPC-local health
+events collect committed target facts after the VM's local mutations.
+A prepared probe uses the original admission claim and local sender
+with the stock cap. These additions are pending integration verification.
+
+The full pseudocode and prepared bundle both show seven `0D9A` receivers
+and no literal sender. The `0B9E` entry binds different slots from the
+three instance operands read by its outgoing grant. The original
+dispatcher, the origin of those three values, and the order relative
+to health settlement still need original-build evidence.
+
 Static model protection now uses the authored state slots and an
 explicit host capability. The prepared boss graph regression passed its
 link, encoding, and final restoration checks. The current encounter

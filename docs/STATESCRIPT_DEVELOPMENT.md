@@ -820,6 +820,8 @@ expressions, and other entities continue through their usual host.
 Unavailable captured facts stay unavailable. The room checks body
 generation when dispatching the event, and the VM clears the snapshot
 at the end of each delivery.
+For NPC-local heals, publication samples the committed target after the
+local VM step. The queued delta remains the actual amount for each heal.
 
 The enabled room records successful weapon damage, room-settled script
 and AI requests, field healing, and VM-local AI damage and healing.
@@ -931,6 +933,24 @@ and uses the original bonus receiver. It verifies the one-second
 deadline, cancellation and re-arm, and the configured cap. Room
 admission, stock hit and healing attribution, and original-client
 presentation have separate verification.
+
+The [settled bonus contract](../fixtures/behavior/script-settled-bonus-v1.json)
+binds the actual healed delta and target from `health_applied` to a
+declared numeric message in a synthetic graph. The room delivers the
+message in the recipient's next VM frame after routing. The recipient
+graph owns admission and capping. A body replacement between request
+admission and room settlement discards the pending grant.
+
+The prepared local probe exercises the isolated original admission
+claim, stock sender, receiver and cap from the available body binding.
+
+```text
+cargo test --locked -p orpheus-statescript --test stock_charge -- --ignored --exact prepared_stock_admission_controls_local_bonus_credit
+```
+
+This probe supplies the admission trigger and bonus amount. Room-origin
+native `0D9A` emission and the previously unbound foreign operands still
+need independent evidence.
 
 ## Apply a radial health change
 

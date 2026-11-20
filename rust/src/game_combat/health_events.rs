@@ -181,17 +181,20 @@ impl RoomSimulation {
             let Some(enemy) = state.enemy.as_mut() else {
                 continue;
             };
+            let changes = enemy.scripts.take_local_health_changes();
             let target = SampledBody { wire, entity };
-            for change in enemy.scripts.take_local_health_changes() {
+            for change in changes {
                 let source =
                     SampledBody::lookup(change.source, &self.by_wire, &self.players_by_wire);
-                self.health_events.stage(
-                    source,
-                    target,
-                    change.delta,
-                    change.killed,
-                    HealthEventContext::Unattributed,
-                );
+                // The VM has finished its local mutation. Use this committed body
+                // snapshot when publishing the heal to a distinct room source.
+                let context = if change.delta > 0.0 {
+                    HealthEventContext::Healing(&self.world)
+                } else {
+                    HealthEventContext::Unattributed
+                };
+                self.health_events
+                    .stage(source, target, change.delta, change.killed, context);
             }
         }
     }
@@ -276,6 +279,176 @@ mod tests {
             assert_eq!(actual, expected);
             assert!(room.health_events.pending.is_empty());
         }
+    }
+
+    #[test]
+    fn local_npc_healing_publishes_committed_target_facts() {
+        use crate::{
+            game_combat::EnemySpawn,
+            game_content::JUNKENSTEIN_REVENGE,
+            game_hitscan::TargetPose,
+            game_pools::HealthPools,
+            npc_catalog::NpcDefinition,
+            script_codecs::CodecTable,
+            script_enemy::{EnemyTarget, WitchStaffSource},
+            script_graph::GraphStore,
+            script_init::{CreationKind, EntityCreation, OWNER_HEALTH},
+            script_wire::Value,
+        };
+        use serde_json::{Value as Json, json};
+
+        let fixture: Json = serde_json::from_str(include_str!(
+            "../../../fixtures/behavior/script-local-health-outcomes-v1.json"
+        ))
+        .unwrap();
+        let input = &fixture["input"]["local_heal"];
+        let expected = &fixture["expected"]["local_heal"];
+        let effect = json!({
+            "index":121,"items":2,"fields":{},"containers":{},"unknown_nodes":[],
+            "header":{"m_nodesBitCount":2,"m_statesBitCount":2,
+                "m_remoteSyncNodesBitCount":2,"m_syncVarsBitCount":2},
+            "states":[0],"entries":[1],"remote":[],"sync_vars":[],
+            "nodes":[
+                {"pos":0,"rid":0,"uid":0,"remote":-1,"state":0,"client_only":false,
+                    "server_only":true,"class":"STUStatescriptStateModifyHealth",
+                    "fields":{"m_modifyHealth":{"m_amount":input["requested_per_second"]}}},
+                {"pos":1,"rid":1,"uid":1,"remote":-1,"state":null,"client_only":false,
+                    "server_only":true,"class":"STUStatescriptEntry",
+                    "fields":{"m_outPlug":{"$":"Plug","links":[[0,"m_beginPlug"]]}}}
+            ]
+        });
+        let bundle = json!({
+            "version":1,"graphs":[fixture["input"]["ai"]["listener_graph"],effect],
+            "bodies":{},"missing":[],
+            "junkenstein":{
+                "pairs":{"0x02E0000000000901":{"body":"0x0400000000000902",
+                    "controller":"0x0400000000000903"}},
+                "entities":{
+                    "0x0400000000000902":{"hero":"0x02E0000000000901","name":"Target",
+                        "graphs":[{"graph":908,"m_75408640":0}],"weapons":[],
+                        "target_tags":[input["target_tag"]]},
+                    "0x0400000000000903":{"name":"Control","weapons":[],
+                        "graphs":[{"graph":908,"m_75408640":0}]}
+                }
+            }
+        });
+        let graphs =
+            Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+        let definition = NpcDefinition {
+            hero: 0x02e0_0000_0000_0901,
+            body: 0x0400_0000_0000_0902,
+            name: "Target".into(),
+            pools: HealthPools {
+                health: 100.0,
+                armour: 0.0,
+                shields: 0.0,
+            },
+        };
+        let bots = fixture_bots();
+        let source = bots[0].entity;
+        let mut room = RoomSimulation::new(bots).unwrap();
+        room.enable_host_health_events();
+        let target = room
+            .create_enemy(EnemySpawn {
+                graphs: Arc::clone(&graphs),
+                codecs: Arc::new(CodecTable::from_json(r#"{"classes":{}}"#).unwrap()),
+                definition: &definition,
+                request: &EntityCreation {
+                    position: [0.0; 3],
+                    kind: CreationKind::Hero {
+                        hero: definition.hero,
+                        team: 1,
+                        yaw: 0.0,
+                        flags: [Value::Bool(false), Value::Bool(false)],
+                        controller: None,
+                        skin: None,
+                    },
+                },
+                mode: JUNKENSTEIN_REVENGE,
+                mode_variables: Arc::default(),
+                tick: 3,
+                walk: Default::default(),
+                gate: None,
+            })
+            .unwrap();
+
+        let state = room.state_mut(target).unwrap().unwrap();
+        state.vitals.damage(
+            input["wound"].as_f64().unwrap(),
+            Death {
+                killer: target,
+                frame: 3,
+                time: 0.048,
+            },
+        );
+        let enemy = state.enemy.as_mut().unwrap();
+        enemy.binding.roster = Some(Arc::new(vec![EnemyTarget {
+            hero: None,
+            filter_flags: None,
+            tags: Default::default(),
+            health: None,
+            velocity: None,
+            script_state: Default::default(),
+            entity: source,
+            team: 1,
+            pose: TargetPose {
+                feet: [0.0; 3],
+                height: 1.0,
+                radius: 0.25,
+                eye: 0.75,
+            },
+            alive: true,
+        }]));
+        enemy.scripts.record_witch_staff_source(
+            source,
+            WitchStaffSource {
+                controller: source,
+                name: "Source".into(),
+                health: [100.0, 0.0],
+                capacity: [100.0, 0.0],
+            },
+        );
+        enemy
+            .scripts
+            .sync_witch_staff(
+                &graphs,
+                &enemy.binding,
+                &mut state.vitals,
+                None,
+                Some((source, 8.0)),
+            )
+            .unwrap();
+        enemy
+            .scripts
+            .advance(&graphs, &enemy.binding, &mut state.vitals, 4)
+            .unwrap();
+        let committed_health = expected["committed_health"].as_f64().unwrap();
+        assert_eq!(state.vitals.total(), committed_health);
+
+        room.collect_local_health_events();
+        let change = room.health_events.pending.pop_front().unwrap();
+        let (event, _) = change.resolve(&room).unwrap();
+        assert_eq!(
+            event,
+            HostEvent::HealthApplied {
+                source: Some(source),
+                target,
+                delta: expected["actual_delta"].as_f64().unwrap(),
+                killed: false,
+                hit_tags: None,
+            }
+        );
+        let facts = change.target_facts.unwrap();
+        let tag = crate::accounts::parse_guid(input["target_tag"].as_str().unwrap()).unwrap();
+        assert_eq!(facts.target, target);
+        assert_eq!(facts.filter_flags, expected["target_filter_flags"].as_u64());
+        assert_eq!(facts.tags.presence(tag), Some(true));
+        assert_eq!(
+            facts.script_state.read(OWNER_HEALTH),
+            Some(Value::Float(committed_health))
+        );
+        room.collect_local_health_events();
+        assert!(room.health_events.pending.is_empty());
     }
 
     #[test]

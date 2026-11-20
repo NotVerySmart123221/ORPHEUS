@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "case_id": "script-settled-bonus.synthetic.v1",
+  "source": {
+    "basis": "Invented players, numeric route, and meter settings through the production room, body factory, and VM."
+  },
+  "evidence": "synthetic-rust",
+  "input": {
+    "damage": 6,
+    "heal_request": 20,
+    "meter_cap": 8
+  },
+  "expected": {
+    "after_deliveries": [
+      6,
+      8
+    ],
+    "replacement_meter": 0
+  }
+}

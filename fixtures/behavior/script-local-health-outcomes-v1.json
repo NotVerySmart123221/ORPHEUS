@@ -34,6 +34,11 @@
         {"actor": 801, "damage": 2.0}
       ]
     },
+    "local_heal": {
+      "wound": 6.0,
+      "requested_per_second": 500.0,
+      "target_tag": "0x0D60000000000904"
+    },
     "field": {
       "initial_two_actor_wounds": [0.5, 3.0],
       "pulse_ticks_elapsed": 4
@@ -47,6 +52,11 @@
         {"source": 801, "delta": -6.0, "killed": false},
         {"source": 801, "delta": -19.0, "killed": true}
       ]
+    },
+    "local_heal": {
+      "actual_delta": 6.0,
+      "committed_health": 100.0,
+      "target_filter_flags": 16777217
     },
     "field": {"actual_deltas": [0.5, 3.0]}
   }
