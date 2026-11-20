@@ -1,7 +1,7 @@
 use std::cell::Cell;
 
 use super::*;
-use crate::script_expr::SpatialCandidate;
+use crate::{script_expr::SpatialCandidate, script_runtime::frame_start};
 
 const ROOT: u16 = 1;
 const TARGET_VARIABLE: u32 = 7;
@@ -148,11 +148,14 @@ fn assert_fresh_child(
     assert!(instance.is_server_only());
     let pulse = &instance.states[&0];
     assert!(pulse.active);
-    assert_eq!(
-        pulse.start_ms,
-        u64::from(born) * crate::script_runtime::FRAME_MS
+    // The tracker samples at the first scheduler wake in this frame. With
+    // no due work that can be the last millisecond of the frame.
+    assert!(
+        (frame_start(born)..frame_start(born + 1)).contains(&pulse.start_ms),
+        "child started at {} ms outside frame {born}",
+        pulse.start_ms
     );
-    let due = u64::from(born + interval) * crate::script_runtime::FRAME_MS;
+    let due = frame_start(born + interval);
     assert!(
         component.snapshot().unwrap().pending_timers[&id]
             .iter()
@@ -174,6 +177,7 @@ fn room_actor_scopes_replace_children_before_stale_work_and_recover_after_unavai
     let message = input["child_message"].as_u64().unwrap();
     advance(&mut component, &mut world, initial);
     let original = assert_fresh_child(&component, child_graph, world.target, initial, interval);
+    let original_start = child_at(&component, child_graph).unwrap().1.states[&0].start_ms;
     component
         .set_instance_variable(
             original,
@@ -186,10 +190,7 @@ fn room_actor_scopes_replace_children_before_stale_work_and_recover_after_unavai
     advance(&mut component, &mut world, retained);
     let (same, child) = child_at(&component, child_graph).unwrap();
     assert_eq!(same, original);
-    assert_eq!(
-        child.states[&0].start_ms,
-        u64::from(initial) * crate::script_runtime::FRAME_MS
-    );
+    assert_eq!(child.states[&0].start_ms, original_start);
     assert_eq!(
         child.variables[&COPIED_TARGET],
         Value::Integer(input["stale_child_value"].as_i64().unwrap())
@@ -205,6 +206,8 @@ fn room_actor_scopes_replace_children_before_stale_work_and_recover_after_unavai
     // Child IDs can be recycled: the fresh state clock and copied target prove replacement.
     let replacement = assert_fresh_child(&component, child_graph, world.target, replaced, interval);
     assert!(world.pulses.is_empty(), "retired actor's due work ran");
+    advance(&mut component, &mut world, first_pulse - 1);
+    assert!(world.pulses.is_empty(), "replacement pulse ran early");
     advance(&mut component, &mut world, first_pulse);
     assert_eq!(
         world.pulses,
@@ -240,6 +243,8 @@ fn room_actor_scopes_replace_children_before_stale_work_and_recover_after_unavai
     advance(&mut component, &mut world, recovered);
     assert_fresh_child(&component, child_graph, world.target, recovered, interval);
     let recovered_pulse = frame(&input, "recovery_pulse_frame");
+    advance(&mut component, &mut world, recovered_pulse - 1);
+    assert_eq!(world.pulses.len(), 1, "recovered pulse ran early");
     advance(&mut component, &mut world, recovered_pulse);
     assert_eq!(
         world.pulses,
@@ -318,15 +323,15 @@ fn default_target_children_keep_wire_membership_without_querying_actor_identity(
         first,
         frame(&input, "interval_frames"),
     );
+    let original_start = child_at(&component, child_graph).unwrap().1.states[&0].start_ms;
     world.token = input["replacement_token"].as_u64();
     let due = frame(&input, "replacement_frame");
+    advance(&mut component, &mut world, due - 1);
+    assert!(world.pulses.is_empty());
     advance(&mut component, &mut world, due);
     let (current, child) = child_at(&component, child_graph).unwrap();
     assert_eq!(current, original);
-    assert_eq!(
-        child.states[&0].start_ms,
-        u64::from(first) * crate::script_runtime::FRAME_MS
-    );
+    assert_eq!(child.states[&0].start_ms, original_start);
     assert_eq!(world.pulses, [(due, world.token, world.target, -1.0)]);
     assert_eq!(world.identity_reads.get(), 0);
 }
