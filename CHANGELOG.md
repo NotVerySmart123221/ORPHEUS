@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Register the existing horizontal velocity cap contract in public Rust checks.
+
 - Add opt-in player respawn delays by map and mode. Respawn uses the dead body's generation and existing hero, skin, and replacement path. Manual replacements cancel the old request. Shared regression and original-client timing verification remain open.
 
 - Load optional per-map lethal volumes and settle deaths through room health without assigning a killer. Add synthetic checks for safe lower positions and the existing training bot replacement deadline. Verified map regions remain open.

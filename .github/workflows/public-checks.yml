@@ -86,6 +86,7 @@ jobs:
                 'linked_aim::tests::shared_captured_aim_numeric_contract',
                 'script_enemy::tests::shared_captured_aim_lifecycle_contract',
                 'script_init_host_tests::tests::shared_charge_contract',
+                'script_player::tests::shared_horizontal_cap_queues_on_a_live_player_without_a_roll_profile',
                 'script_enemy::tests::shared_retired_entity_contract',
                 'script_enemy::tests::shared_self_damage_clock_contract',
                 'script_enemy::tests::shared_flashbang_effect_dispatch_contract',
