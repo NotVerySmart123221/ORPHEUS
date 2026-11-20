@@ -182,6 +182,9 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
         None
     }
 
+    /// Transfer modeled health to the native body when this runtime is retired.
+    fn take_vitals(&mut self) -> Option<Vitals>;
+
     fn heal(&mut self, _amount: f64) -> f64 {
         0.0
     }

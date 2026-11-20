@@ -288,6 +288,14 @@ impl Vitals {
         self.encode(self.used)
     }
 
+    pub(crate) fn take_cumulative_update(&mut self) -> Option<Component> {
+        if !self.has_changed() {
+            return None;
+        }
+        self.clear_changed();
+        Some(self.cumulative_component())
+    }
+
     pub(crate) fn has_changed(&self) -> bool {
         self.changed != 0
     }
