@@ -529,6 +529,10 @@ impl<W: World> Context for InstanceContext<'_, W> {
         self.world.room_entities()
     }
 
+    fn settled_health_target(&self, entity: u32) -> Option<&HealthTargetFacts> {
+        self.settled_target(entity)
+    }
+
     fn spatial_line_clear(&mut self, origin: [f64; 3], target: [f64; 3]) -> Option<bool> {
         self.read_native = true;
         self.world.spatial_line_clear(origin, target)

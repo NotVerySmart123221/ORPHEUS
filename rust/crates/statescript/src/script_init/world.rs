@@ -152,11 +152,21 @@ impl HostEvent {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RoomEntityStatus {
+    /// None means an independent participant.
+    pub team: Option<u8>,
+    /// Liveness after the authoritative health mutation.
+    pub alive: bool,
+}
+
 /// Room-sampled facts for the original target of a settled health event.
 #[derive(Clone, Debug)]
 pub struct HealthTargetFacts {
     pub target: u32,
     pub filter_flags: Option<u64>,
+    /// None means no room affiliation or liveness was sampled.
+    pub room_status: Option<RoomEntityStatus>,
     pub tags: TargetTagSnapshot,
     pub script_state: EntityScriptState,
 }

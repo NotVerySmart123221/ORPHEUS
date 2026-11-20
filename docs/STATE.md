@@ -362,6 +362,9 @@ heal and bind the target in an authored graph. The room regression covers
 a grant on the recipient's VM frame after routing, the meter cap, and
 discarding a request for a replaced body. Positive NPC-local health
 events collect committed target facts after the VM's local mutations.
+Direct target filters use the event's tags and, in a configured room,
+the original target's affiliation and post-settlement liveness. The
+room preserves these facts if a lethal target retires before delivery.
 A prepared probe uses the original admission claim and local sender
 with the stock cap. These additions are pending integration verification.
 
