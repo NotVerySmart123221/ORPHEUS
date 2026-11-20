@@ -23,7 +23,7 @@ use crate::{
     game_clock::FIRST_TICK,
     game_combat::{
         ENCOUNTER_INSTANCE, EncounterRegistration, EncounterWorld, GateState, GateWorld,
-        RoomSimulation,
+        RoomSimulation, script_eye_position,
     },
     game_content::{
         GameMap, JUNKENSTEIN_GATE, JunkensteinCard, PRACTICE_RANGE_MAP, PRACTICE_RANGE_MODE,
@@ -32,7 +32,7 @@ use crate::{
     game_heroes::{CASSIDY, Hero, HeroCatalog},
     game_instance::RETAIL_QUANTA,
     game_pools::PoolCatalog,
-    game_replication::OwnerBodyRuntime,
+    game_replication::{OwnerBodyRuntime, OwnerRoomActivity},
     game_stats::{PlayerStats, StatsCatalog, initial_on_fire},
     match_scene::{
         PlayerAppearance, initial_world, junkenstein_presentation, mode_presentation, team_bit,
@@ -289,6 +289,8 @@ impl SceneAssets {
             vec![Root::new(1, gate.graph)],
             0,
             &mut GateWorld {
+                graphs: &self.graphs,
+                mode: card.mode,
                 entity: gate.entity,
                 state: &mut gate_state,
                 bodies: scene.simulation(),
@@ -311,6 +313,8 @@ impl SceneAssets {
         let mut screens_complete = false;
         let encounter = {
             let mut startup = EncounterWorld {
+                graphs: &self.graphs,
+                mode: card.mode,
                 gate: &gate,
                 anchors: &anchors,
                 gate_variables: &gate_variables,
@@ -587,6 +591,7 @@ impl SceneAssets {
                     hero,
                     OwnerBodySetup {
                         spatial_frame,
+                        room_activity: Some(scene.owner_room_activity()),
                         ..OwnerBodySetup::default()
                     },
                 )
@@ -678,6 +683,7 @@ impl SceneAssets {
                     body_filter: team_bit(0).map_err(SceneOwnerPreparationError::TeamFilter)?,
                     frame: FIRST_TICK,
                     pose: mover.pose(),
+                    eye_position: script_eye_position(hero.guid, &mover),
                     quanta: RETAIL_QUANTA,
                 },
                 setup,

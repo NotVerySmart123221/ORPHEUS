@@ -85,7 +85,7 @@ def collect_timing(lines, graph) -> list[dict]:
             continue
         parsed = read_terms(text, line_offset + call.end() - 1)
         expression = ""
-        if parsed and parsed[0] and BLOCK_COLON.match(text, parsed[1]):
+        if parsed and len(parsed[0]) == 1 and BLOCK_COLON.match(text, parsed[1]):
             expression = parsed[0][0]
         resolution, duration, bounds = wait_operand(expression)
         rid, state, scope = owner

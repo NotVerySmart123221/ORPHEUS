@@ -285,7 +285,7 @@ def collect_evidence(evidence, graph_bundle=None, families=None):
         provenance.update(bytes.fromhex(digest))
     manifest = {
         "schema_version": 1,
-        "tool": "statescript-evidence/v2",
+        "tool": "statescript-evidence/v3",
         "source_sha256": provenance.hexdigest(),
         "source_digest_basis": "graph GUID and normalized listing digest, ordered by GUID",
         "listing_graphs": len(graph_hashes),

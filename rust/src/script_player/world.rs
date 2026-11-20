@@ -14,6 +14,7 @@ use crate::{
     game_heroes::CASSIDY,
     game_hitscan::{TargetPose, aim_direction, direction_for_angles},
     game_instance::TeamMemberCounts,
+    game_replication::OwnerRoomActivity,
     junkenstein_messages::{self, DefenderSighting, SIGHTING, SIGHTING_TAGS, SightingSource},
     mover::sample_movement_flags,
     scene_assets::MOVER_CATEGORY,
@@ -134,14 +135,17 @@ pub(super) fn target_delta(origin: Vec3, target: TargetPose) -> Vec3 {
 
 pub(super) struct BodyWorld {
     pub(super) damage_credit: Option<AppliedDamage>,
+    pub(super) uses_authored_charge: bool,
     pub(super) graphs: Arc<GraphStore>,
     pub(super) spatial_frame: Option<Arc<crate::game_combat::RoomSpatialFrame>>,
     pub(super) team_member_counts: Option<TeamMemberCounts>,
+    pub(super) room_activity: Option<OwnerRoomActivity>,
     pub(super) script_requests: RoomScriptRequests,
     pub(super) controller: u32,
     pub(super) entity: u32,
     pub(super) body_filter: u64,
     pub(super) position: [f64; 3],
+    pub(super) eye_position: Option<[f64; 3]>,
     pub(super) movement: Movement,
     pub(super) throttles: [i8; 2],
     pub(super) mode: u64,
@@ -164,16 +168,23 @@ impl World for BodyWorld {
         self.is_player_site(site).then_some(false)
     }
 
+    fn local_combat_context_available(&self, site: Site) -> Option<bool> {
+        // The headless owner body has no client-local combat accumulator.
+        self.is_player_site(site).then_some(false)
+    }
+
+    fn voice_context(&mut self, site: Site) -> Option<bool> {
+        // This body has no native voice manager. Authored room cues use
+        // the separate room request path.
+        self.is_player_site(site).then_some(false)
+    }
+
     fn team_members(&self, team: u8) -> Option<u32> {
         self.team_member_counts?.count(team)
     }
 
     fn engine_setting(&self, _site: Site, key: u32) -> crate::script_expr::EngineSetting {
-        if is_junkenstein_mode(self.mode) {
-            crate::junkenstein_host::engine_setting(key)
-        } else {
-            crate::script_expr::EngineSetting::Unavailable
-        }
+        crate::body_ruleset::engine_setting(&self.graphs, self.mode, key)
     }
 
     fn edit_velocity(&mut self, site: Site, frame: u32, value: Value, cap: bool) -> bool {
@@ -238,13 +249,13 @@ impl World for BodyWorld {
     }
 
     fn spatial_binding_owner_available(&self, site: Site) -> Option<bool> {
-        // This authoritative body host has no local client-world auxiliary
-        // owner. Its remote native client still evaluates the view bindings.
-        (self.is_player_site(site)
-            && is_junkenstein_mode(self.mode)
-            && site.graph == 0x0ced
-            && matches!(site.node, Some(0 | 4 | 6)))
-        .then_some(false)
+        // The headless body has no local auxiliary view owner.
+        self.is_player_site(site).then_some(false)
+    }
+
+    fn outline_context_available(&self, site: Site) -> Option<bool> {
+        // The headless body has no local outline presentation context.
+        self.is_player_site(site).then_some(false)
     }
 
     fn set_cinematic_aim_lock(&mut self, site: Site, active: bool) -> bool {
@@ -385,6 +396,12 @@ impl World for BodyWorld {
         self.spatial_frame.as_deref()?.entity_facts()
     }
 
+    fn body_active(&self, site: Site) -> Option<bool> {
+        self.is_player_site(site).then_some(())?;
+        self.room_activity
+            .map(|activity| activity.allows_body_activity() && self.vitals.death().is_none())
+    }
+
     fn spatial_line_clear(&self, origin: [f64; 3], target: [f64; 3]) -> Option<bool> {
         self.spatial_frame.as_deref()?.line_clear(origin, target)
     }
@@ -427,6 +444,13 @@ impl World for BodyWorld {
                 .map(|(_, [yaw, pitch])| direction_for_angles(yaw, pitch)),
             None => self.forward(entity),
         }
+    }
+
+    fn body_eye_position(&self, entity: u32) -> Option<[f64; 3]> {
+        if entity == self.entity {
+            return self.eye_position.filter(|_| self.vitals.death().is_none());
+        }
+        self.spatial_frame.as_deref()?.actor_eye_position(entity)
     }
 
     fn forward(&self, entity: u32) -> Option<[f64; 3]> {

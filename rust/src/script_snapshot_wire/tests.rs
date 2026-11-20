@@ -7,6 +7,8 @@ use crate::script_init::{
 use crate::script_stream::{BodyStream, ChangeKey, DeltaKind};
 use serde_json::{Value as Json, json};
 
+mod voice;
+
 const ENTITY: u32 = 0xa000_0101;
 pub(crate) const CODECS: &str = r#"{"classes":{
     "12340001":{"name":"STUStatescriptState","codec":"none","stec":false,"status":"VERIFIED","layout":[]},
@@ -1546,6 +1548,131 @@ fn delayed_switch_projects_reference_bits_and_owner_timer() {
                 (bits.bit_len(), bits.as_bytes()),
                 (width, [byte].as_slice())
             );
+        }
+    }
+}
+
+#[test]
+fn cinematic_boundary_projects_on_enter_and_release_for_relocated_state() {
+    use crate::script_init::Component;
+    use std::sync::Arc;
+
+    const CLASS: &str = "STU_2F07848F";
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-cinematic-boundary-v1.json"
+    ))
+    .unwrap();
+    let input = &contract["input"];
+    let graph_index = u32::try_from(input["graph"].as_u64().unwrap()).unwrap();
+    let release_frame = u32::try_from(input["release_frame"].as_u64().unwrap()).unwrap();
+    let mut registry: Json = serde_json::from_str(CODECS).unwrap();
+    registry["classes"]["2F07848F"] = json!({
+        "name": CLASS, "codec": "value_slot", "stec": true, "status": "VERIFIED",
+        "layout": [{"op": "bits", "f": "which", "n": 1},
+                   {"op": "bits", "f": "value", "n": 32}]
+    });
+    let codecs = CodecTable::from_json(&registry.to_string()).unwrap();
+    let codec = codecs.codec(CLASS).unwrap();
+
+    for case in input["cases"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let mut cinematic = node(
+            1,
+            CLASS,
+            Some(0),
+            json!({
+                "m_17D12F6B": case["delay"],
+                "m_D8989B37": {"$": "STUConfigVarInt", "m_value": 9},
+                "m_89C63AB3": {"$": "STUConfigVarInt", "m_value": 5},
+                "m_E75DF5AC": case["scale"],
+            }),
+        );
+        let remote = if case["remote"] == true {
+            cinematic["remote"] = json!(0);
+            json!([1])
+        } else {
+            json!([])
+        };
+        let fixture = graph(
+            graph_index,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({"m_outPlug": {"$": "Plug", "links": [[1, "m_beginPlug"]]}}),
+                ),
+                cinematic,
+            ],
+            json!([1]),
+            json!([0]),
+            remote,
+            json!([]),
+        );
+        let graphs = Arc::new(
+            GraphStore::from_json(
+                &serde_json::to_vec(&json!({
+                    "version": 1, "graphs": [fixture], "bodies": {}, "missing": []
+                }))
+                .unwrap(),
+            )
+            .unwrap(),
+        );
+        let mut world = EmptyWorld;
+        let mut component = Component::start(
+            Arc::clone(&graphs),
+            ENTITY,
+            Variables::new(),
+            vec![Root::new(1, graph_index)],
+            0,
+            &mut world,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        let Some(boundaries) = case["boundaries"].as_array() else {
+            let snapshot = component.snapshot().unwrap();
+            assert!(
+                matches!(snapshot.diagnostics.as_slice(),
+                         [Diagnostic { issue: Issue::UnsupportedState(class), .. }] if class == CLASS),
+                "{name}: {:?}",
+                snapshot.diagnostics
+            );
+            assert!(!snapshot.instances[&1].states.contains_key(&0), "{name}");
+            continue;
+        };
+        let encoder = SnapshotEncoder::new(&graphs, &codecs);
+        for (active, expected) in [true, false].into_iter().zip(boundaries) {
+            let boundary = expected.as_u64().unwrap();
+            if !active {
+                component.advance_frame(release_frame, &mut world).unwrap();
+                component.debug_end_state(1, 0, &mut world).unwrap();
+            }
+            let snapshot = component.snapshot().unwrap();
+            assert!(
+                snapshot.diagnostics.is_empty(),
+                "{name}: {:?}",
+                snapshot.diagnostics
+            );
+            for (view, mode) in [
+                (
+                    View::Owner,
+                    PayloadMode::Owner {
+                        full: true,
+                        frame_time: 0,
+                        frame_ms: 16,
+                    },
+                ),
+                (View::Observer, PayloadMode::Remote { full: true }),
+            ] {
+                let projected = encoder.project(snapshot, view).unwrap();
+                let state = &projected.instances[&1].states[&0];
+                assert_eq!(state.active, active, "{name}");
+                let bits = codec.payload(&state.payload, mode).unwrap();
+                assert_eq!(bits.bit_len(), 33, "{name}");
+                let mut reader = crate::bits::BitReader::new(bits.as_bytes());
+                assert_eq!(reader.bit().unwrap(), active, "{name}");
+                assert_eq!(reader.bits(32).unwrap(), boundary, "{name}");
+            }
         }
     }
 }

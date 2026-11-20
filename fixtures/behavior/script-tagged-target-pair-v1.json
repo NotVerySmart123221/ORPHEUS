@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "case_id": "script-tagged-target-pair.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "input": {
+    "graph": 1987,
+    "position": 3,
+    "include_tag": "0x0D6000000000D451",
+    "exclude_tag": "0x0D6000000000D452",
+    "cases": [
+      {"name": "ordered captured targets", "targets": [91, 44], "outcome": "resolved"},
+      {"name": "known empty on server-only state", "server_only": true, "targets": [], "outcome": "resolved"},
+      {"name": "unknown scene inventory", "targets": null, "outcome": "unavailable"},
+      {"name": "client-only state", "client_only": true, "targets": [91], "outcome": "skipped"},
+      {"name": "zero inclusion", "fields": {"m_9C7BD8B8": {"$": "STU_357DABBB"}}, "outcome": "unsupported"},
+      {"name": "zero exclusion", "fields": {"m_8B2A4DF3": {"$": "STU_357DABBB", "m_7D7C86A1": null}}, "outcome": "unsupported"},
+      {"name": "wrong asset type", "fields": {"m_8B2A4DF3": {"$": "STU_357DABBB", "m_7D7C86A1": "0x040000000000D452"}}, "outcome": "unsupported"},
+      {"name": "additional filter", "fields": {"m_filter": {"$": "STUConfigVarFilter"}}, "outcome": "unsupported"},
+      {"name": "additional required tag", "fields": {"m_B486603E": {"$": "STU_357DABBB", "m_7D7C86A1": "0x0D6000000000D453"}}, "outcome": "unsupported"},
+      {"name": "missing output", "fields": {"m_4AEEE6A1": null}, "outcome": "invalid_output"},
+      {"name": "malformed output", "fields": {"m_4AEEE6A1": {"$": "STUConfigVarDynamic", "m_identifier": -1}}, "outcome": "invalid_expression"}
+    ]
+  }
+}

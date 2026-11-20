@@ -94,6 +94,74 @@ ability support.
    shape and lifecycle outline. Use invented values, graphs, IDs and
    expected results derived from the server contract.
 
+### Phase 2 shared VM paths
+
+- The native pitched direction operand reads a bound entity through the
+  host pose provider. The existing roll adapter still supplies its
+  compatibility vector. A host's explicit no-target reply completes the
+  operand before selector evaluation.
+- The scene placement collection action uses a literal required tag and
+  a scene placement inventory from its host. An empty inventory and an
+  unavailable inventory produce distinct results.
+- Timed graph states with no completion operands or alternate links use
+  parent-owned lifecycle at any placement. The prior configured-duration
+  path remains a compatibility case. Configured predicates and alternate
+  subgraphs need separate contracts.
+- Owner graphs can read `BodyActive` as an activity gate with no hero or
+  graph-specific bindings. The prepared scene provides the initial level.
+  The room updates the current body by generation.
+- Native eye-position operands use the player's simulation eye anchor.
+  Native eye and direction expressions with potential foreign selectors
+  request a frozen room pose.
+- A native local combat accumulator enters as a plain state when its host
+  confirms the local service is absent. It leaves spatial operands dormant.
+  Hosts that report the service present or return an unknown result still
+  produce an unsupported-state diagnostic.
+
+- Player, NPC, mode and gate scripts read native engine settings through
+  the mode's authored table or its captured compatibility table.
+
+- Auxiliary view bindings and outline states keep their ordinary
+  lifecycle when the host confirms the local presentation context is
+  absent. Graph placement is independent of that host fact.
+- Dynamic elapsed waits with a direct numeric variable sample the duration
+  again on each tick. Reentry with restart enabled cancels the prior
+  registration and resets the start time. Ending the state unregisters
+  its tick.
+- Cinematic boundary projections with a literal integer delay use the
+  current component frame at entry and release. The owner and observer
+  slots must both refer to the state. Room simulation still uses its
+  existing clock.
+
+- A scoped headless player body can report that its native voice context
+  is absent. A voice state keeps its lifecycle and uses its verified
+  empty codec. Authored room cues use their existing request and
+  delivery path.
+
+- Tagged target selection with literal include and exclude operands
+  uses the same VM path at any placement. It preserves the host's
+  ordered result and reports unavailable scene context.
+
+- The hardpoint membership expression queries a bound entity and a
+  literal hardpoint asset. A known model can report presence or absence.
+  Unavailable model facts produce a runtime diagnostic.
+
+Native target tracking still needs ordered samples, optional typed
+output bindings, and the lifecycle of its embedded state slots. The
+authored `track_entities` node owns separate child graph instances.
+Start with a validated query-only shape and an empty embedded plug.
+Preserve the difference between unavailable queries and empty results,
+then verify the output lifetime and owner and observer projections.
+The other pending paths include migration of the legacy charge bindings,
+health effects, spatial queries, control effects, and voice recipients.
+
+The prepared Python ordinary sender trace takes its compatibility branch.
+That branch leaves the persistent recipient wrapper unresolved, so it
+supplies no evidence of delivery or registration. Keep the existing
+persistent registration diagnostic until host policy is modeled or the
+topic has a verified client-only receiver set. Use projected message
+topic declarations for the latter case.
+
 ### Generate the static reports
 
 ```text
@@ -127,6 +195,8 @@ ordered literal random bounds. Dynamic and unsupported operands keep
 their location and classification. A null unit indicates that the
 listing lacks an explicit unit. Use VM traces to verify elapsed time
 and event order.
+The v3 report generator requires exactly one wait operand before inferring
+timing. A malformed multi-argument wait stays unresolved.
 
 The `variable-access.json` report records definite reads and write sites,
 schema default declarations, direct message bindings, and uncertain
@@ -160,10 +230,15 @@ to identify graph position, RID, state slot, and class.
 python scripts/summarize_statescript_coverage.py --graph-bundle path/to/game_graphs_174.json.gz --hero-catalog path/to/game_heroes_174.json --observation path/to/owner-coverage.json --output path/to/new-coverage.json
 ```
 
-The input catalog supplies direct body roots. An observation can also
-identify a child graph. Use repeated `--observation` options for separate
-runs. With no observation, the report lists catalog roots and marks their
-nodes as having no sampled scenario. The report lists each node's declared
+The input catalog supplies direct body roots. The report follows declared
+`track_entities` child graph links from those roots and any observed
+graphs. `static_dependencies` lists those references and their source
+nodes. `missing_dependency_graphs` identifies absent targets. A graph
+with origin `referenced_child` has a static reference and no observed
+site in that scenario. Dynamic graph choices need a capture. Use repeated
+`--observation` options for separate runs. With no observation, the report
+marks inventory nodes as having no sampled scenario. The report lists each
+node's declared
 `scope` and effective `server_scope`. Its `runtime_classification` identifies
 an exact client state or a candidate for plain lifecycle fallback. Review
 scope skips, registration rejections, and unsupported sites separately.
@@ -453,8 +528,8 @@ entities. The batch uses the sender's existing request budget. The action
 continues once the batch is accepted.
 
 The notice carries the sender as its anchor and speaker. Before reliable
-delivery, the transport checks both body generations and waits for both
-identity acknowledgements. Each player has at most one unacknowledged
+admission, the transport checks both body generations and the listener's
+liveness. It waits for both identity acknowledgements. Each player has at most one unacknowledged
 authored cue in reliable delivery. When the pending combat queue is full,
 a new cue is dropped. Cue identifiers describe resources supplied by the
 author.
@@ -496,6 +571,9 @@ immutable rules for the running mode. This example uses synthetic IDs.
         {"id": 7, "value": false},
         {"id": 7, "body": "0x00000000000000B1", "value": true},
         {"id": 8, "value": 1.0}
+      ],
+      "engine_settings": [
+        {"id": 7, "value": 4}
       ]
     }
   ]
@@ -514,6 +592,18 @@ existing compatibility value in that order. An explicit `null` is an
 authored result and prevents compatibility fallback. A fully missing
 rule retains the VM's existing integer-zero fallback. Graph bundles
 without the optional section retain the existing host rules.
+
+A mode row can also declare `engine_settings`. This is the separate table
+used by native engine-setting expressions and watchers. Keys are unsigned
+32-bit hashes. Values use the same scalar types as rules. The table is
+mode-wide, with unique keys. Player, NPC, mode and
+scene-object scripts read the table for their current mode.
+
+An omitted table keeps the existing mode-specific compatibility lookup.
+An authored table, including an empty list, supplies the whole mode table.
+A missing key in that table keeps the expression's initial value, while
+an explicit `null` supplies a null result. A row may declare engine settings
+without declaring body rules.
 
 See the [synthetic mode ruleset contract](../fixtures/behavior/script-mode-rulesets-v1.json).
 
@@ -584,13 +674,46 @@ affiliation data to route damage and healing. An interval state can update
 the same balance independently. Ordinary assignment and numeric clamp
 operations apply the limit.
 
+Use `{"$":"BodyActive"}` in the gain branches when the meter depends on
+room and body activity. A live owner in a regular room is active. An
+encounter supplies its existing pre-result activity level after its
+runtime is installed. Death closes the gate through authoritative vitals.
+A detached body with no supplied room
+activity reports an unavailable host read. A deferred health event reads
+the level when its graph handler executes. Gating interval gain keeps
+the interval schedule anchored to startup. The debug scheduler can
+freeze the VM clock independently.
+
 The [synthetic meter contract](../fixtures/behavior/script-authored-meter-v1.json)
 runs this graph for two differently configured body definitions and checks
 an actor without the binding. Its rates, limits and test actors are
 original examples. The fixture verifies execution and scoped balances.
+The [activity contract](../fixtures/behavior/script-meter-body-activity-v1.json)
+checks when gains stop, resume, or belong to a replacement actor.
 Adding a root to a client-facing body also requires an owner and observer
 projection regression, since body graph bindings participate in instance
-ordering. The existing charge bridge uses synchronous damage delivery.
+ordering.
+
+A player body can select one private root as its charge graph. Use the
+normal graph binding for settings and a canonical graph asset GUID for
+`authored_charge_graph`. This example uses a synthetic graph ID.
+
+```json
+{
+  "server_graphs": [{"graph": 612, "m_75408640": 0}],
+  "authored_charge_graph": "0x0580000000000264"
+}
+```
+
+The loader requires exactly one private mount of the selected graph and
+a valid server `health_applied` entry. The factory checks the same mount
+constraint after adding room roots. A selected root uses the ordinary
+settled events on its next VM frame. The host skips its compatibility
+charge admission and synchronous damage credit for that body. An
+omitted selection retains the existing bridge for its supported profile.
+Graph bindings remain the source for authored starting values and costs.
+
+See the [synthetic charge route contract](../fixtures/behavior/script-authored-charge-route-v1.json).
 
 ## Apply a radial health change
 
@@ -691,7 +814,21 @@ before starting its temporary runtime.
 The [synthetic spatial contract](../fixtures/behavior/statescript-entity-spatial-v1.json)
 shows both operands applied to the same entity at two points in time.
 The [room pose contract](../fixtures/behavior/script-room-actor-pose-v1.json)
-checks how the native room captures actor movement and aim.
+checks how the native room captures actor movement, aim, and player eye
+anchors.
+
+The native eye-position shape uses `STU_21A13145` with one `m_entity`
+selector. A player anchor combines feet position, the existing stance
+height, and the mover's spring offset in movement units. It is seeded
+with the spawn pose and refreshed on each owner advance. Other bodies
+read the same frozen sample as their pose. NPC bodies and static
+placements have no player eye anchor. The VM reports an unavailable
+anchor when the host returns none.
+
+The loader requests a spatial frame for native eye and direction
+expressions with selectors that may refer to other entities. Direct
+self reads and client-only operands without a server fallback do not
+request the frame. See the [pose demand contract](../fixtures/behavior/script-native-pose-demand-v1.json).
 
 ## Find room entities within a radius
 

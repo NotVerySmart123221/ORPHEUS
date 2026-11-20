@@ -180,6 +180,17 @@ impl PreparedScene {
         OwnerBodySetup {
             team_member_counts: self.simulation.team_member_counts(),
             spatial_frame: self.simulation.owner_startup_spatial_frame(owner),
+            room_activity: Some(self.owner_room_activity()),
+        }
+    }
+
+    pub(crate) fn owner_room_activity(&self) -> OwnerRoomActivity {
+        if self.map.is_junkenstein() {
+            OwnerRoomActivity::Encounter {
+                active: self.simulation.encounter_active(),
+            }
+        } else {
+            OwnerRoomActivity::Regular
         }
     }
 

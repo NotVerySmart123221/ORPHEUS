@@ -29,6 +29,7 @@ use crate::{
         GateApproach, JUNKRAT, REAPER, ROADHOG, ReaperExit, SUMMONER, WITCH, ZOMBARDIER,
     },
     match_scene::bot_create,
+    mover::Mover,
     projectile_flight::{ProjectileBallistics, ProjectileFlight},
     scene_assets::{BotQueries, MOVER_CATEGORY},
     script_expr::{RoomEntityFacts, SpatialCandidate},
@@ -101,6 +102,12 @@ pub(crate) fn eye_height(hero: u64, crouched: bool) -> f64 {
         (true, SOLDIER) => 1.085,
         (true, _) => 1.15,
     }
+}
+
+pub(crate) fn script_eye_position(hero: u64, mover: &Mover) -> Option<[f64; 3]> {
+    let mut position = mover.pose().position;
+    position[1] += eye_height(hero, mover.crouched()) + f64::from(mover.spring_offset());
+    position.into_iter().all(f64::is_finite).then_some(position)
 }
 
 #[derive(Clone, Copy)]
@@ -305,9 +312,18 @@ impl RoomSpatialFrame {
     }
 
     pub(crate) fn actor_pose(&self, entity: u32) -> Option<(Vec3, [i32; 2])> {
+        let (candidate, target) = self.actor_sample(entity)?;
+        Some((candidate.position, target.angles))
+    }
+
+    pub(crate) fn actor_eye_position(&self, entity: u32) -> Option<Vec3> {
+        self.actor_sample(entity)?.1.eye_position
+    }
+
+    fn actor_sample(&self, entity: u32) -> Option<(&SpatialCandidate, &RoomScriptTarget)> {
         let target = self.script_targets.get(&entity)?;
         let candidate = self.candidates.get(target.candidate_index)?;
-        (candidate.entity == entity).then_some((candidate.position, target.angles))
+        (candidate.entity == entity).then_some((candidate, target))
     }
 
     pub(crate) fn entity_facts(&self) -> Option<&BTreeMap<u32, RoomEntityFacts>> {
@@ -747,6 +763,7 @@ impl RoomSimulation {
                         entity,
                         candidate_index: candidates.len(),
                         angles: [pose.yaw, pose.pitch],
+                        eye_position: None,
                         health: true,
                         messages: state.enemy.as_ref().is_some_and(|enemy| {
                             enemy.fault.is_none() && !enemy.scripts.retirement_requested
@@ -794,6 +811,7 @@ impl RoomSimulation {
                         entity,
                         candidate_index: candidates.len(),
                         angles: [pose.yaw, pose.pitch],
+                        eye_position: state.script_eye_position(),
                         health: state
                             .runtime
                             .as_ref()

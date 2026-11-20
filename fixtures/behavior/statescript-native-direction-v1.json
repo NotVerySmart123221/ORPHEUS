@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "case_id": "statescript-native-direction.synthetic.v1",
+  "source": {
+    "basis": "Original synthetic entity selectors and host vectors for the pitched direction operand."
+  },
+  "evidence": "synthetic-rust",
+  "input": {
+    "config": {
+      "$": "STU_2200A66D",
+      "m_entity": {"$": "STUConfigVarDynamic", "m_identifier": 61, "m_60DB8F99": false}
+    },
+    "samples": [
+      {"entity": 17, "direction": [0.25, -0.5, 0.75]},
+      {"entity": 29, "direction": [-0.5, 0.75, 0.25]}
+    ]
+  },
+  "expected": [
+    [0.25, -0.5, 0.75],
+    [-0.5, 0.75, 0.25]
+  ]
+}

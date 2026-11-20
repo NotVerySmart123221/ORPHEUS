@@ -26,15 +26,21 @@ pub(super) fn participant_filter(node: &Node) -> Option<&Json> {
     .then_some(filter)
 }
 
-pub(super) fn excluded_target_tags(graph: u32, node: &Node) -> Option<(u64, u64)> {
-    if (graph, node.pos) != (0x00ca, 33)
-        || !field(&node.fields, "m_filter").is_null()
-        || !field(&node.fields, "m_B486603E").is_null()
-    {
+pub(super) fn placement_collection_tag(node: &Node) -> Option<u64> {
+    if !field(&node.fields, "m_9C7BD8B8").is_null() {
         return None;
     }
-    let tag = script_expr::target_tag_config(field(&node.fields, "m_9C7BD8B8"))?;
-    let excluded = script_expr::target_tag_config(field(&node.fields, "m_8B2A4DF3"))?;
+    script_expr::target_tag_config(static_target_operand(node)?).filter(|&tag| tag != 0)
+}
+
+pub(super) fn excluded_target_tags(node: &Node) -> Option<(u64, u64)> {
+    if !field(&node.fields, "m_filter").is_null() || !field(&node.fields, "m_B486603E").is_null() {
+        return None;
+    }
+    let tag = script_expr::target_tag_config(field(&node.fields, "m_9C7BD8B8"))
+        .filter(|&tag| tag != 0)?;
+    let excluded = script_expr::target_tag_config(field(&node.fields, "m_8B2A4DF3"))
+        .filter(|&tag| tag != 0)?;
     Some((tag, excluded))
 }
 
@@ -190,6 +196,25 @@ pub(super) fn is_self_stat_timer(node: &Node) -> bool {
     }
 }
 
+pub(super) fn is_elapsed_wait(node: &Node) -> bool {
+    let dynamic = field(&node.fields, "m_BF1A93B0");
+    if matches!(dynamic, Json::Null | Json::Bool(false)) || dynamic.as_u64() == Some(0) {
+        return true;
+    }
+    let rearm = field(&node.fields, "m_0DBAFD7F");
+    let timeout = field(&node.fields, "m_timeout");
+    let scope = field(timeout, "m_60DB8F99");
+    let is_flag = |value: &Json| {
+        matches!(value, Json::Null | Json::Bool(_)) || matches!(value.as_u64(), Some(0 | 1))
+    };
+    node.remote == -1
+        && (dynamic.as_bool() == Some(true) || dynamic.as_u64() == Some(1))
+        && is_flag(rearm)
+        && is_flag(scope)
+        && script_expr::native_fields(timeout, &["m_identifier", "m_60DB8F99"])
+        && script_expr::dynamic(timeout).is_ok_and(|value| value.is_some())
+}
+
 pub(super) fn is_literal_frame_wait(node: &Node) -> bool {
     let duration = field(&node.fields, "m_3016B9A1");
     let rearm = field(&node.fields, "m_0DBAFD7F");
@@ -199,6 +224,43 @@ pub(super) fn is_literal_frame_wait(node: &Node) -> bool {
         && field(duration, "m_value")
             .as_u64()
             .is_some_and(|count| i32::try_from(count).is_ok())
+}
+
+pub(super) fn is_cinematic_time_scale_envelope(graph: &Graph, node: &Node, state: u16) -> bool {
+    let scale = field(&node.fields, "m_E75DF5AC");
+    let scale_matches = match field(scale, "$").as_str() {
+        Some("STUConfigVarDynamic") => {
+            script_expr::native_fields(scale, &["m_identifier", "m_60DB8F99"])
+                && script_expr::dynamic(scale).is_ok_and(|value| value.is_some())
+        }
+        Some("STU_919FD47C") => {
+            script_expr::native_fields(scale, &["m_expression", "m_configVars"])
+                && field(scale, "m_expression").is_object()
+                && field(scale, "m_configVars").is_array()
+        }
+        _ => false,
+    };
+    node.is_networked()
+        && node.is_state()
+        && !node.is_action()
+        && node.state == Some(state)
+        && graph
+            .state(usize::from(state))
+            .is_some_and(|owner| owner.pos == node.pos)
+        && usize::try_from(node.remote)
+            .ok()
+            .and_then(|slot| graph.remote_node(slot))
+            .is_some_and(|remote| remote.pos == node.pos)
+        && ["m_17D12F6B", "m_D8989B37", "m_89C63AB3"]
+            .into_iter()
+            .all(|name| {
+                let operand = field(&node.fields, name);
+                script_expr::native_shape(operand, "STUConfigVarInt", Some("m_value"))
+                    && field(operand, "m_value")
+                        .as_i64()
+                        .is_some_and(|value| i32::try_from(value).is_ok())
+            })
+        && scale_matches
 }
 
 pub(super) fn is_message_recipient_set(target: &Json) -> bool {
@@ -704,4 +766,35 @@ pub(super) fn chase_step(current: Value, destination: Value, step: f64) -> (Valu
         });
         (Value::Vector(next), false)
     }
+}
+
+pub(super) fn is_parent_owned_timed_graph(node: &Node) -> bool {
+    let has_no_finish_operand = [
+        "m_7C8AD485",
+        "m_C7A42E2A",
+        "m_F8CE386A",
+        "m_C46403A5",
+        "m_ED97A97C",
+    ]
+    .iter()
+    .all(|name| field(&node.fields, name).is_null());
+    let alternate = field(&node.fields, "m_E5790891");
+    let has_no_alternate = alternate.is_null()
+        || (alternate.is_object()
+            && matches!(
+                alternate.get("$").and_then(Json::as_str),
+                Some("Plug" | "STUStatescriptOutputPlug" | "STU_904BFCEC")
+            )
+            && alternate.as_object().is_some_and(|fields| {
+                fields
+                    .keys()
+                    .all(|name| matches!(name.as_str(), "$" | "links" | "m_FF3DAF1E"))
+            })
+            && alternate
+                .get("links")
+                .is_some_and(|value| value.as_array().is_some_and(Vec::is_empty))
+            && alternate.get("m_FF3DAF1E").is_none_or(|value| {
+                value.is_null() || value.as_array().is_some_and(Vec::is_empty)
+            }));
+    has_no_finish_operand && has_no_alternate
 }

@@ -504,6 +504,8 @@ pub trait World {
     fn player_stats_available(&self, _site: Site) -> Option<bool> {
         None
     }
+    /// Whether the local combat accumulator is available to this state's owner.
+    /// `None` means the host cannot establish availability for this binding.
     fn local_combat_context_available(&self, _site: Site) -> Option<bool> {
         None
     }
@@ -570,6 +572,21 @@ pub trait World {
 
     fn authored_forward(&self, entity: u32) -> Option<[f64; 3]> {
         self.forward(entity)
+    }
+
+    /// The current world sample's eye anchor for a known body.
+    fn body_eye_position(&self, _entity: u32) -> Option<[f64; 3]> {
+        None
+    }
+
+    /// A known model can confirm presence or absence. None means unavailable.
+    fn body_has_hardpoint(&self, _site: Site, _entity: u32, _hardpoint: u64) -> Option<bool> {
+        None
+    }
+
+    /// Activity of the component's own body at this site. None means unavailable.
+    fn body_active(&self, _site: Site) -> Option<bool> {
+        None
     }
 
     /// None means the current candidate snapshot is unavailable.

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "case_id": "script-native-pose-demand.synthetic.v1",
+  "source": {
+    "basis": "Synthetic owner and dynamic selectors for the native pose operand grammar."
+  },
+  "evidence": "synthetic-rust",
+  "input": {
+    "pose_classes": ["STU_21A13145", "STU_2200A66D"],
+    "owner": {"$": "STU_B5A0CAF0", "m_EE729DCB": 0},
+    "dynamic": {
+      "$": "STUConfigVarDynamic",
+      "m_identifier": 29,
+      "m_60DB8F99": false
+    }
+  },
+  "expected": {
+    "owner": "none",
+    "dynamic": "queries",
+    "owner_fallback": "none",
+    "dynamic_fallback": "queries",
+    "no_selector_fallback": "none",
+    "invalid_selector_wrapper": "none",
+    "null_selector": "none",
+    "untyped_selector": "none",
+    "missing_selector": "none",
+    "extra_pose_field": "none",
+    "invalid_pose_header": "none",
+    "no_pose_fallback": "none",
+    "pose_fallback": "queries",
+    "invalid_pose_wrapper": "none",
+    "client_only_node": "none"
+  }
+}

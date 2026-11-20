@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "case_id": "script-elapsed-wait.synthetic.v1",
+  "source": {"basis": "Invented placements, numeric timeouts, re-entry and abort events."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "cases": [
+      {
+        "graph": 60570, "rearm": true, "initial_seconds": 0.040,
+        "steps": [
+          {"frame": 1, "event": "begin", "active": true, "started_at_frame": 1},
+          {"frame": 2, "seconds": 0.096, "active": true, "started_at_frame": 1},
+          {"frame": 3, "active": true, "started_at_frame": 1},
+          {"frame": 4, "seconds": 0.030, "active": false, "finished": true, "started_at_frame": 1}
+        ]
+      },
+      {
+        "graph": 60571, "rearm": true, "initial_seconds": 0.064,
+        "steps": [
+          {"frame": 1, "event": "begin", "active": true, "started_at_frame": 1},
+          {"frame": 3, "event": "begin", "active": true, "started_at_frame": 3},
+          {"frame": 5, "active": true, "started_at_frame": 3},
+          {"frame": 6, "active": true, "started_at_frame": 3},
+          {"frame": 7, "active": false, "finished": true, "started_at_frame": 3}
+        ]
+      },
+      {
+        "graph": 60572, "rearm": false, "initial_seconds": 0.064,
+        "steps": [
+          {"frame": 1, "event": "begin", "active": true, "started_at_frame": 1},
+          {"frame": 3, "event": "begin", "active": true, "started_at_frame": 1},
+          {"frame": 5, "active": false, "finished": true, "started_at_frame": 1}
+        ]
+      },
+      {
+        "graph": 60573, "rearm": true, "initial_seconds": 0.032,
+        "steps": [
+          {"frame": 1, "event": "begin", "active": true, "started_at_frame": 1},
+          {"frame": 2, "event": "abort", "active": false, "aborted": true, "started_at_frame": 1},
+          {"frame": 4, "active": false, "started_at_frame": 1},
+          {"frame": 5, "event": "begin", "active": true, "started_at_frame": 5},
+          {"frame": 6, "active": true, "started_at_frame": 5},
+          {"frame": 7, "active": false, "finished": true, "started_at_frame": 5}
+        ]
+      },
+      {
+        "graph": 60576, "rearm": true, "initial_seconds": 0.0004,
+        "steps": [
+          {"frame": 1, "event": "begin", "active": false, "finished": true, "started_at_frame": 1}
+        ]
+      }
+    ],
+    "invalid_shapes": [
+      {"m_BF1A93B0": 2},
+      {"m_BF1A93B0": []},
+      {"m_0DBAFD7F": "true"},
+      {"m_timeout": {"$": "STUConfigVarDynamic", "m_identifier": 613, "m_60DB8F99": 2}},
+      {"m_timeout": {"$": "STUConfigVarDynamic", "m_identifier": 613, "extra": 1}},
+      {"m_timeout": {"$": "STUConfigVarFloat", "m_value": 0.040}}
+    ]
+  }
+}

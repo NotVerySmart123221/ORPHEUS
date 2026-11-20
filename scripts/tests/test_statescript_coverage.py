@@ -121,6 +121,73 @@ class StateScriptCoverageTest(unittest.TestCase):
         self.assertEqual(missing["body_status"], "missing")
         self.assertEqual(missing["scenarios"][0]["graphs"], [])
 
+    def test_static_target_children_include_unvisited_transitive_and_missing_graphs(self):
+        def tracker(pos, state, child, **overrides):
+            return node(pos, pos + 200, state, server_only=True,
+                        state_behavior="track_entities", fields={
+                            "targets": [], "child_graph": child, "target_variable": 7,
+                        }, **overrides)
+
+        self.prepared["graphs"][1] = {
+            "index": 42, "states": [0], "nodes": [tracker(0, 0, 51)],
+        }
+        declared = tracker(1, 0, 60)
+        declared.pop("state_behavior")
+        declared["class"] = "SyntheticTracker"
+        declared["server_only"] = False
+        self.prepared["authored_classes"] = [
+            {"class": "SyntheticTracker", "behavior": "track_entities_state"},
+        ]
+        self.prepared["graphs"][0] = {"index": 51, "states": [1], "nodes": [declared]}
+        self.prepared["graphs"].extend([
+            {"index": 60, "states": [2, 3], "nodes": [tracker(2, 0, 42), tracker(3, 1, 61)]},
+            {"index": 70, "states": [4], "nodes": [tracker(4, 0, 71)]},
+        ])
+        self.prepared["graphs"][2]["nodes"][0]["fields"]["child_graph"] = 72
+        self.write_bundle()
+        scenario = self.read_report()["heroes"][0]["scenarios"][0]
+        graphs = {row["graph"]: row for row in scenario["graphs"]}
+        self.assertEqual(set(graphs), {42, 43, 44, 45, 51, 60, 61})
+        self.assertEqual(scenario["missing_dependency_graphs"], [61])
+        self.assertEqual(
+            [(edge["source_graph"], edge["source_node"], edge["graph"], edge["present"])
+             for edge in scenario["static_dependencies"]],
+            [(42, 0, 51, True), (51, 1, 60, True), (60, 2, 42, True), (60, 3, 61, False)],
+        )
+        for graph in (51, 60, 61):
+            self.assertEqual(graphs[graph]["origin"], "referenced_child")
+        self.assertFalse(graphs[61]["present"])
+        self.assertEqual(graphs[51]["nodes"][0]["scope"], "server_only")
+        for graph in graphs.values():
+            for row in graph["nodes"]:
+                self.assertEqual(row["coverage"], "no_scenario")
+                self.assertIsNone(row["client_scope_skipped"])
+
+        self.output.unlink()
+        self.write_observation(self.observation, observations=[target(51, 1)], diagnostics=[])
+        scenario = self.read_report(self.observation)["heroes"][0]["scenarios"][0]
+        graphs = {row["graph"]: row for row in scenario["graphs"]}
+        self.assertEqual(graphs[51]["origin"], "observed_non_root")
+        self.assertEqual(graphs[51]["nodes"][0]["coverage"], "observed")
+        self.assertEqual(graphs[60]["origin"], "referenced_child")
+        self.assertTrue(all(row["coverage"] == "not_observed" for row in graphs[60]["nodes"]))
+
+    def test_invalid_declared_target_children_are_rejected(self):
+        fields = {"targets": [], "child_graph": 51, "target_variable": 7}
+        tracker = node(0, 200, 0, server_only=True,
+                       state_behavior="track_entities", fields=fields)
+        self.prepared["graphs"][1] = {"index": 42, "states": [0], "nodes": [tracker]}
+        for key, value in (("child_graph", True), ("child_graph", -1),
+                           ("child_graph", 2**32), ("target_variable", 0),
+                           ("target_variable", 0.5), ("targets", None)):
+            with self.subTest(key=key, value=value):
+                tracker["fields"] = {**fields, key: value}
+                self.write_bundle()
+                result = self.run_report()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("invalid declared track entities child binding", result.stderr)
+                self.assertFalse(self.output.exists())
+
     def test_site_join_keeps_rejections_truncation_and_child_graphs(self):
         self.write_observation(self.observation)
         report = self.read_report(self.observation)

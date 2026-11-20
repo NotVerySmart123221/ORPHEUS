@@ -1,4 +1,4 @@
-//! Authored immutable ruleset values keyed by mode and actor profile.
+//! Authored ruleset values and engine settings scoped to a mode.
 
 use std::{collections::BTreeMap, io};
 
@@ -6,18 +6,27 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{Value as Json, value::RawValue};
 
 use super::{asset_guid, invalid};
-use crate::script_wire::Value;
+use crate::{script_expr::EngineSetting, script_wire::Value};
 
 type RuleValues = BTreeMap<(Option<u64>, u32), Value>;
 
 #[derive(Debug)]
-pub(super) struct ModeRulesets(BTreeMap<u64, RuleValues>);
+pub(super) struct ModeRulesets(BTreeMap<u64, ModeProfile>);
+
+#[derive(Debug)]
+struct ModeProfile {
+    rules: RuleValues,
+    engine_settings: Option<BTreeMap<u32, Value>>,
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ModeRulesetDefinition {
     mode: Json,
+    #[serde(default)]
     rules: Vec<RuleDefinition>,
+    #[serde(default, deserialize_with = "setting_table")]
+    engine_settings: Option<Vec<EngineSettingDefinition>>,
 }
 
 #[derive(Deserialize)]
@@ -29,10 +38,22 @@ struct RuleDefinition {
     value: Box<RawValue>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EngineSettingDefinition {
+    id: u32,
+    value: Box<RawValue>,
+}
+
 impl ModeRulesets {
     pub(super) fn compile(definitions: Vec<ModeRulesetDefinition>) -> io::Result<Self> {
         let mut modes = BTreeMap::new();
-        for ModeRulesetDefinition { mode, rules } in definitions {
+        for ModeRulesetDefinition {
+            mode,
+            rules,
+            engine_settings,
+        } in definitions
+        {
             let mode = nonzero_guid(&mode)
                 .ok_or_else(|| invalid("mode ruleset requires a nonzero canonical mode GUID"))?;
             let mut values = RuleValues::new();
@@ -53,7 +74,13 @@ impl ModeRulesets {
                     )));
                 }
             }
-            if modes.insert(mode, values).is_some() {
+            let profile = ModeProfile {
+                rules: values,
+                engine_settings: engine_settings
+                    .map(|settings| compile_engine_settings(mode, settings))
+                    .transpose()?,
+            };
+            if modes.insert(mode, profile).is_some() {
                 return Err(invalid(format!("duplicate mode ruleset {mode:016X}")));
             }
         }
@@ -61,12 +88,48 @@ impl ModeRulesets {
     }
 
     pub(super) fn value(&self, mode: u64, body: u64, id: u32) -> Option<Value> {
-        let values = self.0.get(&mode)?;
+        let values = &self.0.get(&mode)?.rules;
         values
             .get(&(Some(body), id))
             .or_else(|| values.get(&(None, id)))
             .cloned()
     }
+
+    pub(super) fn engine_setting(&self, mode: u64, key: u32) -> Option<EngineSetting> {
+        let table = self.0.get(&mode)?.engine_settings.as_ref()?;
+        Some(
+            table
+                .get(&key)
+                .cloned()
+                .map_or(EngineSetting::Missing, EngineSetting::Present),
+        )
+    }
+}
+
+fn compile_engine_settings(
+    mode: u64,
+    settings: Vec<EngineSettingDefinition>,
+) -> io::Result<BTreeMap<u32, Value>> {
+    let mut table = BTreeMap::new();
+    for EngineSettingDefinition { id, value } in settings {
+        let value = scalar(&value).ok_or_else(|| {
+            invalid(format!(
+                "engine setting {mode:016X}:{id} requires null, a Boolean, a signed integer or a finite float"
+            ))
+        })?;
+        if table.insert(id, value).is_some() {
+            return Err(invalid(format!(
+                "duplicate engine setting {id} in mode {mode:016X}"
+            )));
+        }
+    }
+    Ok(table)
+}
+
+fn setting_table<'de, D: Deserializer<'de>>(
+    decoder: D,
+) -> Result<Option<Vec<EngineSettingDefinition>>, D::Error> {
+    Vec::deserialize(decoder).map(Some)
 }
 
 fn body_scope<'de, D: Deserializer<'de>>(decoder: D) -> Result<Option<u64>, D::Error> {

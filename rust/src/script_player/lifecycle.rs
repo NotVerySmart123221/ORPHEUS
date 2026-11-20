@@ -10,14 +10,14 @@ use crate::{
     commands::Command,
     game_combat::{
         BIOTIC_CANISTER, PosedBioticField, PosedHitscan, PosedProjectile, PosedShot, Stun,
-        eye_height,
+        eye_height, script_eye_position,
     },
     game_content::is_junkenstein_mode,
     game_heroes::{CASSIDY, SOLDIER},
     game_hitscan::{HitDefinition, aim_direction},
     game_instance::TeamMemberCounts,
     game_projectiles::{ProjectileLeases, authored_number, local_prediction, predicted_sync},
-    game_replication::{BodyStep, OwnerBodyRuntime},
+    game_replication::{BodyStep, OwnerBodyRuntime, OwnerRoomActivity},
     junkenstein_messages::{DefenderMessage, DefenderSighting, SIGHTING},
     mover::Mover,
     mover_modifiers::{Modifier, ModifierKey},
@@ -34,7 +34,6 @@ use crate::{
 };
 
 pub(crate) struct PlayerBodyRuntime {
-    pub(super) encounter_active: bool,
     pub(super) component: Component,
     pub(super) world: BodyWorld,
     pub(super) codecs: Arc<CodecTable>,
@@ -47,7 +46,22 @@ pub(super) const DEADEYE_GRAPH: u32 = 0x022f;
 pub(super) const DEADEYE_TARGET_EFFECT: u32 = 0x01ee;
 
 impl OwnerBodyRuntime for PlayerBodyRuntime {
+    fn set_room_activity(&mut self, activity: OwnerRoomActivity) {
+        self.world.room_activity = Some(activity);
+    }
+
     fn set_encounter_active(&mut self, active: bool) -> io::Result<()> {
+        // The room normally supplies this phase before synchronizing charge.
+        // Keep direct calls usable by supplying it here when necessary.
+        if self.world.charge_binding().is_some()
+            && self
+                .world
+                .room_activity
+                .map(OwnerRoomActivity::encounter_active)
+                != Some(active)
+        {
+            self.world.room_activity = Some(OwnerRoomActivity::Encounter { active });
+        }
         self.sync_charge_admission(active)
     }
 
@@ -154,7 +168,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         let result = self.world.vitals.damage(amount, source);
         if result.killed {
             self.component.set_owner_dead(true);
-            if let Err(error) = self.sync_charge_admission(self.encounter_active) {
+            if let Err(error) = self.sync_charge_admission(false) {
                 eprintln!("Owner death charge cleanup failed: {error}");
             }
         }
@@ -195,6 +209,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         }
         let pose = mover.pose();
         self.world.position = pose.position;
+        self.world.eye_position = script_eye_position(self.world.hero, mover);
         // Command gaps and timer advances retain the last movement record.
         if step == BodyStep::Posed {
             self.world.movement = pose;

@@ -1971,6 +1971,330 @@ fn authored_spatial_queries_read_current_entity_vectors() {
 }
 
 #[test]
+fn native_pitched_direction_reads_known_entity_pose_without_a_placement_gate() {
+    struct Host {
+        entity: Value,
+        direction: Option<[f64; 3]>,
+        override_value: Option<Value>,
+        reads: Vec<u32>,
+    }
+
+    impl Context for Host {
+        fn variable(&mut self, variable: Variable) -> Value {
+            assert_eq!(
+                variable,
+                Variable {
+                    scope: Scope::Instance,
+                    id: 61
+                }
+            );
+            self.entity.clone()
+        }
+
+        fn authored_forward(&mut self, entity: u32) -> Option<[f64; 3]> {
+            self.reads.push(entity);
+            self.direction
+        }
+
+        fn forward(&mut self, _: u32) -> Option<[f64; 3]> {
+            panic!("pitched direction must not use the horizontal-facing query")
+        }
+
+        fn native(&mut self, _: &Json) -> Option<Value> {
+            self.override_value.clone()
+        }
+    }
+
+    let contract: Json = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/statescript-native-direction-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract["schema_version"], 1);
+    assert_eq!(
+        contract["case_id"],
+        "statescript-native-direction.synthetic.v1"
+    );
+    let config = &contract["input"]["config"];
+    let mut host = Host {
+        entity: Value::Null,
+        direction: None,
+        override_value: None,
+        reads: Vec::new(),
+    };
+    for (sample, expected) in contract["input"]["samples"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(contract["expected"].as_array().unwrap())
+    {
+        let entity = sample["entity"].as_u64().unwrap() as u32;
+        let direction: [f64; 3] = serde_json::from_value(sample["direction"].clone()).unwrap();
+        host.entity = Value::Entity(entity);
+        host.direction = Some(direction);
+        assert_eq!(
+            evaluate(config, &mut host),
+            Ok(Value::Vector(
+                serde_json::from_value(expected.clone()).unwrap()
+            ))
+        );
+        assert_eq!(std::mem::take(&mut host.reads), [entity]);
+        let mut with_header = config.clone();
+        with_header["m_EE729DCB"] = json!(0);
+        assert_eq!(
+            evaluate(&with_header, &mut host),
+            Ok(Value::Vector(direction))
+        );
+        assert_eq!(std::mem::take(&mut host.reads), [entity]);
+    }
+
+    host.entity = Value::Entity(17);
+    for direction in [
+        None,
+        Some([f64::NAN, 0.0, 1.0]),
+        Some([0.0, f64::INFINITY, 1.0]),
+    ] {
+        host.direction = direction;
+        assert_eq!(
+            evaluate(config, &mut host),
+            Err(EvalError::UnavailableEntityDirection(17))
+        );
+        assert_eq!(std::mem::take(&mut host.reads), [17]);
+    }
+
+    for entity in [
+        Value::Null,
+        Value::Entity(0),
+        Value::Integer(17),
+        Value::Array(vec![Value::Entity(17)]),
+    ] {
+        host.entity = entity;
+        assert!(matches!(
+            evaluate(config, &mut host),
+            Err(EvalError::MalformedConfig(_))
+        ));
+        assert!(host.reads.is_empty());
+    }
+    host.entity = Value::Entity(17);
+    for malformed in [
+        json!({"$":"STU_2200A66D"}),
+        json!({"$":"STU_2200A66D", "m_entity":config["m_entity"], "extra":null}),
+        json!({"$":"STU_2200A66D", "m_entity":config["m_entity"], "m_EE729DCB":1}),
+    ] {
+        assert!(matches!(
+            evaluate(&malformed, &mut host),
+            Err(EvalError::MalformedConfig(_))
+        ));
+        assert!(host.reads.is_empty());
+    }
+    let nested = json!({
+        "$":"STU_2200A66D", "m_entity":{
+            "$":"ClientOnly", "value":null, "server_fallback":config["m_entity"]
+        }
+    });
+    assert_eq!(
+        evaluate_with_budget(&nested, &mut host, 1),
+        Err(EvalError::BudgetExceeded {
+            offset: 0,
+            limit: 1
+        })
+    );
+    assert!(host.reads.is_empty());
+
+    host.override_value = Some(Value::Vector([0.0, -0.5, 1.0]));
+    assert_eq!(
+        evaluate(config, &mut host),
+        Ok(Value::Vector([0.0, -0.5, 1.0]))
+    );
+    assert!(host.reads.is_empty());
+    for invalid_override in [Value::Bool(false), Value::Vector([0.0, f64::INFINITY, 1.0])] {
+        host.override_value = Some(invalid_override);
+        assert_eq!(
+            evaluate(config, &mut host),
+            Err(EvalError::UnavailableEntityDirection(17))
+        );
+        assert!(host.reads.is_empty());
+    }
+    host.override_value = Some(Value::Null);
+    let host_owned_selector = json!({
+        "$":"STU_2200A66D", "m_entity":{"$":"STU_SyntheticHostSelector"}
+    });
+    assert_eq!(evaluate(&host_owned_selector, &mut host), Ok(Value::Null));
+    assert!(host.reads.is_empty());
+    host.override_value = None;
+    assert!(matches!(
+        evaluate(&host_owned_selector, &mut host),
+        Err(EvalError::UnsupportedConfig(_))
+    ));
+    assert!(host.reads.is_empty());
+}
+
+#[test]
+fn native_eye_position_resolves_the_selected_body_and_requires_a_finite_anchor() {
+    struct Host {
+        owner: u32,
+        foreign: Value,
+        anchors: BTreeMap<u32, [f64; 3]>,
+        lookups: Vec<u32>,
+    }
+
+    impl Context for Host {
+        fn owner(&mut self) -> Value {
+            Value::Entity(self.owner)
+        }
+
+        fn variable(&mut self, variable: Variable) -> Value {
+            assert_eq!(variable.scope, Scope::Instance);
+            assert_eq!(variable.id, 37);
+            self.foreign.clone()
+        }
+
+        fn body_eye_position(&mut self, entity: u32) -> Option<[f64; 3]> {
+            self.lookups.push(entity);
+            self.anchors.get(&entity).copied()
+        }
+
+        fn position(&mut self, _: u32) -> Option<[f64; 3]> {
+            panic!("an eye anchor must not use the generic position lookup");
+        }
+
+        fn native(&mut self, _: &Json) -> Option<Value> {
+            panic!("an eye anchor must use the dedicated host method");
+        }
+    }
+
+    let contract: Json = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/statescript-native-eye-position-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract["schema_version"], 1);
+    assert_eq!(
+        contract["case_id"],
+        "statescript-native-eye-position.synthetic.v1"
+    );
+    assert_eq!(contract["evidence"], "synthetic-rust");
+    let input = &contract["input"];
+    let owner = serde_json::from_value(input["owner"].clone()).unwrap();
+    let foreign = serde_json::from_value(input["foreign"].clone()).unwrap();
+    let anchors: [[f64; 3]; 2] = serde_json::from_value(input["anchors"].clone()).unwrap();
+    let mut host = Host {
+        owner,
+        foreign: Value::Entity(foreign),
+        anchors: BTreeMap::from_iter([owner, foreign].into_iter().zip(anchors)),
+        lookups: Vec::new(),
+    };
+    let selectors = input["selectors"].as_array().unwrap();
+    let expected: [[f64; 3]; 2] =
+        serde_json::from_value(contract["expected"]["positions"].clone()).unwrap();
+    for (selector, position) in selectors.iter().zip(expected) {
+        let config = json!({"$":"STU_21A13145", "m_entity":selector, "m_EE729DCB":0});
+        assert_eq!(evaluate(&config, &mut host), Ok(Value::Vector(position)));
+    }
+    let lookups: Vec<u32> =
+        serde_json::from_value(contract["expected"]["lookups"].clone()).unwrap();
+    assert_eq!(std::mem::take(&mut host.lookups), lookups);
+
+    let config = json!({"$":"STU_21A13145", "m_entity":selectors[1]});
+    host.anchors.remove(&foreign);
+    assert_eq!(
+        evaluate(&config, &mut host),
+        Err(EvalError::UnavailableBodyEyePosition(foreign))
+    );
+    host.anchors.insert(foreign, [f64::NAN, 0.0, 0.0]);
+    assert_eq!(
+        evaluate(&config, &mut host),
+        Err(EvalError::UnavailableBodyEyePosition(foreign))
+    );
+    assert_eq!(std::mem::take(&mut host.lookups), [foreign, foreign]);
+
+    for malformed in [
+        json!({"$":"STU_21A13145"}),
+        json!({"$":"STU_21A13145", "m_entity":selectors[0], "m_EE729DCB":1}),
+        json!({"$":"STU_21A13145", "m_entity":selectors[0], "extra":null}),
+    ] {
+        assert_eq!(
+            evaluate(&malformed, &mut host),
+            Err(EvalError::MalformedConfig(
+                "expected one native eye position entity operand"
+            ))
+        );
+    }
+    for unbound in [Value::Null, Value::Entity(0), Value::Entity(0x1fff_ffff)] {
+        host.foreign = unbound;
+        assert_eq!(
+            evaluate(&config, &mut host),
+            Err(EvalError::MalformedConfig("expected a bound entity"))
+        );
+    }
+    assert!(host.lookups.is_empty());
+    host.foreign = Value::Entity(foreign);
+    let wrapped = json!({"$":"ClientOnly", "value":null, "server_fallback":config});
+    assert_eq!(
+        evaluate_with_budget(&wrapped, &mut host, 1),
+        Err(EvalError::BudgetExceeded {
+            offset: 0,
+            limit: 1
+        })
+    );
+    assert!(host.lookups.is_empty());
+}
+
+#[test]
+fn body_activity_reads_a_known_boolean_and_rejects_unavailable_or_malformed_inputs() {
+    struct Host {
+        active: Option<bool>,
+        reads: usize,
+    }
+
+    impl Context for Host {
+        fn body_active(&mut self) -> Option<bool> {
+            self.reads += 1;
+            self.active
+        }
+
+        fn watches_natives(&self) -> bool {
+            true
+        }
+
+        fn reference_native(&mut self, class: &str) {
+            panic!("authored body activity was treated as reference-native: {class}");
+        }
+    }
+
+    let config = json!({"$": "BodyActive"});
+    let mut host = Host {
+        active: Some(true),
+        reads: 0,
+    };
+    assert_eq!(
+        evaluate_with_budget(&config, &mut host, 1),
+        Ok(Value::Bool(true))
+    );
+    host.active = Some(false);
+    assert_eq!(evaluate(&config, &mut host), Ok(Value::Bool(false)));
+    host.active = None;
+    assert_eq!(
+        evaluate(&config, &mut host),
+        Err(EvalError::UnavailableBodyActivity)
+    );
+    assert_eq!(host.reads, 3);
+    assert_eq!(
+        evaluate(&json!({"$": "BodyActive", "entity": null}), &mut host),
+        Err(EvalError::MalformedConfig("BodyActive takes no operands"))
+    );
+    let wrapped = json!({"$":"ClientOnly", "value":null, "server_fallback":config});
+    assert_eq!(
+        evaluate_with_budget(&wrapped, &mut host, 1),
+        Err(EvalError::BudgetExceeded {
+            offset: 0,
+            limit: 1
+        })
+    );
+    assert_eq!(host.reads, 3);
+}
+
+#[test]
 fn authored_stack_admission_passes_strict_scoped_inputs_to_the_context() {
     #[derive(Default)]
     struct StackContext {

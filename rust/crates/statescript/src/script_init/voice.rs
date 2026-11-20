@@ -494,6 +494,21 @@ impl<W: World> Context for InstanceContext<'_, W> {
         self.world.authored_forward(entity)
     }
 
+    fn body_eye_position(&mut self, entity: u32) -> Option<[f64; 3]> {
+        self.read_native = true;
+        self.world.body_eye_position(entity)
+    }
+
+    fn body_has_hardpoint(&mut self, entity: u32, hardpoint: u64) -> Option<bool> {
+        self.read_native = true;
+        self.world.body_has_hardpoint(self.site, entity, hardpoint)
+    }
+
+    fn body_active(&mut self) -> Option<bool> {
+        self.read_native = true;
+        self.world.body_active(self.site)
+    }
+
     fn spatial_candidates(&mut self) -> Option<&[script_expr::SpatialCandidate]> {
         self.read_native = true;
         self.world.spatial_candidates()

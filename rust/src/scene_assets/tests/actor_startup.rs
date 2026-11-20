@@ -68,6 +68,9 @@ fn diagnostic_category(diagnostic: &Diagnostic) -> &'static str {
         Issue::Expression(EvalError::UnavailableEntityVariable { .. }) => {
             "entity_variable_unavailable"
         }
+        Issue::Expression(EvalError::UnavailableBodyHardpoint { .. }) => {
+            "body_hardpoint_unavailable"
+        }
         Issue::Expression(_) => "expression",
         Issue::ObservationUnavailable => "observation_unavailable",
     }
@@ -221,6 +224,9 @@ fn preparation_failure(graphs: &GraphStore, error: &SceneOwnerPreparationError) 
             Body::RootLayout(fault) => vm_failure("root_layout", fault),
             Body::ModeRootId => simple_failure("body_preparation", "mode_root_id"),
             Body::MissingModeRoot => simple_failure("body_preparation", "missing_mode_root"),
+            Body::AuthoredChargeRoot(_) => {
+                simple_failure("body_preparation", "authored_charge_root")
+            }
             Body::Start(error) => startup_failure(error),
             Body::Projection(error) => snapshot_failure(graphs, "projection", error),
             Body::Encoding(error) => snapshot_failure(graphs, "encoding", error),
@@ -289,6 +295,7 @@ fn actor_row(assets: &SceneAssets, scene: &PreparedScene, hero: &Hero) -> Json {
         body_filter: team_bit(PROBE_TEAM).unwrap(),
         frame: FIRST_TICK,
         pose: mover.pose(),
+        eye_position: script_eye_position(hero.guid, &mover),
         quanta: RETAIL_QUANTA,
     });
     let admission = match spawn.map(|spawn| scene.owner_body_runtime(hero, spawn)) {
@@ -396,6 +403,10 @@ fn startup_diagnostics_keep_distinct_operand_classes_and_omit_error_text() {
             entity: 81_000_551,
             id: 91_000_557,
         }),
+        row(EvalError::UnavailableBodyHardpoint {
+            entity: 81_000_559,
+            hardpoint: 0x0dc0_0000_00ad_b917,
+        }),
     ];
     let report = snapshot_failure(
         &graphs,
@@ -406,17 +417,19 @@ fn startup_diagnostics_keep_distinct_operand_classes_and_omit_error_text() {
         },
     );
     let entries = report["diagnostics"].as_array().unwrap();
-    assert_eq!(entries.len(), 5);
+    assert_eq!(entries.len(), 6);
     assert!(
         entries
             .iter()
             .all(|entry| entry["graph"] == 720 && entry["node"] == 3)
     );
-    assert_eq!(entries[0]["category"], "entity_variable_unavailable");
+    assert_eq!(entries[0]["category"], "body_hardpoint_unavailable");
     assert_eq!(entries[0]["operand_class"], Json::Null);
-    assert_eq!(entries[1]["category"], "expression");
+    assert_eq!(entries[1]["category"], "entity_variable_unavailable");
     assert_eq!(entries[1]["operand_class"], Json::Null);
-    let operand_classes: Vec<_> = entries[2..]
+    assert_eq!(entries[2]["category"], "expression");
+    assert_eq!(entries[2]["operand_class"], Json::Null);
+    let operand_classes: Vec<_> = entries[3..]
         .iter()
         .map(|entry| entry["operand_class"].as_str())
         .collect();
@@ -431,6 +444,8 @@ fn startup_diagnostics_keep_distinct_operand_classes_and_omit_error_text() {
     assert!(!serialized.contains(overlong.as_str()));
     assert!(!serialized.contains("81000551"));
     assert!(!serialized.contains("91000557"));
+    assert!(!serialized.contains("81000559"));
+    assert!(!serialized.contains("ADB917"));
 }
 
 #[test]

@@ -97,18 +97,140 @@ returns no runtime for a different hero. The independent probe calls
 the per-hero factory builder directly. Ability coverage and original
 client acceptance require separate verification.
 
-Seven actor probes have one blocking site each. Mercy's tag query needs
+At `9f6114ae` and `763b8e56`, two reports per revision from the same
+prepared 104319 runtime matched byte for byte. All 32 actor rows matched
+the preceding reports, with 11 independent passes, one ordinary room
+attachment, and 47 blocking sites. The Phase 2 changes cover the shared
+direction evaluator, scene placement collection, and parent-owned states
+without completion operands. The #72 capture matched the earlier
+900-frame run at all 476 observation sites on both revisions.
+
+The prepared bot firing-placement regression passed on the earlier
+binary and failed at selector evaluation after the first direction
+change. The follow-up preserved the host's explicit no-target reply.
+The same bot regression then passed. The legacy roll scenario stopped
+during map preparation on both tested bundles because its map record
+lacked spawn points.
+
+The Windows #131 check at `763b8e56` used the same effective runtime
+profile and schedules as the previous baseline. Idle and single-shot
+reload each produced 339 ticks. Rust and Python traces both validated and
+repeated, and every tick matched the preceding capture for its
+implementation. The strict comparison retained the same four RNG model
+and seed differences.
+
+At `15a10d4e`, authored owner graphs gained a `BodyActive` query.
+Synthetic tests covered initialization with and without room activity,
+paused and resumed gains, health awards at dispatch, death, and stale
+updates after same-wire replacement. Two same-pack startup reports
+matched byte for byte. The 32 rows matched the preceding revision,
+with 11 independent passes, one ordinary attachment, and 47 blocking
+sites. The #72 trace matched all 476 observations across 900 frames.
+On the same Windows #131 inputs, idle and single-shot reload each
+produced 339 ticks. Both implementations repeated their observations,
+passed individual trace validation, and matched their previous traces
+tick for tick. Strict comparison retained the four RNG setup differences.
+
+At `8d1d33a6`, native eye-position operands gained a player anchor from
+the simulation mover. Potential foreign eye and direction selectors now
+request a frozen room pose. The startup scene captured 15 living
+candidates. Both same-pack reports matched byte for byte. All 32 actor
+rows remained unchanged, with 11 independent passes, one ordinary
+attachment, and 47 blocking sites. The prepared firing-placement
+regression passed, and the #72 trace retained all 476 observations.
+Simulation stance heights have no new original-client verification.
+
+The Windows #131 idle and single-shot reload schedules each produced
+339 ticks. Each implementation validated and repeated both traces.
+Every tick matched its own preceding Windows capture. Strict comparison
+still reports the four RNG model and seed differences.
+
+At `e540fdc0`, the native local combat accumulator stopped using two
+fixed placements to choose its no-tick state. The current owner body
+reports the local accumulator absent to the VM. Hosts with available or
+unknown context still report an unsupported state. Two same-pack startup
+reports matched byte for byte. The 32 actor results remained unchanged,
+with 11 independent passes, one ordinary attachment, and 47 blocking
+sites. The #72 900-frame trace matched all 476 prior observations. The
+Windows #131 idle and single-shot reload traces each matched their
+preceding 339-tick captures for both implementations. Strict comparison
+retained the same four RNG setup differences.
+
+At `e6cfc337`, player, NPC, gate and mode scripts began reading one
+mode-scoped engine settings table. The portable and native synthetic
+suites distinguish missing keys, explicit null, empty tables and mode
+isolation. The prepared Practice Range pack exercised the compatibility
+lookup with its existing settings. The two same-pack startup results
+matched byte for byte. The 32 actor rows remained at 11 independent
+passes, one ordinary attachment and 47 blocking sites. The #72 trace
+retained all 476 observations. This revision also includes the authored
+eye observation recovery contract at `9b957ce7`.
+
+At `9caac758`, the auxiliary view binding states began using host
+context at any placement. The owned headless body also reports outline
+absence through the existing outline branch. The same batch added
+elapsed waits for direct numeric variable bindings and moved the
+literal-delay cinematic boundary states to field and slot validation.
+Synthetic tests covered dormant operands, cleanup, timer changes and
+reentry, and the owner and observer boundary payloads.
+
+Two reports from the same prepared Practice Range pack matched byte
+for byte. All 32 actor rows and the #72 trace matched the preceding
+revision, with 11 independent passes, one ordinary attachment, 47
+blocking sites and all 476 observations. Both Windows #131 schedules
+repeated and matched their previous 339-tick captures for each
+implementation. Strict comparison retained the four RNG setup
+differences. The cinematic payload tests used a synthetic graph.
+
+At `0d3716e4`, a player body gained an explicit private charge-root
+selection. Synthetic tests cover mount validation after the room adds
+its roots, settled health delivery, and owner and observer projection.
+The existing bridge takes damage eligibility from the room phase and
+retains its startup projection. The local 104319 catalog gives each of
+32 player bodies an authored cost binding read by the shared startup
+graph. The selected charge route was exercised by the synthetic
+fixture.
+
+At `5b269875`, authored cues began rechecking listener liveness at
+reliable admission. The synthetic case kills the listener with its
+generation unchanged and verifies that the queued cue is discarded.
+
+Two same-pack startup reports at `0d3716e4` matched byte for byte.
+All 32 rows remained at 11 independent passes, one ordinary attachment
+and 47 blocking sites. The #72 trace retained 476 observations. Both
+Windows #131 schedules repeated and matched their preceding 339-tick
+captures for each implementation. Strict comparison retained the four
+RNG setup differences.
+
+At `3dbfd5e4`, the native voice state keeps its lifecycle when the local
+host explicitly has no voice context. Its verified empty state codec
+preserves owner and observer projection. Two same-pack 104319 reports
+matched byte for byte. Moira raised independent actor startup to
+**12 of 32** and the blocking-site count fell to **46**. Ordinary Practice
+Range admission still attached one actor. The #72 Soldier owner trace
+retained all 476 observations. The two #131 schedules each reproduced
+339 ticks per implementation and kept the same four RNG setup differences
+in strict comparison.
+
+Two of the three remaining native target-tracking startup sites have
+empty embedded plugs. One configures a second filter and an entity list
+output. The other configures a count output. Both read a dynamic radius.
+The remaining site links embedded states. Each configuration still needs
+its native query and output semantics verified.
+
+Six actor probes have one blocking site each. Mercy's paired tag query
+now selects its shared VM path by authored fields. Its host still needs
 the tagged placement inventory and live actor tags. Orisa and Sigma
 still hit persistent message registration. Baptiste cannot read a
-controller variable. Torbjörn's hardpoint query and Moira's voice
-stimulus each lack their supporting host service or context. Symmetra
-still reports an unsupported state.
+controller variable. Torbjörn's hardpoint query now reaches the shared
+host interface and reports unavailable active-model membership.
+Symmetra still reports an unsupported state.
 
 The prepared 104319 bundle supplies voice stimulus references and gallery
 unlock metadata. It lacks an authored stimulus-to-line mapping and playback
 durations for the player voice service. The room already routes resolved
 cues to listeners by body generation. A player voice provider still needs
-the catalog and timing inputs before this startup site can be verified.
+the catalog and timing inputs before active-context playback can be verified.
 
 At `36818197`, a synthetic input test reproduced the former replacement
 after a factory error at `3e778d08`. The fix preserved the current body,

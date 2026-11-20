@@ -994,12 +994,12 @@ impl State {
                             world.scene.try_step_encounter(room_tick, encounter_hero)?;
                             peer.world.queue_encounter_presentation(&world.scene)?;
                         }
-                        let active = world.scene.simulation().encounter_active();
+                        let activity = world.scene.owner_room_activity();
                         if let Some(body_id) = peer.world.active_body_id() {
                             world
                                 .scene
                                 .simulation_mut()
-                                .set_player_encounter_active(body_id, active);
+                                .set_player_activity(body_id, activity);
                         }
                         let context = ShotContext {
                             team: player.info.team,

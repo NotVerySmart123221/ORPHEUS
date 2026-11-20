@@ -176,6 +176,10 @@ impl Mover {
         self.posture.crouched()
     }
 
+    pub(crate) fn spring_offset(&self) -> f32 {
+        self.posture.spring_offset()
+    }
+
     pub fn track_modifiers(&mut self, frame: u32, active: &BTreeMap<ModifierKey, Modifier>) {
         self.modifiers.track(frame, active);
     }

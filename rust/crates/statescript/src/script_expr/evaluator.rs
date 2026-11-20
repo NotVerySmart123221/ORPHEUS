@@ -670,6 +670,92 @@ impl Evaluator {
                         .ok_or(unavailable)?,
                 )
             }
+            "STU_2200A66D" => {
+                let operand = native_entity_operand(config, class).ok_or(
+                    EvalError::MalformedConfig("expected one native direction entity operand"),
+                )?;
+                let native = context.native(config);
+                if matches!(&native, Some(Value::Null)) {
+                    // A host can explicitly report that this query has no target.
+                    return Ok(Value::Null);
+                }
+                self.charge()?;
+                let Value::Entity(entity) = self.config(operand, context, nested)? else {
+                    return Err(EvalError::MalformedConfig("expected a bound entity"));
+                };
+                if !valid_entity(entity) {
+                    return Err(EvalError::MalformedConfig("expected a bound entity"));
+                }
+                // Preserve existing host-specific numeric adapters before using
+                // the room's authoritative pitched direction.
+                let direction = match native {
+                    Some(Value::Vector(direction)) => Some(direction),
+                    Some(_) => None,
+                    None => context.authored_forward(entity),
+                };
+                Value::Vector(
+                    direction
+                        .filter(|parts| parts.iter().all(|part| part.is_finite()))
+                        .ok_or(EvalError::UnavailableEntityDirection(entity))?,
+                )
+            }
+            "STU_21A13145" => {
+                let operand = native_entity_operand(config, class).ok_or(
+                    EvalError::MalformedConfig("expected one native eye position entity operand"),
+                )?;
+                self.charge()?;
+                let Value::Entity(entity) = self.config(operand, context, nested)? else {
+                    return Err(EvalError::MalformedConfig("expected a bound entity"));
+                };
+                if !valid_entity(entity) {
+                    return Err(EvalError::MalformedConfig("expected a bound entity"));
+                }
+                Value::Vector(
+                    context
+                        .body_eye_position(entity)
+                        .filter(|parts| parts.iter().all(|part| part.is_finite()))
+                        .ok_or(EvalError::UnavailableBodyEyePosition(entity))?,
+                )
+            }
+            "STU_719E45B8" => {
+                let Some((entity, hardpoint)) = fields
+                    .get("m_entity")
+                    .zip(fields.get("m_hardPoint"))
+                    .filter(|_| native_fields(config, &["m_entity", "m_hardPoint"]))
+                else {
+                    return Err(EvalError::MalformedConfig(
+                        "expected hardpoint entity and resource operands",
+                    ));
+                };
+                let Some(Value::Asset(hardpoint)) =
+                    literal_asset(hardpoint, "STUConfigVarHardPoint", "m_hardPoint", 0x0dc0)
+                else {
+                    return Err(EvalError::MalformedConfig(
+                        "expected a literal model hardpoint",
+                    ));
+                };
+                self.charge()?;
+                let entity = match self.config(entity, context, nested)? {
+                    Value::Entity(entity) if valid_entity(entity) => entity,
+                    _ => return Err(EvalError::MalformedConfig("expected a bound entity")),
+                };
+                Value::Bool(
+                    context
+                        .body_has_hardpoint(entity, hardpoint)
+                        .ok_or(EvalError::UnavailableBodyHardpoint { entity, hardpoint })?,
+                )
+            }
+            "BodyActive" => {
+                if fields.len() != 1 {
+                    return Err(EvalError::MalformedConfig("BodyActive takes no operands"));
+                }
+                self.charge()?;
+                Value::Bool(
+                    context
+                        .body_active()
+                        .ok_or(EvalError::UnavailableBodyActivity)?,
+                )
+            }
             "EntityMatches" => self.entity_matches(fields, context, nested)?,
             "EntitiesInRadius" => self.entities_in_radius(fields, context, nested)?,
             "SegmentClear" => self.segment_clear(fields, context, nested)?,

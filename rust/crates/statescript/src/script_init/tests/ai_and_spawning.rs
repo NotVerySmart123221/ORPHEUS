@@ -791,6 +791,253 @@ fn participant_collection_writes_before_following_and_preserves_order() {
 }
 
 #[test]
+fn tagged_placement_collection_uses_the_required_field_outside_legacy_graphs() {
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../../../../fixtures/behavior/script-tagged-placement-collection-v1.json"
+    ))
+    .unwrap();
+    let tag = fixture["tag"].as_str().unwrap();
+    let tag_id = orpheus_runtime::format::parse_guid(tag).unwrap();
+    let placements = |rows: &Json| {
+        rows.as_array().map(|rows| {
+            rows.iter()
+                .map(|row| u32::try_from(row.as_u64().unwrap()).unwrap())
+                .collect::<Vec<_>>()
+        })
+    };
+    struct Placements {
+        tag: u64,
+        entities: Option<Vec<u32>>,
+        queries: std::cell::Cell<usize>,
+    }
+    impl World for Placements {
+        fn tagged_placements(&self, _: Site, tag: u64) -> Option<&[u32]> {
+            self.queries.set(self.queries.get() + 1);
+            assert_eq!(tag, self.tag);
+            self.entities.as_deref()
+        }
+        fn position(&mut self, _: u32) -> Option<[f64; 3]> {
+            None
+        }
+        fn entity_variable(&mut self, _: u32, _: u32) -> Option<Value> {
+            None
+        }
+    }
+    for (index, case) in (71..).zip(fixture["cases"].as_array().unwrap()) {
+        let mut fields = json!({
+            "m_4AEEE6A1":var(100,true),
+            "m_B486603E":{"$":"STU_357DABBB","m_7D7C86A1":tag},
+            "m_outPlug":plug(&[(2,"m_inPlug")], &[]),
+        });
+        let malformed = case["extra_exclusion"] == true;
+        if malformed {
+            fields["m_8B2A4DF3"] = fields["m_B486603E"].clone();
+        }
+        let mut collect = node(1, "STU_42578342", None, fields);
+        collect["fields"]["m_ADEB6E05"] = json!(true);
+        let graphs = store(vec![graph(
+            index,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({"m_outPlug":plug(&[(1,"m_inPlug")], &[])}),
+                ),
+                collect,
+                node(
+                    2,
+                    "STUStatescriptActionSetVar",
+                    None,
+                    json!({"m_out_Var":var(101,true),"m_value":var(100,true)}),
+                ),
+            ],
+            json!([]),
+            json!([0]),
+        )]);
+        let mut world = Placements {
+            tag: tag_id,
+            entities: placements(&case["inventory"]),
+            queries: std::cell::Cell::new(0),
+        };
+        let snapshot = initialize(
+            &graphs,
+            42,
+            Variables::new(),
+            vec![Root::new(1, index)],
+            &mut world,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        let expected = placements(&case["expected"])
+            .map(|rows| Value::Array(rows.into_iter().map(Value::Entity).collect()));
+        assert_eq!(world.queries.get(), usize::from(!malformed));
+        assert_eq!(snapshot.initialization_complete(), expected.is_some());
+        assert_eq!(snapshot.variables.get(&100), expected.as_ref());
+        assert_eq!(snapshot.variables.get(&101), expected.as_ref());
+    }
+}
+
+#[test]
+fn paired_target_tags_use_admitted_query_scope_at_any_placement() {
+    use std::cell::Cell;
+
+    const OWNER: u32 = 52;
+    const OUTPUT: u32 = 610;
+    const BEGAN: u32 = 611;
+    struct TargetTags {
+        site: Site,
+        include: u64,
+        exclude: u64,
+        targets: Option<Vec<u32>>,
+        reads: Cell<usize>,
+    }
+    impl World for TargetTags {
+        fn targets_with_tag(&self, site: Site, include: u64, exclude: u64) -> Option<Vec<u32>> {
+            assert_eq!(
+                (site, include, exclude),
+                (self.site, self.include, self.exclude)
+            );
+            self.reads.set(self.reads.get() + 1);
+            self.targets.clone()
+        }
+        fn entity_variable(&mut self, _: u32, _: u32) -> Option<Value> {
+            None
+        }
+        fn position(&mut self, _: u32) -> Option<[f64; 3]> {
+            None
+        }
+    }
+
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../../../../fixtures/behavior/script-tagged-target-pair-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(contract["schema_version"], 1);
+    assert_eq!(
+        contract["case_id"],
+        "script-tagged-target-pair.synthetic.v1"
+    );
+    let input = &contract["input"];
+    let index = u32::try_from(input["graph"].as_u64().unwrap()).unwrap();
+    let position = u16::try_from(input["position"].as_u64().unwrap()).unwrap();
+    let marker = position + 1;
+    for case in input["cases"].as_array().unwrap() {
+        let mut fields = json!({
+            "m_4AEEE6A1": var(OUTPUT, true),
+            "m_9C7BD8B8": {"$": "STU_357DABBB", "m_7D7C86A1": input["include_tag"]},
+            "m_8B2A4DF3": {"$": "STU_357DABBB", "m_7D7C86A1": input["exclude_tag"]},
+            "m_onBeginPlug": plug(&[(marker, "m_inPlug")], &[]),
+        });
+        if let Some(overrides) = case["fields"].as_object() {
+            fields.as_object_mut().unwrap().extend(overrides.clone());
+        }
+        let mut query = node(position, "STU_160F2578", Some(0), fields);
+        query["client_only"] = json!(case["client_only"].as_bool().unwrap_or(false));
+        query["server_only"] = json!(case["server_only"].as_bool().unwrap_or(false));
+        let mut model = graph(
+            index,
+            vec![
+                query,
+                node(
+                    marker,
+                    "STUStatescriptActionSetVar",
+                    None,
+                    json!({
+                        "m_out_Var": var(BEGAN, true), "m_value": true,
+                    }),
+                ),
+            ],
+            json!([position]),
+            json!([]),
+        );
+        model["items"] = json!(marker + 1);
+        let graphs = store(vec![model]);
+        let mut world = TargetTags {
+            site: Site {
+                entity: OWNER,
+                instance: 1,
+                graph: index,
+                node: Some(position),
+            },
+            include: crate::script_graph::asset_guid(&input["include_tag"]).unwrap(),
+            exclude: crate::script_graph::asset_guid(&input["exclude_tag"]).unwrap(),
+            targets: case["targets"].as_array().map(|rows| {
+                rows.iter()
+                    .map(|row| u32::try_from(row.as_u64().unwrap()).unwrap())
+                    .collect()
+            }),
+            reads: Cell::new(0),
+        };
+        let snapshot = initialize(
+            &graphs,
+            OWNER,
+            Variables::from([(OUTPUT, Value::Integer(777))]),
+            vec![Root::listener(1, index, Some(0))],
+            &mut world,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        let outcome = case["outcome"].as_str().unwrap();
+        let result = match snapshot.diagnostics.as_slice() {
+            [] if snapshot.variables.contains_key(&BEGAN) => "resolved",
+            [] => "skipped",
+            [
+                Diagnostic {
+                    issue: Issue::UnsupportedField("tagged targets with exclusions"),
+                    ..
+                },
+            ] => "unavailable",
+            [
+                Diagnostic {
+                    issue: Issue::UnsupportedState(class),
+                    ..
+                },
+            ] if class == "STU_160F2578" => "unsupported",
+            [
+                Diagnostic {
+                    issue: Issue::UnsupportedField("static target output"),
+                    ..
+                },
+            ] => "invalid_output",
+            [
+                Diagnostic {
+                    issue:
+                        Issue::Expression(script_expr::EvalError::MalformedConfig(
+                            "variable identifier out of range",
+                        )),
+                    ..
+                },
+            ] => "invalid_expression",
+            other => panic!("unexpected diagnostics for {}: {other:?}", case["name"]),
+        };
+        assert_eq!(result, outcome, "{}", case["name"]);
+        assert_eq!(
+            world.reads.get(),
+            usize::from(matches!(outcome, "resolved" | "unavailable"))
+        );
+        let expected = if outcome == "resolved" {
+            Value::Array(
+                world
+                    .targets
+                    .unwrap()
+                    .into_iter()
+                    .map(Value::Entity)
+                    .collect(),
+            )
+        } else {
+            Value::Integer(777)
+        };
+        assert_eq!(
+            snapshot.variables.get(&OUTPUT),
+            Some(&expected),
+            "{}",
+            case["name"]
+        );
+    }
+}
+
+#[test]
 #[ignore = "requires the prepared 104319 Junkenstein spawner graph"]
 fn authored_spawner_filters_dead_and_removed_bodies_in_order() {
     struct Bodies(BTreeMap<u32, bool>);

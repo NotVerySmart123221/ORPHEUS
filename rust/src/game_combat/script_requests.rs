@@ -1,7 +1,8 @@
 //! Deferred script operations for generation-checked room bodies.
 
 use super::{
-    BotState, CombatError, PlayerBodyState, RoomSimulation, RoomSpatialFrame, health::HealthEffect,
+    BotState, CombatError, PlayerBodyState, RoomSimulation, RoomSpatialFrame, Vec3,
+    health::HealthEffect,
 };
 use crate::{
     game_combat_messages::CombatNotice,
@@ -19,6 +20,7 @@ pub(super) struct RoomScriptTarget {
     pub(super) entity: Entity,
     pub(super) candidate_index: usize,
     pub(super) angles: [i32; 2],
+    pub(super) eye_position: Option<Vec3>,
     pub(super) health: bool,
     pub(super) messages: bool,
     pub(super) cue_listener: bool,
@@ -270,15 +272,18 @@ impl RoomSimulation {
             .is_some_and(|entity| *entity == source)
     }
 
+    pub(crate) fn room_cue_listener_current(&self, owner: u32, listener: BodyId) -> bool {
+        self.player_body(listener)
+            .is_some_and(|player| player.owner == owner && player.alive())
+    }
+
     pub(crate) fn take_player_cues(&mut self) -> Vec<PlayerRoomCue> {
         let mut cues = std::mem::take(&mut self.player_cues);
         cues.retain(|cue| {
             cue.notice
                 .required_identity()
                 .is_some_and(|wire| self.room_cue_source_current(wire, cue.source))
-                && self
-                    .player_body(cue.listener)
-                    .is_some_and(|player| player.owner == cue.owner && player.alive())
+                && self.room_cue_listener_current(cue.owner, cue.listener)
         });
         cues
     }
@@ -434,6 +439,7 @@ mod tests {
             entity: world.spawn_empty().id(),
             candidate_index,
             angles: [0; 2],
+            eye_position: None,
             health,
             messages,
             cue_listener: health,
