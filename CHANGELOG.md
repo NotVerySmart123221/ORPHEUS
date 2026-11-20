@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added an explicit authored charge root selection for player bodies with a private health-event graph. The loader and room factory reject duplicate mounts. Opted-in bodies use the settled health event path. The compatibility bridge reads live room activity and keeps its existing startup projection. Formatting, locked Clippy, and workspace tests with script coverage passed, including 376 native and 221 portable StateScript library tests.
+
 - Rechecked the authored cue listener's live owner and body generation before reliable admission. Queued cues expire when the listener dies or is replaced. The synthetic regression covers late death and legacy notice matching.
 
 - Made local auxiliary view bindings and outlines depend on explicit host context. Dynamic elapsed waits now resample numeric durations, rearm when configured and cancel on exit. Literal-delay cinematic states select the shared owner and observer boundary projection from validated fields and slots. Formatting, locked Clippy, and workspace tests with script coverage passed, including 374 native and 220 portable StateScript library tests.

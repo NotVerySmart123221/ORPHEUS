@@ -322,9 +322,21 @@ fn charge_admission_preserves_profile_scope_and_requires_a_live_instance_for_cre
         game_content::{JUNKENSTEIN_ENDLESS, JUNKENSTEIN_REVENGE},
         game_hitscan::DamageTags,
         script_entity_state::EntityScriptState,
+        vitals::Death,
     };
 
-    let (factory, spawn) = fixture_body_factory();
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-owner-room-activity-v1.json"
+    ))
+    .unwrap();
+    let projected = |key: &str| {
+        Value::Bool(
+            contract["expected"]["legacy_charge_admission"][key]
+                .as_bool()
+                .unwrap(),
+        )
+    };
+    let (mut factory, spawn) = fixture_body_factory();
     let damage = AppliedDamage {
         source: spawn.entity,
         target: spawn.entity + 1,
@@ -334,30 +346,234 @@ fn charge_admission_preserves_profile_scope_and_requires_a_live_instance_for_cre
         target_tags: Default::default(),
         target_state: EntityScriptState::Unavailable,
     };
+    let admission =
+        |runtime: &PlayerBodyRuntime| runtime.snapshot().unwrap().variables.get(&2426).cloned();
+    let require_live_graph = |runtime: &mut PlayerBodyRuntime| {
+        assert!(
+            runtime
+                .receive_applied_damage(damage.clone())
+                .unwrap_err()
+                .to_string()
+                .contains("authored common charge graph")
+        );
+    };
     for (mode, hero, admitted) in [
         (JUNKENSTEIN_REVENGE, CASSIDY, true),
         (JUNKENSTEIN_ENDLESS, CASSIDY, true),
         (JUNKENSTEIN_REVENGE, SOLDIER, false),
         (PRACTICE_RANGE_MODE, CASSIDY, false),
     ] {
+        factory.mode = mode;
+        factory.hero = hero;
         let mut runtime = factory.start(spawn).unwrap();
-        runtime.world.mode = mode;
-        runtime.world.hero = hero;
-        runtime.set_encounter_active(true).unwrap();
-        assert_eq!(runtime.encounter_active, admitted);
-        let credit = runtime.receive_applied_damage(damage.clone());
+        assert_eq!(runtime.world.room_activity, None);
+        assert_eq!(
+            admission(&runtime),
+            admitted.then(|| projected("bootstrap"))
+        );
         if admitted {
-            assert!(
-                credit
-                    .unwrap_err()
-                    .to_string()
-                    .contains("authored common charge graph")
-            );
+            require_live_graph(&mut runtime);
+            let mut inactive = factory
+                .start_with_setup(
+                    spawn,
+                    OwnerBodySetup {
+                        room_activity: Some(OwnerRoomActivity::Encounter { active: false }),
+                        ..OwnerBodySetup::default()
+                    },
+                )
+                .unwrap();
+            assert_eq!(admission(&inactive), Some(projected("bootstrap")));
+            inactive.receive_applied_damage(damage.clone()).unwrap();
         } else {
-            credit.unwrap();
+            runtime.receive_applied_damage(damage.clone()).unwrap();
         }
-        runtime.set_encounter_active(false).unwrap();
+
+        runtime.set_encounter_active(true).unwrap();
+        assert_eq!(
+            runtime.world.room_activity,
+            admitted.then_some(OwnerRoomActivity::Encounter { active: true })
+        );
+        runtime.set_room_activity(OwnerRoomActivity::Encounter { active: false });
+        assert_eq!(
+            admission(&runtime),
+            admitted.then(|| projected("bootstrap"))
+        );
         runtime.receive_applied_damage(damage.clone()).unwrap();
+        runtime.set_encounter_active(false).unwrap();
+        assert_eq!(
+            admission(&runtime),
+            admitted.then(|| projected("inactive_room"))
+        );
+
+        runtime.set_room_activity(OwnerRoomActivity::Regular);
+        runtime.set_encounter_active(false).unwrap();
+        assert_eq!(
+            runtime.world.room_activity,
+            Some(OwnerRoomActivity::Regular)
+        );
+        runtime.receive_applied_damage(damage.clone()).unwrap();
+
+        if admitted {
+            runtime.set_encounter_active(true).unwrap();
+            require_live_graph(&mut runtime);
+            let outcome = runtime.receive_damage(
+                contract["input"]["lethal_damage"].as_f64().unwrap(),
+                Death {
+                    time: 0.0,
+                    frame: spawn.frame,
+                    killer: damage.target,
+                },
+            );
+            assert!(outcome.killed);
+            assert_eq!(admission(&runtime), Some(projected("after_death")));
+            assert_eq!(
+                runtime.world.room_activity,
+                Some(OwnerRoomActivity::Encounter { active: true })
+            );
+            runtime.receive_applied_damage(damage.clone()).unwrap();
+        }
+    }
+}
+
+#[test]
+fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
+    use crate::{
+        game_combat::AppliedDamage, game_content::JUNKENSTEIN_REVENGE, game_hitscan::DamageTags,
+        script_entity_state::EntityScriptState, script_init::HostEvent,
+    };
+    use serde_json::json;
+
+    const BODY: &str = "0x040000000000B013";
+    const METER: u32 = 612;
+    const DELTA_SLOT: u32 = 607;
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-authored-charge-route-v1.json"
+    ))
+    .unwrap();
+    let mut bundle = contract["input"]["bundle"].clone();
+    let probe = &mut bundle["graphs"][0];
+    probe["nodes"][0]["fields"]["m_params"] = json!([{
+        "m_B5051BCE": "0x0000000000000003",
+        "m_out_Var": {"$":"STUConfigVarDynamic","m_identifier":DELTA_SLOT,"m_60DB8F99":false}
+    }]);
+    bundle["graphs"].as_array_mut().unwrap().push(json!({
+        "index": 0x0ca5, "items": 0, "nodes": [], "states": [], "entries": [], "remote": [],
+        "sync_vars": [], "containers": {}, "unknown_nodes": [], "fields": {},
+        "header": {
+            "m_nodesBitCount":4, "m_statesBitCount":4, "m_remoteSyncNodesBitCount":4, "m_syncVarsBitCount":4
+        }
+    }));
+    bundle["bodies"][BODY]["hero"] = json!(format!("0x{CASSIDY:016X}"));
+    let hero = Hero {
+        guid: CASSIDY,
+        name: "Configured charge fixture".into(),
+        role: "Damage".into(),
+        body: parse_guid(BODY).unwrap(),
+    };
+    let (_, spawn) = fixture_body_factory();
+    let setup = OwnerBodySetup {
+        room_activity: Some(OwnerRoomActivity::Encounter { active: true }),
+        ..OwnerBodySetup::default()
+    };
+    let build = |bundle: &Json| {
+        let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(bundle).unwrap()).unwrap());
+        let codecs = Arc::new(CodecTable::from_json(r#"{"classes":{}}"#).unwrap());
+        PlayerBodyFactory::prepare(
+            graphs,
+            codecs,
+            JUNKENSTEIN_REVENGE,
+            &hero,
+            None,
+            false,
+            (spawn, setup.clone()),
+        )
+        .unwrap()
+        .start_runtime(spawn, setup.clone())
+        .unwrap()
+    };
+    let mut authored = build(&bundle);
+
+    let mut conflicting = bundle.clone();
+    conflicting["graphs"].as_array_mut().unwrap().pop();
+    conflicting["graphs"][0]["index"] = json!(0x0ca5);
+    conflicting["bodies"][BODY]["server_graphs"][0]["graph"] = json!(0x0ca5);
+    conflicting["bodies"][BODY]["authored_charge_graph"] = json!("0x0580000000000CA5");
+    let graphs =
+        Arc::new(GraphStore::from_json(&serde_json::to_vec(&conflicting).unwrap()).unwrap());
+    let codecs = Arc::new(CodecTable::from_json(r#"{"classes":{}}"#).unwrap());
+    assert!(matches!(
+        PlayerBodyFactory::prepare(
+            graphs,
+            codecs,
+            JUNKENSTEIN_REVENGE,
+            &hero,
+            None,
+            false,
+            (spawn, setup.clone()),
+        ),
+        Err(OwnerBodyPreparationError::AuthoredChargeRoot(0x0ca5))
+    ));
+
+    bundle["bodies"][BODY]
+        .as_object_mut()
+        .unwrap()
+        .remove("authored_charge_graph");
+    let mut compatibility = build(&bundle);
+    let damage = AppliedDamage {
+        source: spawn.entity,
+        target: spawn.entity + 1,
+        amount: 3.0,
+        tags: DamageTags::EMPTY,
+        target_flags: None,
+        target_tags: Default::default(),
+        target_state: EntityScriptState::Unavailable,
+    };
+    assert!(!authored.snapshot().unwrap().variables.contains_key(&2426));
+    assert_eq!(
+        compatibility.snapshot().unwrap().variables[&2426],
+        Value::Bool(true)
+    );
+    authored.receive_applied_damage(damage.clone()).unwrap();
+    assert!(
+        compatibility
+            .receive_applied_damage(damage)
+            .unwrap_err()
+            .to_string()
+            .contains("authored common charge graph")
+    );
+    assert_eq!(
+        authored
+            .receive_host_event(HostEvent::HealthApplied {
+                source: Some(spawn.entity),
+                target: spawn.entity + 1,
+                delta: -3.0,
+                killed: false,
+            })
+            .unwrap(),
+        1
+    );
+    authored
+        .component
+        .advance_frame(spawn.frame + 1, &mut authored.world)
+        .unwrap();
+    let snapshot = authored.snapshot().unwrap();
+    assert!(
+        snapshot.diagnostics.is_empty(),
+        "{:?}",
+        snapshot.diagnostics
+    );
+    let meter = snapshot
+        .instances
+        .values()
+        .find(|instance| instance.graph == METER)
+        .unwrap();
+    assert!(meter.is_server_only());
+    assert_eq!(meter.variables[&DELTA_SLOT], Value::Float(-3.0));
+    let encoder = authored.encoder();
+    for view in [View::Owner, View::Observer] {
+        let projected = encoder.project(snapshot, view).unwrap();
+        assert_eq!(projected.instance_count(), 1);
+        encoder.full(&projected).unwrap();
     }
 }
 
@@ -2056,6 +2272,7 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
         deadeye_scene: DeadeyeScene::default(),
         velocity_changes: Vec::new(),
         damage_credit: None,
+        uses_authored_charge: false,
     };
     let mut component = Component::start(
         graphs,
@@ -2481,6 +2698,7 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             deadeye_scene: DeadeyeScene::default(),
             velocity_changes: Vec::new(),
             damage_credit: None,
+            uses_authored_charge: false,
         };
         let component = Component::start(
             Arc::clone(&graphs),

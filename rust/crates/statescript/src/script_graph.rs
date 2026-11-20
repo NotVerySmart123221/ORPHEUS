@@ -909,6 +909,9 @@ pub struct Body {
     /// Server roots mounted without consuming the body's projected IDs.
     #[serde(default)]
     pub server_graphs: Vec<GraphBinding>,
+    /// Private root that handles the player's authored charge route.
+    #[serde(default, deserialize_with = "optional_graph_index")]
+    pub authored_charge_graph: Option<u32>,
     pub manager: Option<u32>,
     pub weapons: Vec<Option<u32>>,
     #[serde(default)]
@@ -959,7 +962,7 @@ fn optional_graph_index<'de, D: serde::Deserializer<'de>>(
             asset_guid(&value)
                 .filter(|guid| guid >> 48 == GRAPH_TYPE)
                 .and_then(|guid| u32::try_from(guid & 0x0000_ffff_ffff_ffff).ok())
-                .ok_or_else(|| serde::de::Error::custom("invalid mode script graph GUID"))
+                .ok_or_else(|| serde::de::Error::custom("invalid StateScript graph GUID"))
         })
         .transpose()
 }
@@ -1421,6 +1424,48 @@ impl GraphStore {
                 }
             }
         }
+        let health_topic = EntryTopic::Host(HostEventKind::HealthApplied);
+        for (body, definition) in bundle.entities.iter().chain(&bundle.junkenstein.entities) {
+            if definition.authored_charge_graph.is_some() {
+                return Err(invalid(format!(
+                    "entity {body} cannot declare a player authored charge graph"
+                )));
+            }
+        }
+        for (body, definition) in &bundle.bodies {
+            let Some(graph) = definition.authored_charge_graph else {
+                continue;
+            };
+            if definition.hero.as_deref().and_then(parse_guid).is_none() {
+                return Err(invalid(format!(
+                    "body {body} requires a hero to declare an authored charge graph"
+                )));
+            }
+            let private_roots = definition
+                .server_graphs
+                .iter()
+                .filter(|root| root.graph == Some(graph))
+                .count();
+            let public_root = definition
+                .graphs
+                .iter()
+                .any(|root| root.graph == Some(graph))
+                || definition.manager == Some(graph)
+                || definition.weapons.contains(&Some(graph));
+            if private_roots != 1 || public_root {
+                return Err(invalid(format!(
+                    "body {body} must mount authored charge graph {graph} once as a private server root"
+                )));
+            }
+            if !graphs
+                .get(&graph)
+                .is_some_and(|graph| graph.entry_handlers.contains_key(&health_topic))
+            {
+                return Err(invalid(format!(
+                    "authored charge graph {graph} for body {body} requires a server health_applied entry"
+                )));
+            }
+        }
         let projected_message_topics = validate_projected_message_topics(
             bundle.runtime_state_metadata.projected_message_topics,
             &graphs,
@@ -1442,7 +1487,6 @@ impl GraphStore {
             })
             .max()
             .unwrap_or(RoomSpatialNeeds::None);
-        let health_topic = EntryTopic::Host(HostEventKind::HealthApplied);
         let uses_host_health_events = graphs
             .values()
             .any(|graph| graph.entry_handlers.contains_key(&health_topic));
@@ -1865,6 +1909,85 @@ mod tests {
             data["bodies"][BODY]["server_graphs"][0]["graph"] = invalid;
             assert_eq!(load(&data).unwrap_err().kind(), io::ErrorKind::InvalidData);
         }
+    }
+
+    #[test]
+    fn authored_charge_route_requires_a_single_private_player_health_event_root() {
+        const BODY: &str = "0x040000000000B013";
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../fixtures/behavior/script-authored-charge-route-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(fixture["schema_version"], 1);
+        assert_eq!(
+            fixture["case_id"],
+            "script-authored-charge-route.synthetic.v1"
+        );
+        let bundle = &fixture["input"]["bundle"];
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let graphs = load(bundle).unwrap();
+        assert_eq!(
+            graphs.bodies()[&0x0400_0000_0000_b013].authored_charge_graph,
+            Some(612)
+        );
+        assert_eq!(
+            graphs.bodies()[&0x0400_0000_0000_b014].authored_charge_graph,
+            None
+        );
+
+        let root = bundle["bodies"][BODY]["server_graphs"][0].clone();
+        for (field, value) in [
+            ("authored_charge_graph", json!(612)),
+            ("authored_charge_graph", json!("0x0400000000000264")),
+            ("authored_charge_graph", json!("0x0580000100000264")),
+            ("authored_charge_graph", json!("0x0580000000000265")),
+            ("hero", Value::Null),
+            ("server_graphs", json!([])),
+            ("server_graphs", json!([root.clone(), root.clone()])),
+            ("graphs", json!([root])),
+            ("manager", json!(612)),
+            ("weapons", json!([612])),
+        ] {
+            let mut data = bundle.clone();
+            data["bodies"][BODY][field] = value;
+            assert_eq!(
+                load(&data).unwrap_err().kind(),
+                io::ErrorKind::InvalidData,
+                "{field}"
+            );
+        }
+
+        let mut data = bundle.clone();
+        let entry = data["graphs"][0]["nodes"][0].as_object_mut().unwrap();
+        entry.remove("host_event_entry");
+        entry.insert("class".into(), json!("STUStatescriptEntry"));
+        assert!(
+            load(&data)
+                .unwrap_err()
+                .to_string()
+                .contains("requires a server health_applied entry")
+        );
+
+        let mut data = bundle.clone();
+        data["graphs"][0]["nodes"][0]["server_only"] = json!(false);
+        assert_eq!(load(&data).unwrap_err().kind(), io::ErrorKind::InvalidData);
+
+        let mut data = bundle.clone();
+        data["entities"] = json!({BODY: bundle["bodies"][BODY]});
+        assert!(
+            load(&data)
+                .unwrap_err()
+                .to_string()
+                .contains("cannot declare a player authored charge graph")
+        );
+        let mut data = bundle.clone();
+        data["junkenstein"] = json!({"entities": {BODY: bundle["bodies"][BODY]}});
+        assert!(
+            load(&data)
+                .unwrap_err()
+                .to_string()
+                .contains("cannot declare a player authored charge graph")
+        );
     }
 
     #[test]

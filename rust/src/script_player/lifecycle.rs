@@ -34,7 +34,6 @@ use crate::{
 };
 
 pub(crate) struct PlayerBodyRuntime {
-    pub(super) encounter_active: bool,
     pub(super) component: Component,
     pub(super) world: BodyWorld,
     pub(super) codecs: Arc<CodecTable>,
@@ -52,6 +51,17 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
     }
 
     fn set_encounter_active(&mut self, active: bool) -> io::Result<()> {
+        // The room normally supplies this phase before synchronizing charge.
+        // Keep direct calls usable by supplying it here when necessary.
+        if self.world.charge_binding().is_some()
+            && self
+                .world
+                .room_activity
+                .map(OwnerRoomActivity::encounter_active)
+                != Some(active)
+        {
+            self.world.room_activity = Some(OwnerRoomActivity::Encounter { active });
+        }
         self.sync_charge_admission(active)
     }
 
@@ -158,7 +168,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         let result = self.world.vitals.damage(amount, source);
         if result.killed {
             self.component.set_owner_dead(true);
-            if let Err(error) = self.sync_charge_admission(self.encounter_active) {
+            if let Err(error) = self.sync_charge_admission(false) {
                 eprintln!("Owner death charge cleanup failed: {error}");
             }
         }

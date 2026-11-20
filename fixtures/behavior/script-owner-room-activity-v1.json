@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "case_id": "script-owner-room-activity.synthetic.v1",
-  "source": {"basis": "Original body graph, encounter activity changes, death, and replacement."},
+  "source": {"basis": "Original body graph, encounter activity changes, death, replacement, and legacy charge admission."},
   "evidence": "synthetic-rust",
   "input": {
     "graph": 823,
@@ -13,6 +13,11 @@
     "regular_at_startup": true,
     "during_encounter": [false, true],
     "after_death": false,
-    "after_replacement": true
+    "after_replacement": true,
+    "legacy_charge_admission": {
+      "bootstrap": true,
+      "inactive_room": false,
+      "after_death": false
+    }
   }
 }

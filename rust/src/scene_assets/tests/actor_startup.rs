@@ -221,6 +221,9 @@ fn preparation_failure(graphs: &GraphStore, error: &SceneOwnerPreparationError) 
             Body::RootLayout(fault) => vm_failure("root_layout", fault),
             Body::ModeRootId => simple_failure("body_preparation", "mode_root_id"),
             Body::MissingModeRoot => simple_failure("body_preparation", "missing_mode_root"),
+            Body::AuthoredChargeRoot(_) => {
+                simple_failure("body_preparation", "authored_charge_root")
+            }
             Body::Start(error) => startup_failure(error),
             Body::Projection(error) => snapshot_failure(graphs, "projection", error),
             Body::Encoding(error) => snapshot_failure(graphs, "encoding", error),

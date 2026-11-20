@@ -66,6 +66,7 @@ pub(crate) struct PlayerBodyFactory {
     pools: Option<HealthPools>,
     target_tags: Option<BTreeSet<u64>>,
     controller_on_fire: bool,
+    uses_authored_charge: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -78,6 +79,8 @@ pub(crate) enum OwnerBodyPreparationError {
     ModeRootId,
     #[error("Junkenstein defender body graph is absent")]
     MissingModeRoot,
+    #[error("authored charge graph {0:04X} must remain a single private root after room setup")]
+    AuthoredChargeRoot(u32),
     #[error(transparent)]
     Start(#[from] OwnerBodyStartupError),
     #[error(transparent)]
@@ -135,9 +138,16 @@ impl PlayerBodyFactory {
             }
             roots.insert(public_roots, Root::new(id, DEFENDER_BODY_GRAPH));
         }
+        if let Some(graph) = body.authored_charge_graph {
+            let mut mounted = roots.iter().filter(|root| root.graph == graph);
+            if !mounted.next().is_some_and(Root::is_server_only) || mounted.next().is_some() {
+                return Err(OwnerBodyPreparationError::AuthoredChargeRoot(graph));
+            }
+        }
         let health = pools.unwrap_or(FALLBACK_POOLS).total();
         let variables = crate::script_init::player_entity_variables(body, health, health);
         let target_tags = body.target_tags.clone();
+        let uses_authored_charge = body.authored_charge_graph.is_some();
         let factory = Self {
             graphs,
             codecs,
@@ -148,6 +158,7 @@ impl PlayerBodyFactory {
             pools,
             target_tags,
             controller_on_fire,
+            uses_authored_charge,
         };
         let runtime = factory.start_runtime(probe.0, probe.1)?;
         let encoder = runtime.encoder();
@@ -224,6 +235,7 @@ impl PlayerBodyFactory {
             deadeye_scene: DeadeyeScene::default(),
             velocity_changes: Vec::new(),
             damage_credit: None,
+            uses_authored_charge: self.uses_authored_charge,
         };
         let mut component = Component::start(
             Arc::clone(&self.graphs),
@@ -259,7 +271,6 @@ impl PlayerBodyFactory {
             modifiers,
             leases,
             frame: spawn.frame,
-            encounter_active: false,
         };
         runtime
             .sync_charge_admission(true)

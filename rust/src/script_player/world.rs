@@ -135,6 +135,7 @@ pub(super) fn target_delta(origin: Vec3, target: TargetPose) -> Vec3 {
 
 pub(super) struct BodyWorld {
     pub(super) damage_credit: Option<AppliedDamage>,
+    pub(super) uses_authored_charge: bool,
     pub(super) graphs: Arc<GraphStore>,
     pub(super) spatial_frame: Option<Arc<crate::game_combat::RoomSpatialFrame>>,
     pub(super) team_member_counts: Option<TeamMemberCounts>,
