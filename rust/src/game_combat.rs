@@ -1748,12 +1748,15 @@ impl RoomSimulation {
                 operation: Some(Operation::Update(vec![component])),
                 ..EntityUpdate::default()
             });
+            let target = SampledBody { wire, entity };
+            let room_status = self.sample_health_target_room_status(target);
             self.health_events.stage(
                 source,
-                SampledBody { wire, entity },
+                target,
                 healed,
                 false,
                 HealthEventContext::Healing(&self.world),
+                room_status,
             );
         }
         self.heal_player_bodies(team, skip_player_wire, source, pulses, &mut updates);

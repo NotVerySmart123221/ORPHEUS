@@ -998,12 +998,15 @@ impl RoomSimulation {
                         ..EntityUpdate::default()
                     });
                 }
+                let target = SampledBody { wire, entity };
+                let room_status = self.sample_health_target_room_status(target);
                 self.health_events.stage(
                     source,
-                    SampledBody { wire, entity },
+                    target,
                     healed,
                     false,
                     HealthEventContext::Healing(&self.world),
+                    room_status,
                 );
             }
         }
