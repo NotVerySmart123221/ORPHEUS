@@ -342,6 +342,7 @@ fn charge_admission_preserves_profile_scope_and_requires_a_live_instance_for_cre
     let damage = AppliedDamage {
         source: spawn.entity,
         amount: 1.0,
+        named_pool_losses: Vec::new(),
         tags: DamageTags::EMPTY,
         target_facts: crate::script_init::HealthTargetFacts {
             target: spawn.entity + 1,
@@ -542,6 +543,7 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
     let damage = AppliedDamage {
         source: spawn.entity,
         amount: 3.0,
+        named_pool_losses: Vec::new(),
         tags: DamageTags::EMPTY,
         target_facts: crate::script_init::HealthTargetFacts {
             target: spawn.entity + 1,
@@ -1022,7 +1024,8 @@ fn health_queries_read_the_authoritative_vitals() {
         ),
         crate::vitals::Damage {
             dealt: 75.0,
-            killed: false
+            killed: false,
+            ..Default::default()
         }
     );
     assert_eq!(evaluate(&mut runtime, &current), Ok(Value::Float(125.0)));

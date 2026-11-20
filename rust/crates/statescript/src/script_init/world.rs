@@ -93,7 +93,7 @@ impl RoomCue {
 }
 
 // Host admission bound, independent of the size of a native tag list.
-const MAX_HIT_TAGS: usize = 16;
+pub(super) const MAX_HIT_TAGS: usize = 16;
 
 /// Bounded, ordered asset tags supplied by a settled hit.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -810,6 +810,30 @@ pub trait World {
         _maximum: f64,
         _current: f64,
     ) -> Option<u32> {
+        None
+    }
+
+    fn add_temporary_shield(
+        &mut self,
+        _site: Site,
+        _identifier: u64,
+        _amount: f64,
+        _stacked: bool,
+    ) -> Option<u32> {
+        None
+    }
+
+    fn temporary_shield_current(&self, _site: Site, _identifier: u64) -> Option<f64> {
+        None
+    }
+
+    /// Drain only the named pool and return its remaining amount.
+    fn drain_temporary_shield(
+        &mut self,
+        _site: Site,
+        _identifier: u64,
+        _amount: f64,
+    ) -> Option<f64> {
         None
     }
 

@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "case_id": "npc-script-packet-isolation-v1",
+  "source": {
+    "basis": "Synthetic peer sends, with one deliberately lost NPC script datagram."
+  },
+  "evidence": "rust-synthetic",
+  "input": {
+    "npc": 3221233280,
+    "placeable": 2147483719,
+    "first_tick": 1000,
+    "first_sequence": 10,
+    "frames": [
+      {"queue_reliable": 0, "arrived": true},
+      {"queue_reliable": 1, "queue_unreliable": true, "transport_retries": true, "arrived": false},
+      {"queue_reliable": null, "arrived": true},
+      {"queue_reliable": 2, "arrived": true},
+      {"queue_reliable": null, "arrived": true}
+    ]
+  },
+  "expected": {
+    "frames": [
+      {"reliable_ordinal": 0, "script_entity": 2147483719, "npc_base": false},
+      {"reliable_ordinal": null, "script_entity": 3221233280, "npc_base": false},
+      {"reliable_ordinal": 1, "unreliable": true, "script_entity": null, "npc_base": false},
+      {"reliable_ordinal": null, "script_entity": 3221233280, "npc_base": true},
+      {"reliable_ordinal": 2, "script_entity": null, "npc_base": true}
+    ]
+  }
+}

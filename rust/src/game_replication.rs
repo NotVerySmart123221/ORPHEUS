@@ -307,6 +307,7 @@ pub(crate) struct WorldDelivery {
     projectile_destroys: HashMap<u32, (BodyId, ProjectileToken)>,
     biotic_views: BTreeMap<u32, BioticView>,
     scene_views: BTreeMap<u32, BodyStream<ProjectedSnapshot>>,
+    bot_chunk_waited: bool,
     gate: Option<u32>,
     next_biotic_view: u32,
 }

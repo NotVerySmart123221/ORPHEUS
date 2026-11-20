@@ -606,6 +606,11 @@ impl<W: World> Context for InstanceContext<'_, W> {
         self.world.entity_health(self.site, entity, kind, maximum)
     }
 
+    fn temporary_shield_current(&mut self, identifier: u64) -> Option<f64> {
+        self.read_native = true;
+        self.world.temporary_shield_current(self.site, identifier)
+    }
+
     fn total_health(&mut self, entity: u32) -> script_expr::HealthQuery {
         self.read_native = true;
         self.world.total_health(self.site, entity)

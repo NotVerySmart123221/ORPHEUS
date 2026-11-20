@@ -19,7 +19,7 @@ use super::super::{
     machine::{Event, LinkValue, StateKey, VarKey, VariableLink, Volley},
     shapes::{
         array_field, chase_lerp, chase_step, chase_value, configured, field, immediate_self_damage,
-        pool_kind, pool_number, same, shot_delay, source_key, stored,
+        named_temporary_shield, pool_kind, pool_number, same, shot_delay, source_key, stored,
     },
     types::{ChasePayload, InitFault, Issue, ShotEvent, StateKind},
     world::{
@@ -354,6 +354,43 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             self.report(site, Issue::UnsupportedField("NPC self damage service"));
         }
         self.publish_health_totals(site)
+    }
+
+    pub(in crate::script_init) fn update_named_shield_decay(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+        elapsed_ms: u64,
+    ) -> Result<bool, InitFault> {
+        let site = self.site(key.instance, node);
+        if self.machine.owner_dead {
+            self.post(key.instance, Event::Finish(key.raw))?;
+            return Ok(false);
+        }
+        let identifier = script_expr::named_shield_identifier(field(&node.fields, "m_7BE02F89"))
+            .expect("validated named shield identifier");
+        let effect = field(&node.fields, "m_modifyHealth");
+        let Some(rate) = self
+            .creation_scalar(key.instance, node, field(effect, "m_amount"), Value::Null)?
+            .and_then(pool_number)
+            .filter(|rate| *rate > 0.0 && *rate <= f64::from(f32::MAX))
+        else {
+            self.report(site, Issue::UnsupportedField("named shield decay rate"));
+            return Ok(false);
+        };
+        let amount = rate * (elapsed_ms as f64 / 1_000.0);
+        let Some(remaining) = self.world.drain_temporary_shield(site, identifier, amount) else {
+            self.report(site, Issue::UnsupportedField("named shield decay service"));
+            return Ok(false);
+        };
+        if elapsed_ms != 0 {
+            self.publish_health_totals(site)?;
+        }
+        if remaining <= 0.0 {
+            self.post(key.instance, Event::Finish(key.raw))?;
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     pub(in crate::script_init) fn begin_shield_recharge(
@@ -1276,6 +1313,32 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             self.report(site, Issue::UnsupportedField("health pool capacity"));
             return Ok(());
         };
+        if let Some(identifier) = named_temporary_shield(node, key.raw) {
+            let instance = &self.machine.snapshot.instances[&id];
+            let stacked = instance.parent.is_none() && instance.retire_after_frame.is_some();
+            if maximum == 0.0 {
+                if stacked {
+                    self.post(id, Event::Finish(key.raw))?;
+                }
+                return Ok(());
+            }
+            let Some(pool) = self
+                .world
+                .add_temporary_shield(site, identifier, maximum, stacked)
+            else {
+                self.report(
+                    site,
+                    Issue::UnsupportedField("temporary shield registration"),
+                );
+                return Ok(());
+            };
+            self.state_mut(key).expect("active temporary shield").kind =
+                StateKind::HealthPool { pool: Some(pool) };
+            if stacked {
+                self.register_tick(key, self.machine.now_ms);
+            }
+            return self.publish_health_totals(site);
+        }
         let initial = field(&node.fields, "m_BCFDD2E9");
         let current = if initial.is_null() {
             maximum
@@ -1358,6 +1421,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         node: &Node,
         current: f64,
     ) -> Result<(), InitFault> {
+        if !field(&node.fields, "m_7BE02F89").is_null() {
+            // The reference exposes the named value through the pool query.
+            return self.publish_health_totals(self.site(key.instance, node));
+        }
         let output = script_expr::lvalue(field(&node.fields, "m_CEAB19E8"))
             .expect("validated health pool output");
         if let Some(output) = output {

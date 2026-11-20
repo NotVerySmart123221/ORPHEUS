@@ -32,6 +32,8 @@ The Rust-only [health action fixture](../fixtures/behavior/script-health-change-
 
 The Rust-only [scripted training bot respawn fixture](../fixtures/behavior/training-bot-scripted-respawn-v1.json) checks the ordinary replacement deadline even when authored damage is processed before room combat starts. The [bot respawn delivery fixture](../fixtures/behavior/training-bot-respawn-delivery-v1.json) covers successive replacements behind delayed health or identity acknowledgements, while independent bots continue through their own delivery order.
 
+The Rust-only [NPC script packet fixture](../fixtures/behavior/npc-script-packet-isolation-v1.json) checks that a peer sends reliable messages and NPC script chunks separately, retries a lost chunk, and retains its pending turn after a transport error. Other scene-script chunks can still share a datagram with reliable messages. The scheduling rule follows the [Python implementation and client observation](https://github.com/leafall903/ORPHEUS/commit/858e54dfa43e0e19abd59b07efa548b8270038f0).
+
 The Rust-only [ordinary health pool placement fixture](../fixtures/behavior/script-base-health-pool-placement-v1.json) exercises the same health pool shape at two positions through the VM and Vitals. It covers registration, remaining health on exit, cleanup, and rejection of an unsupported shape.
 
 The Rust-only [health query target fixture](../fixtures/behavior/script-health-target-v1.json) checks current and maximum queries for ordinary health and selected pools. An unbound target yields zero without a host read, including an integer-zero reset in a direct target slot. Missing or malformed operands and bound targets with unavailable vitals retain their diagnostics.
@@ -59,6 +61,11 @@ The [static model protection fixture](../fixtures/behavior/script-static-model-p
 covers authored slot validation, host admission, and restoration after the last state retires.
 The [self shield recharge fixture](../fixtures/behavior/script-self-shield-recharge-v1.json)
 covers field-based admission, ticking, rate changes, and retirement.
+The [named shield fixture](../fixtures/behavior/script-named-shield-v1.json)
+exercises the owner query, lifecycle cleanup, exhaustion of a played
+grant and periodic decay with a changing authored rate. Native Vitals
+and charge tests compare pool-row aggregation and distinguish decay
+from damage that contributes a named-pool loss.
 The [immediate self-damage fixture](../fixtures/behavior/script-immediate-self-damage-v1.json)
 checks admission at invented positions, native integer rounding, one-shot
 execution, the different death rules, and rejection of unreviewed modifiers.

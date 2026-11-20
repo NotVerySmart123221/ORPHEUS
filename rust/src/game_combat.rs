@@ -36,7 +36,7 @@ use crate::{
     script_graph::RoomSpatialNeeds,
     script_init::{HealthTargetFacts, ShotEvent},
     static_ray::{Vec3, capsule_entry_distance, norm, segment_separation},
-    vitals::Death,
+    vitals::{Death, NamedPoolLoss},
     world::{EntityUpdate, Operation},
 };
 
@@ -244,6 +244,7 @@ pub(crate) struct AppliedDamage {
     pub source: u32,
     /// Actual pool loss, including armour reduction and remaining health limits.
     pub amount: f64,
+    pub named_pool_losses: Vec<NamedPoolLoss>,
     pub tags: crate::game_hitscan::DamageTags,
     pub target_facts: HealthTargetFacts,
 }
@@ -1988,6 +1989,7 @@ impl RoomSimulation {
             damage: AppliedDamage {
                 source,
                 amount: result.dealt,
+                named_pool_losses: result.named_pool_losses,
                 tags: impact.tags,
                 target_facts: state.health_target_facts(),
             },

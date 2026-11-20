@@ -20,6 +20,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Preserve observation inputs through a committed StateScript logical-button branch. Its child states use current values if the source expires, so finishing a sample does not interrupt the listener's held or idle lifecycle. Shared-branch verification is pending.
 
+- Separate NPC StateScript chunks from reliable messages under contention. A peer alternates sends so delayed or lost NPC chunks and sustained combat notices can both make progress. Added synthetic coverage for the wire payload and retry order. Original-client verification is pending.
+
 - Process training bot respawn deadlines after authored damage, including before normal room combat starts. Preserve bot replacement order for each peer while its old body records are being acknowledged.
 
 - Replaced fixed PhysicsExplosion placements with authored state checks and an explicit map physics capability. Static rooms retain the ordinary state lifecycle and transitions. Unknown and dynamic map physics still produce a diagnostic. Added a synthetic regression for scope, lifecycle, and unsupported fields. Integration validation pending.
@@ -27,6 +29,10 @@ This log records tested changes and their acceptance status. Entries are grouped
 - Preserve already generated hitscan and current health pools when an owner script stops. The room can settle prior shots and continue damage, healing, and death for the same body until it is replaced.
 
 - Applied the settled target's tags, affiliation and liveness to direct `EntityMatches` filters in a health event. A lethal impact retains its original target's qualification after the body retires. Source membership and spatial searches still use the current room frame. Validated in shared candidate `29df13cb`.
+
+- Added field-driven decay for named temporary shields. The state samples the authored rate on the VM clock and finishes at zero. Decay uses the shared grant-draining routine independently from attributed weapon hits. Synthetic lifecycle and native settlement regressions are pending integration validation.
+
+- Implemented shared named temporary shield grants, depletion, and removal. The charge bridge now projects actual damage drained from these shields as typed pool records. Added synthetic lifecycle and settlement coverage and a prepared probe for the stock 0044 charge receiver. Integration validation pending.
 
 - Keep the settled target context when an immediate same-body GameMessage carries the target as a typed entity parameter. The synthetic contract checks relayed requests across replacement and independent messages on the same VM frame. Integration validation pending.
 

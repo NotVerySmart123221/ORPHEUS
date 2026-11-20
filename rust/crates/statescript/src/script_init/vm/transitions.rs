@@ -76,11 +76,22 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         if let Some(current) =
                             self.world.health_pool_current(self.site(id, node), pool)
                         {
-                            self.publish_health_pool(key, node, current)?;
+                            if current == 0.0 && !field(&node.fields, "m_7BE02F89").is_null() {
+                                self.post(id, Event::Finish(raw))?;
+                            } else {
+                                self.publish_health_pool(key, node, current)?;
+                            }
                         }
                     }
                     Some(StateKind::ShieldRecharge) => {
                         self.tick_shield_recharge(key, elapsed_ms)?
+                    }
+                    Some(StateKind::NamedShieldDecay) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("named shield decay");
+                        self.update_named_shield_decay(key, node, elapsed_ms)?;
                     }
                     Some(StateKind::WitchStaffHealing) => {
                         self.tick_witch_staff_healing(key, elapsed_ms)?

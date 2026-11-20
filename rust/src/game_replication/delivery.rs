@@ -95,6 +95,7 @@ impl WorldDelivery {
             projectile_destroys: HashMap::new(),
             biotic_views: BTreeMap::new(),
             scene_views: BTreeMap::new(),
+            bot_chunk_waited: false,
             gate: None,
             next_biotic_view: FIRST_BIOTIC_VIEW,
         }
@@ -125,6 +126,7 @@ impl WorldDelivery {
         self.projectile_destroys.clear();
         self.biotic_views.clear();
         self.scene_views.clear();
+        self.bot_chunk_waited = false;
         self.gate = None;
         self.input.clear();
     }
@@ -695,9 +697,24 @@ impl WorldDelivery {
             movements.push(correction.update());
             index
         });
-        let queued = self.ready();
+        let mut queued = self.ready();
+        let is_bot_chunk = |item: &Ready<'_>| {
+            let record = item.record;
+            matches!(record.delivery, Delivery::SceneScript { .. })
+                && record.update.chunk.is_some()
+                && self.bots.contains_key(&record.update.entity)
+        };
+        // A mixed packet can be acknowledged even when the receiver drops
+        // the NPC chunk. Give each class a send opportunity under sustained
+        // traffic and let the ordinary stream handle acknowledgements.
+        let contention =
+            !reliable_only && egress.has_queued_reliable() && queued.iter().any(is_bot_chunk);
+        let bot_turn = contention && self.bot_chunk_waited;
+        if contention {
+            queued.retain(|item| is_bot_chunk(item) == bot_turn);
+        }
         let newest = self.command_ack(tick);
-        let sent = egress.send_frame(
+        let sent = egress.send_frame_with_messages(
             FrameRecords {
                 tick,
                 queued: &queued,
@@ -705,6 +722,7 @@ impl WorldDelivery {
                 owner_correction: owner_index.is_some(),
                 reliable_only,
             },
+            !bot_turn,
             |records| {
                 let selected = owner_index
                     .filter(|&index| {
@@ -725,6 +743,9 @@ impl WorldDelivery {
         )?;
         let indexes = Self::sent_indices(&queued, &sent.records);
         self.sent(&indexes);
+        if !reliable_only {
+            self.bot_chunk_waited = contention && !bot_turn;
+        }
         let selected = owner_index
             .zip(correction)
             .filter(|(index, _)| sent.records.contains(&RecordSource::Movement(*index)));
