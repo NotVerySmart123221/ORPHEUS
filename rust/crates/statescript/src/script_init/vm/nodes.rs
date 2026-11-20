@@ -16,9 +16,10 @@ use super::super::{
         array_field, array_insertion_index, case_path, configured, encounter_base_state_shape,
         excluded_target_tags, field, is_bare_header_action, is_base_health_pool,
         is_client_subgraph_controller, is_entry, is_message_recipient_set,
-        is_networked_for_code_synced, is_owner_movement_sampler, is_self_target,
-        is_wave_health_pool, living_body_array_shape, participant_filter, persistent_message,
-        pool_number, raw_indices, registered_state, source_key, static_target_operand, stored,
+        is_networked_for_code_synced, is_owner_movement_sampler, is_self_stat_timer,
+        is_self_target, is_wave_health_pool, living_body_array_shape, participant_filter,
+        persistent_message, pool_number, raw_indices, registered_state, source_key,
+        static_target_operand, stored,
     },
     types::{InitFault, Issue, SpawnSearch, SpawnSearchKey, State, StateKind},
     world::{CreationKind, EntityCreation, Site, World},
@@ -1245,31 +1246,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::Plain
             }
             "STU_441B50E4"
-                if registration.permits(self.graph(id).index == 0x0b8b)
-                    && matches!(
-                        (node.pos, node.field("m_stat").and_then(asset_guid)),
-                        (52, Some(0x0860_0000_0000_0466)) | (66, Some(0x0860_0000_0000_05bf))
-                    )
-                    && node.server_only
-                    && field(&node.fields, "m_D32CB484").is_null()
-                    && field(&node.fields, "m_stats").is_null()
-                    && is_self_target(node, "m_targets")
+                if registration.shape(is_self_stat_timer(node))
                     && self.world.player_stats_available(self.site(id, node)) == Some(false) =>
-            {
-                StateKind::Plain
-            }
-            "STU_441B50E4"
-                if registration.permits((self.graph(id).index, node.pos) == (0x01a3, 14))
-                    && !node.server_only
-                    && field(&node.fields, "m_stat").is_null()
-                    && field(&node.fields, "m_stats").is_null()
-                    && matches!(array_field(&node.fields, "m_D32CB484"),
-                        [stat] if asset_guid(stat) == Some(0x0860_0000_0000_037a))
-                    && is_self_target(node, "m_targets")
-                    && self
-                        .world
-                        .local_combat_context_available(self.site(id, node))
-                        == Some(false) =>
             {
                 StateKind::Plain
             }

@@ -172,6 +172,8 @@ In schema version 2, a factory rejection also records its failure stage.
 This distinguishes scene prerequisites, root layout, VM startup steps,
 snapshot projection, and full snapshot encoding. An incomplete projection
 lists a bounded set of typed diagnostics with graph and node positions.
+An unavailable entity member read reports `entity_variable_unavailable`.
+The row carries the script site and omits the entity ID and variable key.
 For an unsupported config diagnostic, `operand_class` records the
 bounded identifier from the evaluator when available. The containing
 node class remains a separate field. A class identifier shows where

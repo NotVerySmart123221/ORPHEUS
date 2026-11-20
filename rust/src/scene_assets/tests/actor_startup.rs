@@ -65,6 +65,9 @@ fn diagnostic_category(diagnostic: &Diagnostic) -> &'static str {
         Issue::EntityCreation(_) => "entity_creation",
         Issue::InvalidSubScript => "invalid_subscript",
         Issue::Expression(EvalError::UnsupportedConfig(_)) => "unsupported_config",
+        Issue::Expression(EvalError::UnavailableEntityVariable { .. }) => {
+            "entity_variable_unavailable"
+        }
         Issue::Expression(_) => "expression",
         Issue::ObservationUnavailable => "observation_unavailable",
     }
@@ -380,6 +383,10 @@ fn startup_diagnostics_keep_distinct_operand_classes_and_omit_error_text() {
         unsupported("9BadPrefix"),
         unsupported(&overlong),
         row(EvalError::MalformedConfig("synthetic malformed detail")),
+        row(EvalError::UnavailableEntityVariable {
+            entity: 81_000_551,
+            id: 91_000_557,
+        }),
     ];
     let report = snapshot_failure(
         &graphs,
@@ -390,15 +397,17 @@ fn startup_diagnostics_keep_distinct_operand_classes_and_omit_error_text() {
         },
     );
     let entries = report["diagnostics"].as_array().unwrap();
-    assert_eq!(entries.len(), 4);
+    assert_eq!(entries.len(), 5);
     assert!(
         entries
             .iter()
             .all(|entry| entry["graph"] == 720 && entry["node"] == 3)
     );
-    assert_eq!(entries[0]["category"], "expression");
+    assert_eq!(entries[0]["category"], "entity_variable_unavailable");
     assert_eq!(entries[0]["operand_class"], Json::Null);
-    let operand_classes: Vec<_> = entries[1..]
+    assert_eq!(entries[1]["category"], "expression");
+    assert_eq!(entries[1]["operand_class"], Json::Null);
+    let operand_classes: Vec<_> = entries[2..]
         .iter()
         .map(|entry| entry["operand_class"].as_str())
         .collect();
@@ -411,6 +420,8 @@ fn startup_diagnostics_keep_distinct_operand_classes_and_omit_error_text() {
     assert!(!serialized.contains("synthetic malformed detail"));
     assert!(!serialized.contains("9BadPrefix"));
     assert!(!serialized.contains(overlong.as_str()));
+    assert!(!serialized.contains("81000551"));
+    assert!(!serialized.contains("91000557"));
 }
 
 #[test]

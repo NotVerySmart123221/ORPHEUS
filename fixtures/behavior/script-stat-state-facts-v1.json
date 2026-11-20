@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "case_id": "script-stat-state-facts.synthetic.v1",
+  "source": {"basis": "Invented graph sites, stat identifiers, and independent host facts."},
+  "evidence": "synthetic-rust",
+  "input": [
+    {
+      "name": "server-only single stat, confirmed absent",
+      "graph": 60031, "server_only": true,
+      "player_stats_available": false, "local_combat_available": true,
+      "fields": {"m_stat": "0x08600000FEDCBA11"},
+      "expected_admission": true
+    },
+    {
+      "name": "networked stat list, confirmed absent",
+      "graph": 60032, "server_only": false,
+      "player_stats_available": false, "local_combat_available": true,
+      "fields": {"m_D32CB484": ["0x08600000FEDCBA12"]},
+      "expected_admission": true
+    },
+    {
+      "name": "networked stat list, stats available without local combat",
+      "graph": 60033, "server_only": false,
+      "player_stats_available": true, "local_combat_available": false,
+      "fields": {"m_D32CB484": ["0x08600000FEDCBA12"]},
+      "expected_admission": false
+    },
+    {
+      "name": "networked stat list, stats unknown without local combat",
+      "graph": 60034, "server_only": false,
+      "player_stats_available": null, "local_combat_available": false,
+      "fields": {"m_D32CB484": ["0x08600000FEDCBA12"]},
+      "expected_admission": false
+    },
+    {
+      "name": "server-only single stat has wrong asset type",
+      "graph": 60035, "server_only": true,
+      "player_stats_available": false, "local_combat_available": false,
+      "fields": {"m_stat": "0x09100000FEDCBA11"},
+      "expected_admission": false
+    },
+    {
+      "name": "networked stat selector has two entries",
+      "graph": 60036, "server_only": false,
+      "player_stats_available": false, "local_combat_available": false,
+      "fields": {"m_D32CB484": ["0x08600000FEDCBA11", "0x08600000FEDCBA12"]},
+      "expected_admission": false
+    },
+    {
+      "name": "server selector has a non-self target",
+      "graph": 60037, "server_only": true,
+      "player_stats_available": false, "local_combat_available": false,
+      "fields": {"m_stat": "0x08600000FEDCBA11", "m_targets": 31},
+      "expected_admission": false
+    },
+    {
+      "name": "single selector includes an additional stats payload",
+      "graph": 60038, "server_only": true,
+      "player_stats_available": false, "local_combat_available": false,
+      "fields": {"m_stat": "0x08600000FEDCBA11", "m_stats": [1]},
+      "expected_admission": false
+    }
+  ]
+}

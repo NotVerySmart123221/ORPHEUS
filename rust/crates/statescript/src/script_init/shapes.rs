@@ -171,6 +171,25 @@ pub(super) fn is_self_target(node: &Node, name: &str) -> bool {
     script_expr::native_shape(field(&node.fields, name), "STU_B5A0CAF0", None)
 }
 
+pub(super) fn is_self_stat_timer(node: &Node) -> bool {
+    if node.remote != -1
+        || !field(&node.fields, "m_stats").is_null()
+        || !is_self_target(node, "m_targets")
+    {
+        return false;
+    }
+    let stat = field(&node.fields, "m_stat");
+    let stat_list = field(&node.fields, "m_D32CB484");
+    let is_stat = |value| asset_guid(value).is_some_and(|id| id >> 48 == 0x0860);
+    if node.server_only {
+        is_stat(stat) && stat_list.is_null()
+    } else {
+        node.is_networked()
+            && stat.is_null()
+            && matches!(stat_list.as_array().map(Vec::as_slice), Some([entry]) if is_stat(entry))
+    }
+}
+
 pub(super) fn is_message_recipient_set(target: &Json) -> bool {
     field(target, "$").as_str() == Some("STU_9B213168")
 }

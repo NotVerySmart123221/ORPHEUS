@@ -269,6 +269,19 @@ fn shared_flashbang_velocity_action_contract() {
             body_variables: &empty,
             controller_variables: &empty,
         };
+        let site = Site {
+            entity: binding.body,
+            instance: 1,
+            graph: 0x224e,
+            node: Some(31),
+        };
+        assert_eq!(
+            world.player_stats_available(site),
+            encounter.then_some(false)
+        );
+        for entity in [binding.controller, 999] {
+            assert_eq!(world.player_stats_available(Site { entity, ..site }), None);
+        }
         let component = Component::start(
             Arc::clone(&graphs),
             binding.body,
@@ -298,12 +311,6 @@ fn shared_flashbang_velocity_action_contract() {
             }
         );
         if accepted {
-            let site = Site {
-                entity: binding.body,
-                instance: 1,
-                graph: 0x224e,
-                node: Some(31),
-            };
             assert!(!world.edit_velocity(
                 Site {
                     node: Some(30),

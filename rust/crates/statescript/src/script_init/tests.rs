@@ -12,6 +12,7 @@ mod movement_edges;
 mod room_cue;
 mod runtime_state_metadata;
 mod stack_controls;
+mod stat_state;
 mod states_and_switches;
 
 pub(super) use std::path::PathBuf;

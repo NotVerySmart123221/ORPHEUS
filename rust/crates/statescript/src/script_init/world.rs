@@ -499,6 +499,8 @@ pub trait World {
     fn spatial_binding_owner_available(&self, _site: Site) -> Option<bool> {
         None
     }
+    /// Whether this body's linked controller has a player stats record.
+    /// Unknown bindings return None.
     fn player_stats_available(&self, _site: Site) -> Option<bool> {
         None
     }
