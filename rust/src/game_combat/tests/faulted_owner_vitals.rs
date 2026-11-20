@@ -151,6 +151,7 @@ fn scripted_owner_unload_keeps_room_health_and_death_on_the_same_body() {
     let spawn = OwnerBodySpawn {
         controller: 0xa000_0100,
         entity: 0xa000_0101,
+        skin: 0,
         body_filter: team_bit(0).unwrap(),
         slot: 0,
         frame: 100,
