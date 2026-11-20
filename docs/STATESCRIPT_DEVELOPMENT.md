@@ -99,8 +99,7 @@ ability support.
 - The native pitched direction operand reads a bound entity through the
   host pose provider. The existing roll adapter still supplies its
   compatibility vector. A host's explicit no-target reply completes the
-  operand before selector evaluation. Eye-position reads need their own
-  host contract.
+  operand before selector evaluation.
 - The scene placement collection action uses a literal required tag and
   a scene placement inventory from its host. An empty inventory and an
   unavailable inventory produce distinct results.
@@ -111,6 +110,9 @@ ability support.
 - Owner graphs can read `BodyActive` as an activity gate with no hero or
   graph-specific bindings. The prepared scene provides the initial level.
   The room updates the current body by generation.
+- Native eye-position operands use the player's simulation eye anchor.
+  Native eye and direction expressions with potential foreign selectors
+  request a frozen room pose.
 
 Native target tracking still needs the lifecycle of its embedded
 per-target subgraph and both output bindings. The authored
@@ -734,7 +736,21 @@ before starting its temporary runtime.
 The [synthetic spatial contract](../fixtures/behavior/statescript-entity-spatial-v1.json)
 shows both operands applied to the same entity at two points in time.
 The [room pose contract](../fixtures/behavior/script-room-actor-pose-v1.json)
-checks how the native room captures actor movement and aim.
+checks how the native room captures actor movement, aim, and player eye
+anchors.
+
+The native eye-position shape uses `STU_21A13145` with one `m_entity`
+selector. A player anchor combines feet position, the existing stance
+height, and the mover's spring offset in movement units. It is seeded
+with the spawn pose and refreshed on each owner advance. Other bodies
+read the same frozen sample as their pose. NPC bodies and static
+placements have no player eye anchor. The VM reports an unavailable
+anchor when the host returns none.
+
+The loader requests a spatial frame for native eye and direction
+expressions with selectors that may refer to other entities. Direct
+self reads and client-only operands without a server fallback do not
+request the frame. See the [pose demand contract](../fixtures/behavior/script-native-pose-demand-v1.json).
 
 ## Find room entities within a radius
 

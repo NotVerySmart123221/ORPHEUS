@@ -572,6 +572,11 @@ pub trait World {
         self.forward(entity)
     }
 
+    /// The current world sample's eye anchor for a known body.
+    fn body_eye_position(&self, _entity: u32) -> Option<[f64; 3]> {
+        None
+    }
+
     /// Activity of the component's own body at this site. None means unavailable.
     fn body_active(&self, _site: Site) -> Option<bool> {
         None

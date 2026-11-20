@@ -491,6 +491,11 @@ impl<W: World> Context for InstanceContext<'_, W> {
         self.world.authored_forward(entity)
     }
 
+    fn body_eye_position(&mut self, entity: u32) -> Option<[f64; 3]> {
+        self.read_native = true;
+        self.world.body_eye_position(entity)
+    }
+
     fn body_active(&mut self) -> Option<bool> {
         self.read_native = true;
         self.world.body_active(self.site)

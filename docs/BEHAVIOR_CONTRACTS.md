@@ -63,7 +63,9 @@ The Rust-only [entity spatial fixture](../fixtures/behavior/statescript-entity-s
 
 The Rust-only [bound body angle fixture](../fixtures/behavior/script-bound-body-angle-v1.json) checks owner and NPC host reads across modes using the same packed pose samples. It distinguishes an unbound target, an unavailable foreign body, and an out-of-range angle.
 
-The Rust-only [room actor pose fixture](../fixtures/behavior/script-room-actor-pose-v1.json) checks frozen movement and aim samples across movement, retirement, death, and generation changes. It also covers the scoped view installed on consecutive replacements in the same room frame.
+The Rust-only [room actor pose fixture](../fixtures/behavior/script-room-actor-pose-v1.json) checks frozen movement, aim, and eye anchors across movement, retirement, death, and generation changes. It also covers the scoped view installed on consecutive replacements in the same room frame.
+
+The [native eye position fixture](../fixtures/behavior/statescript-native-eye-position-v1.json) checks a finite anchor read and unavailable-host diagnostics. The [pose demand fixture](../fixtures/behavior/script-native-pose-demand-v1.json) checks when the loader requests room poses for native expressions.
 
 The Rust-only [owner startup spatial fixture](../fixtures/behavior/script-owner-startup-spatial-v1.json) checks a one-shot query through scene admission before body publication. It covers unavailable context, an available empty room, and another actor's frozen pose with a separate owner command clock.
 

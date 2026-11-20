@@ -8,6 +8,7 @@ use crate::{
     game_combat::{
         AdmittedFlight, AppliedDamage, BioticField, BotHit, CombatError, HealingPulse,
         PosedHitscan, RoomSimulation, SampledBody, eligible_target, eye_height,
+        script_eye_position,
     },
     game_combat_messages::CombatNotice,
     game_hitscan::{Impact, TargetHistory, TargetPose, ViewFrame},
@@ -114,6 +115,10 @@ impl PlayerBodyState {
             radius,
             eye: eye_height(self.hero, self.mover.crouched()),
         }
+    }
+
+    pub(super) fn script_eye_position(&self) -> Option<[f64; 3]> {
+        script_eye_position(self.hero, &self.mover)
     }
 
     pub(crate) fn enemy_target(&self) -> Option<EnemyTarget> {

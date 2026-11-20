@@ -45,6 +45,7 @@ pub(crate) struct OwnerBodySpawn {
     pub slot: u8,
     pub frame: u32,
     pub pose: Movement,
+    pub eye_position: Option<[f64; 3]>,
     pub quanta: u32,
 }
 
@@ -202,6 +203,7 @@ impl PlayerBodyFactory {
             entity: spawn.entity,
             body_filter: spawn.body_filter,
             position: spawn.pose.position,
+            eye_position: spawn.eye_position,
             movement: spawn.pose,
             throttles: [0; 2],
             mode: self.mode,
@@ -303,6 +305,7 @@ pub(crate) fn fixture_body_factory() -> (PlayerBodyFactory, OwnerBodySpawn) {
             position: [1.0, 2.0, 3.0],
             ..Movement::default()
         },
+        eye_position: None,
         quanta: RETAIL_QUANTA,
     };
     let factory = PlayerBodyFactory::prepare(

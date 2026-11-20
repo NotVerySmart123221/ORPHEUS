@@ -1556,6 +1556,7 @@ impl WorldDelivery {
                     body_filter,
                     frame: start_frame,
                     pose: movement,
+                    eye_position: crate::game_combat::script_eye_position(hero.guid, &mover),
                     quanta,
                 },
             )

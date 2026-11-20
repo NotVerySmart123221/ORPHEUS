@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added native player eye-position queries from the shared mover and per-frame room pose. The pose provider uses the current simulation stance and spring offset. Potential foreign eye and direction selectors request a frozen pose, with unavailable anchors reported explicitly. Synthetic cases cover owner startup, crouching, death, and replacement. Formatting, locked workspace check, Clippy, and workspace tests with script coverage passed, including 368 native and 214 portable StateScript library tests.
+
 - Added the `BodyActive` host query for authored owner graphs. The room supplies its activity level before graph startup and updates the current body by generation. Meter contracts exercise paused and resumed gains, deferred health awards, death, and replacement. Locked workspace check, formatting, Clippy, and workspace tests with script coverage passed, including 367 native and 212 portable StateScript library tests.
 
 - Preserved the explicit no-target reply from the native direction host before evaluating the entity selector. The prepared bot firing-placement and timer regression reproduced the failure in the generic evaluator and passed after the fix. The workspace suite and the prepared #72 session also passed.

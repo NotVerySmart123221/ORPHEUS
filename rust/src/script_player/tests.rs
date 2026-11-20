@@ -1575,6 +1575,80 @@ fn verified_body_starts_fresh_instances_and_advances_only_its_own_retail_clock()
 }
 
 #[test]
+fn owner_eye_query_reads_spawn_anchor_then_updates_with_live_crouch_and_spring() {
+    use crate::{
+        collision_index::SceneTriangle, commands::CROUCH, game_combat::script_eye_position,
+        vitals::Death,
+    };
+
+    let (factory, spawn) = fixture_body_factory();
+    let [x, y, z] = spawn.pose.position;
+    let rays = TriangleIndex::new([SceneTriangle {
+        vertices: [[0.0, y, 0.0], [0.0, y, 8.0], [8.0, y, 8.0]],
+        mask: MOVER_CATEGORY,
+        surface: 0,
+    }])
+    .unwrap();
+    let mut mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        spawn.pose.position,
+        0,
+        MOVER_CATEGORY,
+    )
+    .unwrap();
+    let standing = [x, y + eye_height(factory.hero, false), z];
+    let eye_position = script_eye_position(factory.hero, &mover);
+    assert_eq!(eye_position, Some(standing));
+    let mut runtime = factory
+        .start(OwnerBodySpawn {
+            eye_position,
+            ..spawn
+        })
+        .unwrap();
+    assert_eq!(
+        runtime.world.body_eye_position(spawn.entity),
+        Some(standing)
+    );
+
+    let command = Command {
+        frame: spawn.frame + 1,
+        buttons: CROUCH,
+        ..Command::default()
+    };
+    mover
+        .step(&rays, command, 0.016, |mover, command| {
+            runtime.advance(command, mover, BodyStep::Posed).unwrap();
+        })
+        .unwrap();
+    assert!(mover.crouched());
+    let spring = f64::from(mover.spring_offset());
+    assert_ne!(spring, 0.0);
+    let [x, y, z] = mover.pose().position;
+    let crouched = [x, y + (eye_height(factory.hero, true) + spring), z];
+    assert_ne!(crouched, mover.pose().position);
+    assert_ne!(crouched, standing);
+    assert_eq!(
+        runtime.world.body_eye_position(spawn.entity),
+        Some(crouched)
+    );
+
+    assert!(
+        runtime
+            .receive_damage(
+                1_000.0,
+                Death {
+                    time: 0.0,
+                    frame: command.frame,
+                    killer: 0,
+                },
+            )
+            .killed
+    );
+    assert_eq!(runtime.world.body_eye_position(spawn.entity), None);
+}
+
+#[test]
 fn authored_pose_queries_read_live_player_position_and_aim_outside_encounter_mode() {
     let (factory, spawn) = fixture_body_factory();
     let mut world = factory.start(spawn).unwrap().world;
@@ -1858,6 +1932,7 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
         entity: 0xa000_0101,
         body_filter: crate::match_scene::team_bit(0).unwrap(),
         position: GameMap::practice_range().spawn_point(0, 0).unwrap().0,
+        eye_position: None,
         movement: Movement::default(),
         throttles: [0; 2],
         mode: PRACTICE_RANGE_MODE,
@@ -2282,6 +2357,7 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             entity: 0xa000_0101,
             body_filter: crate::match_scene::team_bit(0).unwrap(),
             position: [0.0; 3],
+            eye_position: None,
             movement: Movement::default(),
             throttles: [0; 2],
             mode: PRACTICE_RANGE_MODE,

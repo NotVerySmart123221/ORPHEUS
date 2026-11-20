@@ -1,7 +1,8 @@
 //! Deferred script operations for generation-checked room bodies.
 
 use super::{
-    BotState, CombatError, PlayerBodyState, RoomSimulation, RoomSpatialFrame, health::HealthEffect,
+    BotState, CombatError, PlayerBodyState, RoomSimulation, RoomSpatialFrame, Vec3,
+    health::HealthEffect,
 };
 use crate::{
     game_combat_messages::CombatNotice,
@@ -19,6 +20,7 @@ pub(super) struct RoomScriptTarget {
     pub(super) entity: Entity,
     pub(super) candidate_index: usize,
     pub(super) angles: [i32; 2],
+    pub(super) eye_position: Option<Vec3>,
     pub(super) health: bool,
     pub(super) messages: bool,
     pub(super) cue_listener: bool,
@@ -434,6 +436,7 @@ mod tests {
             entity: world.spawn_empty().id(),
             candidate_index,
             angles: [0; 2],
+            eye_position: None,
             health,
             messages,
             cue_listener: health,

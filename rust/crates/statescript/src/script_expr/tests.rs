@@ -2130,6 +2130,117 @@ fn native_pitched_direction_reads_known_entity_pose_without_a_placement_gate() {
 }
 
 #[test]
+fn native_eye_position_resolves_the_selected_body_and_requires_a_finite_anchor() {
+    struct Host {
+        owner: u32,
+        foreign: Value,
+        anchors: BTreeMap<u32, [f64; 3]>,
+        lookups: Vec<u32>,
+    }
+
+    impl Context for Host {
+        fn owner(&mut self) -> Value {
+            Value::Entity(self.owner)
+        }
+
+        fn variable(&mut self, variable: Variable) -> Value {
+            assert_eq!(variable.scope, Scope::Instance);
+            assert_eq!(variable.id, 37);
+            self.foreign.clone()
+        }
+
+        fn body_eye_position(&mut self, entity: u32) -> Option<[f64; 3]> {
+            self.lookups.push(entity);
+            self.anchors.get(&entity).copied()
+        }
+
+        fn position(&mut self, _: u32) -> Option<[f64; 3]> {
+            panic!("an eye anchor must not use the generic position lookup");
+        }
+
+        fn native(&mut self, _: &Json) -> Option<Value> {
+            panic!("an eye anchor must use the dedicated host method");
+        }
+    }
+
+    let contract: Json = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/statescript-native-eye-position-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract["schema_version"], 1);
+    assert_eq!(
+        contract["case_id"],
+        "statescript-native-eye-position.synthetic.v1"
+    );
+    assert_eq!(contract["evidence"], "synthetic-rust");
+    let input = &contract["input"];
+    let owner = serde_json::from_value(input["owner"].clone()).unwrap();
+    let foreign = serde_json::from_value(input["foreign"].clone()).unwrap();
+    let anchors: [[f64; 3]; 2] = serde_json::from_value(input["anchors"].clone()).unwrap();
+    let mut host = Host {
+        owner,
+        foreign: Value::Entity(foreign),
+        anchors: BTreeMap::from_iter([owner, foreign].into_iter().zip(anchors)),
+        lookups: Vec::new(),
+    };
+    let selectors = input["selectors"].as_array().unwrap();
+    let expected: [[f64; 3]; 2] =
+        serde_json::from_value(contract["expected"]["positions"].clone()).unwrap();
+    for (selector, position) in selectors.iter().zip(expected) {
+        let config = json!({"$":"STU_21A13145", "m_entity":selector, "m_EE729DCB":0});
+        assert_eq!(evaluate(&config, &mut host), Ok(Value::Vector(position)));
+    }
+    let lookups: Vec<u32> =
+        serde_json::from_value(contract["expected"]["lookups"].clone()).unwrap();
+    assert_eq!(std::mem::take(&mut host.lookups), lookups);
+
+    let config = json!({"$":"STU_21A13145", "m_entity":selectors[1]});
+    host.anchors.remove(&foreign);
+    assert_eq!(
+        evaluate(&config, &mut host),
+        Err(EvalError::UnavailableBodyEyePosition(foreign))
+    );
+    host.anchors.insert(foreign, [f64::NAN, 0.0, 0.0]);
+    assert_eq!(
+        evaluate(&config, &mut host),
+        Err(EvalError::UnavailableBodyEyePosition(foreign))
+    );
+    assert_eq!(std::mem::take(&mut host.lookups), [foreign, foreign]);
+
+    for malformed in [
+        json!({"$":"STU_21A13145"}),
+        json!({"$":"STU_21A13145", "m_entity":selectors[0], "m_EE729DCB":1}),
+        json!({"$":"STU_21A13145", "m_entity":selectors[0], "extra":null}),
+    ] {
+        assert_eq!(
+            evaluate(&malformed, &mut host),
+            Err(EvalError::MalformedConfig(
+                "expected one native eye position entity operand"
+            ))
+        );
+    }
+    for unbound in [Value::Null, Value::Entity(0), Value::Entity(0x1fff_ffff)] {
+        host.foreign = unbound;
+        assert_eq!(
+            evaluate(&config, &mut host),
+            Err(EvalError::MalformedConfig("expected a bound entity"))
+        );
+    }
+    assert!(host.lookups.is_empty());
+    host.foreign = Value::Entity(foreign);
+    let wrapped = json!({"$":"ClientOnly", "value":null, "server_fallback":config});
+    assert_eq!(
+        evaluate_with_budget(&wrapped, &mut host, 1),
+        Err(EvalError::BudgetExceeded {
+            offset: 0,
+            limit: 1
+        })
+    );
+    assert!(host.lookups.is_empty());
+}
+
+#[test]
 fn body_activity_reads_a_known_boolean_and_rejects_unavailable_or_malformed_inputs() {
     struct Host {
         active: Option<bool>,

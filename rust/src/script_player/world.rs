@@ -144,6 +144,7 @@ pub(super) struct BodyWorld {
     pub(super) entity: u32,
     pub(super) body_filter: u64,
     pub(super) position: [f64; 3],
+    pub(super) eye_position: Option<[f64; 3]>,
     pub(super) movement: Movement,
     pub(super) throttles: [i8; 2],
     pub(super) mode: u64,
@@ -435,6 +436,13 @@ impl World for BodyWorld {
                 .map(|(_, [yaw, pitch])| direction_for_angles(yaw, pitch)),
             None => self.forward(entity),
         }
+    }
+
+    fn body_eye_position(&self, entity: u32) -> Option<[f64; 3]> {
+        if entity == self.entity {
+            return self.eye_position.filter(|_| self.vitals.death().is_none());
+        }
+        self.spatial_frame.as_deref()?.actor_eye_position(entity)
     }
 
     fn forward(&self, entity: u32) -> Option<[f64; 3]> {

@@ -671,22 +671,16 @@ impl Evaluator {
                 )
             }
             "STU_2200A66D" => {
-                if !native_shape(config, class, Some("m_entity"))
-                    || !fields.contains_key("m_entity")
-                {
-                    return Err(EvalError::MalformedConfig(
-                        "expected one native direction entity operand",
-                    ));
-                }
+                let operand = native_entity_operand(config, class).ok_or(
+                    EvalError::MalformedConfig("expected one native direction entity operand"),
+                )?;
                 let native = context.native(config);
                 if matches!(&native, Some(Value::Null)) {
                     // A host can explicitly report that this query has no target.
                     return Ok(Value::Null);
                 }
                 self.charge()?;
-                let Value::Entity(entity) =
-                    self.config(child(config, "m_entity"), context, nested)?
-                else {
+                let Value::Entity(entity) = self.config(operand, context, nested)? else {
                     return Err(EvalError::MalformedConfig("expected a bound entity"));
                 };
                 if !valid_entity(entity) {
@@ -703,6 +697,24 @@ impl Evaluator {
                     direction
                         .filter(|parts| parts.iter().all(|part| part.is_finite()))
                         .ok_or(EvalError::UnavailableEntityDirection(entity))?,
+                )
+            }
+            "STU_21A13145" => {
+                let operand = native_entity_operand(config, class).ok_or(
+                    EvalError::MalformedConfig("expected one native eye position entity operand"),
+                )?;
+                self.charge()?;
+                let Value::Entity(entity) = self.config(operand, context, nested)? else {
+                    return Err(EvalError::MalformedConfig("expected a bound entity"));
+                };
+                if !valid_entity(entity) {
+                    return Err(EvalError::MalformedConfig("expected a bound entity"));
+                }
+                Value::Vector(
+                    context
+                        .body_eye_position(entity)
+                        .filter(|parts| parts.iter().all(|part| part.is_finite()))
+                        .ok_or(EvalError::UnavailableBodyEyePosition(entity))?,
                 )
             }
             "BodyActive" => {

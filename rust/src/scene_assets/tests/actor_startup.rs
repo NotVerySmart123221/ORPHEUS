@@ -289,6 +289,7 @@ fn actor_row(assets: &SceneAssets, scene: &PreparedScene, hero: &Hero) -> Json {
         body_filter: team_bit(PROBE_TEAM).unwrap(),
         frame: FIRST_TICK,
         pose: mover.pose(),
+        eye_position: script_eye_position(hero.guid, &mover),
         quanta: RETAIL_QUANTA,
     });
     let admission = match spawn.map(|spawn| scene.owner_body_runtime(hero, spawn)) {

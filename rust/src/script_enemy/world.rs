@@ -1078,6 +1078,13 @@ impl World for EnemyWorld<'_> {
         self.forward(entity)
     }
 
+    fn body_eye_position(&self, entity: u32) -> Option<[f64; 3]> {
+        self.binding
+            .spatial_frame
+            .as_deref()?
+            .actor_eye_position(entity)
+    }
+
     fn targets_with_tag(&self, site: Site, tag: u64, excluded: u64) -> Option<Vec<u32>> {
         if (site.entity, site.graph, site.node) != (self.binding.body, 0x00ca, Some(33))
             || !is_junkenstein_mode(self.binding.mode)

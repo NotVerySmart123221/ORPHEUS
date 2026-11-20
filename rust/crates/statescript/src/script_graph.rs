@@ -16,7 +16,8 @@ use serde_json::{Map, Value};
 use rulesets::{ModeRulesetDefinition, ModeRulesets};
 
 use crate::script_expr::{
-    StackPriority, Variable, authored_stack_priority, authored_stack_variable, native_fields,
+    StackPriority, Variable, authored_stack_priority, authored_stack_variable,
+    client_only_fallback, native_entity_operand, native_fields, native_shape,
 };
 
 mod rulesets;
@@ -1216,12 +1217,26 @@ pub enum RoomSpatialNeeds {
     EntityTags,
 }
 
+fn native_pose_needs_queries(value: &Value, class: &str) -> bool {
+    let Some(mut entity) = native_entity_operand(value, class) else {
+        return false;
+    };
+    while entity.get("$").and_then(Value::as_str) == Some("ClientOnly") {
+        let Ok(Some(fallback)) = client_only_fallback(entity) else {
+            return false;
+        };
+        entity = fallback;
+    }
+    entity.get("$").and_then(Value::as_str).is_some() && !native_shape(entity, "STU_B5A0CAF0", None)
+}
+
 fn room_spatial_needs(value: &Value) -> RoomSpatialNeeds {
     use RoomSpatialNeeds::{EntityFacts, EntityTags, None as NoQueries, Queries};
 
     if value.get("$").and_then(Value::as_str) == Some("ClientOnly") {
-        return value
-            .get("server_fallback")
+        return client_only_fallback(value)
+            .ok()
+            .flatten()
             .map_or(NoQueries, room_spatial_needs);
     }
     let requirements = |fields: &Map<String, Value>| {
@@ -1236,6 +1251,11 @@ fn room_spatial_needs(value: &Value) -> RoomSpatialNeeds {
                 EntityFacts
             }
             Some("EntitiesInRadius" | "SegmentClear" | "EntityPosition" | "EntityDirection") => {
+                Queries
+            }
+            Some(class @ ("STU_21A13145" | "STU_2200A66D"))
+                if native_pose_needs_queries(value, class) =>
+            {
                 Queries
             }
             _ => NoQueries,
@@ -2271,6 +2291,92 @@ mod tests {
         data["graphs"][0]["nodes"][0]["client_only"] = json!(true);
         assert!(!load(&data).uses_room_spatial_frame());
         assert!(load(&data).room_spatial_needs() < RoomSpatialNeeds::EntityFacts);
+    }
+
+    #[test]
+    fn native_pose_operands_request_spatial_data_for_possible_foreign_entities() {
+        use RoomSpatialNeeds::{None as NoQueries, Queries};
+
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../fixtures/behavior/script-native-pose-demand-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(contract["schema_version"], 1);
+        assert_eq!(
+            contract["case_id"],
+            "script-native-pose-demand.synthetic.v1"
+        );
+        assert_eq!(contract["evidence"], "synthetic-rust");
+        let mut data = fixture();
+        let assert_needs = |data: &Value, case: &str| {
+            let expected = match contract["expected"][case].as_str().unwrap() {
+                "none" => NoQueries,
+                "queries" => Queries,
+                other => panic!("unexpected demand in {case}: {other}"),
+            };
+            let store = GraphStore::from_json(&serde_json::to_vec(data).unwrap()).unwrap();
+            assert_eq!(store.room_spatial_needs(), expected, "{case}");
+            assert_eq!(
+                store.uses_room_spatial_frame(),
+                expected != NoQueries,
+                "{case}"
+            );
+        };
+        let own = &contract["input"]["owner"];
+        let foreign = &contract["input"]["dynamic"];
+        let client_only = |fallback: Option<&Value>| {
+            let mut operand = json!({"$":"ClientOnly","value":foreign});
+            if let Some(fallback) = fallback {
+                operand["server_fallback"] = fallback.clone();
+            }
+            operand
+        };
+
+        for class in contract["input"]["pose_classes"].as_array().unwrap() {
+            let pose = |entity: &Value| json!({"$":class,"m_entity":entity,"m_EE729DCB":0});
+            data["graphs"][0]["nodes"][0]["client_only"] = json!(false);
+            for (case, operand) in [
+                ("owner", pose(own)),
+                ("dynamic", pose(foreign)),
+                ("owner_fallback", pose(&client_only(Some(own)))),
+                ("dynamic_fallback", pose(&client_only(Some(foreign)))),
+                ("no_selector_fallback", pose(&client_only(None))),
+                (
+                    "invalid_selector_wrapper",
+                    pose(&json!({"$":"ClientOnly","server_fallback":foreign})),
+                ),
+                ("null_selector", pose(&Value::Null)),
+                ("untyped_selector", pose(&json!(29))),
+                ("missing_selector", json!({"$":class})),
+                (
+                    "extra_pose_field",
+                    json!({"$":class,"m_entity":foreign,"extra":null}),
+                ),
+                (
+                    "invalid_pose_header",
+                    json!({"$":class,"m_entity":foreign,"m_EE729DCB":1}),
+                ),
+                (
+                    "no_pose_fallback",
+                    json!({"$":"ClientOnly","value":pose(foreign)}),
+                ),
+                (
+                    "pose_fallback",
+                    json!({"$":"ClientOnly","value":null,"server_fallback":pose(foreign)}),
+                ),
+                (
+                    "invalid_pose_wrapper",
+                    json!({"$":"ClientOnly","server_fallback":pose(foreign)}),
+                ),
+            ] {
+                data["graphs"][0]["nodes"][0]["fields"]["value"] = operand;
+                assert_needs(&data, case);
+            }
+
+            data["graphs"][0]["nodes"][0]["client_only"] = json!(true);
+            data["graphs"][0]["nodes"][0]["fields"]["value"] = pose(foreign);
+            assert_needs(&data, "client_only_node");
+        }
     }
 
     #[test]

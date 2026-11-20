@@ -10,7 +10,7 @@ use crate::{
     commands::Command,
     game_combat::{
         BIOTIC_CANISTER, PosedBioticField, PosedHitscan, PosedProjectile, PosedShot, Stun,
-        eye_height,
+        eye_height, script_eye_position,
     },
     game_content::is_junkenstein_mode,
     game_heroes::{CASSIDY, SOLDIER},
@@ -199,6 +199,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         }
         let pose = mover.pose();
         self.world.position = pose.position;
+        self.world.eye_position = script_eye_position(self.world.hero, mover);
         // Command gaps and timer advances retain the last movement record.
         if step == BodyStep::Posed {
             self.world.movement = pose;

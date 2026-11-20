@@ -53,6 +53,7 @@ pub(super) fn verify_natural_ending(ending: NormalEnding) {
                 body_filter: flags,
                 frame: FIRST_TICK,
                 pose: mover.pose(),
+                eye_position: crate::game_combat::script_eye_position(hero.guid, &mover),
                 quanta: RETAIL_QUANTA,
             },
         )
@@ -766,6 +767,7 @@ pub(super) fn normal_encounter_first_reaper_finishes_intro_and_pursues_live_defe
                 body_filter: crate::match_scene::team_bit(0).unwrap(),
                 frame: FIRST_TICK,
                 pose: mover.pose(),
+                eye_position: crate::game_combat::script_eye_position(cassidy.guid, &mover),
                 quanta: RETAIL_QUANTA,
             },
         )
@@ -1121,6 +1123,7 @@ fn normal_street_wave_keeps_the_zomnic_body_running_after_setup() {
                 body_filter: team_bit(0).unwrap(),
                 frame: 2700,
                 pose: mover.pose(),
+                eye_position: crate::game_combat::script_eye_position(cassidy.guid, &mover),
                 quanta: RETAIL_QUANTA,
             },
         )

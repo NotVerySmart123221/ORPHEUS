@@ -23,7 +23,7 @@ use crate::{
     game_clock::FIRST_TICK,
     game_combat::{
         ENCOUNTER_INSTANCE, EncounterRegistration, EncounterWorld, GateState, GateWorld,
-        RoomSimulation,
+        RoomSimulation, script_eye_position,
     },
     game_content::{
         GameMap, JUNKENSTEIN_GATE, JunkensteinCard, PRACTICE_RANGE_MAP, PRACTICE_RANGE_MODE,
@@ -626,6 +626,7 @@ impl SceneAssets {
                     body_filter: team_bit(0).map_err(SceneOwnerPreparationError::TeamFilter)?,
                     frame: FIRST_TICK,
                     pose: mover.pose(),
+                    eye_position: script_eye_position(hero.guid, &mover),
                     quanta: RETAIL_QUANTA,
                 },
                 setup,
