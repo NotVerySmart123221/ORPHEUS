@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Carried target facts with positive NPC-local health events at VM publication. Added room coverage for a capped heal issuing one configured bonus on the recipient's next VM frame and for dropping the award when that recipient is replaced. A prepared probe exercises original local admission, award, and revocation through the graph. Shared-branch validation pending.
+
 - Matched two immediate StateScript self-damage forms from their authored fields instead of fixed graph positions. Both use the current NPC vitals callback, retaining the distinct cleanup death rule and native integer rounding. Synthetic regression added. Shared-branch validation pending.
 
 - Added opt-in native directed numeric messages with same-generation source and target checks. The prepared bonus probe exercises the original local and foreign actions against the original receiver. Static model protection now uses validated state fields and an explicit body capability, preserving the mask until the last protecting state retires.
