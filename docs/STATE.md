@@ -110,6 +110,16 @@ durations for the player voice service. The room already routes resolved
 cues to listeners by body generation. A player voice provider still needs
 the catalog and timing inputs before this startup site can be verified.
 
+At `36818197`, a synthetic input test reproduced the former replacement
+after a factory error at `3e778d08`. The fix preserved the current body,
+controller counters, and room events when the factory failed, when the
+runtime had the wrong entity, and when its owner snapshot could not
+be encoded. Input continued and the retry committed one generation.
+The prepared input-gap and replacement test passed. Two 104319 reports
+matched each other byte for byte and matched the preceding 32 actor
+results after removing the revision field. The #72 capture matched
+all 476 observations.
+
 | Workflow | Python reference | Rust implementation | Open client or parity gap |
 | --- | --- | --- | --- |
 | **Login, Profiles & Lobby** | Battle.net/JAM auth, profiles, settings (`22200`–`22204`), queues, Windows launcher + TLS relay. | Native BNet/JAM lobby, `profile-settings-v1` (CI verified), encrypted UDP seat handoff. | Standalone Rust launcher & public client connection flow open. |
