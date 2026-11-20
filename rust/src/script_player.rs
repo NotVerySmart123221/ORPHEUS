@@ -21,7 +21,7 @@ use crate::{
     accounts::parse_guid,
     game_content::is_junkenstein_mode,
     game_heroes::Hero,
-    game_instance::RETAIL_QUANTA,
+    game_instance::{RETAIL_QUANTA, TeamMemberCounts},
     game_pools::{BODY_GRAPH, FALLBACK_POOLS, HealthPools},
     game_projectiles::ProjectileLeases,
     game_replication::OwnerBodyRuntime,
@@ -101,7 +101,7 @@ impl PlayerBodyFactory {
         hero: &Hero,
         pools: Option<HealthPools>,
         controller_on_fire: bool,
-        probe: OwnerBodySpawn,
+        probe: (OwnerBodySpawn, Option<TeamMemberCounts>),
     ) -> Result<Self, OwnerBodyPreparationError> {
         let body = graphs
             .bodies()
@@ -140,7 +140,7 @@ impl PlayerBodyFactory {
             target_tags,
             controller_on_fire,
         };
-        let runtime = factory.start_runtime(probe)?;
+        let runtime = factory.start_runtime(probe.0, probe.1)?;
         let encoder = runtime.encoder();
         let snapshot = runtime
             .snapshot()
@@ -154,17 +154,28 @@ impl PlayerBodyFactory {
         Ok(factory)
     }
 
+    #[cfg(test)]
     pub(crate) fn start(&self, spawn: OwnerBodySpawn) -> io::Result<PlayerBodyRuntime> {
-        self.start_runtime(spawn).map_err(|error| match error {
-            OwnerBodyStartupError::ProjectileLeases(source)
-            | OwnerBodyStartupError::ChargeAdmission(source) => source,
-            other => io::Error::new(io::ErrorKind::Unsupported, other),
-        })
+        self.start_with_team_member_counts(spawn, None)
+    }
+
+    pub(crate) fn start_with_team_member_counts(
+        &self,
+        spawn: OwnerBodySpawn,
+        counts: Option<TeamMemberCounts>,
+    ) -> io::Result<PlayerBodyRuntime> {
+        self.start_runtime(spawn, counts)
+            .map_err(|error| match error {
+                OwnerBodyStartupError::ProjectileLeases(source)
+                | OwnerBodyStartupError::ChargeAdmission(source) => source,
+                other => io::Error::new(io::ErrorKind::Unsupported, other),
+            })
     }
 
     fn start_runtime(
         &self,
         spawn: OwnerBodySpawn,
+        team_member_counts: Option<TeamMemberCounts>,
     ) -> Result<PlayerBodyRuntime, OwnerBodyStartupError> {
         if spawn.quanta != RETAIL_QUANTA {
             return Err(OwnerBodyStartupError::Clock);
@@ -175,6 +186,7 @@ impl PlayerBodyFactory {
             .any(|root| !root.is_server_only() && root.graph == BODY_GRAPH);
         let mut world = BodyWorld {
             spatial_frame: None,
+            team_member_counts,
             script_requests: Default::default(),
             graphs: Arc::clone(&self.graphs),
             controller: spawn.controller,
@@ -291,7 +303,7 @@ pub(crate) fn fixture_body_factory() -> (PlayerBodyFactory, OwnerBodySpawn) {
         &hero,
         None,
         false,
-        spawn,
+        (spawn, None),
     )
     .unwrap();
     (factory, spawn)

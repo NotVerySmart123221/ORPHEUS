@@ -30,7 +30,7 @@ use crate::{
     },
     game_controller::Controller,
     game_heroes::{CASSIDY, Hero, HeroCatalog, SOLDIER},
-    game_instance::RETAIL_QUANTA,
+    game_instance::{RETAIL_QUANTA, TeamMemberCounts},
     game_pools::PoolCatalog,
     game_replication::OwnerBodyRuntime,
     game_stats::{PlayerStats, StatsCatalog, initial_on_fire},
@@ -89,8 +89,13 @@ fn ground_height(
     }
 }
 
-type OwnerBodyFactory =
-    dyn Fn(&Hero, OwnerBodySpawn) -> io::Result<Option<Box<dyn OwnerBodyRuntime>>> + Send + Sync;
+type OwnerBodyFactory = dyn Fn(
+        &Hero,
+        OwnerBodySpawn,
+        Option<TeamMemberCounts>,
+    ) -> io::Result<Option<Box<dyn OwnerBodyRuntime>>>
+    + Send
+    + Sync;
 
 #[derive(Debug, thiserror::Error)]
 enum SceneOwnerPreparationError {
@@ -557,21 +562,24 @@ impl SceneAssets {
         hero_guid: u64,
     ) -> Option<Arc<OwnerBodyFactory>> {
         let hero = self.heroes.get(hero_guid)?;
-        let prepared = self.prepare_owner_factory(scene, hero).map_err(Arc::new);
+        let prepared = self
+            .prepare_owner_factory(scene, hero, None)
+            .map_err(Arc::new);
         if let Err(reason) = &prepared {
             eprintln!(
                 "{} owner statescript unavailable in {} ({reason})",
                 hero.name, scene.map.name
             );
         }
-        Some(Arc::new(move |hero, spawn| {
+        Some(Arc::new(move |hero, spawn, counts| {
             if hero.guid != hero_guid {
                 return Ok(None);
             }
             let factory = prepared
                 .as_ref()
                 .map_err(|reason| io::Error::new(io::ErrorKind::Unsupported, Arc::clone(reason)))?;
-            let runtime: Box<dyn OwnerBodyRuntime> = Box::new(factory.start(spawn)?);
+            let runtime: Box<dyn OwnerBodyRuntime> =
+                Box::new(factory.start_with_team_member_counts(spawn, counts)?);
             Ok(Some(runtime))
         }))
     }
@@ -580,6 +588,7 @@ impl SceneAssets {
         &self,
         scene: &PreparedScene,
         hero: &Hero,
+        counts: Option<TeamMemberCounts>,
     ) -> Result<PlayerBodyFactory, SceneOwnerPreparationError> {
         let codecs = self
             .codecs
@@ -597,15 +606,18 @@ impl SceneAssets {
             hero,
             self.pools.hero_pools(hero.guid),
             controller_on_fire,
-            OwnerBodySpawn {
-                slot: 0,
-                controller: 0xa000_0100,
-                entity: 0xa000_0101,
-                body_filter: team_bit(0).map_err(SceneOwnerPreparationError::TeamFilter)?,
-                frame: FIRST_TICK,
-                pose: mover.pose(),
-                quanta: RETAIL_QUANTA,
-            },
+            (
+                OwnerBodySpawn {
+                    slot: 0,
+                    controller: 0xa000_0100,
+                    entity: 0xa000_0101,
+                    body_filter: team_bit(0).map_err(SceneOwnerPreparationError::TeamFilter)?,
+                    frame: FIRST_TICK,
+                    pose: mover.pose(),
+                    quanta: RETAIL_QUANTA,
+                },
+                counts,
+            ),
         )
         .map_err(|source| SceneOwnerPreparationError::Body(Box::new(source)))
     }

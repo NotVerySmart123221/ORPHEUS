@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::{
+    game_instance::TeamMemberCounts,
     script_expr::EvalError,
     script_init::{Diagnostic, InitFault, Issue},
     script_player::OwnerBodyStartupError,
@@ -12,6 +13,8 @@ use sha2::{Digest, Sha256};
 use std::{env, io::Write};
 
 const MAX_DIAGNOSTIC_SITES: usize = 128;
+const PROBE_TEAM: u8 = 0;
+const PROBE_ROSTER: [u8; 1] = [PROBE_TEAM];
 
 const SCENE_INPUTS: &[&str] = &[
     "data/ai_spawners_174.json",
@@ -241,9 +244,14 @@ fn runtime_result(graphs: &GraphStore, runtime: &dyn OwnerBodyRuntime) -> Json {
     })
 }
 
-fn actor_row(assets: &SceneAssets, scene: &PreparedScene, hero: &Hero) -> Json {
+fn actor_row(
+    assets: &SceneAssets,
+    scene: &PreparedScene,
+    hero: &Hero,
+    bootstrap_counts: TeamMemberCounts,
+) -> Json {
     let body = assets.graphs.bodies().get(&hero.body);
-    let mover = scene.player_spawn_mover(hero.body, 0);
+    let mover = scene.player_spawn_mover(hero.body, PROBE_TEAM);
     let body_status = match body {
         None => "missing",
         Some(body) if body.hero.as_deref().and_then(parse_guid) == Some(hero.guid) => "matched",
@@ -278,7 +286,7 @@ fn actor_row(assets: &SceneAssets, scene: &PreparedScene, hero: &Hero) -> Json {
         slot: 0,
         controller: 0xa000_0100,
         entity: 0xa000_0101,
-        body_filter: team_bit(0).unwrap(),
+        body_filter: team_bit(PROBE_TEAM).unwrap(),
         frame: FIRST_TICK,
         pose: mover.pose(),
         quanta: RETAIL_QUANTA,
@@ -292,12 +300,14 @@ fn actor_row(assets: &SceneAssets, scene: &PreparedScene, hero: &Hero) -> Json {
         }
     };
     // Exercise the same preparation gate without admitting the actor to the scene.
-    let bootstrap = match assets.prepare_owner_factory(scene, hero) {
+    let bootstrap = match assets.prepare_owner_factory(scene, hero, Some(bootstrap_counts)) {
         Err(error) => json!({
             "status": "factory_error", "error_kind": "Unsupported",
             "failure": preparation_failure(&assets.graphs, &error),
         }),
-        Ok(factory) => match spawn.map(|spawn| factory.start(spawn)) {
+        Ok(factory) => match spawn
+            .map(|spawn| factory.start_with_team_member_counts(spawn, Some(bootstrap_counts)))
+        {
             None => json!({"status": "not_probed"}),
             Some(Ok(runtime)) => runtime_result(&assets.graphs, &runtime),
             Some(Err(error)) => json!({
@@ -317,14 +327,18 @@ fn actor_row(assets: &SceneAssets, scene: &PreparedScene, hero: &Hero) -> Json {
 
 fn measure_scene(runtime: &Path) -> Result<(Json, Vec<Json>), (&'static str, io::Error)> {
     let assets = SceneAssets::load(runtime).map_err(|error| ("asset_load", error))?;
-    let scene = assets
+    let mut scene = assets
         .prepare(GameMap::practice_range())
         .map_err(|error| ("scene_prepare", error))?;
+    let bootstrap_counts = TeamMemberCounts::from_teams(false, PROBE_ROSTER);
+    scene
+        .simulation_mut()
+        .set_team_member_counts(bootstrap_counts);
     let mut heroes: Vec<_> = assets.heroes().heroes().collect();
     heroes.sort_unstable_by_key(|hero| hero.guid);
     let rows = heroes
         .into_iter()
-        .map(|hero| actor_row(&assets, &scene, hero))
+        .map(|hero| actor_row(&assets, &scene, hero, bootstrap_counts))
         .collect();
     Ok((
         json!({
@@ -431,6 +445,11 @@ fn prepared_practice_actor_startup_matrix() {
         "source_revision": revision.to_ascii_lowercase(),
         "inputs": inputs,
         "scene": scene,
+        "probe_roster": {
+            "kind": "synthetic_admitted_players",
+            "free_for_all": false,
+            "team_slots": PROBE_ROSTER,
+        },
         "actors": actors,
     });
     let parent = path

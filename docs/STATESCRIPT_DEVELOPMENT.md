@@ -179,6 +179,14 @@ the evaluator attributed the error, including shape and context failures.
 The independent factory probe retains these details when the ordinary
 room admission reports a generic unsupported error.
 
+The report's `probe_roster` declares the synthetic admitted player slots
+used by both attempts. In a live room, the player host reads the admitted
+roster at startup and refreshes it on departure. The count includes members
+whose body is unspawned or dead and excludes NPCs. With a known roster, an
+empty team yields zero. Asset-only factory preparation has no room roster.
+The roster rule follows the existing Python ready-switch adapter at
+`c73e5a49` in `src/ow174/game/match.py`.
+
 ### Generate a synthetic test scaffold
 
 ```text

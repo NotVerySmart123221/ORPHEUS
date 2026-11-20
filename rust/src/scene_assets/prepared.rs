@@ -158,7 +158,9 @@ impl PreparedScene {
     ) -> io::Result<Option<Box<dyn OwnerBodyRuntime>>> {
         self.owner_body_factory
             .as_ref()
-            .map_or(Ok(None), |factory| factory(hero, spawn))
+            .map_or(Ok(None), |factory| {
+                factory(hero, spawn, self.simulation.team_member_counts())
+            })
     }
 
     pub fn heroes(&self) -> &HeroCatalog {

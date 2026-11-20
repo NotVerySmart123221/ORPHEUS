@@ -10,6 +10,31 @@ pub const RETAIL_QUANTA: u32 = 16_000;
 pub const TOURNAMENT_QUANTA: u32 = 7_000;
 pub(crate) const FREE_FOR_ALL_TEAM: u8 = 4;
 
+/// Membership of the admitted player roster, independent of spawned bodies.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct TeamMemberCounts([u32; FREE_FOR_ALL_TEAM as usize + 1]);
+
+impl TeamMemberCounts {
+    pub(crate) fn from_teams(free_for_all: bool, teams: impl IntoIterator<Item = u8>) -> Self {
+        let mut counts = [0_u32; FREE_FOR_ALL_TEAM as usize + 1];
+        for team in teams {
+            let slot = if free_for_all {
+                FREE_FOR_ALL_TEAM
+            } else {
+                team
+            };
+            if let Some(count) = counts.get_mut(usize::from(slot)) {
+                *count = count.saturating_add(1);
+            }
+        }
+        Self(counts)
+    }
+
+    pub(crate) fn count(self, team: u8) -> Option<u32> {
+        self.0.get(usize::from(team)).copied()
+    }
+}
+
 pub struct Member<'a> {
     pub entity: u32,
     pub name: &'a str,

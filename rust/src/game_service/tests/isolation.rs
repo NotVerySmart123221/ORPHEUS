@@ -430,6 +430,58 @@ fn panic_after_peer_detachment_and_mutation_retires_the_whole_room() {
 }
 
 #[test]
+fn team_members_follow_admitted_roster_without_possession() {
+    use crate::{game_bots::Bot, scene_assets::PreparedScene};
+
+    for (free_for_all, initial, departed) in [
+        (false, [2, 1, 0, 0, 0], [1, 1, 0, 0, 0]),
+        (true, [0, 0, 0, 0, 3], [0, 0, 0, 0, 2]),
+    ] {
+        let mut state = State::new(Arc::new(fixture()), PatrolScript::load().unwrap());
+        let mut map = GameMap::practice_range();
+        map.free_for_all = free_for_all;
+        let mut players = roster(3);
+        players[2].team = 1;
+        let tickets = state
+            .open_match(
+                MATCH,
+                map,
+                players,
+                Some(WorldStart {
+                    scene: Box::new(PreparedScene::fixture_for_bots(vec![Bot::fixture_walker(
+                        [0.0, 0.0, 10.0],
+                    )])),
+                    card: PlayerCard::default(),
+                }),
+                Duration::ZERO,
+            )
+            .unwrap();
+        let room = state.rooms.get_mut(&MATCH).unwrap();
+        let counts = |room: &Room| {
+            let counts = room
+                .world
+                .as_ref()
+                .unwrap()
+                .scene
+                .simulation()
+                .team_member_counts()
+                .unwrap();
+            assert_eq!(counts.count(5), None);
+            [0, 1, 2, 3, 4].map(|team| counts.count(team).unwrap())
+        };
+        let connection = tickets[1].conn;
+
+        assert_eq!(counts(room), initial);
+        room.admit(connection).unwrap();
+        assert_eq!(counts(room), initial);
+        room.retire_member(connection).unwrap();
+        assert_eq!(counts(room), departed);
+        room.retire_member(connection).unwrap();
+        assert_eq!(counts(room), departed);
+    }
+}
+
+#[test]
 fn retirement_is_idempotent_and_removes_orphaned_routes_and_members() {
     for missing in ["peer", "route", "room"] {
         let mut state = State::new(Arc::new(fixture()), PatrolScript::load().unwrap());
@@ -617,7 +669,7 @@ fn prepared_fault_keeps_other_room_input_world_and_patrol_alive() {
         let (bots, _) = scene.bot_simulation();
         bots.body_mut(BOT_ENTITY + 1).unwrap().position = [x - 4.0, y, z];
         let factory = Arc::clone(&factory);
-        scene.owner_body_factory = Some(Arc::new(move |hero, spawn| {
+        scene.owner_body_factory = Some(Arc::new(move |hero, spawn, _| {
             if hero.guid == SOLDIER {
                 Ok(Some(Box::new(factory.start(spawn)?)))
             } else {

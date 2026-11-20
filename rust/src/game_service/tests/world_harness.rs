@@ -153,7 +153,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
                     }
                     _ => fixture_body_factory().0,
                 };
-                scene.owner_body_factory = Some(Arc::new(move |hero, spawn| {
+                scene.owner_body_factory = Some(Arc::new(move |hero, spawn, _| {
                     if hero.guid != crate::game_heroes::SOLDIER {
                         return Ok(None);
                     }

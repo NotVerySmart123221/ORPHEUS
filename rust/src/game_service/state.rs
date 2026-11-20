@@ -128,11 +128,14 @@ impl State {
             if payload.len() > MAX_PAYLOAD {
                 return Err(invalid("match roster exceeds the game datagram budget").into());
             }
-            if let Some(WorldStart { scene, card }) = world {
+            if let Some(WorldStart { mut scene, card }) = world {
                 let patrol = match preloaded {
                     Some(patrol) => patrol,
                     None => PatrolScript::from_source(&active_source)?,
                 };
+                scene
+                    .simulation_mut()
+                    .set_team_member_counts(room.team_member_counts());
                 room.world = Some(RoomWorld {
                     scene,
                     card,

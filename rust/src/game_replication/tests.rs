@@ -1769,7 +1769,7 @@ fn prepared_worker_resumes_unposed_vm_frames_before_advancing_physics() {
     let assets = SceneAssets::load(runtime).unwrap();
     let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
     let (factory, _) = crate::script_player::fixture_body_factory();
-    scene.owner_body_factory = Some(Arc::new(move |_, spawn| {
+    scene.owner_body_factory = Some(Arc::new(move |_, spawn, _| {
         Ok(Some(Box::new(factory.start(spawn)?)))
     }));
     let viewer = PlayerAppearance {

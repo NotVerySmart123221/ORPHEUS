@@ -13,6 +13,7 @@ use crate::{
     game_content::{PRACTICE_RANGE_MODE, TUTORIAL_MODE, is_junkenstein_mode},
     game_heroes::CASSIDY,
     game_hitscan::{TargetPose, aim_direction, direction_for_angles},
+    game_instance::TeamMemberCounts,
     junkenstein_messages::{self, DefenderSighting, SIGHTING, SIGHTING_TAGS, SightingSource},
     mover::sample_movement_flags,
     scene_assets::MOVER_CATEGORY,
@@ -133,6 +134,7 @@ pub(super) struct BodyWorld {
     pub(super) damage_credit: Option<AppliedDamage>,
     pub(super) graphs: Arc<GraphStore>,
     pub(super) spatial_frame: Option<Arc<crate::game_combat::RoomSpatialFrame>>,
+    pub(super) team_member_counts: Option<TeamMemberCounts>,
     pub(super) script_requests: RoomScriptRequests,
     pub(super) controller: u32,
     pub(super) entity: u32,
@@ -156,6 +158,10 @@ pub(super) struct BodyWorld {
 }
 
 impl World for BodyWorld {
+    fn team_members(&self, team: u8) -> Option<u32> {
+        self.team_member_counts?.count(team)
+    }
+
     fn engine_setting(&self, _site: Site, key: u32) -> crate::script_expr::EngineSetting {
         if is_junkenstein_mode(self.mode) {
             crate::junkenstein_host::engine_setting(key)

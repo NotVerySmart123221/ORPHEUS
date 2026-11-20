@@ -811,7 +811,7 @@ fn body_factory_preparation_retains_distinct_startup_failures() {
             &hero,
             None,
             false,
-            probe,
+            (probe, None),
         )
     };
 
@@ -848,6 +848,108 @@ fn body_factory_preparation_retains_distinct_startup_failures() {
             OwnerBodyStartupError::Clock
         ))
     ));
+}
+
+#[test]
+fn player_host_team_counts_are_available_before_body_start_and_refresh_afterward() {
+    use serde_json::json;
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        query_team: u8,
+        invalid_team: u8,
+        initial_teams: Vec<u8>,
+        updated_teams: Vec<u8>,
+        free_for_all_teams: Vec<u8>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Expected {
+        initial: u32,
+        updated: Option<u32>,
+        empty: Option<u32>,
+        without_snapshot: Option<u32>,
+        invalid_team: Option<u32>,
+        free_for_all_query_team: Option<u32>,
+        free_for_all_pool: Option<u32>,
+    }
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-player-host-facts-v1.json"
+    ))
+    .unwrap();
+    let input: Input =
+        serde_json::from_value(fixture["input"]["team_member_counts"].clone()).unwrap();
+    let expected: Expected =
+        serde_json::from_value(fixture["expected"]["team_member_counts"].clone()).unwrap();
+
+    const GRAPH: u32 = 731;
+    const COUNT_VAR: u32 = 36;
+    let bundle = json!({
+        "version": 1, "missing": [], "bodies": {},
+        "graphs": [{
+            "index": GRAPH, "items": 2, "entries": [0], "states": [], "remote": [],
+            "sync_vars": [], "containers": {}, "unknown_nodes": [], "fields": {},
+            "header": {"m_nodesBitCount": 2, "m_statesBitCount": 2,
+                "m_remoteSyncNodesBitCount": 2, "m_syncVarsBitCount": 2},
+            "nodes": [
+                {"pos": 0, "rid": 0, "uid": 0, "remote": -1, "class": "STUStatescriptEntry",
+                    "state": null, "server_only": false, "client_only": false,
+                    "fields": {"m_outPlug": {"$": "Plug", "links": [[1, "m_inPlug"]]}}},
+                {"pos": 1, "rid": 1, "uid": 1, "remote": -1, "class": "STUStatescriptActionSetVar",
+                    "state": null, "server_only": false, "client_only": false,
+                    "fields": {"m_ADEB6E05": true,
+                        "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": COUNT_VAR,
+                            "m_60DB8F99": true},
+                        "m_value": {"$": "STU_D289FA32", "m_team": input.query_team}}}
+            ]
+        }]
+    });
+    let (mut factory, spawn) = fixture_body_factory();
+    factory.graphs =
+        Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    factory.roots = vec![Root::new(1, GRAPH)];
+
+    let mut runtime = factory
+        .start_with_team_member_counts(
+            spawn,
+            Some(TeamMemberCounts::from_teams(false, input.initial_teams)),
+        )
+        .unwrap();
+    let snapshot = runtime.snapshot().unwrap();
+    assert!(
+        snapshot.initialization_complete(),
+        "{:?}",
+        snapshot.diagnostics
+    );
+    assert_eq!(
+        snapshot.variables.get(&COUNT_VAR),
+        Some(&Value::Integer(i64::from(expected.initial)))
+    );
+    assert_eq!(
+        runtime.world.team_members(input.invalid_team),
+        expected.invalid_team
+    );
+
+    runtime.set_team_member_counts(TeamMemberCounts::from_teams(false, input.updated_teams));
+    assert_eq!(
+        runtime.world.team_members(input.query_team),
+        expected.updated
+    );
+    runtime.set_team_member_counts(TeamMemberCounts::from_teams(false, []));
+    assert_eq!(runtime.world.team_members(input.query_team), expected.empty);
+    runtime.set_team_member_counts(TeamMemberCounts::from_teams(true, input.free_for_all_teams));
+    assert_eq!(
+        runtime.world.team_members(input.query_team),
+        expected.free_for_all_query_team
+    );
+    assert_eq!(runtime.world.team_members(4), expected.free_for_all_pool);
+
+    let without_snapshot = fixture_body_factory().0.start(spawn).unwrap();
+    assert_eq!(
+        without_snapshot.world.team_members(input.query_team),
+        expected.without_snapshot
+    );
 }
 
 #[test]
@@ -1323,6 +1425,7 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
     let variables = crate::script_init::player_entity_variables(body, health, health);
     let mut world = BodyWorld {
         spatial_frame: None,
+        team_member_counts: None,
         script_requests: Default::default(),
         graphs: Arc::clone(&graphs),
         controller: 0xa000_0100,
@@ -1742,6 +1845,7 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
         let health = pools.total();
         let mut world = BodyWorld {
             spatial_frame: None,
+            team_member_counts: None,
             script_requests: Default::default(),
             graphs: Arc::clone(&graphs),
             controller: 0xa000_0100,

@@ -1,6 +1,7 @@
 //! Room-local execution and fault types. Unwinding never resumes a damaged room.
 
 use super::*;
+use crate::game_instance::TeamMemberCounts;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use thiserror::Error;
 
@@ -244,6 +245,16 @@ pub(super) struct RoomMember {
 }
 
 impl Room {
+    pub(super) fn team_member_counts(&self) -> TeamMemberCounts {
+        TeamMemberCounts::from_teams(
+            self.map.free_for_all,
+            self.players
+                .iter()
+                .filter(|player| !player.gone)
+                .map(|player| player.info.team),
+        )
+    }
+
     pub(super) fn appearance(&self, slot: usize) -> Option<PlayerAppearance<'_>> {
         let player = self.players.get(slot)?;
         Some(PlayerAppearance {
@@ -486,12 +497,13 @@ impl Room {
                 return Err(RoomError::Invariant("retired roster slot already gone"));
             }
             player.gone = true;
+            let entity = player.entity;
+            let counts = self.team_member_counts();
             if let Some(world) = &mut self.world {
                 world.scene.retire_projectiles(connection);
-                world
-                    .scene
-                    .simulation_mut()
-                    .retire_player_owner(player.entity);
+                let simulation = world.scene.simulation_mut();
+                simulation.retire_player_owner(entity);
+                simulation.set_team_member_counts(counts);
             }
         }
         Ok(())

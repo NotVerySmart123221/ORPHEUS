@@ -11,6 +11,7 @@ use crate::{
     },
     game_combat_messages::CombatNotice,
     game_hitscan::{Impact, TargetHistory, TargetPose, ViewFrame},
+    game_instance::TeamMemberCounts,
     game_projectiles::ProjectileToken,
     game_replication::{BodyId, OwnerBodyRuntime},
     junkenstein_messages::{DefenderMessage, DefenderSighting},
@@ -560,6 +561,21 @@ impl RoomSimulation {
             .collect();
         defenders.sort_unstable_by_key(|entry| entry.0);
         defenders.into_iter().map(|entry| entry.1).collect()
+    }
+
+    pub(crate) fn team_member_counts(&self) -> Option<TeamMemberCounts> {
+        self.team_member_counts
+    }
+
+    pub(crate) fn set_team_member_counts(&mut self, counts: TeamMemberCounts) {
+        self.team_member_counts = Some(counts);
+        for &entity in self.players_by_wire.values() {
+            if let Some(mut state) = self.world.get_mut::<PlayerBodyState>(entity) {
+                if let Some(runtime) = &mut state.runtime {
+                    runtime.set_team_member_counts(counts);
+                }
+            }
+        }
     }
 
     pub(crate) fn set_player_defenders(&mut self, defenders: Arc<[u32]>) {

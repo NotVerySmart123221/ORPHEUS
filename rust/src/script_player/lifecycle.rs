@@ -15,6 +15,7 @@ use crate::{
     game_content::is_junkenstein_mode,
     game_heroes::{CASSIDY, SOLDIER},
     game_hitscan::{HitDefinition, aim_direction},
+    game_instance::TeamMemberCounts,
     game_projectiles::{ProjectileLeases, authored_number, local_prediction, predicted_sync},
     game_replication::{BodyStep, OwnerBodyRuntime},
     junkenstein_messages::{DefenderMessage, DefenderSighting, SIGHTING},
@@ -89,6 +90,10 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
 
     fn set_spatial_frame(&mut self, frame: Arc<crate::game_combat::RoomSpatialFrame>) {
         self.world.spatial_frame = Some(frame);
+    }
+
+    fn set_team_member_counts(&mut self, counts: TeamMemberCounts) {
+        self.world.team_member_counts = Some(counts);
     }
 
     fn set_defenders(&mut self, defenders: Arc<[u32]>) {

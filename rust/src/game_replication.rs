@@ -103,6 +103,7 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
     }
     fn set_spatial_frame(&mut self, _frame: Arc<crate::game_combat::RoomSpatialFrame>) {}
     fn set_defenders(&mut self, _defenders: Arc<[u32]>) {}
+    fn set_team_member_counts(&mut self, _counts: crate::game_instance::TeamMemberCounts) {}
     fn take_sightings(&mut self) -> Vec<crate::junkenstein_messages::DefenderSighting> {
         Vec::new()
     }
