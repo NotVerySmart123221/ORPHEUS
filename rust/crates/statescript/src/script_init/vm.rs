@@ -483,9 +483,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         depth: usize,
     ) -> Result<(), InitFault> {
         let state = self.state(key).expect("active logical button");
+        let activation = state.activation;
         let buffer = state
             .buffered_press
-            .filter(|press| press.activation == state.activation);
+            .filter(|press| press.activation == activation);
         let button = self.logical_button_id(key.instance, node);
         let blocked = button.is_some_and(|button| self.logical_button_blocked(key, node, button));
         let duration = field(&node.fields, "m_246438AD");
@@ -499,16 +500,24 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         if early {
             self.follow(key.instance, node, "m_onGoingDownPlug", Some(key), depth)?;
         }
-        if !self.state(key).is_some_and(|state| state.active) {
+        if !self.logical_button_is_current(key, activation, false) {
             return Ok(());
         }
+        let blocked = blocked
+            || (early
+                && button.is_some_and(|button| self.logical_button_blocked(key, node, button)));
         let held = !blocked && self.button_held(key, node);
-        let down = held || early;
+        let buffered = early && !blocked;
+        let down = held || buffered;
         self.state_mut(key).expect("active logical button").kind =
             StateKind::LogicalButton { down };
-        let path = if down { "m_80AF45FB" } else { "m_1C9EF058" };
-        self.follow(key.instance, node, path, Some(key), depth)?;
-        if early && !held {
+        if early {
+            self.queue_logical_button_branch(key, activation, down)?;
+        } else {
+            let path = if down { "m_80AF45FB" } else { "m_1C9EF058" };
+            self.follow(key.instance, node, path, Some(key), depth)?;
+        }
+        if buffered && !held {
             self.post_after(key.instance, 1, Event::Timer(key.raw, 1))?;
         }
         Ok(())
@@ -534,6 +543,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             return Ok(());
         }
         self.follow(key.instance, node, edge, Some(key), depth)?;
+        self.queue_logical_button_branch(key, activation, down)
+    }
+
+    fn queue_logical_button_branch(
+        &mut self,
+        key: StateKey,
+        activation: u16,
+        down: bool,
+    ) -> Result<(), InitFault> {
         // Edge callbacks can schedule state changes for this same instant.
         self.post(
             key.instance,

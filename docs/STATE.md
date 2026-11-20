@@ -177,6 +177,16 @@ for Soldier: 76 and 20–54 for the other actors. These measurements
 cover startup. The conditions that enable weapon actions after startup
 need separate verification.
 
+A separate 100-frame probe at `140e6a6e` enabled room combat and ran
+per-frame settlement. It reproduced the 11 admissions, 10 completed schedules,
+and five Soldier combat requests. Only Soldier: 76 and Hanzo showed a
+pressed logical state. All 11 admitted weapon roots had a declared
+primary-button subscription with a fixed input ID. Among the 11
+unvisited primary subscriptions in the other weapons, ten had a
+visited BooleanSwitch immediately upstream and one was two links
+from a visited BooleanSwitch. Condition values and selected branches
+require runtime measurements.
+
 The tagged 104319 encrypted loopback also covered an attempted Tracer
 selection followed by a Reaper selection. The rejected selection retained
 the current body and generation. The next selection published the controller

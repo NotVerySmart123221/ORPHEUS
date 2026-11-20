@@ -71,6 +71,8 @@ The Rust-only [Practice Range owner content fixture](../fixtures/behavior/practi
 
 The Rust-only [reentrant button lock fixture](../fixtures/behavior/script-reentrant-button-lock-v1.json) has a press callback acquire a lock on its own button. The queued lock can take effect before the next branch runs. The nested release leaves the locked listener up and discards its superseded down branch. A same-frame input pulse still runs both branches in sequence when no lock applies.
 
+The Rust-only [buffered button readiness fixture](../fixtures/behavior/script-buffered-button-readiness-v1.json) starts a dormant input listener within its authored buffer. The press can queue a readiness change in time for the down branch to see it. The same queue lets an input lock invalidate that branch.
+
 The Rust-only [player host facts fixture](../fixtures/behavior/script-player-host-facts-v1.json) checks known body and controller presence, unknown entities, the team slot assigned at spawn, and membership counts from the admitted player roster.
 
 The Rust-only [owned entity count fixture](../fixtures/behavior/statescript-owned-entity-count-v1.json) distinguishes an explicitly unbound owner, an unavailable ownership registry, and a known count. The native startup regression uses the production human owner selector and verifies the assignment completes without an AI controller.

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "case_id": "script-buffered-button-readiness-v1",
+  "evidence": "rust-headless-synthetic",
+  "graph": 753,
+  "entity": 184,
+  "press_frame": 110,
+  "start_frame": 111,
+  "button": 20,
+  "press_mask": 1,
+  "window_seconds": 0.05,
+  "start_topic": "0x024000000000A571",
+  "ready": 814,
+  "marker": 815
+}
