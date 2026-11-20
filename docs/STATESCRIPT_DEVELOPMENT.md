@@ -49,6 +49,12 @@ identifiers for local evidence. Record the input digest and importer
 version so two runs can be compared. Keep extracted records private.
 Shared tests use original graphs and values.
 
+Use these reports to clear independent actor startup failures first.
+Repeat the startup matrix on the same inputs and keep room admission
+separate from independent factory results. Then finish the shared
+Phase 2 paths and run their regressions before starting Phase 3
+ability support.
+
 1. **Field contracts**. Group nodes by capability and class. Record
    field paths, operand types, presence counts, and incompatible shapes.
    Validate candidate contracts against the Rust loader and evaluator.

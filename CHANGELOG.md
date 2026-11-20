@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Supplied player scripts with known presence for their bound body and controller. The assigned team slot comes from the canonical spawn filter. Unbound entities and ambiguous team filters remain unavailable. A synthetic startup test reproduced the missing player-host facts. The native library suite with script coverage passed with 358 tests and 120 skipped.
+
 - Exposed live self poses and frozen foreign actor poses through the authored position and direction operands. Player and NPC scripts share the room sample and its existing actor identities. The player host also supplies its own live position to known-position queries during bootstrap. Two prepared runs at `619ca04e` produced identical reports and cleared five self-position diagnostics without introducing new diagnostics. Independent startup remained at 9 of 32. The #72 regression passed with its 476 observed sites and capture fields unchanged. The StateScript suite passed with 188 tests and 13 skipped. The native library suite with script coverage passed with 357 tests and 120 skipped. Locked workspace check and Clippy with script coverage passed.
 
 - Kept config groups in their assignment context when an authored client-only wrapper supplies a server fallback. SetVar and subscript bindings share selection and flattening. An original graph reproduced both direct and nested group failures before the fix. The StateScript suite passed with 188 tests and 13 prepared-runtime tests skipped.

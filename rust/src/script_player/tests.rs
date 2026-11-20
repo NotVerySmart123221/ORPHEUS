@@ -851,6 +851,80 @@ fn body_factory_preparation_retains_distinct_startup_failures() {
 }
 
 #[test]
+fn player_host_facts_use_the_bound_body_and_canonical_team() {
+    use crate::{match_scene::team_bit, script_expr::EntityRelation};
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-player-host-facts-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(fixture["schema_version"], 1);
+    assert_eq!(fixture["case_id"], "script-player-host-facts.synthetic.v1");
+    assert_eq!(fixture["evidence"], "synthetic-rust");
+    let foreign = u32::try_from(fixture["input"]["foreign_entity"].as_u64().unwrap()).unwrap();
+    let teams: Vec<(u8, i8)> = serde_json::from_value(fixture["input"]["teams"].clone()).unwrap();
+    let invalid_filters: Vec<u64> =
+        serde_json::from_value(fixture["input"]["invalid_filters"].clone()).unwrap();
+    let presence = &fixture["expected"]["entity_exists"];
+
+    let (factory, spawn) = fixture_body_factory();
+    let site = Site {
+        entity: spawn.entity,
+        instance: 1,
+        graph: 42,
+        node: None,
+    };
+    let wrong_site = Site {
+        entity: foreign,
+        ..site
+    };
+    let mut world = factory.start(spawn).unwrap().world;
+    assert_eq!(
+        world.related_entity(site, EntityRelation::CurrentPossessor, spawn.entity),
+        Some(spawn.controller)
+    );
+    for (entity, role) in [
+        (spawn.entity, "body"),
+        (spawn.controller, "controller"),
+        (0, "zero"),
+        (foreign, "foreign"),
+    ] {
+        assert_eq!(
+            world.entity_exists(entity),
+            presence[role].as_bool(),
+            "{role}"
+        );
+    }
+
+    let mut composite = 0;
+    for (team, expected) in teams {
+        let body_filter = team_bit(team).unwrap();
+        composite |= body_filter;
+        let world = factory
+            .start(OwnerBodySpawn {
+                body_filter,
+                ..spawn
+            })
+            .unwrap()
+            .world;
+        assert_eq!(world.entity_team(site, spawn.entity), Some(expected));
+        assert_eq!(world.entity_team(site, spawn.controller), None);
+        assert_eq!(world.entity_team(site, foreign), None);
+        assert_eq!(world.entity_team(wrong_site, spawn.entity), None);
+    }
+    for body_filter in invalid_filters.into_iter().chain([composite]) {
+        let world = factory
+            .start(OwnerBodySpawn {
+                body_filter,
+                ..spawn
+            })
+            .unwrap()
+            .world;
+        assert_eq!(world.entity_team(site, spawn.entity), None);
+    }
+}
+
+#[test]
 fn verified_body_starts_fresh_instances_and_advances_only_its_own_retail_clock() {
     let (factory, spawn) = fixture_body_factory();
     assert!(

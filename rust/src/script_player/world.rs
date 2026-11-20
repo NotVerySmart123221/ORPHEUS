@@ -315,6 +315,19 @@ impl World for BodyWorld {
             .map_or(VelocityQuery::Unavailable, VelocityQuery::Present)
     }
 
+    fn entity_exists(&self, entity: u32) -> Option<bool> {
+        (valid_entity(entity) && (entity == self.entity || entity == self.controller))
+            .then_some(true)
+    }
+
+    fn entity_team(&self, site: Site, entity: u32) -> Option<i8> {
+        if !self.is_player_site(site) || entity != self.entity {
+            return None;
+        }
+        let team = crate::match_scene::team_from_spawn_filter(self.body_filter)?;
+        i8::try_from(team).ok()
+    }
+
     fn queue_health_change(&mut self, site: Site, target: u32, delta: f64) -> bool {
         if !self.is_player_site(site) {
             return false;

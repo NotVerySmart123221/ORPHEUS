@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "case_id": "script-player-host-facts.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "input": {
+    "foreign_entity": 73,
+    "teams": [[0, 0], [4, 4]],
+    "invalid_filters": [0, 1]
+  },
+  "expected": {
+    "entity_exists": {
+      "body": true,
+      "controller": true,
+      "zero": null,
+      "foreign": null
+    }
+  }
+}
