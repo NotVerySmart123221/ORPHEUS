@@ -52,6 +52,11 @@ pub(crate) enum PlayerBodyEvent {
         owner: u32,
         id: BodyId,
     },
+    ScriptHalted {
+        owner: u32,
+        id: BodyId,
+        health: Option<WorldComponent>,
+    },
 }
 
 /// Room-owned authoritative player body component stored inside `RoomSimulation`'s ECS world.
@@ -458,6 +463,17 @@ impl RoomSimulation {
         true
     }
 
+    fn retire_faulted_defender_script(&mut self, id: BodyId) {
+        if self.clear_player_runtime(id) {
+            if let Some(state) = self.player_body_mut(id) {
+                let owner = state.owner;
+                let health = state.take_health_update();
+                self.player_events
+                    .push(PlayerBodyEvent::ScriptHalted { owner, id, health });
+            }
+        }
+    }
+
     pub(crate) fn player_body(&self, id: BodyId) -> Option<&PlayerBodyState> {
         let &entity = self.players_by_wire.get(&id.entity)?;
         let state = self.world.get::<PlayerBodyState>(entity)?;
@@ -672,10 +688,14 @@ impl RoomSimulation {
         }
         if let Some(runtime) = &mut state.runtime {
             if let Err(error) = runtime.receive_sighting(message) {
+                let id = state.id;
                 eprintln!(
                     "Junkenstein defender message failed for {:08x}: {error}",
-                    state.id.entity
+                    id.entity
                 );
+                if runtime.snapshot().is_none() {
+                    self.retire_faulted_defender_script(id);
+                }
             }
         }
         true
@@ -703,11 +723,15 @@ impl RoomSimulation {
                 true
             }
             Err(error) => {
-                state.mover.set_authored_facing(None);
                 eprintln!(
                     "Junkenstein defender message failed for {:08x}: {error}",
                     id.entity
                 );
+                if runtime.snapshot().is_none() {
+                    self.retire_faulted_defender_script(id);
+                } else {
+                    state.mover.set_authored_facing(None);
+                }
                 false
             }
         }

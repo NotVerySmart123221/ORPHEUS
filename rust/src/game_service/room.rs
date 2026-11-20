@@ -715,7 +715,6 @@ impl Room {
             messages,
             bot_sightings,
             deaths,
-            player_events,
             observer_player_health,
             player_cues,
         ) = {
@@ -731,7 +730,6 @@ impl Room {
                 bots.take_defender_messages(),
                 all_sightings,
                 bots.take_player_deaths(),
-                bots.take_player_events(),
                 bots.take_observer_player_health(),
                 bots.take_player_cues(),
             )
@@ -810,7 +808,7 @@ impl Room {
             created: world.scene.take_enemy_creates(),
             health,
             retired,
-            player_events,
+            player_events: world.scene.simulation_mut().take_player_events(),
             observer_player_health,
         })
     }
