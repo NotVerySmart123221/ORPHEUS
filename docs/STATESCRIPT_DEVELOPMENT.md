@@ -394,6 +394,21 @@ queue the existing wrapper and hit notification in order. The room can
 suppress its native control timer while the graph still handles the
 notification.
 
+## Limit instance variables to the owner
+
+A graph can declare `"owner_only_instance_vars": [12]` to restrict variable
+12 to owner StateScript snapshots. Declare unique nonzero variable IDs
+on the graph object. A declared ID can use one existing instance sync
+slot or the ordinary extra-variable encoding. A sync slot for shared
+entity scope or multiple sync slots for that ID is invalid.
+
+The owner receives the resolved value through the existing codec.
+Observer full snapshots and deltas omit the declared instance value.
+The declaration applies independently to every instance of the graph,
+including child instances. Entity variables, actions, and explicit
+copies to public variables keep their usual visibility. Client-side
+interpretation of the value requires a verified receiver.
+
 ## Share class behavior across a graph bundle
 
 Add `authored_classes` to a version 1 bundle and use those names in the
@@ -858,7 +873,11 @@ An optional `on_sample` plug follows every successful sample, including
 an unchanged result or a known empty result. The state writes the current
 value before either plug. On a changed sample, `on_change` runs first.
 If the observation has stopped or restarted by the time the sample
-callback runs, the old activation's callback is dropped.
+callback runs, the old activation's callback is dropped. If another
+state or an earlier plug overwrote the output, the VM restores this
+activation's sample at callback entry. The normal variable binding
+priority still applies. If a binding hides the sample, the VM reports
+the output as unavailable and suppresses that callback.
 
 Sampling starts in the VM frame after activation and runs at most once
 per VM frame. That lets a body initialize before the room publishes its

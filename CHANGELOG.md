@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Isolated queued StateScript observation callbacks from intervening output writes. A callback receives its own successful sample and stays inactive while a higher-priority binding hides that sample.
+- Added opt-in owner-only StateScript instance variables. The existing snapshot encoder carries their resolved values to the owner and excludes them from observer full snapshots and deltas.
 - Added the optional StateScript observation `on_sample` plug. It follows each successful current sample and stays inactive when the host cannot supply a fresh value. This lets aimed effects use the current ray result while display variables retain their last successful value on a transient query failure.
 - Added authored StateScript facing claims for player and NPC bodies. A claim supplies a normalized direction while active and follows the existing priority rules. Finishing, aborting or tearing down the state releases its claim. Formatting, default workspace tests, and Clippy passed, including 365 native-server tests and 209 StateScript tests. The prepared #72 900-frame test passed.
 

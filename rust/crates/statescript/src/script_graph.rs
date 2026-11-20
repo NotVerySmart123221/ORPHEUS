@@ -435,6 +435,8 @@ pub struct Graph {
     #[serde(rename = "remote")]
     pub remote_nodes: Vec<Option<u16>>,
     pub sync_vars: Vec<SyncVar>,
+    #[serde(default)]
+    owner_only_instance_vars: Vec<u32>,
     #[serde(skip)]
     by_pos: Vec<Option<usize>>,
     #[serde(skip)]
@@ -498,6 +500,29 @@ impl Graph {
     }
 
     fn compile(&mut self) -> io::Result<()> {
+        if !self.owner_only_instance_vars.is_empty() {
+            let mut owner_variables = BTreeSet::new();
+            for &variable in &self.owner_only_instance_vars {
+                if variable == 0 || !owner_variables.insert(variable) {
+                    return Err(invalid(format!(
+                        "invalid owner-only instance variable {variable} in graph {}",
+                        self.index
+                    )));
+                }
+            }
+            let mut synchronized_owner_variables = BTreeSet::new();
+            for entry in &self.sync_vars {
+                if let Some(variable) = entry.0.filter(|id| owner_variables.contains(id)) {
+                    if entry.1 != 0 || !synchronized_owner_variables.insert(variable) {
+                        return Err(invalid(format!(
+                            "owner-only instance variable {variable} has an ambiguous synchronization scope in graph {}",
+                            self.index
+                        )));
+                    }
+                }
+            }
+            self.owner_only_instance_vars.sort_unstable();
+        }
         self.by_pos = vec![None; usize::from(self.items)];
         if let Some(max) = self.nodes.iter().map(|node| node.rid).max() {
             self.by_rid = vec![None; usize::from(max) + 1];
@@ -859,6 +884,11 @@ impl Graph {
 
     pub fn owner_positions(&self) -> &[u16] {
         &self.owner.positions
+    }
+
+    /// Authored instance variables excluded from observer projection.
+    pub fn owner_only_instance_vars(&self) -> &[u32] {
+        &self.owner_only_instance_vars
     }
 
     pub fn remote_positions(&self) -> &[u16] {
@@ -1780,6 +1810,73 @@ mod tests {
             }},
             "missing": [43]
         })
+    }
+
+    #[test]
+    fn owner_only_instance_variables_validate_identity_and_synchronization_scope() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../fixtures/behavior/script-owner-instance-visibility-v1.json"
+        )))
+        .unwrap();
+        let source = &fixture["input"]["bundle"];
+        let load = |bundle: &Value| GraphStore::from_json(&serde_json::to_vec(bundle).unwrap());
+        let graphs = load(source).unwrap();
+        assert_eq!(
+            graphs.graph(121).unwrap().owner_only_instance_vars(),
+            [871, 872]
+        );
+        assert_eq!(graphs.graph(122).unwrap().owner_only_instance_vars(), [871]);
+        for invalid_ids in [
+            json!(null),
+            json!(true),
+            json!({}),
+            json!(0),
+            json!([0]),
+            json!([871, 871]),
+            json!([-1]),
+            json!([true]),
+            json!([1.5]),
+            json!(["871"]),
+            json!([4294967296_u64]),
+        ] {
+            let mut bundle = source.clone();
+            bundle["graphs"][0]["owner_only_instance_vars"] = invalid_ids;
+            assert!(load(&bundle).is_err());
+        }
+        for invalid_sync in [
+            json!([[871, 1, 0]]),
+            json!([[871, 2, 0]]),
+            json!([[871, 0, 0], [871, 0, 1]]),
+            json!([[871, 0, 0], [871, 1, 0]]),
+        ] {
+            let mut bundle = source.clone();
+            bundle["graphs"][0]["sync_vars"] = invalid_sync;
+            assert!(load(&bundle).is_err());
+        }
+        let mut legacy = source.clone();
+        legacy["graphs"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("owner_only_instance_vars");
+        assert!(
+            load(&legacy)
+                .unwrap()
+                .graph(121)
+                .unwrap()
+                .owner_only_instance_vars()
+                .is_empty()
+        );
+        let mut extras = source.clone();
+        extras["graphs"][0]["owner_only_instance_vars"] = json!([u32::MAX]);
+        assert_eq!(
+            load(&extras)
+                .unwrap()
+                .graph(121)
+                .unwrap()
+                .owner_only_instance_vars(),
+            [u32::MAX]
+        );
     }
 
     #[test]
