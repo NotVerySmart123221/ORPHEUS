@@ -36,8 +36,8 @@ fn movement_snapshot_honors_base_and_next_pose_contact_participation() {
         MoverCatalog::from_json(&serde_json::to_string(&input["mover_catalog"]).unwrap()).unwrap(),
     );
     let mut bots = fixture_bots();
-    bots[0].spawn.body = input["disabled_npc_body"].as_u64().unwrap();
-    bots[1].spawn.body = input["enabled_npc_body"].as_u64().unwrap();
+    Arc::get_mut(&mut bots[0].spawn).unwrap().body = input["disabled_npc_body"].as_u64().unwrap();
+    Arc::get_mut(&mut bots[1].spawn).unwrap().body = input["enabled_npc_body"].as_u64().unwrap();
     let enabled_npc = bots[1].contact_capsule(catalog.for_body(Some(bots[1].spawn.body)));
     let disabled_npc = bots[0].contact_capsule(catalog.for_body(Some(bots[0].spawn.body)));
     let [disabled_npc_wire, enabled_npc_wire] = [bots[0].entity, bots[1].entity];
