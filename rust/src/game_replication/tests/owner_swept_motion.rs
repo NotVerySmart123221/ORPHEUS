@@ -1,6 +1,101 @@
 use super::*;
 
 #[test]
+fn posed_owner_fault_cancels_future_velocity_before_the_recovered_batch_continues() {
+    use crate::mover::VelocityChange;
+
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/owner-script-motion-cancellation-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(fixture["schema_version"], 1);
+    assert_eq!(fixture["evidence"], "synthetic-rust");
+    let input = &fixture["input"];
+    let frame = |name: &str| u32::try_from(input[name].as_u64().unwrap()).unwrap();
+    let spawn = frame("spawn_frame");
+    let warm = frame("warm_pose_frame");
+    let first_fault = frame("fault_pose_frame");
+    let due = frame("velocity_due_frame");
+    let recovered = frame("recovered_command_frame");
+    let delta = serde_json::from_value(input["velocity_delta"].clone()).unwrap();
+    let actor = input["actor"].as_u64().unwrap();
+    assert_eq!(first_fault, warm + 1);
+    assert!(first_fault < due && due < recovered);
+    let card = PlayerCard::default();
+    let viewer = PlayerAppearance {
+        entity: OWNER,
+        slot: 0,
+        team: 0,
+        card: &card,
+    };
+
+    for fault_after_pose in [false, true] {
+        let mut scene = PreparedScene::fixture_for_bots(Vec::new());
+        let mut world = WorldDelivery::new(OWNER);
+        let id = avatar(1, 1);
+        let fault = Arc::new(AtomicBool::new(false));
+        world.started = Some(spawn);
+        world.input.processed = Some(spawn);
+        activate_script(
+            &mut world,
+            scene.simulation_mut(),
+            id,
+            actor,
+            Arc::clone(&fault),
+        );
+        world.queue_commands(
+            warm,
+            &[Command {
+                frame: warm,
+                ..Command::default()
+            }],
+        );
+        world
+            .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
+            .unwrap();
+        let mover = &mut scene.simulation_mut().player_body_mut(id).unwrap().mover;
+        assert_eq!(mover.pose().frame, Some(warm));
+        assert_eq!(mover.pose().position[0], 0.0);
+        mover.queue_velocity_change(due, VelocityChange::Delta(delta));
+
+        // The fixture still advances its component, but snapshot() becomes
+        // unavailable. The first recovered physics pose therefore completes
+        // before the owner's posed VM check reports the failure.
+        fault.store(fault_after_pose, Ordering::Relaxed);
+        world.queue_commands(
+            recovered,
+            &[Command {
+                frame: recovered,
+                ..Command::default()
+            }],
+        );
+        world
+            .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
+            .unwrap();
+        let pose = scene.simulation().player_body(id).unwrap().mover.pose();
+        assert_eq!(pose.frame, Some(recovered));
+        assert_eq!(world.input.processed, Some(recovered));
+        assert!(world.input.work.is_empty());
+        assert_eq!(world.body_script.is_none(), fault_after_pose);
+        if fault_after_pose {
+            let report = world.owner_script_fault.as_ref().unwrap();
+            assert_eq!(report.id, id);
+            assert_eq!(report.frame, first_fault);
+            assert_eq!(report.step, Some(BodyStep::Posed));
+            assert_eq!(
+                pose.position[0],
+                fixture["expected"]["faulted_final_x"].as_f64().unwrap()
+            );
+            assert_eq!(pose.velocity[0], 0.0);
+        } else {
+            assert!(world.owner_script_fault.is_none());
+            assert!(pose.position[0] > 0.0, "control pose: {pose:?}");
+            assert!(pose.velocity[0] > 0.0);
+        }
+    }
+}
+
+#[test]
 fn player_displacement_uses_room_actor_contacts_for_the_authoritative_pose() {
     use crate::{mover::VelocityChange, script_init::SweptDisplacement};
 

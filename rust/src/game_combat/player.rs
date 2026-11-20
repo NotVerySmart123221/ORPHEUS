@@ -258,16 +258,17 @@ impl PlayerBodyState {
     }
 
     fn receive_damage(&mut self, amount: f64, source: Death) -> Damage {
-        let Some(runtime) = self.runtime.as_mut() else {
-            return self
-                .halted_vitals
+        let result = if let Some(runtime) = &mut self.runtime {
+            let result = runtime.receive_damage(amount, source);
+            self.mover.set_authored_facing(runtime.authored_facing());
+            result
+        } else {
+            self.halted_vitals
                 .as_mut()
-                .map_or_else(Damage::default, |vitals| vitals.damage(amount, source));
+                .map_or_else(Damage::default, |vitals| vitals.damage(amount, source))
         };
-        let result = runtime.receive_damage(amount, source);
-        self.mover.set_authored_facing(runtime.authored_facing());
         if result.killed {
-            self.mover.clear_swept_displacement();
+            self.mover.clear_pending_script_motion();
         }
         result
     }
@@ -449,7 +450,7 @@ impl RoomSimulation {
         state.mover.track_modifiers(frame, &BTreeMap::new());
         state.mover.set_cinematic_aim(None);
         state.mover.set_authored_facing(None);
-        state.mover.clear_swept_displacement();
+        state.mover.clear_pending_script_motion();
         if let Some(mut runtime) = state.runtime.take() {
             state.halted_vitals = runtime.take_vitals();
         }
