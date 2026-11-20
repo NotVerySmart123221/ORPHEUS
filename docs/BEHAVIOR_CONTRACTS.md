@@ -74,6 +74,12 @@ The Rust-only [server root allocation fixture](../fixtures/behavior/script-serve
 
 The Rust-only [authored resource meter fixture](../fixtures/behavior/script-authored-meter-v1.json) checks body-specific settings on one shared graph. It exercises settled health events, affiliation filtering, passive gains and saturation in the production loader and VM. The [authored charge route](../fixtures/behavior/script-authored-charge-route-v1.json) checks private mount validation, deferred health events, and owner and observer projection.
 
+The Rust-only charge compatibility contract covers an opt-in mode list,
+an ordinary damage receiver mounted as a public root or an existing
+native child, an optional ability inhibit, and rejection of conflicting
+authored charge configuration. Integration validation is pending.
+[Synthetic charge compatibility fixture](../fixtures/behavior/script-charge-compatibility-v1.json)
+
 The Rust-only [local health outcomes fixture](../fixtures/behavior/script-local-health-outcomes-v1.json) checks actual damage from AI callbacks and capped field healing. Room tests also exercise source provenance across body replacement.
 The Rust-only [directed charge sender fixture](../fixtures/behavior/script-directed-charge-sender-v1.json) checks that both supported server-only target operands use the same finite numeric delivery route and bind on the receiver's next VM frame.
 

@@ -512,10 +512,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
     ) -> Result<Option<u16>, InitFault> {
         let id = key.instance;
         let site = self.site(id, node);
-        let Some(guid) = node
-            .field("m_36F7B64C.m_36F7B64C.m_C974E369.m_graph")
-            .and_then(asset_guid)
-        else {
+        let Some(guid) = node.subscript_graph_asset() else {
             self.report(site, Issue::InvalidSubScript);
             return Ok(None);
         };

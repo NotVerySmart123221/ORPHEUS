@@ -227,6 +227,9 @@ fn preparation_failure(graphs: &GraphStore, error: &SceneOwnerPreparationError) 
             Body::AuthoredChargeRoot(_) => {
                 simple_failure("body_preparation", "authored_charge_root")
             }
+            Body::CompatibilityChargeRoot(_) => {
+                simple_failure("body_preparation", "compatibility_charge_root")
+            }
             Body::Start(error) => startup_failure(error),
             Body::Projection(error) => snapshot_failure(graphs, "projection", error),
             Body::Encoding(error) => snapshot_failure(graphs, "encoding", error),

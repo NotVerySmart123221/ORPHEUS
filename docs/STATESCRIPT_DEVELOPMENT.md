@@ -834,8 +834,7 @@ The loader requires exactly one private mount of the selected graph and
 a valid server `health_applied` entry. The factory checks the same mount
 constraint after adding room roots. A selected root uses the ordinary
 settled events on its next VM frame. The host skips its compatibility
-charge admission and synchronous damage credit for that body. An
-omitted selection retains the existing bridge for its supported profile.
+charge admission and synchronous damage credit for that body.
 Graph bindings remain the source for authored starting values and costs.
 A configured private root can inspect hit tags after weapon settlement.
 The stock charge graph still reads its synchronous native damage message
@@ -843,6 +842,27 @@ and target snapshot. Its timing, target flags, and mitigation records
 need separate validation before switching routes.
 
 See the [synthetic charge route contract](../fixtures/behavior/script-authored-charge-route-v1.json).
+
+Use `charge_compatibility` to bind the synchronous bridge to an existing
+receiver on a player body. Declare the supported mode GUIDs in `modes`,
+the receiving graph GUID in `receiver_graph`, its entity-scoped
+`admission_variable` key, and the ordinary `damage_message` GUID.
+The loader checks for one server receiver with distinct writable bindings
+for all four damage parameters.
+
+The receiving graph can be a public root mounted once on the body. For
+an existing native child, give the mounted public root and its native
+subscript's raw state slot in `parent: {graph, state}`. The subscript must
+refer to the declared receiver. Optional `inhibit: {graph, state}`
+identifies an ability state that suspends damage credit while active.
+Both references use full graph GUIDs and raw state slots.
+
+A body can declare either `charge_compatibility` or
+`authored_charge_graph`. A compatibility declaration applies only in its
+listed modes. Bodies with neither declaration keep the existing legacy
+bridge for its supported profile. The synthetic example includes both
+mount layouts. Original stock admission and rollout still require
+validation. [Synthetic compatibility fixture](../fixtures/behavior/script-charge-compatibility-v1.json)
 
 To check the stock timing and bonus receiver, point
 `ORPHEUS_RUNTIME_DIR` at the private 104319 graph bundle and run:

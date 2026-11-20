@@ -309,6 +309,14 @@ portable regression covers direct and relayed requests after replacement.
 A prepared probe uses the original admission claim and local sender
 with the stock cap. These additions are pending integration verification.
 
+Player bodies can opt into mode-scoped compatibility charge using an
+existing ordinary damage receiver, mounted directly or as a native
+child of a declared public root. The configuration can inhibit credit
+during an ability state. Bodies without either charge declaration retain
+the existing legacy path for its supported profile. Synthetic regressions
+await integration runs. Original stock admission and rollout still
+require validation.
+
 The full pseudocode and prepared bundle both show seven `0D9A` receivers
 and no literal sender. The `0B9E` entry binds different slots from the
 three instance operands read by its outgoing grant. The original

@@ -80,6 +80,49 @@ fn graph_pack() -> PathBuf {
 
 #[test]
 #[ignore = "requires an authorized 104319 graph pack in ORPHEUS_RUNTIME_DIR"]
+fn prepared_stock_charge_compatibility_validates_its_nested_receiver() {
+    const BODY: u64 = 0x0400_0000_0000_02a3;
+    const PARENT: u32 = 0x004b;
+    const INHIBIT: u32 = 0x022f;
+    const ADMISSION: u32 = 2426;
+    const TOPIC: u64 = 0x0240_0000_0000_0012;
+    let mode = crate::game_content::JUNKENSTEIN_REVENGE;
+    let file = File::open(graph_pack()).unwrap();
+    let mut bundle: Json = serde_json::from_reader(GzDecoder::new(file)).unwrap();
+    let body = bundle["bodies"]
+        .get_mut(format!("0x{BODY:016X}").as_str())
+        .expect("stock Cassidy body");
+    assert_eq!(
+        body["hero"],
+        format!("0x{:016X}", crate::game_heroes::CASSIDY)
+    );
+    assert!(body["charge_compatibility"].is_null());
+    body["charge_compatibility"] = json!({
+        "receiver_graph": format!("0x0580{STOCK_CHARGE_GRAPH:012X}"),
+        "parent": {"graph": format!("0x0580{PARENT:012X}"), "state": 10},
+        "inhibit": {"graph": format!("0x0580{INHIBIT:012X}"), "state": 0},
+        "modes": [format!("0x{mode:016X}")],
+        "admission_variable": ADMISSION,
+        "damage_message": format!("0x{TOPIC:016X}")
+    });
+
+    let graphs = GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap();
+    let binding = graphs.bodies()[&BODY]
+        .charge_compatibility
+        .as_ref()
+        .unwrap();
+    let parent = binding.parent.unwrap();
+    let inhibit = binding.inhibit.unwrap();
+    assert_eq!((parent.graph, parent.state), (PARENT, 10));
+    assert_eq!((inhibit.graph, inhibit.state), (INHIBIT, 0));
+    assert_eq!(binding.receiver_graph, STOCK_CHARGE_GRAPH);
+    assert_eq!(binding.admission_variable, ADMISSION);
+    assert_eq!(binding.damage_message, TOPIC);
+    assert!(binding.modes.contains(&mode));
+}
+
+#[test]
+#[ignore = "requires an authorized 104319 graph pack in ORPHEUS_RUNTIME_DIR"]
 fn prepared_stock_14f2_sets_absolute_charge_fraction_and_respects_gates() {
     let graphs = Arc::new(GraphStore::load(graph_pack()).unwrap());
     let fraction_binding = Variable {

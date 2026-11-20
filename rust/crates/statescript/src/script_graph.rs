@@ -24,7 +24,11 @@ use crate::{
     script_wire::{Value as ScriptValue, Variables},
 };
 
+mod charge_compatibility;
 mod rulesets;
+
+use charge_compatibility::validate_charge_compatibility;
+pub use charge_compatibility::{ChargeCompatibility, ChargeStateBinding};
 
 const GRAPH_TYPE: u64 = 0x0580;
 pub(crate) const MAX_ROOM_MESSAGE_PARAMETERS: usize = 16;
@@ -343,6 +347,11 @@ impl Node {
 
     pub fn field(&self, path: &str) -> Option<&Value> {
         field_at(&self.fields, path)
+    }
+
+    pub(crate) fn subscript_graph_asset(&self) -> Option<u64> {
+        self.field("m_36F7B64C.m_36F7B64C.m_C974E369.m_graph")
+            .and_then(asset_guid)
     }
 
     /// The plug's targets in data order, including unresolved targets.
@@ -963,6 +972,9 @@ pub struct Body {
     /// Private root that handles the player's authored charge route.
     #[serde(default, deserialize_with = "optional_graph_index")]
     pub authored_charge_graph: Option<u32>,
+    /// Public charge receiver for modes that still use synchronous damage credit.
+    #[serde(default)]
+    pub charge_compatibility: Option<ChargeCompatibility>,
     pub manager: Option<u32>,
     pub weapons: Vec<Option<u32>>,
     #[serde(default)]
@@ -1607,8 +1619,16 @@ impl GraphStore {
                     "entity {body} cannot declare a player authored charge graph"
                 )));
             }
+            if definition.charge_compatibility.is_some() {
+                return Err(invalid(format!(
+                    "entity {body} cannot declare player charge compatibility"
+                )));
+            }
         }
         for (body, definition) in &bundle.bodies {
+            if let Some(binding) = &definition.charge_compatibility {
+                validate_charge_compatibility(body, definition, binding, &graphs)?;
+            }
             let Some(graph) = definition.authored_charge_graph else {
                 continue;
             };
