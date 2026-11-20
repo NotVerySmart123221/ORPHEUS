@@ -18,7 +18,7 @@ use super::{
     world::BodyWorld,
 };
 
-struct ChargeBinding {
+pub(super) struct ChargeBinding {
     graph: u32,
     admission: u32,
     damage_message: u64,
@@ -26,7 +26,7 @@ struct ChargeBinding {
 }
 
 impl BodyWorld {
-    fn charge_binding(&self) -> Option<ChargeBinding> {
+    pub(super) fn charge_binding(&self) -> Option<ChargeBinding> {
         // A declared authored charge root owns this body's meter. Otherwise the
         // existing profile uses the native charge admission and credit path.
         (!self.uses_authored_charge && self.hero == CASSIDY && is_junkenstein_mode(self.mode))
