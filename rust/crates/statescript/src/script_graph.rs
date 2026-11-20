@@ -26,6 +26,11 @@ use crate::{
     script_wire::{Value as ScriptValue, Variables},
 };
 
+mod charge_compatibility;
+
+use charge_compatibility::validate_charge_compatibility;
+pub use charge_compatibility::{ChargeCompatibility, ChargeStateBinding};
+
 const GRAPH_TYPE: u64 = 0x0580;
 pub(crate) const MAX_ROOM_MESSAGE_PARAMETERS: usize = 16;
 
@@ -277,7 +282,7 @@ impl Node {
 
     fn valid_host_event_parameters(&self, kind: HostEventKind) -> bool {
         let max_slot = match kind {
-            HostEventKind::HealthApplied => 5,
+            HostEventKind::HealthApplied => 6,
         };
         let Some(parameters) = self.fields.get("m_params").filter(|value| !value.is_null()) else {
             return true;
@@ -374,6 +379,11 @@ impl Node {
         field_at(&self.fields, path)
     }
 
+    pub(crate) fn subscript_graph_asset(&self) -> Option<u64> {
+        self.field("m_36F7B64C.m_36F7B64C.m_C974E369.m_graph")
+            .and_then(asset_guid)
+    }
+
     /// The plug's targets in data order, including unresolved targets.
     pub fn links(&self, path: &str) -> impl Iterator<Item = (Option<u16>, &str)> {
         self.field(path)
@@ -399,11 +409,15 @@ pub(crate) fn directed_numeric_payload(slot: u32, parameters: &Variables) -> boo
         }
 }
 
-fn directed_instance_variable(value: &Value) -> bool {
+fn directed_variable(value: &Value, scope: Scope) -> bool {
+    let scope_field = &value["m_60DB8F99"];
+    let valid_scope = match scope {
+        Scope::Instance => neutral_flag(scope_field),
+        Scope::Entity => scope_field.as_bool() == Some(true) || scope_field.as_u64() == Some(1),
+    };
     native_fields(value, &["m_identifier", "m_60DB8F99"])
-        && neutral_flag(&value["m_60DB8F99"])
-        && dynamic(value)
-            .is_ok_and(|var| var.is_some_and(|var| var.scope == Scope::Instance && var.id != 0))
+        && valid_scope
+        && dynamic(value).is_ok_and(|var| var.is_some_and(|var| var.scope == scope && var.id != 0))
 }
 
 fn neutral_flag(value: &Value) -> bool {
@@ -1212,6 +1226,9 @@ pub struct Body {
     /// Private root that handles the player's authored charge route.
     #[serde(default, deserialize_with = "optional_graph_index")]
     pub authored_charge_graph: Option<u32>,
+    /// Public charge receiver for modes that still use synchronous damage credit.
+    #[serde(default)]
+    pub charge_compatibility: Option<ChargeCompatibility>,
     pub manager: Option<u32>,
     pub weapons: Vec<Option<u32>>,
     #[serde(default)]
@@ -1518,16 +1535,17 @@ fn validate_projected_message_topics(
 
 fn directed_numeric_shape(node: &Node, parameter: u64) -> Option<DirectedNumericRoute> {
     let sender = match node.class.as_str() {
-        "STUStatescriptActionSendGameMessage" if node.is_networked() && node.is_action() => true,
+        "STUStatescriptActionSendGameMessage" if node.is_action() => true,
         "STUStatescriptEntryGameMessage" if node.server_only && !node.is_action() => false,
         _ => return None,
     };
+    let output = node.field("m_outPlug")?;
     if !node.runs_on_server()
         || node.remote != -1
         || node.state.is_some()
         || node.is_state()
         || node.declares_room_message_entry()
-        || !node.field("m_outPlug").is_some_and(valid_output_plug)
+        || !valid_output_plug(output)
         || !node
             .fields
             .as_object()?
@@ -1566,12 +1584,22 @@ fn directed_numeric_shape(node: &Node, parameter: u64) -> Option<DirectedNumeric
     }
     let value = row.get(value_field)?;
     let slot = u32::from(parameter as u16);
-    if sender {
-        (!value.is_null() && directed_instance_variable(node.field("m_targets")?))
-            .then_some(DirectedNumericRoute::Sender(slot))
-    } else {
-        directed_instance_variable(value).then_some(DirectedNumericRoute::Receiver(slot))
+    if !sender {
+        return directed_variable(value, Scope::Instance)
+            .then_some(DirectedNumericRoute::Receiver(slot));
     }
+    let target = node.field("m_targets")?;
+    let valid_sender = if node.server_only {
+        // These senders terminate after forwarding an instance value to one body.
+        raw_plug_links(output).next().is_none()
+            && directed_variable(value, Scope::Instance)
+            && (directed_variable(target, Scope::Entity)
+                || native_entity_operand(target, "STU_0AC15F78")
+                    .is_some_and(|owner| native_shape(owner, "STU_B5A0CAF0", None)))
+    } else {
+        !value.is_null() && directed_variable(target, Scope::Instance)
+    };
+    valid_sender.then_some(DirectedNumericRoute::Sender(slot))
 }
 
 fn compile_directed_numeric_messages(
@@ -1884,8 +1912,16 @@ impl GraphStore {
                     "entity {body} cannot declare a player authored charge graph"
                 )));
             }
+            if definition.charge_compatibility.is_some() {
+                return Err(invalid(format!(
+                    "entity {body} cannot declare player charge compatibility"
+                )));
+            }
         }
         for (body, definition) in &bundle.bodies {
+            if let Some(binding) = &definition.charge_compatibility {
+                validate_charge_compatibility(body, definition, binding, &graphs)?;
+            }
             let Some(graph) = definition.authored_charge_graph else {
                 continue;
             };
@@ -2367,6 +2403,72 @@ mod tests {
                 .owner_only_instance_vars(),
             [u32::MAX]
         );
+    }
+
+    #[test]
+    fn directed_numeric_server_senders_require_a_terminal_single_body_route() {
+        const PARAMETER: u64 = 0x0a40_0000_0000_0563;
+        let variable =
+            |id, scope| json!({"$":"STUConfigVarDynamic", "m_identifier":id, "m_60DB8F99":scope});
+        let raw = json!({
+            "pos":0, "uid":0, "rid":0, "remote":-1, "state":null,
+            "class":"STUStatescriptActionSendGameMessage", "client_only":false, "server_only":true,
+            "fields":{
+                "m_ADEB6E05":1,
+                "m_gameMessage":{"$":"STUConfigVarGameMessage","m_gameMessage":"0x0240000000000564"},
+                "m_targets":variable(91, 1),
+                "m_params":[{
+                    "$":"STU_814D595E", "m_B5051BCE":format!("0x{PARAMETER:016X}"), "m_value":variable(92, 0)
+                }],
+                "m_outPlug":{"$":"STUStatescriptOutputPlug","links":[]}
+            }
+        });
+        let route = |record: &Value| {
+            let node: Node = serde_json::from_value(record.clone()).unwrap();
+            directed_numeric_shape(&node, PARAMETER)
+        };
+        assert!(matches!(
+            route(&raw),
+            Some(DirectedNumericRoute::Sender(0x563))
+        ));
+
+        let mut possession = raw.clone();
+        possession["fields"]["m_targets"] = json!({
+            "$":"STU_0AC15F78", "m_EE729DCB":0,
+            "m_entity":{"$":"STU_B5A0CAF0", "m_EE729DCB":0}
+        });
+        assert!(matches!(
+            route(&possession),
+            Some(DirectedNumericRoute::Sender(0x563))
+        ));
+        possession["fields"]["m_targets"]["m_entity"] = variable(91, 1);
+        assert!(route(&possession).is_none());
+
+        for (key, replacement) in [
+            ("m_targets", variable(91, 0)),
+            ("m_targets", variable(0, 1)),
+            (
+                "m_outPlug",
+                json!({"$":"STUStatescriptOutputPlug","links":[[0,"m_inPlug"]]}),
+            ),
+            (
+                "m_params",
+                json!([{"$":"STU_814D595E","m_B5051BCE":format!("0x{PARAMETER:016X}"),"m_value":variable(92, 1)}]),
+            ),
+        ] {
+            let mut invalid = raw.clone();
+            invalid["fields"][key] = replacement;
+            assert!(route(&invalid).is_none(), "{key} accepted");
+        }
+
+        let mut networked = raw;
+        networked["server_only"] = json!(false);
+        assert!(route(&networked).is_none());
+        networked["fields"]["m_targets"] = variable(91, 0);
+        assert!(matches!(
+            route(&networked),
+            Some(DirectedNumericRoute::Sender(0x563))
+        ));
     }
 
     #[test]

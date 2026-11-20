@@ -7,8 +7,8 @@ use bevy_ecs::component::Component;
 use crate::{
     game_combat::{
         AdmittedFlight, AppliedDamage, BioticField, BotHit, CombatError, HealingPulse,
-        HealthEventContext, PosedHitscan, RoomSimulation, SampledBody, eligible_target, eye_height,
-        script_eye_position,
+        HealthDamageEvidence, HealthEventContext, PosedHitscan, RoomSimulation, SampledBody,
+        eligible_target, eye_height, script_eye_position,
     },
     game_combat_messages::CombatNotice,
     game_hitscan::{Impact, TargetHistory, TargetPose, ViewFrame},
@@ -796,7 +796,10 @@ impl RoomSimulation {
             entity,
             -outcome.dealt,
             outcome.killed,
-            impact,
+            Some(HealthDamageEvidence {
+                impact,
+                named_pool_losses: &outcome.named_pool_losses,
+            }),
         );
         Some((owner, outcome, health))
     }
@@ -1072,7 +1075,10 @@ impl RoomSimulation {
                     target,
                     healed,
                     false,
-                    HealthEventContext::Healing(&self.world),
+                    HealthEventContext {
+                        world: &self.world,
+                        damage: None,
+                    },
                     room_status,
                 );
             }

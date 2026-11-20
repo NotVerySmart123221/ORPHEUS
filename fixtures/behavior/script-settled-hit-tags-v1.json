@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "case_id": "script-settled-hit-tags.synthetic.v1",
-  "source": {"basis": "Synthetic room impacts and healing, overkill attribution, frozen target facts, and body replacement."},
+  "source": {"basis": "Synthetic room impacts, attributed health effects, overkill, frozen target facts, and body replacement."},
   "evidence": "synthetic-rust",
   "input": {
     "bot_impact": 23.5,
@@ -10,7 +10,20 @@
     "ordered_hit_tags": [613, 101, 613],
     "unavailable_target_tag": 732,
     "generic_healing": 90.0,
-    "generic_damage": 25.0
+    "generic_damage": 25.0,
+    "named_damage": {
+      "grants": [[972777519512081729, 3.25], [972777519512081730, 4.0]],
+      "weapon_damage": 5.0,
+      "scripted_damage": 4.0,
+      "heal": 8.0,
+      "ordinary_damage": 2.0,
+      "expected_losses": [
+        [[972777519512081729, 3.25], [972777519512081730, 1.75]],
+        [[972777519512081730, 2.25]],
+        null,
+        []
+      ]
+    }
   },
   "expected": {
     "ordered_outcomes": [
@@ -21,7 +34,13 @@
         "hit_tags": [613, 101, 613],
         "target_facts": {"filter_flags": 16777217, "owner_health": null}
       },
-      {"target": "player", "delta": -25.0, "killed": false, "hit_tags": null, "target_facts": null},
+      {
+        "target": "player",
+        "delta": -25.0,
+        "killed": false,
+        "hit_tags": null,
+        "target_facts": {"filter_flags": 8388609, "owner_health": 200.0}
+      },
       {
         "target": "player",
         "delta": 25.0,
@@ -43,10 +62,18 @@
         "hit_tags": null,
         "target_facts": {"filter_flags": 16777217, "owner_health": null}
       },
-      {"target": "bot", "delta": -25.0, "killed": false, "hit_tags": null, "target_facts": null}
+      {
+        "target": "bot",
+        "delta": -25.0,
+        "killed": false,
+        "hit_tags": null,
+        "target_facts": {"filter_flags": 16777217, "owner_health": null}
+      }
     ],
     "bot_health": 75.0,
     "player_health": 0.0,
+    "health_after_stale_request": 100.0,
+    "health_after_current_dead_source_request": 75.0,
     "replacement": {
       "heal_delta": 25.0,
       "heal_target_facts": {"filter_flags": 16777217, "owner_health": null},

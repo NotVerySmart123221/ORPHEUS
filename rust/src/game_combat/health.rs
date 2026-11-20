@@ -1,6 +1,6 @@
 //! Room-authoritative health effects for player and NPC bodies.
 
-use super::{CombatError, RoomSimulation, player::PlayerDeath};
+use super::{CombatError, HealthDamageEvidence, RoomSimulation, player::PlayerDeath};
 use crate::{
     script_expr::valid_entity,
     vitals::Death,
@@ -35,11 +35,19 @@ impl RoomSimulation {
         now: Duration,
     ) -> Result<bool, CombatError> {
         if let Some(state) = self.state_mut(wire)? {
-            let (delta, killed) = match effect {
+            let (delta, killed, named_pool_losses) = match effect {
                 HealthEffect::Damage(amount) => Self::damage_bot(state, amount, source, now)
-                    .map_or((0.0, false), |outcome| (-outcome.dealt, outcome.killed)),
-                HealthEffect::Heal(amount) if !state.bot.dead => (state.vitals.heal(amount), false),
-                HealthEffect::Heal(_) => (0.0, false),
+                    .map_or((0.0, false, None), |outcome| {
+                        (
+                            -outcome.dealt,
+                            outcome.killed,
+                            Some(outcome.named_pool_losses),
+                        )
+                    }),
+                HealthEffect::Heal(amount) if !state.bot.dead => {
+                    (state.vitals.heal(amount), false, None)
+                }
+                HealthEffect::Heal(_) => (0.0, false, None),
             };
             if delta != 0.0 {
                 let health = state.vitals.component();
@@ -49,7 +57,18 @@ impl RoomSimulation {
                     operation: Some(Operation::Update(vec![health])),
                     ..Default::default()
                 });
-                self.record_health_applied(source.killer, wire, delta, killed, None);
+                self.record_health_applied(
+                    source.killer,
+                    wire,
+                    delta,
+                    killed,
+                    named_pool_losses
+                        .as_deref()
+                        .map(|named_pool_losses| HealthDamageEvidence {
+                            impact: None,
+                            named_pool_losses,
+                        }),
+                );
             }
             return Ok(true);
         }

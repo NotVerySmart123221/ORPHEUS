@@ -9,7 +9,7 @@ use super::lifecycle::{DEADEYE_GRAPH, DEADEYE_TARGET_EFFECT};
 use crate::{
     collision_scene::CollisionScene,
     commands::Command,
-    game_combat::{AppliedDamage, RoomScriptRequests, eye_height},
+    game_combat::{RoomScriptRequests, eye_height},
     game_content::{PRACTICE_RANGE_MODE, TUTORIAL_MODE, is_junkenstein_mode},
     game_heroes::CASSIDY,
     game_hitscan::{TargetPose, aim_direction, direction_for_angles},
@@ -21,8 +21,8 @@ use crate::{
     script_expr::{EntityRelation, OnFire, RoomEntityFacts, native_shape, valid_entity},
     script_graph::GraphStore,
     script_init::{
-        MAX_INIT_WORK, MovementSample, RoomMessage, ScriptedMotion, Site, TargetTagEffect,
-        TargetTagEffects, World,
+        HealthTargetFacts, MAX_INIT_WORK, MovementSample, RoomMessage, ScriptedMotion, Site,
+        TargetTagEffect, TargetTagEffects, World,
     },
     script_wire::{Value, Variables},
     static_ray::{Vec3, capsule_entry_distance, norm},
@@ -135,8 +135,6 @@ pub(super) fn target_delta(origin: Vec3, target: TargetPose) -> Vec3 {
 }
 
 pub(super) struct BodyWorld {
-    pub(super) damage_credit: Option<AppliedDamage>,
-    pub(super) uses_authored_charge: bool,
     pub(super) graphs: Arc<GraphStore>,
     pub(super) spatial_frame: Option<Arc<crate::game_combat::RoomSpatialFrame>>,
     pub(super) team_member_counts: Option<TeamMemberCounts>,
@@ -279,8 +277,9 @@ impl World for BodyWorld {
         )
     }
 
-    fn player_stats_available(&self, site: Site) -> Option<bool> {
-        (self.is_player_site(site) && is_junkenstein_mode(self.mode)).then_some(false)
+    fn player_stats_service_available(&self, site: Site) -> Option<bool> {
+        // The bound body cannot update the scoreboard through StateScript.
+        self.is_player_site(site).then_some(false)
     }
 
     fn spatial_binding_owner_available(&self, site: Site) -> Option<bool> {
@@ -342,9 +341,6 @@ impl World for BodyWorld {
     }
 
     fn entity_variable(&mut self, entity: u32, id: u32) -> Option<Value> {
-        if let Some(damage) = self.damage_credit_for(entity) {
-            return damage.target_facts.script_state.read(id);
-        }
         if entity != GAME_MODE_ENTITY {
             return self
                 .deadeye_scene
@@ -750,9 +746,6 @@ impl World for BodyWorld {
             return None;
         }
         if entity != self.entity {
-            if let Some(damage) = self.damage_credit_for(entity) {
-                return damage.target_facts.tags.presence(tag);
-            }
             return self
                 .sighting_source
                 .filter(|source| source.entity == entity)
@@ -788,23 +781,20 @@ impl World for BodyWorld {
         if entity == self.entity {
             Some(self.own_filter_flags())
         } else {
-            if let Some(damage) = self.damage_credit_for(entity) {
-                return damage.target_facts.filter_flags;
-            }
             self.sighting_source
                 .filter(|source| source.entity == entity)?
                 .filter_flags
         }
     }
 
-    fn scene_filter_policy(
+    fn settled_scene_filter_policy(
         &self,
         site: Site,
         filter: &Json,
+        _target: &HealthTargetFacts,
     ) -> Option<crate::script_expr::SceneFilterPolicy> {
         use crate::script_expr::{FilterPredicate, FilterRelation, SceneFilterPolicy};
-        (self.charge_site(site)
-            && self.damage_credit.is_some()
+        (self.is_player_site(site)
             && filter["m_66747E7D"] == 2
             && filter
                 .get("m_89831602")
@@ -816,13 +806,18 @@ impl World for BodyWorld {
         })
     }
 
-    fn entities_hostile(&self, site: Site, source: u32, target: u32, option: bool) -> Option<bool> {
-        if !self.charge_site(site) || source != self.entity || option {
+    fn settled_entities_hostile(
+        &self,
+        site: Site,
+        source: u32,
+        target: &HealthTargetFacts,
+        option: bool,
+    ) -> Option<bool> {
+        if !self.is_player_site(site) || source != self.entity || option {
             return None;
         }
-        let damage = self.damage_credit_for(target)?;
         let left = self.own_filter_flags();
-        let right = damage.target_facts.filter_flags?;
+        let right = target.filter_flags?;
         crate::junkenstein_host::ordinary_hostility(left, right)
     }
 
@@ -1048,19 +1043,6 @@ impl BodyWorld {
         self.velocity_changes
             .push((frame.saturating_add(1), change));
         true
-    }
-
-    fn charge_site(&self, site: Site) -> bool {
-        self.is_player_site(site)
-            && self
-                .charge_binding()
-                .is_some_and(|binding| site.graph == binding.graph)
-    }
-
-    fn damage_credit_for(&self, entity: u32) -> Option<&AppliedDamage> {
-        self.damage_credit
-            .as_ref()
-            .filter(|damage| damage.target_facts.target == entity)
     }
 
     pub(super) fn has_deadeye(&self) -> bool {

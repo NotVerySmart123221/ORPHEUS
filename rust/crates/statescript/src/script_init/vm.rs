@@ -50,6 +50,7 @@ pub(super) struct Vm<'graph, 'world, 'machine, W> {
     pub(super) parameters: Option<Arc<Variables>>,
     health_context: HostHealthContext,
     observed_input: Option<ObservationInput>,
+    settled_damage_receiver: Option<u16>,
     pub(super) output_write_depth: usize,
 }
 
@@ -66,6 +67,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             parameters: None,
             health_context: HostHealthContext::default(),
             observed_input: None,
+            settled_damage_receiver: None,
             output_write_depth: 0,
         }
     }
@@ -1257,8 +1259,16 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             sender,
                             parameters,
                             health_context,
+                            settled_damage,
                         } => {
-                            self.deliver(id, position, sender, parameters, health_context)?;
+                            self.deliver(
+                                id,
+                                position,
+                                sender,
+                                parameters,
+                                health_context,
+                                settled_damage,
+                            )?;
                         }
                     }
                 }
@@ -1392,6 +1402,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         sender: Option<u32>,
         parameters: Arc<Variables>,
         health_context: HostHealthContext,
+        settled_damage: bool,
     ) -> Result<(), InitFault> {
         let Some(node) = self.graph(id).node(position) else {
             return Ok(());
@@ -1401,7 +1412,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         }
         self.parameters = Some(parameters);
         self.health_context = health_context;
+        self.settled_damage_receiver = settled_damage.then_some(id);
         let result = self.deliver_entry(id, node, sender);
+        self.settled_damage_receiver = None;
         self.health_context = HostHealthContext::default();
         self.parameters = None;
         result
@@ -2050,28 +2063,38 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         self.destroy(id)
     }
 
-    fn expired_health_target(&self, wire: u32) -> bool {
-        self.health_context.target_body.is_some_and(|target| {
-            target.wire == wire
-                && target.wire != self.machine.snapshot.entity
-                && self.world.room_body_generation(wire) != Some(target.generation)
+    fn expired_health_event_body(&self, wire: u32) -> bool {
+        if wire == self.machine.snapshot.entity {
+            return false;
+        }
+        [
+            self.health_context.source_body,
+            self.health_context.target_body,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|body| {
+            body.wire == wire && self.world.room_body_generation(wire) != Some(body.generation)
         })
     }
 
     fn forwarded_health_context(&self, parameters: &Variables) -> HostHealthContext {
         let context = &self.health_context;
-        let target = context
-            .target_body
-            .map(|body| body.wire)
-            .or(context.target_facts.as_ref().map(|facts| facts.target));
-        if target.is_some_and(|target| {
+        let carries_entity = |wire| {
             parameters
                 .values()
-                .any(|value| matches!(value, Value::Entity(entity) if *entity == target))
-        }) {
-            return context.clone();
+                .any(|value| matches!(value, Value::Entity(entity) if *entity == wire))
+        };
+        HostHealthContext {
+            source_body: context.source_body.filter(|body| carries_entity(body.wire)),
+            target_body: context.target_body.filter(|body| carries_entity(body.wire)),
+            target_facts: context
+                .target_facts
+                .as_ref()
+                .filter(|facts| carries_entity(facts.target))
+                .cloned(),
+            named_pool_losses: None,
         }
-        HostHealthContext::default()
     }
 
     pub(in crate::script_init) fn send_game_message(
@@ -2129,8 +2152,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         for entity in entities {
             self.spend("game message routing")?;
             if entity == site.entity {
-                // An immediate local relay can forward the same authenticated
-                // target. Stored vars and other messages do not carry it.
+                // A local relay can carry the authenticated identity of each
+                // event participant named by a typed parameter.
                 let health_context = self.forwarded_health_context(&parameters);
                 self.machine.queue_local_game_message(
                     self.graphs,
@@ -2142,7 +2165,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 let delivered = if let Some(slot) = directed_parameter {
                     script_expr::valid_entity(entity)
                         && directed_numeric_payload(slot, &parameters)
-                        && (self.expired_health_target(entity)
+                        && (self.expired_health_event_body(entity)
                             || self.world.queue_room_message(
                                 site,
                                 entity,
@@ -2214,7 +2237,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             return Ok(false);
         }
         self.spend("room message admission")?;
-        if !self.expired_health_target(target)
+        if !self.expired_health_event_body(target)
             && !self.world.queue_room_message(site, target, message)
         {
             self.report(site, Issue::UnsupportedField("room message request"));
@@ -2442,6 +2465,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 .observed_input
                 .as_ref()
                 .map(|input| input.sample.as_ref()),
+            settled_damage: self.settled_damage_receiver == Some(site.instance),
             watcher,
             read_native: false,
             read_clock: false,

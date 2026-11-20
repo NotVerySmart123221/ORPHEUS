@@ -369,6 +369,20 @@ attachment, and **46 blocking sites**. The #72 trace retained its
 476 observations. Both #131 schedules reproduced the previous 339
 ticks per implementation and the same four RNG setup differences.
 
+The shared stat action now uses the authored target and stat selectors.
+The body host can confirm that it has no stats writer. These actions
+follow their continuation without evaluating unused operands. Live stat
+updates remain open.
+
+The server-only form of the directed numeric route accepts a terminal
+send of one instance value. Its target is either an entity-scope variable
+or the owner's possessed body. One prepared `14F2` probe supplies
+explicit inputs to check the receiver's absolute charge fraction, cap,
+and both authored gates. A second probe connects the unmodified terminal
+send to the receiver through the deferred queue. Its trigger and input
+values are synthetic. The probes await integration runs. Live trigger
+timing remains open.
+
 The opt-in directed numeric route preserves ordinary local delivery
 and uses the room queue for a validated foreign target. The prepared
 probe passed for the original `00EB` sender actions and receiver with
@@ -384,28 +398,48 @@ events collect committed target facts after the VM's local mutations.
 Direct target filters use the event's tags and, in a configured room,
 the original target's affiliation and post-settlement liveness. The
 room preserves these facts if a lethal target retires before delivery.
-The health event also carries the original body identity through VM
-delivery. A subsequent direct request to that same wire expires if the
-room now identifies a different body. The room regression includes a
-fresh award to the replacement to exercise the normal path. An
-immediate same-body message can relay the original target's context
-through a typed entity parameter. The portable regression exercises
-both direct and relayed awards across body replacement.
+The health event carries the original source and target identities
+through VM delivery. A direct request to either wire expires if the
+room now identifies a different body. The room regressions cover stale
+awards to a replaced target and stale replies to a replaced source,
+followed by fresh awards. An immediate same-body message can relay each
+participant's context through its own typed entity parameter. The
+portable regression covers direct and relayed requests after replacement.
 A prepared probe uses the original admission claim and local sender
 with the stock cap. These additions are pending integration verification.
+
+Player bodies can opt into mode-scoped compatibility charge using an
+existing ordinary damage receiver, mounted directly or as a native
+child of a declared public root. The configuration can inhibit credit
+during an ability state. Bodies without either charge declaration retain
+the existing legacy path for its supported profile. Synthetic regressions
+await integration runs. Original stock admission and rollout still
+require validation.
 
 The full pseudocode and prepared bundle both show seven `0D9A` receivers
 and no literal sender. The `0B9E` entry binds different slots from the
 three instance operands read by its outgoing grant. The original
 dispatcher, the origin of those three values, and the order relative
 to health settlement still need original-build evidence.
+The Mercy receiver requires two positive numeric inputs before its local
+bonus. Baptiste has separate branches for positive and negative values
+from the same message slot. These checks establish a signed input format.
+What the sender measures and how it relates to the applied health delta
+remain open. All 17 literal `0044` references in the pseudocode are
+receiver entries. Original attribution to healing still needs evidence.
 
 Player hit notices, immediate damage credit and deferred notifications
 now use the same actual pool loss. The prepared `0012` probe supplies
 explicit pool records to the original charge receiver and checks how
 matching identifiers affect the award. The room records each named
 temporary shield's actual loss in damage settlement and supplies the
-typed records to the compatibility route.
+typed records to the compatibility route. Its synchronous message now
+carries its own target snapshot and native filter scope. Other queued
+messages on the same frame reuse ordinary queries. The authored `health_applied`
+event can also bind those records. Weapon and direct damage use the
+same settlement, including NPC-local self damage. Healing and damage
+with unavailable pool accounting omit the binding. Regression runs
+remain pending.
 Owner grants and their named current query use the shared pool lifecycle.
 A checked mode-2 effect drains only its own named pool at the authored
 rate and ends at zero. Native and VM regressions cover decay separately
