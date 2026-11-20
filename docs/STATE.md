@@ -127,6 +127,21 @@ matrix matched the preceding capture at **11 of 32** independent passes,
 All 476 #72 observation sites matched. Client zoom presentation and
 specific ability integration remain open.
 
+At `e4739efd`, Phase 3A scripted targeting gained an optional callback for
+each successful observation sample. The native synthetic room fixture
+verified repeated visible hits, wall occlusion, unavailable actor-ray
+data, target replacement before effect settlement, and runtime removal.
+StateScript tests also verified callback order and cancellation on
+retirement or reactivation. Formatting, Clippy, and all public workspace
+tests passed in both the default and Inspector configurations. The two
+prepared 104319 startup reports were byte-identical. After normalizing
+only the source revision, both the startup report and the #72 replay
+matched the preceding captures. The startup matrix recorded **11 of 32**
+independent passes, **one** ordinary Practice Range attachment, and
+**47** blocking sites. The #72 replay matched all 476 observation sites
+across 900 frames. Original ability mappings and client zoom acceptance
+remain open.
+
 Seven actor probes have one blocking site each. Mercy's tag query needs
 the tagged placement inventory and live actor tags. Orisa and Sigma
 still hit persistent message registration. Baptiste cannot read a
