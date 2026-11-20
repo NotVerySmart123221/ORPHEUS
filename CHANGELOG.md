@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added private wait timing and graph variable reports. They separate literal bounds from dynamic operands and list read and write sites, schema declarations, and message bindings. Prepared public schemas add a separate default-slot check. Workspace check passed, and script unittest discovery passed with 12 tests and four skips. The ZIP and extracted directory produced identical reports for 3,186 wait sites and 1,587 graphs.
+
 - Added private field-shape and GameMessage reports for local StateScript listings. The field report separates rendered constructor shapes from exact prepared-state observations and supports capability grouping. The message catalog records endpoint and parameter evidence with explicit dynamic and unresolved entries. Workspace check and script unittest discovery passed (12 passed, four skipped). The 1,587-graph ZIP and extracted directory produced identical reports with 11,707 prepared state matches and 1,419 literal message IDs.
 
 - Added optional runtime state classifications for prepared bundles. Plain classes use ordinary lifecycle fallback after native dispatch. Exact client instances skip execution with their raw scope and wire slots intact. An offline importer creates a separate annotated bundle from local evidence. Passed 662 default workspace tests, locked Clippy, script unittest discovery, and the #72 prepared 900-frame regression on both the base and annotated bundles.

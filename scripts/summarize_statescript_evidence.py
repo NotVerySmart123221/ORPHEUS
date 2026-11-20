@@ -1,4 +1,4 @@
-"""Build private field-shape and message catalogs from local graph evidence."""
+"""Build private field, message, timing and variable reports from local evidence."""
 
 import argparse
 from collections import Counter
@@ -12,10 +12,13 @@ from zipfile import BadZipFile
 from build_runtime_state_metadata import CLIENT, SERVER, listings, state_markers
 from statescript_field_evidence import FieldInventory
 from statescript_message_evidence import collect_messages
+from statescript_timing_evidence import collect_timing
+from statescript_variable_evidence import collect_variable_access
 
 
 CLASS_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,127}")
 FIELD_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
+ASSET_GUID = re.compile(r"0x[0-9A-F]{16}")
 
 
 def digest_file(path):
@@ -34,12 +37,12 @@ def load_prepared(path):
         nodes = {node["pos"]: node for node in graph["nodes"]}
         if index in graphs or len(nodes) != len(graph["nodes"]):
             raise ValueError(f"duplicate graph or node position at graph {index}")
-        graphs[index] = (graph["states"], nodes)
+        graphs[index] = (graph["states"], nodes, graph.get("fields", {}))
     return graphs
 
 
 def verified_state(graph, slot, rid, class_name, flags):
-    slots, nodes = graph
+    slots, nodes, _ = graph
     node = nodes.get(slots[slot]) if slot < len(slots) else None
     if (
         node is not None
@@ -52,6 +55,38 @@ def verified_state(graph, slot, rid, class_name, flags):
     ):
         return node["fields"]
     return None
+
+
+def public_schema_defaults(index, fields):
+    """Identify declared instance slots accepted by the Rust public schema shape."""
+    schema = fields.get("m_publicSchema")
+    if schema is None:
+        return {"status": "absent", "default_slots": []}
+    unrecognized = {"status": "unrecognized", "default_slots": []}
+    if not isinstance(schema, dict) or schema.get("$") not in (
+        "STUStatescriptSchema", "STU_77990ED7"
+    ):
+        return unrecognized
+    owner = schema.get("m_89EAAC40")
+    if owner is not None and (
+        schema["$"] != "STU_77990ED7" or owner != f"0x{0x0580000000000000 | index:016X}"
+    ):
+        return unrecognized
+    entries = schema.get("m_entries")
+    if entries is not None and not isinstance(entries, list):
+        return unrecognized
+    slots = set()
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            return unrecognized
+        identifier = entry.get("m_0D09D2D9")
+        if entry.get("m_value") is None or identifier is None:
+            continue
+        if not isinstance(identifier, str) or not ASSET_GUID.fullmatch(identifier):
+            return unrecognized
+        if asset := int(identifier, 16):
+            slots.add(asset & 0xFFFF)
+    return {"status": "recognized", "default_slots": sorted(slots)}
 
 
 def operand_shapes(fields):
@@ -217,6 +252,8 @@ def collect_evidence(evidence, graph_bundle=None, families=None):
     prepared = PreparedEvidence(graph_bundle) if graph_bundle else None
     graph_hashes = {}
     messages = []
+    timing = []
+    variables = []
     state_count = 0
     for guid, source in listings(evidence):
         index = guid & 0xFFFFFFFF
@@ -229,9 +266,16 @@ def collect_evidence(evidence, graph_bundle=None, families=None):
         state_count += len(markers)
         graph_hashes[index] = (guid, hashlib.sha256("".join(lines).encode("utf-8")).hexdigest())
         inventory.add_graph(guid, lines)
-        messages.extend(collect_messages(lines, index))
+        endpoints = collect_messages(lines, index)
+        messages.extend(endpoints)
+        timing.extend(collect_timing(lines, index))
+        graph_variables = collect_variable_access(lines, index, endpoints)
+        graph_variables["prepared_public_schema"] = None
         if prepared is not None:
             prepared.add_graph(index, markers)
+            if graph := prepared.graphs.get(index):
+                graph_variables["prepared_public_schema"] = public_schema_defaults(index, graph[2])
+        variables.append(graph_variables)
 
     if not graph_hashes:
         raise ValueError("no graph listings found in the evidence source")
@@ -241,7 +285,7 @@ def collect_evidence(evidence, graph_bundle=None, families=None):
         provenance.update(bytes.fromhex(digest))
     manifest = {
         "schema_version": 1,
-        "tool": "statescript-evidence/v1",
+        "tool": "statescript-evidence/v2",
         "source_sha256": provenance.hexdigest(),
         "source_digest_basis": "graph GUID and normalized listing digest, ordered by GUID",
         "listing_graphs": len(graph_hashes),
@@ -250,22 +294,33 @@ def collect_evidence(evidence, graph_bundle=None, families=None):
 
     listing = inventory.report()
     prepared_report = prepared.report() if prepared is not None else None
-    return (
-        {
-            "schema_version": 1, "source_sha256": manifest["source_sha256"],
+    provenance_keys = {"schema_version": 1, "source_sha256": manifest["source_sha256"]}
+    return {
+        "field-contracts.json": {
+            **provenance_keys,
             "listing": listing, "prepared_bundle": prepared_report,
             "families": family_report(families or {}, listing, prepared_report),
         },
-        {"schema_version": 1, "source_sha256": manifest["source_sha256"], **message_report(messages)},
-        manifest,
-    )
+        "gamemessage-catalog.json": {**provenance_keys, **message_report(messages)},
+        "timing-contracts.json": {
+            **provenance_keys,
+            "resolutions": dict(sorted(Counter(row["resolution"] for row in timing).items())),
+            "observations": sorted(timing, key=lambda row: (row["graph"], row["line"])),
+        },
+        "variable-access.json": {
+            **provenance_keys,
+            "prepared_bundle_sha256": prepared.digest if prepared is not None else None,
+            "graphs": sorted(variables, key=lambda row: row["graph"]),
+        },
+        "evidence-manifest.json": manifest,
+    }
 
 
 def write_reports(directory, reports):
     directory.mkdir()
     created = []
     try:
-        for name, value in reports:
+        for name, value in reports.items():
             path = directory / name
             with path.open("x", encoding="utf-8", newline="\n") as output:
                 created.append(path)
@@ -288,21 +343,24 @@ def main():
     if args.output_dir.exists():
         parser.error("report directory already exists")
     try:
-        fields, messages, manifest = collect_evidence(
+        reports = collect_evidence(
             args.evidence, args.graph_bundle, load_families(args.families),
         )
-        write_reports(args.output_dir, [
-            ("field-contracts.json", fields),
-            ("gamemessage-catalog.json", messages),
-            ("evidence-manifest.json", manifest),
-        ])
+        write_reports(args.output_dir, reports)
     except (OSError, ValueError, KeyError, TypeError, BadZipFile) as error:
         parser.error(str(error))
 
+    fields = reports["field-contracts.json"]
+    messages = reports["gamemessage-catalog.json"]
+    timing = reports["timing-contracts.json"]
+    variables = reports["variable-access.json"]
+    manifest = reports["evidence-manifest.json"]
     print(f"Read {manifest['listing_graphs']} graphs and {manifest['state_markers']} state markers.")
     print(f"Recorded {len(fields['listing']['classes'])} classes and "
           f"{messages['message_count']} literal message IDs.")
     print(f"Left {len(messages['unresolved_endpoints'])} message endpoints unresolved.")
+    print(f"Recorded {len(timing['observations'])} timing sites and "
+          f"variable evidence for {len(variables['graphs'])} graphs.")
     if prepared := fields["prepared_bundle"]:
         print(f"Cross-checked {prepared['matched_states']} prepared state slots, "
               f"with {prepared['unmatched_markers']} unmatched markers.")

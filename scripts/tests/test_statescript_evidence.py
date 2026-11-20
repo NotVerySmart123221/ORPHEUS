@@ -19,10 +19,28 @@ PARAMETER_ID = "0xA200000000000101"
 UNBOUND_PARAMETER_ID = "0xA200000000000102"
 LISTING_LITERAL = "invented-listing-value-stays-local"
 PREPARED_LITERAL = "invented-prepared-value-stays-local"
-OUTPUTS = ("field-contracts.json", "gamemessage-catalog.json", "evidence-manifest.json")
+LISTED_DEFAULT = "invented-listing-schema-value-stays-local"
+PREPARED_DEFAULT = "invented-prepared-schema-value-stays-local"
+UNKNOWN_WAIT = "invented-timing-operand-stays-local"
+OUTPUTS = (
+    "field-contracts.json",
+    "gamemessage-catalog.json",
+    "timing-contracts.json",
+    "variable-access.json",
+    "evidence-manifest.json",
+)
 
 LISTINGS = {
     GRAPH_A: f"""# graph {GRAPH_A}
+schema:  # public schema defaults [INFERENCE: synthetic fixture]
+    var[9] = "{LISTED_DEFAULT}"
+
+on_entry(context=unset, rid=2):  # STUStatescriptEntry
+    set_var(var[521], shared_var[522])
+    set_var(None, 1, key=shared_var[523])
+    if var[999]:
+        pass
+
 state Stage_19:  # SyntheticStage, state 0
     SyntheticStage(
         m_data=Config(m_value=var[401], m_note="{LISTING_LITERAL}"),
@@ -62,6 +80,21 @@ on_game_message(
     m_params=[Param(m_out_Var=shared_var[519], m_B5051BCE=asset({PARAMETER_ID}))],
 )(var[517] <- param {PARAMETER_ID}):  # STUStatescriptEntryGameMessage
     pass
+
+state Pause_90:  # STUStatescriptStateWait, state 1 (server-only)
+    after(0.125):
+        pass
+state Pause_91:  # STUStatescriptStateWait, state 2
+    after(
+        random_float(0.25, 0.75),
+    ):
+        pass
+state Pause_92:  # STUStatescriptStateWait, state 3
+    after(var[920] + shared_var[520]):
+        pass
+state Pause_93:  # STUStatescriptStateWait, state 4 (client-only)
+    after(UnknownDelay("{UNKNOWN_WAIT}")):
+        pass
 """,
 }
 
@@ -119,6 +152,17 @@ class StateScriptEvidenceTest(unittest.TestCase):
                         "graphs": [
                             {
                                 "index": 42,
+                                "fields": {
+                                    "m_publicSchema": {
+                                        "$": "STUStatescriptSchema",
+                                        "m_entries": [
+                                            {
+                                                "m_0D09D2D9": "0x0D80000000000009",
+                                                "m_value": PREPARED_DEFAULT,
+                                            },
+                                        ],
+                                    },
+                                },
                                 "states": [5, 6, 7],
                                 "nodes": [
                                     prepared_node(5, 19, 0, {
@@ -156,24 +200,36 @@ class StateScriptEvidenceTest(unittest.TestCase):
                 reports,
                 {name: (directory_output / name).read_bytes() for name in OUTPUTS},
             )
-            fields, messages, manifest = (json.loads(reports[name]) for name in OUTPUTS)
+            fields, messages, timing, variables, manifest = (
+                json.loads(reports[name]) for name in OUTPUTS
+            )
             self.assertEqual(manifest["schema_version"], 1)
             self.assertEqual(manifest["listing_graphs"], 2)
-            self.assertEqual(manifest["state_markers"], 4)
+            self.assertEqual(manifest["state_markers"], 8)
             self.assertRegex(manifest["source_sha256"], r"^[0-9a-f]{64}$")
             self.assertTrue(all(
                 report["source_sha256"] == manifest["source_sha256"]
-                for report in (fields, messages)
+                for report in (fields, messages, timing, variables)
+            ))
+            self.assertTrue(all(
+                report["schema_version"] == 1
+                for report in (fields, messages, timing, variables)
             ))
             for text in reports.values():
                 self.assertNotIn(LISTING_LITERAL.encode(), text)
                 self.assertNotIn(PREPARED_LITERAL.encode(), text)
+                self.assertNotIn(LISTED_DEFAULT.encode(), text)
+                self.assertNotIn(PREPARED_DEFAULT.encode(), text)
+                self.assertNotIn(UNKNOWN_WAIT.encode(), text)
+                self.assertNotIn(b"UnknownDelay", text)
                 self.assertNotIn(b"UnknownMessage", text)
                 self.assertNotIn(b"m_mismatched", text)
                 self.assertNotIn(b"var[", text)
 
             self.assert_field_summary(fields, hashlib.sha256(bundle.read_bytes()).hexdigest())
             self.assert_message_summary(messages)
+            self.assert_timing_summary(timing)
+            self.assert_variable_summary(variables)
             duplicate = run_summary(archive, bundle, family_file, zip_output)
             self.assertNotEqual(duplicate.returncode, 0)
             self.assertIn("already exists", duplicate.stderr)
@@ -217,6 +273,62 @@ class StateScriptEvidenceTest(unittest.TestCase):
             {"class": "SyntheticStage", "listing_occurrences": 3, "prepared_matched_states": 2},
             {"class": "UnseenClass", "listing_occurrences": 0, "prepared_matched_states": 0},
         ])
+
+    def assert_timing_summary(self, timing):
+        self.assertEqual(
+            timing["resolutions"],
+            {"literal": 1, "literal_range": 1, "dynamic": 1, "unsupported": 1},
+        )
+        observations = timing["observations"]
+        self.assertEqual(
+            [(row["graph"], row["rid"], row["state"], row["scope"]) for row in observations],
+            [
+                (43, 90, 1, "server_only"),
+                (43, 91, 2, "unspecified"),
+                (43, 92, 3, "unspecified"),
+                (43, 93, 4, "client_only"),
+            ],
+        )
+        self.assertTrue(all(
+            (row["operation"], row["field"], row["unit"]) == ("wait", "after", None)
+            for row in observations
+        ))
+        self.assertEqual(
+            [(row["resolution"], row["duration"], row["range"]) for row in observations],
+            [
+                ("literal", 0.125, None),
+                ("literal_range", None, {"operator": "random_float", "min": 0.25, "max": 0.75}),
+                ("dynamic", None, None),
+                ("unsupported", None, None),
+            ],
+        )
+
+    def assert_variable_summary(self, variables):
+        graphs = {row["graph"]: row for row in variables["graphs"]}
+        self.assertEqual(
+            graphs[42]["prepared_public_schema"],
+            {"status": "recognized", "default_slots": [9]},
+        )
+        self.assertIsNone(graphs[43]["prepared_public_schema"])
+        accesses = {
+            (graph, entry["scope"], entry["slot"]): entry
+            for graph, row in graphs.items()
+            for entry in row["variables"]
+        }
+        self.assertEqual(accesses[42, "instance", 9]["schema_defaults"], 1)
+        self.assertEqual(accesses[42, "instance", 521]["writes"], 1)
+        self.assertEqual(accesses[42, "shared", 522]["reads"], 1)
+        self.assertGreater(graphs[42]["dynamic_contexts"], 0)
+        missing = accesses[42, "instance", 999]
+        self.assertEqual(missing["reads"], 1)
+        self.assertTrue(missing["no_observed_value_source"])
+        self.assertEqual(accesses[43, "instance", 920]["reads"], 1)
+        self.assertEqual(accesses[43, "shared", 520]["reads"], 1)
+        for scope, slot in (("instance", 517), ("shared", 519)):
+            with self.subTest(scope=scope, slot=slot):
+                binding = accesses[43, scope, slot]
+                self.assertEqual(binding["parameter_bindings"], 1)
+                self.assertFalse(binding["no_observed_value_source"])
 
     def assert_message_summary(self, messages):
         self.assertEqual(messages["message_count"], 1)

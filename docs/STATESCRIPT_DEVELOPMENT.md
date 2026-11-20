@@ -55,7 +55,7 @@ Shared tests use original graphs and values.
 2. **GameMessage catalog**. Index message IDs, send and receive
    placements, and parameter-to-variable bindings. Record dynamic or
    unresolved routes explicitly.
-3. **Timing contracts**. Separate literal values, evaluated ranges,
+3. **Timing contracts**. Separate literal values, literal ranges,
    and unknown expressions. Compare observable timer order and frame
    boundaries with a headless trace.
 4. **Variable access**. Track read, write, and initialization edges by
@@ -68,32 +68,49 @@ Shared tests use original graphs and values.
    shape and lifecycle outline. Use invented values, graphs, IDs and
    expected results derived from the server contract.
 
-### Generate the first two reports
+### Generate the static reports
 
 ```text
 python scripts/summarize_statescript_evidence.py --evidence path/to/classification.zip --graph-bundle path/to/game_graphs_174.json.gz --families path/to/capability-families.json --output-dir path/to/new-private-report
 ```
 
-The output directory holds `field-contracts.json`,
-`gamemessage-catalog.json`, and `evidence-manifest.json`. The manifest
-identifies the normalized source and report version. The command accepts
-an extracted evidence directory as well as a ZIP. It requires a new
-output directory.
+The output directory holds the four static reports and
+`evidence-manifest.json`. The manifest identifies the normalized source
+and report version. The command accepts an extracted evidence directory
+as well as a ZIP. It requires a new output directory.
 
-Field shapes from confidently attributable listing constructors appear
-under `listing`. Missing rendering stays distinct from field absence.
+In `field-contracts.json`, field shapes from confidently attributable
+listing constructors appear under `listing`. Missing rendering stays
+distinct from field absence.
 The optional prepared bundle adds exact matches by graph, RID, slot,
 class, and scope. Its field counts use the matched state population.
 Prepared shapes include array-element paths and one example per kind.
 Use an optional JSON object under `--families` to group raw classes by
 capability. Values are arrays of class names.
 
-The message catalog groups literal IDs and reports sender and receiver
+The `gamemessage-catalog.json` report groups literal IDs and lists sender and receiver
 locations, observed parameter GUIDs, low-16-bit slots, and direct
 variable bindings. Dynamic and unresolved endpoints retain their own
 records. Treat endpoint pairs as candidate routes. Runtime traces
 establish delivery. Reports retain message IDs and binding slots.
 Other field values are reduced to structural kinds.
+
+The `timing-contracts.json` report identifies direct wait-state operands
+by graph, RID, state slot, and scope. It records finite literals and
+ordered literal random bounds. Dynamic and unsupported operands keep
+their location and classification. A null unit indicates that the
+listing lacks an explicit unit. Use VM traces to verify elapsed time
+and event order.
+
+The `variable-access.json` report records definite reads and write sites,
+schema default declarations, direct message bindings, and uncertain
+contexts for each graph. It keeps shared slots separate from instance
+slots. For a matching prepared graph, the report also lists instance
+slots declared by a recognized public schema. A source candidate means
+the listing shows a read and lacks a visible value source. Review the
+prepared schema, cross-graph input, and runtime ordering before treating
+it as a missing initializer. The report omits source expressions and
+default values.
 
 ## Declare an ordinary server state
 
