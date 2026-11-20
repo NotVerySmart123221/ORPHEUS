@@ -1265,6 +1265,117 @@ pub(super) fn shared_spatial_owner_absence_contract() {
         }
     }
 }
+
+#[test]
+fn auxiliary_presentation_absence_preserves_lifecycle_at_unrelated_placement() {
+    use std::cell::Cell;
+
+    struct Host {
+        outline: bool,
+        available: Option<bool>,
+        reads: Cell<u8>,
+    }
+    impl World for Host {
+        fn entity_variable(&mut self, _entity: u32, _id: u32) -> Option<Value> {
+            None
+        }
+        fn position(&mut self, _entity: u32) -> Option<[f64; 3]> {
+            None
+        }
+        fn spatial_binding_owner_available(&self, _site: Site) -> Option<bool> {
+            assert!(!self.outline);
+            self.reads.set(self.reads.get() + 1);
+            self.available
+        }
+        fn outline_context_available(&self, _site: Site) -> Option<bool> {
+            assert!(self.outline);
+            self.reads.set(self.reads.get() + 1);
+            self.available
+        }
+    }
+
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../../../../fixtures/behavior/statescript-spatial-owner-absence-v1.json"
+    ))
+    .unwrap();
+    let portable = &contract["input"]["portable_only"];
+    let index = u32::try_from(portable["graph"].as_u64().unwrap()).unwrap();
+    let position = u16::try_from(portable["position"].as_u64().unwrap()).unwrap();
+    let child = position + 1;
+    for case in portable["classes"].as_array().unwrap() {
+        let class = case["class"].as_str().unwrap();
+        for (available, client_only) in [
+            (Some(false), false),
+            (Some(true), false),
+            (None, false),
+            (Some(false), true),
+        ] {
+            let mut fields = case["fields"].clone();
+            fields["m_subgraphPlug"] = plug(&[(child, "m_beginPlug")], &[1]);
+            let mut state = node(position, class, Some(0), fields);
+            state["client_only"] = json!(client_only);
+            let mut graph = graph(
+                index,
+                vec![
+                    state,
+                    node(child, "STUStatescriptState", Some(1), json!({})),
+                ],
+                json!([position, child]),
+                json!([]),
+            );
+            graph["items"] = json!(child + 1);
+            let bundle = json!({
+                "version": 1, "graphs": [graph], "bodies": {}, "missing": [],
+                "runtime_state_metadata": {"plain_classes": [class]}
+            });
+            let graphs =
+                Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+            let mut world = Host {
+                outline: class == "STU_DC80F7E6",
+                available,
+                reads: Cell::new(0),
+            };
+            let mut component = Component::start(
+                graphs,
+                0xa000_0101,
+                Variables::new(),
+                vec![Root::listener(1, index, Some(0))],
+                0,
+                &mut world,
+                MAX_INIT_WORK,
+            )
+            .unwrap();
+            let snapshot = component.snapshot().unwrap();
+            assert_eq!(world.reads.get(), u8::from(!client_only));
+            if client_only {
+                assert!(snapshot.initialization_complete());
+                assert!(active(snapshot, 1).is_empty());
+            } else if available == Some(false) {
+                assert!(
+                    snapshot.initialization_complete(),
+                    "{:?}",
+                    snapshot.diagnostics
+                );
+                assert_eq!(snapshot.instances[&1].states[&0].kind, StateKind::Plain);
+                assert_eq!(active(snapshot, 1), [0, 1]);
+                component
+                    .machine
+                    .queues
+                    .push(1, frame_start(1), Event::Abort(0))
+                    .unwrap();
+                component.advance_frame(1, &mut world).unwrap();
+                assert!(active(component.snapshot().unwrap(), 1).is_empty());
+                assert_eq!(world.reads.get(), 1);
+            } else {
+                assert!(active(snapshot, 1).is_empty());
+                assert!(snapshot.diagnostics.iter().any(|diagnostic| {
+                    matches!(&diagnostic.issue, Issue::UnsupportedState(rejected) if rejected == class)
+                }));
+            }
+        }
+    }
+}
+
 #[test]
 fn public_schema_evaluates_before_assignment_and_inherits_to_children() {
     let entry = |links: &[(u16, &str)]| {

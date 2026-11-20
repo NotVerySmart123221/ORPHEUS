@@ -265,6 +265,40 @@ fn owner_reports_absent_combat_accumulator_only_for_valid_own_body() {
 }
 
 #[test]
+fn owner_reports_absent_presentation_contexts_only_for_valid_own_body() {
+    let (factory, spawn) = fixture_body_factory();
+    let mut runtime = factory.start(spawn).unwrap();
+    let world = &mut runtime.world;
+    let site = Site {
+        entity: spawn.entity,
+        instance: 1,
+        graph: 42,
+        node: Some(7),
+    };
+    for mode in [
+        PRACTICE_RANGE_MODE,
+        crate::game_content::JUNKENSTEIN_REVENGE,
+    ] {
+        world.mode = mode;
+        for (entity, expected) in [
+            (spawn.entity, Some(false)),
+            (spawn.controller, None),
+            (spawn.entity + 1, None),
+            (0, None),
+        ] {
+            let site = Site { entity, ..site };
+            assert_eq!(world.spatial_binding_owner_available(site), expected);
+            assert_eq!(world.outline_context_available(site), expected);
+        }
+    }
+
+    world.entity = 0;
+    let invalid = Site { entity: 0, ..site };
+    assert_eq!(world.spatial_binding_owner_available(invalid), None);
+    assert_eq!(world.outline_context_available(invalid), None);
+}
+
+#[test]
 fn cassidy_junkenstein_rules_enable_fan_without_changing_other_hero_defaults() {
     let (factory, spawn) = fixture_body_factory();
     let mut runtime = factory.start(spawn).unwrap();

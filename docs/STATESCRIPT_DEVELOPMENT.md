@@ -121,6 +121,18 @@ ability support.
 - Player, NPC, mode and gate scripts read native engine settings through
   the mode's authored table or its captured compatibility table.
 
+- Auxiliary view bindings and outline states keep their ordinary
+  lifecycle when the host confirms the local presentation context is
+  absent. Graph placement is independent of that host fact.
+- Dynamic elapsed waits with a direct numeric variable sample the duration
+  again on each tick. Reentry with restart enabled cancels the prior
+  registration and resets the start time. Ending the state unregisters
+  its tick.
+- Cinematic boundary projections with a literal integer delay use the
+  current component frame at entry and release. The owner and observer
+  slots must both refer to the state. Room simulation still uses its
+  existing clock.
+
 Native target tracking still needs ordered samples, optional typed
 output bindings, and the lifecycle of its embedded state slots. The
 authored `track_entities` node owns separate child graph instances.

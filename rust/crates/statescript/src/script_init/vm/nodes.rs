@@ -15,11 +15,12 @@ use super::super::{
     shapes::{
         array_field, array_insertion_index, case_path, configured, encounter_base_state_shape,
         excluded_target_tags, field, is_bare_header_action, is_base_health_pool,
-        is_client_subgraph_controller, is_entry, is_literal_frame_wait, is_message_recipient_set,
-        is_networked_for_code_synced, is_owner_movement_sampler, is_parent_owned_timed_graph,
-        is_projected_self_message, is_self_stat_timer, is_self_target, is_wave_health_pool,
-        living_body_array_shape, participant_filter, persistent_message, placement_collection_tag,
-        pool_number, raw_indices, registered_state, source_key, static_target_operand, stored,
+        is_cinematic_time_scale_envelope, is_client_subgraph_controller, is_elapsed_wait, is_entry,
+        is_literal_frame_wait, is_message_recipient_set, is_networked_for_code_synced,
+        is_owner_movement_sampler, is_parent_owned_timed_graph, is_projected_self_message,
+        is_self_stat_timer, is_self_target, is_wave_health_pool, living_body_array_shape,
+        participant_filter, persistent_message, placement_collection_tag, pool_number, raw_indices,
+        registered_state, source_key, static_target_operand, stored,
     },
     types::{InitFault, Issue, SpawnSearch, SpawnSearchKey, State, StateKind},
     world::{CreationKind, EntityCreation, Site, World},
@@ -1070,6 +1071,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         self.machine
                             .queues
                             .retain(id, |_, event| event.state() != Some(key.raw));
+                        self.clear_tick(key);
                         self.state_mut(key).expect("active wait").start_ms = self.machine.now_ms;
                         self.arm_wait(key, node)?;
                     }
@@ -1106,13 +1108,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::Plain
             }
             "STU_96333BBE" | "STU_E8D976BE"
-                if registration.permits(matches!(
-                    (self.graph(id).index, node.pos, node.class.as_str()),
-                    (0x0ced, 0 | 4, "STU_96333BBE") | (0x0ced, 6, "STU_E8D976BE")
-                )) && self
-                    .world
-                    .spatial_binding_owner_available(self.site(id, node))
-                    == Some(false) =>
+                if registration.shape(
+                    self.world
+                        .spatial_binding_owner_available(self.site(id, node))
+                        == Some(false),
+                ) =>
             {
                 // 911920 and AE03F0 return before any binding/field access
                 // when 978A30 cannot resolve the auxiliary client owner.
@@ -1308,7 +1308,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::BossPauseReceiver { receiving: false }
             }
             "STUStatescriptStateGameMessageEntry" => StateKind::MessageIdle,
-            "STUStatescriptStateWait" if registration.shape(!configured(node, "m_BF1A93B0")) => {
+            "STUStatescriptStateWait" if registration.shape(is_elapsed_wait(node)) => {
                 StateKind::Wait
             }
             "STUStatescriptStateShockwave" => StateKind::Shockwave { managed: false },
@@ -1341,9 +1341,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             "STU_D74D4F47" => StateKind::WaitFrames { target: 0 },
             "STU_2F07848F"
-                if registration.permits(matches!(
-                    (self.graph(id).index, node.pos),
-                    (0x0cec, 6) | (0x0ce0, 3) | (0x181e, 0)
+                if registration.shape(is_cinematic_time_scale_envelope(
+                    self.graph(id),
+                    node,
+                    key.raw,
                 )) =>
             {
                 StateKind::CinematicTimeScale { boundary_frame: 0 }

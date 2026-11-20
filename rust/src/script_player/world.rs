@@ -242,13 +242,13 @@ impl World for BodyWorld {
     }
 
     fn spatial_binding_owner_available(&self, site: Site) -> Option<bool> {
-        // This authoritative body host has no local client-world auxiliary
-        // owner. Its remote native client still evaluates the view bindings.
-        (self.is_player_site(site)
-            && is_junkenstein_mode(self.mode)
-            && site.graph == 0x0ced
-            && matches!(site.node, Some(0 | 4 | 6)))
-        .then_some(false)
+        // The headless body has no local auxiliary view owner.
+        self.is_player_site(site).then_some(false)
+    }
+
+    fn outline_context_available(&self, site: Site) -> Option<bool> {
+        // The headless body has no local outline presentation context.
+        self.is_player_site(site).then_some(false)
     }
 
     fn set_cinematic_aim_lock(&mut self, site: Site, active: bool) -> bool {

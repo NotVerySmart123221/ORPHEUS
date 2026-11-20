@@ -173,6 +173,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             .expect("AI facing state");
                         self.update_ai_facing(key, node, Some(record))?;
                     }
+                    Some(StateKind::Wait) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("elapsed wait");
+                        self.check_elapsed_wait(key, node)?;
+                    }
                     Some(StateKind::WaitFrames { target }) if target <= self.machine.frame => {
                         self.post(id, Event::Finish(raw))?;
                     }
@@ -198,20 +205,51 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         node: &Node,
     ) -> Result<(), InitFault> {
         let id = key.instance;
-        let Some(seconds) = self.evaluate(id, node, field(&node.fields, "m_timeout"), Some(key))
-        else {
+        if configured(node, "m_BF1A93B0") {
+            self.register_tick(key, self.machine.now_ms);
+            return self.check_elapsed_wait(key, node);
+        }
+        let Some(milliseconds) = self.wait_milliseconds(key, node, false) else {
             return Ok(());
         };
-        let milliseconds = ((script_expr::to_float(&seconds) * 1000.0) as f32).round();
-        if !milliseconds.is_finite() {
-            self.report(self.site(id, node), Issue::UnsupportedField("Wait timeout"));
-            return Ok(());
-        }
         if milliseconds <= 0.0 {
             self.post(id, Event::Finish(key.raw))
         } else {
             self.post_after(id, milliseconds as u64, Event::Timer(key.raw, 1))
         }
+    }
+
+    fn check_elapsed_wait(&mut self, key: StateKey, node: &Node) -> Result<(), InitFault> {
+        let Some(milliseconds) = self.wait_milliseconds(key, node, true) else {
+            return Ok(());
+        };
+        let start = self.state(key).expect("active wait").start_ms;
+        if self.machine.now_ms.saturating_sub(start) >= milliseconds as u64 {
+            self.post(key.instance, Event::Finish(key.raw))?;
+        }
+        Ok(())
+    }
+
+    fn wait_milliseconds(&mut self, key: StateKey, node: &Node, dynamic: bool) -> Option<f32> {
+        let value = self.evaluate(
+            key.instance,
+            node,
+            field(&node.fields, "m_timeout"),
+            (!dynamic).then_some(key),
+        )?;
+        let milliseconds = ((script_expr::to_float(&value) * 1000.0) as f32).round();
+        if milliseconds.is_finite()
+            && (!dynamic
+                || (matches!(value, Value::Integer(_) | Value::Float(_))
+                    && f64::from(milliseconds) < u64::MAX as f64))
+        {
+            return Some(milliseconds);
+        }
+        self.report(
+            self.site(key.instance, node),
+            Issue::UnsupportedField("Wait timeout"),
+        );
+        None
     }
 
     pub(in crate::script_init) fn arm_animation(

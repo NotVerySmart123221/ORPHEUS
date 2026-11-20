@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "case_id": "script-cinematic-boundary.synthetic.v1",
+  "source": {"basis": "Original graph placements, timing operands and frame boundaries."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "graph": 417,
+    "release_frame": 11,
+    "cases": [
+      {
+        "name": "literal delay and bound scale",
+        "delay": {"$": "STUConfigVarInt", "m_value": 4},
+        "scale": {"$": "STUConfigVarDynamic", "m_identifier": 87, "m_60DB8F99": false},
+        "remote": true,
+        "boundaries": [4, 15]
+      },
+      {
+        "name": "negative delay and authored scale expression",
+        "delay": {"$": "STUConfigVarInt", "m_value": -7},
+        "scale": {"$": "STU_919FD47C", "m_expression": {}, "m_configVars": []},
+        "remote": true,
+        "boundaries": [0, 11]
+      },
+      {
+        "name": "variable delay needs a separate contract",
+        "delay": {"$": "STUConfigVarDynamic", "m_identifier": 88, "m_60DB8F99": false},
+        "scale": {"$": "STUConfigVarDynamic", "m_identifier": 87, "m_60DB8F99": false},
+        "remote": true,
+        "boundaries": null
+      },
+      {
+        "name": "missing observer slot",
+        "delay": {"$": "STUConfigVarInt", "m_value": 4},
+        "scale": {"$": "STUConfigVarDynamic", "m_identifier": 87, "m_60DB8F99": false},
+        "remote": false,
+        "boundaries": null
+      }
+    ]
+  }
+}
