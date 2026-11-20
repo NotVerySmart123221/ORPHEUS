@@ -1777,6 +1777,7 @@ fn authored_spatial_queries_read_current_entity_vectors() {
 #[test]
 fn authored_radius_query_filters_and_bounds_spatial_candidates() {
     type CandidateRows = Vec<(u32, [f64; 3])>;
+    type RelationRows = Vec<(u32, [f64; 3], Option<u8>)>;
 
     #[derive(serde::Deserialize)]
     struct Input {
@@ -1786,12 +1787,16 @@ fn authored_radius_query_filters_and_bounds_spatial_candidates() {
         budget_after_first_candidate: usize,
         large_radius: Json,
         large_candidates: CandidateRows,
+        relation_source: Json,
+        relation_candidates: RelationRows,
+        relation_queries: Vec<(String, u32)>,
     }
 
     #[derive(serde::Deserialize)]
     struct Expected {
         matches: Vec<u32>,
         large_matches: Vec<u32>,
+        relation_matches: Vec<Option<Vec<u32>>>,
     }
 
     #[derive(serde::Deserialize)]
@@ -1805,14 +1810,18 @@ fn authored_radius_query_filters_and_bounds_spatial_candidates() {
 
     struct Host {
         center: [f64; 3],
+        source: u32,
         candidates: Option<Vec<SpatialCandidate>>,
     }
 
     impl Context for Host {
         fn variable(&mut self, variable: Variable) -> Value {
             assert_eq!(variable.scope, Scope::Instance);
-            assert_eq!(variable.id, 61);
-            Value::Vector(self.center)
+            match variable.id {
+                61 => Value::Vector(self.center),
+                62 => Value::Entity(self.source),
+                id => panic!("unexpected variable {id}"),
+            }
         }
 
         fn spatial_candidates(&mut self) -> Option<&[SpatialCandidate]> {
@@ -1839,16 +1848,24 @@ fn authored_radius_query_filters_and_bounds_spatial_candidates() {
         budget_after_first_candidate,
         large_radius,
         large_candidates,
+        relation_source,
+        relation_candidates,
+        relation_queries,
     } = contract.input;
     let spatial_candidates = |rows: CandidateRows| {
         rows.into_iter()
-            .map(|(entity, position)| SpatialCandidate { entity, position })
+            .map(|(entity, position)| SpatialCandidate {
+                entity,
+                position,
+                team: None,
+            })
             .collect()
     };
     let entities =
         |matches: Vec<u32>| Value::Array(matches.into_iter().map(Value::Entity).collect());
     let mut host = Host {
         center,
+        source: 0,
         candidates: Some(spatial_candidates(candidates)),
     };
     assert_eq!(
@@ -1886,16 +1903,19 @@ fn authored_radius_query_filters_and_bounds_spatial_candidates() {
         SpatialCandidate {
             entity: 0,
             position: center,
+            team: None,
         },
         SpatialCandidate {
             entity: 42,
             position: [0.0, f64::NAN, 0.0],
+            team: None,
         },
     ] {
         host.candidates = Some(vec![
             SpatialCandidate {
                 entity: 17,
                 position: center,
+                team: None,
             },
             invalid,
         ]);
@@ -1904,6 +1924,76 @@ fn authored_radius_query_filters_and_bounds_spatial_candidates() {
             Err(EvalError::UnavailableSpatialCandidates)
         );
     }
+
+    let limit = relation_candidates.len();
+    host.candidates = Some(
+        relation_candidates
+            .into_iter()
+            .map(|(entity, position, team)| SpatialCandidate {
+                entity,
+                position,
+                team,
+            })
+            .collect(),
+    );
+    let filter = |relation: &str| json!({"relation": relation, "source": &relation_source});
+    let mut filtered = config;
+    assert_eq!(
+        relation_queries.len(),
+        contract.expected.relation_matches.len()
+    );
+    for ((relation, source), expected) in relation_queries
+        .into_iter()
+        .zip(contract.expected.relation_matches)
+    {
+        filtered["filter"] = filter(&relation);
+        host.source = source;
+        assert_eq!(
+            evaluate(&filtered, &mut host),
+            expected
+                .map(entities)
+                .ok_or(EvalError::UnavailableSpatialCandidates),
+            "{relation} relative to {source}"
+        );
+    }
+
+    // An independent source has no allies, but the whole snapshot still costs work.
+    host.source = 25;
+    filtered["filter"] = filter("ally");
+    assert_eq!(
+        evaluate_with_budget(&filtered, &mut host, limit),
+        Err(EvalError::BudgetExceeded { offset: 0, limit })
+    );
+
+    host.source = 0;
+    assert!(matches!(
+        evaluate(&filtered, &mut host),
+        Err(EvalError::MalformedConfig(_))
+    ));
+    host.source = 31;
+    for malformed in [
+        Json::Null,
+        filter("unknown"),
+        json!({"relation":"ally", "source":31}),
+        json!({"relation":"ally", "source":&relation_source, "extra":null}),
+    ] {
+        filtered["filter"] = malformed;
+        assert!(matches!(
+            evaluate(&filtered, &mut host),
+            Err(EvalError::MalformedConfig(_))
+        ));
+    }
+
+    host.candidates.as_mut().unwrap().push(SpatialCandidate {
+        entity: 31,
+        position: center,
+        team: Some(1),
+    });
+    filtered["filter"] = filter("ally");
+    assert_eq!(
+        evaluate(&filtered, &mut host),
+        Err(EvalError::UnavailableSpatialCandidates)
+    );
 }
 
 #[test]

@@ -127,8 +127,15 @@ captured at the first input or simulation work of the room frame. Position
 and membership updates appear in the following frame's sample. The sample
 contains player and bot bodies and is supplied during room runtime events.
 A component initialized before it joins the room has no candidate sample.
-Graphs can apply their own relationship rules to the resulting entity
-references.
+
+To filter by team, add a `filter` object with a `relation` of `ally` or
+`opponent` and a `source` expression that yields a living entity reference.
+The query finds that entity's affiliation in the same snapshot, even when
+the source lies beyond the radius. Both relations exclude the source.
+Allies share an assigned team. Independents, including free-for-all
+participants, are opponents of every other entity. A missing source or
+conflicting snapshots for its affiliation yield an unavailable query.
+Omit `filter` to include every entity in range.
 
 See the [synthetic radius contract](../fixtures/behavior/statescript-entities-in-radius-v1.json).
 

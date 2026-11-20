@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added an optional ally or opponent filter to authored radius queries. Player and AI scripts use source and candidate affiliations from the same frame snapshot, respecting the room's free-for-all rule. Both locked workspace lanes, Rust 1.85, pinned Python public contracts, and the prepared 900-frame regression passed.
+
 - Added authored StateScript observation states for continuously publishing expressions such as room radius membership. Sampling uses the normal VM frame and state lifecycle, preserves successful values through unavailable scene data, and emits changes when a new value is available. Both locked workspace lanes, Rust 1.85, pinned Python public contracts, and the prepared 900-frame regression passed.
 
 - Added a bounded authored StateScript radius query backed by one living-body position sample shared by player and AI scripts per room frame. Passed both locked workspace lanes, the Rust 1.85 check, pinned Python public contracts, and the prepared 900-frame regression.

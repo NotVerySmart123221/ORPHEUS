@@ -274,7 +274,7 @@ pub(crate) struct RoomSimulation {
     by_wire: IndexMap<u32, Entity>,
     players_by_wire: IndexMap<u32, Entity>,
     players_by_owner: IndexMap<u32, PlayerBodyHandle>,
-    spatial_queries_enabled: bool,
+    spatial_free_for_all: Option<bool>,
     spatial_frame: Option<(u32, Arc<[SpatialCandidate]>)>,
     // Generation maps live for the room's lifetime so reconnects cannot reset history.
     player_generations: HashMap<u32, u64>,
@@ -590,7 +590,7 @@ impl RoomSimulation {
             by_wire,
             players_by_wire: IndexMap::new(),
             players_by_owner: IndexMap::new(),
-            spatial_queries_enabled: false,
+            spatial_free_for_all: None,
             spatial_frame: None,
             player_generations: HashMap::new(),
             spawned_player_generations: HashMap::new(),
@@ -635,17 +635,19 @@ impl RoomSimulation {
         self.spawn_anchors.as_ref()
     }
 
-    pub(crate) fn enable_spatial_queries(&mut self) {
-        self.spatial_queries_enabled = true;
+    pub(crate) fn enable_spatial_queries(&mut self, free_for_all: bool) {
+        self.spatial_free_for_all = Some(free_for_all);
     }
 
     /// Capture the living room bodies on the first use of this room frame.
     pub(crate) fn prepare_spatial_frame(&mut self, frame: u32) -> Result<(), CombatError> {
-        if !self.spatial_queries_enabled
-            || self
-                .spatial_frame
-                .as_ref()
-                .is_some_and(|(previous, _)| *previous == frame)
+        let Some(free_for_all) = self.spatial_free_for_all else {
+            return Ok(());
+        };
+        if self
+            .spatial_frame
+            .as_ref()
+            .is_some_and(|(previous, _)| *previous == frame)
         {
             return Ok(());
         }
@@ -657,6 +659,7 @@ impl RoomSimulation {
                 candidates.push(SpatialCandidate {
                     entity: bot.entity,
                     position: bot.position,
+                    team: (!free_for_all).then_some(bot.spawn.team),
                 });
             }
         }
@@ -675,6 +678,7 @@ impl RoomSimulation {
                 candidates.push(SpatialCandidate {
                     entity: wire,
                     position: state.mover.pose().position,
+                    team: (!free_for_all).then_some(state.team),
                 });
             }
         }

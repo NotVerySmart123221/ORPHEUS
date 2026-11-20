@@ -142,14 +142,17 @@ fn authored_observer_samples_radius_once_per_frame_until_aborted() {
     const GRAPH: u32 = 94;
     const INSTANCE: u16 = 1;
     const ENTITY: u32 = 4242;
+    const SOURCE: u32 = 61;
     const OUTPUT: u32 = 81;
     const FIRED: u32 = 82;
     const SUBFRAME_MESSAGE: u64 = 13;
 
+    type CandidateRow = (u32, [f64; 3], Option<u8>);
+
     #[derive(Deserialize)]
     struct Step {
         frame: u32,
-        candidates: Option<Vec<(u32, [f64; 3])>>,
+        candidates: Option<Vec<CandidateRow>>,
         message: Option<u64>,
         override_output: Option<Vec<u32>>,
         #[serde(default)]
@@ -159,6 +162,7 @@ fn authored_observer_samples_radius_once_per_frame_until_aborted() {
     #[derive(Deserialize)]
     struct Input {
         bundle: Json,
+        common_candidates: Vec<CandidateRow>,
         steps: Vec<Step>,
     }
 
@@ -220,7 +224,7 @@ fn authored_observer_samples_radius_once_per_frame_until_aborted() {
     let mut component = Component::start(
         graphs,
         ENTITY,
-        Variables::from([(1, Value::Entity(ENTITY))]),
+        Variables::from([(1, Value::Entity(ENTITY)), (2, Value::Entity(SOURCE))]),
         vec![Root::new(INSTANCE, GRAPH)],
         0,
         &mut world,
@@ -231,11 +235,17 @@ fn authored_observer_samples_radius_once_per_frame_until_aborted() {
     assert!(component.snapshot().unwrap().diagnostics.is_empty());
     let entities = |ids: Vec<u32>| Value::Array(ids.into_iter().map(Value::Entity).collect());
 
+    let common_candidates = contract.input.common_candidates;
     for (step, expected) in contract.input.steps.into_iter().zip(contract.expected) {
         let before = world.reads.get();
         world.candidates = step.candidates.map(|rows| {
             rows.into_iter()
-                .map(|(entity, position)| SpatialCandidate { entity, position })
+                .chain(common_candidates.iter().copied())
+                .map(|(entity, position, team)| SpatialCandidate {
+                    entity,
+                    position,
+                    team,
+                })
                 .collect()
         });
         component

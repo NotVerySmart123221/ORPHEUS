@@ -35,6 +35,11 @@ fn combat_target_admission_applies_team_and_liveness_rules_to_bots() {
 
 #[test]
 fn spatial_candidates_capture_living_room_bodies_once_per_frame() {
+    check_spatial_candidates_frame(false);
+    check_spatial_candidates_frame(true);
+}
+
+fn check_spatial_candidates_frame(free_for_all: bool) {
     use crate::{contact_world::ContactWorld, mover::Mover, mover_settings::MoverSettings};
 
     let bots = fixture_bots();
@@ -64,20 +69,27 @@ fn spatial_candidates_capture_living_room_bodies_once_per_frame() {
     room.prepare_spatial_frame(frame).unwrap();
     assert!(room.spatial_frame.is_none());
 
-    room.enable_spatial_queries();
+    room.enable_spatial_queries(free_for_all);
     room.prepare_spatial_frame(frame).unwrap();
     let (captured, initial) = room.spatial_frame.as_ref().unwrap();
     assert_eq!(*captured, frame);
     assert_eq!(initial.len(), 3);
-    assert!(initial.iter().any(|row| row.entity == dying_bot));
+    let bot_team = (!free_for_all).then_some(1);
+    assert!(
+        initial
+            .iter()
+            .any(|row| row.entity == dying_bot && row.team == bot_team)
+    );
     let initial_bot = SpatialCandidate {
         entity: moving_bot,
         position: initial_bot_position,
+        team: bot_team,
     };
     assert!(initial.contains(&initial_bot));
     assert!(initial.contains(&SpatialCandidate {
         entity: player.entity,
         position: player_position,
+        team: (!free_for_all).then_some(0),
     }));
     let initial = Arc::clone(initial);
 
@@ -104,6 +116,7 @@ fn spatial_candidates_capture_living_room_bodies_once_per_frame() {
         &[SpatialCandidate {
             entity: moving_bot,
             position: new_position,
+            team: bot_team,
         }]
     );
     assert!(initial.contains(&initial_bot));

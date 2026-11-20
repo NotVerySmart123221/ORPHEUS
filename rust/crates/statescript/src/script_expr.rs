@@ -66,6 +66,8 @@ pub enum VelocityQuery {
 pub struct SpatialCandidate {
     pub entity: u32,
     pub position: [f64; 3],
+    /// Team affiliation. None is an independent participant.
+    pub team: Option<u8>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

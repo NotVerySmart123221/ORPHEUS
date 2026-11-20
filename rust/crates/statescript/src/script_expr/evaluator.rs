@@ -577,50 +577,7 @@ impl Evaluator {
                         .ok_or(unavailable)?,
                 )
             }
-            "EntitiesInRadius" => {
-                let Some((center, radius)) = fields
-                    .get("center")
-                    .zip(fields.get("radius"))
-                    .filter(|_| fields.len() == 3)
-                else {
-                    return Err(EvalError::MalformedConfig("expected a center and radius"));
-                };
-                self.charge()?;
-                let center = match self.config(center, context, nested)? {
-                    Value::Vector(center) if center.iter().all(|axis| axis.is_finite()) => center,
-                    _ => {
-                        return Err(EvalError::MalformedConfig(
-                            "expected a finite center vector",
-                        ));
-                    }
-                };
-                let radius = match self.config(radius, context, nested)? {
-                    Value::Integer(value) if value >= 0 => value as f64,
-                    Value::Float(value) if value.is_finite() && value >= 0.0 => value,
-                    _ => {
-                        return Err(EvalError::MalformedConfig(
-                            "expected a finite nonnegative radius",
-                        ));
-                    }
-                };
-                let candidates = context
-                    .spatial_candidates()
-                    .ok_or(EvalError::UnavailableSpatialCandidates)?;
-                let mut matches = Vec::new();
-                for &SpatialCandidate { entity, position } in candidates {
-                    self.charge()?;
-                    if !valid_entity(entity) || !position.iter().all(|axis| axis.is_finite()) {
-                        return Err(EvalError::UnavailableSpatialCandidates);
-                    }
-                    let [dx, dy, dz] = std::array::from_fn(|axis| position[axis] - center[axis]);
-                    if dx.hypot(dy).hypot(dz) <= radius {
-                        matches.push(entity);
-                    }
-                }
-                matches.sort_unstable();
-                matches.dedup();
-                Value::Array(matches.into_iter().map(Value::Entity).collect())
-            }
+            "EntitiesInRadius" => self.entities_in_radius(fields, context, nested)?,
             "STU_71A87E92" if native_shape(config, class, Some("m_entity")) => {
                 if let Some(value) = context.native(config) {
                     return Ok(value);
@@ -1373,6 +1330,107 @@ impl Evaluator {
             return result.map(|value| Value::Bool(truthy(&value)));
         }
         Ok(Value::Bool(true))
+    }
+
+    fn entities_in_radius(
+        &mut self,
+        fields: &serde_json::Map<String, Json>,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<Value, EvalError> {
+        let filter = fields.get("filter");
+        let Some((center, radius)) = fields
+            .get("center")
+            .zip(fields.get("radius"))
+            .filter(|_| fields.len() == 3 + usize::from(filter.is_some()))
+        else {
+            return Err(EvalError::MalformedConfig("expected a center and radius"));
+        };
+        self.charge()?;
+        let center = match self.config(center, context, depth)? {
+            Value::Vector(center) if center.iter().all(|axis| axis.is_finite()) => center,
+            _ => {
+                return Err(EvalError::MalformedConfig(
+                    "expected a finite center vector",
+                ));
+            }
+        };
+        let radius = match self.config(radius, context, depth)? {
+            Value::Integer(value) if value >= 0 => value as f64,
+            Value::Float(value) if value.is_finite() && value >= 0.0 => value,
+            _ => {
+                return Err(EvalError::MalformedConfig(
+                    "expected a finite nonnegative radius",
+                ));
+            }
+        };
+        let filter = filter
+            .map(|filter| {
+                let malformed = EvalError::MalformedConfig("expected a relation and source filter");
+                let Some((relation, source)) = filter
+                    .as_object()
+                    .filter(|fields| fields.len() == 2)
+                    .and_then(|fields| fields.get("relation").zip(fields.get("source")))
+                else {
+                    return Err(malformed);
+                };
+                let allies_only = match relation.as_str() {
+                    Some("ally") => true,
+                    Some("opponent") => false,
+                    _ => return Err(malformed),
+                };
+                let Value::Entity(source) = self.config(source, context, depth)? else {
+                    return Err(EvalError::MalformedConfig("expected a bound filter source"));
+                };
+                if !valid_entity(source) {
+                    return Err(EvalError::MalformedConfig("expected a bound filter source"));
+                }
+                Ok((source, allies_only))
+            })
+            .transpose()?;
+
+        let candidates = context
+            .spatial_candidates()
+            .ok_or(EvalError::UnavailableSpatialCandidates)?;
+        let mut source_team: Option<Option<u8>> = None;
+        let mut matches = Vec::new();
+        for &SpatialCandidate {
+            entity,
+            position,
+            team,
+        } in candidates
+        {
+            self.charge()?;
+            if !valid_entity(entity) || !position.iter().all(|axis| axis.is_finite()) {
+                return Err(EvalError::UnavailableSpatialCandidates);
+            }
+            if filter.is_some_and(|(source, _)| entity == source) {
+                if source_team
+                    .replace(team)
+                    .is_some_and(|previous| previous != team)
+                {
+                    return Err(EvalError::UnavailableSpatialCandidates);
+                }
+                continue;
+            }
+            let [dx, dy, dz] = std::array::from_fn(|axis| position[axis] - center[axis]);
+            if dx.hypot(dy).hypot(dz) <= radius {
+                matches.push((entity, team));
+            }
+        }
+        if let Some((_, allies_only)) = filter {
+            let source_team = source_team.ok_or(EvalError::UnavailableSpatialCandidates)?;
+            matches
+                .retain(|&(_, team)| (source_team.is_some() && team == source_team) == allies_only);
+        }
+        matches.sort_unstable_by_key(|&(entity, _)| entity);
+        matches.dedup_by_key(|(entity, _)| *entity);
+        Ok(Value::Array(
+            matches
+                .into_iter()
+                .map(|(entity, _)| Value::Entity(entity))
+                .collect(),
+        ))
     }
 
     fn expression(
