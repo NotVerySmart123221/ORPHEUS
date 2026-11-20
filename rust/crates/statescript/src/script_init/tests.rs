@@ -20,6 +20,7 @@ mod movement_edges;
 mod observation_sample;
 mod observer_eye_position;
 mod parent_owned_state;
+mod physics_explosion;
 mod projected_messages;
 mod room_cue;
 mod runtime_state_metadata;

@@ -460,6 +460,148 @@ pub(super) fn is_cinematic_time_scale_envelope(graph: &Graph, node: &Node, state
         && scale_matches
 }
 
+pub(super) fn is_static_map_explosion(graph: &Graph, node: &Node, state: u16) -> bool {
+    if !node.runs_on_server()
+        || !node.is_state()
+        || node.is_action()
+        || node.state != Some(state)
+        || graph
+            .state(usize::from(state))
+            .is_none_or(|owner| owner.pos != node.pos)
+    {
+        return false;
+    }
+    let visibility_matches = if node.server_only {
+        node.remote == -1
+    } else {
+        usize::try_from(node.remote)
+            .ok()
+            .and_then(|slot| graph.remote_node(slot))
+            .is_some_and(|remote| remote.pos == node.pos)
+    };
+
+    let fields = &node.fields;
+    let position = field(fields, "m_position");
+    let direction = field(fields, "m_direction");
+    let scalar = field(fields, "m_D80AEDB1");
+    let extra_scalar = field(fields, "m_3E3DFE0F");
+    let optional_float = field(fields, "m_015FF666");
+    let owner = field(fields, "m_0B1AA8CA");
+    let literal_number = |config| explosion_integer(config) || explosion_float(config);
+    let number = |config| literal_number(config) || explosion_expression(config);
+    visibility_matches
+        && field(fields, "m_86CE02DE").as_u64() == Some(1)
+        && field(fields, "m_A2287776").as_u64() == Some(0)
+        && field(fields, "m_AED90719").as_u64() == Some(0)
+        && ["m_17E9238F", "m_4A518273", "m_falloff"]
+            .into_iter()
+            .all(|name| field(fields, name).is_null())
+        && (owner.is_null()
+            || owner
+                .as_object()
+                .is_some_and(|item| item.len() == 1 && field(owner, "item").as_u64().is_some()))
+        && empty_explosion_plug(field(fields, "m_F198FD3A"), "STU_1CCEA5F7")
+        && empty_explosion_plug(field(fields, "m_subgraphPlug"), "STU_904BFCEC")
+        && explosion_position(position)
+        && (direction.is_null() || explosion_direction(direction))
+        && number(field(fields, "m_radius"))
+        && explosion_float(field(fields, "m_65438EEB"))
+        && explosion_integer(field(fields, "m_66D29548"))
+        && {
+            let strength = field(fields, "m_6EFD110C");
+            explosion_integer(strength) || explosion_expression(strength)
+        }
+        && number(scalar)
+        && (extra_scalar.is_null() || literal_number(extra_scalar))
+        && (optional_float.is_null() || explosion_float(optional_float))
+        && explosion_sync_matches(graph, fields)
+}
+
+fn empty_explosion_plug(config: &Json, class: &str) -> bool {
+    let data = field(config, "m_FF3DAF1E");
+    config.is_null()
+        || (field(config, "$").as_str() == Some(class)
+            && field(config, "links").as_array().is_some_and(Vec::is_empty)
+            && (data.is_null() || data.as_array().is_some_and(Vec::is_empty)))
+}
+
+fn explosion_sync_matches(graph: &Graph, fields: &Json) -> bool {
+    let sync = field(fields, "m_8BF03679");
+    sync == field(fields, "m_BF5B22B7")
+        && (sync.is_null()
+            || sync.as_array().is_some_and(|rows| {
+                rows.iter().all(|row| {
+                    script_expr::native_fields(row, &["m_0D09D2D9", "m_56341592"])
+                        && field(row, "$").as_str() == Some("STUStatescriptRemoteSyncVar")
+                        && field(row, "m_56341592").as_u64() == Some(0)
+                        && asset_guid(field(row, "m_0D09D2D9")).is_some_and(|resource| {
+                            let variable = resource as u32;
+                            resource >> 52 == 0x0d8
+                                && variable != 0
+                                && graph
+                                    .sync_vars
+                                    .iter()
+                                    .any(|entry| entry.0 == Some(variable) && entry.1 == 0)
+                        })
+                })
+            }))
+}
+
+fn explosion_position(config: &Json) -> bool {
+    match field(config, "$").as_str() {
+        Some("STU_71A87E92") => {
+            script_expr::native_shape(config, "STU_71A87E92", Some("m_entity"))
+                && explosion_dynamic(field(config, "m_entity"))
+        }
+        Some("STU_B5A0CAF0") => script_expr::native_shape(config, "STU_B5A0CAF0", None),
+        Some("STUConfigVarDynamic") => explosion_dynamic(config),
+        _ => explosion_expression(config),
+    }
+}
+
+fn explosion_direction(config: &Json) -> bool {
+    let Some(class) = field(config, "$").as_str() else {
+        return false;
+    };
+    match class {
+        "STU_2200A66D" | "STU_309B0570" => {
+            script_expr::native_fields(config, &["m_entity", "m_5B94EDB8"])
+                && field(config, "m_5B94EDB8").is_null()
+                && script_expr::native_shape(field(config, "m_entity"), "STU_B5A0CAF0", None)
+        }
+        "STUConfigVarDynamic" => explosion_dynamic(config),
+        _ => explosion_expression(config),
+    }
+}
+
+fn explosion_integer(config: &Json) -> bool {
+    script_expr::native_shape(config, "STUConfigVarInt", Some("m_value"))
+        && field(config, "m_value")
+            .as_i64()
+            .is_some_and(|value| i32::try_from(value).is_ok())
+}
+
+fn explosion_float(config: &Json) -> bool {
+    script_expr::native_shape(config, "STUConfigVarFloat", Some("m_value"))
+        && field(config, "m_value")
+            .as_f64()
+            .is_some_and(|value| (value as f32).is_finite())
+}
+
+fn explosion_expression(config: &Json) -> bool {
+    let vars = field(config, "m_configVars");
+    field(config, "$").as_str() == Some("STU_919FD47C")
+        && script_expr::native_fields(config, &["m_expression", "m_configVars"])
+        && field(config, "m_expression").is_object()
+        && (vars.is_null() || vars.is_array())
+}
+
+fn explosion_dynamic(config: &Json) -> bool {
+    field(config, "$").as_str() == Some("STUConfigVarDynamic")
+        && script_expr::native_fields(config, &["m_identifier", "m_60DB8F99"])
+        && script_expr::dynamic(config).is_ok_and(|value| value.is_some())
+}
+
 pub(super) fn is_message_recipient_set(target: &Json) -> bool {
     field(target, "$").as_str() == Some("STU_9B213168")
 }

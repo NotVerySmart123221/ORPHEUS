@@ -110,6 +110,8 @@ The Rust-only [buffered button readiness fixture](../fixtures/behavior/script-bu
 
 The Rust-only [clock-driven readiness fixture](../fixtures/behavior/script-clock-driven-readiness-v1.json) checks a BooleanSwitch reading a linked countdown. The ready branch runs when the clock brings the value to zero, even in the absence of an authored variable write.
 
+The Rust-only [static map explosion fixture](../fixtures/behavior/script-static-map-explosion-v1.json) checks the native state lifecycle in a host that confirms the absence of dynamic map rigid bodies. It covers relocated states, authored transitions and unsupported contexts through the production VM.
+
 The [local combat accumulator fixture](../fixtures/behavior/script-local-combat-accumulator-v1.json) checks that the VM keeps the state lifecycle and skips tick operands when the host confirms the context is absent. Available and unknown contexts remain diagnostic.
 
 The Rust-only [player host facts fixture](../fixtures/behavior/script-player-host-facts-v1.json) checks known body and controller presence, unknown entities, the team slot assigned at spawn, and membership counts from the admitted player roster.

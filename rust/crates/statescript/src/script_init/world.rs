@@ -367,6 +367,12 @@ pub trait World {
     fn body_display_name(&self, _site: Site, _entity: u32) -> Option<String> {
         None
     }
+    /// Whether this site's map physics backend has dynamic rigid bodies.
+    /// None means the host cannot resolve the site or its backend.
+    fn has_dynamic_map_rigid_bodies(&self, _site: Site) -> Option<bool> {
+        None
+    }
+
     fn objective_route_active(&self, _site: Site) -> Option<bool> {
         None
     }

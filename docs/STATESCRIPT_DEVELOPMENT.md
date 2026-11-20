@@ -190,6 +190,13 @@ ability support.
   This action preserves vertical velocity and uses the existing mover
   and NPC motion primitives.
 
+- Native `PhysicsExplosion` uses the ordinary state lifecycle when its
+  authored operands, visibility and compiled slots match and the room
+  confirms that it has no dynamic map rigid bodies. The VM keeps the
+  authored transitions, including timers, and uses the existing empty
+  state payload. The static path leaves the impulse operands dormant.
+  A dynamic-body implementation and original-client acceptance remain open.
+
 Native target tracking still needs ordered samples, optional typed
 output bindings, and the lifecycle of its embedded state slots. The
 authored `track_entities` node owns separate child graph instances.
@@ -202,8 +209,8 @@ health effects, spatial queries, control effects, and voice recipients.
 Phase 2 still tracks three groups. The common charge route needs prepared
 coverage for the stock damage, healing, passive and bonus messages and
 migration of the legacy admission bridge. The core graph states still
-need the remaining `TrackTargets`, `ModifyHealth`, and
-`PhysicsExplosion` shapes and the other linked and timed states. The
+need the remaining `TrackTargets` and `ModifyHealth` shapes,
+dynamic map impulse behavior, and the other linked and timed states. The
 handoff's `SpatialQuery` ID, `STU_B5C87F3D`, uses the native local
 combat accumulator lifecycle. Its spatial operands stay dormant with
 explicitly absent context. Present-context behavior still needs native
