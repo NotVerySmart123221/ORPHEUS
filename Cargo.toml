@@ -106,7 +106,8 @@ criterion = { version = "=0.7.0", default-features = false, features = ["cargo_b
 
 [features]
 default = []
-inspector = ["dep:httparse"]
+inspector = ["dep:httparse", "orpheus-statescript/node-observations"]
+script-coverage = ["inspector", "orpheus-statescript/extended-node-observations"]
 
 [dependencies]
 bevy_ecs = { version = "0.16.1", default-features = false, features = ["std"] }

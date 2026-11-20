@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "case_id": "owner-script-fault-vitals-v1",
+  "input": {
+    "base_health": 175.0,
+    "initial_shields": 25.0,
+    "damage_before_unload": 35.0,
+    "damage_after_unload": 20.0,
+    "healing_after_unload": 12.0,
+    "lethal_damage": 500.0
+  },
+  "expected": {
+    "maximum_health": 200.0,
+    "health_before_unload": 165.0,
+    "health_after_damage": 145.0,
+    "health_after_healing": 157.0
+  }
+}

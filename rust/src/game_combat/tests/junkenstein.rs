@@ -53,6 +53,8 @@ pub(super) fn verify_natural_ending(ending: NormalEnding) {
                 body_filter: flags,
                 frame: FIRST_TICK,
                 pose: mover.pose(),
+                eye_position: crate::game_combat::script_eye_position(hero.guid, &mover),
+                skin: 0,
                 quanta: RETAIL_QUANTA,
             },
         )
@@ -278,12 +280,21 @@ pub(super) fn verify_natural_ending(ending: NormalEnding) {
                 )
                 .unwrap()
             {
-                let hero = state(room, hit.damage.target).unwrap().bot.spawn.hero;
+                let hero = state(room, hit.damage.target_facts.target)
+                    .unwrap()
+                    .bot
+                    .spawn
+                    .hero;
                 let killed = matches!(hit.notices[0], Some(CombatNotice::Hit { killed: true, .. }));
-                deadeye_hits.push((hit.damage.target, hero, hit.damage.amount, killed));
+                deadeye_hits.push((
+                    hit.damage.target_facts.target,
+                    hero,
+                    hit.damage.amount,
+                    killed,
+                ));
                 if killed && crate::npc_catalog::is_junkenstein_boss(hero) {
                     deadeye_kills.insert(hero);
-                    deadeye_bodies.insert(hit.damage.target);
+                    deadeye_bodies.insert(hit.damage.target_facts.target);
                 }
                 owner.receive_applied_damage(hit.damage).unwrap();
             }
@@ -766,6 +777,8 @@ pub(super) fn normal_encounter_first_reaper_finishes_intro_and_pursues_live_defe
                 body_filter: crate::match_scene::team_bit(0).unwrap(),
                 frame: FIRST_TICK,
                 pose: mover.pose(),
+                eye_position: crate::game_combat::script_eye_position(cassidy.guid, &mover),
+                skin: 0,
                 quanta: RETAIL_QUANTA,
             },
         )
@@ -927,7 +940,11 @@ pub(super) fn normal_encounter_first_reaper_finishes_intro_and_pursues_live_defe
             )
             .unwrap();
         for hit in hits {
-            assert_eq!(Some(hit.damage.target), reaper, "E hit another enemy");
+            assert_eq!(
+                Some(hit.damage.target_facts.target),
+                reaper,
+                "E hit another enemy"
+            );
             assert_eq!(hit.damage.amount, 25.0);
             assert_eq!(
                 state(room, reaper.unwrap()).unwrap().vitals.total(),
@@ -1121,6 +1138,8 @@ fn normal_street_wave_keeps_the_zomnic_body_running_after_setup() {
                 body_filter: team_bit(0).unwrap(),
                 frame: 2700,
                 pose: mover.pose(),
+                eye_position: crate::game_combat::script_eye_position(cassidy.guid, &mover),
+                skin: 0,
                 quanta: RETAIL_QUANTA,
             },
         )
@@ -1180,14 +1199,18 @@ fn normal_street_wave_keeps_the_zomnic_body_running_after_setup() {
             if Some(hit.source) == first_body {
                 assert!(hit.amount > 0.0);
                 if hit.target == DEFENDERS[0] {
-                    assert!(!owner.receive_damage(
-                        hit.amount,
-                        Death {
-                            time: f64::from(tick) * 0.016,
-                            frame: tick,
-                            killer: hit.source,
-                        }
-                    ));
+                    assert!(
+                        !owner
+                            .receive_damage(
+                                hit.amount,
+                                Death {
+                                    time: f64::from(tick) * 0.016,
+                                    frame: tick,
+                                    killer: hit.source,
+                                }
+                            )
+                            .killed
+                    );
                 }
                 victims.push(hit.target);
             }

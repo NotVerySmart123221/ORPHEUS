@@ -11,8 +11,10 @@ use orpheus_wire::commands::Command;
 use serde_json::Value as Json;
 
 use crate::{
-    script_expr::{self, Scope, StackPriority, truthy},
-    script_graph::{Graph, GraphStore, Node, asset_guid},
+    script_expr::{self, EvalError, Scope, StackPriority, truthy},
+    script_graph::{
+        Graph, GraphStore, Node, asset_guid, directed_numeric_payload, message_parameter_id,
+    },
     script_runtime::{ButtonEdge, FRAME_MS, button_edges, frame_start},
     script_wire::{Value, Variables},
 };
@@ -20,20 +22,25 @@ use crate::{
 use super::{
     ABILITY_HELD, ABILITY_PUSHED, ABILITY_RUNNING, ABORT_PLUG, MAX_EVENTS_PER_UPDATE,
     MAX_PLAY_INSTANCES, MAX_PLUG_DEPTH, Root, SCRIPT_SOURCE,
-    machine::{AbilityPress, Event, LinkValue, Machine, Startup, StateKey, VarKey, VariableLink},
+    machine::{
+        AbilityPress, Event, LinkValue, LogicalButtonStage, Machine, ObservationInput,
+        ObservedSample, Startup, StateKey, UnavailableSample, VarKey, VariableLink,
+    },
     shapes::{
-        ability_is_stacked, array_field, configured, field, is_entry, is_message_entry,
-        is_self_target, parameter_id, raw_indices, same, source_key, stored,
+        ability_is_stacked, array_field, configured, field, is_entry, is_self_target, same,
+        source_key, stored,
     },
     types::{
-        AbilityCooldown, BufferedPress, Diagnostic, InitFault, Instance, Issue, State, StateKind,
+        AbilityCooldown, BufferedPress, Diagnostic, InitFault, Instance, InstanceScope, Issue,
+        State, StateKind,
     },
     voice::InstanceContext,
-    world::{PlayScript, Site, World},
+    world::{HostHealthContext, PlayScript, RoomCue, RoomMessage, Site, World},
 };
 
 mod effects;
 mod nodes;
+mod target_tracking;
 mod transitions;
 
 pub(super) struct Vm<'graph, 'world, 'machine, W> {
@@ -41,6 +48,8 @@ pub(super) struct Vm<'graph, 'world, 'machine, W> {
     pub(super) world: &'world mut W,
     pub(super) machine: &'machine mut Machine,
     pub(super) parameters: Option<Arc<Variables>>,
+    health_context: HostHealthContext,
+    observed_input: Option<ObservationInput>,
     pub(super) output_write_depth: usize,
 }
 
@@ -55,30 +64,61 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             world,
             machine,
             parameters: None,
+            health_context: HostHealthContext::default(),
+            observed_input: None,
             output_write_depth: 0,
         }
     }
 
-    pub(in crate::script_init) fn start(&mut self, roots: Vec<Root>) -> Result<(), InitFault> {
+    pub(in crate::script_init) fn start(&mut self, mut roots: Vec<Root>) -> Result<(), InitFault> {
         let mut seen = HashSet::new();
         for root in &roots {
-            if root.id == 0 || !seen.insert(root.id) {
+            let valid = if root.is_server_only() {
+                root.id == 0
+            } else {
+                root.id != 0 && seen.insert(root.id)
+            };
+            if !valid {
                 return Err(InitFault::InvalidRoot(root.id));
             }
         }
+        let private_count = roots.len() - seen.len();
+        if private_count != 0 {
+            let highest_public = seen.into_iter().max().unwrap_or(0);
+            if private_count > usize::from(u16::MAX - highest_public) {
+                return Err(InitFault::InstanceIdExhausted);
+            }
+            roots.sort_by_key(Root::is_server_only);
+        }
         for root in roots {
+            let (id, scope) = if root.is_server_only() {
+                (
+                    self.machine.next_instance_id(true)?,
+                    InstanceScope::Isolated,
+                )
+            } else {
+                (root.id, InstanceScope::Projected)
+            };
             let startup = if root.run_startup {
                 Startup::Ordinary
             } else {
                 Startup::Passive
             };
-            if self.create(root.id, root.graph, None, root.variables, startup)? {
+            if self.create(id, root.graph, None, root.variables, startup, scope)? {
                 if let Some(raw) = root.initial_state {
-                    self.post(root.id, Event::Begin(raw))?;
+                    self.post(id, Event::Begin(raw))?;
                 }
             }
         }
         self.run()
+    }
+
+    fn instance_scope(&self, id: u16) -> InstanceScope {
+        self.machine
+            .snapshot
+            .instances
+            .get(&id)
+            .map_or(InstanceScope::Projected, |instance| instance.scope)
     }
 
     pub(in crate::script_init) fn spend(
@@ -103,23 +143,26 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         parent: Option<(u16, u16)>,
         mut variables: Variables,
         startup: Startup,
+        scope: InstanceScope,
     ) -> Result<bool, InitFault> {
         self.spend("instance creation")?;
         let Some(definition) = self.graphs.graph(graph) else {
-            self.report(
-                Site {
+            self.record_diagnostic(Diagnostic {
+                site: Site {
                     entity: self.machine.snapshot.entity,
                     instance: id,
                     graph,
                     node: None,
                 },
-                Issue::MissingGraph(graph),
-            );
+                issue: Issue::MissingGraph(graph),
+                registration_rejected: false,
+                server_only: scope.is_server_only(),
+            });
             return Ok(false);
         };
         let apply_schema =
             self.machine.public_schemas && !matches!(startup, Startup::Played { .. });
-        self.machine.next_id = self.machine.next_id.max(u32::from(id) + 1);
+        self.machine.claim_instance_id(id, scope.is_isolated())?;
         self.machine.snapshot.instances.insert(
             id,
             Instance {
@@ -127,6 +170,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 start_ms: self.machine.now_ms,
                 retire_after_frame: matches!(startup, Startup::Played { auto_retire: true })
                     .then(|| self.machine.frame.saturating_add(1)),
+                scope,
                 parent,
                 variables: if apply_schema {
                     Variables::new()
@@ -300,7 +344,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 .retain(|&button| button != edge.button);
         }
         let graph = self.graph(id);
-        for raw in raw_indices(array_field(&graph.fields, "m_680A2CB2")) {
+        for raw in graph.logical_button_slots() {
             let Some(node) = graph.state(usize::from(raw)) else {
                 continue;
             };
@@ -317,17 +361,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 continue;
             }
             self.spend("logical button edge")?;
-            if self.logical_button_id(id, node) != Some(edge.button)
+            if self.logical_button_id(id, node, None) != Some(edge.button)
                 || self.logical_button_blocked(key, node, edge.button)
             {
                 continue;
             }
-            if edge.pressed
-                && self.machine.owner_dead
-                && !self
-                    .evaluate(id, node, field(&node.fields, "m_5AE05408"), None)
-                    .is_some_and(|value| truthy(&value))
-            {
+            if edge.pressed && !self.logical_button_allows_press(id, node) {
                 continue;
             }
             if edge.pressed {
@@ -338,22 +377,31 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 state.buffered_press = Some(BufferedPress {
                     time_ms: self.machine.now_ms,
                     activation: state.activation.wrapping_add(u16::from(!state.active)),
+                    button: edge.button,
                 });
             }
-            if self.state(key).is_some_and(|state| state.active) {
+            if self.state(key).is_some_and(|state| {
+                state.active && !state.ending
+                    && matches!(state.kind, StateKind::LogicalButton { down } if down != edge.pressed)
+            }) {
                 self.set_button_down(key, node, edge.pressed, 0)?;
             }
         }
         Ok(())
     }
 
-    pub(in crate::script_init) fn logical_button_id(&mut self, id: u16, node: &Node) -> Option<u8> {
-        let value = self.evaluate(id, node, field(&node.fields, "m_logicalButton"), None)?;
+    pub(in crate::script_init) fn logical_button_id(
+        &mut self,
+        id: u16,
+        node: &Node,
+        watcher: Option<StateKey>,
+    ) -> Option<u8> {
+        let value = self.evaluate(id, node, field(&node.fields, "m_logicalButton"), watcher)?;
         u8::try_from(script_expr::to_int(&value, 0)).ok()
     }
 
     pub(in crate::script_init) fn button_held(&mut self, key: StateKey, node: &Node) -> bool {
-        self.logical_button_id(key.instance, node)
+        self.logical_button_id(key.instance, node, None)
             .is_some_and(|button| self.machine.held_buttons.contains(&button))
     }
 
@@ -377,9 +425,22 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 .is_some_and(|value| truthy(&value))
     }
 
+    fn logical_button_allows_press(&mut self, id: u16, node: &Node) -> bool {
+        !self.machine.owner_dead
+            || self
+                .evaluate(id, node, field(&node.fields, "m_5AE05408"), None)
+                .is_some_and(|value| truthy(&value))
+    }
+
+    fn logical_button_admitted_and_held(&mut self, key: StateKey, node: &Node, button: u8) -> bool {
+        self.machine.held_buttons.contains(&button)
+            && !self.logical_button_blocked(key, node, button)
+            && self.logical_button_allows_press(key.instance, node)
+    }
+
     pub(in crate::script_init) fn resync_logical_buttons(
         &mut self,
-        button: u8,
+        button_filter: Option<u8>,
         depth: usize,
     ) -> Result<(), InitFault> {
         let keys: Vec<_> = self
@@ -407,15 +468,20 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             let StateKind::LogicalButton { down } = state.kind else {
                 continue;
             };
+            if button_filter.is_none() && !down {
+                continue;
+            }
             let node = self
                 .graph(key.instance)
                 .state(usize::from(key.raw))
                 .expect("logical button state");
-            if self.logical_button_id(key.instance, node) != Some(button) {
+            let Some(button) = self
+                .logical_button_id(key.instance, node, None)
+                .filter(|&button| button_filter.is_none_or(|filter| filter == button))
+            else {
                 continue;
-            }
-            let held = self.machine.held_buttons.contains(&button)
-                && !self.logical_button_blocked(key, node, button);
+            };
+            let held = self.logical_button_admitted_and_held(key, node, button);
             if held != down {
                 self.set_button_down(key, node, held, depth)?;
             }
@@ -425,12 +491,20 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
 
     pub(in crate::script_init) fn release_button_block(
         &mut self,
-        button: u8,
+        key: StateKey,
         depth: usize,
     ) -> Result<(), InitFault> {
+        let Some(state) = self.state_mut(key) else {
+            return Ok(());
+        };
+        let StateKind::ButtonBlock(Some(button)) = state.kind else {
+            return Ok(());
+        };
+        // Clear ownership before button callbacks can end or destroy this state again.
+        state.kind = StateKind::ButtonBlock(None);
         let count = &mut self.machine.button_blocks[usize::from(button)];
         *count -= 1;
-        self.resync_logical_buttons(button, depth)
+        self.resync_logical_buttons(Some(button), depth)
     }
 
     pub(in crate::script_init) fn enter_button(
@@ -440,11 +514,22 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         depth: usize,
     ) -> Result<(), InitFault> {
         let state = self.state(key).expect("active logical button");
+        let activation = state.activation;
+        let initial_stage = LogicalButtonStage {
+            activation,
+            revision: state.logical_button_revision,
+            down: false,
+        };
         let buffer = state
             .buffered_press
-            .filter(|press| press.activation == state.activation);
-        let button = self.logical_button_id(key.instance, node);
-        let blocked = button.is_some_and(|button| self.logical_button_blocked(key, node, button));
+            .filter(|press| press.activation == activation);
+        let button = self.logical_button_id(key.instance, node, Some(key));
+        self.state_mut(key)
+            .expect("active logical button")
+            .logical_button_binding = button;
+        let buffer = buffer.filter(|press| button == Some(press.button));
+        let blocked = button.is_some_and(|button| self.logical_button_blocked(key, node, button))
+            || !self.logical_button_allows_press(key.instance, node);
         let duration = field(&node.fields, "m_246438AD");
         let early = if let Some(press) = buffer.filter(|_| !duration.is_null() && !blocked) {
             let waited = ((self.machine.now_ms - press.time_ms) as f64 / 1000.0) as f32;
@@ -456,17 +541,64 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         if early {
             self.follow(key.instance, node, "m_onGoingDownPlug", Some(key), depth)?;
         }
-        if !self.state(key).is_some_and(|state| state.active) {
+        if !self.logical_button_stage_is_current(key, initial_stage) {
             return Ok(());
         }
+        let blocked = blocked
+            || (early
+                && (button.is_some_and(|button| self.logical_button_blocked(key, node, button))
+                    || !self.logical_button_allows_press(key.instance, node)));
         let held = !blocked && self.button_held(key, node);
-        let down = held || early;
+        let buffered = early && !blocked;
+        let down = held || buffered;
         self.state_mut(key).expect("active logical button").kind =
             StateKind::LogicalButton { down };
-        let path = if down { "m_80AF45FB" } else { "m_1C9EF058" };
-        self.follow(key.instance, node, path, Some(key), depth)?;
-        if early && !held {
+        let stage = LogicalButtonStage {
+            down,
+            ..initial_stage
+        };
+        if early {
+            self.queue_logical_button_branch(key, stage)?;
+        } else {
+            self.follow_logical_button_branch(
+                key,
+                stage,
+                self.current_observation_sample(),
+                depth,
+            )?;
+        }
+        if buffered && !held {
             self.post_after(key.instance, 1, Event::Timer(key.raw, 1))?;
+        }
+        Ok(())
+    }
+
+    pub(in crate::script_init) fn refresh_logical_button_binding(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        let button = self.logical_button_id(key.instance, node, Some(key));
+        let state = self.state_mut(key).expect("active logical button");
+        let StateKind::LogicalButton { down } = state.kind else {
+            return Ok(());
+        };
+        if state.ending || state.logical_button_binding == button {
+            return Ok(());
+        }
+        state.logical_button_binding = button;
+        state.buffered_press = state
+            .buffered_press
+            .filter(|press| Some(press.button) == button);
+        // A synthetic release scheduled for the old buffer cannot release the new binding.
+        self.machine.queues.retain(
+            key.instance,
+            |_, event| !matches!(event, Event::Timer(raw, 1) if *raw == key.raw),
+        );
+        let held =
+            button.is_some_and(|button| self.logical_button_admitted_and_held(key, node, button));
+        if held != down {
+            self.set_button_down(key, node, held, 0)?;
         }
         Ok(())
     }
@@ -478,17 +610,99 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         down: bool,
         depth: usize,
     ) -> Result<(), InitFault> {
-        self.state_mut(key).expect("active logical button").kind =
-            StateKind::LogicalButton { down };
-        let (previous, edge, next) = if down {
-            ("m_1C9EF058", "m_onGoingDownPlug", "m_80AF45FB")
+        let state = self.state_mut(key).expect("active logical button");
+        if state.kind == (StateKind::LogicalButton { down }) {
+            return Ok(());
+        }
+        state.kind = StateKind::LogicalButton { down };
+        // A listener can leave and re-enter the same branch before its queue runs.
+        state.logical_button_revision = state.logical_button_revision.wrapping_add(1);
+        let stage = LogicalButtonStage {
+            activation: state.activation,
+            revision: state.logical_button_revision,
+            down,
+        };
+        let (previous, edge) = if down {
+            ("m_1C9EF058", "m_onGoingDownPlug")
         } else {
-            ("m_80AF45FB", "m_onComingUpPlug", "m_1C9EF058")
+            ("m_80AF45FB", "m_onComingUpPlug")
         };
         self.exit_subgraph(key.instance, node, previous, depth + 1)?;
+        if !self.logical_button_stage_is_current(key, stage) {
+            return Ok(());
+        }
         self.follow(key.instance, node, edge, Some(key), depth)?;
-        if self.state(key).is_some_and(|state| state.active) {
-            self.follow(key.instance, node, next, Some(key), depth)?;
+        if self.logical_button_stage_is_current(key, stage) {
+            self.queue_logical_button_branch(key, stage)?;
+        }
+        Ok(())
+    }
+
+    fn queue_logical_button_branch(
+        &mut self,
+        key: StateKey,
+        stage: LogicalButtonStage,
+    ) -> Result<(), InitFault> {
+        // Edge callbacks can schedule state changes for this same instant.
+        self.post(
+            key.instance,
+            Event::LogicalButtonBranch {
+                state: key.raw,
+                stage,
+                sample: self.current_observation_sample(),
+            },
+        )
+    }
+
+    fn current_observation_sample(&self) -> Option<Arc<ObservedSample>> {
+        self.observed_input
+            .as_ref()
+            .map(|input| Arc::clone(&input.sample))
+    }
+
+    fn logical_button_stage_is_current(&self, key: StateKey, stage: LogicalButtonStage) -> bool {
+        self.state(key).is_some_and(|state| {
+            state.active
+                && !state.ending
+                && state.activation == stage.activation
+                && state.logical_button_revision == stage.revision
+                && state.kind == (StateKind::LogicalButton { down: stage.down })
+        })
+    }
+
+    fn follow_logical_button_branch(
+        &mut self,
+        key: StateKey,
+        stage: LogicalButtonStage,
+        sample: Option<Arc<ObservedSample>>,
+        depth: usize,
+    ) -> Result<(), InitFault> {
+        if self.logical_button_stage_is_current(key, stage) {
+            let node = self
+                .graph(key.instance)
+                .state(usize::from(key.raw))
+                .expect("logical button state");
+            let path = if stage.down {
+                "m_80AF45FB"
+            } else {
+                "m_1C9EF058"
+            };
+            let follow = |vm: &mut Self| {
+                vm.follow(key.instance, node, path, Some(key), depth)
+                    .map(|_| ())
+            };
+            if let Some(sample) = sample {
+                // Once the input transition commits, its branch owns the lifecycle.
+                self.resume_observed(
+                    ObservationInput {
+                        sample,
+                        on_unavailable: UnavailableSample::ReadCurrent,
+                    },
+                    follow,
+                )?;
+            } else {
+                follow(self)?;
+            }
         }
         Ok(())
     }
@@ -958,6 +1172,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
 
     pub(in crate::script_init) fn update(&mut self) -> Result<(), InitFault> {
         self.spend("component update")?;
+        self.retire_stale_actor_children()?;
+        // Release scopes that cannot accept input before timers or observations
+        // sample their next frame. Physical input remains available to opt-ins.
+        if std::mem::take(&mut self.machine.logical_buttons_need_resync) {
+            self.resync_logical_buttons(None, 0)?;
+        }
         let instances: Vec<_> = self.machine.snapshot.instances.keys().copied().collect();
         for id in instances {
             let mut events = 0;
@@ -965,7 +1185,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 if !self.machine.snapshot.instances.contains_key(&id) {
                     break;
                 }
-                while let Some(event) = self.machine.queues.pop_due(id, self.machine.now_ms) {
+                // Settle script work before the next input edge at this instant.
+                // A press and release can share a timestamp.
+                while let Some(event) =
+                    self.machine
+                        .queues
+                        .pop_due(id, self.machine.now_ms, |event| {
+                            !matches!(event, Event::Button(_))
+                        })
+                {
                     if events == MAX_EVENTS_PER_UPDATE {
                         return Err(InitFault::EventBudget { instance: id });
                     }
@@ -981,12 +1209,28 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         Event::Assign(target, value) => self.write(target, value)?,
                         Event::ExitInstance => self.exit_instance(id)?,
                         Event::Begin(raw) => self.begin(key(raw), 0)?,
+                        Event::BeginObserved { state, input } => {
+                            self.resume_observed(input, |vm| vm.begin(key(state), 0))?;
+                        }
                         Event::Finish(raw) => self.end(key(raw), true, 0)?,
                         Event::Abort(raw) => self.end(key(raw), false, 0)?,
                         Event::Changed(raw) => self.changed(key(raw))?,
                         Event::Reevaluate(raw) => self.reevaluate(key(raw), 0)?,
                         Event::Timer(raw, parameter) => self.timer(key(raw), parameter)?,
                         Event::Button(edge) => self.button_edge(id, edge)?,
+                        Event::LogicalButtonBranch {
+                            state,
+                            stage,
+                            sample,
+                        } => self.follow_logical_button_branch(
+                            StateKey {
+                                instance: id,
+                                raw: state,
+                            },
+                            stage,
+                            sample,
+                            0,
+                        )?,
                         Event::AbilityCheck(raw) => self.timer(key(raw), 1)?,
                         Event::CheckTransitions(raw) => {
                             if self.state(key(raw)).is_some_and(|state| state.active) {
@@ -996,6 +1240,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             }
                         }
                         Event::WatchChanged(raw) => self.deliver_watch(key(raw))?,
+                        Event::ObserveSample {
+                            raw,
+                            activation,
+                            frame,
+                            available,
+                        } => {
+                            self.deliver_observed_sample(key(raw), activation, frame, available)?;
+                        }
+
                         Event::SpawnResult { key, positions } => {
                             self.finish_spawn_search(key, positions)?
                         }
@@ -1003,16 +1256,18 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             position,
                             sender,
                             parameters,
+                            health_context,
                         } => {
-                            self.deliver(id, position, sender, parameters)?;
+                            self.deliver(id, position, sender, parameters, health_context)?;
                         }
                     }
                 }
                 if !self.machine.snapshot.instances.contains_key(&id) {
                     break;
                 }
-                self.tick_states(id)?;
-                if !self.run_deferred(id)? {
+                let samples_queued = self.tick_states(id)?;
+                let deferred = self.run_deferred(id)?;
+                if !deferred && !samples_queued {
                     break;
                 }
             }
@@ -1052,16 +1307,57 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         }
     }
 
+    #[inline]
+    #[cfg_attr(
+        not(feature = "node-observations"),
+        allow(
+            clippy::needless_pass_by_ref_mut,
+            reason = "Inspector builds record the target"
+        )
+    )]
+    fn observed_server_path(&mut self, id: u16, node: &Node) -> bool {
+        let runs_on_server = node.runs_on_server();
+        #[cfg(feature = "node-observations")]
+        {
+            let graph = self.graph(id).index;
+            self.machine
+                .snapshot
+                .node_observations
+                .record(graph, node.pos, !runs_on_server);
+        }
+        #[cfg(not(feature = "node-observations"))]
+        let _ = id;
+        runs_on_server
+    }
+
     pub(in crate::script_init) fn report(&mut self, site: Site, issue: Issue) {
         self.report_diagnostic(site, issue, false);
     }
 
     fn report_diagnostic(&mut self, site: Site, issue: Issue, registration_rejected: bool) {
-        let diagnostic = Diagnostic {
+        let server_only = self
+            .machine
+            .snapshot
+            .instances
+            .get(&site.instance)
+            .is_some_and(Instance::is_server_only)
+            || site
+                .node
+                .and_then(|position| self.graphs.graph(site.graph)?.node(position))
+                .is_some_and(|node| {
+                    node.target_child_binding().is_some()
+                        || node.declares_stack_claim()
+                        || node.declares_room_cue_action()
+                });
+        self.record_diagnostic(Diagnostic {
             site,
             issue,
             registration_rejected,
-        };
+            server_only,
+        });
+    }
+
+    fn record_diagnostic(&mut self, diagnostic: Diagnostic) {
         if !self
             .machine
             .snapshot
@@ -1095,12 +1391,18 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         position: u16,
         sender: Option<u32>,
         parameters: Arc<Variables>,
+        health_context: HostHealthContext,
     ) -> Result<(), InitFault> {
         let Some(node) = self.graph(id).node(position) else {
             return Ok(());
         };
+        if !self.observed_server_path(id, node) {
+            return Ok(());
+        }
         self.parameters = Some(parameters);
+        self.health_context = health_context;
         let result = self.deliver_entry(id, node, sender);
+        self.health_context = HostHealthContext::default();
         self.parameters = None;
         result
     }
@@ -1124,12 +1426,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 );
                 return Ok(());
             }
-            self.exit_subgraph(id, node, "m_33DA5163", 1)?;
             ("m_452862E6", Some(key))
         } else {
             ("m_outPlug", None)
         };
         let site = self.site(id, node);
+        let mut writes = Vec::new();
         for field in array_field(&node.fields, "m_params") {
             if !field.is_object() {
                 continue;
@@ -1142,20 +1444,20 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     return Ok(());
                 }
             };
-            let key = parameter_id(field);
+            let key = message_parameter_id(field);
             let value = self
                 .parameters
                 .as_deref()
                 .and_then(|params| params.get(&key))
                 .cloned()
                 .unwrap_or(Value::Null);
-            self.write(target, value)?;
+            writes.push((target, value));
         }
-        if let Some(sender) = sender.filter(|_| !node.is_state()) {
+        if let Some(sender) = sender.filter(|_| path.1.is_none()) {
             for output in ["m_B60ABDA4", "m_FF703F20"] {
                 match script_expr::dynamic(field(&node.fields, output)) {
                     Ok(Some(target)) => {
-                        self.write(source_key(id, target), Value::Entity(sender))?;
+                        writes.push((source_key(id, target), Value::Entity(sender)));
                     }
                     Ok(None) => (),
                     Err(error) => {
@@ -1164,6 +1466,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     }
                 }
             }
+        }
+        // A malformed later binding must leave earlier outputs and the receiver's
+        // active branch intact. Valid deliveries still exit before applying writes.
+        if path.1.is_some() {
+            self.exit_subgraph(id, node, "m_33DA5163", 1)?;
+        }
+        for (target, value) in writes {
+            self.write(target, value)?;
         }
         self.follow(id, node, path.0, path.1, 0)?;
         Ok(())
@@ -1364,12 +1674,20 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             self.report(site, Issue::UnsupportedField("PlayScript policy"));
             return Ok(());
         }
+        let scope = match self.instance_scope(site.instance) {
+            InstanceScope::Isolated if site.entity != self.machine.snapshot.entity => {
+                InstanceScope::Projected
+            }
+            scope => scope,
+        };
         let matches: Vec<_> = self
             .machine
             .snapshot
             .instances
             .iter()
-            .filter_map(|(&id, instance)| (instance.graph == *graph).then_some(id))
+            .filter_map(|(&id, instance)| {
+                (instance.graph == *graph && instance.scope == scope).then_some(id)
+            })
             .collect();
         if *policy == 0 && !matches.is_empty() {
             return Ok(());
@@ -1394,8 +1712,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let id = if let Some(id) = reused {
             id
         } else {
-            let id =
-                u16::try_from(self.machine.next_id).map_err(|_| InitFault::InstanceIdExhausted)?;
+            let id = self.machine.next_instance_id(scope.is_isolated())?;
             self.create(
                 id,
                 *graph,
@@ -1404,6 +1721,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Startup::Played {
                     auto_retire: *auto_retire,
                 },
+                scope,
             )?;
             id
         };
@@ -1604,9 +1922,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         for child in remaining {
             self.destroy(child)?;
         }
+        let scope = self.instance_scope(id);
         for value in added {
-            let child =
-                u16::try_from(self.machine.next_id).map_err(|_| InitFault::InstanceIdExhausted)?;
+            let child = self.machine.next_instance_id(scope.is_isolated())?;
             let values = Variables::from([
                 (target.id, value),
                 (SCRIPT_SOURCE, Value::Entity(site.entity)),
@@ -1617,6 +1935,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Some((id, key.raw)),
                 values,
                 Startup::Passive,
+                scope,
             )? {
                 self.follow(child, node, "m_C41A9BE2", None, 0)?;
             }
@@ -1660,8 +1979,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let Some(parameters) = self.play_parameters(id, node)? else {
             return Ok(());
         };
-        let child =
-            u16::try_from(self.machine.next_id).map_err(|_| InitFault::InstanceIdExhausted)?;
+        let scope = self.instance_scope(id);
+        let child = self.machine.next_instance_id(scope.is_isolated())?;
         let values = Variables::from([(SCRIPT_SOURCE, Value::Entity(site.entity))]);
         if self.create(
             child,
@@ -1669,6 +1988,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             Some((id, key.raw)),
             values,
             Startup::Played { auto_retire: false },
+            scope,
         )? {
             self.queue_script_start(child, graph, site.entity, &parameters)?;
         }
@@ -1720,7 +2040,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .filter_map(|position| graph.node(*position))
         {
             self.spend("PlayScript retirement entry")?;
-            if !is_message_entry(node)
+            if !node.is_message_entry()
+                && node.host_event_kind().is_none()
                 && !matches!(node.class.as_str(), "STU_BB4AC733" | "STU_8A7E9DA8")
             {
                 return Ok(());
@@ -1729,16 +2050,36 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         self.destroy(id)
     }
 
+    fn expired_health_target(&self, wire: u32) -> bool {
+        self.health_context.target_body.is_some_and(|target| {
+            target.wire == wire
+                && target.wire != self.machine.snapshot.entity
+                && self.world.room_body_generation(wire) != Some(target.generation)
+        })
+    }
+
+    fn forwarded_health_context(&self, parameters: &Variables) -> HostHealthContext {
+        let context = &self.health_context;
+        let target = context
+            .target_body
+            .map(|body| body.wire)
+            .or(context.target_facts.as_ref().map(|facts| facts.target));
+        if target.is_some_and(|target| {
+            parameters
+                .values()
+                .any(|value| matches!(value, Value::Entity(entity) if *entity == target))
+        }) {
+            return context.clone();
+        }
+        HostHealthContext::default()
+    }
+
     pub(in crate::script_init) fn send_game_message(
         &mut self,
         id: u16,
         node: &Node,
     ) -> Result<bool, InitFault> {
-        let Some(message) = node
-            .field("m_gameMessage.m_gameMessage")
-            .and_then(asset_guid)
-            .filter(|&id| id != 0)
-        else {
+        let Some(message) = node.game_message_id().filter(|&id| id != 0) else {
             return Ok(true);
         };
         let site = self.site(id, node);
@@ -1755,6 +2096,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             };
             value
         };
+        let directed_parameter = node.directed_numeric_parameter();
+        if directed_parameter.is_some() && !matches!(value, Value::Entity(_) | Value::Null) {
+            self.report(
+                site,
+                Issue::UnsupportedField("directed numeric message target"),
+            );
+            return Ok(false);
+        }
         let entities: Vec<_> = match value {
             Value::Entity(entity) if entity != 0 => vec![entity],
             Value::Array(items) => items
@@ -1780,23 +2129,182 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         for entity in entities {
             self.spend("game message routing")?;
             if entity == site.entity {
-                self.machine.queue_entries_from(
+                // An immediate local relay can forward the same authenticated
+                // target. Stored vars and other messages do not carry it.
+                let health_context = self.forwarded_health_context(&parameters);
+                self.machine.queue_local_game_message(
                     self.graphs,
-                    None,
-                    Some(site.entity),
                     message,
                     parameters.clone(),
-                    self.machine.now_ms,
+                    health_context,
                 )?;
-            } else if !self.world.send_message(site, entity, message, &parameters) {
-                self.report(
-                    site,
-                    Issue::UnsupportedField("external game message delivery"),
-                );
-                return Ok(false);
+            } else {
+                let delivered = if let Some(slot) = directed_parameter {
+                    script_expr::valid_entity(entity)
+                        && directed_numeric_payload(slot, &parameters)
+                        && (self.expired_health_target(entity)
+                            || self.world.queue_room_message(
+                                site,
+                                entity,
+                                RoomMessage {
+                                    id: message,
+                                    parameters: parameters.clone(),
+                                },
+                            ))
+                } else {
+                    self.world.send_message(site, entity, message, &parameters)
+                };
+                if !delivered {
+                    self.report(
+                        site,
+                        Issue::UnsupportedField("external game message delivery"),
+                    );
+                    return Ok(false);
+                }
             }
         }
         Ok(true)
+    }
+
+    pub(in crate::script_init) fn send_room_message(
+        &mut self,
+        id: u16,
+        node: &Node,
+        caller: Option<StateKey>,
+    ) -> Result<bool, InitFault> {
+        let site = self.site(id, node);
+        let Some(target) = self.evaluate(id, node, field(&node.fields, "m_target"), caller) else {
+            return Ok(false);
+        };
+        let Value::Entity(target) = target else {
+            self.report(
+                site,
+                Issue::Expression(EvalError::MalformedConfig(
+                    "room message target must be a bound entity",
+                )),
+            );
+            return Ok(false);
+        };
+        if !script_expr::valid_entity(target) || target == site.entity {
+            self.report(
+                site,
+                Issue::Expression(EvalError::MalformedConfig(
+                    "room message target must be a different bound entity",
+                )),
+            );
+            return Ok(false);
+        }
+        let Some(message) = node.game_message_id() else {
+            return Ok(false);
+        };
+        let Some(parameters) = self.message_parameters(id, node, caller)? else {
+            return Ok(false);
+        };
+        let message = RoomMessage {
+            id: message,
+            parameters,
+        };
+        if !message.is_valid() {
+            self.report(
+                site,
+                Issue::Expression(EvalError::MalformedConfig(
+                    "room message parameters must be bounded scalar or finite vector values",
+                )),
+            );
+            return Ok(false);
+        }
+        self.spend("room message admission")?;
+        if !self.expired_health_target(target)
+            && !self.world.queue_room_message(site, target, message)
+        {
+            self.report(site, Issue::UnsupportedField("room message request"));
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    fn send_room_cue(
+        &mut self,
+        id: u16,
+        node: &Node,
+        caller: Option<StateKey>,
+    ) -> Result<bool, InitFault> {
+        let site = self.site(id, node);
+        let Some(audience) = self.evaluate(id, node, field(&node.fields, "audience"), caller)
+        else {
+            return Ok(false);
+        };
+        let Value::Array(audience) = audience else {
+            self.report(
+                site,
+                Issue::Expression(EvalError::MalformedConfig(
+                    "expected a room cue audience array",
+                )),
+            );
+            return Ok(false);
+        };
+        let mut seen = HashSet::new();
+        let mut targets = Vec::new();
+        for listener in audience {
+            self.spend("room cue listener")?;
+            let entity = match listener {
+                Value::Entity(entity) if script_expr::valid_entity(entity) => entity,
+                _ => {
+                    self.report(
+                        site,
+                        Issue::Expression(EvalError::MalformedConfig("invalid room cue listener")),
+                    );
+                    return Ok(false);
+                }
+            };
+            if seen.insert(entity) {
+                if targets.len() == RoomCue::MAX_TARGETS {
+                    self.report(site, Issue::UnsupportedField("room cue audience limit"));
+                    return Ok(false);
+                }
+                targets.push(entity);
+            }
+        }
+        let Some((stimulus, line)) = node.room_cue_assets() else {
+            return Ok(false);
+        };
+        if targets.is_empty() {
+            return Ok(true);
+        }
+        self.spend("room cue admission")?;
+        if !self
+            .world
+            .queue_room_cue(site, &targets, RoomCue { stimulus, line })
+        {
+            self.report(site, Issue::UnsupportedField("room cue request"));
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    fn request_radial_health(&mut self, id: u16, node: &Node, caller: Option<StateKey>) -> bool {
+        let site = self.site(id, node);
+        let result = self.with_instance_context(site, caller, |context| {
+            script_expr::radial_health_changes(
+                field(&node.fields, "area"),
+                field(&node.fields, "delta"),
+                node.field("edge_scale"),
+                context,
+            )
+        });
+        let changes = match result {
+            Ok(changes) => changes,
+            Err(error) => {
+                self.report(site, Issue::Expression(error));
+                return false;
+            }
+        };
+        if changes.is_empty() || self.world.queue_health_changes(site, &changes) {
+            true
+        } else {
+            self.report(site, Issue::UnsupportedField("radial health request"));
+            false
+        }
     }
 
     pub(in crate::script_init) fn game_message_parameters(
@@ -1804,16 +2312,32 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         id: u16,
         node: &Node,
     ) -> Result<Option<Variables>, InitFault> {
+        self.message_parameters(id, node, None)
+    }
+
+    fn message_parameters(
+        &mut self,
+        id: u16,
+        node: &Node,
+        caller: Option<StateKey>,
+    ) -> Result<Option<Variables>, InitFault> {
+        if node
+            .game_message_id()
+            .is_some_and(|topic| self.graphs.is_projected_message_topic(topic))
+        {
+            self.report(self.site(id, node), Issue::UnsupportedMessageRegistration);
+            return Ok(None);
+        }
         let mut parameters = Variables::new();
         for parameter in array_field(&node.fields, "m_params")
             .iter()
             .filter(|value| value.is_object())
         {
             self.spend("game message parameter")?;
-            let Some(value) = self.evaluate(id, node, field(parameter, "m_value"), None) else {
+            let Some(value) = self.evaluate(id, node, field(parameter, "m_value"), caller) else {
                 return Ok(None);
             };
-            parameters.insert(parameter_id(parameter), value);
+            parameters.insert(message_parameter_id(parameter), value);
         }
         Ok(Some(parameters))
     }
@@ -1874,6 +2398,38 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         initial: Value,
         scalar: bool,
     ) -> Option<Value> {
+        match self.evaluate_with_context(site, config, watcher, initial, scalar) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                self.report(site, Issue::Expression(error));
+                None
+            }
+        }
+    }
+
+    fn evaluate_with_context(
+        &mut self,
+        site: Site,
+        config: &Json,
+        watcher: Option<StateKey>,
+        initial: Value,
+        scalar: bool,
+    ) -> Result<Value, EvalError> {
+        self.with_instance_context(site, watcher, |context| {
+            if scalar {
+                script_expr::evaluate_scalar_with_initial(config, context, initial)
+            } else {
+                script_expr::evaluate_with_initial(config, context, initial)
+            }
+        })
+    }
+
+    fn with_instance_context<T>(
+        &mut self,
+        site: Site,
+        watcher: Option<StateKey>,
+        evaluate: impl FnOnce(&mut InstanceContext<'_, W>) -> Result<T, EvalError>,
+    ) -> Result<T, EvalError> {
         let mut context = InstanceContext {
             machine: self.machine,
             world: self.world,
@@ -1881,18 +2437,20 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             reads: Vec::new(),
             foreign_reads: Vec::new(),
             parameters: self.parameters.as_deref(),
+            health_target_facts: self.health_context.target_facts.as_deref(),
+            observed_sample: self
+                .observed_input
+                .as_ref()
+                .map(|input| input.sample.as_ref()),
             watcher,
             read_native: false,
+            read_clock: false,
             untrusted_native: false,
         };
-        let result = if scalar {
-            script_expr::evaluate_scalar_with_initial(config, &mut context, initial)
-        } else {
-            script_expr::evaluate_with_initial(config, &mut context, initial)
-        };
+        let result = evaluate(&mut context);
         let reads = context.reads;
         let foreign_reads = context.foreign_reads;
-        let read_native = context.read_native;
+        let needs_ticks = context.read_native || context.read_clock;
         if context.untrusted_native {
             // Like the reference, the record outlives the activation.
             if let Some(state) = watcher.and_then(|key| self.state_mut(key)) {
@@ -1915,7 +2473,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             if let Some(start) = self
                 .state(watcher)
                 .filter(|state| {
-                    read_native
+                    needs_ticks
                         && matches!(
                             state.kind,
                             StateKind::BooleanSwitch(_)
@@ -1924,6 +2482,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                                 | StateKind::AiBehavior { .. }
                                 | StateKind::ExplosionContact
                                 | StateKind::MovementMod
+                                | StateKind::LogicalButton { .. }
                         )
                 })
                 .map(|state| state.start_ms)
@@ -1931,13 +2490,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.register_tick(watcher, start);
             }
         }
-        match result {
-            Ok(value) => Some(value),
-            Err(error) => {
-                self.report(site, Issue::Expression(error));
-                None
-            }
-        }
+        result
     }
 
     pub(in crate::script_init) fn watch(&mut self, key: VarKey, watcher: StateKey) {
@@ -1993,6 +2546,19 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
     }
 
     pub(in crate::script_init) fn set_base(&mut self, key: VarKey, value: Value) {
+        if let Some(sample) = self
+            .observed_input
+            .as_mut()
+            .map(|input| &mut input.sample)
+            .filter(|sample| {
+                sample
+                    .input
+                    .as_ref()
+                    .is_some_and(|(output, _)| *output == key)
+            })
+        {
+            Arc::make_mut(sample).input = Some((key, value.clone()));
+        }
         match key {
             VarKey::Entity(id) => self.machine.snapshot.variables.insert(id, value),
             VarKey::Instance(instance, id) => self.machine.snapshot.instances[&instance]
@@ -2066,7 +2632,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 taken = true;
                 continue;
             };
-            if !target.runs_on_server() {
+            if target.host_event_kind().is_some() || !self.observed_server_path(id, target) {
                 continue;
             }
             if target.is_state() {
@@ -2117,6 +2683,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     }
                     let event = if input == ABORT_PLUG {
                         Event::Abort(raw)
+                    } else if let Some(input) = &self.observed_input {
+                        Event::BeginObserved {
+                            state: raw,
+                            input: input.clone(),
+                        }
                     } else {
                         Event::Begin(raw)
                     };

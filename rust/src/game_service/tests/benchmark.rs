@@ -48,7 +48,7 @@ fn prepared_worker_timing_two_solo_rooms() {
         assert!(target.spawn.route.is_empty());
         target.position = [x - 4.0, y, z];
         let factory = Arc::clone(&factory);
-        scene.owner_body_factory = Some(Arc::new(move |hero, spawn| {
+        scene.owner_body_factory = Some(Arc::new(move |hero, spawn, _| {
             if hero.guid == SOLDIER {
                 Ok(Some(Box::new(factory.start(spawn)?)))
             } else {

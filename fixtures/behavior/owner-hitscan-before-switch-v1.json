@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "case_id": "owner-hitscan-before-switch-v1",
+  "evidence": "rust-headless-synthetic",
+  "input": {
+    "heroes": [207165582859067801, 207165582859067802],
+    "skin": 17,
+    "target_position": [6.0, 0.0, 0.0],
+    "target_health": 100.0,
+    "damage": 25.0,
+    "input_budgets": [1, 8]
+  },
+  "expected": {
+    "target_health_after_shot": 75.0,
+    "generation_after_switch": 2
+  }
+}

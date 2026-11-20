@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "case_id": "script-clock-driven-readiness-v1",
+  "evidence": "rust-headless-synthetic",
+  "graph": 754,
+  "entity": 185,
+  "start_frame": 100,
+  "busy_frame": 101,
+  "ready_frame": 102,
+  "cooldown": 816,
+  "initial_seconds": 0.04,
+  "ready_marker": 817
+}

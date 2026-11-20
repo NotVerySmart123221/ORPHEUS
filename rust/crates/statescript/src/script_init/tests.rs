@@ -2,10 +2,38 @@ use super::*;
 
 mod abilities_and_weapons;
 mod actions_contract;
+mod actor_scope_identity;
 mod ai_and_spawning;
 mod arrays_and_boss;
+mod authored_classes;
 mod destination_and_victory;
+mod elapsed_wait;
+mod facing_claim;
+mod frame_wait;
+mod horizontal_velocity_clamp;
+mod linked_state;
+mod local_combat_accumulator;
+mod local_command;
+mod local_message;
+mod logical_button_lifecycle;
+mod movement_edges;
+mod named_shield;
+mod observation_sample;
+mod observer_eye_position;
+mod parent_owned_state;
+mod physics_explosion;
+mod projected_messages;
+mod relocation;
+mod room_cue;
+mod runtime_state_metadata;
+mod self_damage;
+mod shield_recharge;
+mod stack_controls;
+mod stat_state;
 mod states_and_switches;
+mod static_model_protection;
+mod swept_displacement;
+mod vertical_velocity_impulse;
 
 pub(super) use std::path::PathBuf;
 

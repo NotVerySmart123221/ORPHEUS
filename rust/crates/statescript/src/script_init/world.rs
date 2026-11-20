@@ -5,8 +5,9 @@ use std::{collections::BTreeMap, sync::Arc};
 use serde_json::Value as Json;
 
 use crate::{
-    script_expr::{self, EntityRelation, OnFire, StackPriority},
-    script_graph::Node,
+    script_entity_state::EntityScriptState,
+    script_expr::{self, EntityRelation, OnFire, RoomEntityFacts, SpatialCandidate, StackPriority},
+    script_graph::{HostEventKind, MAX_ROOM_MESSAGE_PARAMETERS, Node},
     script_runtime::PoolKind,
     script_voice::IntroCue,
     script_wire::{Value, Variables},
@@ -18,6 +19,226 @@ pub struct Site {
     pub instance: u16,
     pub graph: u32,
     pub node: Option<u16>,
+}
+
+/// Authoritative movement facts captured from a single owner pose.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MovementSample {
+    pub flags: u16,
+    pub air_ticks: u32,
+    /// Source frame of the movement record, when known.
+    pub pose_frame: Option<u32>,
+}
+
+/// A finite, nonzero movement request bounded to 32 world units.
+/// The host applies it through its ordinary collision and movement path.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SweptDisplacement {
+    delta: [f32; 3],
+}
+
+impl SweptDisplacement {
+    pub fn new(delta: [f64; 3]) -> Option<Self> {
+        const MAX_DISTANCE: f64 = 32.0;
+        let length = delta.into_iter().fold(0.0_f64, f64::hypot);
+        if !length.is_finite() || length <= 0.0 || length > MAX_DISTANCE {
+            return None;
+        }
+        let delta = delta.map(|axis| axis as f32);
+        let length = delta
+            .into_iter()
+            .fold(0.0_f64, |length, axis| length.hypot(f64::from(axis)));
+        (length.is_finite() && length > 0.0 && length <= MAX_DISTANCE).then_some(Self { delta })
+    }
+
+    pub fn delta(self) -> [f32; 3] {
+        self.delta
+    }
+}
+
+/// A finite destination whose distance is checked against the consuming body's pose.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Relocation {
+    destination: [f64; 3],
+}
+
+impl Relocation {
+    pub fn new(destination: [f64; 3]) -> Option<Self> {
+        destination
+            .into_iter()
+            .all(|axis| axis.is_finite() && (axis as f32).is_finite())
+            .then_some(Self { destination })
+    }
+
+    /// Keep the requested feet coordinates; share the swept motion distance bound.
+    pub fn destination_from(self, origin: [f64; 3]) -> Option<[f64; 3]> {
+        SweptDisplacement::new(std::array::from_fn(|axis| {
+            self.destination[axis] - origin[axis]
+        }))?;
+        Some(self.destination)
+    }
+}
+
+/// One scheduled body motion, with distinct path and destination collision policies.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ScriptedMotion {
+    Sweep(SweptDisplacement),
+    Relocate(Relocation),
+}
+
+/// A bounded, typed message evaluated by the sending StateScript VM.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RoomMessage {
+    pub id: u64,
+    pub parameters: Variables,
+}
+
+impl RoomMessage {
+    pub(super) fn is_valid(&self) -> bool {
+        self.id != 0
+            && self.parameters.len() <= MAX_ROOM_MESSAGE_PARAMETERS
+            && self.parameters.iter().all(|(&slot, value)| {
+                slot != 0
+                    && u16::try_from(slot).is_ok()
+                    && match value {
+                        Value::Null | Value::Bool(_) | Value::Integer(_) | Value::Asset(_) => true,
+                        Value::Float(value) => value.is_finite(),
+                        Value::Entity(entity) => script_expr::valid_entity(*entity),
+                        Value::Vector(parts) => parts.iter().all(|part| part.is_finite()),
+                        _ => false,
+                    }
+            })
+    }
+}
+
+/// An authored cue admitted by the room host for explicit listeners.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RoomCue {
+    pub stimulus: u64,
+    pub line: u64,
+}
+
+impl RoomCue {
+    pub const MAX_TARGETS: usize = 64;
+}
+
+// Host admission bound, independent of the size of a native tag list.
+pub(super) const MAX_HIT_TAGS: usize = 16;
+
+/// Bounded, ordered asset tags supplied by a settled hit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HitTags {
+    values: [u64; MAX_HIT_TAGS],
+    len: usize,
+}
+
+impl HitTags {
+    pub const EMPTY: Self = Self {
+        values: [0; MAX_HIT_TAGS],
+        len: 0,
+    };
+
+    pub fn as_slice(&self) -> &[u64] {
+        &self.values[..self.len]
+    }
+
+    pub fn push(&mut self, guid: u64) -> bool {
+        if self.len == MAX_HIT_TAGS {
+            return false;
+        }
+        self.values[self.len] = guid;
+        self.len += 1;
+        true
+    }
+}
+
+/// Authoritative notification emitted by the simulation after a health change.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HostEvent {
+    HealthApplied {
+        source: Option<u32>,
+        target: u32,
+        delta: f64,
+        killed: bool,
+        /// Optional asset list for parameter 5. An unavailable list leaves the
+        /// parameter absent and clears a declared binding through message delivery.
+        hit_tags: Option<HitTags>,
+    },
+}
+
+impl HostEvent {
+    pub(super) fn target(self) -> u32 {
+        let Self::HealthApplied { target, .. } = self;
+        target
+    }
+
+    pub(super) fn bindings_for(self, receiver: u32) -> Option<(HostEventKind, Variables)> {
+        match self {
+            Self::HealthApplied {
+                source,
+                target,
+                delta,
+                killed,
+                hit_tags,
+            } => {
+                if !script_expr::valid_entity(target)
+                    || source.is_some_and(|source| !script_expr::valid_entity(source))
+                    || (receiver != target && source != Some(receiver))
+                    || !delta.is_finite()
+                    || delta == 0.0
+                    || (killed && delta > 0.0)
+                {
+                    return None;
+                }
+                let mut parameters = Variables::from([
+                    (1, source.map_or(Value::Null, Value::Entity)),
+                    (2, Value::Entity(target)),
+                    (3, Value::Float(delta)),
+                    (4, Value::Bool(killed)),
+                ]);
+                if let Some(tags) = hit_tags {
+                    parameters.insert(
+                        5,
+                        Value::Array(tags.as_slice().iter().copied().map(Value::Asset).collect()),
+                    );
+                }
+                Some((HostEventKind::HealthApplied, parameters))
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RoomEntityStatus {
+    /// None means an independent participant.
+    pub team: Option<u8>,
+    /// Liveness after the authoritative health mutation.
+    pub alive: bool,
+}
+
+/// A room-resolved body identity. Generations are opaque to StateScript.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RoomBodyIdentity {
+    pub wire: u32,
+    pub generation: u64,
+}
+
+/// Host-only context scoped to the immediate health event delivery.
+#[derive(Clone, Default)]
+pub struct HostHealthContext {
+    pub target_body: Option<RoomBodyIdentity>,
+    pub target_facts: Option<Arc<HealthTargetFacts>>,
+}
+
+/// Room-sampled facts for the original target of a settled health event.
+#[derive(Clone, Debug)]
+pub struct HealthTargetFacts {
+    pub target: u32,
+    pub filter_flags: Option<u64>,
+    /// None means no room affiliation or liveness was sampled.
+    pub room_status: Option<RoomEntityStatus>,
+    pub tags: TargetTagSnapshot,
+    pub script_state: EntityScriptState,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -187,6 +408,23 @@ pub trait World {
     fn edit_velocity(&mut self, _site: Site, _frame: u32, _value: Value, _cap: bool) -> bool {
         false
     }
+
+    /// Queue a horizontal velocity cap for the frame after the action ran.
+    fn cap_horizontal_velocity(&mut self, _site: Site, _frame: u32, _cap: f64) -> bool {
+        false
+    }
+
+    /// Queue a vertical reset and a world-space impulse as one movement edit.
+    fn apply_velocity_impulse(
+        &mut self,
+        _site: Site,
+        _frame: u32,
+        _vertical: f64,
+        _delta: [f64; 3],
+    ) -> bool {
+        false
+    }
+
     fn summoner_beam_contact(&self, _site: Site) -> Option<BeamContact> {
         None
     }
@@ -197,6 +435,12 @@ pub trait World {
     fn body_display_name(&self, _site: Site, _entity: u32) -> Option<String> {
         None
     }
+    /// Whether this site's map physics backend has dynamic rigid bodies.
+    /// None means the host cannot resolve the site or its backend.
+    fn has_dynamic_map_rigid_bodies(&self, _site: Site) -> Option<bool> {
+        None
+    }
+
     fn objective_route_active(&self, _site: Site) -> Option<bool> {
         None
     }
@@ -256,6 +500,34 @@ pub trait World {
     fn self_damage(&mut self, _site: Site, _amount: f64) -> bool {
         false
     }
+    /// Admit a signed health request for application by the world.
+    fn queue_health_change(&mut self, _site: Site, _target: u32, _delta: f64) -> bool {
+        false
+    }
+    /// Admit every signed change together or leave the host queue unchanged.
+    fn queue_health_changes(&mut self, _site: Site, _changes: &[(u32, f64)]) -> bool {
+        false
+    }
+    /// Admit movement for the bound body at the supplied future simulation frame.
+    /// None means unavailable; Some(false) is an ordinary supported refusal.
+    fn queue_scripted_motion(
+        &mut self,
+        _site: Site,
+        _frame: u32,
+        _motion: ScriptedMotion,
+    ) -> Option<bool> {
+        None
+    }
+    /// Compatibility entry for hosts and graphs that only schedule swept motion.
+    fn queue_swept_displacement(
+        &mut self,
+        site: Site,
+        frame: u32,
+        displacement: SweptDisplacement,
+    ) -> Option<bool> {
+        self.queue_scripted_motion(site, frame, ScriptedMotion::Sweep(displacement))
+    }
+    /// Restore the owner's shield pools. A zero amount checks support without changing health.
     fn recharge_shields(&mut self, _site: Site, _amount: f64) -> bool {
         false
     }
@@ -307,6 +579,11 @@ pub trait World {
     fn outline_context_available(&self, _site: Site) -> Option<bool> {
         None
     }
+    /// The current body supports the static protected-entity rule with an enabled baseline.
+    fn supports_static_model_protection(&self, _site: Site) -> bool {
+        false
+    }
+
     fn set_encounter_model_enabled(&mut self, _site: Site, _enabled: bool) -> bool {
         false
     }
@@ -405,9 +682,13 @@ pub trait World {
     fn spatial_binding_owner_available(&self, _site: Site) -> Option<bool> {
         None
     }
+    /// Whether this body's linked controller has a player stats record.
+    /// Unknown bindings return None.
     fn player_stats_available(&self, _site: Site) -> Option<bool> {
         None
     }
+    /// Whether the local combat accumulator is available to this state's owner.
+    /// `None` means the host cannot establish availability for this binding.
     fn local_combat_context_available(&self, _site: Site) -> Option<bool> {
         None
     }
@@ -423,6 +704,10 @@ pub trait World {
         None
     }
     fn ai_facing(&mut self, _site: Site, _record: AiFacing, _active: bool) -> Option<bool> {
+        None
+    }
+    /// Admit or release an authored self-facing claim, keyed by its originating site.
+    fn set_facing_claim(&mut self, _site: Site, _record: AiFacing, _active: bool) -> Option<bool> {
         None
     }
     /// None: unavailable; false: the declared controller has no matching slot;
@@ -467,13 +752,89 @@ pub trait World {
         None
     }
 
-    /// The implicit owner's movement sample, if the world knows all its bits.
-    fn movement_sample(&self, _site: Site) -> Option<u16> {
+    /// Authored operands may use the room's actor sample instead of a profile-specific lookup.
+    fn authored_position(&mut self, entity: u32) -> Option<[f64; 3]> {
+        self.position(entity)
+    }
+
+    fn authored_forward(&self, entity: u32) -> Option<[f64; 3]> {
+        self.forward(entity)
+    }
+
+    /// The current world sample's eye anchor for a known body.
+    fn body_eye_position(&self, _entity: u32) -> Option<[f64; 3]> {
+        None
+    }
+
+    /// Opaque identity of a live actor in the current room sample. Compare
+    /// tokens only for the same entity ID within this room.
+    fn room_actor_identity(&self, _entity: u32) -> Option<u64> {
+        None
+    }
+
+    /// A known model can confirm presence or absence. None means unavailable.
+    fn body_has_hardpoint(&self, _site: Site, _entity: u32, _hardpoint: u64) -> Option<bool> {
+        None
+    }
+
+    /// Activity of the component's own body at this site. None means unavailable.
+    fn body_active(&self, _site: Site) -> Option<bool> {
+        None
+    }
+
+    /// None means the current candidate snapshot is unavailable.
+    fn spatial_candidates(&self) -> Option<&[SpatialCandidate]> {
+        None
+    }
+
+    /// Includes registered bodies that are dead. None means no facts are available.
+    fn room_entities(&self) -> Option<&BTreeMap<u32, RoomEntityFacts>> {
+        None
+    }
+
+    /// Whether static geometry leaves the segment clear. None is unavailable.
+    fn spatial_line_clear(&self, _origin: [f64; 3], _target: [f64; 3]) -> Option<bool> {
+        None
+    }
+
+    /// None is unavailable, Some(None) is an available miss.
+    fn spatial_ray_cast(
+        &self,
+        _site: Site,
+        _vm_frame: u32,
+        _origin: [f64; 3],
+        _direction: [f64; 3],
+        _max_distance: f64,
+    ) -> Option<Option<script_expr::SpatialRayHit>> {
+        None
+    }
+
+    /// None is unavailable, Some(None) is an available miss.
+    fn spatial_actor_ray_cast(
+        &self,
+        _site: Site,
+        _vm_frame: u32,
+        _origin: [f64; 3],
+        _direction: [f64; 3],
+        _max_distance: f64,
+        _targets: &[u32],
+    ) -> Option<Option<script_expr::SpatialActorRayHit>> {
+        None
+    }
+
+    /// The implicit owner's pose flags and air duration, if the host can read them.
+    fn movement_sample(&self, _site: Site) -> Option<MovementSample> {
         None
     }
 
     fn engine_setting(&self, _site: Site, _key: u32) -> script_expr::EngineSetting {
         script_expr::EngineSetting::Unavailable
+    }
+
+    /// Whether the process has a local presentation command at this site.
+    /// Remote player and AI commands do not supply this fact.
+    fn local_command_present(&self, _site: Site) -> Option<bool> {
+        None
     }
 
     fn native(&mut self, _site: Site, _config: &Json) -> Option<Value> {
@@ -500,6 +861,30 @@ pub trait World {
         _maximum: f64,
         _current: f64,
     ) -> Option<u32> {
+        None
+    }
+
+    fn add_temporary_shield(
+        &mut self,
+        _site: Site,
+        _identifier: u64,
+        _amount: f64,
+        _stacked: bool,
+    ) -> Option<u32> {
+        None
+    }
+
+    fn temporary_shield_current(&self, _site: Site, _identifier: u64) -> Option<f64> {
+        None
+    }
+
+    /// Drain only the named pool and return its remaining amount.
+    fn drain_temporary_shield(
+        &mut self,
+        _site: Site,
+        _identifier: u64,
+        _amount: f64,
+    ) -> Option<f64> {
         None
     }
 
@@ -612,6 +997,21 @@ pub trait World {
 
     fn selects_ai_behavior(&mut self, _site: Site) -> Option<bool> {
         None
+    }
+
+    /// Resolve the generation in the room snapshot used to admit script effects.
+    fn room_body_generation(&self, _wire: u32) -> Option<u64> {
+        None
+    }
+
+    /// Admit an authored message for a different body. Delivery happens later.
+    fn queue_room_message(&mut self, _site: Site, _target: u32, _message: RoomMessage) -> bool {
+        false
+    }
+
+    /// Admit a cue for a bounded set of listeners. Delivery happens later.
+    fn queue_room_cue(&mut self, _site: Site, _targets: &[u32], _cue: RoomCue) -> bool {
+        false
     }
 
     /// The world owns delivery outside the current body.

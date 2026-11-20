@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "case_id": "script-owner-instance-visibility.synthetic.v1",
+  "source": {
+    "basis": "Original instance variable declarations and state-owned scalar claims.",
+    "scope": "Direct instance variable projection only. Public aliases, entity variables and values read by other graphs keep their declared visibility."
+  },
+  "evidence": "synthetic-rust",
+  "input": {
+    "private": 871,
+    "input": 872,
+    "public": 873,
+    "alias": 874,
+    "base": 19,
+    "values": [41, 53, 67],
+    "entity_same_id": 203,
+    "public_value": 7,
+    "bundle": {
+      "version": 1,
+      "missing": [],
+      "bodies": {},
+      "graphs": [
+        {
+          "index": 121,
+          "owner_only_instance_vars": [871, 872],
+          "items": 3,
+          "header": {
+            "m_nodesBitCount": 4,
+            "m_statesBitCount": 4,
+            "m_remoteSyncNodesBitCount": 4,
+            "m_syncVarsBitCount": 4
+          },
+          "fields": {},
+          "containers": {},
+          "nodes": [
+            {
+              "pos": 0, "rid": 0, "uid": 0, "remote": -1, "state": null,
+              "class": "STUStatescriptEntry",
+              "server_only": false, "client_only": false,
+              "fields": {"m_outPlug": {"$": "Plug", "links": [[1, "m_beginPlug"]]}}
+            },
+            {
+              "pos": 1, "rid": 1, "uid": 1, "remote": -1, "state": 0,
+              "class": "authored.owner_profile",
+              "server_only": true, "client_only": false,
+              "state_behavior": "stack_claim",
+              "fields": {
+                "variable": {"scope": "instance", "id": 871},
+                "priority": {"level": 3, "above_equals": false},
+                "value": {"$": "STUConfigVarDynamic", "m_identifier": 872, "m_60DB8F99": false}
+              }
+            },
+            {
+              "pos": 2, "rid": 2, "uid": 2, "remote": 0, "state": 1,
+              "class": "STU_37D754C8",
+              "server_only": false, "client_only": false,
+              "fields": {
+                "m_2BBEEAB8": true,
+                "m_36F7B64C": {"m_36F7B64C": {"m_C974E369": {"m_graph": "0x058000000000007A"}}}
+              }
+            }
+          ],
+          "states": [1, 2],
+          "entries": [0],
+          "remote": [2],
+          "sync_vars": [[871, 0, 0], [873, 0, 0]],
+          "unknown_nodes": []
+        },
+        {
+          "index": 122,
+          "owner_only_instance_vars": [871],
+          "items": 0,
+          "header": {
+            "m_nodesBitCount": 4,
+            "m_statesBitCount": 4,
+            "m_remoteSyncNodesBitCount": 4,
+            "m_syncVarsBitCount": 4
+          },
+          "fields": {},
+          "containers": {},
+          "nodes": [],
+          "states": [],
+          "entries": [],
+          "remote": [],
+          "sync_vars": [[871, 0, 0]],
+          "unknown_nodes": []
+        }
+      ]
+    }
+  }
+}

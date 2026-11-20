@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "case_id": "script-linked-state-lifecycle.synthetic.v1",
+  "source": {"basis": "Invented graph identities exercise registration order and removal across independent root instances."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "roots": [
+      {"graph": 61057, "position": 2, "type": 0, "server_only": false},
+      {"graph": 61058, "position": 3, "type": 0, "server_only": true},
+      {"graph": 61059, "position": 4, "type": 1, "server_only": false}
+    ],
+    "unsupported_types": [2, "1", null]
+  },
+  "expected": {
+    "links_after_enter": [[3, 0], [3, 0], null],
+    "links_after_final_root_ends": [null, null, null]
+  },
+  "registry_only_pair": {
+    "roots": [
+      {"graph": 61077, "position": 5, "class": "STU_43994F1B"},
+      {"graph": 61078, "position": 7, "class": "STU_93B8758C"},
+      {"graph": 61079, "position": 9, "class": "STU_43994F1B"},
+      {"graph": 61080, "position": 11, "class": "STU_93B8758C"}
+    ],
+    "rejected": [
+      {
+        "graph": 61081, "position": 13, "class": "STU_43994F1B",
+        "configured": {"m_contactSet": "0x01200000ABCDEF01"}
+      },
+      {
+        "graph": 61082, "position": 15, "class": "STU_93B8758C",
+        "configured": {"m_A5B7A147": "0x09E00000ABCDEF02"}
+      },
+      {
+        "graph": 61083, "position": 17, "class": "STU_43994F1B",
+        "configured": {"m_4A5CA514": {"$": "STUConfigVarDynamic", "m_identifier": 681}}
+      },
+      {
+        "graph": 61084, "position": 19, "class": "STU_93B8758C",
+        "server_only": true
+      },
+      {
+        "graph": 61085, "position": 21, "class": "STU_43994F1B",
+        "has_remote_slot": true
+      }
+    ],
+    "client_only": [
+      {"graph": 61086, "position": 23, "class": "STU_43994F1B", "client_only": true},
+      {"graph": 61087, "position": 25, "class": "STU_93B8758C", "client_only": true}
+    ],
+    "initial_links": [[3, 0], [4, 0], null, null]
+  }
+}

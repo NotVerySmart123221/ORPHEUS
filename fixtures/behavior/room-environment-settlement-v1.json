@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "case_id": "room-environment-settlement.synthetic.v1",
+  "evidence": "synthetic-native",
+  "source": {
+    "basis": "Original bounded room volume and synthetic body positions. No client assets or map boundary claims."
+  },
+  "environment": {
+    "version": 1,
+    "maps": {
+      "0x0800000000E97003": {
+        "lethal_volumes": [{"min": [-1, -20, -1], "max": [1, -5, 1]}]
+      }
+    }
+  },
+  "input": {
+    "map": "0x0800000000E97003",
+    "safe_lower_position": [3, -10, 0],
+    "lethal_position": [0, -10, 0],
+    "safe_tick": 10,
+    "kill_tick": 11,
+    "safe_time_ms": 160,
+    "kill_time_ms": 176,
+    "health": 100,
+    "armour": 25,
+    "shields": 25
+  },
+  "expected": {
+    "source": 0,
+    "killed_by": false,
+    "death_count": 1,
+    "replacement_count": 1,
+    "fresh_bot_health": 100
+  }
+}

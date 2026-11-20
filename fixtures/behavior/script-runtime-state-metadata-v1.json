@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "case_id": "script-runtime-state-metadata.synthetic.v1",
+  "source": {"basis": "Invented classes, graph positions, identities and transition graphs."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "class": "SyntheticLifecycle",
+    "runtime_state_metadata": {
+      "plain_classes": ["SyntheticLifecycle", "STUStatescriptStateWait", "STUStatescriptStateAnimatedCamera"],
+      "client_states": [{"graph": 803, "state": 0, "rid": 9, "class": "SyntheticLifecycle"}]
+    },
+    "lifecycle": [
+      {"graph": 801, "ending": "wait"},
+      {"graph": 802, "ending": "message", "server_only": true},
+      {"graph": 803, "ending": "client"}
+    ],
+    "handlers": [
+      {"graph": 804, "class": "STUStatescriptStateWait", "case": "wait"},
+      {"graph": 805, "class": "STUStatescriptStateWait", "case": "blocked_wait"},
+      {"graph": 806, "class": "STUStatescriptStateAnimatedCamera", "case": "blocked_placement"}
+    ]
+  },
+  "expected": {
+    "active_before_end": [801, 802],
+    "owner_state_graphs": [801, 803],
+    "remote_state_graphs": [801, 803]
+  }
+}

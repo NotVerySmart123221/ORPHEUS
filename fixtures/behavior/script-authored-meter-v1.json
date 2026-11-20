@@ -1,0 +1,371 @@
+{
+  "schema_version": 1,
+  "case_id": "script-authored-meter.synthetic.v1",
+  "source": {
+    "basis": "Original graph logic, synthetic room actors and distinct body binding settings."
+  },
+  "evidence": "synthetic-rust",
+  "input": {
+    "bundle": {
+      "version": 1,
+      "authored_classes": [
+        {
+          "class": "authored.meter_gate",
+          "behavior": "branch_action"
+        },
+        {
+          "class": "authored.meter_timer",
+          "behavior": "interval_state"
+        }
+      ],
+      "graphs": [
+        {
+          "index": 444,
+          "items": 11,
+          "header": {
+            "m_nodesBitCount": 4,
+            "m_statesBitCount": 4,
+            "m_remoteSyncNodesBitCount": 4,
+            "m_syncVarsBitCount": 4
+          },
+          "fields": {},
+          "containers": {},
+          "nodes": [
+            {
+              "pos": 0,
+              "class": "STUStatescriptEntry",
+              "uid": 0,
+              "rid": 0,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_outPlug": {"$": "Plug", "links": [[1, "m_inPlug"]]}
+              }
+            },
+            {
+              "pos": 1,
+              "class": "STUStatescriptActionSetVar",
+              "uid": 1,
+              "rid": 1,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_ADEB6E05": true,
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 71, "m_60DB8F99": false},
+                "m_value": 0.0,
+                "m_outPlug": {"$": "Plug", "links": [[2, "m_inPlug"]]}
+              }
+            },
+            {
+              "pos": 2,
+              "class": "authored.meter_timer",
+              "uid": 2,
+              "rid": 2,
+              "remote": -1,
+              "state": 0,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "interval_frames": 3,
+                "on_interval": {"$": "Plug", "links": [[3, "m_inPlug"]]}
+              }
+            },
+            {
+              "pos": 3,
+              "class": "STUStatescriptActionSetVar",
+              "uid": 3,
+              "rid": 3,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_ADEB6E05": true,
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 71, "m_60DB8F99": false},
+                "m_value": {
+                  "$": "STU_919FD47C",
+                  "m_configVars": [],
+                  "m_expression": {
+                    "m_opcodes": [8, 0, 8, 1, 23, 6, 0, 8, 2, 65, 0],
+                    "m_dynamicVars": [
+                      {"$": "STUConfigVarDynamic", "m_identifier": 71, "m_60DB8F99": false},
+                      {"$": "STUConfigVarDynamic", "m_identifier": 74, "m_60DB8F99": false},
+                      {"$": "STUConfigVarDynamic", "m_identifier": 75, "m_60DB8F99": false}
+                    ],
+                    "m_D99EF254": [0.0]
+                  }
+                },
+                "m_outPlug": {"$": "Plug", "links": []}
+              }
+            },
+            {
+              "pos": 4,
+              "class": "EntryHostEvent",
+              "uid": 4,
+              "rid": 4,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "host_event_entry": "health_applied",
+              "fields": {
+                "m_params": [
+                  {"m_B5051BCE": "0x0000000000000001", "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 76, "m_60DB8F99": false}},
+                  {"m_B5051BCE": "0x0000000000000002", "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 77, "m_60DB8F99": false}},
+                  {"m_B5051BCE": "0x0000000000000003", "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 78, "m_60DB8F99": false}}
+                ],
+                "m_outPlug": {"$": "Plug", "links": [[5, "m_inPlug"]]}
+              }
+            },
+            {
+              "pos": 5,
+              "class": "authored.meter_gate",
+              "uid": 5,
+              "rid": 5,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_condition": {
+                  "$": "STU_919FD47C",
+                  "m_configVars": [
+                    {"$": "STU_B5A0CAF0"}
+                  ],
+                  "m_expression": {
+                    "m_opcodes": [8, 0, 14, 0, 37, 0],
+                    "m_dynamicVars": [
+                      {"$": "STUConfigVarDynamic", "m_identifier": 76, "m_60DB8F99": false}
+                    ],
+                    "m_D99EF254": []
+                  }
+                },
+                "m_truePlug": {"$": "Plug", "links": [[6, "m_inPlug"]]},
+                "m_falsePlug": {"$": "Plug", "links": []}
+              }
+            },
+            {
+              "pos": 6,
+              "class": "authored.meter_gate",
+              "uid": 6,
+              "rid": 6,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_condition": {
+                  "$": "STU_919FD47C",
+                  "m_configVars": [],
+                  "m_expression": {
+                    "m_opcodes": [8, 0, 6, 0, 63, 0],
+                    "m_dynamicVars": [
+                      {"$": "STUConfigVarDynamic", "m_identifier": 78, "m_60DB8F99": false}
+                    ],
+                    "m_D99EF254": [0.0]
+                  }
+                },
+                "m_truePlug": {"$": "Plug", "links": [[7, "m_inPlug"]]},
+                "m_falsePlug": {"$": "Plug", "links": [[8, "m_inPlug"]]}
+              }
+            },
+            {
+              "pos": 7,
+              "class": "authored.meter_gate",
+              "uid": 7,
+              "rid": 7,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_condition": {"$": "EntityMatches", "entity": {"$": "STUConfigVarDynamic", "m_identifier": 77, "m_60DB8F99": false}, "filter": {"relation": "opponent", "source": {"$": "STU_B5A0CAF0"}}},
+                "m_truePlug": {"$": "Plug", "links": [[9, "m_inPlug"]]},
+                "m_falsePlug": {"$": "Plug", "links": []}
+              }
+            },
+            {
+              "pos": 8,
+              "class": "authored.meter_gate",
+              "uid": 8,
+              "rid": 8,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_condition": {"$": "EntityMatches", "entity": {"$": "STUConfigVarDynamic", "m_identifier": 77, "m_60DB8F99": false}, "filter": {"relation": "ally", "source": {"$": "STU_B5A0CAF0"}}},
+                "m_truePlug": {"$": "Plug", "links": [[10, "m_inPlug"]]},
+                "m_falsePlug": {"$": "Plug", "links": []}
+              }
+            },
+            {
+              "pos": 9,
+              "class": "STUStatescriptActionSetVar",
+              "uid": 9,
+              "rid": 9,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_ADEB6E05": true,
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 71, "m_60DB8F99": false},
+                "m_value": {
+                  "$": "STU_919FD47C",
+                  "m_configVars": [],
+                  "m_expression": {
+                    "m_opcodes": [8, 0, 8, 1, 29, 8, 2, 25, 23, 6, 0, 8, 3, 65, 0],
+                    "m_dynamicVars": [
+                      {"$": "STUConfigVarDynamic", "m_identifier": 71, "m_60DB8F99": false},
+                      {"$": "STUConfigVarDynamic", "m_identifier": 78, "m_60DB8F99": false},
+                      {"$": "STUConfigVarDynamic", "m_identifier": 72, "m_60DB8F99": false},
+                      {"$": "STUConfigVarDynamic", "m_identifier": 75, "m_60DB8F99": false}
+                    ],
+                    "m_D99EF254": [0.0]
+                  }
+                },
+                "m_outPlug": {"$": "Plug", "links": []}
+              }
+            },
+            {
+              "pos": 10,
+              "class": "STUStatescriptActionSetVar",
+              "uid": 10,
+              "rid": 10,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_ADEB6E05": true,
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 71, "m_60DB8F99": false},
+                "m_value": {
+                  "$": "STU_919FD47C",
+                  "m_configVars": [],
+                  "m_expression": {
+                    "m_opcodes": [8, 0, 8, 1, 8, 2, 25, 23, 6, 0, 8, 3, 65, 0],
+                    "m_dynamicVars": [
+                      {"$": "STUConfigVarDynamic", "m_identifier": 71, "m_60DB8F99": false},
+                      {"$": "STUConfigVarDynamic", "m_identifier": 78, "m_60DB8F99": false},
+                      {"$": "STUConfigVarDynamic", "m_identifier": 73, "m_60DB8F99": false},
+                      {"$": "STUConfigVarDynamic", "m_identifier": 75, "m_60DB8F99": false}
+                    ],
+                    "m_D99EF254": [0.0]
+                  }
+                },
+                "m_outPlug": {"$": "Plug", "links": []}
+              }
+            }
+          ],
+          "unknown_nodes": [],
+          "states": [2],
+          "entries": [0, 4],
+          "remote": [],
+          "sync_vars": []
+        }
+      ],
+      "bodies": {
+        "0x0400000000000A01": {
+          "hero": null,
+          "name": "Fixture actor A",
+          "graphs": [
+            {
+              "graph": 444,
+              "m_75408640": 0,
+              "m_1EB5A024": [
+                {"m_0D09D2D9": "0x0000000000000048", "m_value": 2.0},
+                {"m_0D09D2D9": "0x0000000000000049", "m_value": 1.0},
+                {"m_0D09D2D9": "0x000000000000004A", "m_value": 1.0},
+                {"m_0D09D2D9": "0x000000000000004B", "m_value": 12.0}
+              ]
+            }
+          ],
+          "manager": null,
+          "weapons": []
+        },
+        "0x0400000000000A02": {
+          "hero": null,
+          "name": "Fixture actor B",
+          "graphs": [
+            {
+              "graph": 444,
+              "m_75408640": 0,
+              "m_1EB5A024": [
+                {"m_0D09D2D9": "0x0000000000000048", "m_value": 1.0},
+                {"m_0D09D2D9": "0x0000000000000049", "m_value": 3.0},
+                {"m_0D09D2D9": "0x000000000000004A", "m_value": 2.0},
+                {"m_0D09D2D9": "0x000000000000004B", "m_value": 20.0}
+              ]
+            }
+          ],
+          "manager": null,
+          "weapons": []
+        },
+        "0x0400000000000A03": {
+          "hero": null,
+          "name": "Fixture actor without a meter",
+          "graphs": [],
+          "manager": null,
+          "weapons": []
+        }
+      },
+      "missing": []
+    },
+    "actors": [
+      {"entity": 501, "body": "0x0400000000000A01", "team": 1},
+      {"entity": 502, "body": "0x0400000000000A02", "team": 1},
+      {"entity": 503, "body": "0x0400000000000A03", "team": 2}
+    ],
+    "steps": [
+      {"frame": 1, "event": {"source": 501, "target": 503, "delta": -4.0, "killed": false}},
+      {"frame": 2, "event": {"source": 502, "target": 501, "delta": 2.0, "killed": false}},
+      {"frame": 3},
+      {"frame": 4, "event": {"source": 501, "target": 502, "delta": 1.0, "killed": false}},
+      {"frame": 5, "event": {"source": 502, "target": 503, "delta": -3.0, "killed": false}},
+      {"frame": 6},
+      {"frame": 7, "event": {"source": 503, "target": 501, "delta": -9.0, "killed": false}},
+      {"frame": 8, "event": {"source": 501, "target": 503, "delta": 6.0, "killed": false}},
+      {"frame": 9},
+      {"frame": 10, "event": {"source": 502, "target": 501, "delta": -3.0, "killed": false}},
+      {"frame": 11, "event": {"source": 502, "target": 502, "delta": 2.0, "killed": false}},
+      {"frame": 12},
+      {"frame": 13, "event": {"source": null, "target": 502, "delta": -100.0, "killed": false}},
+      {"frame": 14, "event": {"source": 502, "target": 501, "delta": 2.0, "killed": false}},
+      {"frame": 15},
+      {"frame": 16, "event": {"source": 502, "target": 503, "delta": 0.0, "killed": false}}
+    ]
+  },
+  "expected": {
+    "graph": 444,
+    "meter_variable": 71,
+    "settings_variables": [72, 73, 74, 75],
+    "settings": [
+      [2.0, 1.0, 1.0, 12.0],
+      [1.0, 3.0, 2.0, 20.0],
+      null
+    ],
+    "meters": [
+      [8.0, 0.0, null],
+      [8.0, 6.0, null],
+      [9.0, 8.0, null],
+      [10.0, 8.0, null],
+      [10.0, 11.0, null],
+      [11.0, 13.0, null],
+      [11.0, 13.0, null],
+      [11.0, 13.0, null],
+      [12.0, 15.0, null],
+      [12.0, 15.0, null],
+      [12.0, 15.0, null],
+      [12.0, 17.0, null],
+      [12.0, 17.0, null],
+      [12.0, 20.0, null],
+      [12.0, 20.0, null],
+      [12.0, 20.0, null]
+    ]
+  }
+}

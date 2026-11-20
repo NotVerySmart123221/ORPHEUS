@@ -3,9 +3,11 @@ use super::*;
 use crate::commands::{Click, Command, SUBFRAME};
 use crate::game_bots::BotSpawn;
 use crate::game_clock::{FIRST_TICK, SEND_EVERY};
+use crate::game_replication::BodyId;
 use crate::game_replication::tests::owner_effects::{script_receipts, selected};
 use crate::game_replication::tests::practice_observation::{processed, rifle_state};
 use crate::scene_assets::SceneAssets;
+use crate::script_init::RandomCheckpoint;
 use serde::Deserialize;
 use serde_json::{Value as Json, json};
 use std::fs::File;
@@ -104,6 +106,15 @@ struct Tick {
     inputs: Vec<Offer>,
 }
 
+fn player_vm_checkpoint(state: &State, owner: u32, expected: BodyId) -> Option<RandomCheckpoint> {
+    let scene = &state.rooms.get(&MATCH)?.world.as_ref()?.scene;
+    let body = scene.simulation().player_body_by_owner(owner)?;
+    if body.id != expected {
+        return None;
+    }
+    body.runtime.as_ref()?.random_checkpoint()
+}
+
 #[test]
 #[ignore = "requires a private decoded schedule, prepared 104319 runtime and new observation path"]
 fn same_schedule_practice_room() {
@@ -186,6 +197,9 @@ fn same_schedule_practice_room() {
         .as_ref()
         .unwrap();
     let initial_player = peer.world.active_body_id().unwrap();
+    let owner = peer.world.owner();
+    let before_schedule = player_vm_checkpoint(&state, owner, initial_player)
+        .expect("observed player VM after possession");
     let first_scheduled_time = setup.now + Duration::from_micros(u64::from(RETAIL_QUANTA));
     let mut first_scheduled_frame = None;
     let mut ticks = Vec::new();
@@ -285,7 +299,11 @@ fn same_schedule_practice_room() {
     }
     assert!(!ticks.is_empty());
     unavailable.insert("provenance.effective_data_sha256");
-    let vm_seed = (u64::from(initial_player.entity) << 32) | u64::from(setup.component_frame);
+    let during_schedule = player_vm_checkpoint(&state, owner, initial_player)
+        .filter(|end| {
+            end.model == before_schedule.model && end.initial_seed == before_schedule.initial_seed
+        })
+        .map(|end| end.draws.wrapping_sub(before_schedule.draws));
     let result = json!({"status":"incomplete","scope":"stock Practice Range owner and selected ordinary spawner",
         "quanta_us":RETAIL_QUANTA,"bot_spawner_slot":slot,"bot_spawner":spawn_description,"bot_roster_size":roster_size,
         "transport":"loopback room loading and owner acknowledgements on ordinary worker ticks",
@@ -293,7 +311,8 @@ fn same_schedule_practice_room() {
         "bot_death_timing":bot_deaths,"setup_delivery_ticks":setup.tick-FIRST_TICK,
         "startup_acks":setup.acks,"setup_elapsed_us":setup.now.as_micros(),"owner_component_start_frame":setup.component_frame,
         "owner_component_entity":initial_player.entity,
-        "player_vm_random_model":"splitmix64","player_vm_initial_seed":vm_seed,
+        "player_vm_random_model":before_schedule.model,"player_vm_initial_seed":before_schedule.initial_seed,
+        "player_vm_rng_observation":{"draws_before_schedule":before_schedule.draws,"draws_during_schedule":during_schedule},
         "first_scheduled_room_tick":first_scheduled_frame,"initial_owner_delivery_phase":"after-possession-ack",
         "host_random_model":"os-entropy-transport-only","host_initial_seed":null,
         "server_player_slots":1,

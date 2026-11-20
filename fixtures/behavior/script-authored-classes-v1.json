@@ -1,0 +1,375 @@
+{
+  "schema_version": 1,
+  "case_id": "script-authored-classes.synthetic.v1",
+  "source": {
+    "basis": "Original synthetic graphs for the GraphStore authored class declarations and VM."
+  },
+  "evidence": "synthetic-rust",
+  "input": {
+    "version": 1,
+    "authored_classes": [
+      {"class": "authored.window", "behavior": "plain_state"},
+      {"class": "authored.sequence", "behavior": "forward_action"},
+      {"class": "authored.choose", "behavior": "branch_action"},
+      {"class": "authored.decoration", "behavior": "client_only"}
+    ],
+    "graphs": [
+      {
+        "index": 42,
+        "items": 10,
+        "header": {
+          "m_nodesBitCount": 4,
+          "m_statesBitCount": 4,
+          "m_remoteSyncNodesBitCount": 4,
+          "m_syncVarsBitCount": 4
+        },
+        "fields": {},
+        "containers": {},
+        "nodes": [
+          {
+            "pos": 0,
+            "class": "STUStatescriptEntry",
+            "uid": 0,
+            "rid": 0,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_outPlug": {"$": "Plug", "links": [[1, "m_beginPlug"], [5, "m_inPlug"]], "m_FF3DAF1E": []}
+            }
+          },
+          {
+            "pos": 1,
+            "class": "authored.window",
+            "uid": 1,
+            "rid": 1,
+            "remote": 0,
+            "state": 0,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_onBeginPlug": {"$": "Plug", "links": [[2, "m_inPlug"]], "m_FF3DAF1E": []},
+              "m_2BBEEAB8": true
+            }
+          },
+          {
+            "pos": 2,
+            "class": "authored.sequence",
+            "uid": 2,
+            "rid": 2,
+            "remote": 1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_outPlug": {"$": "Plug", "links": [[3, "m_inPlug"], [4, "m_inPlug"], [8, "m_inPlug"]], "m_FF3DAF1E": []}
+            }
+          },
+          {
+            "pos": 3,
+            "class": "STUStatescriptActionSetVar",
+            "uid": 3,
+            "rid": 3,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_ADEB6E05": true,
+              "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 100, "m_60DB8F99": false},
+              "m_value": 17
+            }
+          },
+          {
+            "pos": 4,
+            "class": "STUStatescriptActionSetVar",
+            "uid": 4,
+            "rid": 4,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_ADEB6E05": true,
+              "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 200, "m_60DB8F99": false},
+              "m_value": {"$": "STUConfigVarDynamic", "m_identifier": 100, "m_60DB8F99": false}
+            }
+          },
+          {
+            "pos": 5,
+            "class": "authored.decoration",
+            "uid": 5,
+            "rid": 5,
+            "remote": 2,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {"m_outPlug": {"$": "Plug", "links": [[6, "m_inPlug"]], "m_FF3DAF1E": []}}
+          },
+          {
+            "pos": 6,
+            "class": "STUStatescriptActionSetVar",
+            "uid": 6,
+            "rid": 6,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_ADEB6E05": true,
+              "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 300, "m_60DB8F99": false},
+              "m_value": {"$": "invented.unchosen"}
+            }
+          },
+          {
+            "pos": 7,
+            "class": "STUStatescriptState",
+            "uid": 7,
+            "rid": 7,
+            "remote": 3,
+            "state": 1,
+            "client_only": false,
+            "server_only": false,
+            "fields": {"m_2BBEEAB8": true}
+          },
+          {
+            "pos": 8,
+            "class": "authored.choose",
+            "uid": 8,
+            "rid": 8,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_condition": {"$": "STUConfigVarDynamic", "m_identifier": 200, "m_60DB8F99": false},
+              "m_truePlug": {"$": "Plug", "links": [[9, "m_inPlug"]], "m_FF3DAF1E": []},
+              "m_falsePlug": {"$": "Plug", "links": [[6, "m_inPlug"]], "m_FF3DAF1E": []}
+            }
+          },
+          {
+            "pos": 9,
+            "class": "STUStatescriptActionSetVar",
+            "uid": 9,
+            "rid": 9,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_ADEB6E05": true,
+              "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 400, "m_60DB8F99": false},
+              "m_value": {"$": "STUConfigVarDynamic", "m_identifier": 200, "m_60DB8F99": false}
+            }
+          }
+        ],
+        "unknown_nodes": [],
+        "states": [1,7],
+        "entries": [0],
+        "remote": [1,2,5,7],
+        "sync_vars": []
+      },
+      {
+        "index": 77,
+        "items": 11,
+        "header": {
+          "m_nodesBitCount": 4,
+          "m_statesBitCount": 4,
+          "m_remoteSyncNodesBitCount": 4,
+          "m_syncVarsBitCount": 4
+        },
+        "fields": {},
+        "containers": {},
+        "nodes": [
+          {
+            "pos": 0,
+            "class": "STUStatescriptActionSetVar",
+            "uid": 0,
+            "rid": 0,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_ADEB6E05": true,
+              "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 300, "m_60DB8F99": false},
+              "m_value": {"$": "invented.unchosen"}
+            }
+          },
+          {
+            "pos": 1,
+            "class": "STUStatescriptState",
+            "uid": 1,
+            "rid": 1,
+            "remote": 3,
+            "state": 0,
+            "client_only": false,
+            "server_only": false,
+            "fields": {"m_2BBEEAB8": true}
+          },
+          {
+            "pos": 2,
+            "class": "authored.decoration",
+            "uid": 2,
+            "rid": 2,
+            "remote": 2,
+            "state": null,
+            "client_only": true,
+            "server_only": false,
+            "fields": {"m_outPlug": {"$": "Plug", "links": [[0, "m_inPlug"]], "m_FF3DAF1E": []}}
+          },
+          {
+            "pos": 3,
+            "class": "STUStatescriptActionSetVar",
+            "uid": 3,
+            "rid": 3,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_ADEB6E05": true,
+              "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 200, "m_60DB8F99": false},
+              "m_value": {"$": "STUConfigVarDynamic", "m_identifier": 100, "m_60DB8F99": false}
+            }
+          },
+          {
+            "pos": 4,
+            "class": "authored.sequence",
+            "uid": 4,
+            "rid": 4,
+            "remote": 1,
+            "state": null,
+            "client_only": false,
+            "server_only": true,
+            "fields": {
+              "m_outPlug": {"$": "Plug", "links": [[6, "m_inPlug"], [3, "m_inPlug"], [10, "m_inPlug"]], "m_FF3DAF1E": []}
+            }
+          },
+          {
+            "pos": 5,
+            "class": "STUStatescriptEntry",
+            "uid": 5,
+            "rid": 5,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_outPlug": {"$": "Plug", "links": [[7, "m_beginPlug"], [2, "m_inPlug"]], "m_FF3DAF1E": []}
+            }
+          },
+          {
+            "pos": 6,
+            "class": "STUStatescriptActionSetVar",
+            "uid": 6,
+            "rid": 6,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_ADEB6E05": true,
+              "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 100, "m_60DB8F99": false},
+              "m_value": 23
+            }
+          },
+          {
+            "pos": 7,
+            "class": "authored.window",
+            "uid": 7,
+            "rid": 7,
+            "remote": 0,
+            "state": 1,
+            "client_only": false,
+            "server_only": true,
+            "fields": {
+              "m_onBeginPlug": {"$": "Plug", "links": [[4, "m_inPlug"]], "m_FF3DAF1E": []},
+              "m_2BBEEAB8": true
+            }
+          },
+          {
+            "pos": 8,
+            "class": "STUStatescriptActionSetVar",
+            "uid": 8,
+            "rid": 8,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_ADEB6E05": true,
+              "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 400, "m_60DB8F99": false},
+              "m_value": {"$": "STUConfigVarDynamic", "m_identifier": 200, "m_60DB8F99": false}
+            }
+          },
+          {
+            "pos": 9,
+            "class": "authored.choose",
+            "uid": 9,
+            "rid": 9,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_condition": true,
+              "m_truePlug": {"$": "Plug", "links": [], "m_FF3DAF1E": []},
+              "m_falsePlug": {"$": "Plug", "links": [[0, "m_inPlug"]], "m_FF3DAF1E": []}
+            }
+          },
+          {
+            "pos": 10,
+            "class": "authored.choose",
+            "uid": 10,
+            "rid": 10,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_condition": {"$": "ClientOnly", "value": {"$": "invented.ignored"}, "server_fallback": false},
+              "m_truePlug": {"$": "Plug", "links": [[0, "m_inPlug"]], "m_FF3DAF1E": []},
+              "m_falsePlug": {"$": "Plug", "links": [[8, "m_inPlug"]], "m_FF3DAF1E": []}
+            }
+          }
+        ],
+        "unknown_nodes": [],
+        "states": [1,7],
+        "entries": [5],
+        "remote": [7,4,2,1],
+        "sync_vars": []
+      }
+    ],
+    "bodies": {},
+    "missing": []
+  },
+  "expected": [
+    {
+      "graph": 42,
+      "instance": 11,
+      "active_state": 0,
+      "server_targets": [0, 1, 2, 3, 4, 8, 9],
+      "owner_positions": [7],
+      "remote_positions": [7],
+      "server_only_nodes": [1,2,8],
+      "client_only_nodes": [5],
+      "variables": {"100": 17, "200": 17, "400": 17},
+      "absent_variables": [300]
+    },
+    {
+      "graph": 77,
+      "instance": 22,
+      "active_state": 1,
+      "empty_branch": 9,
+      "server_targets": [3, 4, 5, 6, 7, 8, 9, 10],
+      "owner_positions": [1],
+      "remote_positions": [1],
+      "server_only_nodes": [7,4,9,10],
+      "client_only_nodes": [2],
+      "variables": {"100": 23, "200": 23, "400": 23},
+      "absent_variables": [300]
+    }
+  ]
+}

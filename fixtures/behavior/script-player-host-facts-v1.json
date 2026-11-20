@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "case_id": "script-player-host-facts.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "input": {
+    "foreign_entity": 73,
+    "teams": [[0, 0], [4, 4]],
+    "invalid_filters": [0, 1],
+    "team_member_counts": {
+      "query_team": 2,
+      "invalid_team": 8,
+      "initial_teams": [2, 0, 2],
+      "updated_teams": [0, 1, 0],
+      "free_for_all_teams": [3, 2, 1]
+    }
+  },
+  "expected": {
+    "entity_exists": {
+      "body": true,
+      "controller": true,
+      "zero": null,
+      "foreign": null
+    },
+    "team_member_counts": {
+      "initial": 2,
+      "updated": 0,
+      "empty": 0,
+      "without_snapshot": null,
+      "invalid_team": null,
+      "free_for_all_query_team": 0,
+      "free_for_all_pool": 3
+    }
+  }
+}

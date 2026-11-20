@@ -96,8 +96,8 @@ pub(crate) struct QueueFull {
     pub limit: usize,
 }
 
-/// Each instance consumes events in timestamp order, with FIFO ties. The
-/// component controls the order in which instances take a turn.
+/// Each instance consumes events by timestamp. Within a timestamp, the
+/// caller selects a preferred group and preserves FIFO order within each group.
 #[derive(Clone)]
 pub(crate) struct Timeline<E> {
     instances: BTreeMap<u16, BTreeMap<u64, VecDeque<E>>>,
@@ -141,13 +141,20 @@ impl<E> Timeline<E> {
             .min()
     }
 
-    pub fn pop_due(&mut self, instance: u16, now_ms: u64) -> Option<E> {
+    pub fn pop_due(
+        &mut self,
+        instance: u16,
+        now_ms: u64,
+        preferred: impl FnMut(&E) -> bool,
+    ) -> Option<E> {
         let events = self.instances.get_mut(&instance)?;
         let mut next = events.first_entry()?;
         if *next.key() > now_ms {
             return None;
         }
-        let event = next.get_mut().pop_front().expect("populated timestamp");
+        let queue = next.get_mut();
+        let index = queue.iter().position(preferred).unwrap_or(0);
+        let event = queue.remove(index).expect("populated timestamp");
         if next.get().is_empty() {
             next.remove();
         }
@@ -230,16 +237,16 @@ mod tests {
             timeline.push(instance, time, event).unwrap();
         }
         assert_eq!(timeline.next_due(), Some(16));
-        assert_eq!(timeline.pop_due(2, 16), None);
-        assert_eq!(timeline.pop_due(1, 16), Some('e'));
-        assert_eq!(timeline.pop_due(2, 17), Some('c'));
+        assert_eq!(timeline.pop_due(2, 16, |_| true), None);
+        assert_eq!(timeline.pop_due(1, 16, |_| true), Some('e'));
+        assert_eq!(timeline.pop_due(2, 17, |_| true), Some('c'));
         timeline.push(2, 17, 'f').unwrap();
-        assert_eq!(timeline.pop_due(2, 17), Some('d'));
-        assert_eq!(timeline.pop_due(2, 17), Some('f'));
-        assert_eq!(timeline.pop_due(2, 17), None);
-        assert_eq!(timeline.pop_due(1, 17), Some('b'));
+        assert_eq!(timeline.pop_due(2, 17, |_| true), Some('d'));
+        assert_eq!(timeline.pop_due(2, 17, |_| true), Some('f'));
+        assert_eq!(timeline.pop_due(2, 17, |_| true), None);
+        assert_eq!(timeline.pop_due(1, 17, |_| true), Some('b'));
         assert_eq!(timeline.next_due(), Some(18));
-        assert_eq!(timeline.pop_due(2, 18), Some('a'));
+        assert_eq!(timeline.pop_due(2, 18, |_| true), Some('a'));
         assert_eq!(timeline.next_due(), None);
         assert_eq!(frame_start(u32::MAX), u64::from(u32::MAX) * 16);
     }
@@ -265,6 +272,6 @@ mod tests {
         timeline.push(7, 7, 44).unwrap();
         timeline.push(7, 8, 45).unwrap();
         assert_eq!(timeline.next_due(), Some(6));
-        assert_eq!(timeline.pop_due(9, 8), None);
+        assert_eq!(timeline.pop_due(9, 8, |_| true), None);
     }
 }

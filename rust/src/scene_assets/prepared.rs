@@ -22,6 +22,18 @@ pub struct PreparedScene {
 
 impl PreparedScene {
     #[cfg(test)]
+    pub(crate) fn fixture_for_owner_admission(heroes: HeroCatalog) -> Self {
+        let mut scene = Self::fixture_for_bots(Vec::new());
+        scene.contacts = Some(Arc::new(ContactWorld::new(Vec::new()).unwrap()));
+        scene.controller = Controller::fixture_for_owner_admission();
+        let stats = PlayerStats::default();
+        scene.initial_board =
+            StatsCatalog::default().component(&stats, scene.map.mode_guid, None, None);
+        scene.heroes = Arc::new(heroes);
+        scene
+    }
+
+    #[cfg(test)]
     pub(crate) fn fixture_for_bots(bots: Vec<Bot>) -> Self {
         use crate::collision_cache::{CollisionCache, Mesh, Triangle};
 
@@ -156,9 +168,33 @@ impl PreparedScene {
         hero: &Hero,
         spawn: OwnerBodySpawn,
     ) -> io::Result<Option<Box<dyn OwnerBodyRuntime>>> {
-        self.owner_body_factory
-            .as_ref()
-            .map_or(Ok(None), |factory| factory(hero, spawn))
+        let Some(factory) = &self.owner_body_factory else {
+            return Ok(None);
+        };
+        let runtime = factory(hero, spawn, self.owner_body_setup(spawn.controller))?;
+        if let Some(runtime) = &runtime {
+            crate::game_replication::validate_body_baselines(runtime.as_ref(), spawn.entity)
+                .map_err(|error| io::Error::new(io::ErrorKind::Unsupported, error))?;
+        }
+        Ok(runtime)
+    }
+
+    pub(super) fn owner_body_setup(&self, owner: u32) -> OwnerBodySetup {
+        OwnerBodySetup {
+            team_member_counts: self.simulation.team_member_counts(),
+            spatial_frame: self.simulation.owner_startup_spatial_frame(owner),
+            room_activity: Some(self.owner_room_activity()),
+        }
+    }
+
+    pub(crate) fn owner_room_activity(&self) -> OwnerRoomActivity {
+        if self.map.is_junkenstein() {
+            OwnerRoomActivity::Encounter {
+                active: self.simulation.encounter_active(),
+            }
+        } else {
+            OwnerRoomActivity::Regular
+        }
     }
 
     pub fn heroes(&self) -> &HeroCatalog {
@@ -432,9 +468,14 @@ impl PreparedScene {
         tick: u32,
         patrol: &PatrolScript,
     ) -> Result<(), CombatError> {
+        self.simulation.prepare_movement_frame(tick)?;
+        let contacts = self.simulation.movement_contact_frame();
         let floor = self.ground.triangles();
         let map = &self.map;
         self.simulation.for_each_body_mut(|bot| {
+            if let Some(contacts) = contacts.as_ref().filter(|_| bot.patrol_active()) {
+                contacts.stage_bot(bot, tick);
+            }
             if let Err(error) = bot.step(
                 tick,
                 patrol,

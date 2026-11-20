@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "case_id": "script-local-health-outcomes.synthetic.v1",
+  "source": {"basis": "Original actors and wounds for checking actual health change records."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "ai": {
+      "body": 801,
+      "controller": 802,
+      "initial_health": 25.0,
+      "listener_graph": {
+        "index": 908,
+        "items": 1,
+        "header": {
+          "m_nodesBitCount": 1, "m_statesBitCount": 1,
+          "m_remoteSyncNodesBitCount": 1, "m_syncVarsBitCount": 1
+        },
+        "fields": {},
+        "containers": {},
+        "nodes": [
+          {
+            "pos": 0, "class": "EntryHostEvent", "uid": 0, "rid": 0, "remote": -1, "state": null,
+            "client_only": false, "server_only": true, "host_event_entry": "health_applied",
+            "fields": {"m_outPlug": {"$": "Plug", "links": []}}
+          }
+        ],
+        "unknown_nodes": [], "states": [], "entries": [], "remote": [], "sync_vars": []
+      },
+      "attempts": [
+        {"actor": 802, "damage": 400.0},
+        {"actor": 801, "damage": 6.0},
+        {"actor": 801, "damage": 0.0},
+        {"actor": 801, "damage": 400.0},
+        {"actor": 801, "damage": 2.0}
+      ]
+    },
+    "local_heal": {
+      "wound": 6.0,
+      "requested_per_second": 500.0,
+      "target_tag": "0x0D60000000000904"
+    },
+    "field": {
+      "initial_two_actor_wounds": [0.5, 3.0],
+      "pulse_ticks_elapsed": 4
+    }
+  },
+  "expected": {
+    "ai": {
+      "accepted": [false, true, true, true, true],
+      "remaining_health": [25.0, 19.0, 19.0, 0.0, 0.0],
+      "changes": [
+        {"source": 801, "delta": -6.0, "killed": false},
+        {"source": 801, "delta": -19.0, "killed": true}
+      ]
+    },
+    "local_heal": {
+      "actual_delta": 6.0,
+      "committed_health": 100.0,
+      "target_filter_flags": 16777217
+    },
+    "field": {"actual_deltas": [0.5, 3.0]}
+  }
+}

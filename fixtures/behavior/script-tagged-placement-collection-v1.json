@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "case_id": "script-tagged-placement-collection.synthetic.v1",
+  "source": {
+    "basis": "Original synthetic tags and a scene placement inventory."
+  },
+  "evidence": "synthetic-rust",
+  "tag": "0x0D6000000000F527",
+  "cases": [
+    {"inventory": [2147483689, 2147483675], "expected": [2147483689, 2147483675]},
+    {"inventory": [], "expected": []},
+    {"inventory": null, "expected": null},
+    {"inventory": [2147483689], "extra_exclusion": true, "expected": null}
+  ]
+}

@@ -159,9 +159,7 @@ fn configured_cassidy_immunity_routes_real_room_damage_and_death_notices() {
             );
             assert_eq!(actor.alive, case["alive"][step].as_bool().unwrap());
             let deaths = peer
-                .combat_ui
-                .notices
-                .iter()
+                .pending_combat_notices()
                 .filter(|notice| {
                     matches!(
                         notice,

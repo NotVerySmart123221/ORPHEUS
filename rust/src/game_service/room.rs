@@ -1,6 +1,7 @@
 //! Room-local execution and fault types. Unwinding never resumes a damaged room.
 
 use super::*;
+use crate::game_instance::TeamMemberCounts;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use thiserror::Error;
 
@@ -244,6 +245,16 @@ pub(super) struct RoomMember {
 }
 
 impl Room {
+    pub(super) fn team_member_counts(&self) -> TeamMemberCounts {
+        TeamMemberCounts::from_teams(
+            self.map.free_for_all,
+            self.players
+                .iter()
+                .filter(|player| !player.gone)
+                .map(|player| player.info.team),
+        )
+    }
+
     pub(super) fn appearance(&self, slot: usize) -> Option<PlayerAppearance<'_>> {
         let player = self.players.get(slot)?;
         Some(PlayerAppearance {
@@ -486,12 +497,13 @@ impl Room {
                 return Err(RoomError::Invariant("retired roster slot already gone"));
             }
             player.gone = true;
+            let entity = player.entity;
+            let counts = self.team_member_counts();
             if let Some(world) = &mut self.world {
                 world.scene.retire_projectiles(connection);
-                world
-                    .scene
-                    .simulation_mut()
-                    .retire_player_owner(player.entity);
+                let simulation = world.scene.simulation_mut();
+                simulation.retire_player_owner(entity);
+                simulation.set_team_member_counts(counts);
             }
         }
         Ok(())
@@ -610,45 +622,58 @@ impl Room {
                 tick,
                 now,
             };
+            world.scene.simulation_mut().prepare_movement_frame(tick)?;
+            world.scene.simulation_mut().prepare_spatial_frame(tick)?;
             // Movement/input failure previously closes this member. Keep that
             // scope and report the cause; body-script failures are handled locally.
-            let active = world.scene.simulation().encounter_active();
+            let activity = world.scene.owner_room_activity();
             if let Some(id) = peer.world.active_body_id() {
                 world
                     .scene
                     .simulation_mut()
-                    .set_player_encounter_active(id, active);
+                    .set_player_activity(id, activity);
             }
-            let (used, leave) = match peer.world.advance_input(
-                &mut world.scene,
-                &viewer,
-                context.quanta,
-                budget,
-            ) {
-                Ok(result) => result,
-                Err(error) => {
-                    eprintln!(
-                        "Game input for connection {connection} at frame {tick} stopped: {error}"
-                    );
-                    (budget, true)
+            let mut used = 0;
+            let leave = loop {
+                let remaining = budget - used;
+                let (steps, leave) = match peer.world.advance_input(
+                    &mut world.scene,
+                    &viewer,
+                    context.quanta,
+                    remaining,
+                ) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        eprintln!(
+                            "Game input for connection {connection} at frame {tick} stopped: {error}"
+                        );
+                        (remaining, true)
+                    }
+                };
+                if steps > remaining {
+                    return Err(RoomError::Invariant("input exceeded assigned budget"));
                 }
-            };
-            if used > budget {
-                return Err(RoomError::Invariant("input exceeded assigned budget"));
-            }
-            let shots = peer.world.take_hitscan(world.scene.simulation_mut());
-            if (!leave && peer.world.combat_body_active()) || !shots.is_empty() {
-                let (bots, queries) = world.scene.bot_simulation();
-                bots.activate_combat();
-                for shot in shots {
-                    if let Some(hit) = bots.hitscan(&queries, shot, context, |entity| {
-                        peer.world.identity_ready(entity)
-                    })? {
-                        bots.deliver_applied_damage(peer.world.owner(), hit.damage.clone());
-                        peer.bot_hit(hit);
+                used += steps;
+                let shots = peer.world.take_hitscan(world.scene.simulation_mut());
+                let settled_shots = !shots.is_empty();
+                if (!leave && peer.world.combat_body_active()) || settled_shots {
+                    let (bots, queries) = world.scene.bot_simulation();
+                    bots.activate_combat();
+                    for shot in shots {
+                        if let Some(hit) = bots.hitscan(&queries, shot, context, |entity| {
+                            peer.world.identity_ready(entity)
+                        })? {
+                            bots.deliver_applied_damage(peer.world.owner(), hit.damage.clone());
+                            peer.bot_hit(hit);
+                        }
                     }
                 }
-            }
+                // A batch may have yielded before a body selection so these
+                // shots could settle. Resume within the same peer budget.
+                if leave || used == budget || !settled_shots || !peer.world.has_input_work() {
+                    break leave;
+                }
+            };
             if leave {
                 peer.clear_world_in_room(world.scene.simulation_mut());
                 world.scene.retire_projectiles(connection);
@@ -678,9 +703,14 @@ impl Room {
         let Some(world) = &mut self.world else {
             return Ok(RoomUpdates::default());
         };
+        world.scene.simulation_mut().prepare_spatial_frame(tick)?;
         let junkenstein = world.scene.map().is_junkenstein();
-        let active = world.scene.simulation().encounter_active();
-        world.scene.simulation_mut().sync_player_encounter(active);
+        let respawn_delay = world
+            .scene
+            .simulation()
+            .player_respawn_delay(world.scene.map().mode_guid);
+        let activity = world.scene.owner_room_activity();
+        world.scene.simulation_mut().sync_player_activity(activity);
 
         let (
             replacements,
@@ -689,8 +719,8 @@ impl Room {
             messages,
             bot_sightings,
             deaths,
-            player_events,
             observer_player_health,
+            player_cues,
         ) = {
             let (bots, queries) = world.scene.bot_simulation();
             let sightings = bots.take_player_defender_sightings();
@@ -704,20 +734,33 @@ impl Room {
                 bots.take_defender_messages(),
                 all_sightings,
                 bots.take_player_deaths(),
-                bots.take_player_events(),
                 bots.take_observer_player_health(),
+                bots.take_player_cues(),
             )
         };
         for death in deaths {
             for member in self.members.values_mut() {
                 if let Some(peer) = &mut member.peer {
-                    if peer.world.owner() == death.owner {
-                        peer.queue_combat_notice(CombatNotice::Death {
-                            source: death.source,
-                            killed_by: true,
-                        });
+                    peer.queue_player_death(death);
+                    if let Some(delay) = respawn_delay {
+                        peer.world
+                            .schedule_player_respawn(death.body, now.saturating_add(delay));
                     }
                 }
+            }
+        }
+        for cue in player_cues {
+            let peer = self.members.values_mut().find_map(|member| {
+                self.players
+                    .get(member.slot)
+                    .filter(|player| !player.gone)?;
+                member.peer.as_mut().filter(|peer| {
+                    peer.world.owner() == cue.owner
+                        && peer.world.active_body_id() == Some(cue.listener)
+                })
+            });
+            if let Some(peer) = peer {
+                peer.queue_player_cue(cue.listener, cue.source, cue.notice);
             }
         }
         if junkenstein {
@@ -768,12 +811,50 @@ impl Room {
                     .deliver_player_defender_sighting(message);
             }
         }
+        if respawn_delay.is_some() && !world.scene.simulation().encounter_screens_complete() {
+            for member in self.members.values_mut() {
+                let Some(peer) = &mut member.peer else {
+                    continue;
+                };
+                let Some((victim, due)) = peer.world.pending_player_respawn() else {
+                    continue;
+                };
+                // Keep the victim notice eligible until reliable admission.
+                // An unavailable UI identity cannot block respawn indefinitely.
+                if now < due
+                    || (now < due.saturating_add(SILENCE_TIME) && peer.death_notice_pending(victim))
+                {
+                    continue;
+                }
+                let Some(player) = self.players.get(member.slot).filter(|player| !player.gone)
+                else {
+                    continue;
+                };
+                let viewer = PlayerAppearance {
+                    entity: player.entity,
+                    slot: i8::try_from(member.slot).map_err(|_| {
+                        RoomError::Invariant("respawn member has invalid roster slot")
+                    })?,
+                    team: player.info.team,
+                    card: &world.card,
+                };
+                if let Err(error) = peer.world.advance_player_respawn(
+                    &mut world.scene,
+                    &viewer,
+                    tick,
+                    player.quanta(),
+                    now,
+                ) {
+                    eprintln!("player {:08X} respawn rejected: {error}", viewer.entity);
+                }
+            }
+        }
         Ok(RoomUpdates {
             replacements,
             created: world.scene.take_enemy_creates(),
             health,
             retired,
-            player_events,
+            player_events: world.scene.simulation_mut().take_player_events(),
             observer_player_health,
         })
     }

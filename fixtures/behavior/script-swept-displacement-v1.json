@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "case_id": "script-swept-displacement.synthetic.v1",
+  "source": {"basis": "Original bounded vectors, self-only requests, and next-frame host admission."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "body": 1201,
+    "graph": 713,
+    "message": 97,
+    "constructor_cases": [
+      {"name": "diagonal", "delta": [3, 0, 4], "expected": [3, 0, 4]},
+      {"name": "positive boundary", "delta": [32, 0, 0], "expected": [32, 0, 0]},
+      {"name": "negative boundary", "delta": [-32, 0, 0], "expected": [-32, 0, 0]},
+      {"name": "three dimensional", "delta": [10, -10, 10], "expected": [10, -10, 10]},
+      {"name": "zero", "delta": [0, 0, 0], "expected": null},
+      {"name": "oversized", "delta": [33, 0, 0], "expected": null},
+      {"name": "large diagonal", "delta": [24, 0, 24], "expected": null},
+      {"name": "overflow safe", "delta": [1e300, 1e300, 1e300], "expected": null},
+      {"name": "conversion underflow", "delta": [1e-300, 0, 0], "expected": null},
+      {"name": "converted boundary overflow", "delta": [19.2, 25.6, 0], "expected": null},
+      {"name": "nan", "delta": ["nan", 0, 0], "expected": null},
+      {"name": "infinite", "delta": [0, "infinity", 0], "expected": null}
+    ],
+    "steps": [
+      {"name": "accepted", "frame": 3, "delta": [3, 0, 4], "admission": "accepted", "host_call": true, "continued": true, "diagnostic": null},
+      {"name": "another source", "frame": 5, "body": 1301, "delta": [-1, 2, 0], "admission": "accepted", "host_call": true, "continued": true, "diagnostic": null},
+      {"name": "ordinary refusal", "frame": 7, "delta": [1, 0, 0], "admission": "refused", "host_call": true, "continued": false, "diagnostic": null},
+      {"name": "unavailable host", "frame": 9, "delta": [1, 0, 0], "admission": "unavailable", "host_call": true, "continued": false, "diagnostic": "service"},
+      {"name": "zero vector", "frame": 11, "delta": [0, 0, 0], "admission": "accepted", "host_call": false, "continued": false, "diagnostic": "delta"},
+      {"name": "oversized vector", "frame": 13, "delta": [33, 0, 0], "admission": "accepted", "host_call": false, "continued": false, "diagnostic": "delta"},
+      {"name": "nonfinite vector", "frame": 15, "delta": [0, "nan", 0], "admission": "accepted", "host_call": false, "continued": false, "diagnostic": "delta"},
+      {"name": "wrong value type", "frame": 17, "delta": false, "admission": "accepted", "host_call": false, "continued": false, "diagnostic": "delta"},
+      {"name": "unbound source", "frame": 19, "body": 0, "delta": [1, 0, 0], "admission": "accepted", "host_call": false, "continued": false, "diagnostic": "source"},
+      {"name": "expression failure", "frame": 21, "delta": [1, 0, 0], "invalid_expression": true, "admission": "accepted", "host_call": false, "continued": false, "diagnostic": "expression"},
+      {"name": "next frame overflow", "frame": 4294967295, "delta": [1, 0, 0], "admission": "accepted", "host_call": false, "continued": false, "diagnostic": "frame"}
+    ]
+  }
+}

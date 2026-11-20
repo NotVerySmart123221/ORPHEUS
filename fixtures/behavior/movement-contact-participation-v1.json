@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "case_id": "movement-contact-participation.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "source": {
+    "basis": "Original room contact admission and next-frame modifier lifecycle."
+  },
+  "input": {
+    "birth_frame": 100,
+    "disabled_sample_frame": 101,
+    "restored_sample_frame": 102,
+    "source_wire": 901,
+    "target_wire": 902,
+    "source_position": [0, 0, 0],
+    "target_position": [4, 0, 0],
+    "disabled_npc_body": 2,
+    "enabled_npc_body": 3,
+    "mover_catalog": {
+      "0x02": {"character_collision": 0},
+      "0x03": {"character_collision": 1}
+    },
+    "modifier_slot": 22
+  },
+  "expected": {
+    "disabled_blockers": 1,
+    "restored_blockers": 2
+  }
+}

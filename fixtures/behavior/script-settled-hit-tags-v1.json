@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "case_id": "script-settled-hit-tags.synthetic.v1",
+  "source": {"basis": "Synthetic room impacts and healing, overkill attribution, frozen target facts, and body replacement."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "bot_impact": 23.5,
+    "player_impact": 500.0,
+    "bot_lethal_impact": 300.0,
+    "ordered_hit_tags": [613, 101, 613],
+    "unavailable_target_tag": 732,
+    "generic_healing": 90.0,
+    "generic_damage": 25.0
+  },
+  "expected": {
+    "ordered_outcomes": [
+      {
+        "target": "bot",
+        "delta": -23.5,
+        "killed": false,
+        "hit_tags": [613, 101, 613],
+        "target_facts": {"filter_flags": 16777217, "owner_health": null}
+      },
+      {"target": "player", "delta": -25.0, "killed": false, "hit_tags": null, "target_facts": null},
+      {
+        "target": "player",
+        "delta": 25.0,
+        "killed": false,
+        "hit_tags": null,
+        "target_facts": {"filter_flags": 8388609, "owner_health": 200.0}
+      },
+      {
+        "target": "player",
+        "delta": -200.0,
+        "killed": true,
+        "hit_tags": [],
+        "target_facts": {"filter_flags": 8388609, "owner_health": 200.0}
+      },
+      {
+        "target": "bot",
+        "delta": 23.5,
+        "killed": false,
+        "hit_tags": null,
+        "target_facts": {"filter_flags": 16777217, "owner_health": null}
+      },
+      {"target": "bot", "delta": -25.0, "killed": false, "hit_tags": null, "target_facts": null}
+    ],
+    "bot_health": 75.0,
+    "player_health": 0.0,
+    "replacement": {
+      "heal_delta": 25.0,
+      "heal_target_facts": {"filter_flags": 16777217, "owner_health": null},
+      "lethal_delta": -100.0,
+      "target_facts": {"filter_flags": 16777233, "owner_health": null}
+    }
+  }
+}

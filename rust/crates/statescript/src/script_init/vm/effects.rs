@@ -8,7 +8,7 @@ use serde_json::Value as Json;
 use crate::{
     script_expr::{self, truthy},
     script_graph::{Node, asset_guid},
-    script_modifiers::{Modifier, ModifierKey, Operation},
+    script_modifiers::{Modifier, ModifierKey, Operation, SPEED_SLOT, narrow},
     script_runtime::{FRAME_MS, GAME_MODE_ENTITY, MAX_MOVEMENT_AXIS, PoolKind},
     script_wire::{Value, Variables},
 };
@@ -16,10 +16,10 @@ use crate::{
 use super::super::{
     ABILITY_PUSHED, ABILITY_RUNNING, HUD_HEALTH, HUD_MAX_HEALTH, LINK_PRIORITY, MAX_PENDING_SHOTS,
     MAX_PLUG_DEPTH, OWNER_HEALTH, SCRIPT_SOURCE,
-    machine::{Event, LinkValue, Startup, StateKey, VarKey, VariableLink, Volley},
+    machine::{Event, LinkValue, StateKey, VarKey, VariableLink, Volley},
     shapes::{
-        array_field, chase_lerp, chase_step, chase_value, configured, field, pool_kind,
-        pool_number, same, shot_delay, source_key, stored,
+        array_field, chase_lerp, chase_step, chase_value, configured, field, immediate_self_damage,
+        named_temporary_shield, pool_kind, pool_number, same, shot_delay, source_key, stored,
     },
     types::{ChasePayload, InitFault, Issue, ShotEvent, StateKind},
     world::{
@@ -289,6 +289,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             self.register_tick(key, self.machine.now_ms);
             return Ok(());
         }
+        if let Some(damage) = immediate_self_damage(node, key.raw) {
+            if !damage.skip_dead_owner || !self.machine.owner_dead {
+                return self.apply_npc_self_damage(site, damage.amount);
+            }
+            return Ok(());
+        }
         let Some(target) = self.creation_scalar(
             key.instance,
             node,
@@ -306,34 +312,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             self.report(site, Issue::UnsupportedField("NPC damage target"));
             return Ok(());
         };
-        if (site.graph, node.pos) == (0x0cbc, 69) {
-            let source =
-                self.creation_scalar(key.instance, node, field(config, "m_724CBA57"), Value::Null)?;
-            let amount = self
-                .creation_scalar(key.instance, node, field(config, "m_amount"), Value::Null)?
-                .and_then(pool_number);
-            if target != site.entity
-                || source != Some(Value::Entity(site.entity))
-                || amount != Some(10_000.0)
-                || field(config, "m_93CDFD2F").as_u64() != Some(1)
-                || !field(config, "m_instigator").is_null()
-                || field(&node.fields, "m_8B707686").as_u64() != Some(1)
-            {
-                self.report(site, Issue::UnsupportedField("Junkenstein cleanup damage"));
-                return Ok(());
-            }
-            if !self.machine.owner_dead {
-                if !self.world.self_damage(site, 10_000.0) {
-                    self.report(site, Issue::UnsupportedField("NPC self damage service"));
-                }
-                self.publish_health_totals(site)?;
-            }
-            return Ok(());
-        }
-        let self_hit = node.pos == 46 && target == site.entity;
-        let other_hit =
-            node.pos == 38 && target != site.entity && script_expr::valid_entity(target);
-        if !(self_hit || other_hit)
+        if node.pos != 38
+            || target == site.entity
+            || !script_expr::valid_entity(target)
             || field(config, "m_93CDFD2F").as_u64() != Some(1)
             || !field(&node.fields, "m_95F1FB0B").is_null()
         {
@@ -351,30 +332,65 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let Some(amount) = self
             .creation_scalar(key.instance, node, field(config, "m_amount"), Value::Null)?
             .and_then(pool_number)
-            .filter(|amount| {
-                (0.0..=f64::from(f32::MAX)).contains(amount) && (!self_hit || *amount > 0.0)
-            })
+            .filter(|amount| (0.0..=f64::from(f32::MAX)).contains(amount))
         else {
             self.report(site, Issue::UnsupportedField("NPC damage amount"));
             return Ok(());
         };
         let amount = f64::from(amount as f32);
-        if other_hit {
-            if self.world.explosion_damage(site, target, amount) {
-                self.post(key.instance, Event::Finish(key.raw))?;
-            } else {
-                self.report(
-                    site,
-                    Issue::UnsupportedField("NPC explosion damage service"),
-                );
-            }
-            return Ok(());
+        if self.world.explosion_damage(site, target, amount) {
+            self.post(key.instance, Event::Finish(key.raw))?;
+        } else {
+            self.report(
+                site,
+                Issue::UnsupportedField("NPC explosion damage service"),
+            );
         }
+        Ok(())
+    }
+
+    fn apply_npc_self_damage(&mut self, site: Site, amount: f64) -> Result<(), InitFault> {
         if !self.world.self_damage(site, amount) {
             self.report(site, Issue::UnsupportedField("NPC self damage service"));
         }
-        self.publish_health_totals(site)?;
-        Ok(())
+        self.publish_health_totals(site)
+    }
+
+    pub(in crate::script_init) fn update_named_shield_decay(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+        elapsed_ms: u64,
+    ) -> Result<bool, InitFault> {
+        let site = self.site(key.instance, node);
+        if self.machine.owner_dead {
+            self.post(key.instance, Event::Finish(key.raw))?;
+            return Ok(false);
+        }
+        let identifier = script_expr::named_shield_identifier(field(&node.fields, "m_7BE02F89"))
+            .expect("validated named shield identifier");
+        let effect = field(&node.fields, "m_modifyHealth");
+        let Some(rate) = self
+            .creation_scalar(key.instance, node, field(effect, "m_amount"), Value::Null)?
+            .and_then(pool_number)
+            .filter(|rate| *rate > 0.0 && *rate <= f64::from(f32::MAX))
+        else {
+            self.report(site, Issue::UnsupportedField("named shield decay rate"));
+            return Ok(false);
+        };
+        let amount = rate * (elapsed_ms as f64 / 1_000.0);
+        let Some(remaining) = self.world.drain_temporary_shield(site, identifier, amount) else {
+            self.report(site, Issue::UnsupportedField("named shield decay service"));
+            return Ok(false);
+        };
+        if elapsed_ms != 0 {
+            self.publish_health_totals(site)?;
+        }
+        if remaining <= 0.0 {
+            self.post(key.instance, Event::Finish(key.raw))?;
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     pub(in crate::script_init) fn begin_shield_recharge(
@@ -383,37 +399,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         node: &Node,
     ) -> Result<(), InitFault> {
         let site = self.site(key.instance, node);
-        let config = field(&node.fields, "m_modifyHealth");
-        if field(&node.fields, "m_DD792FF0").as_u64() != Some(3)
-            || field(&node.fields, "m_7B2B3F5C").as_u64() != Some(1)
-            || field(config, "m_93CDFD2F").as_u64() != Some(0)
-        {
-            self.report(
-                site,
-                Issue::UnsupportedField("shield recharge configuration"),
-            );
-            return Ok(());
-        }
-        for target in [
-            field(&node.fields, "m_FA3ECC43"),
-            field(config, "m_724CBA57"),
-        ] {
-            if self.creation_scalar(key.instance, node, target, Value::Null)?
-                != Some(Value::Entity(site.entity))
-            {
-                self.report(site, Issue::UnsupportedField("shield recharge target"));
-                return Ok(());
-            }
-        }
-        let interval = self
-            .creation_scalar(
-                key.instance,
-                node,
-                field(&node.fields, "m_95F1FB0B"),
-                Value::Null,
-            )?
-            .and_then(pool_number);
-        if interval != Some(1.0) || !self.world.recharge_shields(site, 0.0) {
+        if !script_expr::valid_entity(site.entity) || !self.world.recharge_shields(site, 0.0) {
             self.report(site, Issue::UnsupportedField("shield recharge service"));
             return Ok(());
         }
@@ -426,7 +412,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         key: StateKey,
         elapsed_ms: u64,
     ) -> Result<(), InitFault> {
-        if self.machine.owner_dead {
+        if self.machine.owner_dead || elapsed_ms == 0 {
             return Ok(());
         }
         let node = self
@@ -773,41 +759,17 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 .collect::<Vec<_>>(),
             _ => Vec::new(),
         };
-        let mut children = std::mem::take(
-            &mut self
-                .state_mut(key)
-                .expect("Deadeye effect state")
-                .deadeye_children,
-        );
-        let mut removed = Vec::new();
-        children.retain(|entity, child| {
-            if !self.machine.snapshot.instances.contains_key(child) {
-                return false;
-            }
-            if selected.contains(entity) {
-                return true;
-            }
-            removed.push(*child);
-            false
-        });
-        for child in removed {
-            self.destroy(child)?;
-        }
+        self.retain_target_children(key, &selected)?;
         for entity in selected {
-            let child = if let Some(&child) = children.get(&entity) {
-                child
-            } else {
-                let child = u16::try_from(self.machine.next_id)
-                    .map_err(|_| InitFault::InstanceIdExhausted)?;
-                let variables = Variables::from([
-                    (536, Value::Entity(entity)),
-                    (SCRIPT_SOURCE, Value::Entity(site.entity)),
-                ]);
-                if !self.create(child, TARGET_GRAPH, None, variables, Startup::Ordinary)? {
-                    continue;
-                }
-                children.insert(entity, child);
-                child
+            let Some(child) =
+                self.ensure_target_child(key, entity, TARGET_GRAPH, false, None, || {
+                    Variables::from([
+                        (536, Value::Entity(entity)),
+                        (SCRIPT_SOURCE, Value::Entity(site.entity)),
+                    ])
+                })?
+            else {
+                continue;
             };
             self.machine.queue_entries_from(
                 self.graphs,
@@ -818,9 +780,6 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.machine.now_ms,
             )?;
         }
-        self.state_mut(key)
-            .expect("Deadeye effect state")
-            .deadeye_children = children;
         self.register_tick(key, self.machine.now_ms);
         Ok(())
     }
@@ -1046,6 +1005,20 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         }
     }
 
+    pub(in crate::script_init) fn publish_facing_record(
+        &mut self,
+        node: &Node,
+        site: Site,
+        record: AiFacing,
+        active: bool,
+    ) -> Option<bool> {
+        if node.declares_facing_claim() {
+            self.world.set_facing_claim(site, record, active)
+        } else {
+            self.world.ai_facing(site, record, active)
+        }
+    }
+
     pub(in crate::script_init) fn update_ai_facing(
         &mut self,
         key: StateKey,
@@ -1053,7 +1026,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         previous: Option<AiFacing>,
     ) -> Result<(), InitFault> {
         let site = self.site(key.instance, node);
-        let (target, priority) = if let Some(previous) = previous {
+        let authored = node.declares_facing_claim();
+        let (target, priority) = if authored {
+            (
+                site.entity,
+                node.facing_claim_priority()
+                    .expect("validated facing claim priority"),
+            )
+        } else if let Some(previous) = previous {
             (previous.target, previous.priority)
         } else {
             let priority = field(&node.fields, "m_priority");
@@ -1075,31 +1055,69 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 script_expr::stack_priority(priority).expect("validated priority asset"),
             )
         };
-        let Some(direction) =
-            self.evaluate(key.instance, node, field(&node.fields, "m_7CCD8B4B"), None)
+        let operand = if authored { "direction" } else { "m_7CCD8B4B" };
+        let Some(direction) = self.evaluate(key.instance, node, field(&node.fields, operand), None)
         else {
+            if authored {
+                self.post(key.instance, Event::Abort(key.raw))?;
+            }
             return Ok(());
         };
         let direction = match direction {
             Value::Vector(direction) if direction.iter().all(|axis| axis.is_finite()) => direction,
             _ => {
-                self.report(site, Issue::UnsupportedField("AI facing direction"));
+                self.report(
+                    site,
+                    Issue::UnsupportedField(if authored {
+                        "facing claim direction"
+                    } else {
+                        "AI facing direction"
+                    }),
+                );
+                if authored {
+                    self.post(key.instance, Event::Abort(key.raw))?;
+                }
                 return Ok(());
             }
+        };
+        let direction = if authored {
+            let scale = direction.into_iter().map(f64::abs).fold(0.0, f64::max);
+            if scale == 0.0 {
+                self.report(site, Issue::UnsupportedField("facing claim direction"));
+                self.post(key.instance, Event::Abort(key.raw))?;
+                return Ok(());
+            }
+            let scaled = direction.map(|axis| axis / scale);
+            let magnitude = scaled.iter().map(|axis| axis * axis).sum::<f64>().sqrt();
+            scaled.map(|axis| axis / magnitude)
+        } else {
+            direction
         };
         let record = AiFacing {
             target,
             direction,
             priority,
         };
-        match self.world.ai_facing(site, record, true) {
+        match self.publish_facing_record(node, site, record, true) {
             Some(true) => {
                 self.state_mut(key).expect("active AI facing").kind =
                     StateKind::AiFacing(Some(record));
                 self.register_tick(key, self.machine.now_ms);
             }
             Some(false) => self.post(key.instance, Event::Abort(key.raw))?,
-            None => self.report(site, Issue::UnsupportedField("AI facing component")),
+            None => {
+                self.report(
+                    site,
+                    Issue::UnsupportedField(if authored {
+                        "facing claim component"
+                    } else {
+                        "AI facing component"
+                    }),
+                );
+                if authored {
+                    self.post(key.instance, Event::Abort(key.raw))?;
+                }
+            }
         }
         Ok(())
     }
@@ -1274,6 +1292,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         &mut self,
         key: StateKey,
         node: &Node,
+        wave_bonus: bool,
     ) -> Result<(), InitFault> {
         let id = key.instance;
         let site = self.site(id, node);
@@ -1284,7 +1303,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             self.report(site, Issue::UnsupportedField("health pool target"));
             return Ok(());
         }
-        if site.graph == 0x0cbc {
+        if wave_bonus {
             return self.begin_wave_health(key, node, site);
         }
         let Some(maximum) = self
@@ -1294,6 +1313,32 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             self.report(site, Issue::UnsupportedField("health pool capacity"));
             return Ok(());
         };
+        if let Some(identifier) = named_temporary_shield(node, key.raw) {
+            let instance = &self.machine.snapshot.instances[&id];
+            let stacked = instance.parent.is_none() && instance.retire_after_frame.is_some();
+            if maximum == 0.0 {
+                if stacked {
+                    self.post(id, Event::Finish(key.raw))?;
+                }
+                return Ok(());
+            }
+            let Some(pool) = self
+                .world
+                .add_temporary_shield(site, identifier, maximum, stacked)
+            else {
+                self.report(
+                    site,
+                    Issue::UnsupportedField("temporary shield registration"),
+                );
+                return Ok(());
+            };
+            self.state_mut(key).expect("active temporary shield").kind =
+                StateKind::HealthPool { pool: Some(pool) };
+            if stacked {
+                self.register_tick(key, self.machine.now_ms);
+            }
+            return self.publish_health_totals(site);
+        }
         let initial = field(&node.fields, "m_BCFDD2E9");
         let current = if initial.is_null() {
             maximum
@@ -1376,6 +1421,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         node: &Node,
         current: f64,
     ) -> Result<(), InitFault> {
+        if !field(&node.fields, "m_7BE02F89").is_null() {
+            // The reference exposes the named value through the pool query.
+            return self.publish_health_totals(self.site(key.instance, node));
+        }
         let output = script_expr::lvalue(field(&node.fields, "m_CEAB19E8"))
             .expect("validated health pool output");
         if let Some(output) = output {
@@ -1408,6 +1457,18 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         Ok(())
     }
 
+    fn rejects_stack_value(&mut self, key: StateKey, node: &Node, value: &Value) -> bool {
+        if node.declares_stack_claim() && matches!(value, Value::Map(_) | Value::IdentifierMap(_)) {
+            self.report(
+                self.site(key.instance, node),
+                Issue::UnsupportedField("map-valued stack claim"),
+            );
+            true
+        } else {
+            false
+        }
+    }
+
     pub(in crate::script_init) fn begin_stack(
         &mut self,
         key: StateKey,
@@ -1415,24 +1476,47 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         depth: usize,
     ) -> Result<(), InitFault> {
         let id = key.instance;
-        let Some(value) = self.evaluate(id, node, field(&node.fields, "m_value"), Some(key)) else {
+        let Some(value) = self.evaluate(
+            id,
+            node,
+            node.stack_value().unwrap_or(&Json::Null),
+            Some(key),
+        ) else {
             return Ok(());
         };
-        let target = match script_expr::lvalue(field(&node.fields, "m_out_Var")) {
-            Ok(Some(target)) => source_key(id, target),
-            Ok(None) => return Ok(()),
-            Err(error) => {
-                self.report(self.site(id, node), Issue::Expression(error));
-                return Ok(());
+        if self.rejects_stack_value(key, node, &value) {
+            return Ok(());
+        }
+        let (variable, priority) = if let Some((variable, priority, duration)) = node.stack_claim()
+        {
+            if let Some(frames) = duration {
+                // The top subgraph can synchronously end its owner.
+                self.post_after(
+                    id,
+                    u64::from(frames.get()) * FRAME_MS,
+                    Event::Finish(key.raw),
+                )?;
             }
+            (variable, priority)
+        } else {
+            let variable = match script_expr::lvalue(field(&node.fields, "m_out_Var")) {
+                Ok(Some(variable)) => variable,
+                Ok(None) => return Ok(()),
+                Err(error) => {
+                    self.report(self.site(id, node), Issue::Expression(error));
+                    return Ok(());
+                }
+            };
+            let priority = match script_expr::stack_priority(field(&node.fields, "m_priority")) {
+                Ok(priority) => priority,
+                Err(error) => {
+                    self.report(self.site(id, node), Issue::Expression(error));
+                    return Ok(());
+                }
+            };
+            (variable, priority)
         };
-        let priority = match script_expr::stack_priority(field(&node.fields, "m_priority")) {
-            Ok(priority) => priority,
-            Err(error) => {
-                self.report(self.site(id, node), Issue::Expression(error));
-                return Ok(());
-            }
-        };
+        let target = source_key(id, variable);
         self.state_mut(key).expect("active stack").linked_variable = Some(target);
         self.insert_link(
             target,
@@ -2060,13 +2144,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .graph(id)
             .state(usize::from(key.raw))
             .expect("stack state");
-        let value = field(&node.fields, "m_value");
-        if value.is_null() {
+        let Some(value) = node.stack_value().filter(|config| !config.is_null()) else {
             return Ok(());
-        }
+        };
         let Some(value) = self.evaluate(id, node, value, Some(key)) else {
             return Ok(());
         };
+        if self.rejects_stack_value(key, node, &value) {
+            return Ok(());
+        }
         let old = self.machine.value(target, None);
         if let Some(LinkValue::Fixed(current)) = self
             .machine
@@ -2091,6 +2177,23 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         node: &Node,
     ) -> Result<(), InitFault> {
         let id = key.instance;
+        if let Some((factor, _)) = node.movement_scale() {
+            self.spend("movement modifier")?;
+            self.machine.movement_modifiers.insert(
+                ModifierKey {
+                    instance: id,
+                    state: key.raw,
+                    slot: 0,
+                },
+                Modifier {
+                    index: SPEED_SLOT,
+                    operation: Operation::Multiply,
+                    value: narrow(factor),
+                    priority: 0.0,
+                },
+            );
+            return Ok(());
+        }
         let mut modifiers = BTreeMap::new();
         for (slot, config) in array_field(&node.fields, "m_BC5E91CF").iter().enumerate() {
             self.spend("movement modifier")?;

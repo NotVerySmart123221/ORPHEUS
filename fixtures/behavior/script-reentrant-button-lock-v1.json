@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "case_id": "script-reentrant-button-lock-v1",
+  "evidence": "rust-headless-synthetic",
+  "graph": 752,
+  "entity": 183,
+  "frame": 110,
+  "up_marker": 812,
+  "down_marker": 813,
+  "cases": [
+    {"button": 20, "press_mask": 1, "action": 0, "lock_on_press": true, "expect_down_marker": false},
+    {"button": 15, "press_mask": 0, "action": 1, "lock_on_press": false, "expect_down_marker": true}
+  ]
+}

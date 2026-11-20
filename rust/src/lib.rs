@@ -20,12 +20,14 @@ pub mod bnet_protocol;
 pub mod bnet_rpc;
 pub mod bnet_service;
 pub mod bnet_session_key;
+mod body_ruleset;
 pub mod catalog;
 pub mod collection;
 #[cfg(any(test, feature = "inspector"))]
 mod debug_geometry;
 #[cfg(feature = "inspector")]
 mod debug_http;
+mod facing;
 pub mod game_body;
 pub mod game_bots;
 pub mod game_clock;
@@ -71,6 +73,7 @@ pub mod lobby_presence;
 pub mod lobby_ranked;
 pub mod lobby_session;
 pub mod lobby_transport;
+mod map_environment;
 pub mod match_handoff;
 pub mod match_scene;
 pub mod mover;
@@ -88,6 +91,7 @@ pub mod retail_templates;
 mod weapon_spread;
 pub use orpheus_runtime as runtime;
 pub mod scene_assets;
+mod script_control;
 mod script_enemy;
 #[cfg(test)]
 mod script_init_host_tests;

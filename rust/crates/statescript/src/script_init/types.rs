@@ -4,6 +4,7 @@ use std::{
     collections::{BTreeMap, HashSet},
     error::Error,
     fmt,
+    num::NonZeroU32,
 };
 
 use indexmap::IndexMap;
@@ -35,6 +36,7 @@ pub enum StateKind {
     SummonerBeamDamage,
     ModifyHealth,
     ShieldRecharge,
+    NamedShieldDecay,
     ForCode,
     AiBehavior {
         record: Option<AiBehaviorRequest>,
@@ -114,7 +116,11 @@ pub enum StateKind {
     OutgoingDamageFilter {
         registered: bool,
     },
-    MovementSample(u16),
+    MovementSample {
+        flags: u16,
+        pose_frame: Option<u32>,
+        sampled_at: Option<u32>,
+    },
     Anim,
     Effect,
     ClientPulse {
@@ -123,10 +129,21 @@ pub enum StateKind {
     },
     EmptyTargets,
     SendMessage,
+    ProjectedSelfSend,
     PersistentSend(u64),
     CosmeticEntity,
     ChaseVar,
     Watch,
+    Observe {
+        sampled_frame: u32,
+    },
+    TrackEntities {
+        sampled_frame: u32,
+    },
+    Interval {
+        period_frames: NonZeroU32,
+        next_frame: Option<u32>,
+    },
     SpawnSearch,
     RecentInput,
     LivingBodyArray,
@@ -152,12 +169,13 @@ pub enum StateKind {
 pub(super) struct BufferedPress {
     pub(super) time_ms: u64,
     pub(super) activation: u16,
+    pub(super) button: u8,
 }
 
 #[derive(Clone, Debug)]
 pub struct State {
     pub tracked_targets: Vec<u32>,
-    pub(super) deadeye_children: BTreeMap<u32, u16>,
+    pub(super) target_children: BTreeMap<u32, u16>,
     pub active: bool,
     pub activation: u16,
     pub start_ms: u64,
@@ -173,6 +191,8 @@ pub struct State {
     pub(super) pending_timer: bool,
     pub(super) delayed_timers: [bool; 2],
     pub(super) buffered_press: Option<BufferedPress>,
+    pub(super) logical_button_binding: Option<u8>,
+    pub(super) logical_button_revision: u32,
     pub(super) linked_variable: Option<VarKey>,
     pub(super) ability_stack: Option<VarKey>,
     pub(super) untrusted_native: bool,
@@ -200,7 +220,7 @@ impl State {
     pub(super) fn dormant(kind: StateKind) -> Self {
         Self {
             tracked_targets: Vec::new(),
-            deadeye_children: BTreeMap::new(),
+            target_children: BTreeMap::new(),
             active: false,
             activation: 0,
             start_ms: 0,
@@ -216,6 +236,8 @@ impl State {
             pending_timer: false,
             delayed_timers: [false; 2],
             buffered_press: None,
+            logical_button_binding: None,
+            logical_button_revision: 0,
             linked_variable: None,
             ability_stack: None,
             untrusted_native: false,
@@ -282,16 +304,48 @@ pub struct ChasePayload {
     pub last_ms: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum InstanceScope {
+    Projected,
+    ServerOnly,
+    Isolated,
+}
+
+impl InstanceScope {
+    pub(super) fn is_isolated(self) -> bool {
+        self == Self::Isolated
+    }
+
+    pub(super) fn is_server_only(self) -> bool {
+        self != Self::Projected
+    }
+
+    pub(super) fn hide_if(self, server_only: bool) -> Self {
+        if server_only && self == Self::Projected {
+            Self::ServerOnly
+        } else {
+            self
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Instance {
     pub graph: u32,
     pub(super) start_ms: u64,
     pub(super) retire_after_frame: Option<u32>,
+    pub(super) scope: InstanceScope,
     /// Parent instance and raw state index, as carried on the wire.
     pub parent: Option<(u16, u16)>,
     pub variables: Variables,
     pub states: IndexMap<u16, State>,
     pub(super) join_inputs: BTreeMap<u16, HashSet<(u16, String)>>,
+}
+
+impl Instance {
+    pub fn is_server_only(&self) -> bool {
+        self.scope.is_server_only()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -301,10 +355,12 @@ pub enum Issue {
     MissingState(u16),
     UnsupportedAction(String),
     UnsupportedState(String),
+    UnsupportedMessageRegistration,
     UnsupportedField(&'static str),
     EntityCreation(String),
     InvalidSubScript,
     Expression(EvalError),
+    ObservationUnavailable,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -313,6 +369,62 @@ pub struct Diagnostic {
     pub issue: Issue,
     /// An existing placement or registration guard rejected this node.
     pub registration_rejected: bool,
+    /// Retained for server diagnostics without blocking client projection.
+    pub server_only: bool,
+}
+
+/// A read-only checkpoint of a component's random stream.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RandomCheckpoint {
+    pub model: &'static str,
+    pub initial_seed: u64,
+    /// Draws since construction, modulo 2^64.
+    pub draws: u64,
+}
+
+/// Bounded evidence of node targets encountered by the VM.
+#[derive(Clone, Debug, Default)]
+pub struct NodeObservations {
+    sites: BTreeMap<(u32, u16), bool>,
+    truncated: bool,
+}
+
+impl NodeObservations {
+    /// The observation limit used by ordinary diagnostic builds.
+    pub const DEFAULT_SITE_LIMIT: usize = 128;
+
+    #[cfg(feature = "node-observations")]
+    pub(super) const SITE_LIMIT: usize = if cfg!(feature = "extended-node-observations") {
+        4096
+    } else {
+        Self::DEFAULT_SITE_LIMIT
+    };
+
+    /// Each graph and node location, with whether its client scope skipped it.
+    pub fn sites(&self) -> impl ExactSizeIterator<Item = (u32, u16, bool)> + '_ {
+        self.sites
+            .iter()
+            .map(|(&(graph, node), &client_scope_skipped)| (graph, node, client_scope_skipped))
+    }
+
+    pub fn truncated(&self) -> bool {
+        self.truncated
+    }
+
+    #[cfg(feature = "node-observations")]
+    pub(super) fn record(&mut self, graph: u32, node: u16, client_scope_skipped: bool) {
+        if self.truncated {
+            return;
+        }
+        let full = self.sites.len() == Self::SITE_LIMIT;
+        if let std::collections::btree_map::Entry::Vacant(site) = self.sites.entry((graph, node)) {
+            if full {
+                self.truncated = true;
+            } else {
+                site.insert(client_scope_skipped);
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -328,9 +440,23 @@ pub struct Snapshot {
     /// Effective linked values, separate from their stored bases.
     pub resolved_bindings: IndexMap<(u16, u32), Value>,
     pub diagnostics: Vec<Diagnostic>,
+    #[cfg(feature = "node-observations")]
+    pub(super) node_observations: NodeObservations,
 }
 
 impl Snapshot {
+    /// Dispatch-target evidence, when compiled with node observations enabled.
+    pub fn node_observations(&self) -> Option<&NodeObservations> {
+        #[cfg(feature = "node-observations")]
+        {
+            Some(&self.node_observations)
+        }
+        #[cfg(not(feature = "node-observations"))]
+        {
+            None
+        }
+    }
+
     pub fn boss_pause_active(&self) -> bool {
         self.instances.values().any(|instance| {
             let senders: &[u16] = match instance.graph {
@@ -349,7 +475,9 @@ impl Snapshot {
     /// The reached initialization path was supported. This does not check
     /// dormant paths, later input, timers, messages, or gameplay.
     pub fn initialization_complete(&self) -> bool {
-        self.diagnostics.is_empty()
+        self.diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.issue == Issue::ObservationUnavailable)
     }
 }
 

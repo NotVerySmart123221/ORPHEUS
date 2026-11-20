@@ -4,15 +4,30 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs::File,
     io::{self, BufReader, Read},
+    num::NonZeroU32,
     path::Path,
+    sync::Arc,
 };
 
 use flate2::bufread::MultiGzDecoder;
-use orpheus_runtime::format::{MAX_GRAPH_BYTES, TARGET_TAG_TYPE, parse_guid};
+pub use orpheus_runtime::format::asset_guid;
+use orpheus_runtime::format::{
+    MAX_GRAPH_BYTES, ModeRulesets, RuleValue, TARGET_TAG_TYPE, parse_guid,
+};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
+use crate::{
+    script_expr::{
+        EngineSetting, Scope, StackPriority, Variable, authored_stack_priority,
+        authored_stack_variable, client_only_fallback, dynamic, native_entity_operand,
+        native_fields, native_shape, native_target_tag_operand,
+    },
+    script_wire::{Value as ScriptValue, Variables},
+};
+
 const GRAPH_TYPE: u64 = 0x0580;
+pub(crate) const MAX_ROOM_MESSAGE_PARAMETERS: usize = 16;
 
 #[derive(Debug, Deserialize)]
 pub struct Header {
@@ -26,6 +41,52 @@ pub struct Header {
     pub sync_vars_bits: u8,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum StateBehavior {
+    Plain,
+    Observe,
+    Interval,
+    ButtonLock,
+    HeldInput,
+    MovementScale,
+    StackClaim,
+    FacingClaim,
+    TrackEntities,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum ActionBehavior {
+    Forward,
+    Branch,
+    LocalMessage,
+    RoomMessage,
+    RoomCue,
+    HealthChange,
+    RadialHealth,
+    SweptDisplacement,
+    Relocation,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum HostEventKind {
+    HealthApplied,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum EntryTopic {
+    Message(u64),
+    Host(HostEventKind),
+}
+
+#[derive(Clone, Copy, Debug)]
+enum DirectedNumericRoute {
+    Sender(u32),
+    Receiver(u32),
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Node {
     pub pos: u16,
@@ -34,17 +95,28 @@ pub struct Node {
     pub rid: u16,
     pub remote: i32,
     pub state: Option<u16>,
+    state_behavior: Option<StateBehavior>,
+    action_behavior: Option<ActionBehavior>,
+    #[serde(default)]
+    room_message_entry: bool,
+    host_event_entry: Option<HostEventKind>,
     #[serde(deserialize_with = "node_flag")]
     pub client_only: bool,
     #[serde(deserialize_with = "node_flag")]
     pub server_only: bool,
+    #[serde(skip)]
+    runtime_plain_state: bool,
+    #[serde(skip)]
+    runtime_client_state: bool,
+    #[serde(skip)]
+    directed_numeric_route: Option<DirectedNumericRoute>,
     pub fields: Value,
 }
 
 impl Node {
-    /// Whether the node's declared execution scope includes the server.
+    /// Whether the node can run on the server.
     pub(crate) fn runs_on_server(&self) -> bool {
-        !self.client_only
+        !self.client_only && !self.runtime_client_state
     }
 
     pub fn is_networked(&self) -> bool {
@@ -52,11 +124,250 @@ impl Node {
     }
 
     pub fn is_state(&self) -> bool {
-        self.fields.get("m_2BBEEAB8").is_some_and(truthy)
+        self.state_behavior.is_some() || self.fields.get("m_2BBEEAB8").is_some_and(truthy)
+    }
+
+    /// Whether authored metadata opts this node into the ordinary state lifecycle.
+    pub fn declares_plain_state(&self) -> bool {
+        matches!(self.state_behavior, Some(StateBehavior::Plain))
+    }
+
+    pub(crate) fn declares_runtime_plain_state(&self) -> bool {
+        self.runtime_plain_state
+    }
+
+    pub(crate) fn declares_observe_state(&self) -> bool {
+        matches!(self.state_behavior, Some(StateBehavior::Observe))
+    }
+
+    pub(crate) fn interval_frames(&self) -> Option<NonZeroU32> {
+        if self.state_behavior != Some(StateBehavior::Interval) {
+            return None;
+        }
+        let frames = self.field("interval_frames")?.as_u64()?;
+        NonZeroU32::new(u32::try_from(frames).ok()?)
+    }
+
+    pub(crate) fn button_lock(&self) -> Option<(u8, Option<NonZeroU32>)> {
+        if self.state_behavior != Some(StateBehavior::ButtonLock) {
+            return None;
+        }
+        let button = u8::try_from(self.field("button")?.as_u64()?).ok()?;
+        if button == 0 {
+            return None;
+        }
+        Some((button, self.optional_duration_frames()?))
+    }
+
+    pub(crate) fn movement_scale(&self) -> Option<(f64, Option<NonZeroU32>)> {
+        if self.state_behavior != Some(StateBehavior::MovementScale) {
+            return None;
+        }
+        let factor = self.field("factor")?.as_f64()?;
+        if !(0.0..=1.0).contains(&factor) {
+            return None;
+        }
+        Some((factor, self.optional_duration_frames()?))
+    }
+
+    /// Whether authored metadata declares a self-facing claim.
+    pub fn declares_facing_claim(&self) -> bool {
+        self.state_behavior == Some(StateBehavior::FacingClaim)
+    }
+
+    pub(crate) fn facing_claim_priority(&self) -> Option<StackPriority> {
+        if !self.declares_facing_claim() {
+            return None;
+        }
+        authored_stack_priority(self.field("priority")?).ok()
+    }
+
+    pub(crate) fn declares_stack_claim(&self) -> bool {
+        self.state_behavior == Some(StateBehavior::StackClaim)
+    }
+
+    pub(crate) fn stack_claim(&self) -> Option<(Variable, StackPriority, Option<NonZeroU32>)> {
+        if !self.declares_stack_claim() {
+            return None;
+        }
+        let variable = authored_stack_variable(self.field("variable")?).ok()?;
+        let priority = authored_stack_priority(self.field("priority")?).ok()?;
+        Some((variable, priority, self.optional_duration_frames()?))
+    }
+
+    pub(crate) fn stack_value(&self) -> Option<&Value> {
+        if self.declares_stack_claim() {
+            self.field("value")
+        } else {
+            self.field("m_value")
+        }
+    }
+
+    fn optional_duration_frames(&self) -> Option<Option<NonZeroU32>> {
+        match self.field("duration_frames") {
+            Some(value) => NonZeroU32::new(u32::try_from(value.as_u64()?).ok()?).map(Some),
+            None => Some(None),
+        }
+    }
+
+    pub(crate) fn target_child_binding(&self) -> Option<(u32, u32)> {
+        if self.state_behavior != Some(StateBehavior::TrackEntities) {
+            return None;
+        }
+        let graph = u32::try_from(self.field("child_graph")?.as_u64()?).ok()?;
+        let variable = u32::try_from(self.field("target_variable")?.as_u64()?).ok()?;
+        (variable != 0).then_some((graph, variable))
+    }
+
+    pub(crate) fn tracks_room_actor_identity(&self) -> bool {
+        self.state_behavior == Some(StateBehavior::TrackEntities)
+            && self.field("identity").and_then(Value::as_str) == Some("room_actor")
     }
 
     pub fn is_action(&self) -> bool {
-        self.fields.get("m_ADEB6E05").is_some_and(truthy)
+        self.action_behavior.is_some() || self.fields.get("m_ADEB6E05").is_some_and(truthy)
+    }
+
+    pub(crate) fn declares_forward_action(&self) -> bool {
+        matches!(self.action_behavior, Some(ActionBehavior::Forward))
+    }
+
+    pub(crate) fn declares_branch_action(&self) -> bool {
+        matches!(self.action_behavior, Some(ActionBehavior::Branch))
+    }
+
+    pub(crate) fn declares_room_message_action(&self) -> bool {
+        self.action_behavior == Some(ActionBehavior::RoomMessage)
+    }
+
+    pub(crate) fn declares_room_cue_action(&self) -> bool {
+        self.action_behavior == Some(ActionBehavior::RoomCue)
+    }
+
+    pub(crate) fn room_cue_assets(&self) -> Option<(u64, u64)> {
+        if !self.declares_room_cue_action() {
+            return None;
+        }
+        let stimulus = asset_guid(self.field("stimulus")?)?;
+        let line = asset_guid(self.field("line")?)?;
+        (stimulus != 0 && line != 0).then_some((stimulus, line))
+    }
+
+    pub(crate) fn declares_room_message_entry(&self) -> bool {
+        self.room_message_entry
+    }
+
+    pub(crate) fn directed_numeric_parameter(&self) -> Option<u32> {
+        match self.directed_numeric_route {
+            Some(DirectedNumericRoute::Sender(slot)) => Some(slot),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn accepts_directed_numeric_message(&self, parameters: &Variables) -> bool {
+        matches!(
+            self.directed_numeric_route,
+            Some(DirectedNumericRoute::Receiver(slot)) if directed_numeric_payload(slot, parameters)
+        )
+    }
+
+    pub(crate) fn host_event_kind(&self) -> Option<HostEventKind> {
+        self.host_event_entry
+    }
+
+    fn valid_host_event_parameters(&self, kind: HostEventKind) -> bool {
+        let max_slot = match kind {
+            HostEventKind::HealthApplied => 5,
+        };
+        let Some(parameters) = self.fields.get("m_params").filter(|value| !value.is_null()) else {
+            return true;
+        };
+        let mut bound = BTreeSet::new();
+        parameters.as_array().is_some_and(|parameters| {
+            parameters.len() <= max_slot as usize
+                && parameters.iter().all(|parameter| {
+                    let slot = message_parameter_id(parameter);
+                    (1..=max_slot).contains(&slot)
+                        && bound.insert(slot)
+                        && parameter.get("m_out_Var").is_some_and(|output| {
+                            crate::script_expr::lvalue(output)
+                                .ok()
+                                .flatten()
+                                .is_some_and(|variable| variable.id != 0)
+                        })
+                })
+        })
+    }
+
+    pub(crate) fn declares_health_change_action(&self) -> bool {
+        matches!(self.action_behavior, Some(ActionBehavior::HealthChange))
+    }
+
+    pub(crate) fn declares_swept_displacement_action(&self) -> bool {
+        self.action_behavior == Some(ActionBehavior::SweptDisplacement)
+    }
+
+    pub(crate) fn declares_relocation_action(&self) -> bool {
+        self.action_behavior == Some(ActionBehavior::Relocation)
+    }
+
+    pub(crate) fn declares_radial_health_action(&self) -> bool {
+        matches!(self.action_behavior, Some(ActionBehavior::RadialHealth))
+    }
+
+    pub(crate) fn game_message_id(&self) -> Option<u64> {
+        self.field("m_gameMessage.m_gameMessage")
+            .and_then(asset_guid)
+    }
+
+    pub(crate) fn literal_game_message_id(&self) -> Option<u64> {
+        let message = self.field("m_gameMessage")?;
+        if !native_fields(message, &["m_gameMessage", "m_resourceKey"])
+            || message
+                .get("$")
+                .is_some_and(|class| class.as_str() != Some("STUConfigVarGameMessage"))
+            || message
+                .get("m_resourceKey")
+                .is_some_and(|key| !key.is_null())
+        {
+            return None;
+        }
+        self.game_message_id().filter(|&id| id != 0)
+    }
+
+    pub(crate) fn is_message_entry(&self) -> bool {
+        self.class == "STUStatescriptEntryGameMessage"
+    }
+
+    fn valid_local_message(&self) -> bool {
+        self.game_message_id().is_some_and(|message| message != 0)
+            && self.fields.get("m_targets").is_none_or(Value::is_null)
+            && self.fields.get("m_target").is_none_or(Value::is_null)
+            && self.valid_message_parameters(usize::MAX)
+    }
+
+    fn valid_room_message(&self) -> bool {
+        self.game_message_id().is_some_and(|message| message != 0)
+            && self.fields.get("m_targets").is_none()
+            && self
+                .fields
+                .get("m_target")
+                .is_some_and(|target| !target.is_null())
+            && self.valid_message_parameters(MAX_ROOM_MESSAGE_PARAMETERS)
+    }
+
+    pub(crate) fn valid_message_parameters(&self, max_parameters: usize) -> bool {
+        let Some(parameters) = self.fields.get("m_params").filter(|value| !value.is_null()) else {
+            return true;
+        };
+        let mut slots = BTreeSet::new();
+        parameters.as_array().is_some_and(|parameters| {
+            parameters.len() <= max_parameters
+                && parameters.iter().all(|parameter| {
+                    let slot = message_parameter_id(parameter);
+                    slot != 0 && parameter.get("m_value").is_some() && slots.insert(slot)
+                })
+        })
     }
 
     pub fn field(&self, path: &str) -> Option<&Value> {
@@ -78,12 +389,41 @@ impl Node {
     }
 }
 
+/// The native directed subset carries exactly one finite numeric value.
+pub(crate) fn directed_numeric_payload(slot: u32, parameters: &Variables) -> bool {
+    parameters.len() == 1
+        && match parameters.get(&slot) {
+            Some(ScriptValue::Integer(_)) => true,
+            Some(ScriptValue::Float(value)) => value.is_finite(),
+            _ => false,
+        }
+}
+
+fn directed_instance_variable(value: &Value) -> bool {
+    native_fields(value, &["m_identifier", "m_60DB8F99"])
+        && neutral_flag(&value["m_60DB8F99"])
+        && dynamic(value)
+            .is_ok_and(|var| var.is_some_and(|var| var.scope == Scope::Instance && var.id != 0))
+}
+
+fn neutral_flag(value: &Value) -> bool {
+    value.is_null() || value.as_bool() == Some(false) || value.as_u64() == Some(0)
+}
+
 fn raw_plug_links(field: &Value) -> impl Iterator<Item = &Value> {
     field
         .get("$")
         .and_then(|_| field.get("links")?.as_array())
         .into_iter()
         .flatten()
+}
+
+fn valid_output_plug(plug: &Value) -> bool {
+    plug.get("$").and_then(Value::as_str).is_some()
+        && plug
+            .get("links")
+            .and_then(Value::as_array)
+            .is_some_and(|links| links.iter().all(|link| decode_link(link).is_some()))
 }
 
 fn decode_link(link: &Value) -> Option<(Option<u16>, &str)> {
@@ -159,10 +499,16 @@ pub struct Graph {
     #[serde(rename = "remote")]
     pub remote_nodes: Vec<Option<u16>>,
     pub sync_vars: Vec<SyncVar>,
+    #[serde(default)]
+    owner_only_instance_vars: Vec<u32>,
     #[serde(skip)]
     by_pos: Vec<Option<usize>>,
     #[serde(skip)]
     by_rid: Vec<Option<usize>>,
+    #[serde(skip)]
+    entry_handlers: BTreeMap<EntryTopic, Vec<usize>>,
+    #[serde(skip)]
+    authored_logical_button_slots: Vec<u16>,
     #[serde(skip)]
     owner: WireSlots,
     #[serde(skip)]
@@ -172,18 +518,437 @@ pub struct Graph {
 }
 
 impl Graph {
+    fn apply_runtime_state_metadata(
+        &mut self,
+        plain_classes: &BTreeSet<String>,
+        mut client_states: BTreeMap<u16, RuntimeClientState>,
+    ) -> io::Result<()> {
+        if plain_classes.is_empty() && client_states.is_empty() {
+            return Ok(());
+        }
+        for node in &mut self.nodes {
+            let Some(slot) = node.state.filter(|&slot| {
+                self.states.get(usize::from(slot)).copied().flatten() == Some(node.pos)
+            }) else {
+                continue;
+            };
+            let authored = node.class.starts_with("authored.")
+                || node.state_behavior.is_some()
+                || node.action_behavior.is_some()
+                || node.declares_room_message_entry()
+                || node.host_event_kind().is_some();
+            if let Some(state) = client_states.remove(&slot) {
+                if node.rid != state.rid
+                    || node.class != state.class
+                    || !node.is_state()
+                    || node.server_only
+                    || authored
+                {
+                    return Err(invalid(format!(
+                        "runtime client state in graph {} at slot {slot} does not match an eligible state",
+                        self.index
+                    )));
+                }
+                node.runtime_client_state = true;
+            }
+            node.runtime_plain_state = !authored
+                && node.runs_on_server()
+                && node.is_state()
+                && plain_classes.contains(&node.class);
+        }
+        if let Some((slot, _)) = client_states.first_key_value() {
+            return Err(invalid(format!(
+                "runtime client state in graph {} at slot {slot} has no matching state",
+                self.index
+            )));
+        }
+        Ok(())
+    }
+
     fn compile(&mut self) -> io::Result<()> {
+        if !self.owner_only_instance_vars.is_empty() {
+            let mut owner_variables = BTreeSet::new();
+            for &variable in &self.owner_only_instance_vars {
+                if variable == 0 || !owner_variables.insert(variable) {
+                    return Err(invalid(format!(
+                        "invalid owner-only instance variable {variable} in graph {}",
+                        self.index
+                    )));
+                }
+            }
+            let mut synchronized_owner_variables = BTreeSet::new();
+            for entry in &self.sync_vars {
+                if let Some(variable) = entry.0.filter(|id| owner_variables.contains(id)) {
+                    if entry.1 != 0 || !synchronized_owner_variables.insert(variable) {
+                        return Err(invalid(format!(
+                            "owner-only instance variable {variable} has an ambiguous synchronization scope in graph {}",
+                            self.index
+                        )));
+                    }
+                }
+            }
+            self.owner_only_instance_vars.sort_unstable();
+        }
         self.by_pos = vec![None; usize::from(self.items)];
         if let Some(max) = self.nodes.iter().map(|node| node.rid).max() {
             self.by_rid = vec![None; usize::from(max) + 1];
         }
-        for (index, node) in self.nodes.iter().enumerate() {
+        let mut authored_state_slots = BTreeMap::new();
+        if self.nodes.iter().any(|node| {
+            node.state_behavior.is_some()
+                || node.action_behavior.is_some()
+                || node.declares_room_message_entry()
+                || node.host_event_kind().is_some()
+        }) {
+            for &position in self.states.iter().flatten() {
+                *authored_state_slots.entry(position).or_insert(0_usize) += 1;
+            }
+        }
+        let mut held_inputs = Vec::new();
+        for (index, node) in self.nodes.iter_mut().enumerate() {
+            if let Some(behavior) = node.state_behavior {
+                let state = match behavior {
+                    StateBehavior::Plain => "plain state",
+                    StateBehavior::Observe => "observe state",
+                    StateBehavior::Interval => "interval state",
+                    StateBehavior::ButtonLock => "button lock state",
+                    StateBehavior::HeldInput => "held input state",
+                    StateBehavior::MovementScale => "movement scale state",
+                    StateBehavior::StackClaim => "stack claim state",
+                    StateBehavior::FacingClaim => "facing claim state",
+                    StateBehavior::TrackEntities => "track entities state",
+                };
+                let occupies_state_slot = node
+                    .state
+                    .and_then(|slot| self.states.get(usize::from(slot)))
+                    .is_some_and(|&position| position == Some(node.pos));
+                if !node.server_only
+                    || !node.runs_on_server()
+                    || node.is_action()
+                    || !occupies_state_slot
+                    || authored_state_slots.get(&node.pos) != Some(&1)
+                {
+                    return Err(invalid(format!(
+                        "{state} in graph {} at node {} must be server-only and occupy its state slot exactly once",
+                        self.index, node.pos
+                    )));
+                }
+                let stack_outputs: &[&str] = if behavior == StateBehavior::StackClaim {
+                    &["m_topSubgraphPlug", "m_underSubgraphPlug"]
+                } else {
+                    &[]
+                };
+                for path in [
+                    "m_onBeginPlug",
+                    "m_onEndPlug",
+                    "m_onAbortPlug",
+                    "m_onFinishedPlug",
+                ]
+                .into_iter()
+                .chain(node.declares_observe_state().then_some("on_change"))
+                .chain(node.declares_observe_state().then_some("on_sample"))
+                .chain(node.declares_observe_state().then_some("on_unavailable"))
+                .chain(stack_outputs.iter().copied())
+                {
+                    if node
+                        .field(path)
+                        .is_some_and(|plug| !plug.is_null() && !valid_output_plug(plug))
+                    {
+                        return Err(invalid(format!(
+                            "{state} in graph {} at node {} has an invalid {path} output plug",
+                            self.index, node.pos
+                        )));
+                    }
+                }
+                node.class = match behavior {
+                    // Class checks outside the main dispatch also use the ordinary state.
+                    StateBehavior::Plain => "STUStatescriptState",
+                    StateBehavior::Observe => {
+                        let has_value = node.field("value").is_some_and(|value| !value.is_null());
+                        let has_output = node
+                            .field("output")
+                            .is_some_and(|output| matches!(crate::script_expr::lvalue(output), Ok(Some(_))));
+                        if !has_value || !has_output {
+                            return Err(invalid(format!(
+                                "observe state in graph {} at node {} requires a value expression and writable output",
+                                self.index, node.pos
+                            )));
+                        }
+                        "StateObserve"
+                    }
+                    StateBehavior::Interval => {
+                        if node.interval_frames().is_none() {
+                            return Err(invalid(format!(
+                                "{state} in graph {} at node {} requires a nonzero u32 interval_frames",
+                                self.index, node.pos
+                            )));
+                        }
+                        if !node.field("on_interval").is_some_and(valid_output_plug) {
+                            return Err(invalid(format!(
+                                "{state} in graph {} at node {} requires a valid on_interval output plug",
+                                self.index, node.pos
+                            )));
+                        }
+                        "StateInterval"
+                    }
+                    StateBehavior::ButtonLock => {
+                        if node.button_lock().is_none() {
+                            return Err(invalid(format!(
+                                "{state} in graph {} at node {} requires an integer button in 1..=255 and an optional nonzero u32 duration_frames",
+                                self.index, node.pos
+                            )));
+                        }
+                        "StateButtonLock"
+                    }
+                    StateBehavior::HeldInput => {
+                        held_inputs.push(index);
+                        "STUStatescriptStateLogicalButton"
+                    }
+                    StateBehavior::MovementScale => {
+                        if node.movement_scale().is_none() {
+                            return Err(invalid(format!(
+                                "{state} in graph {} at node {} requires a finite factor in 0..=1 and an optional nonzero u32 duration_frames",
+                                self.index, node.pos
+                            )));
+                        }
+                        "StateMovementScale"
+                    }
+                    StateBehavior::StackClaim => {
+                        if node.stack_claim().is_none() || node.stack_value().is_none() {
+                            return Err(invalid(format!(
+                                "{state} in graph {} at node {} requires a valid variable, priority and value, with an optional nonzero u32 duration_frames",
+                                self.index, node.pos
+                            )));
+                        }
+                        "StateStackClaim"
+                    }
+                    StateBehavior::FacingClaim => {
+                        if node.field("direction").is_none_or(Value::is_null)
+                            || node.facing_claim_priority().is_none()
+                        {
+                            return Err(invalid(format!(
+                                "{state} in graph {} at node {} requires a direction expression and explicit i8 level and boolean above_equals priority",
+                                self.index, node.pos
+                            )));
+                        }
+                        "StateFacingClaim"
+                    }
+                    StateBehavior::TrackEntities => {
+                        if node.field("targets").is_none_or(Value::is_null) {
+                            return Err(invalid(format!(
+                                "{state} in graph {} at node {} requires a targets expression",
+                                self.index, node.pos
+                            )));
+                        }
+                        if node.target_child_binding().is_none() {
+                            return Err(invalid(format!(
+                                "{state} in graph {} at node {} requires a u32 child_graph and nonzero u32 target_variable",
+                                self.index, node.pos
+                            )));
+                        }
+                        if node.field("identity").is_some() && !node.tracks_room_actor_identity() {
+                            return Err(invalid(format!(
+                                "{state} in graph {} at node {} requires identity to be room_actor when specified",
+                                self.index, node.pos
+                            )));
+                        }
+                        "StateTrackEntities"
+                    }
+                }
+                .into();
+            }
+            if let Some(behavior) = node.action_behavior {
+                let (action, outputs): (&str, &[&str]) = match behavior {
+                    ActionBehavior::Forward => ("forward action", &["m_outPlug"]),
+                    ActionBehavior::Branch => ("branch action", &["m_truePlug", "m_falsePlug"]),
+                    ActionBehavior::LocalMessage => ("local message action", &["m_outPlug"]),
+                    ActionBehavior::RoomMessage => ("room message action", &["m_outPlug"]),
+                    ActionBehavior::RoomCue => ("room cue action", &["m_outPlug"]),
+                    ActionBehavior::HealthChange => ("health change action", &["m_outPlug"]),
+                    ActionBehavior::RadialHealth => ("radial health action", &["m_outPlug"]),
+                    ActionBehavior::SweptDisplacement => {
+                        ("swept displacement action", &["m_outPlug"])
+                    }
+                    ActionBehavior::Relocation => ("relocation action", &["m_outPlug"]),
+                };
+                let state_slot = authored_state_slots.contains_key(&node.pos);
+                if !node.server_only
+                    || !node.runs_on_server()
+                    || node.is_state()
+                    || node.state.is_some()
+                    || state_slot
+                {
+                    return Err(invalid(format!(
+                        "{action} in graph {} at node {} must be server-only with no state slot",
+                        self.index, node.pos
+                    )));
+                }
+                for &path in outputs {
+                    if !node.field(path).is_some_and(valid_output_plug) {
+                        return Err(invalid(format!(
+                            "{action} in graph {} at node {} requires a valid {path} output plug",
+                            self.index, node.pos
+                        )));
+                    }
+                }
+                // The declaration supplies dispatch. An authored name that
+                // matches an entry or another special class cannot activate it.
+                node.class = match behavior {
+                    ActionBehavior::Forward => "ActionForward".into(),
+                    ActionBehavior::Branch => {
+                        if node.field("m_condition").is_none_or(Value::is_null) {
+                            return Err(invalid(format!(
+                                "{action} in graph {} at node {} requires m_condition",
+                                self.index, node.pos
+                            )));
+                        }
+                        "ActionBranch".into()
+                    }
+                    ActionBehavior::LocalMessage => {
+                        if !node.valid_local_message() {
+                            return Err(invalid(format!(
+                                "{action} in graph {} at node {} requires a nonzero message, unique parameter slots and no external target",
+                                self.index, node.pos
+                            )));
+                        }
+                        "STUStatescriptActionSendGameMessage".into()
+                    }
+                    ActionBehavior::RoomMessage => {
+                        if !node.valid_room_message() {
+                            return Err(invalid(format!(
+                                "{action} in graph {} at node {} requires a nonzero message, one explicit m_target and at most {MAX_ROOM_MESSAGE_PARAMETERS} unique parameter slots",
+                                self.index, node.pos
+                            )));
+                        }
+                        "ActionRoomMessage".into()
+                    }
+                    ActionBehavior::RoomCue => {
+                        if node.field("audience").is_none_or(Value::is_null) {
+                            return Err(invalid(format!(
+                                "{action} in graph {} at node {} requires an audience expression",
+                                self.index, node.pos
+                            )));
+                        }
+                        if node.room_cue_assets().is_none() {
+                            return Err(invalid(format!(
+                                "{action} in graph {} at node {} requires nonzero stimulus and line asset GUIDs",
+                                self.index, node.pos
+                            )));
+                        }
+                        "ActionRoomCue".into()
+                    }
+                    ActionBehavior::SweptDisplacement | ActionBehavior::Relocation => {
+                        let (operand, class) = if behavior == ActionBehavior::Relocation {
+                            ("destination", "ActionRelocation")
+                        } else {
+                            ("delta", "ActionSweptDisplacement")
+                        };
+                        if node.field(operand).is_none_or(Value::is_null) {
+                            return Err(invalid(format!(
+                                "{action} in graph {} at node {} requires {operand}",
+                                self.index, node.pos
+                            )));
+                        }
+                        class.into()
+                    }
+                    ActionBehavior::HealthChange => {
+                        for operand in ["target", "delta"] {
+                            if node.field(operand).is_none_or(Value::is_null) {
+                                return Err(invalid(format!(
+                                    "{action} in graph {} at node {} requires a {operand} expression",
+                                    self.index, node.pos
+                                )));
+                            }
+                        }
+                        "ActionHealthChange".into()
+                    }
+                    ActionBehavior::RadialHealth => {
+                        if node
+                            .field("area")
+                            .and_then(|area| area.get("$"))
+                            .and_then(Value::as_str)
+                            != Some("EntitiesInRadius")
+                            || node.field("delta").is_none_or(Value::is_null)
+                            || node.field("edge_scale").is_some_and(Value::is_null)
+                        {
+                            return Err(invalid(format!(
+                                "{action} in graph {} at node {} requires an EntitiesInRadius area and a delta expression, with an optional edge_scale expression",
+                                self.index, node.pos
+                            )));
+                        }
+                        "ActionRadialHealth".into()
+                    }
+                };
+            }
+            if node.declares_room_message_entry()
+                && (!node.server_only
+                    || !node.runs_on_server()
+                    || !node.is_message_entry()
+                    || node.is_action()
+                    || node.is_state()
+                    || node.state.is_some()
+                    || authored_state_slots.contains_key(&node.pos)
+                    || node.game_message_id().is_none_or(|message| message == 0)
+                    || !node.field("m_outPlug").is_some_and(valid_output_plug))
+            {
+                return Err(invalid(format!(
+                    "room message entry in graph {} at node {} must be a server-only message entry with a nonzero message and a valid m_outPlug",
+                    self.index, node.pos
+                )));
+            }
+            if (node.host_event_kind().is_some() || node.class == "EntryHostEvent")
+                && (node.class != "EntryHostEvent"
+                    || !node.server_only
+                    || !node.runs_on_server()
+                    || node.is_action()
+                    || node.is_state()
+                    || node.state.is_some()
+                    || authored_state_slots.contains_key(&node.pos)
+                    || node.declares_room_message_entry()
+                    || node.fields.get("m_gameMessage").is_some()
+                    || !node.field("m_outPlug").is_some_and(valid_output_plug)
+                    || !node
+                        .host_event_kind()
+                        .is_some_and(|kind| node.valid_host_event_parameters(kind)))
+            {
+                return Err(invalid(format!(
+                    "host event entry in graph {} at node {} must be a standalone server-only EntryHostEvent with a valid host event kind, m_outPlug and parameter bindings",
+                    self.index, node.pos
+                )));
+            }
             let position = self
                 .by_pos
                 .get_mut(usize::from(node.pos))
                 .ok_or_else(|| invalid("graph node outside the item table"))?;
-            *position = Some(index);
+            if position.replace(index).is_some() {
+                return Err(invalid(format!(
+                    "graph {} defines node position {} more than once",
+                    self.index, node.pos
+                )));
+            }
             self.by_rid[usize::from(node.rid)] = Some(index);
+            let topic = node.host_event_kind().map(EntryTopic::Host).or_else(|| {
+                node.game_message_id()
+                    .filter(|_| {
+                        node.runs_on_server()
+                            && (node.is_message_entry()
+                                || (node.is_state() && node.state.is_some()))
+                    })
+                    .map(EntryTopic::Message)
+            });
+            if let Some(topic) = topic {
+                self.entry_handlers.entry(topic).or_default().push(index);
+            }
+        }
+        if !held_inputs.is_empty() {
+            held_inputs.sort_unstable_by_key(|&index| self.nodes[index].state);
+            let mut registered: BTreeSet<_> = self.logical_button_slots().collect();
+            for index in held_inputs {
+                let raw = self.lower_held_input(index, &authored_state_slots)?;
+                if registered.insert(raw) {
+                    self.authored_logical_button_slots.push(raw);
+                }
+            }
         }
         self.owner = WireSlots::build(&self.states, self, false);
         self.remote = WireSlots::build(&self.remote_nodes, self, true);
@@ -194,6 +959,152 @@ impl Graph {
             .filter_map(|(index, var)| var.has_presence_bit().then_some(index))
             .collect();
         Ok(())
+    }
+
+    fn lower_held_input(
+        &mut self,
+        index: usize,
+        state_occurrences: &BTreeMap<u16, usize>,
+    ) -> io::Result<u16> {
+        let node = &self.nodes[index];
+        let context = format!(
+            "held input state in graph {} at node {}",
+            self.index, node.pos
+        );
+        let raw = node
+            .state
+            .ok_or_else(|| invalid(format!("{context} has no state slot")))?;
+        let button = node
+            .field("button")
+            .and_then(Value::as_u64)
+            .and_then(|value| u8::try_from(value).ok())
+            .filter(|&button| button != 0)
+            .ok_or_else(|| invalid(format!("{context} requires an integer button in 1..=255")))?;
+        let allow_dead = match node.field("allow_dead") {
+            None => false,
+            Some(value) => value
+                .as_bool()
+                .ok_or_else(|| invalid(format!("{context} requires boolean allow_dead")))?,
+        };
+        for field in [
+            "m_logicalButton",
+            "m_80AF45FB",
+            "m_1C9EF058",
+            "m_onGoingDownPlug",
+            "m_onComingUpPlug",
+            "m_5AE05408",
+            "m_53C4B6A6",
+            "m_246438AD",
+        ] {
+            if node.field(field).is_some() {
+                return Err(invalid(format!(
+                    "{context} conflicts with generated field {field}"
+                )));
+            }
+        }
+        let mut owned = BTreeSet::new();
+        let held =
+            self.held_input_stage(node, "held_states", true, &mut owned, state_occurrences)?;
+        let idle =
+            self.held_input_stage(node, "idle_states", false, &mut owned, state_occurrences)?;
+        let empty = serde_json::json!({"$":"Plug","links":[]});
+        let hook = |name| match node.field(name) {
+            Some(plug) if valid_output_plug(plug) => Ok(plug.clone()),
+            Some(_) => Err(invalid(format!(
+                "{context} has an invalid {name} output plug"
+            ))),
+            None => Ok(empty.clone()),
+        };
+        let on_press = hook("on_press")?;
+        let on_release = hook("on_release")?;
+        let fields = self.nodes[index]
+            .fields
+            .as_object_mut()
+            .ok_or_else(|| invalid(format!("{context} requires object fields")))?;
+        fields.insert(
+            "m_logicalButton".into(),
+            serde_json::json!({
+            "$":"STUConfigVarLogicalButton","m_logicalButton":button}),
+        );
+        fields.insert("m_80AF45FB".into(), held);
+        fields.insert("m_1C9EF058".into(), idle);
+        fields.insert("m_onGoingDownPlug".into(), on_press);
+        fields.insert("m_onComingUpPlug".into(), on_release);
+        fields.insert("m_5AE05408".into(), Value::Bool(allow_dead));
+        Ok(raw)
+    }
+
+    fn held_input_stage(
+        &self,
+        node: &Node,
+        name: &str,
+        required: bool,
+        owned: &mut BTreeSet<u16>,
+        state_occurrences: &BTreeMap<u16, usize>,
+    ) -> io::Result<Value> {
+        let context = format!(
+            "held input state in graph {} at node {}",
+            self.index, node.pos
+        );
+        let slots = match node.field(name) {
+            Some(Value::Array(slots)) if !required || !slots.is_empty() => slots.as_slice(),
+            None if !required => &[],
+            _ => {
+                return Err(invalid(format!(
+                    "{context} requires {}{name} state slots",
+                    if required { "nonempty " } else { "array " }
+                )));
+            }
+        };
+        let mut links = Vec::with_capacity(slots.len());
+        let mut states = Vec::with_capacity(slots.len());
+        for slot in slots {
+            let raw = slot
+                .as_u64()
+                .and_then(|value| u16::try_from(value).ok())
+                .ok_or_else(|| invalid(format!("{context} has an invalid {name} state slot")))?;
+            let target = self
+                .state(usize::from(raw))
+                .filter(|target| {
+                    target.state == Some(raw)
+                        && target.is_state()
+                        && !target.is_action()
+                        && target.runs_on_server()
+                        && state_occurrences.get(&target.pos) == Some(&1)
+                })
+                .ok_or_else(|| {
+                    invalid(format!(
+                        "{context} {name} slot {raw} must identify one runnable state exactly once"
+                    ))
+                })?;
+            if Some(raw) == node.state || !owned.insert(raw) {
+                return Err(invalid(format!(
+                    "{context} {name} slot {raw} is self-owned or already owned by another stage"
+                )));
+            }
+            links.push(serde_json::json!([target.pos, "m_beginPlug"]));
+            states.push(raw);
+        }
+        Ok(serde_json::json!({"$":"Plug","links":links,"m_FF3DAF1E":states}))
+    }
+
+    /// Preserve legacy dispatch order and append automatically registered authored inputs.
+    pub(crate) fn logical_button_slots(&self) -> impl Iterator<Item = u16> + '_ {
+        self.fields
+            .get("m_680A2CB2")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|value| u16::try_from(value.as_u64()?).ok())
+            .chain(self.authored_logical_button_slots.iter().copied())
+    }
+
+    pub(crate) fn entry_handlers(&self, topic: EntryTopic) -> impl Iterator<Item = &Node> {
+        self.entry_handlers
+            .get(&topic)
+            .into_iter()
+            .flatten()
+            .map(|&index| &self.nodes[index])
     }
 
     pub fn node(&self, pos: u16) -> Option<&Node> {
@@ -218,6 +1129,11 @@ impl Graph {
 
     pub fn owner_positions(&self) -> &[u16] {
         &self.owner.positions
+    }
+
+    /// Authored instance variables excluded from observer projection.
+    pub fn owner_only_instance_vars(&self) -> &[u32] {
+        &self.owner_only_instance_vars
     }
 
     pub fn remote_positions(&self) -> &[u16] {
@@ -290,6 +1206,12 @@ pub struct Body {
     pub hero: Option<String>,
     pub name: String,
     pub graphs: Vec<GraphBinding>,
+    /// Server roots mounted without consuming the body's projected IDs.
+    #[serde(default)]
+    pub server_graphs: Vec<GraphBinding>,
+    /// Private root that handles the player's authored charge route.
+    #[serde(default, deserialize_with = "optional_graph_index")]
+    pub authored_charge_graph: Option<u32>,
     pub manager: Option<u32>,
     pub weapons: Vec<Option<u32>>,
     #[serde(default)]
@@ -304,6 +1226,15 @@ pub struct Body {
     /// An omitted list means the source definition was unavailable.
     #[serde(default, deserialize_with = "body_target_tags")]
     pub target_tags: Option<BTreeSet<u64>>,
+    #[serde(default, deserialize_with = "body_model_hardpoints")]
+    model_hardpoints: ModelHardpointsBySkin,
+}
+
+impl Body {
+    /// Complete authored launch-model inventory for the exact skin. Skin zero is stock.
+    pub fn model_hardpoints(&self, skin: u64) -> Option<Arc<BTreeSet<u64>>> {
+        self.model_hardpoints.get(&skin).cloned()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -340,7 +1271,7 @@ fn optional_graph_index<'de, D: serde::Deserializer<'de>>(
             asset_guid(&value)
                 .filter(|guid| guid >> 48 == GRAPH_TYPE)
                 .and_then(|guid| u32::try_from(guid & 0x0000_ffff_ffff_ffff).ok())
-                .ok_or_else(|| serde::de::Error::custom("invalid mode script graph GUID"))
+                .ok_or_else(|| serde::de::Error::custom("invalid StateScript graph GUID"))
         })
         .transpose()
 }
@@ -421,8 +1352,282 @@ impl EnemyCatalog {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredClass {
+    class: String,
+    behavior: AuthoredClassBehavior,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum AuthoredClassBehavior {
+    PlainState,
+    ObserveState,
+    IntervalState,
+    ButtonLockState,
+    HeldInputState,
+    MovementScaleState,
+    StackClaimState,
+    FacingClaimState,
+    TrackEntitiesState,
+    ForwardAction,
+    BranchAction,
+    LocalMessageAction,
+    RoomMessageAction,
+    RoomCueAction,
+    HealthChangeAction,
+    RadialHealthAction,
+    SweptDisplacementAction,
+    RelocationAction,
+    ClientOnly,
+}
+
+impl AuthoredClassBehavior {
+    fn apply(self, graph: u32, node: &mut Node) -> io::Result<()> {
+        let (client_only, state, action) = match self {
+            Self::PlainState => (false, Some(StateBehavior::Plain), None),
+            Self::ObserveState => (false, Some(StateBehavior::Observe), None),
+            Self::IntervalState => (false, Some(StateBehavior::Interval), None),
+            Self::ButtonLockState => (false, Some(StateBehavior::ButtonLock), None),
+            Self::HeldInputState => (false, Some(StateBehavior::HeldInput), None),
+            Self::MovementScaleState => (false, Some(StateBehavior::MovementScale), None),
+            Self::StackClaimState => (false, Some(StateBehavior::StackClaim), None),
+            Self::FacingClaimState => (false, Some(StateBehavior::FacingClaim), None),
+            Self::TrackEntitiesState => (false, Some(StateBehavior::TrackEntities), None),
+            Self::ForwardAction => (false, None, Some(ActionBehavior::Forward)),
+            Self::BranchAction => (false, None, Some(ActionBehavior::Branch)),
+            Self::LocalMessageAction => (false, None, Some(ActionBehavior::LocalMessage)),
+            Self::RoomMessageAction => (false, None, Some(ActionBehavior::RoomMessage)),
+            Self::RoomCueAction => (false, None, Some(ActionBehavior::RoomCue)),
+            Self::HealthChangeAction => (false, None, Some(ActionBehavior::HealthChange)),
+            Self::RadialHealthAction => (false, None, Some(ActionBehavior::RadialHealth)),
+            Self::SweptDisplacementAction => (false, None, Some(ActionBehavior::SweptDisplacement)),
+            Self::RelocationAction => (false, None, Some(ActionBehavior::Relocation)),
+            Self::ClientOnly => (true, None, None),
+        };
+        if (node.client_only && !client_only)
+            || (node.server_only && client_only)
+            || (node.state_behavior.is_some() && node.state_behavior != state)
+            || (node.action_behavior.is_some() && node.action_behavior != action)
+        {
+            return Err(invalid(format!(
+                "authored class {} conflicts with scope or behavior in graph {graph} at node {}",
+                node.class, node.pos
+            )));
+        }
+        node.client_only = client_only;
+        node.server_only = !client_only;
+        node.state_behavior = state;
+        node.action_behavior = action;
+        Ok(())
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeStateMetadata {
+    #[serde(default)]
+    plain_classes: Vec<String>,
+    #[serde(default)]
+    client_states: Vec<RuntimeClientState>,
+    #[serde(default)]
+    projected_message_topics: Vec<String>,
+    #[serde(default)]
+    directed_numeric_messages: Vec<RuntimeDirectedNumericMessage>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeDirectedNumericMessage {
+    topic: String,
+    parameter: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeClientState {
+    graph: u32,
+    state: u16,
+    rid: u16,
+    class: String,
+}
+
+fn valid_runtime_class_name(class: &str) -> bool {
+    (1..=128).contains(&class.len())
+        && class.as_bytes()[0].is_ascii_alphabetic()
+        && class
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+fn validate_projected_message_topics(
+    declarations: Vec<String>,
+    graphs: &BTreeMap<u32, Graph>,
+) -> io::Result<BTreeSet<u64>> {
+    let mut topics = BTreeSet::new();
+    for declaration in declarations {
+        let id = asset_guid(&Value::String(declaration))
+            .filter(|&id| id != 0)
+            .ok_or_else(|| invalid("invalid projected message topic"))?;
+        if !topics.insert(id) {
+            return Err(invalid(format!(
+                "duplicate projected message topic {id:#018X}"
+            )));
+        }
+    }
+    if topics.is_empty() {
+        return Ok(topics);
+    }
+    let mut unmatched = topics.clone();
+    for graph in graphs.values() {
+        for node in &graph.nodes {
+            let stateful = node.class == "STUStatescriptStateGameMessageEntry";
+            if !stateful && !node.is_message_entry() {
+                continue;
+            }
+            let Some(id) = node.game_message_id().filter(|id| topics.contains(id)) else {
+                continue;
+            };
+            if node.runs_on_server() || node.server_only {
+                return Err(invalid(format!(
+                    "projected message topic {id:#018X} has a server receiver in graph {} at node {}",
+                    graph.index, node.pos
+                )));
+            }
+            let valid_receiver = if stateful {
+                node.is_state()
+                    && node
+                        .state
+                        .and_then(|slot| graph.state(usize::from(slot)))
+                        .is_some_and(|state| state.pos == node.pos)
+            } else {
+                node.state.is_none() && !node.is_state()
+            };
+            if valid_receiver && !node.is_action() && node.literal_game_message_id() == Some(id) {
+                unmatched.remove(&id);
+            }
+        }
+    }
+    if let Some(id) = unmatched.first() {
+        return Err(invalid(format!(
+            "projected message topic {id:#018X} has no client receiver"
+        )));
+    }
+    Ok(topics)
+}
+
+fn directed_numeric_shape(node: &Node, parameter: u64) -> Option<DirectedNumericRoute> {
+    let sender = match node.class.as_str() {
+        "STUStatescriptActionSendGameMessage" if node.is_networked() && node.is_action() => true,
+        "STUStatescriptEntryGameMessage" if node.server_only && !node.is_action() => false,
+        _ => return None,
+    };
+    if !node.runs_on_server()
+        || node.remote != -1
+        || node.state.is_some()
+        || node.is_state()
+        || node.declares_room_message_entry()
+        || !node.field("m_outPlug").is_some_and(valid_output_plug)
+        || !node
+            .fields
+            .as_object()?
+            .iter()
+            .all(|(key, value)| match key.as_str() {
+                "m_gameMessage" | "m_outPlug" | "m_params" => true,
+                "m_ADEB6E05" if sender => {
+                    value.as_bool() == Some(true) || value.as_u64() == Some(1)
+                }
+                "m_ADEB6E05" | "m_2BBEEAB8" | "m_A2287776" | "m_AED90719" => neutral_flag(value),
+                "m_8BF03679" | "m_BF5B22B7" => value.is_null(),
+                "m_targets" | "m_inPlug" if sender => true,
+                "m_8B34E9C3" if sender => value.is_null(),
+                "m_44D0D060" | "m_B60ABDA4" | "m_FF703F20" | "m_filter" if !sender => {
+                    value.is_null()
+                }
+                "m_5AEA0A51" | "m_FDBDCB70" if !sender => neutral_flag(value),
+                _ => false,
+            })
+    {
+        return None;
+    }
+    let [row] = node.field("m_params")?.as_array()?.as_slice() else {
+        return None;
+    };
+    let (class, value_field) = if sender {
+        ("STU_814D595E", "m_value")
+    } else {
+        ("STU_EF930FD7", "m_out_Var")
+    };
+    if !native_fields(row, &["m_B5051BCE", value_field])
+        || row.get("$").and_then(Value::as_str) != Some(class)
+        || row.get("m_B5051BCE").and_then(asset_guid) != Some(parameter)
+    {
+        return None;
+    }
+    let value = row.get(value_field)?;
+    let slot = u32::from(parameter as u16);
+    if sender {
+        (!value.is_null() && directed_instance_variable(node.field("m_targets")?))
+            .then_some(DirectedNumericRoute::Sender(slot))
+    } else {
+        directed_instance_variable(value).then_some(DirectedNumericRoute::Receiver(slot))
+    }
+}
+
+fn compile_directed_numeric_messages(
+    declarations: Vec<RuntimeDirectedNumericMessage>,
+    graphs: &mut BTreeMap<u32, Graph>,
+) -> io::Result<()> {
+    let mut topics = BTreeMap::new();
+    for declaration in declarations {
+        let topic = asset_guid(&Value::String(declaration.topic))
+            .filter(|&id| id >> 48 == 0x0240 && id as u16 != 0)
+            .ok_or_else(|| invalid("invalid directed numeric message topic"))?;
+        let parameter = asset_guid(&Value::String(declaration.parameter))
+            .filter(|&id| id >> 16 == 0x0a40_0000_0000 && id as u16 != 0)
+            .ok_or_else(|| invalid("invalid directed numeric message parameter"))?;
+        if topics.insert(topic, (parameter, false, false)).is_some() {
+            return Err(invalid(format!(
+                "duplicate directed numeric message topic {topic:#018X}"
+            )));
+        }
+    }
+    if topics.is_empty() {
+        return Ok(());
+    }
+    for node in graphs.values_mut().flat_map(|graph| &mut graph.nodes) {
+        let Some((parameter, found_sender, found_receiver)) = node
+            .literal_game_message_id()
+            .and_then(|topic| topics.get_mut(&topic))
+        else {
+            continue;
+        };
+        let route = directed_numeric_shape(node, *parameter);
+        match route {
+            Some(DirectedNumericRoute::Sender(_)) => *found_sender = true,
+            Some(DirectedNumericRoute::Receiver(_)) => *found_receiver = true,
+            None => (),
+        }
+        node.directed_numeric_route = route;
+    }
+    if let Some((topic, _)) = topics
+        .iter()
+        .find(|(_, (_, sender, receiver))| !sender || !receiver)
+    {
+        return Err(invalid(format!(
+            "directed numeric message topic {topic:#018X} requires a matching native sender and receiver",
+        )));
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
 struct Bundle {
     version: u32,
+    #[serde(default)]
+    authored_classes: Vec<AuthoredClass>,
+    #[serde(default)]
+    runtime_state_metadata: RuntimeStateMetadata,
     graphs: Vec<Graph>,
     bodies: BTreeMap<String, Body>,
     #[serde(default)]
@@ -432,17 +1637,114 @@ struct Bundle {
     #[serde(default)]
     mode_scripts: BTreeMap<String, ModeScripts>,
     #[serde(default)]
+    mode_rulesets: ModeRulesets,
+    #[serde(default)]
     junkenstein: EnemyCatalog,
     missing: Vec<u32>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub enum RoomSpatialNeeds {
+    #[default]
+    None,
+    Queries,
+    EntityFacts,
+    EntityTags,
+}
+
+fn may_query_foreign_entity(mut entity: &Value) -> bool {
+    while entity.get("$").and_then(Value::as_str) == Some("ClientOnly") {
+        let Ok(Some(fallback)) = client_only_fallback(entity) else {
+            return false;
+        };
+        entity = fallback;
+    }
+    entity.get("$").and_then(Value::as_str).is_some() && !native_shape(entity, "STU_B5A0CAF0", None)
+}
+
+#[derive(Clone, Copy, Default)]
+struct RoomSpatialRequirements {
+    needs: RoomSpatialNeeds,
+    actor_rays: bool,
+}
+
+impl RoomSpatialRequirements {
+    fn merge(self, other: Self) -> Self {
+        Self {
+            needs: self.needs.max(other.needs),
+            actor_rays: self.actor_rays || other.actor_rays,
+        }
+    }
+}
+
+fn room_spatial_requirements(value: &Value) -> RoomSpatialRequirements {
+    use RoomSpatialNeeds::{EntityFacts, EntityTags, None as NoQueries, Queries};
+
+    if value.get("$").and_then(Value::as_str) == Some("ClientOnly") {
+        return client_only_fallback(value)
+            .ok()
+            .flatten()
+            .map_or_else(RoomSpatialRequirements::default, room_spatial_requirements);
+    }
+    match value {
+        Value::Object(fields) => {
+            let filter = fields.get("filter").and_then(Value::as_object);
+            let tags = filter.is_some_and(|filter| filter.contains_key("tags"));
+            let class = fields.get("$").and_then(Value::as_str);
+            let needs = match class {
+                Some("EntityMatches" | "EntitiesInRadius" | "EntityRayCast") if tags => EntityTags,
+                Some("EntityMatches") => EntityFacts,
+                Some("EntitiesInRadius" | "EntityRayCast")
+                    if filter.is_some_and(|filter| filter.contains_key("alive")) =>
+                {
+                    EntityFacts
+                }
+                Some(
+                    "EntitiesInRadius" | "SegmentClear" | "RayCast" | "EntityRayCast"
+                    | "EntityPosition" | "EntityDirection",
+                ) => Queries,
+                Some(class @ ("STU_21A13145" | "STU_2200A66D"))
+                    if native_entity_operand(value, class)
+                        .is_some_and(may_query_foreign_entity) =>
+                {
+                    Queries
+                }
+                Some("STU_25ECB55F")
+                    if native_target_tag_operand(value)
+                        .is_some_and(|(_, entity)| may_query_foreign_entity(entity)) =>
+                {
+                    EntityTags
+                }
+                _ => NoQueries,
+            };
+            fields.values().map(room_spatial_requirements).fold(
+                RoomSpatialRequirements {
+                    needs,
+                    actor_rays: class == Some("EntityRayCast"),
+                },
+                RoomSpatialRequirements::merge,
+            )
+        }
+        Value::Array(values) => values.iter().map(room_spatial_requirements).fold(
+            RoomSpatialRequirements::default(),
+            RoomSpatialRequirements::merge,
+        ),
+        _ => RoomSpatialRequirements::default(),
+    }
 }
 
 #[derive(Debug)]
 pub struct GraphStore {
     graphs: BTreeMap<u32, Graph>,
+    projected_message_topics: BTreeSet<u64>,
+    room_spatial_needs: RoomSpatialNeeds,
+    uses_spatial_actor_rays: bool,
+    uses_host_health_events: bool,
     bodies: BTreeMap<u64, Body>,
     entities: BTreeMap<u64, Body>,
     mode_variables: BTreeMap<u64, BTreeMap<u32, ModeValue>>,
     mode_scripts: BTreeMap<u64, ModeScripts>,
+    mode_rulesets: ModeRulesets,
     enemies: EnemyCatalog,
     missing: Vec<u32>,
 }
@@ -469,13 +1771,191 @@ impl GraphStore {
         if bundle.version != 1 {
             return Err(invalid("unsupported state graph bundle version"));
         }
+        let mut authored_classes = BTreeMap::new();
+        for AuthoredClass { class, behavior } in bundle.authored_classes {
+            let valid_name = class.strip_prefix("authored.").is_some_and(|name| {
+                !name.is_empty()
+                    && name
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+            });
+            if !valid_name {
+                return Err(invalid(format!(
+                    "class {class:?} must use an authored. name with letters, digits, underscores or hyphens"
+                )));
+            }
+            if authored_classes.insert(class.clone(), behavior).is_some() {
+                return Err(invalid(format!("duplicate authored class {class}")));
+            }
+        }
+        let mut plain_classes = BTreeSet::new();
+        for class in bundle.runtime_state_metadata.plain_classes {
+            if !valid_runtime_class_name(&class) {
+                return Err(invalid("invalid runtime plain state class name"));
+            }
+            if !plain_classes.insert(class) {
+                return Err(invalid("duplicate runtime plain state class"));
+            }
+        }
+        // The 104319 factory maps this class to the base state even in
+        // version 1 bundles prepared before runtime annotations were available.
+        plain_classes.insert("STU_F08E1453".into());
+        let mut client_states = BTreeMap::<u32, BTreeMap<u16, RuntimeClientState>>::new();
+        for row in bundle.runtime_state_metadata.client_states {
+            let RuntimeClientState { graph, state, .. } = row;
+            if !valid_runtime_class_name(&row.class) {
+                return Err(invalid(format!(
+                    "invalid runtime client state class in graph {graph} at slot {state}"
+                )));
+            }
+            if client_states
+                .entry(graph)
+                .or_default()
+                .insert(state, row)
+                .is_some()
+            {
+                return Err(invalid(format!(
+                    "duplicate runtime client state in graph {graph} at slot {state}"
+                )));
+            }
+        }
         let mut graphs = BTreeMap::new();
         for mut graph in bundle.graphs {
+            if !authored_classes.is_empty() {
+                for node in &mut graph.nodes {
+                    if let Some(behavior) = authored_classes.get(&node.class) {
+                        behavior.apply(graph.index, node)?;
+                    }
+                }
+            }
+            graph.apply_runtime_state_metadata(
+                &plain_classes,
+                client_states.remove(&graph.index).unwrap_or_default(),
+            )?;
             graph.compile()?;
-            graphs.insert(graph.index, graph);
+            let index = graph.index;
+            if graphs.insert(index, graph).is_some() {
+                return Err(invalid(format!(
+                    "bundle defines graph {index} more than once"
+                )));
+            }
         }
+        if let Some((graph, _)) = client_states.first_key_value() {
+            return Err(invalid(format!(
+                "runtime client state references unknown graph {graph}"
+            )));
+        }
+        for graph in graphs.values() {
+            for node in &graph.nodes {
+                if let Some((child, _)) = node
+                    .target_child_binding()
+                    .filter(|(child, _)| !graphs.contains_key(child))
+                {
+                    return Err(invalid(format!(
+                        "track entities state in graph {} at node {} references missing child_graph {child}",
+                        graph.index, node.pos
+                    )));
+                }
+            }
+        }
+        for (body, definition) in bundle
+            .bodies
+            .iter()
+            .chain(&bundle.entities)
+            .chain(&bundle.junkenstein.entities)
+        {
+            for binding in &definition.server_graphs {
+                let graph = binding.graph.ok_or_else(|| {
+                    invalid(format!(
+                        "body {body} declares a server root without a graph"
+                    ))
+                })?;
+                if !graphs.contains_key(&graph) {
+                    return Err(invalid(format!(
+                        "body {body} declares missing server graph {graph}"
+                    )));
+                }
+            }
+        }
+        let health_topic = EntryTopic::Host(HostEventKind::HealthApplied);
+        for (body, definition) in bundle.entities.iter().chain(&bundle.junkenstein.entities) {
+            if definition.authored_charge_graph.is_some() {
+                return Err(invalid(format!(
+                    "entity {body} cannot declare a player authored charge graph"
+                )));
+            }
+        }
+        for (body, definition) in &bundle.bodies {
+            let Some(graph) = definition.authored_charge_graph else {
+                continue;
+            };
+            if definition.hero.as_deref().and_then(parse_guid).is_none() {
+                return Err(invalid(format!(
+                    "body {body} requires a hero to declare an authored charge graph"
+                )));
+            }
+            let private_roots = definition
+                .server_graphs
+                .iter()
+                .filter(|root| root.graph == Some(graph))
+                .count();
+            let public_root = definition
+                .graphs
+                .iter()
+                .any(|root| root.graph == Some(graph))
+                || definition.manager == Some(graph)
+                || definition.weapons.contains(&Some(graph));
+            if private_roots != 1 || public_root {
+                return Err(invalid(format!(
+                    "body {body} must mount authored charge graph {graph} once as a private server root"
+                )));
+            }
+            if !graphs
+                .get(&graph)
+                .is_some_and(|graph| graph.entry_handlers.contains_key(&health_topic))
+            {
+                return Err(invalid(format!(
+                    "authored charge graph {graph} for body {body} requires a server health_applied entry"
+                )));
+            }
+        }
+        let projected_message_topics = validate_projected_message_topics(
+            bundle.runtime_state_metadata.projected_message_topics,
+            &graphs,
+        )?;
+        compile_directed_numeric_messages(
+            bundle.runtime_state_metadata.directed_numeric_messages,
+            &mut graphs,
+        )?;
+        let room_spatial_requirements = graphs
+            .values()
+            .flat_map(|graph| &graph.nodes)
+            .filter(|node| node.runs_on_server())
+            .map(|node| {
+                let mut requirements = room_spatial_requirements(&node.fields);
+                if node.declares_health_change_action()
+                    || node.declares_room_message_action()
+                    || node.declares_room_cue_action()
+                    || node.directed_numeric_parameter().is_some()
+                    || node.tracks_room_actor_identity()
+                {
+                    requirements.needs = requirements.needs.max(RoomSpatialNeeds::Queries);
+                }
+                requirements
+            })
+            .fold(
+                RoomSpatialRequirements::default(),
+                RoomSpatialRequirements::merge,
+            );
+        let uses_host_health_events = graphs
+            .values()
+            .any(|graph| graph.entry_handlers.contains_key(&health_topic));
         Ok(Self {
             graphs,
+            projected_message_topics,
+            room_spatial_needs: room_spatial_requirements.needs,
+            uses_spatial_actor_rays: room_spatial_requirements.actor_rays,
+            uses_host_health_events,
             bodies: keyed_by_guid(bundle.bodies)?,
             entities: keyed_by_guid(bundle.entities)?,
             mode_variables: keyed_by_guid(bundle.mode_variables)?
@@ -489,13 +1969,38 @@ impl GraphStore {
                 })
                 .collect::<io::Result<_>>()?,
             mode_scripts: keyed_by_guid(bundle.mode_scripts)?,
+            mode_rulesets: bundle.mode_rulesets,
             enemies: bundle.junkenstein.validate()?,
             missing: bundle.missing,
         })
     }
 
+    /// Whether any server graph uses the room's living body snapshot.
+    pub fn uses_room_spatial_frame(&self) -> bool {
+        self.room_spatial_needs != RoomSpatialNeeds::None
+    }
+
+    /// The most detailed room data requested by any server graph.
+    pub fn room_spatial_needs(&self) -> RoomSpatialNeeds {
+        self.room_spatial_needs
+    }
+
+    /// Whether a server operand needs frozen actor collision shapes.
+    pub fn uses_spatial_actor_rays(&self) -> bool {
+        self.uses_spatial_actor_rays
+    }
+
+    /// Whether this bundle explicitly subscribes to a host health event.
+    pub fn uses_host_health_events(&self) -> bool {
+        self.uses_host_health_events
+    }
+
     pub fn graph(&self, index: u32) -> Option<&Graph> {
         self.graphs.get(&index)
+    }
+
+    pub(crate) fn is_projected_message_topic(&self, id: u64) -> bool {
+        self.projected_message_topics.contains(&id)
     }
 
     /// Inspect local graph structure on demand. Unresolved null links and links
@@ -534,6 +2039,29 @@ impl GraphStore {
         self.mode_variables.get(&mode)
     }
 
+    /// Authored per-body overrides take precedence over mode defaults.
+    pub fn mode_ruleset_value(
+        &self,
+        mode: u64,
+        body: u64,
+        id: u32,
+    ) -> Option<crate::script_wire::Value> {
+        self.mode_rulesets.value(mode, body, id).map(rule_value)
+    }
+
+    /// Returns `None` when this mode has no authored engine setting table.
+    pub fn mode_engine_setting(&self, mode: u64, key: u32) -> Option<EngineSetting> {
+        Some(
+            self.mode_rulesets
+                .engine_settings(mode)?
+                .get(&key)
+                .copied()
+                .map_or(EngineSetting::Missing, |value| {
+                    EngineSetting::Present(rule_value(value))
+                }),
+        )
+    }
+
     pub fn mode_scripts(&self, mode: u64) -> Option<&ModeScripts> {
         self.mode_scripts.get(&mode)
     }
@@ -543,18 +2071,21 @@ impl GraphStore {
     }
 }
 
-pub fn asset_guid(value: &Value) -> Option<u64> {
-    let text = value.as_str()?;
-    let hex = text.strip_prefix("0x")?;
-    if hex.len() == 16
-        && hex
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'A'..=b'F'))
-    {
-        parse_guid(text)
-    } else {
-        None
+fn rule_value(value: RuleValue) -> crate::script_wire::Value {
+    use crate::script_wire::Value;
+    match value {
+        RuleValue::Null => Value::Null,
+        RuleValue::Bool(value) => Value::Bool(value),
+        RuleValue::Integer(value) => Value::Integer(value),
+        RuleValue::Float(value) => Value::Float(value),
     }
+}
+
+pub(crate) fn message_parameter_id(config: &Value) -> u32 {
+    config
+        .get("m_B5051BCE")
+        .and_then(asset_guid)
+        .map_or(0, |guid| u32::from(guid as u16))
 }
 
 pub fn target_tag_guid(value: &Value) -> Option<u64> {
@@ -580,6 +2111,40 @@ fn body_target_tags<'de, D: serde::Deserializer<'de>>(
                 .collect()
         })
         .transpose()
+}
+
+type ModelHardpointsBySkin = BTreeMap<u64, Arc<BTreeSet<u64>>>;
+
+fn body_model_hardpoints<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> Result<ModelHardpointsBySkin, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ModelHardpoints {
+        skin: Value,
+        hardpoints: Vec<Value>,
+    }
+
+    let mut by_skin = BTreeMap::new();
+    for entry in Vec::<ModelHardpoints>::deserialize(decoder)? {
+        let skin = asset_guid(&entry.skin)
+            .ok_or_else(|| serde::de::Error::custom("model skin must be a canonical GUID"))?;
+        let hardpoints = entry
+            .hardpoints
+            .iter()
+            .map(|value| {
+                asset_guid(value)
+                    .filter(|guid| guid >> 48 == 0x0dc0 && (guid & 0x0000_ffff_ffff_ffff) != 0)
+                    .ok_or_else(|| {
+                        serde::de::Error::custom("model hardpoint must be a nonzero .0DC GUID")
+                    })
+            })
+            .collect::<Result<BTreeSet<_>, D::Error>>()?;
+        if by_skin.insert(skin, Arc::new(hardpoints)).is_some() {
+            return Err(serde::de::Error::custom("duplicate model skin"));
+        }
+    }
+    Ok(by_skin)
 }
 
 pub fn field_at<'a>(fields: &'a Value, path: &str) -> Option<&'a Value> {
@@ -738,6 +2303,399 @@ mod tests {
     }
 
     #[test]
+    fn owner_only_instance_variables_validate_identity_and_synchronization_scope() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../fixtures/behavior/script-owner-instance-visibility-v1.json"
+        )))
+        .unwrap();
+        let source = &fixture["input"]["bundle"];
+        let load = |bundle: &Value| GraphStore::from_json(&serde_json::to_vec(bundle).unwrap());
+        let graphs = load(source).unwrap();
+        assert_eq!(
+            graphs.graph(121).unwrap().owner_only_instance_vars(),
+            [871, 872]
+        );
+        assert_eq!(graphs.graph(122).unwrap().owner_only_instance_vars(), [871]);
+        for invalid_ids in [
+            json!(null),
+            json!(true),
+            json!({}),
+            json!(0),
+            json!([0]),
+            json!([871, 871]),
+            json!([-1]),
+            json!([true]),
+            json!([1.5]),
+            json!(["871"]),
+            json!([4294967296_u64]),
+        ] {
+            let mut bundle = source.clone();
+            bundle["graphs"][0]["owner_only_instance_vars"] = invalid_ids;
+            assert!(load(&bundle).is_err());
+        }
+        for invalid_sync in [
+            json!([[871, 1, 0]]),
+            json!([[871, 2, 0]]),
+            json!([[871, 0, 0], [871, 0, 1]]),
+            json!([[871, 0, 0], [871, 1, 0]]),
+        ] {
+            let mut bundle = source.clone();
+            bundle["graphs"][0]["sync_vars"] = invalid_sync;
+            assert!(load(&bundle).is_err());
+        }
+        let mut legacy = source.clone();
+        legacy["graphs"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("owner_only_instance_vars");
+        assert!(
+            load(&legacy)
+                .unwrap()
+                .graph(121)
+                .unwrap()
+                .owner_only_instance_vars()
+                .is_empty()
+        );
+        let mut extras = source.clone();
+        extras["graphs"][0]["owner_only_instance_vars"] = json!([u32::MAX]);
+        assert_eq!(
+            load(&extras)
+                .unwrap()
+                .graph(121)
+                .unwrap()
+                .owner_only_instance_vars(),
+            [u32::MAX]
+        );
+    }
+
+    #[test]
+    fn runtime_state_metadata_checks_node_identity_and_preserves_wire_scope() {
+        let mut data = fixture();
+        let graph = &mut data["graphs"][0];
+        graph["nodes"][0]["state"] = json!(0);
+        graph["nodes"][1]["state"] = json!(1);
+        graph["nodes"][1]["client_only"] = json!(false);
+        let load = |value: &Value| GraphStore::from_json(&serde_json::to_vec(value).unwrap());
+        let baseline = load(&data).unwrap();
+        let baseline = baseline.graph(42).unwrap();
+
+        let row = json!({"graph": 42, "state": 1, "rid": 5, "class": "Node"});
+        data["runtime_state_metadata"] = json!({
+            "plain_classes": ["Node"],
+            "client_states": [row.clone()],
+        });
+        let store = load(&data).unwrap();
+        let graph = store.graph(42).unwrap();
+        assert!(graph.node(0).unwrap().declares_runtime_plain_state());
+        let client = graph.node(1).unwrap();
+        assert!(!client.declares_runtime_plain_state() && !client.runs_on_server());
+        assert!(client.is_networked() && !client.client_only && !client.server_only);
+        assert_eq!(client.class, "Node");
+        assert!(!graph.node(2).unwrap().declares_runtime_plain_state());
+        assert_eq!(graph.owner_positions(), baseline.owner_positions());
+        assert_eq!(graph.remote_positions(), baseline.remote_positions());
+
+        for (field, value) in [
+            ("rid", json!(3)),
+            ("class", json!("OtherState")),
+            ("state", json!(2)),
+            ("graph", json!(43)),
+            ("unexpected", json!(true)),
+        ] {
+            let mut invalid = data.clone();
+            invalid["runtime_state_metadata"]["client_states"][0][field] = value;
+            assert_eq!(
+                load(&invalid).unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+        }
+        for (field, value) in [
+            ("client_states", json!([row.clone(), row.clone()])),
+            ("plain_classes", json!(["Node", "Node"])),
+            ("plain_classes", json!(["authored.state"])),
+            ("plain_classes", json!(["N".repeat(129)])),
+        ] {
+            let mut invalid = data.clone();
+            invalid["runtime_state_metadata"][field] = value;
+            assert_eq!(
+                load(&invalid).unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+        }
+        for (field, value) in [
+            ("server_only", json!(true)),
+            ("state_behavior", json!("plain")),
+            ("fields", json!({})),
+        ] {
+            let mut invalid = data.clone();
+            invalid["graphs"][0]["nodes"][1][field] = value;
+            assert_eq!(
+                load(&invalid).unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+        }
+    }
+
+    #[test]
+    fn body_server_graphs_preserve_public_roots_and_bind_variables_in_order() {
+        use crate::{
+            script_init::{Root, body_roots, player_roots},
+            script_wire::Value as ScriptValue,
+        };
+
+        const BODY: &str = "0x0400000000000001";
+        let mut data = fixture();
+        let body = &mut data["bodies"][BODY];
+        body["manager"] = json!(42);
+        body["graphs"].as_array_mut().unwrap().extend([
+            json!({"graph":null,"m_75408640":0}),
+            json!({"graph":42,"m_75408640":0}),
+        ]);
+        body["server_graphs"] = json!([
+            {"graph":42,"m_75408640":0,"m_1EB5A024":[{"m_0D09D2D9":"0x0000000000000017","m_value":11}]},
+            {"graph":42,"m_75408640":0,"m_1EB5A024":[{"m_0D09D2D9":"0x0000000000000017","m_value":12}]}
+        ]);
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let store = load(&data).unwrap();
+        let body = &store.bodies()[&0x0400_0000_0000_0001];
+        let ids = |roots: &[Root]| roots.iter().map(|root| root.id).collect::<Vec<_>>();
+        let body = body_roots(body).unwrap();
+        assert_eq!(ids(&body), [1, 3, 0, 0]);
+        let player = player_roots(&store.bodies()[&0x0400_0000_0000_0001], &store).unwrap();
+        assert_eq!(ids(&player), [1, 3, 4, 5, 0, 0]);
+        assert_eq!(player[3].variables[&28], ScriptValue::Integer(1));
+        for roots in [&body, &player] {
+            let seeded = roots
+                .iter()
+                .filter(|root| root.is_server_only())
+                .map(|root| &root.variables[&23])
+                .collect::<Vec<_>>();
+            assert_eq!(
+                seeded,
+                [&ScriptValue::Integer(11), &ScriptValue::Integer(12)]
+            );
+        }
+        for invalid in [Value::Null, json!(43)] {
+            data["bodies"][BODY]["server_graphs"][0]["graph"] = invalid;
+            assert_eq!(load(&data).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        }
+    }
+
+    #[test]
+    fn authored_charge_route_requires_a_single_private_player_health_event_root() {
+        const BODY: &str = "0x040000000000B013";
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../fixtures/behavior/script-authored-charge-route-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(fixture["schema_version"], 1);
+        assert_eq!(
+            fixture["case_id"],
+            "script-authored-charge-route.synthetic.v1"
+        );
+        let bundle = &fixture["input"]["bundle"];
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let graphs = load(bundle).unwrap();
+        assert_eq!(
+            graphs.bodies()[&0x0400_0000_0000_b013].authored_charge_graph,
+            Some(612)
+        );
+        assert_eq!(
+            graphs.bodies()[&0x0400_0000_0000_b014].authored_charge_graph,
+            None
+        );
+
+        let root = bundle["bodies"][BODY]["server_graphs"][0].clone();
+        for (field, value) in [
+            ("authored_charge_graph", json!(612)),
+            ("authored_charge_graph", json!("0x0400000000000264")),
+            ("authored_charge_graph", json!("0x0580000100000264")),
+            ("authored_charge_graph", json!("0x0580000000000265")),
+            ("hero", Value::Null),
+            ("server_graphs", json!([])),
+            ("server_graphs", json!([root.clone(), root.clone()])),
+            ("graphs", json!([root])),
+            ("manager", json!(612)),
+            ("weapons", json!([612])),
+        ] {
+            let mut data = bundle.clone();
+            data["bodies"][BODY][field] = value;
+            assert_eq!(
+                load(&data).unwrap_err().kind(),
+                io::ErrorKind::InvalidData,
+                "{field}"
+            );
+        }
+
+        let mut data = bundle.clone();
+        let entry = data["graphs"][0]["nodes"][0].as_object_mut().unwrap();
+        entry.remove("host_event_entry");
+        entry.insert("class".into(), json!("STUStatescriptEntry"));
+        assert!(
+            load(&data)
+                .unwrap_err()
+                .to_string()
+                .contains("requires a server health_applied entry")
+        );
+
+        let mut data = bundle.clone();
+        data["graphs"][0]["nodes"][0]["server_only"] = json!(false);
+        assert_eq!(load(&data).unwrap_err().kind(), io::ErrorKind::InvalidData);
+
+        let mut data = bundle.clone();
+        data["entities"] = json!({BODY: bundle["bodies"][BODY]});
+        assert!(
+            load(&data)
+                .unwrap_err()
+                .to_string()
+                .contains("cannot declare a player authored charge graph")
+        );
+        let mut data = bundle.clone();
+        data["junkenstein"] = json!({"entities": {BODY: bundle["bodies"][BODY]}});
+        assert!(
+            load(&data)
+                .unwrap_err()
+                .to_string()
+                .contains("cannot declare a player authored charge graph")
+        );
+    }
+
+    #[test]
+    fn invalid_or_duplicate_mode_rulesets_fail_loading() {
+        let mut data = fixture();
+        let mode = "0x00000000000000AA";
+        let body = "0x00000000000000BA";
+        let valid = json!({"mode": mode, "rules": [{"id": 7, "value": false}]});
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        assert_eq!(load(&data).unwrap().mode_ruleset_value(0xaa, 0xba, 7), None);
+        for invalid_table in [
+            json!([valid.clone(), valid.clone()]),
+            json!([{"mode": "0x0000000000000000", "rules": []}]),
+            json!([{"mode": "0x00000000000000aa", "rules": []}]),
+            json!([{"mode": mode, "rules": [{"id": 7, "body": null, "value": 12}]}]),
+            json!([{"mode": mode, "rules": [{"id": 7, "body": "BA", "value": 12}]}]),
+            json!([{"mode": mode, "rules": [{"id": 7, "body": "0x0000000000000000", "value": 12}]}]),
+            json!([{"mode": mode, "rules": [{"id": 7, "value": [1]}]}]),
+            json!([{"mode": mode, "rules": [{"id": 7, "value": u64::MAX}]}]),
+            json!([{"mode": mode, "rules": [{"id": 7}]}]),
+            json!([{"mode": mode, "rules": [{"id": 7, "value": 1, "boddy": body}]}]),
+            json!([{"mode": mode, "rules": [{"id": 7, "value": 1}, {"id": 7, "value": 2}]}]),
+            json!([{"mode": mode, "rules": [
+                {"id": 7, "body": body, "value": 1}, {"id": 7, "body": body, "value": 2}
+            ]}]),
+        ] {
+            data["mode_rulesets"] = invalid_table;
+            assert_eq!(
+                load(&data).unwrap_err().kind(),
+                io::ErrorKind::InvalidData,
+                "{}",
+                data["mode_rulesets"]
+            );
+        }
+    }
+
+    #[test]
+    fn mode_engine_settings_keep_types_and_table_availability() {
+        use crate::script_wire::Value as ScriptValue;
+
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../fixtures/behavior/script-mode-rulesets-v1.json"
+        ))
+        .unwrap();
+        let bundle = serde_json::to_vec(&contract["input"]["bundle"]).unwrap();
+        let graphs = GraphStore::from_json(&bundle).unwrap();
+        for (key, value) in [
+            (101, ScriptValue::Bool(false)),
+            (102, ScriptValue::Integer(-9007199254740993)),
+            (103, ScriptValue::Float(1.0)),
+            (104, ScriptValue::Null),
+            (u32::MAX, ScriptValue::Integer(0)),
+        ] {
+            assert_eq!(
+                graphs.mode_engine_setting(0xa1, key),
+                Some(EngineSetting::Present(value))
+            );
+        }
+        assert_eq!(
+            graphs.mode_engine_setting(0xa1, 105),
+            Some(EngineSetting::Missing)
+        );
+        assert_eq!(graphs.mode_engine_setting(0xa2, 102), None);
+        assert_eq!(
+            graphs.mode_engine_setting(0xa3, 101),
+            Some(EngineSetting::Missing)
+        );
+        assert_eq!(
+            graphs.mode_engine_setting(0xa4, 101),
+            Some(EngineSetting::Present(ScriptValue::Bool(true)))
+        );
+        assert_eq!(graphs.mode_engine_setting(0xa5, 101), None);
+        assert_eq!(
+            graphs.mode_ruleset_value(0xa1, 0xb2, 101),
+            Some(ScriptValue::Bool(true))
+        );
+        assert_eq!(graphs.mode_ruleset_value(0xa4, 0xb2, 101), None);
+    }
+
+    #[test]
+    fn invalid_or_duplicate_mode_engine_settings_fail_loading() {
+        let mut data = fixture();
+        let mode = "0x00000000000000AA";
+        for table in [
+            json!(null),
+            json!({"id": 7, "value": true}),
+            json!([{"id": 7, "value": true, "body": "0x00000000000000BA"}]),
+            json!([{"id": -1, "value": true}]),
+            json!([{"id": u64::from(u32::MAX) + 1, "value": true}]),
+            json!([{"id": 7.0, "value": true}]),
+            json!([{"id": 7, "value": [true]}]),
+            json!([{"id": 7, "value": u64::MAX}]),
+            json!([{"id": 7}]),
+            json!([{"id": 7, "value": true}, {"id": 7, "value": null}]),
+        ] {
+            data["mode_rulesets"] = json!([{"mode": mode, "engine_settings": table}]);
+            let result = GraphStore::from_json(&serde_json::to_vec(&data).unwrap());
+            assert_eq!(
+                result.unwrap_err().kind(),
+                io::ErrorKind::InvalidData,
+                "{}",
+                data["mode_rulesets"]
+            );
+        }
+    }
+
+    #[test]
+    fn rule_integer_tokens_do_not_round_into_floats() {
+        let mut data = fixture();
+        data["mode_rulesets"] = json!([
+            {"mode": "0x00000000000000AA", "rules": [{"id": 7, "value": "replace-numeric-token"}]}
+        ]);
+        let data = serde_json::to_string(&data).unwrap();
+        for token in ["-9223372036854775809", "18446744073709551616", "1e309"] {
+            let invalid = data.replace("\"replace-numeric-token\"", token);
+            let result = GraphStore::from_json(invalid.as_bytes());
+            assert_eq!(
+                result.unwrap_err().kind(),
+                io::ErrorKind::InvalidData,
+                "{token}"
+            );
+        }
+        let key = "\"replace-numeric-token\"";
+        let integer =
+            GraphStore::from_json(data.replace(key, "-9223372036854775808").as_bytes()).unwrap();
+        let float = GraphStore::from_json(data.replace(key, "7e0").as_bytes()).unwrap();
+        assert_eq!(
+            integer.mode_ruleset_value(0xaa, 0, 7),
+            Some(crate::script_wire::Value::Integer(i64::MIN))
+        );
+        assert_eq!(
+            float.mode_ruleset_value(0xaa, 0, 7),
+            Some(crate::script_wire::Value::Float(7.0))
+        );
+    }
+
+    #[test]
     fn body_target_tags_distinguish_unknown_empty_and_invalid_data() {
         let mut data = fixture();
         let body = "0x0400000000000001";
@@ -772,6 +2730,47 @@ mod tests {
         );
         data["bodies"][body]["target_tags"] = json!(["0x0400000000000109"]);
         assert_eq!(load(&data).unwrap_err().kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn body_model_hardpoints_keep_exact_skin_membership_and_validate_catalog() {
+        const BODY: u64 = 0x0400_0000_0000_0001;
+        const SKIN: u64 = 0x0a60_0000_0000_002a;
+        const HARDPOINT: u64 = 0x0dc0_0000_0000_0042;
+        let mut data = fixture();
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let body = format!("0x{BODY:016X}");
+        assert!(
+            load(&data).unwrap().bodies()[&BODY]
+                .model_hardpoints(0)
+                .is_none()
+        );
+
+        data["bodies"][&body]["model_hardpoints"] = json!([
+            {"skin": "0x0000000000000000", "hardpoints": []},
+            {"skin": "0x0A6000000000002A", "hardpoints": ["0x0DC0000000000042"]},
+        ]);
+        let parsed = load(&data).unwrap();
+        let definition = &parsed.bodies()[&BODY];
+        assert!(definition.model_hardpoints(0).unwrap().is_empty());
+        assert_eq!(
+            *definition.model_hardpoints(SKIN).unwrap(),
+            BTreeSet::from([HARDPOINT])
+        );
+        assert!(definition.model_hardpoints(SKIN + 1).is_none());
+
+        for invalid in [
+            json!([
+                {"skin": "0x0000000000000000", "hardpoints": []},
+                {"skin": "0x0000000000000000", "hardpoints": ["0x0DC0000000000042"]},
+            ]),
+            json!([{"skin": "0x0A6000000000002A", "hardpoints": ["0x0400000000000042"]}]),
+            json!([{"skin": "0x0A6000000000002A", "hardpoints": ["0x0DC0000000000000"]}]),
+            json!([{"skin": "0xINVALID", "hardpoints": []}]),
+        ] {
+            data["bodies"][&body]["model_hardpoints"] = invalid;
+            assert_eq!(load(&data).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        }
     }
 
     #[test]
@@ -828,6 +2827,1508 @@ mod tests {
         // Playable boss definitions use the explicit encounter pair instead of an AI association.
         data["junkenstein"]["entities"][body]["ai_association"] = Value::Null;
         assert!(load(&data).is_ok());
+    }
+
+    #[test]
+    fn duplicate_graph_identities_are_rejected() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+
+        let mut duplicate_position = fixture();
+        duplicate_position["graphs"][0]["nodes"][2]["pos"] = json!(0);
+        let error = load(&duplicate_position).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("node position 0"));
+
+        let mut duplicate_graph = fixture();
+        let duplicate = duplicate_graph["graphs"][0].clone();
+        duplicate_graph["graphs"]
+            .as_array_mut()
+            .unwrap()
+            .push(duplicate);
+        let error = load(&duplicate_graph).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("graph 42"));
+    }
+
+    #[test]
+    fn authored_class_catalog_rejects_ambiguous_declarations() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let mut data = fixture();
+        assert_eq!(
+            load(&data).unwrap().graph(42).unwrap().owner_positions(),
+            [0, 0]
+        );
+
+        for (declarations, message) in [
+            (
+                json!([{"class":"authored.latch","behavior":"plain_state"},
+                       {"class":"authored.latch","behavior":"client_only"}]),
+                "duplicate authored class",
+            ),
+            (
+                json!([{"class":"STUStatescriptState","behavior":"client_only"}]),
+                "must use an authored.",
+            ),
+            (
+                json!([{"class":"authored.","behavior":"client_only"}]),
+                "must use an authored.",
+            ),
+            (
+                json!([{"class":"authored.latch","behavior":"unknown"}]),
+                "unknown variant",
+            ),
+            (
+                json!([{"class":"authored.latch","behavior":"plain_state","typo":true}]),
+                "unknown field",
+            ),
+        ] {
+            data["authored_classes"] = declarations;
+            let error = load(&data).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(error.to_string().contains(message), "{error}");
+        }
+    }
+
+    #[test]
+    fn authored_class_catalog_reuses_node_validation() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let mut data = fixture();
+        data["authored_classes"] = json!([
+            {"class":"authored.latch","behavior":"plain_state"},
+            {"class":"authored.overlay","behavior":"client_only"},
+            {"class":"authored.forward","behavior":"forward_action"}
+        ]);
+        let nodes = &mut data["graphs"][0]["nodes"];
+        nodes[0]["class"] = json!("authored.latch");
+        nodes[0]["state"] = json!(0);
+        nodes[0]["state_behavior"] = json!("plain");
+        nodes[0]["server_only"] = json!(true);
+        nodes[1]["class"] = json!("authored.overlay");
+        nodes[2]["class"] = json!("authored.forward");
+        nodes[2]["fields"]["m_outPlug"] = json!({"$":"Plug","links":[]});
+        let error = load(&data).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("occupy its state slot exactly once")
+        );
+        data["graphs"][0]["states"][3] = Value::Null;
+
+        let store = load(&data).unwrap();
+        let graph = store.graph(42).unwrap();
+        assert!(graph.owner_positions().is_empty());
+        assert!(graph.remote_positions().is_empty());
+        assert!(graph.node(1).unwrap().client_only);
+
+        for (position, field, value, message) in [
+            (0, "client_only", json!(true), "graph 42 at node 0"),
+            (0, "action_behavior", json!("forward"), "graph 42 at node 0"),
+            (0, "state", json!(1), "occupy its state slot"),
+            (1, "server_only", json!(true), "graph 42 at node 1"),
+            (1, "state_behavior", json!("plain"), "graph 42 at node 1"),
+            (2, "fields", json!({}), "output plug"),
+        ] {
+            let mut malformed = data.clone();
+            malformed["graphs"][0]["nodes"][position][field] = value;
+            let error = load(&malformed).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(error.to_string().contains(message), "{error}");
+        }
+
+        data["graphs"][0]["states"][2] = json!(2);
+        let error = load(&data).unwrap_err();
+        assert!(error.to_string().contains("no state slot"), "{error}");
+    }
+
+    #[test]
+    fn local_message_action_rejects_invalid_routes_and_parameter_slots() {
+        let mut data = fixture();
+        let node = &mut data["graphs"][0]["nodes"][2];
+        node["server_only"] = json!(true);
+        node["action_behavior"] = json!("local_message");
+        node["fields"] = json!({
+            "m_gameMessage": {"m_gameMessage":"0xF100000000000001"},
+            "m_params": [{"m_B5051BCE":"0xF200000000000007", "m_value":12}],
+            "m_outPlug": {"$":"Plug", "links":[]}
+        });
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let valid = load(&data).unwrap();
+        assert_eq!(
+            valid.graph(42).unwrap().node(2).unwrap().game_message_id(),
+            Some(0xf100_0000_0000_0001)
+        );
+        for (field, invalid_value) in [
+            (
+                "m_gameMessage",
+                json!({"m_gameMessage":"0x0000000000000000"}),
+            ),
+            ("m_gameMessage", json!({})),
+            ("m_target", json!(12)),
+            ("m_targets", json!([])),
+            ("m_params", json!(false)),
+            ("m_params", json!([{"m_B5051BCE":"0xF200000000000007"}])),
+            (
+                "m_params",
+                json!([{"m_B5051BCE":"0xF200000000000000","m_value":12}]),
+            ),
+            (
+                "m_params",
+                json!([
+                    {"m_B5051BCE":"0xF100000000000007","m_value":12},
+                    {"m_B5051BCE":"0xF200000000000007","m_value":13}
+                ]),
+            ),
+        ] {
+            let mut malformed = data.clone();
+            malformed["graphs"][0]["nodes"][2]["fields"][field] = invalid_value;
+            let error = load(&malformed).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(
+                error
+                    .to_string()
+                    .contains("local message action in graph 42 at node 2")
+            );
+        }
+        data["graphs"][0]["nodes"][2]["client_only"] = json!(true);
+        assert!(
+            load(&data)
+                .unwrap_err()
+                .to_string()
+                .contains("must be server-only")
+        );
+    }
+
+    #[test]
+    fn forward_action_declarations_require_a_server_action_and_valid_output() {
+        let mut data = fixture();
+        let node = &mut data["graphs"][0]["nodes"][2];
+        node["action_behavior"] = json!("forward");
+        node["server_only"] = json!(true);
+        node["fields"] = json!({"m_outPlug": {"$": "Plug", "links": [[null, "input"]]}});
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let store = load(&data).unwrap();
+        let forward = store.graph(42).unwrap().node(2).unwrap();
+        assert!(forward.is_action());
+        assert!(!forward.is_state());
+        assert!(!forward.is_networked());
+
+        for (field, value) in [
+            ("server_only", json!(false)),
+            ("client_only", json!(true)),
+            ("state", json!(0)),
+            ("state_behavior", json!("plain")),
+            ("action_behavior", json!("unknown")),
+            ("fields", json!({"m_outPlug": {"links": []}})),
+            (
+                "fields",
+                json!({"m_outPlug": {"$": "Plug", "links": [[3, false]]}}),
+            ),
+        ] {
+            let mut malformed = data.clone();
+            malformed["graphs"][0]["nodes"][2][field] = value;
+            assert_eq!(
+                load(&malformed).unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+        }
+        data["graphs"][0]["states"][2] = json!(2);
+        assert_eq!(load(&data).unwrap_err().kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn room_spatial_service_is_requested_by_server_graph_operands() {
+        let mut data = fixture();
+        let load =
+            |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap()).unwrap();
+        assert!(!load(&data).uses_room_spatial_frame());
+        assert!(load(&data).room_spatial_needs() < RoomSpatialNeeds::EntityFacts);
+
+        data["graphs"][0]["nodes"][0]["fields"]["nested"] =
+            json!([{"value":{"$":"EntitiesInRadius","center":null,"radius":1}}]);
+        assert!(load(&data).uses_room_spatial_frame());
+        assert!(load(&data).room_spatial_needs() < RoomSpatialNeeds::EntityFacts);
+
+        let value = &mut data["graphs"][0]["nodes"][0]["fields"]["nested"][0]["value"];
+        value["filter"] = json!({"relation":"ally","source":null});
+        assert!(load(&data).room_spatial_needs() < RoomSpatialNeeds::EntityFacts);
+
+        for (predicate, needs) in [
+            (
+                json!({"$":"EntityPosition","entity":null}),
+                RoomSpatialNeeds::Queries,
+            ),
+            (
+                json!({"$":"EntityDirection","entity":null}),
+                RoomSpatialNeeds::Queries,
+            ),
+            (
+                json!({"$":"SegmentClear","origin":null,"target":null}),
+                RoomSpatialNeeds::Queries,
+            ),
+            (
+                json!({"$":"RayCast","origin":null,"direction":null,"max_distance":1}),
+                RoomSpatialNeeds::Queries,
+            ),
+            (
+                json!({"$":"EntityRayCast","origin":null,"direction":null,"max_distance":1}),
+                RoomSpatialNeeds::Queries,
+            ),
+            (
+                json!({"$":"EntityRayCast","origin":null,"direction":null,"max_distance":1,"filter":{"alive":true}}),
+                RoomSpatialNeeds::EntityFacts,
+            ),
+            (
+                json!({"$":"EntityRayCast","origin":null,"direction":null,"max_distance":1,"filter":{"tags":{}}}),
+                RoomSpatialNeeds::EntityTags,
+            ),
+            (
+                json!({"$":"EntitiesInRadius","center":null,"radius":1,"filter":{"alive":true}}),
+                RoomSpatialNeeds::EntityFacts,
+            ),
+            (
+                json!({"$":"EntitiesInRadius","center":null,"radius":1,"filter":{"tags":{}}}),
+                RoomSpatialNeeds::EntityTags,
+            ),
+            (
+                json!({"$":"EntityMatches","entity":null,"filter":{"alive":true}}),
+                RoomSpatialNeeds::EntityFacts,
+            ),
+            (
+                json!({"$":"EntityMatches","entity":null,"filter":{"tags":{}}}),
+                RoomSpatialNeeds::EntityTags,
+            ),
+        ] {
+            let actor_rays = predicate.get("$").and_then(Value::as_str) == Some("EntityRayCast");
+            data["graphs"][0]["nodes"][0]["fields"]["nested"][0]["value"] = predicate;
+            let parsed = load(&data);
+            assert!(parsed.uses_room_spatial_frame());
+            assert_eq!(parsed.room_spatial_needs(), needs);
+            assert_eq!(parsed.uses_spatial_actor_rays(), actor_rays);
+        }
+
+        let wrapper = json!({
+            "$":"ClientOnly",
+            "value":{"$":"EntityMatches","entity":null,"filter":{"tags":{}}}
+        });
+        data["graphs"][0]["nodes"][0]["fields"]["nested"][0]["value"] = wrapper;
+        assert_eq!(load(&data).room_spatial_needs(), RoomSpatialNeeds::None);
+        data["graphs"][0]["nodes"][0]["fields"]["nested"][0]["value"]["server_fallback"] =
+            json!({"$":"SegmentClear","origin":null,"target":null});
+        assert_eq!(load(&data).room_spatial_needs(), RoomSpatialNeeds::Queries);
+
+        data["graphs"][0]["nodes"][0]["fields"]["nested"][0]["value"]["server_fallback"] =
+            json!({"$":"RayCast","origin":null,"direction":null,"max_distance":1});
+        assert_eq!(load(&data).room_spatial_needs(), RoomSpatialNeeds::Queries);
+
+        data["graphs"][0]["nodes"][0]["fields"]["nested"][0]["value"] = json!({
+            "$":"ClientOnly",
+            "value":{"$":"EntityRayCast","origin":null,"direction":null,"max_distance":1}
+        });
+        assert!(!load(&data).uses_spatial_actor_rays());
+        assert_eq!(load(&data).room_spatial_needs(), RoomSpatialNeeds::None);
+        data["graphs"][0]["nodes"][0]["fields"]["nested"][0]["value"]["server_fallback"] =
+            json!({"$":"EntityRayCast","origin":null,"direction":null,"max_distance":1});
+        assert!(load(&data).uses_spatial_actor_rays());
+        assert_eq!(load(&data).room_spatial_needs(), RoomSpatialNeeds::Queries);
+
+        data["graphs"][0]["nodes"][0]["client_only"] = json!(true);
+        assert!(!load(&data).uses_spatial_actor_rays());
+        assert!(!load(&data).uses_room_spatial_frame());
+        assert!(load(&data).room_spatial_needs() < RoomSpatialNeeds::EntityFacts);
+    }
+
+    #[test]
+    fn native_direct_target_tags_request_frozen_facts_for_foreign_operands() {
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../fixtures/behavior/actor-direct-target-tags-v1.json"
+        ))
+        .unwrap();
+        let input = &contract["input"];
+        let predicate = |entity: &Value| json!({"$":"STU_25ECB55F", "m_entity":entity, "m_88B0050A":input["tags"]["base"]});
+        let owner = &input["owner"];
+        let foreign = &input["foreign"];
+        let client_only = |fallback: &Value| json!({"$":"ClientOnly", "value":foreign, "server_fallback":fallback});
+        let mut invalid_tag = predicate(foreign);
+        invalid_tag["m_88B0050A"] = json!("0x0400000000001101");
+        let mut invalid_header = predicate(foreign);
+        invalid_header["m_EE729DCB"] = json!(1);
+
+        let mut data = fixture();
+        for (case, config, client_only_node) in [
+            ("owner", predicate(owner), false),
+            ("foreign", predicate(foreign), false),
+            ("owner_fallback", predicate(&client_only(owner)), false),
+            ("foreign_fallback", predicate(&client_only(foreign)), false),
+            ("null_selector", predicate(&Value::Null), false),
+            ("invalid_tag", invalid_tag, false),
+            ("invalid_header", invalid_header, false),
+            ("client_only_node", predicate(foreign), true),
+        ] {
+            let node = &mut data["graphs"][0]["nodes"][0];
+            node["fields"]["native_tag"] = config;
+            node["client_only"] = json!(client_only_node);
+            let store = GraphStore::from_json(&serde_json::to_vec(&data).unwrap()).unwrap();
+            let needs = if contract["expected"]["requires_tags"][case]
+                .as_bool()
+                .unwrap()
+            {
+                RoomSpatialNeeds::EntityTags
+            } else {
+                RoomSpatialNeeds::None
+            };
+            assert_eq!(store.room_spatial_needs(), needs, "{case}");
+            assert!(!store.uses_spatial_actor_rays(), "{case}");
+        }
+    }
+
+    #[test]
+    fn native_pose_operands_request_spatial_data_for_possible_foreign_entities() {
+        use RoomSpatialNeeds::{None as NoQueries, Queries};
+
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../fixtures/behavior/script-native-pose-demand-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(contract["schema_version"], 1);
+        assert_eq!(
+            contract["case_id"],
+            "script-native-pose-demand.synthetic.v1"
+        );
+        assert_eq!(contract["evidence"], "synthetic-rust");
+        let mut data = fixture();
+        let assert_needs = |data: &Value, case: &str| {
+            let expected = match contract["expected"][case].as_str().unwrap() {
+                "none" => NoQueries,
+                "queries" => Queries,
+                other => panic!("unexpected demand in {case}: {other}"),
+            };
+            let store = GraphStore::from_json(&serde_json::to_vec(data).unwrap()).unwrap();
+            assert_eq!(store.room_spatial_needs(), expected, "{case}");
+            assert_eq!(
+                store.uses_room_spatial_frame(),
+                expected != NoQueries,
+                "{case}"
+            );
+        };
+        let own = &contract["input"]["owner"];
+        let foreign = &contract["input"]["dynamic"];
+        let client_only = |fallback: Option<&Value>| {
+            let mut operand = json!({"$":"ClientOnly","value":foreign});
+            if let Some(fallback) = fallback {
+                operand["server_fallback"] = fallback.clone();
+            }
+            operand
+        };
+
+        for class in contract["input"]["pose_classes"].as_array().unwrap() {
+            let pose = |entity: &Value| json!({"$":class,"m_entity":entity,"m_EE729DCB":0});
+            data["graphs"][0]["nodes"][0]["client_only"] = json!(false);
+            for (case, operand) in [
+                ("owner", pose(own)),
+                ("dynamic", pose(foreign)),
+                ("owner_fallback", pose(&client_only(Some(own)))),
+                ("dynamic_fallback", pose(&client_only(Some(foreign)))),
+                ("no_selector_fallback", pose(&client_only(None))),
+                (
+                    "invalid_selector_wrapper",
+                    pose(&json!({"$":"ClientOnly","server_fallback":foreign})),
+                ),
+                ("null_selector", pose(&Value::Null)),
+                ("untyped_selector", pose(&json!(29))),
+                ("missing_selector", json!({"$":class})),
+                (
+                    "extra_pose_field",
+                    json!({"$":class,"m_entity":foreign,"extra":null}),
+                ),
+                (
+                    "invalid_pose_header",
+                    json!({"$":class,"m_entity":foreign,"m_EE729DCB":1}),
+                ),
+                (
+                    "no_pose_fallback",
+                    json!({"$":"ClientOnly","value":pose(foreign)}),
+                ),
+                (
+                    "pose_fallback",
+                    json!({"$":"ClientOnly","value":null,"server_fallback":pose(foreign)}),
+                ),
+                (
+                    "invalid_pose_wrapper",
+                    json!({"$":"ClientOnly","server_fallback":pose(foreign)}),
+                ),
+            ] {
+                data["graphs"][0]["nodes"][0]["fields"]["value"] = operand;
+                assert_needs(&data, case);
+            }
+
+            data["graphs"][0]["nodes"][0]["client_only"] = json!(true);
+            data["graphs"][0]["nodes"][0]["fields"]["value"] = pose(foreign);
+            assert_needs(&data, "client_only_node");
+        }
+    }
+
+    #[test]
+    fn branch_action_declarations_require_a_condition_and_both_outputs() {
+        let mut data = fixture();
+        let node = &mut data["graphs"][0]["nodes"][2];
+        node["action_behavior"] = json!("branch");
+        node["server_only"] = json!(true);
+        node["fields"] = json!({
+            "m_condition": false,
+            "m_truePlug": {"$": "Plug", "links": [[null, "input"]]},
+            "m_falsePlug": {"$": "Plug", "links": []},
+        });
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let store = load(&data).unwrap();
+        let branch = store.graph(42).unwrap().node(2).unwrap();
+        assert!(branch.declares_branch_action() && branch.is_action() && !branch.is_networked());
+        assert!(!branch.is_state());
+        for field in ["m_condition", "m_truePlug", "m_falsePlug"] {
+            let mut invalid = data.clone();
+            invalid["graphs"][0]["nodes"][2]["fields"][field] = Value::Null;
+            let result = load(&invalid).unwrap_err();
+            assert_eq!(result.kind(), io::ErrorKind::InvalidData);
+            assert!(
+                result
+                    .to_string()
+                    .contains("branch action in graph 42 at node 2")
+            );
+            assert!(result.to_string().contains(field));
+        }
+    }
+
+    #[test]
+    fn health_change_action_requires_server_scope_and_operands() {
+        let mut data = fixture();
+        let node = &mut data["graphs"][0]["nodes"][2];
+        node["action_behavior"] = json!("health_change");
+        node["server_only"] = json!(true);
+        node["fields"] = json!({
+            "target": {"$": "STUConfigVarDynamic", "m_identifier": 1, "m_60DB8F99": false},
+            "delta": -1,
+            "m_outPlug": {"$": "Plug", "links": []},
+        });
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let store = load(&data).unwrap();
+        assert!(store.uses_room_spatial_frame());
+        let action = store.graph(42).unwrap().node(2).unwrap();
+        assert!(action.declares_health_change_action() && action.is_action());
+        assert!(!action.is_networked() && !action.is_state());
+        assert_eq!(action.class, "ActionHealthChange");
+
+        for field in ["target", "delta", "m_outPlug"] {
+            let mut invalid = data.clone();
+            invalid["graphs"][0]["nodes"][2]["fields"][field] = Value::Null;
+            let error = load(&invalid).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(
+                error
+                    .to_string()
+                    .contains("health change action in graph 42 at node 2")
+            );
+            assert!(error.to_string().contains(field));
+        }
+        data["graphs"][0]["nodes"][2]["server_only"] = json!(false);
+        let error = load(&data).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            error
+                .to_string()
+                .contains("must be server-only with no state slot")
+        );
+    }
+
+    #[test]
+    fn radial_health_action_requires_a_server_radius_and_delta() {
+        let mut data = fixture();
+        let node = &mut data["graphs"][0]["nodes"][2];
+        node["action_behavior"] = json!("radial_health");
+        node["server_only"] = json!(true);
+        node["fields"] = json!({
+            "area": {"$":"EntitiesInRadius","center":{"$":"EntityPosition","entity":null},"radius":4},
+            "delta": -5,
+            "m_outPlug": {"$":"Plug","links":[]},
+        });
+
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let store = load(&data).unwrap();
+        assert_eq!(store.room_spatial_needs(), RoomSpatialNeeds::Queries);
+        let action = store.graph(42).unwrap().node(2).unwrap();
+        assert!(action.declares_radial_health_action() && action.is_action());
+        assert!(!action.is_networked() && !action.is_state());
+
+        for field in ["area", "delta", "edge_scale", "m_outPlug"] {
+            let mut invalid = data.clone();
+            invalid["graphs"][0]["nodes"][2]["fields"][field] = Value::Null;
+            let error = load(&invalid).unwrap_err().to_string();
+            assert!(error.contains("radial health action in graph 42 at node 2"));
+        }
+        data["graphs"][0]["nodes"][2]["server_only"] = json!(false);
+        let error = load(&data).unwrap_err().to_string();
+        assert!(error.contains("must be server-only with no state slot"));
+    }
+
+    #[test]
+    fn room_cue_requires_an_authored_server_action_audience_and_assets() {
+        let mut data = fixture();
+        let node = &mut data["graphs"][0]["nodes"][2];
+        node["action_behavior"] = json!("room_cue");
+        node["server_only"] = json!(true);
+        node["fields"] = json!({
+            "audience": [17],
+            "stimulus": "0x00000000000000A1",
+            "line": "0x00000000000000B2",
+            "m_outPlug": {"$": "Plug", "links": []},
+        });
+
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let store = load(&data).unwrap();
+        let action = store.graph(42).unwrap().node(2).unwrap();
+        assert_eq!(action.class, "ActionRoomCue");
+        assert!(action.is_action() && !action.is_networked() && !action.is_state());
+        assert_eq!(action.room_cue_assets(), Some((0xA1, 0xB2)));
+        assert_eq!(store.room_spatial_needs(), RoomSpatialNeeds::Queries);
+
+        for (field, value, diagnostic) in [
+            ("audience", Value::Null, "audience expression"),
+            ("stimulus", json!("0x0000000000000000"), "asset GUIDs"),
+            ("stimulus", json!("0x00000000000000a1"), "asset GUIDs"),
+            ("line", json!(178), "asset GUIDs"),
+            ("line", json!("0xB2"), "asset GUIDs"),
+            ("m_outPlug", Value::Null, "m_outPlug output plug"),
+        ] {
+            let mut malformed = data.clone();
+            malformed["graphs"][0]["nodes"][2]["fields"][field] = value;
+            let error = load(&malformed).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            let error = error.to_string();
+            assert!(error.contains("room cue action in graph 42 at node 2"));
+            assert!(error.contains(diagnostic), "{error}");
+        }
+
+        data["graphs"][0]["nodes"][2]["server_only"] = json!(false);
+        let error = load(&data).unwrap_err().to_string();
+        assert!(error.contains("must be server-only with no state slot"));
+
+        let node = &mut data["graphs"][0]["nodes"][2];
+        node["action_behavior"] = Value::Null;
+        node["class"] = json!("ActionRoomCue");
+        let store = load(&data).unwrap();
+        let action = store.graph(42).unwrap().node(2).unwrap();
+        assert!(!action.declares_room_cue_action());
+        assert_eq!(action.room_cue_assets(), None);
+        assert_eq!(store.room_spatial_needs(), RoomSpatialNeeds::None);
+
+        let node = &mut data["graphs"][0]["nodes"][2];
+        node["class"] = json!("authored.cue");
+        node["fields"]["audience"] = json!({
+            "$": "EntitiesInRadius",
+            "center": {"$": "EntityPosition", "entity": null},
+            "radius": 10,
+            "filter": {"tags": {"all": ["0xF100000000000007"]}},
+        });
+        data["authored_classes"] =
+            json!([{"class": "authored.cue", "behavior": "room_cue_action"}]);
+        let store = load(&data).unwrap();
+        let action = store.graph(42).unwrap().node(2).unwrap();
+        assert_eq!(action.class, "ActionRoomCue");
+        assert!(action.server_only && action.declares_room_cue_action());
+        assert_eq!(action.room_cue_assets(), Some((0xA1, 0xB2)));
+        assert_eq!(store.room_spatial_needs(), RoomSpatialNeeds::EntityTags);
+    }
+
+    #[test]
+    fn plain_state_declarations_require_a_unique_server_state_slot() {
+        let mut data = fixture();
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let legacy = load(&data).unwrap();
+        let graph = legacy.graph(42).unwrap();
+        assert_eq!(graph.state(0).unwrap().pos, graph.state(3).unwrap().pos);
+
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state"] = json!(0);
+        node["server_only"] = json!(true);
+        node["state_behavior"] = json!("plain");
+        let error = load(&data).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("graph 42 at node 0"));
+        assert!(
+            error
+                .to_string()
+                .contains("occupy its state slot exactly once")
+        );
+        data["graphs"][0]["states"][3] = Value::Null;
+
+        let store = load(&data).unwrap();
+        let graph = store.graph(42).unwrap();
+        let plain = graph.state(0).unwrap();
+        assert!(plain.is_state());
+        assert!(!plain.is_networked());
+        assert!(graph.owner_positions().is_empty());
+
+        for (field, value) in [
+            ("server_only", json!(false)),
+            ("client_only", json!(true)),
+            ("state", json!(1)),
+            ("state", Value::Null),
+            ("state_behavior", json!("unrecognized")),
+        ] {
+            let mut malformed = data.clone();
+            malformed["graphs"][0]["nodes"][0][field] = value;
+            assert_eq!(
+                load(&malformed).unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+        }
+        data["graphs"][0]["nodes"][0]["fields"]["m_ADEB6E05"] = json!(true);
+        assert_eq!(load(&data).unwrap_err().kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn plain_state_declarations_validate_optional_lifecycle_plugs() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let mut data = fixture();
+        data["graphs"][0]["states"][3] = Value::Null;
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state"] = json!(0);
+        node["server_only"] = json!(true);
+        node["state_behavior"] = json!("plain");
+
+        for path in [
+            "m_onBeginPlug",
+            "m_onEndPlug",
+            "m_onAbortPlug",
+            "m_onFinishedPlug",
+        ] {
+            let mut sample = data.clone();
+            sample["graphs"][0]["nodes"][0]["fields"][path] =
+                json!({"$": "Plug", "links": [[2, "input"], [null, "unresolved"]]});
+            assert!(load(&sample).is_ok());
+
+            for malformed in [
+                json!({"$": "Plug"}),
+                json!({"$": 1, "links": []}),
+                json!({"$": "Plug", "links": [[2, 3]]}),
+            ] {
+                sample["graphs"][0]["nodes"][0]["fields"][path] = malformed;
+                let error = load(&sample).unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+                assert!(error.to_string().contains("graph 42 at node 0"));
+                assert!(error.to_string().contains(path));
+
+                sample["graphs"][0]["nodes"][0]["state_behavior"] = Value::Null;
+                assert!(load(&sample).is_ok());
+                sample["graphs"][0]["nodes"][0]["state_behavior"] = json!("plain");
+            }
+            sample["graphs"][0]["nodes"][0]["fields"][path] = Value::Null;
+            assert!(load(&sample).is_ok());
+        }
+    }
+
+    #[test]
+    fn observe_state_declarations_require_a_writable_output_and_valid_change_plug() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let mut data = fixture();
+        data["graphs"][0]["states"][3] = Value::Null;
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state"] = json!(0);
+        node["server_only"] = json!(true);
+        node["state_behavior"] = json!("observe");
+        node["fields"] = json!({
+            "value": false,
+            "output": {"$": "STUConfigVarDynamic", "m_identifier": 7, "m_60DB8F99": true},
+            "on_change": {"$": "Plug", "links": [[2, "input"]]},
+        });
+
+        for (field, invalid, message) in [
+            ("value", Value::Null, "value expression"),
+            ("output", json!(3), "writable output"),
+            (
+                "on_change",
+                json!({"$": "Plug", "links": [[2, 3]]}),
+                "on_change",
+            ),
+        ] {
+            let mut sample = data.clone();
+            sample["graphs"][0]["nodes"][0]["fields"][field] = invalid;
+            let error = load(&sample).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(error.to_string().contains("graph 42 at node 0"));
+            assert!(error.to_string().contains(message), "{error}");
+        }
+
+        let graph = load(&data).unwrap();
+        let observe = graph.graph(42).unwrap().state(0).unwrap();
+        assert!(observe.declares_observe_state() && observe.is_state() && !observe.is_networked());
+        assert_eq!(observe.class, "StateObserve");
+
+        data["authored_classes"] = json!([
+            {"class": "authored.sample", "behavior": "observe_state"}
+        ]);
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["class"] = json!("authored.sample");
+        node["state_behavior"] = Value::Null;
+        node["server_only"] = json!(false);
+        node["fields"]["on_change"] = Value::Null;
+        assert!(load(&data).is_ok());
+
+        for plug in [Value::Null, json!({"$":"Plug","links":[]})] {
+            data["graphs"][0]["nodes"][0]["fields"]["on_sample"] = plug;
+            assert!(load(&data).is_ok());
+        }
+        data["graphs"][0]["nodes"][0]["fields"]["on_sample"] =
+            json!({"$":"Plug","links":[[0,false]]});
+        let error = load(&data).unwrap_err();
+        assert!(error.to_string().contains("invalid on_sample output plug"));
+
+        data["graphs"][0]["nodes"][0]["fields"]["on_sample"] = Value::Null;
+        for plug in [Value::Null, json!({"$":"Plug","links":[]})] {
+            data["graphs"][0]["nodes"][0]["fields"]["on_unavailable"] = plug;
+            assert!(load(&data).is_ok());
+        }
+        data["graphs"][0]["nodes"][0]["fields"]["on_unavailable"] =
+            json!({"$":"Plug","links":[[0,false]]});
+        let error = load(&data).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("invalid on_unavailable output plug")
+        );
+    }
+
+    #[test]
+    fn interval_state_declarations_require_scope_period_and_output() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let rejects = |data: &Value, expected: &str| {
+            let error = load(data).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            let message = error.to_string();
+            assert!(message.contains("graph 42 at node 0"), "{message}");
+            assert!(message.contains(expected), "{message}");
+        };
+        let mut data = fixture();
+        data["graphs"][0]["states"][3] = Value::Null;
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state"] = json!(0);
+        node["server_only"] = json!(true);
+        node["state_behavior"] = json!("interval");
+        node["fields"] = json!({
+            "interval_frames": 1,
+            "on_interval": {"$": "Plug", "links": []},
+        });
+
+        let graph = load(&data).unwrap();
+        let interval = graph.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(interval.class, "StateInterval");
+        assert!(interval.is_state() && !interval.is_networked());
+        assert_eq!(interval.interval_frames().map(NonZeroU32::get), Some(1));
+
+        for period in [
+            Value::Null,
+            json!(0),
+            json!(-1),
+            json!(1.0),
+            json!(true),
+            json!("1"),
+            json!(u64::from(u32::MAX) + 1),
+        ] {
+            let mut bad = data.clone();
+            bad["graphs"][0]["nodes"][0]["fields"]["interval_frames"] = period;
+            rejects(&bad, "interval_frames");
+        }
+        for plug in [
+            Value::Null,
+            json!({"$": "Plug"}),
+            json!({"$": "Plug", "links": [[2, 3]]}),
+        ] {
+            let mut bad = data.clone();
+            bad["graphs"][0]["nodes"][0]["fields"]["on_interval"] = plug;
+            rejects(&bad, "on_interval");
+        }
+        let mut missing_plug = data.clone();
+        missing_plug["graphs"][0]["nodes"][0]["fields"]
+            .as_object_mut()
+            .unwrap()
+            .remove("on_interval");
+        rejects(&missing_plug, "on_interval");
+        for (field, invalid) in [
+            ("server_only", json!(false)),
+            ("client_only", json!(true)),
+            ("state", Value::Null),
+        ] {
+            let mut bad = data.clone();
+            bad["graphs"][0]["nodes"][0][field] = invalid;
+            rejects(&bad, "server-only and occupy its state slot exactly once");
+        }
+        let mut bad_lifecycle = data.clone();
+        bad_lifecycle["graphs"][0]["nodes"][0]["fields"]["m_onBeginPlug"] = json!(3);
+        rejects(&bad_lifecycle, "m_onBeginPlug");
+
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state_behavior"] = Value::Null;
+        node["class"] = json!("StateInterval");
+        let graph = load(&data).unwrap();
+        assert!(
+            graph
+                .graph(42)
+                .unwrap()
+                .state(0)
+                .unwrap()
+                .interval_frames()
+                .is_none()
+        );
+
+        data["authored_classes"] =
+            json!([{"class": "authored.timer", "behavior": "interval_state"}]);
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["class"] = json!("authored.timer");
+        node["server_only"] = json!(false);
+        node["fields"]["interval_frames"] = json!(u32::MAX);
+        let graph = load(&data).unwrap();
+        let interval = graph.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(interval.class, "StateInterval");
+        assert!(interval.server_only && !interval.client_only);
+        assert_eq!(
+            interval.interval_frames().map(NonZeroU32::get),
+            Some(u32::MAX)
+        );
+    }
+
+    fn held_input_fixture() -> Value {
+        let node = |position, class, state, server_only, fields| {
+            json!({
+                "pos":position,"rid":position,"uid":position,"remote":-1,"state":state,
+                "class":class,"server_only":server_only,"client_only":false,"fields":fields,
+            })
+        };
+        let mut input = node(
+            0,
+            "authored.aim_input",
+            0,
+            true,
+            json!({"button":29,"held_states":[1],"idle_states":[2]}),
+        );
+        input["state_behavior"] = json!("held_input");
+        json!({"version":1,"bodies":{},"missing":[],"graphs":[{
+            "index":42,"items":4,"containers":{},"unknown_nodes":[],
+            "states":[0,1,2,3],"entries":[],"remote":[],"sync_vars":[],
+            "header":{"m_nodesBitCount":3,"m_statesBitCount":3,
+                "m_remoteSyncNodesBitCount":3,"m_syncVarsBitCount":3},
+            "fields":{"m_680A2CB2":[3,3,null,"ignored",-1,65536]},
+            "nodes":[input,
+                node(1,"STUStatescriptState",1,false,json!({"m_2BBEEAB8":true})),
+                node(2,"STUStatescriptState",2,true,json!({"m_2BBEEAB8":true})),
+                node(3,"STUStatescriptStateLogicalButton",3,false,json!({
+                    "m_2BBEEAB8":true,"m_logicalButton":20}))
+            ]
+        }]})
+    }
+
+    #[test]
+    fn authored_held_input_lowers_owned_stages_without_rewriting_legacy_dispatch() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let data = held_input_fixture();
+        let graphs = load(&data).unwrap();
+        let graph = graphs.graph(42).unwrap();
+        assert_eq!(graph.fields, data["graphs"][0]["fields"]);
+        assert_eq!(graph.logical_button_slots().collect::<Vec<_>>(), [3, 3, 0]);
+        let input = graph.state(0).unwrap();
+        assert_eq!(input.class, "STUStatescriptStateLogicalButton");
+        assert!(input.is_state() && input.server_only && !input.is_networked());
+        assert_eq!(
+            input.field("m_logicalButton"),
+            Some(&json!({
+            "$":"STUConfigVarLogicalButton","m_logicalButton":29}))
+        );
+        assert_eq!(
+            input.field("m_80AF45FB"),
+            Some(&json!({
+            "$":"Plug","links":[[1,"m_beginPlug"]],"m_FF3DAF1E":[1]}))
+        );
+        assert_eq!(
+            input.field("m_1C9EF058"),
+            Some(&json!({
+            "$":"Plug","links":[[2,"m_beginPlug"]],"m_FF3DAF1E":[2]}))
+        );
+        assert_eq!(input.field("m_5AE05408"), Some(&json!(false)));
+        for name in ["m_onGoingDownPlug", "m_onComingUpPlug"] {
+            assert_eq!(input.field(name), Some(&json!({"$":"Plug","links":[]})));
+        }
+
+        let mut registered = data.clone();
+        registered["graphs"][0]["fields"]["m_680A2CB2"] = json!([3, 0, 3, 0]);
+        let graphs = load(&registered).unwrap();
+        assert_eq!(
+            graphs
+                .graph(42)
+                .unwrap()
+                .logical_button_slots()
+                .collect::<Vec<_>>(),
+            [3, 0, 3, 0]
+        );
+        let mut automatic = data.clone();
+        automatic["graphs"][0]["fields"] = json!({});
+        let graphs = load(&automatic).unwrap();
+        assert_eq!(
+            graphs
+                .graph(42)
+                .unwrap()
+                .logical_button_slots()
+                .collect::<Vec<_>>(),
+            [0]
+        );
+        let mut multiple = automatic;
+        let second = &mut multiple["graphs"][0]["nodes"][3];
+        second["server_only"] = json!(true);
+        second["state_behavior"] = json!("held_input");
+        second["fields"] = json!({"button":20,"held_states":[2]});
+        multiple["graphs"][0]["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .reverse();
+        let graphs = load(&multiple).unwrap();
+        assert_eq!(
+            graphs
+                .graph(42)
+                .unwrap()
+                .logical_button_slots()
+                .collect::<Vec<_>>(),
+            [0, 3]
+        );
+
+        let mut alias = data;
+        alias["authored_classes"] = json!([
+            {"class":"authored.aim_input","behavior":"held_input_state"}]);
+        let input = &mut alias["graphs"][0]["nodes"][0];
+        input["state_behavior"] = Value::Null;
+        input["server_only"] = json!(false);
+        input["fields"]
+            .as_object_mut()
+            .unwrap()
+            .remove("idle_states");
+        input["fields"]["allow_dead"] = json!(true);
+        input["fields"]["on_press"] = json!({"$":"Plug","links":[[3,"m_beginPlug"]]});
+        input["fields"]["on_release"] = json!({"$":"Plug","links":[]});
+        let graphs = load(&alias).unwrap();
+        let input = graphs.graph(42).unwrap().state(0).unwrap();
+        assert!(input.server_only && !input.client_only);
+        assert_eq!(input.field("m_5AE05408"), Some(&json!(true)));
+        assert_eq!(
+            input.field("m_onGoingDownPlug"),
+            Some(&json!({
+            "$":"Plug","links":[[3,"m_beginPlug"]]}))
+        );
+        assert_eq!(
+            input.field("m_1C9EF058"),
+            Some(&json!({
+            "$":"Plug","links":[],"m_FF3DAF1E":[]}))
+        );
+    }
+
+    #[test]
+    fn authored_held_input_rejects_malformed_or_conflicting_configuration() {
+        let source = held_input_fixture();
+        let rejects = |data: &Value| {
+            let error = GraphStore::from_json(&serde_json::to_vec(data).unwrap()).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(
+                error
+                    .to_string()
+                    .contains("held input state in graph 42 at node 0"),
+                "{error}"
+            );
+        };
+        for (name, invalid) in [
+            ("button", json!(null)),
+            ("button", json!(0)),
+            ("button", json!(256)),
+            ("button", json!(-1)),
+            ("button", json!(29.0)),
+            ("button", json!(true)),
+            ("button", json!("29")),
+            ("held_states", json!(null)),
+            ("held_states", json!([])),
+            ("held_states", json!({})),
+            ("held_states", json!([null])),
+            ("held_states", json!([1.0])),
+            ("held_states", json!([-1])),
+            ("held_states", json!([65536])),
+            ("held_states", json!([0])),
+            ("held_states", json!([1, 1])),
+            ("held_states", json!([9])),
+            ("idle_states", json!(null)),
+            ("idle_states", json!([1])),
+            ("allow_dead", json!(null)),
+            ("allow_dead", json!(1)),
+            ("allow_dead", json!("false")),
+            ("on_press", json!(null)),
+            ("on_press", json!({"$":"Plug"})),
+            ("on_release", json!({"$":"Plug","links":[[1,7]]})),
+        ] {
+            let mut invalid_data = source.clone();
+            invalid_data["graphs"][0]["nodes"][0]["fields"][name] = invalid;
+            rejects(&invalid_data);
+        }
+        for name in ["button", "held_states"] {
+            let mut missing = source.clone();
+            missing["graphs"][0]["nodes"][0]["fields"]
+                .as_object_mut()
+                .unwrap()
+                .remove(name);
+            rejects(&missing);
+        }
+        for name in [
+            "m_logicalButton",
+            "m_80AF45FB",
+            "m_1C9EF058",
+            "m_onGoingDownPlug",
+            "m_onComingUpPlug",
+            "m_5AE05408",
+            "m_53C4B6A6",
+            "m_246438AD",
+        ] {
+            let mut conflicting = source.clone();
+            conflicting["graphs"][0]["nodes"][0]["fields"][name] = Value::Null;
+            rejects(&conflicting);
+        }
+        for (name, invalid) in [
+            ("server_only", json!(false)),
+            ("client_only", json!(true)),
+            ("state", json!(null)),
+        ] {
+            let mut invalid_data = source.clone();
+            invalid_data["graphs"][0]["nodes"][0][name] = invalid;
+            rejects(&invalid_data);
+        }
+        let mut conflict = source;
+        conflict["authored_classes"] = json!([
+            {"class":"authored.aim_input","behavior":"plain_state"}]);
+        assert!(
+            GraphStore::from_json(&serde_json::to_vec(&conflict).unwrap())
+                .unwrap_err()
+                .to_string()
+                .contains("conflicts with scope or behavior")
+        );
+    }
+
+    #[test]
+    fn authored_held_input_requires_real_unambiguous_stage_targets() {
+        let source = held_input_fixture();
+        let rejects = |data: &Value| {
+            let error = GraphStore::from_json(&serde_json::to_vec(data).unwrap()).unwrap_err();
+            assert!(error.to_string().contains("held_states slot 1"), "{error}");
+        };
+        for (name, invalid) in [
+            ("client_only", json!(true)),
+            ("state", json!(2)),
+            ("fields", json!({"m_2BBEEAB8":false})),
+            ("fields", json!({"m_2BBEEAB8":true,"m_ADEB6E05":true})),
+        ] {
+            let mut invalid_data = source.clone();
+            invalid_data["graphs"][0]["nodes"][1][name] = invalid;
+            rejects(&invalid_data);
+        }
+        for position in [json!(null), json!(99)] {
+            let mut invalid_data = source.clone();
+            invalid_data["graphs"][0]["states"][1] = position;
+            rejects(&invalid_data);
+        }
+        let mut duplicated = source.clone();
+        duplicated["graphs"][0]["states"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(1));
+        rejects(&duplicated);
+        let mut duplicate_own = source.clone();
+        duplicate_own["graphs"][0]["states"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(0));
+        assert!(
+            GraphStore::from_json(&serde_json::to_vec(&duplicate_own).unwrap())
+                .unwrap_err()
+                .to_string()
+                .contains("occupy its state slot exactly once")
+        );
+
+        // A runnable legacy state is permitted; network visibility is independent
+        // of stage ownership, and no engine-specific class list is imposed here.
+        let mut legacy_target = source;
+        legacy_target["graphs"][0]["nodes"][0]["fields"]["held_states"] = json!([3]);
+        let graphs = GraphStore::from_json(&serde_json::to_vec(&legacy_target).unwrap()).unwrap();
+        assert_eq!(
+            graphs
+                .graph(42)
+                .unwrap()
+                .state(0)
+                .unwrap()
+                .field("m_80AF45FB"),
+            Some(&json!({"$":"Plug","links":[[3,"m_beginPlug"]],"m_FF3DAF1E":[3]}))
+        );
+    }
+
+    #[test]
+    fn authored_button_lock_requires_server_scope_and_valid_config() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let mut data = fixture();
+        data["graphs"][0]["states"][3] = Value::Null;
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state"] = json!(0);
+        node["server_only"] = json!(true);
+        node["state_behavior"] = json!("button_lock");
+        node["fields"] = json!({"button": 255});
+
+        let graphs = load(&data).unwrap();
+        let lock = graphs.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(lock.class, "StateButtonLock");
+        assert_eq!(lock.button_lock(), Some((255, None)));
+        assert!(lock.is_state() && !lock.is_networked());
+
+        for (field, invalid) in [
+            ("button", json!(0)),
+            ("button", json!(256)),
+            ("button", json!(-1)),
+            ("button", json!(1.0)),
+            ("duration_frames", Value::Null),
+            ("duration_frames", json!(0)),
+            ("duration_frames", json!(1.0)),
+            ("duration_frames", json!(u64::from(u32::MAX) + 1)),
+        ] {
+            let mut bad = data.clone();
+            bad["graphs"][0]["nodes"][0]["fields"][field] = invalid;
+            let error = load(&bad).unwrap_err().to_string();
+            assert!(
+                error.contains("button lock state in graph 42 at node 0"),
+                "{error}"
+            );
+            assert!(error.contains(field), "{error}");
+        }
+        for (field, invalid) in [("server_only", false), ("client_only", true)] {
+            let mut bad = data.clone();
+            bad["graphs"][0]["nodes"][0][field] = json!(invalid);
+            assert!(load(&bad).unwrap_err().to_string().contains("server-only"));
+        }
+
+        data["authored_classes"] =
+            json!([{"class": "authored.lock", "behavior": "button_lock_state"}]);
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["class"] = json!("authored.lock");
+        node["state_behavior"] = Value::Null;
+        node["server_only"] = json!(false);
+        node["fields"] = json!({"button": 1, "duration_frames": u32::MAX});
+        let graphs = load(&data).unwrap();
+        let lock = graphs.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(lock.class, "StateButtonLock");
+        assert_eq!(lock.button_lock(), Some((1, NonZeroU32::new(u32::MAX))));
+        assert!(lock.server_only && !lock.client_only);
+    }
+
+    #[test]
+    fn authored_movement_scale_validates_scope_factor_duration_and_alias() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let mut data = fixture();
+        data["graphs"][0]["states"][3] = Value::Null;
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state"] = json!(0);
+        node["server_only"] = json!(true);
+        node["state_behavior"] = json!("movement_scale");
+        node["fields"] = json!({"factor": 0});
+
+        let graphs = load(&data).unwrap();
+        let scale = graphs.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(scale.class, "StateMovementScale");
+        assert_eq!(scale.movement_scale(), Some((0.0, None)));
+        assert!(scale.is_state() && !scale.is_networked());
+
+        for fields in [
+            json!({}),
+            json!({"factor":-0.01}),
+            json!({"factor":1.01}),
+            json!({"factor":"0.5"}),
+            json!({"factor":true}),
+            json!({"factor":null}),
+            json!({"factor":0.5,"duration_frames":null}),
+            json!({"factor":0.5,"duration_frames":0}),
+            json!({"factor":0.5,"duration_frames":1.0}),
+            json!({"factor":0.5,"duration_frames":u64::from(u32::MAX) + 1}),
+        ] {
+            let mut bad = data.clone();
+            bad["graphs"][0]["nodes"][0]["fields"] = fields;
+            let error = load(&bad).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(
+                error
+                    .to_string()
+                    .contains("movement scale state in graph 42 at node 0"),
+                "{error}"
+            );
+        }
+        let mut bad = data.clone();
+        bad["graphs"][0]["nodes"][0]["server_only"] = json!(false);
+        assert!(load(&bad).unwrap_err().to_string().contains("server-only"));
+
+        data["authored_classes"] =
+            json!([{"class": "authored.scale", "behavior": "movement_scale_state"}]);
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["class"] = json!("authored.scale");
+        node["state_behavior"] = Value::Null;
+        node["server_only"] = json!(false);
+        node["fields"] = json!({"factor": 1.0, "duration_frames": u32::MAX});
+        let graphs = load(&data).unwrap();
+        let scale = graphs.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(scale.class, "StateMovementScale");
+        assert_eq!(
+            scale.movement_scale(),
+            Some((1.0, NonZeroU32::new(u32::MAX)))
+        );
+        assert!(scale.server_only && !scale.client_only);
+    }
+
+    #[test]
+    fn authored_facing_claim_requires_direction_and_explicit_priority() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let mut data = fixture();
+        data["graphs"][0]["states"][3] = Value::Null;
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state"] = json!(0);
+        node["server_only"] = json!(true);
+        node["state_behavior"] = json!("facing_claim");
+        node["fields"] = json!({
+            "direction":{"$":"EntityDirection","entity":null},
+            "priority":{"level":-3,"above_equals":true}
+        });
+        let graphs = load(&data).unwrap();
+        let claim = graphs.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(claim.class, "StateFacingClaim");
+        assert!(claim.declares_facing_claim() && claim.is_state() && !claim.is_networked());
+        assert_eq!(
+            claim.facing_claim_priority(),
+            Some(StackPriority {
+                level: -3,
+                above_equals: true
+            })
+        );
+
+        for (field, value) in [
+            ("direction", Value::Null),
+            ("priority", Value::Null),
+            ("priority", json!({"level":128,"above_equals":true})),
+            ("priority", json!({"level":-129,"above_equals":true})),
+            ("priority", json!({"level":1.5,"above_equals":true})),
+            ("priority", json!({"level":1,"above_equals":1})),
+            ("priority", json!({"level":1})),
+            (
+                "priority",
+                json!({"level":1,"above_equals":true,"extra":false}),
+            ),
+            ("m_onAbortPlug", json!({"$":"Plug","links":[[0,false]]})),
+        ] {
+            let mut bad = data.clone();
+            bad["graphs"][0]["nodes"][0]["fields"][field] = value;
+            let error = load(&bad).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(
+                error
+                    .to_string()
+                    .contains("facing claim state in graph 42 at node 0")
+            );
+        }
+        for field in ["direction", "priority"] {
+            let mut bad = data.clone();
+            bad["graphs"][0]["nodes"][0]["fields"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert_eq!(load(&bad).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        }
+        let mut bad = data.clone();
+        bad["graphs"][0]["nodes"][0]["server_only"] = json!(false);
+        assert!(load(&bad).unwrap_err().to_string().contains("server-only"));
+
+        data["authored_classes"] =
+            json!([{"class":"authored.facing","behavior":"facing_claim_state"}]);
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["class"] = json!("authored.facing");
+        node["state_behavior"] = Value::Null;
+        node["server_only"] = json!(false);
+        let graphs = load(&data).unwrap();
+        let claim = graphs.graph(42).unwrap().state(0).unwrap();
+        assert!(claim.declares_facing_claim() && claim.server_only && !claim.client_only);
+        assert_eq!(claim.class, "StateFacingClaim");
+    }
+
+    #[test]
+    fn authored_stack_claim_validates_binding_and_keeps_null_as_a_value() {
+        use crate::script_expr::Scope;
+
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let mut data = fixture();
+        data["graphs"][0]["states"][3] = Value::Null;
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state"] = json!(0);
+        node["server_only"] = json!(true);
+        node["state_behavior"] = json!("stack_claim");
+        node["fields"] = json!({
+            "variable":{"scope":"entity","id":9},
+            "priority":{"level":-3,"above_equals":true},
+            "value":null,
+            "duration_frames":3,
+            "m_topSubgraphPlug":{"$":"Plug","links":[]},
+            "m_underSubgraphPlug":null
+        });
+        let graphs = load(&data).unwrap();
+        let claim = graphs.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(claim.class, "StateStackClaim");
+        assert!(claim.is_state() && !claim.is_networked());
+        assert_eq!(claim.stack_value(), Some(&Value::Null));
+        assert_eq!(
+            claim.stack_claim(),
+            Some((
+                Variable {
+                    scope: Scope::Entity,
+                    id: 9
+                },
+                StackPriority {
+                    level: -3,
+                    above_equals: true
+                },
+                NonZeroU32::new(3),
+            ))
+        );
+        for (field, bad_value) in [
+            ("variable", json!({"scope":"entity","id":0})),
+            ("priority", json!({"level":128,"above_equals":true})),
+            ("duration_frames", json!(0)),
+            ("m_topSubgraphPlug", json!({"$":"Plug","links":[[0,false]]})),
+        ] {
+            let mut bad = data.clone();
+            bad["graphs"][0]["nodes"][0]["fields"][field] = bad_value;
+            let error = load(&bad).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("stack claim state in graph 42 at node 0")
+            );
+        }
+        let mut missing = data.clone();
+        missing["graphs"][0]["nodes"][0]["fields"]
+            .as_object_mut()
+            .unwrap()
+            .remove("value");
+        assert_eq!(
+            load(&missing).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+
+        data["authored_classes"] =
+            json!([{"class":"authored.claim","behavior":"stack_claim_state"}]);
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["class"] = json!("authored.claim");
+        node["server_only"] = json!(false);
+        node["state_behavior"] = Value::Null;
+        node["fields"]["variable"]["scope"] = json!("instance");
+        let graphs = load(&data).unwrap();
+        let claim = graphs.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(claim.class, "StateStackClaim");
+        assert!(claim.server_only && !claim.client_only);
+        assert_eq!(claim.stack_claim().unwrap().0.scope, Scope::Instance);
+    }
+
+    #[test]
+    fn track_entities_state_validates_child_bindings_after_loading_all_graphs() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let rejects = |data: &Value, expected: &str| {
+            let error = load(data).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            let message = error.to_string();
+            assert!(message.contains("graph 42 at node 0"), "{message}");
+            assert!(message.contains(expected), "{message}");
+        };
+
+        let mut data = fixture();
+        let mut child = data["graphs"][0].clone();
+        child["index"] = json!(0);
+        data["graphs"][0]["states"][3] = Value::Null;
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state"] = json!(0);
+        node["server_only"] = json!(true);
+        node["state_behavior"] = json!("track_entities");
+        node["fields"] = json!({
+            "targets": {"$": "STUConfigVarDynamic", "m_identifier": 3, "m_60DB8F99": false},
+            "child_graph": 0,
+            "target_variable": u32::MAX,
+        });
+        rejects(&data, "references missing child_graph 0");
+        data["graphs"].as_array_mut().unwrap().push(child);
+
+        let graphs = load(&data).unwrap();
+        let node = graphs.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(node.class, "StateTrackEntities");
+        assert_eq!(node.target_child_binding(), Some((0, u32::MAX)));
+        assert!(node.is_state() && !node.is_networked());
+        assert!(!node.tracks_room_actor_identity());
+        assert_eq!(graphs.room_spatial_needs(), RoomSpatialNeeds::None);
+
+        let mut room_actor = data.clone();
+        room_actor["graphs"][0]["nodes"][0]["fields"]["identity"] = json!("room_actor");
+        let graphs = load(&room_actor).unwrap();
+        assert!(
+            graphs
+                .graph(42)
+                .unwrap()
+                .state(0)
+                .unwrap()
+                .tracks_room_actor_identity()
+        );
+        assert_eq!(graphs.room_spatial_needs(), RoomSpatialNeeds::Queries);
+
+        for (field, invalid) in [
+            ("targets", Value::Null),
+            ("child_graph", json!(-1)),
+            ("child_graph", json!(0.0)),
+            ("child_graph", json!(u64::from(u32::MAX) + 1)),
+            ("target_variable", json!(0)),
+            ("target_variable", json!(true)),
+            ("target_variable", json!(u64::from(u32::MAX) + 1)),
+            ("identity", Value::Null),
+            ("identity", json!(true)),
+            ("identity", json!("unknown")),
+        ] {
+            let mut bad = data.clone();
+            bad["graphs"][0]["nodes"][0]["fields"][field] = invalid;
+            rejects(&bad, field);
+        }
+        let mut bad_scope = data.clone();
+        bad_scope["graphs"][0]["nodes"][0]["client_only"] = json!(true);
+        rejects(
+            &bad_scope,
+            "server-only and occupy its state slot exactly once",
+        );
+
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state_behavior"] = Value::Null;
+        node["class"] = json!("StateTrackEntities");
+        let graphs = load(&data).unwrap();
+        assert!(
+            graphs
+                .graph(42)
+                .unwrap()
+                .state(0)
+                .unwrap()
+                .target_child_binding()
+                .is_none()
+        );
+
+        data["authored_classes"] =
+            json!([{"class": "authored.members", "behavior": "track_entities_state"}]);
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["class"] = json!("authored.members");
+        node["server_only"] = json!(false);
+        let graphs = load(&data).unwrap();
+        let node = graphs.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(node.class, "StateTrackEntities");
+        assert_eq!(node.target_child_binding(), Some((0, u32::MAX)));
+        assert!(node.server_only && !node.client_only);
     }
 
     #[test]

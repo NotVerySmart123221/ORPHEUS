@@ -1,6 +1,13 @@
 use super::*;
 use crate::{game_content::GameMap, game_instance::RETAIL_QUANTA, scene_assets::SceneAssets};
 
+const SCRIPT_RAY_SITE: crate::script_init::Site = crate::script_init::Site {
+    entity: 91,
+    instance: 2,
+    graph: 93,
+    node: Some(4),
+};
+
 pub(super) fn fixture_bots() -> Vec<Bot> {
     crate::game_bots::BotCatalog::from_json(
         r#"{
@@ -13,6 +20,1258 @@ pub(super) fn fixture_bots() -> Vec<Bot> {
     )
     .unwrap()
     .make(3, |_| crate::game_bots::BotWalk::default())
+}
+
+#[test]
+fn combat_target_admission_applies_team_and_liveness_rules_to_bots() {
+    let mut bot = fixture_bots().remove(0);
+    let shooter = bot.entity + 1;
+    let allied_team = bot.spawn.team;
+    let hostile_team = 0;
+    assert_ne!(allied_team, hostile_team);
+
+    assert!(eligible_bot(&bot, shooter, hostile_team, false));
+    assert!(!eligible_bot(&bot, shooter, allied_team, false));
+    assert!(eligible_bot(&bot, shooter, allied_team, true));
+    assert!(!eligible_bot(&bot, bot.entity, allied_team, true));
+
+    bot.dead = true;
+    assert!(!eligible_bot(&bot, shooter, hostile_team, false));
+    assert!(!eligible_bot(&bot, shooter, hostile_team, true));
+}
+
+#[test]
+fn spatial_candidates_capture_living_room_bodies_once_per_frame() {
+    check_spatial_candidates_frame(false);
+    check_spatial_candidates_frame(true);
+}
+
+fn check_spatial_candidates_frame(free_for_all: bool) {
+    use crate::{contact_world::ContactWorld, mover::Mover, mover_settings::MoverSettings};
+
+    let bots = fixture_bots();
+    let moving_bot = bots[0].entity;
+    let initial_bot_position = bots[0].position;
+    let dying_bot = bots[1].entity;
+    let mut room = RoomSimulation::new(bots).unwrap();
+    let frame = FIXTURE_CONTEXT.tick;
+    let player = BodyId {
+        entity: 9,
+        generation: 1,
+    };
+    let player_position = [4.0, 0.0, 2.0];
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        player_position,
+        0,
+        0x08,
+    )
+    .unwrap();
+    room.spawn_player_body(PlayerBodyState::new(
+        player, 8, 0, 0, 1, mover, None, frame, None,
+    ))
+    .unwrap();
+
+    room.prepare_spatial_frame(frame).unwrap();
+    assert!(room.spatial_frame.is_none());
+
+    room.enable_spatial_queries(
+        free_for_all,
+        Arc::new(fixture_ground()),
+        crate::script_graph::RoomSpatialNeeds::EntityTags,
+    );
+    room.prepare_spatial_frame(frame).unwrap();
+    let (captured, initial) = room.spatial_frame.as_ref().unwrap();
+    assert_eq!(*captured, frame);
+    assert_eq!(initial.candidates().len(), 3);
+    assert!(!RoomScriptRequests::default().queue_health(initial, player.entity, -1.0));
+    let bot_team = (!free_for_all).then_some(1);
+    assert!(
+        initial
+            .candidates()
+            .iter()
+            .any(|row| row.entity == dying_bot && row.team == bot_team)
+    );
+    let initial_bot = SpatialCandidate {
+        entity: moving_bot,
+        position: initial_bot_position,
+        team: bot_team,
+    };
+    assert!(initial.candidates().contains(&initial_bot));
+    assert!(initial.candidates().contains(&SpatialCandidate {
+        entity: player.entity,
+        position: player_position,
+        team: (!free_for_all).then_some(0),
+    }));
+    let initial_facts = initial.entity_facts().unwrap();
+    assert_eq!(initial_facts.len(), 3);
+    assert_eq!(initial_facts[&moving_bot].team, bot_team);
+    assert!(initial_facts[&dying_bot].alive);
+    assert_eq!(
+        initial_facts[&player.entity].team,
+        (!free_for_all).then_some(0)
+    );
+    let initial = Arc::clone(initial);
+
+    let new_position = [10.0, 0.0, -2.0];
+    room.body_mut(moving_bot).unwrap().position = new_position;
+    room.apply_bot_impact(
+        7,
+        frame,
+        FIXTURE_CONTEXT,
+        &fixture_impact(dying_bot, 10000.0),
+    )
+    .unwrap()
+    .unwrap();
+    assert!(room.retire_player_body(player));
+    room.prepare_spatial_frame(frame).unwrap();
+    let (_, same_frame) = room.spatial_frame.as_ref().unwrap();
+    assert!(Arc::ptr_eq(same_frame, &initial));
+
+    room.prepare_spatial_frame(frame + 1).unwrap();
+    let (captured, next) = room.spatial_frame.as_ref().unwrap();
+    assert_eq!(*captured, frame + 1);
+    assert_eq!(
+        next.candidates(),
+        &[SpatialCandidate {
+            entity: moving_bot,
+            position: new_position,
+            team: bot_team,
+        }]
+    );
+    assert!(initial.candidates().contains(&initial_bot));
+    let next_facts = next.entity_facts().unwrap();
+    assert!(!next_facts[&dying_bot].alive);
+    assert_eq!(next_facts[&dying_bot].team, bot_team);
+    assert!(!next_facts.contains_key(&player.entity));
+    assert!(initial.entity_facts().unwrap()[&dying_bot].alive);
+}
+
+#[test]
+fn spatial_actor_poses_follow_room_frames_and_body_generations() {
+    use crate::{contact_world::ContactWorld, mover::Mover, mover_settings::MoverSettings};
+
+    type Pose = (Vec3, [i32; 2]);
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        frame: u32,
+        bot_poses: [Pose; 2],
+        player_poses: [Pose; 2],
+        damage: f64,
+    }
+
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-room-actor-pose-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(fixture["schema_version"], 1);
+    assert_eq!(fixture["case_id"], "script-room-actor-pose.synthetic.v1");
+    assert_eq!(fixture["evidence"], "synthetic-rust");
+    let Input {
+        frame,
+        bot_poses,
+        player_poses,
+        damage,
+    } = serde_json::from_value(fixture["input"].clone()).unwrap();
+    let player_eyes: [Vec3; 2] =
+        serde_json::from_value(fixture["expected"]["player_eye_positions"].clone()).unwrap();
+
+    let bot = fixture_bots().remove(0);
+    let bot_wire = bot.entity;
+    let mut room = RoomSimulation::new(vec![bot]).unwrap();
+    let move_bot = |room: &mut RoomSimulation, (position, angles): Pose, frame| {
+        let bot = room.body_mut(bot_wire).unwrap();
+        bot.position = position;
+        bot.apply_encounter_aim(angles, frame);
+    };
+    let body = BodyId {
+        entity: 71,
+        generation: 1,
+    };
+    let contact = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+    let spawn = |room: &mut RoomSimulation, id, (position, [yaw, _]): Pose| {
+        let mover = Mover::new(
+            MoverSettings::default(),
+            Arc::clone(&contact),
+            position,
+            yaw,
+            0x08,
+        )
+        .unwrap();
+        room.spawn_player_body(PlayerBodyState::new(
+            id, 70, 0, 0, 1, mover, None, frame, None,
+        ))
+        .unwrap();
+    };
+
+    move_bot(&mut room, bot_poses[0], frame);
+    spawn(&mut room, body, player_poses[0]);
+    room.enable_spatial_queries(
+        false,
+        Arc::new(fixture_ground()),
+        RoomSpatialNeeds::EntityFacts,
+    );
+    room.prepare_spatial_frame(frame).unwrap();
+    let initial = Arc::clone(&room.spatial_frame.as_ref().unwrap().1);
+    assert_eq!(initial.actor_pose(bot_wire), Some(bot_poses[0]));
+    assert_eq!(initial.actor_eye_position(bot_wire), None);
+    assert_eq!(initial.actor_pose(body.entity), Some(player_poses[0]));
+    assert_eq!(
+        initial.actor_eye_position(body.entity),
+        Some(player_eyes[0])
+    );
+    let old_player = initial.script_targets[&body.entity].entity;
+
+    move_bot(&mut room, bot_poses[1], frame);
+    let replacement = BodyId {
+        generation: 2,
+        ..body
+    };
+    spawn(&mut room, replacement, player_poses[1]);
+    room.prepare_spatial_frame(frame).unwrap();
+    let same_frame = &room.spatial_frame.as_ref().unwrap().1;
+    assert!(Arc::ptr_eq(&initial, same_frame));
+    assert_eq!(same_frame.actor_pose(bot_wire), Some(bot_poses[0]));
+    assert_eq!(same_frame.actor_pose(body.entity), Some(player_poses[0]));
+    assert_eq!(
+        same_frame.actor_eye_position(body.entity),
+        Some(player_eyes[0])
+    );
+
+    room.prepare_spatial_frame(frame + 1).unwrap();
+    let next = &room.spatial_frame.as_ref().unwrap().1;
+    assert_eq!(next.actor_pose(bot_wire), Some(bot_poses[1]));
+    assert_eq!(next.actor_pose(body.entity), Some(player_poses[1]));
+    assert_eq!(next.actor_eye_position(body.entity), Some(player_eyes[1]));
+    let new_player = next.script_targets[&body.entity].entity;
+    assert_ne!(new_player, old_player);
+    assert_eq!(new_player, room.players_by_wire[&body.entity]);
+
+    let death = Death {
+        time: 0.0,
+        frame: frame + 1,
+        killer: 0,
+    };
+    let state = room.state_mut(bot_wire).unwrap().unwrap();
+    assert!(state.vitals.damage(damage, death).killed);
+    assert!(room.retire_player_body(replacement));
+    room.prepare_spatial_frame(frame + 2).unwrap();
+    let terminal = &room.spatial_frame.as_ref().unwrap().1;
+    assert_eq!(terminal.actor_pose(bot_wire), None);
+    assert_eq!(terminal.actor_pose(body.entity), None);
+    assert_eq!(terminal.actor_eye_position(body.entity), None);
+    assert!(!terminal.entity_facts().unwrap()[&bot_wire].alive);
+}
+
+#[test]
+fn owner_startup_spatial_frame_excludes_the_frozen_body_on_each_replacement() {
+    use crate::{
+        contact_world::ContactWorld,
+        game_replication::{BodyStep, OwnerBodyRuntime},
+        mover::Mover,
+        mover_settings::MoverSettings,
+        script_init::Snapshot,
+        script_snapshot_wire::SnapshotEncoder,
+        vitals::Vitals,
+    };
+    use std::{io, sync::Mutex};
+
+    struct FrameProbe {
+        view: Arc<Mutex<Option<Arc<RoomSpatialFrame>>>>,
+        vitals: Option<Vitals>,
+    }
+    impl OwnerBodyRuntime for FrameProbe {
+        fn set_spatial_frame(&mut self, frame: Arc<RoomSpatialFrame>) {
+            *self.view.lock().unwrap() = Some(frame);
+        }
+        fn vitals(&self) -> Option<&Vitals> {
+            self.vitals.as_ref()
+        }
+        fn take_vitals(&mut self) -> Option<Vitals> {
+            self.vitals.take()
+        }
+        fn snapshot(&self) -> Option<&Snapshot> {
+            None
+        }
+        fn encoder(&self) -> SnapshotEncoder<'_> {
+            panic!("spatial frame probe has no encoder")
+        }
+        fn advance(
+            &mut self,
+            _: crate::commands::Command,
+            _: &Mover,
+            _: BodyStep,
+        ) -> io::Result<()> {
+            Ok(())
+        }
+        fn frame_ms(&self) -> u32 {
+            16
+        }
+    }
+
+    type Pose = (Vec3, [i32; 2]);
+    #[derive(serde::Deserialize)]
+    struct Owners {
+        owner: u32,
+        body_wires: [u32; 3],
+        other_owner: u32,
+        other_body: u32,
+        dead_owner: u32,
+        dead_body: u32,
+    }
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-room-actor-pose-v1.json"
+    ))
+    .unwrap();
+    let input = &fixture["input"];
+    let owners: Owners = serde_json::from_value(input["owner_replacement"].clone()).unwrap();
+    let poses: [Pose; 2] = serde_json::from_value(input["player_poses"].clone()).unwrap();
+    let eyes: [Vec3; 2] =
+        serde_json::from_value(fixture["expected"]["player_eye_positions"].clone()).unwrap();
+    let frame = u32::try_from(input["frame"].as_u64().unwrap()).unwrap();
+    let damage = input["damage"].as_f64().unwrap();
+    let contact = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+    let mover = |(position, [yaw, _]): Pose| {
+        Mover::new(
+            MoverSettings::default(),
+            Arc::clone(&contact),
+            position,
+            yaw,
+            0x08,
+        )
+        .unwrap()
+    };
+    let state = |id, owner, pose, runtime| {
+        PlayerBodyState::new(id, owner, 0, 0, 1, mover(pose), runtime, frame, None)
+    };
+    let body = |entity, generation| BodyId { entity, generation };
+    let first = body(owners.body_wires[0], 1);
+    let other = body(owners.other_body, 1);
+    let dead = body(owners.dead_body, 1);
+
+    for needs in [RoomSpatialNeeds::Queries, RoomSpatialNeeds::EntityFacts] {
+        let mut room = RoomSimulation::new(Vec::new()).unwrap();
+        room.enable_spatial_queries(false, Arc::new(fixture_ground()), needs);
+        room.spawn_player_body(state(first, owners.owner, poses[0], None))
+            .unwrap();
+        room.spawn_player_body(state(other, owners.other_owner, poses[0], None))
+            .unwrap();
+        let mut vitals = Vitals::new(damage, 0.0, 0.0);
+        assert!(
+            vitals
+                .damage(
+                    damage,
+                    Death {
+                        time: 0.0,
+                        frame,
+                        killer: 0
+                    }
+                )
+                .killed
+        );
+        let dead_probe = FrameProbe {
+            view: Arc::default(),
+            vitals: Some(vitals),
+        };
+        room.spawn_player_body(state(
+            dead,
+            owners.dead_owner,
+            poses[0],
+            Some(Box::new(dead_probe)),
+        ))
+        .unwrap();
+
+        let detached = room.capture_spatial_frame(frame).unwrap().unwrap();
+        assert_eq!(detached.actor_pose(first.entity), Some(poses[0]));
+        assert_eq!(detached.actor_eye_position(first.entity), Some(eyes[0]));
+        assert_eq!(detached.actor_eye_position(dead.entity), None);
+        assert!(room.owner_startup_spatial_frame(owners.owner).is_none());
+        room.prepare_spatial_frame(frame).unwrap();
+        let frozen = Arc::clone(&room.spatial_frame.as_ref().unwrap().1);
+        room.player_body_mut(other).unwrap().mover = mover(poses[1]);
+        let current = room.capture_spatial_frame(frame).unwrap().unwrap();
+        assert_eq!(current.actor_pose(other.entity), Some(poses[1]));
+        assert_eq!(current.actor_eye_position(other.entity), Some(eyes[1]));
+
+        for (generation, &wire) in (2..).zip(&owners.body_wires[1..]) {
+            let startup = room.owner_startup_spatial_frame(owners.owner).unwrap();
+            let received = Arc::new(Mutex::new(None));
+            let probe = FrameProbe {
+                view: Arc::clone(&received),
+                vitals: None,
+            };
+            room.spawn_player_body(state(
+                body(wire, generation),
+                owners.owner,
+                poses[1],
+                Some(Box::new(probe)),
+            ))
+            .unwrap();
+            let installed = received.lock().unwrap();
+            for view in [&startup, installed.as_ref().unwrap()] {
+                assert_eq!(view.candidates(), &frozen.candidates()[1..]);
+                assert_eq!(view.actor_pose(other.entity), Some(poses[0]));
+                assert_eq!(view.actor_eye_position(other.entity), Some(eyes[0]));
+                assert!(!view.script_targets.contains_key(&first.entity));
+                assert_eq!(view.actor_eye_position(first.entity), None);
+                assert_eq!(view.actor_pose(wire), None);
+                assert_eq!(view.actor_eye_position(wire), None);
+                assert!(Arc::ptr_eq(&view.ground, &frozen.ground));
+                if needs == RoomSpatialNeeds::EntityFacts {
+                    let facts = view.entity_facts().unwrap();
+                    assert!(!facts.contains_key(&first.entity));
+                    assert!(!facts[&dead.entity].alive);
+                } else {
+                    assert!(view.entity_facts().is_none());
+                }
+            }
+        }
+        let dead_startup = room.owner_startup_spatial_frame(owners.dead_owner).unwrap();
+        assert_eq!(dead_startup.candidates(), frozen.candidates());
+        if let Some(facts) = dead_startup.entity_facts() {
+            assert!(!facts.contains_key(&dead.entity));
+        }
+        assert!(Arc::ptr_eq(
+            &room.spatial_frame.as_ref().unwrap().1,
+            &frozen
+        ));
+        assert_eq!(frozen.actor_pose(first.entity), Some(poses[0]));
+        assert_eq!(frozen.actor_eye_position(first.entity), Some(eyes[0]));
+    }
+}
+
+#[test]
+fn spatial_candidates_exclude_vitals_death_before_bot_reconciliation() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/room-spatial-liveness-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(fixture["schema_version"], 1);
+    assert_eq!(fixture["evidence"], "synthetic-rust");
+    let frame = u32::try_from(fixture["input"]["frame"].as_u64().unwrap()).unwrap();
+    let damage = fixture["input"]["damage"].as_f64().unwrap();
+    let expected = &fixture["expected"];
+
+    let bot = fixture_bots().remove(0);
+    let wire = bot.entity;
+    let mut room = RoomSimulation::new(vec![bot]).unwrap();
+    room.enable_spatial_queries(
+        false,
+        Arc::new(fixture_ground()),
+        RoomSpatialNeeds::EntityFacts,
+    );
+    room.prepare_spatial_frame(frame).unwrap();
+    let initial = Arc::clone(&room.spatial_frame.as_ref().unwrap().1);
+    assert_eq!(initial.candidates()[0].entity, wire);
+    assert!(initial.entity_facts().unwrap()[&wire].alive);
+
+    let state = room.state_mut(wire).unwrap().unwrap();
+    let death = Death {
+        time: 0.0,
+        frame,
+        killer: 0,
+    };
+    assert!(state.vitals.damage(damage, death).killed);
+    assert!(!state.bot.dead);
+
+    room.prepare_spatial_frame(frame).unwrap();
+    assert!(Arc::ptr_eq(
+        &initial,
+        &room.spatial_frame.as_ref().unwrap().1
+    ));
+
+    room.prepare_spatial_frame(frame + 1).unwrap();
+    let next = &room.spatial_frame.as_ref().unwrap().1;
+    assert_eq!(
+        next.entity_facts().unwrap()[&wire].alive,
+        expected["next_frame_alive"].as_bool().unwrap()
+    );
+    assert_eq!(
+        RoomScriptRequests::default().queue_health(next, wire, -1.0),
+        expected["next_frame_health_target"].as_bool().unwrap()
+    );
+    assert_eq!(
+        next.candidates().len() as u64,
+        expected["next_frame_candidates"].as_u64().unwrap()
+    );
+}
+
+#[test]
+fn spatial_visibility_blocks_only_hits_before_the_target() {
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    room.enable_spatial_queries(
+        false,
+        Arc::new(fixture_ground()),
+        crate::script_graph::RoomSpatialNeeds::Queries,
+    );
+    room.prepare_spatial_frame(1).unwrap();
+    let (_, spatial) = room.spatial_frame.as_ref().unwrap();
+    assert!(spatial.entity_facts().is_none());
+    let origin = [-2.0, 0.5, 0.25];
+
+    assert_eq!(spatial.line_clear(origin, [0.0, 0.5, 0.25]), Some(false));
+    assert_eq!(spatial.line_clear(origin, [-1.0, 0.5, 0.25]), Some(true));
+    assert_eq!(spatial.line_clear(origin, [-1.5, 0.5, 0.25]), Some(true));
+    assert_eq!(spatial.line_clear(origin, origin), Some(true));
+    assert_eq!(spatial.line_clear(origin, [f64::NAN, 0.0, 0.0]), None);
+    assert_eq!(
+        spatial.line_clear([0.0; 3], [f64::from_bits(1), 0.0, 0.0]),
+        Some(true)
+    );
+}
+
+#[test]
+fn spatial_rays_return_the_first_static_hit_and_preserve_query_availability() {
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    room.enable_spatial_queries(
+        false,
+        Arc::new(fixture_ground()),
+        crate::script_graph::RoomSpatialNeeds::Queries,
+    );
+    let spatial = room.capture_spatial_frame(1).unwrap().unwrap();
+    let origin = [-2.0, 0.5, 0.25];
+    let direction = [1.0, 0.0, 0.0];
+    let expected = crate::script_expr::SpatialRayHit {
+        distance: 1.0,
+        point: [-1.0, 0.5, 0.25],
+        normal: [-1.0, 0.0, 0.0],
+    };
+    assert_eq!(
+        spatial.ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 1.0),
+        Some(Some(expected))
+    );
+    assert_eq!(
+        spatial.ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 0.5),
+        Some(None)
+    );
+    assert_eq!(
+        spatial.ray_cast(SCRIPT_RAY_SITE, 17, origin, [-1.0, 0.0, 0.0], 2.0),
+        Some(None)
+    );
+    assert_eq!(
+        spatial.ray_cast(SCRIPT_RAY_SITE, 17, [f64::MAX, 0.0, 0.0], direction, 1.0),
+        None
+    );
+    assert_eq!(
+        spatial.ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, f64::MAX),
+        None
+    );
+    assert_eq!(
+        spatial.ray_cast(SCRIPT_RAY_SITE, 17, [0.0; 3], [0.0, 0.0, 1.0], 1_000_000.0),
+        None
+    );
+}
+
+#[test]
+fn actor_rays_sample_capsules_once_and_respect_occlusion_and_replacement() {
+    use crate::{
+        collision_index::{SceneTriangle, TriangleIndex},
+        contact_world::ContactWorld,
+        mover::Mover,
+        mover_settings::{MoverCatalog, MoverSettings},
+        script_expr::SpatialActorRayHit,
+    };
+
+    let mut bots = fixture_bots();
+    let bot_ids = [bots[0].entity, bots[1].entity];
+    for bot in &mut bots {
+        bot.position = [-2.0, 0.0, 0.25];
+    }
+    let mut room = RoomSimulation::new(bots).unwrap();
+    room.enable_spatial_queries(false, Arc::new(fixture_ground()), RoomSpatialNeeds::Queries);
+    let origin = [-3.0, 0.5, 0.25];
+    let direction = [1.0, 0.0, 0.0];
+    let targets = [7, bot_ids[1], bot_ids[0]];
+    let missing = room.capture_spatial_frame(1).unwrap().unwrap();
+    assert!(missing.actor_capsules.is_none());
+    assert_eq!(
+        missing.actor_ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 4.0, &[]),
+        None
+    );
+
+    let movers = Arc::new(
+        MoverCatalog::from_json(r#"{"0x02":{"stand_height":1,"stand_radius":0.25}}"#).unwrap(),
+    );
+    room.enable_spatial_actor_rays(movers);
+    let contacts = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+    let player = |generation, position| {
+        let mover = Mover::new(
+            MoverSettings {
+                stand_height: 1.0,
+                stand_radius: 0.25,
+                crouch_height: 0.5,
+                crouch_radius: 0.125,
+                ..MoverSettings::default()
+            },
+            Arc::clone(&contacts),
+            position,
+            0,
+            MOVER_CATEGORY,
+        )
+        .unwrap();
+        PlayerBodyState::new(
+            BodyId {
+                entity: 7,
+                generation,
+            },
+            8,
+            0,
+            0,
+            1,
+            mover,
+            None,
+            1,
+            None,
+        )
+    };
+    room.spawn_player_body(player(1, [-2.0, 0.0, 0.25]))
+        .unwrap();
+    room.prepare_spatial_frame(1).unwrap();
+    let first = Arc::clone(&room.spatial_frame.as_ref().unwrap().1);
+    let capsules = first.actor_capsules.as_ref().unwrap();
+    let original_identity = first.actor_identity(7).unwrap();
+    assert_eq!(original_identity, first.script_targets[&7].entity.to_bits());
+    assert_eq!(first.actor_identity(99), None);
+    assert_eq!(capsules.len(), 3);
+    assert_eq!(capsules[&7].radius, 0.25);
+    assert_eq!(capsules[&bot_ids[0]].height, 1.0);
+    assert_eq!(
+        first.actor_ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 0.75, &targets),
+        Some(Some(SpatialActorRayHit {
+            entity: 7,
+            distance: 0.75,
+            normal: [-1.0, 0.0, 0.0],
+        }))
+    );
+    assert_eq!(
+        first.actor_ray_cast(
+            SCRIPT_RAY_SITE,
+            17,
+            origin,
+            direction,
+            4.0,
+            &[bot_ids[1], bot_ids[0]]
+        ),
+        Some(Some(SpatialActorRayHit {
+            entity: bot_ids[0].min(bot_ids[1]),
+            distance: 0.75,
+            normal: [-1.0, 0.0, 0.0],
+        }))
+    );
+    assert_eq!(
+        first.actor_ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 0.5, &targets),
+        Some(None)
+    );
+    assert_eq!(
+        first.actor_ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 4.0, &[]),
+        Some(None)
+    );
+    assert_eq!(
+        first.actor_ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 4.0, &[99]),
+        None
+    );
+    assert_eq!(
+        first.actor_ray_cast(
+            SCRIPT_RAY_SITE,
+            17,
+            [-2.0, 2.0, 0.25],
+            [0.0, -1.0, 0.0],
+            1.0,
+            &targets
+        ),
+        Some(Some(SpatialActorRayHit {
+            entity: 7,
+            distance: 1.0,
+            normal: [0.0, 1.0, 0.0],
+        }))
+    );
+    let mut incomplete = first.as_ref().clone();
+    incomplete
+        .actor_capsules
+        .as_mut()
+        .unwrap()
+        .remove(&bot_ids[0]);
+    assert_eq!(
+        incomplete.actor_ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 4.0, &[bot_ids[0]]),
+        None
+    );
+
+    room.body_mut(bot_ids[0]).unwrap().position = [-0.5, 0.0, 0.25];
+    room.body_mut(bot_ids[1]).unwrap().position = [-0.75, 0.0, 0.25];
+    let old_entity = first.script_targets[&7].entity;
+    for generation in [2, 3] {
+        room.spawn_player_body(player(generation, [5.0, 0.0, 0.25]))
+            .unwrap();
+        let replacement = room.owner_startup_spatial_frame(8).unwrap();
+        assert_eq!(first.actor_identity(7), Some(original_identity));
+        assert_eq!(replacement.actor_identity(7), None);
+        assert_eq!(
+            replacement.actor_identity(bot_ids[0]),
+            first.actor_identity(bot_ids[0])
+        );
+        assert!(
+            !replacement
+                .actor_capsules
+                .as_ref()
+                .unwrap()
+                .contains_key(&7)
+        );
+        assert_eq!(
+            replacement.actor_ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 4.0, &[7]),
+            None
+        );
+        assert_eq!(
+            replacement.actor_capsules.as_ref().unwrap()[&bot_ids[0]],
+            capsules[&bot_ids[0]]
+        );
+    }
+    room.prepare_spatial_frame(1).unwrap();
+    assert!(Arc::ptr_eq(&first, &room.spatial_frame.as_ref().unwrap().1));
+    assert_eq!(
+        first.actor_ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 4.0, &[7]),
+        Some(Some(SpatialActorRayHit {
+            entity: 7,
+            distance: 0.75,
+            normal: [-1.0, 0.0, 0.0],
+        }))
+    );
+    let standing_ground = TriangleIndex::new([SceneTriangle {
+        vertices: [[3.0, 0.0, -2.0], [5.0, 0.0, 3.0], [7.0, 0.0, -2.0]],
+        mask: MOVER_CATEGORY,
+        surface: 0,
+    }])
+    .unwrap();
+    let crouched = room
+        .player_body_mut(BodyId {
+            entity: 7,
+            generation: 3,
+        })
+        .unwrap();
+    crouched
+        .mover
+        .step(
+            &standing_ground,
+            Command {
+                frame: 2,
+                buttons: crate::commands::CROUCH,
+                ..Command::default()
+            },
+            0.016,
+            |_, _| {},
+        )
+        .unwrap();
+    assert!(crouched.mover.crouched());
+    room.prepare_spatial_frame(2).unwrap();
+    let next = &room.spatial_frame.as_ref().unwrap().1;
+    assert_eq!(next.actor_capsules.as_ref().unwrap()[&7].height, 0.5);
+    assert_eq!(next.actor_capsules.as_ref().unwrap()[&7].radius, 0.125);
+    assert_ne!(next.script_targets[&7].entity, old_entity);
+    assert_eq!(
+        next.actor_identity(7),
+        Some(next.script_targets[&7].entity.to_bits())
+    );
+    assert_ne!(next.actor_identity(7), Some(original_identity));
+    assert_eq!(first.actor_identity(7), Some(original_identity));
+    assert_eq!(
+        next.actor_ray_cast(
+            SCRIPT_RAY_SITE,
+            17,
+            origin,
+            direction,
+            4.0,
+            &[7, bot_ids[0]]
+        ),
+        Some(None)
+    );
+    assert_eq!(
+        next.actor_ray_cast(SCRIPT_RAY_SITE, 17, origin, direction, 4.0, &[bot_ids[1]]),
+        Some(Some(SpatialActorRayHit {
+            entity: bot_ids[1],
+            distance: 2.0,
+            normal: [-1.0, 0.0, 0.0],
+        }))
+    );
+}
+
+#[test]
+fn script_ray_diagnostics_preserve_capture_identity_and_distinguish_query_outcomes() {
+    use crate::{game_debug::DebugScriptRay, mover_settings::MoverCatalog};
+
+    let mut bots = fixture_bots();
+    let visible = bots[0].entity;
+    let hidden = bots[1].entity;
+    bots[0].position = [-2.0, 0.0, 0.25];
+    bots[1].position = [0.0, 0.0, 0.25];
+    let mut room = RoomSimulation::new(bots).unwrap();
+    room.enable_spatial_queries(false, Arc::new(fixture_ground()), RoomSpatialNeeds::Queries);
+    let origin = [-3.0, 0.5, 0.25];
+    let direction = [1.0, 0.0, 0.0];
+    let missing = room.capture_spatial_frame(41).unwrap().unwrap();
+    assert_eq!(
+        missing.actor_ray_cast(SCRIPT_RAY_SITE, 42, origin, direction, 4.0, &[visible]),
+        None
+    );
+    room.enable_spatial_actor_rays(Arc::new(
+        MoverCatalog::from_json(r#"{"0x02":{"stand_height":1,"stand_radius":0.25}}"#).unwrap(),
+    ));
+    let spatial = room.capture_spatial_frame(41).unwrap().unwrap();
+    assert_eq!(
+        spatial
+            .ray_cast(SCRIPT_RAY_SITE, 43, origin, direction, 4.0)
+            .unwrap()
+            .unwrap()
+            .distance,
+        2.0
+    );
+    assert_eq!(
+        spatial
+            .actor_ray_cast(SCRIPT_RAY_SITE, 44, origin, direction, 4.0, &[visible])
+            .unwrap()
+            .unwrap()
+            .entity,
+        visible
+    );
+    assert_eq!(
+        spatial.actor_ray_cast(SCRIPT_RAY_SITE, 45, origin, direction, 4.0, &[hidden]),
+        Some(None)
+    );
+    // A wall alone does not establish that an unchecked actor was occluded.
+    assert_eq!(
+        spatial.actor_ray_cast(SCRIPT_RAY_SITE, 46, origin, direction, 4.0, &[]),
+        Some(None)
+    );
+    assert_eq!(
+        spatial.ray_cast(SCRIPT_RAY_SITE, 47, origin, [-1.0, 0.0, 0.0], 0.25),
+        Some(None)
+    );
+    let mut incomplete = spatial.as_ref().clone();
+    incomplete.actor_capsules.as_mut().unwrap().remove(&visible);
+    assert_eq!(
+        incomplete.actor_ray_cast(SCRIPT_RAY_SITE, 48, origin, direction, 4.0, &[visible]),
+        None
+    );
+
+    room.prepare_spatial_frame(49).unwrap();
+    // A retained frame shares the room history, but keeps its own capture tick.
+    spatial
+        .ray_cast(SCRIPT_RAY_SITE, 50, origin, direction, 4.0)
+        .unwrap()
+        .unwrap();
+    room.spatial_frame
+        .as_ref()
+        .unwrap()
+        .1
+        .ray_cast(SCRIPT_RAY_SITE, 51, origin, direction, 4.0)
+        .unwrap()
+        .unwrap();
+    let overlay = room.debug_physics().unwrap().unwrap();
+    assert!(!overlay.truncated.rays);
+    let expected = [
+        ("script_actor", "unavailable", 42, [1.0, 0.5, 0.25], None),
+        ("script_static", "world", 43, [-1.0, 0.5, 0.25], None),
+        (
+            "script_actor",
+            "actor",
+            44,
+            [-2.25, 0.5, 0.25],
+            Some(visible),
+        ),
+        ("script_actor", "world", 45, [-1.0, 0.5, 0.25], None),
+        ("script_actor", "none", 46, [1.0, 0.5, 0.25], None),
+        ("script_static", "none", 47, [-3.25, 0.5, 0.25], None),
+        ("script_actor", "unavailable", 48, [1.0, 0.5, 0.25], None),
+        ("script_static", "world", 50, [-1.0, 0.5, 0.25], None),
+        ("script_static", "world", 51, [-1.0, 0.5, 0.25], None),
+    ];
+    assert_eq!(overlay.rays.len(), expected.len());
+    for (index, (ray, (kind, hit, frame, end, target))) in
+        overlay.rays.iter().zip(expected).enumerate()
+    {
+        assert_eq!(ray.tick, if index == expected.len() - 1 { 49 } else { 41 });
+        assert_eq!(
+            (ray.source, ray.kind, ray.hit, ray.end, ray.target),
+            (SCRIPT_RAY_SITE.entity, kind, hit, end, target)
+        );
+        assert_eq!(ray.origin, origin);
+        assert!(!ray.critical);
+        assert_eq!(
+            ray.script,
+            Some(DebugScriptRay {
+                graph: SCRIPT_RAY_SITE.graph,
+                instance: SCRIPT_RAY_SITE.instance,
+                node: SCRIPT_RAY_SITE.node,
+                vm_frame: frame,
+            })
+        );
+    }
+    let encoded = serde_json::to_value(&overlay).unwrap();
+    assert_eq!(encoded["rays"][0]["script"]["vm_frame"], 42);
+    assert_eq!(encoded["rays"][0]["script"]["graph"], SCRIPT_RAY_SITE.graph);
+    assert_eq!(encoded["rays"][8]["tick"], 49);
+
+    // Invalid nonfinite coordinates cannot leak into a serialized debug segment.
+    assert_eq!(
+        spatial.ray_cast(SCRIPT_RAY_SITE, 52, [f64::NAN, 0.0, 0.0], direction, 4.0),
+        None
+    );
+    assert_eq!(
+        room.debug_physics().unwrap().unwrap().rays.len(),
+        expected.len()
+    );
+}
+
+#[test]
+fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() {
+    use crate::{
+        game_clock::TICK_PERIOD,
+        game_pools::HealthPools,
+        mover_settings::MoverCatalog,
+        npc_catalog::NpcDefinition,
+        script_codecs::CodecTable,
+        script_enemy::EnemySpawn,
+        script_graph::GraphStore,
+        script_init::{CreationKind, EntityCreation, RoomMessage},
+        script_wire::{Value, Variables},
+    };
+    use serde_json::json;
+
+    const HERO: u64 = 0x02e0_0000_0050_0101;
+    const BODY: u64 = 0x0400_0000_0050_0102;
+    const MESSAGE: u64 = 71;
+    const SENDER_SLOT: u32 = 7;
+    const PAYLOAD_SLOT: u32 = 8;
+    const PARAMETER: u32 = 9;
+    const HOST_DELTA_SLOT: u32 = 18;
+    const ADMITTED_SLOT: u32 = 19;
+    const CONTROL_SLOT: u32 = 20;
+    const EXCLUDED_TAG: &str = "0x0D60000000500114";
+
+    let entity_var = |id| json!({"$":"STUConfigVarDynamic","m_identifier":id,"m_60DB8F99":true});
+    let priority = json!({"level":3,"above_equals":false});
+    let variable = json!({"scope":"entity","id":CONTROL_SLOT});
+    let nodes = [
+        json!({
+            "pos":0,"uid":0,"rid":0,"remote":-1,"state":null,
+            "class":"STUStatescriptEntryGameMessage","server_only":true,"client_only":false,
+            "room_message_entry":true,"fields":{
+                "m_gameMessage":{"m_gameMessage":format!("0x{MESSAGE:016X}")},
+                "m_B60ABDA4":entity_var(SENDER_SLOT),
+                "m_params":[{"m_B5051BCE":format!("0x{PARAMETER:016X}"),
+                    "m_out_Var":entity_var(PAYLOAD_SLOT)}],
+                "m_outPlug":{"$":"Plug","links":[[4,"m_inPlug"]]}
+            }
+        }),
+        json!({
+            "pos":1,"uid":1,"rid":1,"remote":-1,"state":null,
+            "class":"EntryHostEvent","server_only":true,"client_only":false,
+            "host_event_entry":"health_applied","fields":{
+                "m_params":[{"m_B5051BCE":"0x0000000000000003",
+                    "m_out_Var":entity_var(HOST_DELTA_SLOT)}],
+                "m_outPlug":{"$":"Plug","links":[]}
+            }
+        }),
+        json!({
+            "pos":2,"uid":2,"rid":2,"remote":-1,"state":0,
+            "class":"authored.input_lock","server_only":true,"client_only":false,
+            "state_behavior":"button_lock","fields":{"button":1}
+        }),
+        json!({
+            "pos":3,"uid":3,"rid":3,"remote":-1,"state":1,
+            "class":"authored.speed_scale","server_only":true,"client_only":false,
+            "state_behavior":"movement_scale","fields":{"factor":0.5}
+        }),
+        json!({
+            "pos":4,"uid":4,"rid":4,"remote":-1,"state":null,
+            "class":"authored.sender_filter","server_only":true,"client_only":false,
+            "action_behavior":"branch","fields":{
+                "m_condition":{"$":"EntityMatches","entity":entity_var(SENDER_SLOT),
+                    "filter":{"alive":true,"tags":{"none":[EXCLUDED_TAG]}}},
+                "m_truePlug":{"$":"Plug","links":[[5,"m_inPlug"]]},
+                "m_falsePlug":{"$":"Plug","links":[]}
+            }
+        }),
+        json!({
+            "pos":5,"uid":5,"rid":5,"remote":-1,"state":null,
+            "class":"authored.priority_gate","server_only":true,"client_only":false,
+            "action_behavior":"branch","fields":{
+                "m_condition":{"$":"StackAllows","variable":variable,"priority":priority},
+                "m_truePlug":{"$":"Plug","links":[[6,"m_beginPlug"],[7,"m_inPlug"]]},
+                "m_falsePlug":{"$":"Plug","links":[]}
+            }
+        }),
+        json!({
+            "pos":6,"uid":6,"rid":6,"remote":-1,"state":2,
+            "class":"authored.control_claim","server_only":true,"client_only":false,
+            "state_behavior":"stack_claim","fields":{
+                "variable":variable,"priority":priority,"value":true,"duration_frames":2,
+                "m_topSubgraphPlug":{"$":"Plug","links":[[2,"m_beginPlug"],[3,"m_beginPlug"]],
+                    "m_FF3DAF1E":[0,1]}
+            }
+        }),
+        json!({
+            "pos":7,"uid":7,"rid":7,"remote":-1,"state":null,
+            "class":"STUStatescriptActionSetVar","server_only":true,"client_only":false,
+            "fields":{"m_value":entity_var(PAYLOAD_SLOT),"m_out_Var":entity_var(ADMITTED_SLOT)}
+        }),
+    ];
+    let bundle = json!({
+        "version":1,"bodies":{},"missing":[],
+        "graphs":[{
+            "index":123,"items":8,"states":[2,3,6],"entries":[0,1],"remote":[],"sync_vars":[],
+            "fields":{},"containers":{},"unknown_nodes":[],
+            "header":{"m_nodesBitCount":4,"m_statesBitCount":4,
+                "m_remoteSyncNodesBitCount":4,"m_syncVarsBitCount":4},
+            "nodes":nodes
+        }],
+        "junkenstein":{
+            "pairs":{"0x02E0000000500101":{"body":"0x0400000000500102",
+                "controller":"0x0400000000500103"}},
+            "entities":{
+                "0x0400000000500102":{"hero":"0x02E0000000500101","name":"Body",
+                    "manager":null,"weapons":[],"target_tags":[],"graphs":[{"graph":123,"m_75408640":0}]},
+                "0x0400000000500103":{"hero":null,"name":"Controller",
+                    "manager":null,"weapons":[],"graphs":[{"graph":123,"m_75408640":0}]}
+            }
+        }
+    });
+    let load = |bundle: &serde_json::Value| {
+        Arc::new(GraphStore::from_json(&serde_json::to_vec(bundle).unwrap()).unwrap())
+    };
+    let graphs = load(&bundle);
+    let mut tagged_bundle = bundle;
+    tagged_bundle["junkenstein"]["entities"]["0x0400000000500102"]["target_tags"] =
+        json!([EXCLUDED_TAG]);
+    let tagged_graphs = load(&tagged_bundle);
+    let codecs = Arc::new(CodecTable::from_json(r#"{"classes":{}}"#).unwrap());
+    let definition = NpcDefinition {
+        hero: HERO,
+        body: BODY,
+        name: "Message test".into(),
+        pools: HealthPools {
+            health: 100.0,
+            armour: 0.0,
+            shields: 0.0,
+        },
+    };
+    let request = EntityCreation {
+        position: [1.0, 2.0, 3.0],
+        kind: CreationKind::Hero {
+            hero: HERO,
+            team: 1,
+            yaw: 0.0,
+            flags: [Value::Bool(false), Value::Bool(false)],
+            controller: None,
+            skin: None,
+        },
+    };
+    let context = FIXTURE_CONTEXT;
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    let mut spawn = |graphs| {
+        room.create_enemy(EnemySpawn {
+            graphs,
+            codecs: Arc::clone(&codecs),
+            definition: &definition,
+            request: &request,
+            mode: 0,
+            mode_variables: Arc::new(Variables::new()),
+            tick: context.tick,
+            walk: crate::game_bots::BotWalk::default(),
+            gate: None,
+        })
+        .unwrap()
+    };
+    let sender = spawn(Arc::clone(&graphs));
+    let receiver = spawn(Arc::clone(&graphs));
+    let excluded_sender = spawn(tagged_graphs);
+    let ground = Arc::new(fixture_ground());
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, &ground, None);
+    let needs = graphs.room_spatial_needs();
+    assert_eq!(needs, crate::script_graph::RoomSpatialNeeds::EntityTags);
+    room.enable_spatial_queries(false, Arc::clone(&ground), needs);
+    room.prepare_spatial_frame(context.tick).unwrap();
+
+    let stage = |room: &RoomSimulation, payload| {
+        let frame = &room.spatial_frame.as_ref().unwrap().1;
+        let mut outbox = RoomScriptRequests::default();
+        let message = RoomMessage {
+            id: MESSAGE,
+            parameters: Variables::from([(PARAMETER, Value::Integer(payload))]),
+        };
+        assert!(!outbox.queue_message(frame, receiver + 1, message.clone()));
+        assert!(outbox.queue_message(frame, receiver, message));
+        outbox.take().pop().unwrap()
+    };
+    let send = |room: &mut RoomSimulation, source, payload, when, now| {
+        let envelope = stage(room, payload);
+        room.settle_script_request(envelope, source, when, now)
+            .unwrap();
+    };
+    let sender_body = room.sample_health_body(sender).unwrap();
+    let excluded_body = room.sample_health_body(excluded_sender).unwrap();
+    send(&mut room, sender_body, 17, context.tick, context.now);
+
+    let observed = |room: &RoomSimulation, wire, controller| {
+        let enemy = state(room, wire).unwrap().enemy.as_ref().unwrap();
+        assert_eq!(enemy.fault, None);
+        let component = if controller {
+            &enemy.scripts.controller
+        } else {
+            &enemy.scripts.body
+        };
+        let variables = &component.snapshot().unwrap().variables;
+        (
+            variables.get(&SENDER_SLOT).cloned(),
+            variables.get(&PAYLOAD_SLOT).cloned(),
+            variables.get(&ADMITTED_SLOT).cloned(),
+        )
+    };
+    let lock_active = |room: &RoomSimulation, wire, controller| {
+        let enemy = state(room, wire).unwrap().enemy.as_ref().unwrap();
+        let component = if controller {
+            &enemy.scripts.controller
+        } else {
+            &enemy.scripts.body
+        };
+        component.snapshot().unwrap().instances[&1]
+            .states
+            .get(&0)
+            .is_some_and(|state| state.active)
+    };
+    let speed_scale = |room: &RoomSimulation, wire, frame| {
+        state(room, wire)
+            .unwrap()
+            .enemy
+            .as_ref()
+            .unwrap()
+            .scripts
+            .movement_speed_scale(frame)
+    };
+    assert!(!lock_active(&room, receiver, false));
+    assert_eq!(observed(&room, receiver, false), (None, None, None));
+    assert_eq!(speed_scale(&room, receiver, context.tick), 1.0);
+    room.finish_tick(&queries, context.tick, context.now)
+        .unwrap();
+    assert!(!lock_active(&room, receiver, false));
+    assert_eq!(observed(&room, receiver, false), (None, None, None));
+    room.finish_tick(&queries, context.tick + 1, context.now + TICK_PERIOD)
+        .unwrap();
+    assert_eq!(
+        observed(&room, receiver, false),
+        (
+            Some(Value::Entity(sender)),
+            Some(Value::Integer(17)),
+            Some(Value::Integer(17))
+        )
+    );
+    assert_eq!(observed(&room, receiver, true), (None, None, None));
+    assert_eq!(observed(&room, sender, false), (None, None, None));
+    assert!(lock_active(&room, receiver, false));
+    assert!(!lock_active(&room, receiver, true));
+    assert!(!lock_active(&room, sender, false));
+    assert_eq!(speed_scale(&room, receiver, context.tick + 1), 1.0);
+    assert_eq!(speed_scale(&room, receiver, context.tick + 2), 0.5);
+    assert_eq!(speed_scale(&room, sender, context.tick + 2), 1.0);
+
+    let host_delta = |room: &RoomSimulation, wire| {
+        let enemy = state(room, wire).unwrap().enemy.as_ref().unwrap();
+        let delta = |component: &crate::script_init::Component| {
+            component
+                .snapshot()
+                .unwrap()
+                .variables
+                .get(&HOST_DELTA_SLOT)
+                .cloned()
+        };
+        (delta(&enemy.scripts.body), delta(&enemy.scripts.controller))
+    };
+    room.enable_host_health_events();
+    let tick = context.tick + 2;
+    let now = context.now + 2 * TICK_PERIOD;
+    send(&mut room, sender_body, 18, tick - 1, now - TICK_PERIOD);
+    room.settle_health(
+        receiver,
+        HealthEffect::Damage(25.0),
+        crate::vitals::Death {
+            time: now.as_secs_f64(),
+            frame: tick,
+            killer: sender,
+        },
+        now,
+    )
+    .unwrap();
+    room.finish_tick(&queries, tick, now).unwrap();
+    assert_eq!(host_delta(&room, receiver), (None, None));
+    assert_eq!(host_delta(&room, sender), (None, None));
+    assert_eq!(
+        observed(&room, receiver, false),
+        (
+            Some(Value::Entity(sender)),
+            Some(Value::Integer(18)),
+            Some(Value::Integer(17))
+        )
+    );
+    assert!(lock_active(&room, receiver, false));
+    room.finish_tick(&queries, tick + 1, now + TICK_PERIOD)
+        .unwrap();
+    assert_eq!(
+        host_delta(&room, receiver),
+        (Some(Value::Float(-25.0)), None)
+    );
+    assert_eq!(host_delta(&room, sender), (Some(Value::Float(-25.0)), None));
+    assert!(!lock_active(&room, receiver, false));
+    assert_eq!(speed_scale(&room, receiver, tick + 1), 0.5);
+    assert_eq!(speed_scale(&room, receiver, tick + 2), 1.0);
+
+    send(&mut room, excluded_body, 19, tick + 1, now + TICK_PERIOD);
+    room.finish_tick(&queries, tick + 2, now + 2 * TICK_PERIOD)
+        .unwrap();
+    assert_eq!(
+        observed(&room, receiver, false),
+        (
+            Some(Value::Entity(excluded_sender)),
+            Some(Value::Integer(19)),
+            Some(Value::Integer(17))
+        )
+    );
+    assert!(!lock_active(&room, receiver, false));
+    assert_eq!(speed_scale(&room, receiver, tick + 3), 1.0);
+
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-room-message-v1.json"
+    ))
+    .unwrap();
+    let generations = &fixture["native_sender_generation"];
+    let stale = stage(&room, generations["stale_payload"].as_i64().unwrap());
+    let previous = observed(&room, receiver, false);
+    let body = room
+        .world
+        .entity_mut(sender_body.entity)
+        .take::<BotState>()
+        .unwrap();
+    assert!(room.world.despawn(sender_body.entity));
+    let replacement = room.world.spawn(body).id();
+    assert_ne!(replacement, sender_body.entity);
+    assert_eq!(
+        room.by_wire.insert(sender, replacement),
+        Some(sender_body.entity)
+    );
+    room.settle_script_request(stale, sender_body, tick + 2, now + 2 * TICK_PERIOD)
+        .unwrap();
+    room.finish_tick(&queries, tick + 3, now + 3 * TICK_PERIOD)
+        .unwrap();
+    assert_eq!(observed(&room, receiver, false), previous);
+
+    let current = room.sample_health_body(sender).unwrap();
+    let payload = generations["current_payload"].as_i64().unwrap();
+    send(&mut room, current, payload, tick + 3, now + 3 * TICK_PERIOD);
+    room.finish_tick(&queries, tick + 4, now + 4 * TICK_PERIOD)
+        .unwrap();
+    let (actual_sender, actual_payload, _) = observed(&room, receiver, false);
+    assert_eq!(actual_sender, Some(Value::Entity(sender)));
+    assert_eq!(actual_payload, Some(Value::Integer(payload)));
 }
 
 #[test]
@@ -60,8 +1319,12 @@ fn normal_deadeye_clears_natural_bosses_and_reaches_allied_victory() {
     junkenstein::verify_natural_ending(junkenstein::NormalEnding::DeadeyeVictory);
 }
 
+mod aim_samples;
 mod encounter_ecs;
+mod faulted_owner_vitals;
 mod junkenstein;
+mod settled_bonus;
+mod swept_displacement;
 
 #[test]
 fn scene_enemy_creation_is_atomic_and_retains_late_join_health_and_skin() {
@@ -681,6 +1944,8 @@ fn authored_zomnic_attack_updates_gate_damage_and_retires_the_pair() {
                 body_filter: crate::match_scene::team_bit(0).unwrap(),
                 frame: 5900,
                 pose,
+                eye_position: None,
+                skin: 0,
                 quanta: RETAIL_QUANTA,
             },
         )
@@ -1817,6 +3082,25 @@ fn debug_physics_records_hitscan_rays_and_enforces_ring_cap() {
     assert!((overlay.rays[1].end[0] - 10.0).abs() < 1e-6);
     assert_eq!(overlay.rays[2].hit, "none");
     assert_eq!(overlay.rays[2].end, [-25.0, 1.0, 0.0]);
+    assert!(overlay.rays.iter().all(|ray| ray.script.is_none()));
+
+    room.enable_spatial_queries(false, Arc::new(fixture_ground()), RoomSpatialNeeds::Queries);
+    let captured = room.capture_spatial_frame(13).unwrap().unwrap();
+    captured
+        .ray_cast(SCRIPT_RAY_SITE, 14, [-2.0, 0.5, 0.25], [1.0, 0.0, 0.0], 1.0)
+        .unwrap()
+        .unwrap();
+    let shared = room.debug_physics().unwrap().unwrap();
+    assert_eq!(shared.rays.len(), 4);
+    assert_eq!(shared.rays[3].kind, "script_static");
+    assert_eq!(shared.rays[3].tick, 13);
+    assert_eq!(shared.rays[3].script.unwrap().vm_frame, 14);
+    assert!(
+        serde_json::to_value(shared.rays[0])
+            .unwrap()
+            .get("script")
+            .is_none()
+    );
 
     // Overflow ring buffer and assert truncation flag + newest ticks retained.
     for i in 0..(MAX_DEBUG_RAYS + 5) {

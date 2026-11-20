@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    lifecycle::flashbang_duration,
     world::{BodyWorld, target_delta},
     *,
 };
@@ -15,6 +14,7 @@ use crate::{
     game_replication::BodyStep,
     mover::{Mover, sample_movement_flags},
     scene_assets::MOVER_CATEGORY,
+    script_control::LEGACY_PROJECTILE_CONTROL,
     script_expr::to_float,
     script_init::{Site, TargetTagEffect},
     script_wire::Value,
@@ -156,7 +156,7 @@ use crate::{
 };
 
 #[test]
-fn engine_table_is_available_only_on_the_encounter_owner_host() {
+fn legacy_engine_table_is_available_only_in_encounter_modes() {
     use crate::script_expr::EngineSetting;
     let (factory, spawn) = fixture_body_factory();
     let mut runtime = factory.start(spawn).unwrap();
@@ -192,6 +192,115 @@ fn engine_table_is_available_only_on_the_encounter_owner_host() {
 }
 
 #[test]
+fn owner_engine_settings_follow_the_authored_mode_table() {
+    use crate::script_expr::EngineSetting;
+
+    let (factory, spawn) = fixture_body_factory();
+    let mut runtime = factory.start(spawn).unwrap();
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-mode-rulesets-v1.json"
+    ))
+    .unwrap();
+    runtime.world.graphs = Arc::new(
+        GraphStore::from_json(&serde_json::to_vec(&contract["input"]["bundle"]).unwrap()).unwrap(),
+    );
+    let site = Site {
+        entity: spawn.entity,
+        instance: 1,
+        graph: 42,
+        node: Some(0),
+    };
+
+    runtime.world.mode = 0xa1;
+    for hero in [SOLDIER, CASSIDY] {
+        runtime.world.hero = hero;
+        assert_eq!(
+            runtime.world.engine_setting(site, 101),
+            EngineSetting::Present(Value::Bool(false))
+        );
+        assert_eq!(
+            runtime.world.engine_setting(site, 104),
+            EngineSetting::Present(Value::Null)
+        );
+    }
+    assert_eq!(
+        runtime.world.engine_setting(site, 105),
+        EngineSetting::Missing
+    );
+
+    for (mode, expected) in [
+        (0xa2, EngineSetting::Unavailable),
+        (0xa3, EngineSetting::Missing),
+        (0xa4, EngineSetting::Present(Value::Bool(true))),
+    ] {
+        runtime.world.mode = mode;
+        assert_eq!(runtime.world.engine_setting(site, 101), expected);
+    }
+}
+
+#[test]
+fn owner_reports_absent_combat_accumulator_only_for_valid_own_body() {
+    let (factory, spawn) = fixture_body_factory();
+    let mut runtime = factory.start(spawn).unwrap();
+    let world = &mut runtime.world;
+    let site = Site {
+        entity: spawn.entity,
+        instance: 1,
+        graph: 42,
+        node: Some(7),
+    };
+    assert_eq!(world.local_combat_context_available(site), Some(false));
+    for entity in [spawn.controller, spawn.entity + 1, 0] {
+        assert_eq!(
+            world.local_combat_context_available(Site { entity, ..site }),
+            None
+        );
+    }
+
+    world.entity = 0;
+    assert_eq!(
+        world.local_combat_context_available(Site { entity: 0, ..site }),
+        None
+    );
+}
+
+#[test]
+fn owner_reports_absent_presentation_contexts_only_for_valid_own_body() {
+    let (factory, spawn) = fixture_body_factory();
+    let mut runtime = factory.start(spawn).unwrap();
+    let world = &mut runtime.world;
+    let site = Site {
+        entity: spawn.entity,
+        instance: 1,
+        graph: 42,
+        node: Some(7),
+    };
+    for mode in [
+        PRACTICE_RANGE_MODE,
+        crate::game_content::JUNKENSTEIN_REVENGE,
+    ] {
+        world.mode = mode;
+        for (entity, expected) in [
+            (spawn.entity, Some(false)),
+            (spawn.controller, None),
+            (spawn.entity + 1, None),
+            (0, None),
+        ] {
+            let site = Site { entity, ..site };
+            assert_eq!(world.spatial_binding_owner_available(site), expected);
+            assert_eq!(world.outline_context_available(site), expected);
+            assert_eq!(world.voice_context(site), expected);
+        }
+    }
+
+    world.entity = 0;
+    let invalid = Site { entity: 0, ..site };
+    assert_eq!(world.spatial_binding_owner_available(invalid), None);
+    assert_eq!(world.outline_context_available(invalid), None);
+    assert_eq!(world.voice_context(invalid), None);
+}
+
+#[test]
 fn cassidy_junkenstein_rules_enable_fan_without_changing_other_hero_defaults() {
     let (factory, spawn) = fixture_body_factory();
     let mut runtime = factory.start(spawn).unwrap();
@@ -209,37 +318,348 @@ fn cassidy_junkenstein_rules_enable_fan_without_changing_other_hero_defaults() {
 }
 
 #[test]
-fn encounter_body_angles_follow_the_live_owner_pose() {
+fn charge_admission_preserves_profile_scope_and_requires_a_live_instance_for_credit() {
+    use crate::{
+        game_combat::AppliedDamage,
+        game_content::{JUNKENSTEIN_ENDLESS, JUNKENSTEIN_REVENGE},
+        game_hitscan::DamageTags,
+        script_entity_state::EntityScriptState,
+        vitals::Death,
+    };
+
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-owner-room-activity-v1.json"
+    ))
+    .unwrap();
+    let projected = |key: &str| {
+        Value::Bool(
+            contract["expected"]["legacy_charge_admission"][key]
+                .as_bool()
+                .unwrap(),
+        )
+    };
+    let (mut factory, spawn) = fixture_body_factory();
+    let damage = AppliedDamage {
+        source: spawn.entity,
+        amount: 1.0,
+        named_pool_losses: Vec::new(),
+        tags: DamageTags::EMPTY,
+        target_facts: crate::script_init::HealthTargetFacts {
+            target: spawn.entity + 1,
+            room_status: None,
+            filter_flags: None,
+            tags: Default::default(),
+            script_state: EntityScriptState::Unavailable,
+        },
+    };
+    let admission =
+        |runtime: &PlayerBodyRuntime| runtime.snapshot().unwrap().variables.get(&2426).cloned();
+    let require_live_graph = |runtime: &mut PlayerBodyRuntime| {
+        assert!(
+            runtime
+                .receive_applied_damage(damage.clone())
+                .unwrap_err()
+                .to_string()
+                .contains("authored common charge graph")
+        );
+    };
+    for (mode, hero, admitted) in [
+        (JUNKENSTEIN_REVENGE, CASSIDY, true),
+        (JUNKENSTEIN_ENDLESS, CASSIDY, true),
+        (JUNKENSTEIN_REVENGE, SOLDIER, false),
+        (PRACTICE_RANGE_MODE, CASSIDY, false),
+    ] {
+        factory.mode = mode;
+        factory.hero = hero;
+        let mut runtime = factory.start(spawn).unwrap();
+        assert_eq!(runtime.world.room_activity, None);
+        assert_eq!(
+            admission(&runtime),
+            admitted.then(|| projected("bootstrap"))
+        );
+        if admitted {
+            require_live_graph(&mut runtime);
+            let mut inactive = factory
+                .start_with_setup(
+                    spawn,
+                    OwnerBodySetup {
+                        room_activity: Some(OwnerRoomActivity::Encounter { active: false }),
+                        ..OwnerBodySetup::default()
+                    },
+                )
+                .unwrap();
+            assert_eq!(admission(&inactive), Some(projected("bootstrap")));
+            inactive.receive_applied_damage(damage.clone()).unwrap();
+        } else {
+            runtime.receive_applied_damage(damage.clone()).unwrap();
+        }
+
+        runtime.set_encounter_active(true).unwrap();
+        assert_eq!(
+            runtime.world.room_activity,
+            admitted.then_some(OwnerRoomActivity::Encounter { active: true })
+        );
+        runtime.set_room_activity(OwnerRoomActivity::Encounter { active: false });
+        assert_eq!(
+            admission(&runtime),
+            admitted.then(|| projected("bootstrap"))
+        );
+        runtime.receive_applied_damage(damage.clone()).unwrap();
+        runtime.set_encounter_active(false).unwrap();
+        assert_eq!(
+            admission(&runtime),
+            admitted.then(|| projected("inactive_room"))
+        );
+
+        runtime.set_room_activity(OwnerRoomActivity::Regular);
+        runtime.set_encounter_active(false).unwrap();
+        assert_eq!(
+            runtime.world.room_activity,
+            Some(OwnerRoomActivity::Regular)
+        );
+        runtime.receive_applied_damage(damage.clone()).unwrap();
+
+        if admitted {
+            runtime.set_encounter_active(true).unwrap();
+            require_live_graph(&mut runtime);
+            let outcome = runtime.receive_damage(
+                contract["input"]["lethal_damage"].as_f64().unwrap(),
+                Death {
+                    time: 0.0,
+                    frame: spawn.frame,
+                    killer: damage.target_facts.target,
+                },
+            );
+            assert!(outcome.killed);
+            assert_eq!(admission(&runtime), Some(projected("after_death")));
+            assert_eq!(
+                runtime.world.room_activity,
+                Some(OwnerRoomActivity::Encounter { active: true })
+            );
+            runtime.receive_applied_damage(damage.clone()).unwrap();
+        }
+    }
+}
+
+#[test]
+fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
+    use crate::{
+        game_combat::AppliedDamage,
+        game_content::JUNKENSTEIN_REVENGE,
+        game_hitscan::DamageTags,
+        script_entity_state::EntityScriptState,
+        script_init::{HealthTargetFacts, HostEvent, HostHealthContext},
+    };
+    use serde_json::json;
+
+    const BODY: &str = "0x040000000000B013";
+    const METER: u32 = 612;
+    const DELTA_SLOT: u32 = 607;
+    const HIT_TAG_SLOT: u32 = 608;
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-authored-charge-route-v1.json"
+    ))
+    .unwrap();
+    let mut bundle = contract["input"]["bundle"].clone();
+    let hits: Vec<u64> = serde_json::from_value(contract["input"]["hit_tags"].clone()).unwrap();
+    let mut hit_tags = DamageTags::EMPTY;
+    for &tag in &hits {
+        assert!(hit_tags.push(tag));
+    }
+    let probe = &mut bundle["graphs"][0];
+    probe["nodes"][0]["fields"]["m_params"] = json!([
+        {
+            "m_B5051BCE": "0x0000000000000003",
+            "m_out_Var": {"$":"STUConfigVarDynamic","m_identifier":DELTA_SLOT,"m_60DB8F99":false}
+        },
+        {
+            "m_B5051BCE": "0x0000000000000005",
+            "m_out_Var": {"$":"STUConfigVarDynamic","m_identifier":HIT_TAG_SLOT,"m_60DB8F99":false}
+        }
+    ]);
+    bundle["graphs"].as_array_mut().unwrap().push(json!({
+        "index": 0x0ca5, "items": 0, "nodes": [], "states": [], "entries": [], "remote": [],
+        "sync_vars": [], "containers": {}, "unknown_nodes": [], "fields": {},
+        "header": {
+            "m_nodesBitCount":4, "m_statesBitCount":4, "m_remoteSyncNodesBitCount":4, "m_syncVarsBitCount":4
+        }
+    }));
+    bundle["bodies"][BODY]["hero"] = json!(format!("0x{CASSIDY:016X}"));
+    let hero = Hero {
+        guid: CASSIDY,
+        name: "Configured charge fixture".into(),
+        role: "Damage".into(),
+        body: parse_guid(BODY).unwrap(),
+    };
+    let (_, spawn) = fixture_body_factory();
+    let setup = OwnerBodySetup {
+        room_activity: Some(OwnerRoomActivity::Encounter { active: true }),
+        ..OwnerBodySetup::default()
+    };
+    let build = |bundle: &Json| {
+        let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(bundle).unwrap()).unwrap());
+        let codecs = Arc::new(CodecTable::from_json(r#"{"classes":{}}"#).unwrap());
+        PlayerBodyFactory::prepare(
+            graphs,
+            codecs,
+            JUNKENSTEIN_REVENGE,
+            &hero,
+            None,
+            false,
+            (spawn, setup.clone()),
+        )
+        .unwrap()
+        .start_runtime(spawn, setup.clone())
+        .unwrap()
+    };
+    let mut authored = build(&bundle);
+
+    let mut conflicting = bundle.clone();
+    conflicting["graphs"].as_array_mut().unwrap().pop();
+    conflicting["graphs"][0]["index"] = json!(0x0ca5);
+    conflicting["bodies"][BODY]["server_graphs"][0]["graph"] = json!(0x0ca5);
+    conflicting["bodies"][BODY]["authored_charge_graph"] = json!("0x0580000000000CA5");
+    let graphs =
+        Arc::new(GraphStore::from_json(&serde_json::to_vec(&conflicting).unwrap()).unwrap());
+    let codecs = Arc::new(CodecTable::from_json(r#"{"classes":{}}"#).unwrap());
+    assert!(matches!(
+        PlayerBodyFactory::prepare(
+            graphs,
+            codecs,
+            JUNKENSTEIN_REVENGE,
+            &hero,
+            None,
+            false,
+            (spawn, setup.clone()),
+        ),
+        Err(OwnerBodyPreparationError::AuthoredChargeRoot(0x0ca5))
+    ));
+
+    bundle["bodies"][BODY]
+        .as_object_mut()
+        .unwrap()
+        .remove("authored_charge_graph");
+    let mut compatibility = build(&bundle);
+    let damage = AppliedDamage {
+        source: spawn.entity,
+        amount: 3.0,
+        named_pool_losses: Vec::new(),
+        tags: DamageTags::EMPTY,
+        target_facts: crate::script_init::HealthTargetFacts {
+            target: spawn.entity + 1,
+            room_status: None,
+            filter_flags: None,
+            tags: Default::default(),
+            script_state: EntityScriptState::Unavailable,
+        },
+    };
+    assert!(!authored.snapshot().unwrap().variables.contains_key(&2426));
+    assert_eq!(
+        compatibility.snapshot().unwrap().variables[&2426],
+        Value::Bool(true)
+    );
+    authored.receive_applied_damage(damage.clone()).unwrap();
+    assert!(
+        compatibility
+            .receive_applied_damage(damage)
+            .unwrap_err()
+            .to_string()
+            .contains("authored common charge graph")
+    );
+    assert_eq!(
+        authored
+            .receive_host_event(
+                HostEvent::HealthApplied {
+                    source: Some(spawn.entity),
+                    target: spawn.entity + 1,
+                    delta: -3.0,
+                    killed: false,
+                    hit_tags: Some(hit_tags),
+                },
+                HostHealthContext {
+                    target_body: None,
+                    target_facts: Some(Arc::new(HealthTargetFacts {
+                        target: spawn.entity + 1,
+                        room_status: None,
+                        filter_flags: None,
+                        tags: Default::default(),
+                        script_state: EntityScriptState::Unavailable,
+                    })),
+                },
+            )
+            .unwrap(),
+        1
+    );
+    authored
+        .component
+        .advance_frame(spawn.frame + 1, &mut authored.world)
+        .unwrap();
+    let snapshot = authored.snapshot().unwrap();
+    assert!(
+        snapshot.diagnostics.is_empty(),
+        "{:?}",
+        snapshot.diagnostics
+    );
+    let meter = snapshot
+        .instances
+        .values()
+        .find(|instance| instance.graph == METER)
+        .unwrap();
+    assert!(meter.is_server_only());
+    assert_eq!(meter.variables[&DELTA_SLOT], Value::Float(-3.0));
+    assert_eq!(
+        meter.variables[&HIT_TAG_SLOT],
+        Value::Array(hits.into_iter().map(Value::Asset).collect())
+    );
+    let encoder = authored.encoder();
+    for view in [View::Owner, View::Observer] {
+        let projected = encoder.project(snapshot, view).unwrap();
+        assert_eq!(projected.instance_count(), 1);
+        encoder.full(&projected).unwrap();
+    }
+}
+
+#[test]
+fn player_bound_body_angles_follow_the_live_pose_in_each_mode() {
     use crate::script_expr::{AngleQuery, BodyAngle};
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-bound-body-angle-v1.json"
+    ))
+    .unwrap();
+    let poses = contract["input"]["poses"].as_array().unwrap();
+    let expected = contract["expected"].as_array().unwrap();
+    assert_eq!(poses.len(), expected.len());
     let (factory, spawn) = fixture_body_factory();
     let mut runtime = factory.start(spawn).unwrap();
     let world = &mut runtime.world;
-    world.mode = crate::game_content::JUNKENSTEIN_REVENGE;
-    world.movement.yaw = 8192;
-    world.movement.pitch = -8192;
-    assert_eq!(
-        world.body_angle(world.entity, BodyAngle::Yaw),
-        AngleQuery::Present(45.0)
-    );
-    assert_eq!(
-        world.body_angle(world.entity, BodyAngle::Pitch),
-        AngleQuery::Present(-45.0)
-    );
-    assert_eq!(world.body_angle(0, BodyAngle::Yaw), AngleQuery::Unbound);
-    assert_eq!(
-        world.body_angle(world.entity + 1, BodyAngle::Yaw),
-        AngleQuery::Unavailable
-    );
-    world.movement.yaw = 32768;
-    assert_eq!(
-        world.body_angle(world.entity, BodyAngle::Yaw),
-        AngleQuery::Unavailable
-    );
-    world.mode = PRACTICE_RANGE_MODE;
-    assert_eq!(
-        world.body_angle(world.entity, BodyAngle::Pitch),
-        AngleQuery::Unavailable
-    );
+    for mode in [
+        crate::game_content::JUNKENSTEIN_REVENGE,
+        PRACTICE_RANGE_MODE,
+        TUTORIAL_MODE,
+    ] {
+        world.mode = mode;
+        assert_eq!(world.body_angle(0, BodyAngle::Yaw), AngleQuery::Unbound);
+        for (pose, angles) in poses.iter().zip(expected) {
+            world.movement.yaw = i32::try_from(pose["yaw"].as_i64().unwrap()).unwrap();
+            world.movement.pitch = i32::try_from(pose["pitch"].as_i64().unwrap()).unwrap();
+            for (axis, key) in [(BodyAngle::Yaw, "yaw"), (BodyAngle::Pitch, "pitch")] {
+                assert_eq!(
+                    world.body_angle(spawn.entity, axis),
+                    angles[key]
+                        .as_f64()
+                        .map_or(AngleQuery::Unavailable, AngleQuery::Present)
+                );
+                assert_eq!(
+                    world.body_angle(spawn.controller, axis),
+                    AngleQuery::Unavailable
+                );
+                assert_eq!(
+                    world.body_angle(spawn.entity + 1, axis),
+                    AngleQuery::Unavailable
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -296,6 +716,133 @@ fn roll_velocity_bridge_preserves_sampled_delta_and_rejects_foreign_owners() {
     assert_eq!(
         runtime.take_velocity_changes(),
         vec![(12, VelocityChange::HorizontalCap(5.5))]
+    );
+}
+
+#[test]
+fn shared_horizontal_cap_queues_on_a_live_player_without_a_roll_profile() {
+    use crate::mover::VelocityChange;
+
+    let spawn = fixture_body_factory().1;
+    let mut body = fixture_hitscan_factory(20.0).start(spawn).unwrap();
+    let site = Site {
+        entity: spawn.entity,
+        instance: 2,
+        graph: 61061,
+        node: Some(8),
+    };
+    let foreign_site = Site {
+        entity: spawn.entity + 1,
+        ..site
+    };
+    assert!(!body.world.cap_horizontal_velocity(foreign_site, 12, 4.0));
+    assert!(!body.world.cap_horizontal_velocity(site, 12, f64::INFINITY));
+    assert!(!body.world.cap_horizontal_velocity(site, 12, -1.0));
+    assert!(body.world.cap_horizontal_velocity(site, 12, 4.0));
+    assert_eq!(
+        body.take_velocity_changes(),
+        [(13, VelocityChange::HorizontalCap(4.0))]
+    );
+    assert!(body.take_velocity_changes().is_empty());
+    body.world.vitals.damage(
+        10_000.0,
+        crate::vitals::Death {
+            time: 1.0,
+            frame: 13,
+            killer: foreign_site.entity,
+        },
+    );
+    assert!(!body.world.cap_horizontal_velocity(site, 13, 4.0));
+}
+
+#[test]
+fn authored_impulse_queues_only_for_its_live_body() {
+    use crate::mover::VelocityChange;
+
+    let spawn = fixture_body_factory().1;
+    let mut body = fixture_hitscan_factory(20.0).start(spawn).unwrap();
+    let site = Site {
+        entity: spawn.entity,
+        instance: 2,
+        graph: 61061,
+        node: Some(9),
+    };
+    let foreign = Site {
+        entity: spawn.entity + 1,
+        ..site
+    };
+    let delta = [2.0, 7.0, -0.5];
+    assert!(!body.world.apply_velocity_impulse(foreign, 12, 1.0, delta));
+    assert!(!body.world.apply_velocity_impulse(site, 12, f64::MAX, delta));
+    assert!(body.world.apply_velocity_impulse(site, 12, 1.0, delta));
+    assert_eq!(
+        body.take_velocity_changes(),
+        [(
+            13,
+            VelocityChange::VerticalImpulse {
+                vertical: 1.0,
+                delta,
+            },
+        )]
+    );
+    assert!(body.take_velocity_changes().is_empty());
+}
+
+#[test]
+fn swept_displacement_requests_belong_to_the_live_player_body() {
+    use crate::script_init::{Relocation, ScriptedMotion, SweptDisplacement};
+
+    let (factory, spawn) = fixture_body_factory();
+    let mut body = factory.start(spawn).unwrap();
+    let displacement = SweptDisplacement::new([2.25, 0.0, 0.0]).unwrap();
+    let alternate = ScriptedMotion::Relocate(Relocation::new([0.0, 0.0, 1.0]).unwrap());
+    let site = Site {
+        entity: spawn.entity,
+        instance: 1,
+        graph: 1_783,
+        node: Some(4),
+    };
+    let foreign = Site {
+        entity: spawn.controller,
+        ..site
+    };
+    assert_eq!(
+        body.world
+            .queue_swept_displacement(foreign, 31, displacement),
+        None
+    );
+    assert_eq!(
+        body.world.queue_swept_displacement(site, 31, displacement),
+        Some(true)
+    );
+    assert_eq!(
+        body.world.queue_scripted_motion(site, 32, alternate),
+        Some(false)
+    );
+    assert_eq!(
+        body.take_scripted_motion(),
+        Some((31, ScriptedMotion::Sweep(displacement)))
+    );
+    assert_eq!(body.take_scripted_motion(), None);
+    assert_eq!(
+        body.world.queue_scripted_motion(site, 32, alternate),
+        Some(true)
+    );
+    assert!(
+        body.receive_damage(
+            10_000.0,
+            crate::vitals::Death {
+                time: 0.5,
+                frame: 31,
+                killer: spawn.controller,
+            }
+        )
+        .killed
+    );
+    assert_eq!(body.take_scripted_motion(), None);
+    assert_eq!(
+        body.world.queue_scripted_motion(site, 33, alternate),
+        Some(false)
     );
 }
 
@@ -446,6 +993,144 @@ fn target_tag_effects_restore_authored_tags_and_remaining_grants() {
 }
 
 #[test]
+fn foreign_target_tags_read_the_frozen_body_generation() {
+    use crate::{
+        collision_cache::CollisionCache,
+        contact_world::ContactWorld,
+        game_combat::{PlayerBodyState, RoomSimulation},
+        game_replication::BodyId,
+        mover_settings::MoverSettings,
+        script_graph::RoomSpatialNeeds,
+    };
+
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/actor-direct-target-tags-v1.json"
+    ))
+    .unwrap();
+    let tags = contract["input"]["tags"].as_object().unwrap();
+    let tag = |name: &str| parse_guid(tags[name].as_str().unwrap()).unwrap();
+
+    let (factory, spawn) = fixture_body_factory();
+    let other = OwnerBodySpawn {
+        controller: spawn.controller + 0x100,
+        entity: spawn.entity + 0x100,
+        slot: spawn.slot + 1,
+        ..spawn
+    };
+    let observer_site = Site {
+        entity: spawn.entity,
+        instance: 1,
+        graph: 42,
+        node: Some(1),
+    };
+    let target_site = Site {
+        entity: other.entity,
+        ..observer_site
+    };
+    let effect = |tag, present| TargetTagEffect {
+        entity: other.entity,
+        tag,
+        present,
+    };
+
+    let mut observer = factory.start(spawn).unwrap();
+    let mut target = factory.start(other).unwrap();
+    target.world.target_tags = Some(BTreeSet::from([tag("base"), tag("suppressed")]));
+    assert!(
+        target
+            .world
+            .set_target_tag_effect(target_site, effect(tag("grant"), true), true)
+    );
+    let suppression = effect(tag("suppressed"), false);
+    assert!(
+        target
+            .world
+            .set_target_tag_effect(target_site, suppression, true)
+    );
+
+    let cache = CollisionCache {
+        header: serde_json::from_value(serde_json::json!({
+            "meshes": [], "hulls": 0, "models": 0, "placements": 0, "identifiers": []
+        }))
+        .unwrap(),
+        meshes: vec![],
+        hulls: vec![],
+        models: vec![],
+        placements: vec![],
+    };
+    let ground = Arc::new(CollisionScene::movement_probe(&cache, &BTreeSet::new()).unwrap());
+    let contacts = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    room.enable_spatial_queries(false, ground, RoomSpatialNeeds::EntityTags);
+    let body = |generation, runtime: PlayerBodyRuntime| {
+        let mover = Mover::new(
+            MoverSettings::default(),
+            Arc::clone(&contacts),
+            other.pose.position,
+            0,
+            MOVER_CATEGORY,
+        )
+        .unwrap();
+        PlayerBodyState::new(
+            BodyId {
+                entity: other.entity,
+                generation,
+            },
+            other.controller,
+            other.slot,
+            1,
+            factory.hero,
+            mover,
+            Some(Box::new(runtime)),
+            other.frame,
+            None,
+        )
+    };
+    let assert_tags = |observer: &PlayerBodyRuntime, generation: &str| {
+        for name in tags.keys() {
+            assert_eq!(
+                observer
+                    .world
+                    .has_target_tag(observer_site, other.entity, tag(name)),
+                contract["expected"][generation][name.as_str()].as_bool(),
+                "{generation}: {name}"
+            );
+        }
+    };
+
+    room.spawn_player_body(body(1, target)).unwrap();
+    let first = room.capture_spatial_frame(other.frame).unwrap().unwrap();
+    observer.set_spatial_frame(Arc::clone(&first));
+    assert_tags(&observer, "first_generation");
+    assert_eq!(
+        observer
+            .world
+            .has_target_tag(observer_site, other.entity + 1, tag("base")),
+        None
+    );
+
+    let mut replacement = factory.start(other).unwrap();
+    replacement.world.target_tags = None;
+    assert!(
+        replacement
+            .world
+            .set_target_tag_effect(target_site, suppression, true)
+    );
+    room.spawn_player_body(body(2, replacement)).unwrap();
+    let next = room
+        .capture_spatial_frame(other.frame + 1)
+        .unwrap()
+        .unwrap();
+    assert_ne!(
+        first.actor_identity(other.entity),
+        next.actor_identity(other.entity)
+    );
+    assert_tags(&observer, "first_generation");
+    observer.set_spatial_frame(next);
+    assert_tags(&observer, "next_generation");
+}
+
+#[test]
 fn target_tag_effects_keep_unknown_tags_and_replacement_independent() {
     let (factory, spawn) = fixture_body_factory();
     let tag = 0x0d60_0000_0000_0422;
@@ -502,28 +1187,38 @@ fn health_queries_read_the_authoritative_vitals() {
     let maximum = json!({"$": "STU_7D7D2470", "m_entity": owner});
     assert_eq!(evaluate(&mut runtime, &current), Ok(Value::Float(200.0)));
     assert_eq!(evaluate(&mut runtime, &maximum), Ok(Value::Float(200.0)));
-    assert!(!runtime.receive_damage(
-        75.0,
-        crate::vitals::Death {
-            time: 0.0,
-            frame: spawn.frame,
-            killer: spawn.entity + 1,
-        },
-    ));
+    assert_eq!(
+        runtime.receive_damage(
+            75.0,
+            crate::vitals::Death {
+                time: 0.0,
+                frame: spawn.frame,
+                killer: spawn.entity + 1,
+            },
+        ),
+        crate::vitals::Damage {
+            dealt: 75.0,
+            killed: false,
+            ..Default::default()
+        }
+    );
     assert_eq!(evaluate(&mut runtime, &current), Ok(Value::Float(125.0)));
     assert_eq!(evaluate(&mut runtime, &maximum), Ok(Value::Float(200.0)));
 
     let target = json!({"$": "STUConfigVarDynamic", "m_identifier": 400, "m_60DB8F99": true});
     let current = json!({"$": "STU_32E6E4D8", "m_entity": target});
-    for entity in [spawn.entity + 1, 0] {
+    for (entity, expected) in [
+        (
+            spawn.entity + 1,
+            Err(EvalError::UnsupportedConfig("STU_32E6E4D8".into())),
+        ),
+        (0, Ok(Value::Float(0.0))),
+    ] {
         runtime
             .component
             .set_entity_variable(400, Value::Entity(entity), &mut runtime.world)
             .unwrap();
-        assert_eq!(
-            evaluate(&mut runtime, &current),
-            Err(EvalError::UnsupportedConfig("STU_32E6E4D8".into()))
-        );
+        assert_eq!(evaluate(&mut runtime, &current), expected);
     }
 }
 
@@ -706,6 +1401,675 @@ fn entity_relations_resolve_only_the_active_player_pair() {
 }
 
 #[test]
+fn body_factory_preparation_retains_distinct_startup_failures() {
+    use crate::script_init::{Diagnostic, Issue};
+    use crate::script_snapshot_wire::{SnapshotError, StateSite};
+    use serde_json::json;
+
+    const GRAPH: u32 = 91;
+    const UNKNOWN_ACTION: &str = "SyntheticUnknownStartupAction";
+    const PLAIN_STATE: &str = "STUStatescriptState";
+
+    let (fixture, spawn) = fixture_body_factory();
+    let hero = Hero {
+        guid: 1,
+        name: "Synthetic".into(),
+        role: "Fixture".into(),
+        body: 2,
+    };
+    let prepare = |class: &str, state, probe| {
+        let (slot, states, plug) = if state {
+            (Some(0), json!([1]), "m_beginPlug")
+        } else {
+            (None, json!([]), "m_inPlug")
+        };
+        let bundle = json!({
+            "version":1, "missing":[],
+            "graphs":[{
+                "index":GRAPH, "items":2, "entries":[0], "states":states,
+                "remote":[], "sync_vars":[], "containers":{}, "unknown_nodes":[], "fields":{},
+                "header":{"m_nodesBitCount":2,"m_statesBitCount":2,
+                    "m_remoteSyncNodesBitCount":2,"m_syncVarsBitCount":2},
+                "nodes":[
+                    {"pos":0,"rid":0,"uid":0,"remote":-1,"class":"STUStatescriptEntry",
+                     "state":null,"server_only":false,"client_only":false,
+                     "fields":{"m_outPlug":{"$":"Plug","links":[[1,plug]]}}},
+                    {"pos":1,"rid":1,"uid":1,"remote":-1,"class":class,
+                     "state":slot,"server_only":false,"client_only":false,
+                     "fields":{"m_2BBEEAB8":state,"m_ADEB6E05":!state}}
+                ]
+            }],
+            "bodies":{
+                format!("0x{:016X}", hero.body):{
+                    "hero":format!("0x{:016X}",hero.guid),"name":"Synthetic",
+                    "graphs":[{"graph":GRAPH,"m_75408640":0}],"weapons":[]
+                }
+            }
+        });
+        let graphs = GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap();
+        PlayerBodyFactory::prepare(
+            Arc::new(graphs),
+            Arc::clone(&fixture.codecs),
+            3,
+            &hero,
+            None,
+            false,
+            (probe, OwnerBodySetup::default()),
+        )
+    };
+
+    let Err(OwnerBodyPreparationError::Projection(SnapshotError::Incomplete {
+        entity,
+        diagnostics,
+    })) = prepare(UNKNOWN_ACTION, false, spawn)
+    else {
+        panic!("unknown action must retain the initialization diagnostics");
+    };
+    assert_eq!(entity, spawn.entity);
+    assert!(matches!(
+        diagnostics.as_slice(),
+        [Diagnostic {
+            site: Site { graph: GRAPH, node: Some(1), .. },
+            issue: Issue::UnsupportedAction(class),
+            registration_rejected: false,
+            server_only: false,
+        }] if class == UNKNOWN_ACTION
+    ));
+
+    assert!(matches!(
+        prepare(PLAIN_STATE, true, spawn),
+        Err(OwnerBodyPreparationError::Projection(SnapshotError::UnsupportedState {
+            site: StateSite { graph: GRAPH, state: 0, .. },
+            class,
+            ..
+        })) if class == PLAIN_STATE
+    ));
+
+    assert!(matches!(
+        prepare(PLAIN_STATE, true, OwnerBodySpawn { quanta: 0, ..spawn }),
+        Err(OwnerBodyPreparationError::Start(
+            OwnerBodyStartupError::Clock
+        ))
+    ));
+}
+
+#[test]
+fn player_host_team_counts_are_available_before_body_start_and_refresh_afterward() {
+    use serde_json::json;
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        query_team: u8,
+        invalid_team: u8,
+        initial_teams: Vec<u8>,
+        updated_teams: Vec<u8>,
+        free_for_all_teams: Vec<u8>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Expected {
+        initial: u32,
+        updated: Option<u32>,
+        empty: Option<u32>,
+        without_snapshot: Option<u32>,
+        invalid_team: Option<u32>,
+        free_for_all_query_team: Option<u32>,
+        free_for_all_pool: Option<u32>,
+    }
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-player-host-facts-v1.json"
+    ))
+    .unwrap();
+    let input: Input =
+        serde_json::from_value(fixture["input"]["team_member_counts"].clone()).unwrap();
+    let expected: Expected =
+        serde_json::from_value(fixture["expected"]["team_member_counts"].clone()).unwrap();
+
+    const GRAPH: u32 = 731;
+    const COUNT_VAR: u32 = 36;
+    let bundle = json!({
+        "version": 1, "missing": [], "bodies": {},
+        "graphs": [{
+            "index": GRAPH, "items": 2, "entries": [0], "states": [], "remote": [],
+            "sync_vars": [], "containers": {}, "unknown_nodes": [], "fields": {},
+            "header": {"m_nodesBitCount": 2, "m_statesBitCount": 2,
+                "m_remoteSyncNodesBitCount": 2, "m_syncVarsBitCount": 2},
+            "nodes": [
+                {"pos": 0, "rid": 0, "uid": 0, "remote": -1, "class": "STUStatescriptEntry",
+                    "state": null, "server_only": false, "client_only": false,
+                    "fields": {"m_outPlug": {"$": "Plug", "links": [[1, "m_inPlug"]]}}},
+                {"pos": 1, "rid": 1, "uid": 1, "remote": -1, "class": "STUStatescriptActionSetVar",
+                    "state": null, "server_only": false, "client_only": false,
+                    "fields": {"m_ADEB6E05": true,
+                        "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": COUNT_VAR,
+                            "m_60DB8F99": true},
+                        "m_value": {"$": "STU_D289FA32", "m_team": input.query_team}}}
+            ]
+        }]
+    });
+    let (mut factory, spawn) = fixture_body_factory();
+    factory.graphs =
+        Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    factory.roots = vec![Root::new(1, GRAPH)];
+
+    let mut runtime = factory
+        .start_with_setup(
+            spawn,
+            OwnerBodySetup {
+                team_member_counts: Some(TeamMemberCounts::from_teams(false, input.initial_teams)),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let snapshot = runtime.snapshot().unwrap();
+    assert!(
+        snapshot.initialization_complete(),
+        "{:?}",
+        snapshot.diagnostics
+    );
+    assert_eq!(
+        snapshot.variables.get(&COUNT_VAR),
+        Some(&Value::Integer(i64::from(expected.initial)))
+    );
+    assert_eq!(
+        runtime.world.team_members(input.invalid_team),
+        expected.invalid_team
+    );
+
+    runtime.set_team_member_counts(TeamMemberCounts::from_teams(false, input.updated_teams));
+    assert_eq!(
+        runtime.world.team_members(input.query_team),
+        expected.updated
+    );
+    runtime.set_team_member_counts(TeamMemberCounts::from_teams(false, []));
+    assert_eq!(runtime.world.team_members(input.query_team), expected.empty);
+    runtime.set_team_member_counts(TeamMemberCounts::from_teams(true, input.free_for_all_teams));
+    assert_eq!(
+        runtime.world.team_members(input.query_team),
+        expected.free_for_all_query_team
+    );
+    assert_eq!(runtime.world.team_members(4), expected.free_for_all_pool);
+
+    let without_snapshot = fixture_body_factory().0.start(spawn).unwrap();
+    assert_eq!(
+        without_snapshot.world.team_members(input.query_team),
+        expected.without_snapshot
+    );
+}
+
+#[test]
+fn owner_startup_evaluates_owned_entity_count_without_an_ai_controller() {
+    use serde_json::json;
+
+    const DESTINATION: u32 = 812;
+    let (mut factory, spawn) = fixture_body_factory();
+    let bundle = json!({
+        "version": 1, "missing": [], "bodies": {}, "graphs": [{
+            "index": 87, "items": 2, "entries": [0], "states": [], "remote": [],
+            "sync_vars": [], "containers": {}, "unknown_nodes": [], "fields": {},
+            "header": {"m_nodesBitCount": 2, "m_statesBitCount": 2,
+                "m_remoteSyncNodesBitCount": 2, "m_syncVarsBitCount": 2},
+            "nodes": [
+                {"pos": 0, "rid": 0, "uid": 0, "remote": -1, "class": "STUStatescriptEntry",
+                    "state": null, "server_only": false, "client_only": false,
+                    "fields": {"m_outPlug": {"$": "Plug", "links": [[1, "m_inPlug"]]}}},
+                {"pos": 1, "rid": 1, "uid": 1, "remote": -1, "class": "STUStatescriptActionSetVar",
+                    "state": null, "server_only": false, "client_only": false,
+                    "fields": {"m_ADEB6E05": true,
+                        "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": DESTINATION,
+                            "m_60DB8F99": true},
+                        "m_value": {"$": "STU_967463AB",
+                            "m_92D12BE6": {"$": "STU_DB742151",
+                                "m_entity": {"$": "STU_B5A0CAF0"}},
+                            "m_C8655030": {"$": "STU_8556841E",
+                                "m_entityDef": "0x040000000000FA32"}}}}
+            ]
+        }]
+    });
+    factory.graphs =
+        Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    factory.roots = vec![Root::new(1, 87)];
+
+    let runtime = factory.start(spawn).unwrap();
+    let snapshot = runtime.snapshot().unwrap();
+    assert!(
+        snapshot.initialization_complete(),
+        "{:?}",
+        snapshot.diagnostics
+    );
+    // SetVar supplies integer zero as its initial accumulator. The unbound
+    // count leaves that value intact without looking up an ownership registry.
+    assert_eq!(snapshot.variables[&DESTINATION], Value::Integer(0));
+}
+
+#[test]
+fn authored_body_activity_reads_room_bootstrap_and_current_generation() {
+    use crate::{
+        game_combat::{PlayerBodyState, RoomSimulation},
+        game_replication::{BodyId, OwnerRoomActivity},
+        scene_assets::PreparedScene,
+        script_expr::EvalError,
+        script_init::{Diagnostic, Issue},
+        vitals::Death,
+    };
+    use serde_json::json;
+
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-owner-room-activity-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(contract["schema_version"], 1);
+    assert_eq!(contract["evidence"], "synthetic-rust");
+    let graph = contract["input"]["graph"].as_u64().unwrap() as u32;
+    let variable = contract["input"]["variable"].as_u64().unwrap() as u32;
+    let expected = &contract["expected"];
+    let bundle = json!({
+        "version": 1, "missing": [], "bodies": {},
+        "authored_classes": [{"class": "authored.activity_probe", "behavior": "interval_state"}],
+        "graphs": [{
+            "index": graph, "items": 3, "entries": [0], "states": [2], "remote": [],
+            "sync_vars": [], "containers": {}, "unknown_nodes": [], "fields": {},
+            "header": {"m_nodesBitCount": 2, "m_statesBitCount": 2,
+                "m_remoteSyncNodesBitCount": 2, "m_syncVarsBitCount": 2},
+            "nodes": [
+                {"pos": 0, "uid": 0, "rid": 0, "remote": -1, "class": "STUStatescriptEntry",
+                    "state": null, "server_only": true, "client_only": false,
+                    "fields": {"m_outPlug": {"$": "Plug", "links": [[1, "m_inPlug"], [2, "m_inPlug"]]}}},
+                {"pos": 1, "uid": 1, "rid": 1, "remote": -1, "class": "STUStatescriptActionSetVar",
+                    "state": null, "server_only": true, "client_only": false,
+                    "fields": {"m_ADEB6E05": true,
+                        "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": variable,
+                            "m_60DB8F99": true},
+                        "m_value": {"$": "BodyActive"}}},
+                {"pos": 2, "uid": 2, "rid": 2, "remote": -1, "class": "authored.activity_probe",
+                    "state": 0, "server_only": true, "client_only": false,
+                    "fields": {"interval_frames": 1,
+                        "on_interval": {"$": "Plug", "links": [[1, "m_inPlug"]]}}}
+            ]
+        }]
+    });
+    let (mut factory, spawn) = fixture_body_factory();
+    factory.graphs =
+        Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    factory.roots = vec![Root::new(1, graph)];
+    let assert_activity = |runtime: &dyn OwnerBodyRuntime, expected: &Json| {
+        let snapshot = runtime.snapshot().unwrap();
+        assert!(
+            snapshot.initialization_complete(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        assert_eq!(
+            snapshot.variables[&variable],
+            Value::Bool(expected.as_bool().unwrap())
+        );
+    };
+
+    let detached = factory.start(spawn).unwrap();
+    let snapshot = detached.snapshot().unwrap();
+    assert!(matches!(
+        snapshot.diagnostics.as_slice(),
+        [Diagnostic {
+            issue: Issue::Expression(EvalError::UnavailableBodyActivity),
+            ..
+        }]
+    ));
+    assert!(!snapshot.variables.contains_key(&variable));
+
+    let inactive = factory
+        .start_with_setup(
+            spawn,
+            OwnerBodySetup {
+                room_activity: Some(OwnerRoomActivity::Encounter { active: false }),
+                ..OwnerBodySetup::default()
+            },
+        )
+        .unwrap();
+    assert_activity(&inactive, &expected["inactive_at_startup"]);
+
+    let mut scene = PreparedScene::fixture_for_bots(vec![]);
+    let hero = Hero {
+        guid: factory.hero,
+        name: "Activity probe".into(),
+        role: "Damage".into(),
+        body: 0x0400_0000_0000_F823,
+    };
+    scene.owner_body_factory = Some(Arc::new(move |_, spawn, setup| {
+        Ok(Some(Box::new(factory.start_with_setup(spawn, setup)?)))
+    }));
+    let contacts = Arc::new(ContactWorld::new(vec![]).unwrap());
+    let state = |id, runtime: Box<dyn OwnerBodyRuntime>| {
+        let mover = Mover::new(
+            MoverSettings::default(),
+            Arc::clone(&contacts),
+            spawn.pose.position,
+            0,
+            MOVER_CATEGORY,
+        )
+        .unwrap();
+        PlayerBodyState::new(
+            id,
+            spawn.controller,
+            spawn.slot,
+            0,
+            hero.guid,
+            mover,
+            Some(runtime),
+            spawn.frame,
+            None,
+        )
+    };
+    let sample_next_frame = |room: &mut RoomSimulation, id, frame, expected: &Json| {
+        let state = room.player_body_mut(id).unwrap();
+        let runtime = state.runtime.as_mut().unwrap();
+        runtime
+            .advance(
+                Command {
+                    frame,
+                    ..Command::default()
+                },
+                &state.mover,
+                BodyStep::UnposedTimer,
+            )
+            .unwrap();
+        assert_activity(runtime.as_ref(), expected);
+    };
+
+    let first = BodyId {
+        entity: spawn.entity,
+        generation: 1,
+    };
+    let runtime = scene.owner_body_runtime(&hero, spawn).unwrap().unwrap();
+    assert_activity(runtime.as_ref(), &expected["regular_at_startup"]);
+    let room = scene.simulation_mut();
+    room.spawn_player_body(state(first, runtime)).unwrap();
+    let mut frame = spawn.frame;
+    for (active, sample) in [false, true]
+        .into_iter()
+        .zip(expected["during_encounter"].as_array().unwrap())
+    {
+        room.set_player_activity(first, OwnerRoomActivity::Encounter { active });
+        frame += 1;
+        sample_next_frame(room, first, frame, sample);
+    }
+    let (_, outcome, _) = room
+        .damage_player_body_by_wire(
+            first,
+            contract["input"]["lethal_damage"].as_f64().unwrap(),
+            Death {
+                time: 2.0,
+                frame,
+                killer: 42,
+            },
+            None,
+        )
+        .unwrap();
+    assert!(outcome.killed);
+    sample_next_frame(room, first, frame + 1, &expected["after_death"]);
+
+    let replacement = BodyId {
+        generation: 2,
+        ..first
+    };
+    let fresh = scene.owner_body_runtime(&hero, spawn).unwrap().unwrap();
+    assert_activity(fresh.as_ref(), &expected["after_replacement"]);
+    let room = scene.simulation_mut();
+    room.spawn_player_body(state(replacement, fresh)).unwrap();
+    room.set_player_activity(first, OwnerRoomActivity::Encounter { active: false });
+    assert!(room.player_body(first).is_none());
+    sample_next_frame(
+        room,
+        replacement,
+        spawn.frame + 1,
+        &expected["after_replacement"],
+    );
+}
+
+#[test]
+fn owner_startup_reads_the_frozen_room_frame_before_body_attachment() {
+    use crate::{
+        collision_cache::CollisionCache,
+        contact_world::ContactWorld,
+        game_combat::PlayerBodyState,
+        game_replication::BodyId,
+        mover_settings::MoverSettings,
+        scene_assets::PreparedScene,
+        script_expr::EvalError,
+        script_init::{Diagnostic, Issue},
+    };
+    use serde_json::json;
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        graph: u32,
+        variable: u32,
+        owner_frame: u32,
+        room_frame: u32,
+        owner_position: Vec3,
+        other_entity: u32,
+        other_position: Vec3,
+        moved_position: Vec3,
+        radius: f64,
+    }
+
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-owner-startup-spatial-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(contract["schema_version"], 1);
+    assert_eq!(contract["evidence"], "synthetic-rust");
+    let input: Input = serde_json::from_value(contract["input"].clone()).unwrap();
+    let bundle = json!({
+        "version": 1, "missing": [], "bodies": {},
+        "graphs": [{
+            "index": input.graph, "items": 2, "entries": [0], "states": [], "remote": [],
+            "sync_vars": [], "containers": {}, "unknown_nodes": [], "fields": {},
+            "header": {"m_nodesBitCount": 2, "m_statesBitCount": 2,
+                "m_remoteSyncNodesBitCount": 2, "m_syncVarsBitCount": 2},
+            "nodes": [
+                {"pos": 0, "rid": 0, "uid": 0, "remote": -1, "class": "STUStatescriptEntry",
+                    "state": null, "server_only": false, "client_only": false,
+                    "fields": {"m_outPlug": {"$": "Plug", "links": [[1, "m_inPlug"]]}}},
+                {"pos": 1, "rid": 1, "uid": 1, "remote": -1, "class": "STUStatescriptActionSetVar",
+                    "state": null, "server_only": false, "client_only": false,
+                    "fields": {"m_ADEB6E05": true,
+                        "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": input.variable,
+                            "m_60DB8F99": true},
+                        "m_value": {"$": "EntitiesInRadius", "radius": input.radius,
+                            "center": {"$": "EntityPosition", "entity": {"$": "STU_B5A0CAF0"}}}}}
+            ]
+        }]
+    });
+    let (mut factory, mut spawn) = fixture_body_factory();
+    factory.graphs =
+        Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    factory.roots = vec![Root::new(1, input.graph)];
+    spawn.frame = input.owner_frame;
+    spawn.pose.position = input.owner_position;
+
+    let detached = factory.start(spawn).unwrap();
+    let snapshot = detached.snapshot().unwrap();
+    assert!(matches!(
+        snapshot.diagnostics.as_slice(),
+        [Diagnostic {
+            issue: Issue::Expression(EvalError::UnavailableSpatialCandidates),
+            ..
+        }]
+    ));
+    assert!(!snapshot.variables.contains_key(&input.variable));
+
+    let scene_cache = CollisionCache {
+        header: serde_json::from_value(json!({
+            "meshes": [], "hulls": 0, "models": 0, "placements": 0, "identifiers": []
+        }))
+        .unwrap(),
+        meshes: vec![],
+        hulls: vec![],
+        models: vec![],
+        placements: vec![],
+    };
+    let ground = Arc::new(CollisionScene::movement_probe(&scene_cache, &BTreeSet::new()).unwrap());
+    let hero = Hero {
+        guid: factory.hero,
+        name: "Startup fixture".into(),
+        role: "Damage".into(),
+        body: 0x0400_0000_0000_F872,
+    };
+    let mut scene = PreparedScene::fixture_for_bots(vec![]);
+    scene.simulation_mut().enable_spatial_queries(
+        false,
+        ground,
+        factory.graphs.room_spatial_needs(),
+    );
+    scene.owner_body_factory = Some(Arc::new(move |_, spawn, setup| {
+        let runtime: Box<dyn OwnerBodyRuntime> = Box::new(factory.start_with_setup(spawn, setup)?);
+        Ok(Some(runtime))
+    }));
+
+    scene
+        .simulation_mut()
+        .prepare_spatial_frame(input.room_frame)
+        .unwrap();
+    let empty = scene.owner_body_runtime(&hero, spawn).unwrap().unwrap();
+    let snapshot = empty.snapshot().unwrap();
+    assert!(
+        snapshot.initialization_complete(),
+        "{:?}",
+        snapshot.diagnostics
+    );
+    assert_eq!(
+        snapshot.variables[&input.variable],
+        Value::Array(Vec::new())
+    );
+
+    let contacts = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+    let mover = |position| {
+        Mover::new(
+            MoverSettings::default(),
+            Arc::clone(&contacts),
+            position,
+            0,
+            MOVER_CATEGORY,
+        )
+        .unwrap()
+    };
+    let other = BodyId {
+        entity: input.other_entity,
+        generation: 1,
+    };
+    let room = scene.simulation_mut();
+    room.spawn_player_body(PlayerBodyState::new(
+        other,
+        input.other_entity - 1,
+        1,
+        1,
+        hero.guid,
+        mover(input.other_position),
+        None,
+        input.room_frame + 1,
+        None,
+    ))
+    .unwrap();
+    room.prepare_spatial_frame(input.room_frame + 1).unwrap();
+    room.player_body_mut(other).unwrap().mover = mover(input.moved_position);
+
+    let ready = scene.owner_body_runtime(&hero, spawn).unwrap().unwrap();
+    let snapshot = ready.snapshot().unwrap();
+    assert!(
+        snapshot.initialization_complete(),
+        "{:?}",
+        snapshot.diagnostics
+    );
+    let expected: Vec<u32> =
+        serde_json::from_value(contract["expected"]["selected"].clone()).unwrap();
+    assert_eq!(
+        snapshot.variables[&input.variable],
+        Value::Array(expected.into_iter().map(Value::Entity).collect())
+    );
+    assert!(
+        scene
+            .simulation()
+            .player_handle_for_wire(spawn.entity)
+            .is_none()
+    );
+}
+
+#[test]
+fn player_host_facts_use_the_bound_body_and_canonical_team() {
+    use crate::{match_scene::team_bit, script_expr::EntityRelation};
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-player-host-facts-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(fixture["schema_version"], 1);
+    assert_eq!(fixture["case_id"], "script-player-host-facts.synthetic.v1");
+    assert_eq!(fixture["evidence"], "synthetic-rust");
+    let foreign = u32::try_from(fixture["input"]["foreign_entity"].as_u64().unwrap()).unwrap();
+    let teams: Vec<(u8, i8)> = serde_json::from_value(fixture["input"]["teams"].clone()).unwrap();
+    let invalid_filters: Vec<u64> =
+        serde_json::from_value(fixture["input"]["invalid_filters"].clone()).unwrap();
+    let presence = &fixture["expected"]["entity_exists"];
+
+    let (factory, spawn) = fixture_body_factory();
+    let site = Site {
+        entity: spawn.entity,
+        instance: 1,
+        graph: 42,
+        node: None,
+    };
+    let wrong_site = Site {
+        entity: foreign,
+        ..site
+    };
+    let mut world = factory.start(spawn).unwrap().world;
+    assert_eq!(
+        world.related_entity(site, EntityRelation::CurrentPossessor, spawn.entity),
+        Some(spawn.controller)
+    );
+    for (entity, role) in [
+        (spawn.entity, "body"),
+        (spawn.controller, "controller"),
+        (0, "zero"),
+        (foreign, "foreign"),
+    ] {
+        assert_eq!(
+            world.entity_exists(entity),
+            presence[role].as_bool(),
+            "{role}"
+        );
+    }
+
+    let mut composite = 0;
+    for (team, expected) in teams {
+        let body_filter = team_bit(team).unwrap();
+        composite |= body_filter;
+        let world = factory
+            .start(OwnerBodySpawn {
+                body_filter,
+                ..spawn
+            })
+            .unwrap()
+            .world;
+        assert_eq!(world.entity_team(site, spawn.entity), Some(expected));
+        assert_eq!(world.entity_team(site, spawn.controller), None);
+        assert_eq!(world.entity_team(site, foreign), None);
+        assert_eq!(world.entity_team(wrong_site, spawn.entity), None);
+    }
+    for body_filter in invalid_filters.into_iter().chain([composite]) {
+        let world = factory
+            .start(OwnerBodySpawn {
+                body_filter,
+                ..spawn
+            })
+            .unwrap()
+            .world;
+        assert_eq!(world.entity_team(site, spawn.entity), None);
+    }
+}
+
+#[test]
 fn verified_body_starts_fresh_instances_and_advances_only_its_own_retail_clock() {
     let (factory, spawn) = fixture_body_factory();
     assert!(
@@ -744,7 +2108,14 @@ fn verified_body_starts_fresh_instances_and_advances_only_its_own_retail_clock()
         graph: 42,
         node: None,
     };
-    assert_eq!(first.world.movement_sample(site), Some(2));
+    assert_eq!(
+        first.world.movement_sample(site),
+        Some(crate::script_init::MovementSample {
+            flags: 2,
+            air_ticks: spawn.pose.air_ticks,
+            pose_frame: spawn.pose.frame,
+        })
+    );
     assert_eq!(second.world.movement_sample(site), None);
     let mut mover = Mover::new(
         MoverSettings::default(),
@@ -775,7 +2146,14 @@ fn verified_body_starts_fresh_instances_and_advances_only_its_own_retail_clock()
     let posed = mover.pose();
     let sample = sample_movement_flags(&posed).expect("a regular posed movement record");
     assert_eq!(first.world.movement, posed);
-    assert_eq!(first.world.movement_sample(site), Some(sample));
+    assert_eq!(
+        first.world.movement_sample(site),
+        Some(crate::script_init::MovementSample {
+            flags: sample,
+            air_ticks: posed.air_ticks,
+            pose_frame: posed.frame,
+        })
+    );
     assert_eq!(first.component.now_ms(), 102 * FRAME_MS - 1);
     assert_eq!(second.component.now_ms(), 101 * FRAME_MS - 1);
     let gap = Command {
@@ -829,6 +2207,390 @@ fn verified_body_starts_fresh_instances_and_advances_only_its_own_retail_clock()
 }
 
 #[test]
+fn owner_eye_query_reads_spawn_anchor_then_updates_with_live_crouch_and_spring() {
+    use crate::{
+        collision_index::SceneTriangle, commands::CROUCH, game_combat::script_eye_position,
+        vitals::Death,
+    };
+
+    let (factory, spawn) = fixture_body_factory();
+    let [x, y, z] = spawn.pose.position;
+    let rays = TriangleIndex::new([SceneTriangle {
+        vertices: [[0.0, y, 0.0], [0.0, y, 8.0], [8.0, y, 8.0]],
+        mask: MOVER_CATEGORY,
+        surface: 0,
+    }])
+    .unwrap();
+    let mut mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        spawn.pose.position,
+        0,
+        MOVER_CATEGORY,
+    )
+    .unwrap();
+    let standing = [x, y + eye_height(factory.hero, false), z];
+    let eye_position = script_eye_position(factory.hero, &mover);
+    assert_eq!(eye_position, Some(standing));
+    let mut runtime = factory
+        .start(OwnerBodySpawn {
+            eye_position,
+            ..spawn
+        })
+        .unwrap();
+    assert_eq!(
+        runtime.world.body_eye_position(spawn.entity),
+        Some(standing)
+    );
+
+    let command = Command {
+        frame: spawn.frame + 1,
+        buttons: CROUCH,
+        ..Command::default()
+    };
+    mover
+        .step(&rays, command, 0.016, |mover, command| {
+            runtime.advance(command, mover, BodyStep::Posed).unwrap();
+        })
+        .unwrap();
+    assert!(mover.crouched());
+    let spring = f64::from(mover.spring_offset());
+    assert_ne!(spring, 0.0);
+    let [x, y, z] = mover.pose().position;
+    let crouched = [x, y + (eye_height(factory.hero, true) + spring), z];
+    assert_ne!(crouched, mover.pose().position);
+    assert_ne!(crouched, standing);
+    assert_eq!(
+        runtime.world.body_eye_position(spawn.entity),
+        Some(crouched)
+    );
+
+    assert!(
+        runtime
+            .receive_damage(
+                1_000.0,
+                Death {
+                    time: 0.0,
+                    frame: command.frame,
+                    killer: 0,
+                },
+            )
+            .killed
+    );
+    assert_eq!(runtime.world.body_eye_position(spawn.entity), None);
+}
+
+#[test]
+fn authored_player_facing_claims_seed_the_mover_and_release_with_runtime() {
+    use crate::{
+        contact_world::ContactWorld,
+        game_combat::{PlayerBodyState, RoomSimulation},
+        game_replication::BodyId,
+        mover_settings::MoverSettings,
+        script_expr::StackPriority,
+        script_init::AiFacing,
+    };
+    use serde_json::json;
+
+    let (mut factory, spawn) = fixture_body_factory();
+    let bundle = json!({
+        "version": 1, "missing": [], "bodies": {},
+        "graphs": [{
+            "index": 87, "items": 2, "entries": [0], "states": [1], "remote": [],
+            "sync_vars": [], "containers": {}, "unknown_nodes": [], "fields": {},
+            "header": {"m_nodesBitCount": 2, "m_statesBitCount": 2,
+                "m_remoteSyncNodesBitCount": 2, "m_syncVarsBitCount": 2},
+            "nodes": [
+                {"pos": 0, "rid": 0, "uid": 0, "remote": -1, "class": "STUStatescriptEntry",
+                    "state": null, "server_only": false, "client_only": false,
+                    "fields": {"m_outPlug": {"$": "Plug", "links": [[1, "m_inPlug"]]}}},
+                {"pos": 1, "rid": 1, "uid": 1, "remote": -1, "class": "authored.native_facing",
+                    "state": 0, "server_only": true, "client_only": false,
+                    "state_behavior": "facing_claim", "fields": {
+                        "direction": {"$": "STUConfigVarDynamic", "m_identifier": 42,
+                            "m_60DB8F99": true},
+                        "priority": {"level": 17, "above_equals": false}}}
+            ]
+        }]
+    });
+    factory.graphs =
+        Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    factory.roots = vec![Root::new(1, 87)];
+    factory.variables.insert(42, Value::Vector([1.0, 0.0, 0.0]));
+    let mut runtime = factory.start(spawn).unwrap();
+    assert!(runtime.snapshot().unwrap().initialization_complete());
+    assert_eq!(runtime.authored_facing(), Some([16_384, 0]));
+    let first = Site {
+        entity: spawn.entity,
+        instance: 1,
+        graph: 87,
+        node: Some(1),
+    };
+    let second = Site {
+        node: Some(2),
+        ..first
+    };
+    let record = AiFacing {
+        target: spawn.entity,
+        direction: [-1.0, 0.0, 0.0],
+        priority: StackPriority {
+            level: 17,
+            above_equals: false,
+        },
+    };
+    assert_eq!(
+        runtime.world.set_facing_claim(second, record, true),
+        Some(true)
+    );
+    assert_eq!(runtime.authored_facing(), Some([16_384, 0]));
+    assert_eq!(
+        runtime.world.set_facing_claim(first, record, true),
+        Some(true)
+    );
+    assert_eq!(runtime.authored_facing(), Some([-16_384, 0]));
+    let later = AiFacing {
+        direction: [0.0, 1.0, 0.0],
+        priority: StackPriority {
+            above_equals: true,
+            ..record.priority
+        },
+        ..record
+    };
+    assert_eq!(
+        runtime.world.set_facing_claim(second, later, true),
+        Some(true)
+    );
+    assert_eq!(runtime.authored_facing(), Some([0, -16_384]));
+    assert_eq!(
+        runtime.world.set_facing_claim(second, later, false),
+        Some(true)
+    );
+    assert_eq!(runtime.authored_facing(), Some([-16_384, 0]));
+    assert_eq!(
+        runtime.world.set_facing_claim(
+            Site {
+                entity: spawn.controller,
+                ..first
+            },
+            record,
+            true
+        ),
+        None
+    );
+    assert_eq!(
+        runtime.world.set_facing_claim(
+            second,
+            AiFacing {
+                target: spawn.controller,
+                ..record
+            },
+            true
+        ),
+        Some(false)
+    );
+    assert_eq!(
+        runtime.world.set_facing_claim(
+            second,
+            AiFacing {
+                direction: [0.0; 3],
+                ..record
+            },
+            true
+        ),
+        Some(false)
+    );
+    let east = AiFacing {
+        direction: [1.0, 0.0, 0.0],
+        ..record
+    };
+    assert_eq!(
+        runtime.world.set_facing_claim(first, east, true),
+        Some(true)
+    );
+
+    let ground = crate::collision_index::TriangleIndex::new(Vec::new()).unwrap();
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        spawn.pose.position,
+        0,
+        MOVER_CATEGORY,
+    )
+    .unwrap();
+    let id = BodyId {
+        entity: spawn.entity,
+        generation: 1,
+    };
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    room.spawn_player_body(PlayerBodyState::new(
+        id,
+        spawn.controller,
+        0,
+        0,
+        factory.hero,
+        mover,
+        Some(Box::new(runtime)),
+        spawn.frame,
+        None,
+    ))
+    .unwrap();
+    let body = room.player_body_mut(id).unwrap();
+    body.mover
+        .step(
+            &ground,
+            Command {
+                frame: spawn.frame + 1,
+                yaw: 1234,
+                pitch: 5678,
+                ..Command::default()
+            },
+            0.016,
+            |_, _| {},
+        )
+        .unwrap();
+    assert_eq!(
+        [body.mover.pose().yaw, body.mover.pose().pitch],
+        [16_384, 0]
+    );
+    body.mover.set_cinematic_aim(Some([-1234, -5678]));
+    body.mover
+        .step(
+            &ground,
+            Command {
+                frame: spawn.frame + 2,
+                ..Command::default()
+            },
+            0.016,
+            |_, _| {},
+        )
+        .unwrap();
+    assert_eq!(
+        [body.mover.pose().yaw, body.mover.pose().pitch],
+        [-1234, -5678]
+    );
+    factory
+        .variables
+        .insert(42, Value::Vector([-1.0, 0.0, 0.0]));
+    let replacement = BodyId {
+        generation: 2,
+        ..id
+    };
+    let replacement_runtime = factory.start(spawn).unwrap();
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        spawn.pose.position,
+        0,
+        MOVER_CATEGORY,
+    )
+    .unwrap();
+    room.spawn_player_body(PlayerBodyState::new(
+        replacement,
+        spawn.controller,
+        0,
+        0,
+        factory.hero,
+        mover,
+        Some(Box::new(replacement_runtime)),
+        spawn.frame,
+        None,
+    ))
+    .unwrap();
+    assert!(room.player_body(id).is_none());
+    let body = room.player_body_mut(replacement).unwrap();
+    body.mover
+        .step(
+            &ground,
+            Command {
+                frame: spawn.frame + 3,
+                yaw: 4321,
+                pitch: -1234,
+                ..Command::default()
+            },
+            0.016,
+            |_, _| {},
+        )
+        .unwrap();
+    assert_eq!(
+        [body.mover.pose().yaw, body.mover.pose().pitch],
+        [-16_384, 0]
+    );
+    assert!(room.clear_player_runtime(replacement));
+    let body = room.player_body_mut(replacement).unwrap();
+    body.mover
+        .step(
+            &ground,
+            Command {
+                frame: spawn.frame + 4,
+                yaw: 4321,
+                pitch: -1234,
+                ..Command::default()
+            },
+            0.016,
+            |_, _| {},
+        )
+        .unwrap();
+    assert_eq!(
+        [body.mover.pose().yaw, body.mover.pose().pitch],
+        [4321, -1234]
+    );
+
+    let mut dead = factory.start(spawn).unwrap();
+    dead.receive_damage(
+        10_000.0,
+        crate::vitals::Death {
+            frame: spawn.frame,
+            time: 0.0,
+            killer: 0,
+        },
+    );
+    assert_eq!(dead.authored_facing(), None);
+    assert_eq!(dead.world.set_facing_claim(second, east, true), Some(false));
+    assert_eq!(dead.world.set_facing_claim(first, east, false), Some(true));
+    assert!(dead.world.facing_claims.is_empty());
+}
+
+#[test]
+fn authored_pose_queries_read_live_player_position_and_aim_outside_encounter_mode() {
+    let (factory, spawn) = fixture_body_factory();
+    let mut world = factory.start(spawn).unwrap().world;
+    assert!(!is_junkenstein_mode(world.mode));
+    let current = [0.0, 1.5, -6.25];
+    world.position = current;
+    world.movement.yaw = 16_384;
+    world.movement.pitch = -8_192;
+    assert_eq!(world.known_position(spawn.entity), Some(current));
+    assert_eq!(world.position(spawn.entity), Some(current));
+    assert_eq!(world.authored_position(spawn.entity), Some(current));
+    let heading = world.forward(spawn.entity).unwrap();
+    for (actual, expected) in heading.into_iter().zip([1.0, 0.0, 0.0]) {
+        assert!((actual - expected).abs() < 1e-12);
+    }
+    let axis = std::f64::consts::FRAC_1_SQRT_2;
+    let direction = world.authored_forward(spawn.entity).unwrap();
+    for (actual, expected) in direction.into_iter().zip([axis, axis, 0.0]) {
+        assert!((actual - expected).abs() < 1e-12);
+    }
+
+    let foreign = spawn.entity + 1;
+    let static_position = [12.0, 4.0, -2.0];
+    let static_forward = [0.0, 0.0, 1.0];
+    world.deadeye_scene.view_subjects.insert(
+        foreign,
+        super::world::ViewSubject {
+            position: static_position,
+            forward: static_forward,
+            tags: Default::default(),
+        },
+    );
+    assert_eq!(world.known_position(foreign), None);
+    assert_eq!(world.authored_position(foreign), Some(static_position));
+    assert_eq!(world.authored_forward(foreign), Some(static_forward));
+    assert_eq!(world.authored_position(spawn.controller), None);
+    assert_eq!(world.authored_forward(spawn.controller), None);
+}
+
+#[test]
 fn body_world_queries_only_expose_its_body_and_available_mode_variable_table() {
     use serde_json::json;
 
@@ -866,6 +2628,87 @@ fn body_world_queries_only_expose_its_body_and_available_mode_variable_table() {
     }
     world.mode += 1;
     assert_eq!(world.entity_variable(GAME_MODE_ENTITY, 1), None);
+}
+
+#[test]
+fn owner_mode_entity_query_reads_the_active_mode_at_any_script_site() {
+    use crate::{game_content::JUNKENSTEIN_REVENGE, script_expr::EvalError};
+    use serde_json::json;
+
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-mode-entity-query-v1.json"
+    ))
+    .unwrap();
+    let input = &contract["input"];
+    let expected = &contract["expected"];
+    let present = Ok(Value::Bool(expected["present"].as_bool().unwrap()));
+    let known_absent = Ok(Value::Bool(expected["known_absent"].as_bool().unwrap()));
+    assert_eq!(expected["unknown"], "unsupported");
+    let variable = u32::try_from(input["entity_variable"].as_u64().unwrap()).unwrap();
+
+    let spawn = fixture_body_factory().1;
+    let mut runtime = fixture_hitscan_factory(20.0).start(spawn).unwrap();
+    runtime.world.graphs = Arc::new(
+        GraphStore::from_json(
+            &serde_json::to_vec(&json!({
+                "version":1,"graphs":[],"bodies":{},"missing":[],
+                "mode_variables":input["mode_variables"]
+            }))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    let evaluate = |body: &mut PlayerBodyRuntime, config: &Json| {
+        body.component
+            .evaluate_state_config(1, 0, config, &mut body.world)
+    };
+    let mode = json!({"$":"STU_A3DEF368","m_EE729DCB":0});
+    let exists = json!({"$":"STU_E72F6348","m_entity":mode.clone()});
+    let unsupported = Err(EvalError::UnsupportedConfig("STU_A3DEF368".into()));
+    let foreign_site = Site {
+        entity: spawn.controller,
+        instance: 1,
+        graph: 42,
+        node: Some(0),
+    };
+
+    runtime.world.mode = input["present_mode"].as_u64().unwrap();
+    assert_eq!(
+        evaluate(&mut runtime, &mode),
+        Ok(Value::Entity(GAME_MODE_ENTITY))
+    );
+    assert_eq!(evaluate(&mut runtime, &exists), present);
+    assert_eq!(runtime.world.native(foreign_site, &mode), None);
+
+    let slot = json!({"$":"STUConfigVarDynamic","m_identifier":variable,"m_60DB8F99":true});
+    let stored = json!({"$":"STU_E72F6348","m_entity":slot});
+    runtime
+        .component
+        .set_entity_variable(
+            variable,
+            Value::Entity(GAME_MODE_ENTITY),
+            &mut runtime.world,
+        )
+        .unwrap();
+    assert_eq!(evaluate(&mut runtime, &stored), present);
+
+    let mut malformed = exists.clone();
+    malformed["m_entity"]["m_extra"] = Json::Null;
+    assert_eq!(evaluate(&mut runtime, &malformed), unsupported);
+
+    runtime.world.mode = JUNKENSTEIN_REVENGE;
+    assert_eq!(evaluate(&mut runtime, &exists), known_absent);
+    assert_eq!(evaluate(&mut runtime, &stored), known_absent);
+    assert_eq!(runtime.world.native(foreign_site, &exists), None);
+    assert_eq!(evaluate(&mut runtime, &mode), unsupported);
+    assert_eq!(evaluate(&mut runtime, &malformed), unsupported);
+
+    runtime.world.mode = input["unknown_mode"].as_u64().unwrap();
+    assert_eq!(evaluate(&mut runtime, &exists), unsupported);
+    assert_eq!(
+        evaluate(&mut runtime, &stored),
+        Err(EvalError::UnsupportedConfig("STU_E72F6348".into()))
+    );
 }
 
 #[test]
@@ -992,7 +2835,7 @@ fn authored_flashbang_duration_follows_both_mode_branches() {
     use serde_json::json;
     let root = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
     let graphs = GraphStore::load(root.join("data/game_graphs_174.json.gz")).unwrap();
-    let config = flashbang_duration(&graphs).unwrap();
+    let config = LEGACY_PROJECTILE_CONTROL.duration(&graphs).unwrap();
     for (flag, ticks) in [(false, 50), (true, 107)] {
         let (_, spawn) = fixture_body_factory();
         let mut runtime = fixture_volley_factory(29, true, fixture_projectile_fields(40.0))
@@ -1066,11 +2909,16 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
     let health = pools.total();
     let variables = crate::script_init::player_entity_variables(body, health, health);
     let mut world = BodyWorld {
+        spatial_frame: None,
+        team_member_counts: None,
+        room_activity: None,
+        script_requests: Default::default(),
         graphs: Arc::clone(&graphs),
         controller: 0xa000_0100,
         entity: 0xa000_0101,
         body_filter: crate::match_scene::team_bit(0).unwrap(),
         position: GameMap::practice_range().spawn_point(0, 0).unwrap().0,
+        eye_position: None,
         movement: Movement::default(),
         throttles: [0; 2],
         mode: PRACTICE_RANGE_MODE,
@@ -1078,15 +2926,19 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
         vitals: Vitals::empty(),
         pool_types_known: true,
         target_tags: tagged.then(|| body.target_tags.clone().unwrap()),
+        model_hardpoints: None,
         target_tag_effects: TargetTagEffects::default(),
         controller_on_fire: false,
         defenders: Arc::default(),
         sightings: Vec::new(),
         sighting_source: None,
         cinematic_aim: None,
+        facing_claims: Default::default(),
         deadeye_scene: DeadeyeScene::default(),
         velocity_changes: Vec::new(),
+        scripted_motion: None,
         damage_credit: None,
+        uses_authored_charge: false,
     };
     let mut component = Component::start(
         graphs,
@@ -1177,7 +3029,10 @@ fn prepared_soldier_starts_the_tagged_body_and_weapon_tree() {
     let movement_graph = &snapshot.instances[&12];
     let movement = &movement_graph.states[&4];
     assert!(movement.active);
-    assert_eq!(movement.kind, StateKind::MovementSample(2));
+    assert!(matches!(
+        movement.kind,
+        StateKind::MovementSample { flags: 2, .. }
+    ));
     assert_eq!(snapshot.variables[&545], Value::Bool(true));
     assert!(
         !snapshot
@@ -1483,11 +3338,16 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             .collect();
         let health = pools.total();
         let mut world = BodyWorld {
+            spatial_frame: None,
+            team_member_counts: None,
+            room_activity: None,
+            script_requests: Default::default(),
             graphs: Arc::clone(&graphs),
             controller: 0xa000_0100,
             entity: 0xa000_0101,
             body_filter: crate::match_scene::team_bit(0).unwrap(),
             position: [0.0; 3],
+            eye_position: None,
             movement: Movement::default(),
             throttles: [0; 2],
             mode: PRACTICE_RANGE_MODE,
@@ -1495,15 +3355,19 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             vitals: Vitals::empty(),
             pool_types_known: true,
             target_tags: body.target_tags.clone(),
+            model_hardpoints: None,
             target_tag_effects: TargetTagEffects::default(),
             controller_on_fire: false,
             defenders: Arc::default(),
             sightings: Vec::new(),
             sighting_source: None,
             cinematic_aim: None,
+            facing_claims: Default::default(),
             deadeye_scene: DeadeyeScene::default(),
             velocity_changes: Vec::new(),
+            scripted_motion: None,
             damage_credit: None,
+            uses_authored_charge: false,
         };
         let component = Component::start(
             Arc::clone(&graphs),

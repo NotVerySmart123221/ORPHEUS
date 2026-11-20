@@ -120,6 +120,7 @@ class PythonRoom:
         self.startup_acks = {}
         self.bootstrap_effects = []
         self._load()
+        self._vm_rng_at_schedule = self._vm_rng_state()
         self.setup_delivery_ticks = self.match.tick - self.start_tick
         self.setup_elapsed_us = self.clock.elapsed_us
         self.player_script = self.player.body_script
@@ -131,6 +132,7 @@ class PythonRoom:
     def _load(self):
         m, player = self.match, self.player
         self.vm_seed = None
+        self._vm_rng_component = None
         map_loaded = False
 
         def confirmed(records, possession, script):
@@ -159,6 +161,11 @@ class PythonRoom:
             if (player.steps_done == 4 and self.delivery.controller_ready
                     and player.script.delivered and self.vm_seed is None):
                 self.vm_seed = select_stock_body(m, player, now)
+                self._vm_rng_component = player.body_script.component
+                self._vm_rng = self._vm_rng_component.rng
+                # The selected component has already run initialization. A
+                # separate generator gives the pre-initialization state.
+                self._vm_rng_initial = random.Random(self.vm_seed).getstate()
                 self.component_start_frame = player.body_script.frame
                 self.identities[player.body] = "player/0/body/1"
             if instance_sent:
@@ -172,6 +179,27 @@ class PythonRoom:
                     raise ValueError("gameplay input processed during loading")
                 return
         raise ValueError(f"room readiness timed out; observed receipts: {sorted(self.startup_acks)}")
+
+    def _vm_rng_state(self):
+        player = self.player
+        if self._vm_rng_component is None or player.gone or not player.has_body:
+            return None
+        body = player.body_script
+        if (body is None or body.component is not self._vm_rng_component
+                or body.component.rng is not self._vm_rng):
+            return None
+        return self._vm_rng.getstate()
+
+    def player_vm_rng_observation(self):
+        """Compare the selected VM's RNG state only at recorded boundaries."""
+        start = self._vm_rng_at_schedule
+        end = None
+        if self.player_generation == 1 and not self.ambiguous_player_body:
+            end = self._vm_rng_state()
+        return {
+            "state_changed_before_schedule": None if start is None else start != self._vm_rng_initial,
+            "state_changed_during_schedule": None if start is None or end is None else end != start,
+        }
 
     def _tick_time(self):
         self.clock.elapsed_us = (self.host.tick - self.start_tick) * self.player.quanta

@@ -1,156 +1,58 @@
+use crate::script_control::LEGACY_PROJECTILE_CONTROL;
+
 use super::*;
 
-pub(super) fn flashbang_entry_admits(
-    graphs: &GraphStore,
-    mut entity_value: impl FnMut(crate::script_expr::Variable) -> Option<Value>,
-) -> Result<bool, String> {
-    use crate::script_expr::{Context, Scope, Variable};
-    struct Inputs(Vec<(Variable, Value)>);
-    impl Context for Inputs {
-        fn variable(&mut self, variable: Variable) -> Value {
-            self.0
-                .iter()
-                .find(|(key, _)| *key == variable)
-                .map_or(Value::Null, |(_, value)| value.clone())
-        }
-    }
-    let graph = graphs
-        .graph(0x224e)
-        .ok_or("Flashbang effect graph unavailable")?;
-    let condition = graph
-        .node(4)
-        .and_then(|node| node.field("m_condition"))
-        .ok_or("Flashbang entry predicate unavailable")?;
-    let variables = condition
-        .get("m_expression")
-        .and_then(|v| v.get("m_dynamicVars"))
-        .and_then(Json::as_array)
-        .ok_or("Flashbang entry variables unavailable")?;
-    let schema = graph
-        .fields
-        .get("m_publicSchema")
-        .and_then(|v| v.get("m_entries"))
-        .and_then(Json::as_array)
-        .ok_or("Flashbang entry defaults unavailable")?;
-    let overrides = graphs
-        .graph(0x0228)
-        .and_then(|g| g.node(7))
-        .and_then(|n| n.field("m_69F4B52C.m_6525E98B.m_1EB5A024"))
-        .and_then(Json::as_array)
-        .ok_or("Flashbang wrapper overrides unavailable")?;
-    let mut inputs = Inputs(Vec::new());
-    for config in variables {
-        let variable = crate::script_expr::dynamic(config)
-            .map_err(|e| e.to_string())?
-            .ok_or("Flashbang entry variable unavailable")?;
-        let value = match variable.scope {
-            Scope::Entity => entity_value(variable).ok_or("Flashbang target component halted")?,
-            Scope::Instance => {
-                let identifier = 0x0d80_0000_0000_0000 | u64::from(variable.id);
-                // The admitted 0228 path uses schema defaults for this guard.
-                // A changed wrapper must not silently bypass an override.
-                if overrides
-                    .iter()
-                    .any(|row| row.get("m_0D09D2D9").and_then(asset_guid) == Some(identifier))
-                {
-                    return Err("Flashbang entry override requires evaluation".into());
-                }
-                let default = schema
-                    .iter()
-                    .find(|row| row.get("m_0D09D2D9").and_then(asset_guid) == Some(identifier))
-                    .and_then(|row| row.get("m_value"))
-                    .ok_or("Flashbang entry default unavailable")?;
-                crate::script_expr::evaluate(default, &mut inputs).map_err(|e| e.to_string())?
-            }
-        };
-        inputs.0.push((variable, value));
-    }
-    crate::script_expr::evaluate(condition, &mut inputs)
-        .map(|value| crate::script_expr::truthy(&value))
-        .map_err(|e| e.to_string())
-}
-
-pub(super) fn flashbang_stack_admits(
-    body: &Component,
-    graphs: &GraphStore,
-) -> Result<bool, String> {
-    let config = graphs
-        .graph(0x224e)
-        .and_then(|graph| graph.node(122))
-        .and_then(|node| node.field("m_condition"))
-        .filter(|config| config["$"] == "STU_3ACE35FB")
-        .ok_or("Flashbang control-stack predicate unavailable")?;
-    let variable = crate::script_expr::dynamic(&config["m_E50CF556"])
-        .map_err(|error| error.to_string())?
-        .filter(|variable| variable.scope == crate::script_expr::Scope::Entity)
-        .ok_or("Flashbang control-stack target unavailable")?;
-    let priority = crate::script_expr::stack_priority(&config["m_012B7AF7"])
-        .map_err(|error| error.to_string())?;
-    body.permits_entity_stack(variable.id, priority)
-        .ok_or_else(|| "Flashbang target component halted".into())
-}
-
-pub(super) fn flashbang_exclusions_admit(
-    filter: &Json,
-    presence: impl FnMut(u64) -> Option<bool>,
-) -> Result<bool, String> {
-    if filter["$"] != "STUConfigVarFilter" {
-        return Err("Flashbang exclusion filter unavailable".into());
-    }
-    // Only this independent tag clause is checked here. Native actor category
-    // initialization remains separate from the room timed-control policy.
-    crate::script_expr::excluded_tags_admit(&filter["m_8B2A4DF3"], presence)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "Flashbang target tags unavailable".into())
-}
-
 impl EnemyScripts {
-    pub(crate) fn flashbang_control_allowed(
+    pub(crate) fn apply_legacy_projectile_control(
+        &mut self,
+        graphs: &GraphStore,
+        binding: &EnemyBinding,
+        caller: Site,
+    ) -> Result<bool, String> {
+        if !LEGACY_PROJECTILE_CONTROL.matches_recipient_mode(binding.mode) {
+            return Ok(true);
+        }
+        let admission = self.legacy_projectile_control_allowed(graphs, binding);
+        // VM reaction delivery owns its own filtering. Queue it even if the
+        // room's control admission fails or the recipient reports an error.
+        self.queue_legacy_projectile_effect(binding, caller);
+        admission
+    }
+
+    fn legacy_projectile_control_allowed(
         &self,
         graphs: &GraphStore,
         binding: &EnemyBinding,
     ) -> Result<bool, String> {
-        if !flashbang_entry_admits(graphs, |variable| self.body.resolved_variable(0, variable))? {
+        if !LEGACY_PROJECTILE_CONTROL
+            .entry_admits(graphs, |variable| self.body.resolved_variable(0, variable))?
+            || !LEGACY_PROJECTILE_CONTROL.stack_admits(&self.body, graphs)?
+        {
             return Ok(false);
         }
-        if !flashbang_stack_admits(&self.body, graphs)? {
-            return Ok(false);
-        }
-        let filter = graphs
-            .graph(0x224e)
-            .and_then(|graph| graph.node(9))
-            .and_then(|node| node.field("m_condition.m_filter"))
-            .ok_or("Flashbang exclusion filter unavailable")?;
-        flashbang_exclusions_admit(filter, |tag| self.body_has_target_tag(graphs, binding, tag))
+        let filter = LEGACY_PROJECTILE_CONTROL.exclusion_filter(graphs)?;
+        LEGACY_PROJECTILE_CONTROL
+            .exclusions_admit(filter, |tag| self.body_has_target_tag(graphs, binding, tag))
     }
 
-    /// Queue the admitted Flashbang wrapper before its hit entry. Normal pair
-    /// delivery owns VM execution, schema overrides and observer state lifetime.
-    pub(crate) fn queue_flashbang_effect(&mut self, binding: &EnemyBinding, caller: Site) {
-        if !is_junkenstein_mode(binding.mode) || (caller.graph, caller.node) != (0x01e9, Some(7)) {
+    /// Queue the compatibility wrapper before its hit entry.
+    pub(crate) fn queue_legacy_projectile_effect(&mut self, binding: &EnemyBinding, caller: Site) {
+        let Some((request, message)) = LEGACY_PROJECTILE_CONTROL.reaction(binding.mode, caller)
+        else {
             return;
-        }
+        };
+        let graph = request.graph;
         self.messages.push_back(PairDelivery {
             target: binding.body,
-            input: PairInput::PlayScript {
-                caller,
-                request: PlayScript {
-                    policy: 2,
-                    overrides: vec![],
-                    graph: 0x0228,
-                    source: caller.entity,
-                    parameters: vec![],
-                    auto_retire: false,
-                },
-            },
+            input: PairInput::PlayScript { caller, request },
         });
         self.messages.push_back(PairDelivery {
             target: binding.body,
             input: PairInput::Message {
                 sender: caller.entity,
-                message: 0x0240_0000_0000_000f,
+                message,
                 parameters: Variables::new(),
-                required_graph: Some(0x0228),
+                required_graph: Some(graph),
             },
         });
     }
@@ -163,8 +65,44 @@ impl EnemyScripts {
         std::mem::take(&mut self.control_records.velocity_changes)
     }
 
+    pub(crate) fn clear_pending_script_motion(&mut self) {
+        self.control_records.velocity_changes.clear();
+        self.control_records.scripted_motion = None;
+    }
+
+    pub(crate) fn take_scripted_motion(
+        &mut self,
+        tick: u32,
+    ) -> Option<script_init::ScriptedMotion> {
+        if self
+            .control_records
+            .scripted_motion
+            .is_some_and(|(frame, _)| frame <= tick)
+        {
+            return self
+                .control_records
+                .scripted_motion
+                .take()
+                .map(|(_, motion)| motion);
+        }
+        None
+    }
+
     pub(crate) fn movement_speed_scale(&self, frame: u32) -> f64 {
-        self.movement_modifiers.at(frame).intent(0, 1.0).max(0.0)
+        self.movement_modifiers
+            .at(frame)
+            .intent(crate::mover_modifiers::SPEED_SLOT, 1.0)
+            .max(0.0)
+    }
+
+    pub(crate) fn character_collision(
+        &self,
+        frame: u32,
+        settings: &crate::mover_settings::MoverSettings,
+    ) -> bool {
+        self.movement_modifiers
+            .at(frame)
+            .character_collision(settings)
     }
 
     fn refresh_movement_modifiers(
@@ -259,8 +197,24 @@ impl EnemyScripts {
         self.control_records.ai_control_setting
     }
 
+    pub(crate) fn take_script_requests(&mut self) -> Vec<crate::game_combat::RoomScriptRequest> {
+        self.control_records.script_requests.take()
+    }
+
+    pub(crate) fn receive_room_message(
+        &mut self,
+        sender: u32,
+        message: RoomMessage,
+    ) -> Result<usize, InitFault> {
+        self.body.queue_room_message_from(sender, message)
+    }
+
     pub(crate) fn take_scripted_damage(&mut self) -> Vec<EnemyDamage> {
         std::mem::take(&mut self.control_records.scripted_damage)
+    }
+
+    pub(crate) fn take_local_health_changes(&mut self) -> Vec<LocalHealthChange> {
+        std::mem::take(&mut self.control_records.local_health_changes)
     }
 
     pub(crate) fn set_objective_route(&mut self, active: bool) {
@@ -850,21 +804,15 @@ impl EnemyScripts {
     }
 
     pub(crate) fn facing_direction(&self) -> Option<[f64; 3]> {
-        self.control_records
-            .facing
-            .values()
-            .fold(None, |winner: Option<&script_init::AiFacing>, record| {
-                if winner.is_none_or(|winner| {
-                    record.priority.level > winner.priority.level
-                        || (record.priority.level == winner.priority.level
-                            && record.priority.above_equals)
-                }) {
-                    Some(record)
-                } else {
-                    winner
-                }
-            })
-            .map(|record| record.direction)
+        crate::facing::winner(self.control_records.facing.iter())
+            .map(|(_, record)| record.direction)
+    }
+
+    pub(crate) fn authored_facing(&self, body: u32) -> Option<[i32; 2]> {
+        let (site, record) = crate::facing::winner(self.control_records.facing.iter())?;
+        (site.entity == body)
+            .then(|| crate::facing::angles(record.direction))
+            .flatten()
     }
 
     pub(crate) fn queue_wave_script(
@@ -942,6 +890,7 @@ impl EnemyScripts {
         critical: bool,
         loadout: Option<u64>,
     ) -> Result<(), String> {
+        self.clear_pending_script_motion();
         self.body.set_owner_dead(true);
         let parameters = Variables::from([
             (0x12, Value::Entity(source.killer)),
@@ -1217,7 +1166,7 @@ impl EnemyScripts {
         // NPCs using 0C89's capacity binding retain their catalog-owned pools.
         if roots
             .iter()
-            .any(|root| root.graph == crate::game_pools::BODY_GRAPH)
+            .any(|root| !root.is_server_only() && root.graph == crate::game_pools::BODY_GRAPH)
         {
             *vitals = Vitals::empty();
         }

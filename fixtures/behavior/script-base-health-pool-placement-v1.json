@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "case_id": "script-base-health-pool-placement.synthetic.v1",
+  "source": {"basis": "Invented pool capacities, amounts, and state placements. One graph index exercises the former graph-based routing guard."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "cases": [
+      {"name": "base shape at the former wave-only index", "graph": 3260, "state_node": 1, "capacity": 38.5, "current": 21.25, "base_flag": true, "admitted": true},
+      {"name": "base shape at an unrelated placement", "graph": 61901, "state_node": 2, "capacity": 57.5, "current": 50.25, "base_flag": true, "admitted": true},
+      {"name": "non-base shape without an admitted wave selector", "graph": 61902, "state_node": 1, "capacity": 26.5, "current": 20.25, "base_flag": false, "admitted": false}
+    ]
+  }
+}

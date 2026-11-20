@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "case_id": "actor-capsule-entry-surface-v1",
+  "source": {"basis": "Synthetic capsule intersections and contained starts."},
+  "evidence": "rust-synthetic",
+  "input": {
+    "axis": [[0.0, -1.0, 5.0], [0.0, 1.0, 5.0]],
+    "radius": 1.0,
+    "rays": [
+      {"origin": [0.6, 0.0, 0.0], "direction": [0.0, 0.0, 1.0], "length": 8.0},
+      {"origin": [0.0, 1.6, 0.0], "direction": [0.0, 0.0, 1.0], "length": 8.0},
+      {"origin": [0.4, 0.0, 5.0], "direction": [1.0, 0.0, 0.0], "length": 1.0},
+      {"origin": [0.0, 0.0, 5.0], "direction": [3.0, 4.0, 0.0], "length": 1.0},
+      {"origin": [0.0, 2.01, 0.0], "direction": [0.0, 0.0, 1.0], "length": 8.0},
+      {"origin": [0.0, 0.0, 0.0], "direction": [0.0, 0.0, 1.0], "length": 4.0}
+    ]
+  },
+  "expected": [
+    {"distance": 4.2, "normal": [0.6, 0.0, -0.8]},
+    {"distance": 4.2, "normal": [0.0, 0.6, -0.8]},
+    {"distance": 0.0, "normal": [1.0, 0.0, 0.0]},
+    {"distance": 0.0, "normal": [-0.6, -0.8, 0.0]},
+    null,
+    {"distance": 4.0, "normal": [0.0, 0.0, -1.0]}
+  ]
+}

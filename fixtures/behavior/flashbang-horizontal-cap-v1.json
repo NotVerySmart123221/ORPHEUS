@@ -358,5 +358,68 @@
       "m_syncVarsBitCount": 4
     }
   },
+  "portable_action_cases": [
+    {
+      "name": "integer bounds at an independent placement",
+      "graph": 51821, "node": 7, "host_accepts": true,
+      "row_fields": {
+        "m_8AD739CE": {"$": "STUConfigVarInt", "m_value": 0},
+        "m_8213EB22": {"$": "STUConfigVarInt", "m_value": 3}
+      },
+      "attempted_cap": 3, "unsupported_shape": false
+    },
+    {
+      "name": "floating bound at a different placement",
+      "graph": 51822, "node": 9, "host_accepts": true,
+      "row_fields": {"m_8213EB22": {"$": "STUConfigVarFloat", "m_value": 1.5}},
+      "attempted_cap": 1.5, "unsupported_shape": false
+    },
+    {
+      "name": "host refuses a valid cap",
+      "graph": 51823, "node": 11, "host_accepts": false,
+      "attempted_cap": 3, "unsupported_shape": false
+    },
+    {
+      "name": "selector zero belongs to a different operation",
+      "graph": 51824, "node": 13, "host_accepts": true,
+      "row_fields": {"m_A9561CA0": 0},
+      "attempted_cap": null, "unsupported_shape": true
+    },
+    {
+      "name": "selector two belongs to a different operation",
+      "graph": 51825, "node": 15, "host_accepts": true,
+      "row_fields": {"m_A9561CA0": 2},
+      "attempted_cap": null, "unsupported_shape": true
+    },
+    {
+      "name": "a second row would require ordering support",
+      "graph": 51826, "node": 17, "host_accepts": true, "repeat_row": true,
+      "attempted_cap": null, "unsupported_shape": true
+    },
+    {
+      "name": "a priority operand requires separate support",
+      "graph": 51827, "node": 19, "host_accepts": true,
+      "row_fields": {"m_priority": {"$": "STUConfigVarInt", "m_value": 2}},
+      "attempted_cap": null, "unsupported_shape": true
+    },
+    {
+      "name": "nonzero lower bound cannot be represented as a cap",
+      "graph": 51828, "node": 21, "host_accepts": true,
+      "row_fields": {"m_8AD739CE": {"$": "STUConfigVarInt", "m_value": 1}},
+      "attempted_cap": null, "unsupported_shape": false
+    },
+    {
+      "name": "a boolean is not a numeric bound",
+      "graph": 51829, "node": 23, "host_accepts": true,
+      "row_fields": {"m_8AD739CE": {"$": "STUConfigVarBool", "m_value": false}},
+      "attempted_cap": null, "unsupported_shape": false
+    },
+    {
+      "name": "negative upper bound is invalid",
+      "graph": 51830, "node": 25, "host_accepts": true,
+      "row_fields": {"m_8213EB22": {"$": "STUConfigVarInt", "m_value": -1}},
+      "attempted_cap": null, "unsupported_shape": false
+    }
+  ],
   "client_acceptance": "pending"
 }

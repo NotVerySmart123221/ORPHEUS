@@ -1,0 +1,266 @@
+{
+  "schema_version": 1,
+  "case_id": "script-movement-scale.synthetic.v1",
+  "source": {
+    "basis": "Original scoped movement multipliers with independent owner lifetimes."
+  },
+  "evidence": "synthetic-rust",
+  "input": {
+    "bundle": {
+      "version": 1,
+      "authored_classes": [
+        {
+          "class": "authored.slow",
+          "behavior": "movement_scale_state"
+        }
+      ],
+      "graphs": [
+        {
+          "index": 470,
+          "items": 6,
+          "header": {
+            "m_nodesBitCount": 3,
+            "m_statesBitCount": 3,
+            "m_remoteSyncNodesBitCount": 3,
+            "m_syncVarsBitCount": 3
+          },
+          "fields": {},
+          "containers": {},
+          "nodes": [
+            {
+              "pos": 0,
+              "class": "STUStatescriptEntry",
+              "uid": 0,
+              "rid": 0,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_outPlug": {"$": "Plug", "links": [[1, "m_beginPlug"]]}
+              }
+            },
+            {
+              "pos": 1,
+              "class": "authored.timed_slow",
+              "uid": 1,
+              "rid": 1,
+              "remote": -1,
+              "state": 0,
+              "client_only": false,
+              "server_only": true,
+              "state_behavior": "movement_scale",
+              "fields": {
+                "factor": 0.5,
+                "m_onFinishedPlug": {"$": "Plug", "links": [[4, "m_inPlug"]]},
+                "m_onAbortPlug": {"$": "Plug", "links": [[5, "m_inPlug"]]},
+                "duration_frames": 3
+              }
+            },
+            {
+              "pos": 2,
+              "class": "STUStatescriptEntryGameMessage",
+              "uid": 2,
+              "rid": 2,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_gameMessage": {
+                  "m_gameMessage": "0x0000000000009CA5"
+                },
+                "m_outPlug": {"$": "Plug", "links": [[1, "m_beginPlug"]]}
+              }
+            },
+            {
+              "pos": 3,
+              "class": "STUStatescriptEntryGameMessage",
+              "uid": 3,
+              "rid": 3,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_gameMessage": {
+                  "m_gameMessage": "0x0000000000009CA6"
+                },
+                "m_outPlug": {"$": "Plug", "links": [[1, "m_F198FD3A"]]}
+              }
+            },
+            {
+              "pos": 4,
+              "class": "STUStatescriptActionSetVar",
+              "uid": 4,
+              "rid": 4,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_ADEB6E05": true,
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 61, "m_60DB8F99": false},
+                "m_value": true
+              }
+            },
+            {
+              "pos": 5,
+              "class": "STUStatescriptActionSetVar",
+              "uid": 5,
+              "rid": 5,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_ADEB6E05": true,
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 62, "m_60DB8F99": false},
+                "m_value": true
+              }
+            }
+          ],
+          "unknown_nodes": [],
+          "states": [1],
+          "entries": [0, 2, 3],
+          "remote": [],
+          "sync_vars": []
+        },
+        {
+          "index": 471,
+          "items": 6,
+          "header": {
+            "m_nodesBitCount": 3,
+            "m_statesBitCount": 3,
+            "m_remoteSyncNodesBitCount": 3,
+            "m_syncVarsBitCount": 3
+          },
+          "fields": {},
+          "containers": {},
+          "nodes": [
+            {
+              "pos": 0,
+              "class": "STUStatescriptEntry",
+              "uid": 0,
+              "rid": 0,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_outPlug": {"$": "Plug", "links": [[1, "m_beginPlug"]]}
+              }
+            },
+            {
+              "pos": 1,
+              "class": "authored.slow",
+              "uid": 1,
+              "rid": 1,
+              "remote": -1,
+              "state": 0,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "factor": 0.25,
+                "m_onFinishedPlug": {"$": "Plug", "links": [[4, "m_inPlug"]]},
+                "m_onAbortPlug": {"$": "Plug", "links": [[5, "m_inPlug"]]}
+              }
+            },
+            {
+              "pos": 2,
+              "class": "STUStatescriptEntryGameMessage",
+              "uid": 2,
+              "rid": 2,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_gameMessage": {
+                  "m_gameMessage": "0x0000000000009CA5"
+                },
+                "m_outPlug": {"$": "Plug", "links": [[1, "m_beginPlug"]]}
+              }
+            },
+            {
+              "pos": 3,
+              "class": "STUStatescriptEntryGameMessage",
+              "uid": 3,
+              "rid": 3,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_gameMessage": {
+                  "m_gameMessage": "0x0000000000009CA6"
+                },
+                "m_outPlug": {"$": "Plug", "links": [[1, "m_F198FD3A"]]}
+              }
+            },
+            {
+              "pos": 4,
+              "class": "STUStatescriptActionSetVar",
+              "uid": 4,
+              "rid": 4,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_ADEB6E05": true,
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 61, "m_60DB8F99": false},
+                "m_value": true
+              }
+            },
+            {
+              "pos": 5,
+              "class": "STUStatescriptActionSetVar",
+              "uid": 5,
+              "rid": 5,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "fields": {
+                "m_ADEB6E05": true,
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 62, "m_60DB8F99": false},
+                "m_value": true
+              }
+            }
+          ],
+          "unknown_nodes": [],
+          "states": [1],
+          "entries": [0, 2, 3],
+          "remote": [],
+          "sync_vars": []
+        }
+      ],
+      "bodies": {},
+      "missing": []
+    },
+    "roots": [[1, 470], [2, 471]],
+    "steps": [
+      {"frame": 0},
+      {"frame": 2},
+      {"frame": 3},
+      {"frame": 4, "message": [1, 40101]},
+      {"frame": 5, "message": [2, 40102]},
+      {"frame": 6, "message": [2, 40101]},
+      {"frame": 6, "destroy": 1},
+      {"frame": 7},
+      {"frame": 8, "message": [2, 40102]}
+    ]
+  },
+  "expected": [
+    {"rows": [[1, 0.5], [2, 0.25]], "finished": [], "aborted": []},
+    {"rows": [[1, 0.5], [2, 0.25]], "finished": [], "aborted": []},
+    {"rows": [[2, 0.25]], "finished": [1], "aborted": []},
+    {"rows": [[1, 0.5], [2, 0.25]], "finished": [1], "aborted": []},
+    {"rows": [[1, 0.5]], "finished": [1], "aborted": [2]},
+    {"rows": [[1, 0.5], [2, 0.25]], "finished": [1], "aborted": [2]},
+    {"rows": [[2, 0.25]], "finished": [], "aborted": [2]},
+    {"rows": [[2, 0.25]], "finished": [], "aborted": [2]},
+    {"rows": [], "finished": [], "aborted": [2]}
+  ]
+}

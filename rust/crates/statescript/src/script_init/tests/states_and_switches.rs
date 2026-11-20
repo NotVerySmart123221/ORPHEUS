@@ -209,6 +209,197 @@ fn bridge_forwards_input_only_between_begin_and_abort() {
     }
 }
 
+#[test]
+fn message_dispatch_rechecks_the_resolved_nodes_execution_scope() {
+    const MESSAGE: u64 = 0x0240_0000_0000_0042;
+    let handler = |pos, variable, client_only| {
+        let mut node = node(
+            pos,
+            "STUStatescriptEntryGameMessage",
+            None,
+            json!({
+                "m_gameMessage":{"m_gameMessage":format!("0x{MESSAGE:016X}")},
+                "m_B60ABDA4":var(variable, true)
+            }),
+        );
+        node["client_only"] = json!(client_only);
+        node
+    };
+    let graphs = Arc::new(store(vec![graph(
+        42,
+        vec![handler(0, 20, true), handler(1, 21, false)],
+        json!([]),
+        json!([0, 1]),
+    )]));
+    let mut component = Component::start(
+        graphs,
+        42,
+        Variables::new(),
+        vec![Root::listener(1, 42, None)],
+        0,
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let queue = &mut component.machine.queues;
+    for (position, sender) in [(0, 34), (1, 35)] {
+        queue
+            .push(
+                1,
+                0,
+                Event::Message {
+                    position,
+                    sender: Some(sender),
+                    parameters: Arc::new(Variables::new()),
+                    health_context: Default::default(),
+                },
+            )
+            .unwrap();
+    }
+    component.run_now(&mut EmptyWorld).unwrap();
+    let snapshot = component.snapshot().unwrap();
+    assert!(snapshot.initialization_complete());
+    assert!(!snapshot.variables.contains_key(&20));
+    assert_eq!(snapshot.variables.get(&21), Some(&Value::Entity(35)));
+    if let Some(observations) = snapshot.node_observations() {
+        assert_eq!(
+            observations.sites().collect::<Vec<_>>(),
+            [(42, 0, true), (42, 1, false)]
+        );
+    }
+}
+
+#[test]
+fn declared_forward_actions_keep_output_order_and_transition_results() {
+    for (id, declared, connected) in [(42, true, true), (77, true, false), (90, false, true)] {
+        let targets: &[(u16, &str)] = if connected {
+            &[(2, "m_inPlug"), (3, "m_inPlug")]
+        } else {
+            &[]
+        };
+        let mut forward = node(
+            1,
+            "MilestoneGate",
+            None,
+            json!({"m_outPlug":plug(targets, &[])}),
+        );
+        forward["server_only"] = json!(true);
+        if declared {
+            forward["action_behavior"] = json!("forward");
+        }
+        let graphs = store(vec![graph(
+            id,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptState",
+                    Some(0),
+                    json!({
+                        "m_transitionPlug":[plug(&[(1, "m_inPlug")], &[])]
+                    }),
+                ),
+                forward,
+                node(
+                    2,
+                    "STUStatescriptActionSetVar",
+                    None,
+                    json!({"m_out_Var":var(33, true), "m_value":true}),
+                ),
+                node(
+                    3,
+                    "STUStatescriptActionSetVar",
+                    None,
+                    json!({"m_out_Var":var(33, true), "m_value":false}),
+                ),
+            ],
+            json!([0]),
+            json!([]),
+        )]);
+        let snapshot = initialize(
+            &graphs,
+            42,
+            Variables::new(),
+            vec![Root::listener(1, id, Some(0))],
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        let taken = declared && connected;
+        assert_eq!(
+            snapshot.variables.get(&33),
+            taken.then_some(&Value::Bool(false))
+        );
+        assert_eq!(snapshot.instances[&1].states[&0].active, !taken);
+        if declared {
+            assert!(snapshot.initialization_complete());
+        } else {
+            assert!(matches!(&snapshot.diagnostics[..],
+                [Diagnostic { issue: Issue::UnsupportedAction(name), .. }] if name == "MilestoneGate"
+            ));
+        }
+    }
+}
+
+#[test]
+fn declared_plain_nodes_follow_links_and_ordinary_lifecycle() {
+    for (id, class) in [(42, "WarmupWindow"), (43, "QuietInterval")] {
+        let mut state = node(
+            0,
+            class,
+            Some(0),
+            json!({"m_onBeginPlug":plug(&[(2, "m_inPlug")], &[])}),
+        );
+        state["server_only"] = json!(true);
+        state["fields"]["m_2BBEEAB8"] = json!(false);
+        let undeclared = store(vec![graph(id, vec![state.clone()], json!([0]), json!([]))]);
+        let unsupported = initialize(
+            &undeclared,
+            42,
+            Variables::new(),
+            vec![Root::listener(1, id, Some(0))],
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        assert!(matches!(&unsupported.diagnostics[..],
+            [Diagnostic { issue: Issue::UnsupportedState(name), .. }] if name == class
+        ));
+
+        state["state_behavior"] = json!("plain");
+        let entry = node(
+            1,
+            "STUStatescriptEntry",
+            None,
+            json!({"m_outPlug":plug(&[(0, "m_beginPlug")], &[])}),
+        );
+        let assign = node(
+            2,
+            "STUStatescriptActionSetVar",
+            None,
+            json!({"m_out_Var":var(42, true), "m_value":true}),
+        );
+        let graphs = store(vec![graph(
+            id,
+            vec![state, entry, assign],
+            json!([0]),
+            json!([1]),
+        )]);
+        let snapshot = initialize(
+            &graphs,
+            42,
+            Variables::new(),
+            vec![Root::new(1, id)],
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        assert!(snapshot.initialization_complete());
+        assert!(snapshot.instances[&1].states[&0].active);
+        assert_eq!(snapshot.instances[&1].states[&0].kind, StateKind::Plain);
+        assert_eq!(snapshot.variables.get(&42), Some(&Value::Bool(true)));
+    }
+}
+
 fn scoped_dispatch_fixture(
     client_only: bool,
     server_only: bool,
@@ -281,6 +472,55 @@ fn direct_queued_entry_respects_node_scope() {
             (!client_only).then_some(&Value::Bool(true))
         );
     }
+}
+
+#[test]
+fn message_recipient_registration_reports_a_state_capability_gap() {
+    let graphs = store(vec![graph(
+        731,
+        vec![
+            node(
+                0,
+                "STUStatescriptEntry",
+                None,
+                json!({"m_outPlug":plug(&[(1, "m_beginPlug")], &[])}),
+            ),
+            node(
+                1,
+                "STU_38EE1100",
+                Some(0),
+                json!({
+                    "m_gameMessage": {"m_gameMessage": "0xF00000000000012A"},
+                    "m_target": {"$": "STU_9B213168", "m_targets": {"$": "STU_B5A0CAF0"}},
+                }),
+            ),
+        ],
+        json!([1]),
+        json!([0]),
+    )]);
+    let snapshot = initialize(
+        &graphs,
+        72,
+        Variables::new(),
+        vec![Root::new(1, 731)],
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    assert!(!snapshot.initialization_complete());
+    assert!(matches!(
+        snapshot.diagnostics.as_slice(),
+        [Diagnostic {
+            site: Site {
+                graph: 731,
+                node: Some(1),
+                ..
+            },
+            issue: Issue::UnsupportedMessageRegistration,
+            registration_rejected: false,
+            server_only: false,
+        }]
+    ));
 }
 
 #[test]
@@ -600,8 +840,12 @@ fn state_elapsed_condition_rearms_one_timer_and_completes_at_the_authored_age() 
 fn movement_sample_updates_only_changed_authored_outputs() {
     struct SampleWorld(Option<u16>);
     impl World for SampleWorld {
-        fn movement_sample(&self, _: Site) -> Option<u16> {
-            self.0
+        fn movement_sample(&self, _: Site) -> Option<MovementSample> {
+            self.0.map(|flags| MovementSample {
+                flags,
+                air_ticks: 1,
+                pose_frame: None,
+            })
         }
         fn position(&mut self, _entity: u32) -> Option<[f64; 3]> {
             None
@@ -662,7 +906,10 @@ fn movement_sample_updates_only_changed_authored_outputs() {
     let snapshot = component.snapshot().unwrap();
     assert!(snapshot.initialization_complete());
     let owner = &snapshot.instances[&1];
-    assert_eq!(owner.states[&0].kind, StateKind::MovementSample(2));
+    assert!(matches!(
+        owner.states[&0].kind,
+        StateKind::MovementSample { flags: 2, .. }
+    ));
     assert_eq!(owner.states[&1].kind, StateKind::BooleanSwitch(true));
     assert_eq!(snapshot.variables[&100], Value::Bool(true));
     assert!(!owner.variables.contains_key(&101));
@@ -671,7 +918,10 @@ fn movement_sample_updates_only_changed_authored_outputs() {
     component.advance_frame(1, &mut world).unwrap();
     let snapshot = component.snapshot().unwrap();
     let owner = &snapshot.instances[&1];
-    assert_eq!(owner.states[&0].kind, StateKind::MovementSample(65));
+    assert!(matches!(
+        owner.states[&0].kind,
+        StateKind::MovementSample { flags: 65, .. }
+    ));
     assert_eq!(owner.states[&1].kind, StateKind::BooleanSwitch(false));
     assert_eq!(snapshot.variables[&100], Value::Bool(false));
     assert_eq!(owner.variables[&101], Value::Bool(true));
@@ -679,10 +929,10 @@ fn movement_sample_updates_only_changed_authored_outputs() {
     world.0 = Some(0);
     component.advance_frame(2, &mut world).unwrap();
     let snapshot = component.snapshot().unwrap();
-    assert_eq!(
+    assert!(matches!(
         snapshot.instances[&1].states[&0].kind,
-        StateKind::MovementSample(0)
-    );
+        StateKind::MovementSample { flags: 0, .. }
+    ));
     assert_eq!(snapshot.instances[&1].variables[&101], Value::Bool(false));
 
     let unsupported = start(&mut SampleWorld(None));
@@ -1485,7 +1735,7 @@ fn unsupported_branches_are_reported_and_cyclic_actions_are_bounded() {
                 "STUStatescriptEntry",
                 None,
                 json!({
-                    "m_outPlug":plug(&[(1,"m_inPlug"),(2,"m_beginPlug"),(4,"m_beginPlug"),(5,"m_beginPlug")], &[])
+                    "m_outPlug":plug(&[(1,"m_inPlug"),(2,"m_beginPlug"),(4,"m_beginPlug"),(5,"m_beginPlug"),(7,"m_beginPlug")], &[])
                 }),
             ),
             node(
@@ -1506,8 +1756,9 @@ fn unsupported_branches_are_reported_and_cyclic_actions_are_bounded() {
             node(4, "STUStatescriptStateAnimatedCamera", Some(1), json!({})),
             node(5, "UnknownState", Some(2), json!({})),
             node(6, "UnreachedState", Some(3), json!({})),
+            node(7, "STUStatescriptStateTrackTargets", Some(4), json!({})),
         ],
-        json!([2, 4, 5, 6]),
+        json!([2, 4, 5, 6, 7]),
         json!([0]),
     );
     let cycle = graph(
@@ -1546,6 +1797,7 @@ fn unsupported_branches_are_reported_and_cyclic_actions_are_bounded() {
     assert!(!snapshot.initialization_complete());
     let states = &snapshot.instances[&1].states;
     assert!(states[&0].active);
+    assert!(!states.contains_key(&4));
     assert_eq!(states[&0].kind, StateKind::Plain);
     assert!(!snapshot.variables.contains_key(&42));
     assert_eq!(
@@ -1554,7 +1806,12 @@ fn unsupported_branches_are_reported_and_cyclic_actions_are_bounded() {
             .iter()
             .map(|diagnostic| (diagnostic.site.node, diagnostic.registration_rejected))
             .collect::<Vec<_>>(),
-        [(Some(1), false), (Some(4), true), (Some(5), false)]
+        [
+            (Some(1), false),
+            (Some(4), true),
+            (Some(5), false),
+            (Some(7), true)
+        ]
     );
     assert_eq!(snapshot.diagnostics[0].site.node, Some(1));
     assert_eq!(
@@ -1570,18 +1827,18 @@ fn unsupported_branches_are_reported_and_cyclic_actions_are_bounded() {
 
 #[test]
 fn effect_action_continues_its_output_without_server_state() {
-    let run = |dynamic: Json| {
-        let fixture = graph(
-            42,
+    let run = |graph_id, position, dynamic: Json| {
+        let mut fixture = graph(
+            graph_id,
             vec![
                 node(
                     0,
                     "STUStatescriptEntry",
                     None,
-                    json!({"m_outPlug":plug(&[(1,"m_inPlug")], &[])}),
+                    json!({"m_outPlug":plug(&[(position,"m_inPlug")], &[])}),
                 ),
                 node(
-                    1,
+                    position,
                     "STUStatescriptActionEffect",
                     None,
                     json!({
@@ -1601,17 +1858,18 @@ fn effect_action_continues_its_output_without_server_state() {
             json!([]),
             json!([0]),
         );
+        fixture["items"] = json!(position.max(2) + 1);
         initialize(
             &store(vec![fixture]),
             42,
             Variables::new(),
-            vec![Root::new(1, 42)],
+            vec![Root::new(1, graph_id)],
             &mut EmptyWorld,
             MAX_INIT_WORK,
         )
         .unwrap()
     };
-    let snapshot = run(Json::Null);
+    let snapshot = run(42, 1, Json::Null);
     assert!(snapshot.initialization_complete());
     assert_eq!(
         snapshot.variables,
@@ -1620,66 +1878,171 @@ fn effect_action_continues_its_output_without_server_state() {
     assert!(snapshot.instances[&1].variables.is_empty());
     assert!(snapshot.instances[&1].states.is_empty());
 
-    let snapshot = run(var(9, true));
-    assert!(snapshot.variables.is_empty());
-    assert_eq!(snapshot.diagnostics.len(), 1);
-    assert_eq!(snapshot.diagnostics[0].site.node, Some(1));
-    assert_eq!(
-        snapshot.diagnostics[0].issue,
-        Issue::UnsupportedAction("STUStatescriptActionEffect".into())
-    );
+    for (graph_id, position, rejected) in [(42, 1, true), (0x01c7, 74, false)] {
+        let snapshot = run(graph_id, position, var(9, true));
+        assert!(snapshot.variables.is_empty());
+        assert_eq!(snapshot.diagnostics.len(), 1);
+        let diagnostic = &snapshot.diagnostics[0];
+        assert_eq!(diagnostic.site.node, Some(position));
+        assert_eq!(diagnostic.registration_rejected, rejected);
+        assert_eq!(
+            diagnostic.issue,
+            Issue::UnsupportedAction("STUStatescriptActionEffect".into())
+        );
+    }
 }
 
 #[test]
 fn criteria_actions_continue_their_output() {
-    let fixture = graph(
-        42,
-        vec![
-            node(
+    for (class, graph_id, position) in [
+        ("STUStatescriptActionCriteria", 42, 1),
+        ("STUStatescriptActionCriteria", 0x0257, 9),
+        ("STU_6E5C5F66", 42, 1),
+        ("STU_6E5C5F66", 0x0257, 13),
+        ("STU_6E5C5F66", 0x0cb3, 1),
+        ("STU_D38D0035", 42, 1),
+    ] {
+        for has_output in [false, true] {
+            let targets: &[(u16, &str)] = if has_output { &[(0, "m_inPlug")] } else { &[] };
+            let mut fixture = graph(
+                graph_id,
+                vec![
+                    node(
+                        position,
+                        class,
+                        None,
+                        json!({
+                            "m_identifier":{"$":"unhandled-if-evaluated"},
+                            "m_targets":{"$":"unhandled-if-evaluated"},
+                            "m_outPlug":plug(targets, &[])
+                        }),
+                    ),
+                    node(
+                        0,
+                        "STUStatescriptActionSetVar",
+                        None,
+                        json!({"m_out_Var":var(100, true), "m_value":true}),
+                    ),
+                ],
+                json!([]),
+                json!([]),
+            );
+            fixture["items"] = json!(position + 1);
+            let graphs = Arc::new(store(vec![fixture]));
+            let mut component = Component::start(
+                Arc::clone(&graphs),
+                42,
+                Variables::new(),
+                vec![Root::listener(1, graph_id, None)],
                 0,
-                "STUStatescriptEntry",
-                None,
-                json!({"m_outPlug":plug(&[(1,"m_inPlug")], &[])}),
-            ),
-            node(
-                1,
-                "STUStatescriptActionCriteria",
-                None,
-                json!({
-                    "m_identifier":{"$":"STUConfigVarIdentifier","m_identifier":"0x0D80000000000001"},
-                    "m_targets":{"$":"test-unanswered"},
-                    "m_outPlug":plug(&[(2,"m_inPlug")], &[]),
-                }),
-            ),
-            node(
-                2,
-                "STUStatescriptActionSetVar",
-                None,
-                json!({"m_out_Var":var(100, true), "m_value":true}),
-            ),
-        ],
-        json!([]),
-        json!([0]),
-    );
-    let snapshot = initialize(
-        &store(vec![fixture]),
-        42,
-        Variables::new(),
-        vec![Root::new(1, 42)],
-        &mut EmptyWorld,
-        MAX_INIT_WORK,
-    )
+                &mut EmptyWorld,
+                MAX_INIT_WORK,
+            )
+            .unwrap();
+            let node = graphs.graph(graph_id).unwrap().node(position).unwrap();
+            component
+                .run(&mut EmptyWorld, |vm| {
+                    assert!(vm.run_node(1, node, None, 0)?);
+                    Ok(())
+                })
+                .unwrap();
+            let snapshot = component.snapshot().unwrap();
+            assert!(
+                snapshot.initialization_complete(),
+                "{:?}",
+                snapshot.diagnostics
+            );
+            assert_eq!(
+                snapshot.variables.get(&100),
+                has_output.then_some(&Value::Bool(true))
+            );
+            assert!(snapshot.instances[&1].states.is_empty());
+        }
+    }
+}
+
+#[test]
+fn base_action_shape_controls_continuation_at_new_placements() {
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../../../../fixtures/behavior/script-base-action-placement-v1.json"
+    ))
     .unwrap();
-    assert!(
-        snapshot.initialization_complete(),
-        "{:?}",
-        snapshot.diagnostics
-    );
-    assert_eq!(
-        snapshot.variables,
-        Variables::from([(100, Value::Bool(true))])
-    );
-    assert!(snapshot.instances[&1].states.is_empty());
+    let input = &fixture["input"];
+    let class = input["class"].as_str().unwrap();
+    let marker = u32::try_from(input["marker_variable"].as_u64().unwrap()).unwrap();
+    let value = input["marker_value"].as_i64().unwrap();
+    let cases = input["cases"].as_array().unwrap();
+    let expected = fixture["expected"].as_array().unwrap();
+    assert_eq!(cases.len(), expected.len());
+
+    for (case, expected) in cases.iter().zip(expected) {
+        let graph_id = u32::try_from(case["graph"].as_u64().unwrap()).unwrap();
+        let position = u16::try_from(case["node"].as_u64().unwrap()).unwrap();
+        let output = u16::try_from(case["output_node"].as_u64().unwrap()).unwrap();
+        let mut action = node(
+            position,
+            class,
+            None,
+            json!({"m_outPlug":plug(&[(output,"m_inPlug")], &[])}),
+        );
+        action["fields"]["m_ADEB6E05"] = case["action_header"].clone();
+        action["remote"] = case["remote_slot"].clone();
+        let mut graph_fixture = graph(
+            graph_id,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({"m_outPlug":plug(&[(position,"m_inPlug")], &[])}),
+                ),
+                action,
+                node(
+                    output,
+                    "STUStatescriptActionSetVar",
+                    None,
+                    json!({"m_out_Var":var(marker,true),"m_value":value}),
+                ),
+            ],
+            json!([]),
+            json!([0]),
+        );
+        if case["remote_slot"].as_i64() == Some(0) {
+            graph_fixture["remote"] = json!([position]);
+        }
+        let snapshot = initialize(
+            &store(vec![graph_fixture]),
+            42,
+            Variables::new(),
+            vec![Root::new(1, graph_id)],
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+
+        let expected_value = Value::Integer(value);
+        let continues = expected["continues"].as_bool().unwrap();
+        assert_eq!(
+            snapshot.variables.get(&marker),
+            continues.then_some(&expected_value),
+            "{case}: {:?}",
+            snapshot.diagnostics
+        );
+        if continues {
+            assert!(snapshot.initialization_complete());
+        } else {
+            assert!(matches!(
+                snapshot.diagnostics.as_slice(),
+                [Diagnostic {
+                    site,
+                    issue: Issue::UnsupportedAction(unsupported),
+                    registration_rejected: false,
+                    ..
+                }]
+                    if site.graph == graph_id && site.node == Some(position) && unsupported == class
+            ));
+        }
+    }
 }
 
 pub(super) fn shared_unbound_loadout_action_contract() {

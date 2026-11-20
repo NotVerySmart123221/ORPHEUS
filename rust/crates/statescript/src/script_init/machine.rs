@@ -12,19 +12,36 @@ use indexmap::IndexMap;
 
 use crate::{
     script_expr::StackPriority,
-    script_graph::{GraphStore, asset_guid},
+    script_graph::{EntryTopic, GraphStore, HostEventKind},
     script_modifiers::{Modifier, ModifierKey},
     script_runtime::{ButtonEdge, Timeline, frame_start},
     script_wire::{Value, Variables},
 };
 
 use super::{
-    MAX_PENDING_EVENTS,
-    shapes::{is_message_entry, stored},
+    HostHealthContext, MAX_PENDING_EVENTS, RoomMessage,
+    shapes::stored,
     types::{
-        InitFault, PendingTimer, ShotEvent, Snapshot, SpawnSearchKey, StackBinding, StateKind,
+        InitFault, PendingTimer, RandomCheckpoint, ShotEvent, Snapshot, SpawnSearchKey,
+        StackBinding, StateKind,
     },
 };
+
+#[derive(Clone, Copy)]
+enum MessageDestination {
+    Ordinary(Option<u16>, u64),
+    Room(u64),
+    Host(HostEventKind),
+}
+
+impl MessageDestination {
+    fn topic(self) -> EntryTopic {
+        match self {
+            Self::Ordinary(_, message) | Self::Room(message) => EntryTopic::Message(message),
+            Self::Host(kind) => EntryTopic::Host(kind),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum VarKey {
@@ -36,6 +53,33 @@ pub(super) enum VarKey {
 pub(super) struct StateKey {
     pub(super) instance: u16,
     pub(super) raw: u16,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct ActorTargetGuard {
+    pub(super) tracker: StateKey,
+    pub(super) entity: u32,
+    pub(super) identity: u64,
+}
+
+#[derive(Clone)]
+pub(super) struct ObservedSample {
+    pub(super) source: StateKey,
+    pub(super) activation: u16,
+    pub(super) frame: u32,
+    pub(super) input: Option<(VarKey, Value)>,
+}
+
+#[derive(Clone)]
+pub(super) struct ObservationInput {
+    pub(super) sample: Arc<ObservedSample>,
+    pub(super) on_unavailable: UnavailableSample,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum UnavailableSample {
+    CancelStart,
+    ReadCurrent,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -119,21 +163,43 @@ pub(super) struct AbilityPress {
     pub(super) activation: u16,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct LogicalButtonStage {
+    pub(super) activation: u16,
+    pub(super) revision: u32,
+    pub(super) down: bool,
+}
+
 #[derive(Clone)]
 pub(super) enum Event {
     Entry(u16),
     Assign(VarKey, Value),
     ExitInstance,
     Begin(u16),
+    BeginObserved {
+        state: u16,
+        input: ObservationInput,
+    },
     Finish(u16),
     Abort(u16),
     Changed(u16),
     Reevaluate(u16),
     Timer(u16, u16),
     Button(ButtonEdge),
+    LogicalButtonBranch {
+        state: u16,
+        stage: LogicalButtonStage,
+        sample: Option<Arc<ObservedSample>>,
+    },
     AbilityCheck(u16),
     CheckTransitions(u16),
     WatchChanged(u16),
+    ObserveSample {
+        raw: u16,
+        activation: u16,
+        frame: u32,
+        available: bool,
+    },
     SpawnResult {
         key: SpawnSearchKey,
         positions: Vec<[f64; 3]>,
@@ -142,6 +208,7 @@ pub(super) enum Event {
         position: u16,
         sender: Option<u32>,
         parameters: Arc<Variables>,
+        health_context: HostHealthContext,
     },
 }
 
@@ -152,15 +219,25 @@ pub(super) enum Startup {
 }
 
 impl Event {
+    pub(super) fn begin_state(&self) -> Option<u16> {
+        match *self {
+            Self::Begin(state) | Self::BeginObserved { state, .. } => Some(state),
+            _ => None,
+        }
+    }
+
     pub(super) fn state(&self) -> Option<u16> {
         match *self {
             Self::SpawnResult { key, .. } => Some(key.raw),
+            Self::LogicalButtonBranch { state, .. } => Some(state),
+            Self::ObserveSample { raw, .. } => Some(raw),
             Self::Entry(_)
             | Self::Assign(..)
             | Self::ExitInstance
             | Self::Message { .. }
             | Self::Button(_) => None,
             Self::Begin(state)
+            | Self::BeginObserved { state, .. }
             | Self::Finish(state)
             | Self::Abort(state)
             | Self::Changed(state)
@@ -173,6 +250,10 @@ impl Event {
     }
 }
 
+const SPLITMIX_STEP: u64 = 0x9e37_79b9_7f4a_7c15;
+const SPLITMIX_STEP_INVERSE: u64 = 0xf1de_83e1_9937_733d;
+const _: () = assert!(SPLITMIX_STEP.wrapping_mul(SPLITMIX_STEP_INVERSE) == 1);
+
 pub(super) struct Machine {
     pub(super) public_schemas: bool,
     pub(super) code_states: Vec<StateKey>,
@@ -184,6 +265,7 @@ pub(super) struct Machine {
     pub(super) watchers: BTreeMap<VarKey, Vec<StateKey>>,
     pub(super) foreign_watchers: BTreeMap<(u32, u32), Vec<StateKey>>,
     pub(super) ticking: BTreeMap<u16, IndexMap<u16, u64>>,
+    pub(super) actor_target_guards: BTreeMap<u16, ActorTargetGuard>,
     pub(super) deferred: BTreeMap<u16, Vec<(f64, u16)>>,
     pub(super) voice_poll: Vec<StateKey>,
     pub(super) links: BTreeMap<VarKey, Vec<VariableLink>>,
@@ -191,16 +273,19 @@ pub(super) struct Machine {
     pub(super) movement_modifiers: BTreeMap<ModifierKey, Modifier>,
     pub(super) shots: Vec<ShotEvent>,
     pub(super) ability_presses: BTreeMap<StateKey, Vec<AbilityPress>>,
-    pub(super) next_id: u32,
+    next_public_id: u32,
+    next_private_id: u32,
     pub(super) work_left: usize,
     pub(super) max_work: usize,
     pub(super) frame: u32,
     pub(super) now_ms: u64,
+    random_initial_seed: u64,
     pub(super) random_state: AtomicU64,
     pub(super) command_buttons: u32,
     pub(super) held_buttons: Vec<u8>,
     pub(super) button_blocks: [usize; 256],
     pub(super) owner_dead: bool,
+    pub(super) logical_buttons_need_resync: bool,
     pub(super) control_blocked: bool,
     pub(super) disabled_start_entries: HashSet<(u16, u16)>,
 }
@@ -218,6 +303,7 @@ impl Clone for Machine {
             watchers: self.watchers.clone(),
             foreign_watchers: self.foreign_watchers.clone(),
             ticking: self.ticking.clone(),
+            actor_target_guards: self.actor_target_guards.clone(),
             deferred: self.deferred.clone(),
             voice_poll: self.voice_poll.clone(),
             links: self.links.clone(),
@@ -225,16 +311,19 @@ impl Clone for Machine {
             movement_modifiers: self.movement_modifiers.clone(),
             shots: self.shots.clone(),
             ability_presses: self.ability_presses.clone(),
-            next_id: self.next_id,
+            next_public_id: self.next_public_id,
+            next_private_id: self.next_private_id,
             work_left: self.work_left,
             max_work: self.max_work,
             frame: self.frame,
             now_ms: self.now_ms,
+            random_initial_seed: self.random_initial_seed,
             random_state: AtomicU64::new(self.random_state.load(Ordering::Relaxed)),
             command_buttons: self.command_buttons,
             held_buttons: self.held_buttons.clone(),
             button_blocks: self.button_blocks,
             owner_dead: self.owner_dead,
+            logical_buttons_need_resync: self.logical_buttons_need_resync,
             control_blocked: self.control_blocked,
             disabled_start_entries: self.disabled_start_entries.clone(),
         }
@@ -246,12 +335,26 @@ impl Machine {
         // SplitMix64 keeps the component's stream reproducible across graph calls.
         let state = self
             .random_state
-            .fetch_add(0x9e37_79b9_7f4a_7c15, Ordering::Relaxed)
-            .wrapping_add(0x9e37_79b9_7f4a_7c15);
+            .fetch_add(SPLITMIX_STEP, Ordering::Relaxed)
+            .wrapping_add(SPLITMIX_STEP);
         let mixed = (state ^ (state >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
         let mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
         mixed ^ (mixed >> 31)
     }
+
+    pub(super) fn random_checkpoint(&self) -> RandomCheckpoint {
+        // The stream advances by a fixed odd step. Invert that step in
+        // wrapping arithmetic to recover the count without a second counter.
+        let state = self.random_state.load(Ordering::Relaxed);
+        RandomCheckpoint {
+            model: "splitmix64",
+            initial_seed: self.random_initial_seed,
+            draws: state
+                .wrapping_sub(self.random_initial_seed)
+                .wrapping_mul(SPLITMIX_STEP_INVERSE),
+        }
+    }
+
     pub(super) fn new(
         entity: u32,
         variables: Variables,
@@ -261,6 +364,7 @@ impl Machine {
         if max_work == 0 {
             return Err(InitFault::InvalidBudget);
         }
+        let random_initial_seed = (u64::from(entity) << 32) | u64::from(frame);
         Ok(Self {
             code_states: Vec::new(),
             code_pending: Default::default(),
@@ -274,12 +378,15 @@ impl Machine {
                 bindings: IndexMap::new(),
                 resolved_bindings: IndexMap::new(),
                 diagnostics: Vec::new(),
+                #[cfg(feature = "node-observations")]
+                node_observations: Default::default(),
             },
             queues: Timeline::new(MAX_PENDING_EVENTS),
             registered: IndexMap::new(),
             watchers: BTreeMap::new(),
             foreign_watchers: BTreeMap::new(),
             ticking: BTreeMap::new(),
+            actor_target_guards: BTreeMap::new(),
             deferred: BTreeMap::new(),
             voice_poll: Vec::new(),
             links: BTreeMap::new(),
@@ -287,20 +394,54 @@ impl Machine {
             movement_modifiers: BTreeMap::new(),
             shots: Vec::new(),
             ability_presses: BTreeMap::new(),
-            next_id: 1,
+            next_public_id: 1,
+            next_private_id: u32::from(u16::MAX),
             work_left: max_work,
             max_work,
             frame,
             now_ms: frame_start(frame),
-            random_state: AtomicU64::new(u64::from(entity) << 32 | u64::from(frame)),
+            random_initial_seed,
+            random_state: AtomicU64::new(random_initial_seed),
             command_buttons: 0,
             held_buttons: Vec::new(),
             button_blocks: [0; 256],
             owner_dead: false,
+            logical_buttons_need_resync: false,
             control_blocked: false,
             disabled_start_entries: HashSet::new(),
             public_schemas: false,
         })
+    }
+
+    pub(super) fn next_instance_id(&self, isolated: bool) -> Result<u16, InitFault> {
+        if self.next_public_id > self.next_private_id {
+            return Err(InitFault::InstanceIdExhausted);
+        }
+        let id = if isolated {
+            self.next_private_id
+        } else {
+            self.next_public_id
+        };
+        u16::try_from(id).map_err(|_| InitFault::InstanceIdExhausted)
+    }
+
+    pub(super) fn claim_instance_id(&mut self, id: u16, isolated: bool) -> Result<(), InitFault> {
+        if id == 0 || self.snapshot.instances.contains_key(&id) {
+            return Err(InitFault::InstanceIdExhausted);
+        }
+        let id = u32::from(id);
+        if isolated {
+            if id < self.next_public_id || id != self.next_private_id {
+                return Err(InitFault::InstanceIdExhausted);
+            }
+            self.next_private_id = id - 1;
+        } else {
+            if id > self.next_private_id {
+                return Err(InitFault::InstanceIdExhausted);
+            }
+            self.next_public_id = self.next_public_id.max(id + 1);
+        }
+        Ok(())
     }
 
     pub(super) fn capture_outputs(&mut self) {
@@ -374,34 +515,113 @@ impl Machine {
         parameters: Variables,
         due_ms: u64,
     ) -> Result<usize, InitFault> {
+        self.queue_message_entries(
+            graphs,
+            MessageDestination::Ordinary(recipient, message),
+            sender,
+            parameters,
+            due_ms,
+            HostHealthContext::default(),
+        )
+    }
+
+    pub(super) fn queue_local_game_message(
+        &mut self,
+        graphs: &GraphStore,
+        message: u64,
+        parameters: Variables,
+        health_context: HostHealthContext,
+    ) -> Result<usize, InitFault> {
+        self.queue_message_entries(
+            graphs,
+            MessageDestination::Ordinary(None, message),
+            Some(self.snapshot.entity),
+            parameters,
+            self.now_ms,
+            health_context,
+        )
+    }
+
+    pub(super) fn queue_room_entries_from(
+        &mut self,
+        graphs: &GraphStore,
+        sender: u32,
+        message: RoomMessage,
+        due_ms: u64,
+    ) -> Result<usize, InitFault> {
+        self.queue_message_entries(
+            graphs,
+            MessageDestination::Room(message.id),
+            Some(sender),
+            message.parameters,
+            due_ms,
+            HostHealthContext::default(),
+        )
+    }
+
+    pub(super) fn queue_host_entries(
+        &mut self,
+        graphs: &GraphStore,
+        kind: HostEventKind,
+        parameters: Variables,
+        due_ms: u64,
+        health_context: HostHealthContext,
+    ) -> Result<usize, InitFault> {
+        self.queue_message_entries(
+            graphs,
+            MessageDestination::Host(kind),
+            None,
+            parameters,
+            due_ms,
+            health_context,
+        )
+    }
+
+    fn queue_message_entries(
+        &mut self,
+        graphs: &GraphStore,
+        destination: MessageDestination,
+        sender: Option<u32>,
+        parameters: Variables,
+        due_ms: u64,
+        health_context: HostHealthContext,
+    ) -> Result<usize, InitFault> {
+        let topic = destination.topic();
+        if matches!(topic, EntryTopic::Message(id) if graphs.is_projected_message_topic(id)) {
+            return Ok(0);
+        }
         let mut entries = Vec::new();
         for (&id, item) in &self.snapshot.instances {
-            if recipient.is_some_and(|recipient| recipient != id) {
+            if matches!(destination, MessageDestination::Ordinary(Some(recipient), _) if recipient != id)
+            {
                 continue;
             }
             let graph = graphs.graph(item.graph).expect("registered graph");
-            entries.extend(
-                graph
-                    .nodes
-                    .iter()
-                    .filter(|node| {
-                        node.runs_on_server()
-                            && node
-                                .field("m_gameMessage.m_gameMessage")
-                                .and_then(asset_guid)
-                                == Some(message)
-                            && (is_message_entry(node)
-                                || (node.is_state()
-                                    && node.state.is_some_and(|raw| {
-                                        item.states.get(&raw).is_some_and(|state| {
-                                            state.active && state.kind == StateKind::MessageIdle
-                                        })
-                                    })))
-                    })
-                    .map(|node| (id, node.pos)),
-            );
+            for node in graph
+                .entry_handlers(topic)
+                .filter(|node| match destination {
+                    MessageDestination::Host(_) => true,
+                    MessageDestination::Room(_) => {
+                        node.declares_room_message_entry()
+                            || node.accepts_directed_numeric_message(&parameters)
+                    }
+                    MessageDestination::Ordinary(_, _) => {
+                        !node.declares_room_message_entry()
+                            && (node.is_message_entry()
+                                || node.state.is_some_and(|raw| {
+                                    item.states.get(&raw).is_some_and(|state| {
+                                        state.active && state.kind == StateKind::MessageIdle
+                                    })
+                                }))
+                    }
+                })
+            {
+                // Bound the temporary batch as well as the VM queue. No
+                // receiver gets a partial delivery on a capacity failure.
+                self.queues.reserve(entries.len() + 1)?;
+                entries.push((id, node.pos));
+            }
         }
-        self.queues.reserve(entries.len())?;
         let parameters = Arc::new(parameters);
         for &(instance, position) in &entries {
             self.queues.push(
@@ -411,6 +631,7 @@ impl Machine {
                     position,
                     sender,
                     parameters: Arc::clone(&parameters),
+                    health_context: health_context.clone(),
                 },
             )?;
         }
@@ -418,18 +639,33 @@ impl Machine {
     }
 
     pub(super) fn value(&self, key: VarKey, below: Option<StateKey>) -> Value {
-        self.links
-            .get(&key)
-            .and_then(|entries| {
-                entries
-                    .iter()
-                    .take_while(|entry| Some(entry.state) != below)
-                    .last()
-            })
-            .map_or_else(
-                || stored(&self.snapshot, key),
-                |entry| self.link_value(entry),
-            )
+        self.value_with_clock_dependency(key, below, None).0
+    }
+
+    pub(super) fn value_with_clock_dependency(
+        &self,
+        key: VarKey,
+        below: Option<StateKey>,
+        sampled_base: Option<&Value>,
+    ) -> (Value, bool) {
+        let link = self.links.get(&key).and_then(|entries| {
+            entries
+                .iter()
+                .take_while(|entry| Some(entry.state) != below)
+                .last()
+        });
+        match link {
+            Some(entry) => (
+                self.link_value(entry),
+                matches!(entry.output, LinkValue::Cooldown | LinkValue::Volley(0)),
+            ),
+            None => (
+                sampled_base
+                    .cloned()
+                    .unwrap_or_else(|| stored(&self.snapshot, key)),
+                false,
+            ),
+        }
     }
 
     pub(super) fn link_value(&self, entry: &VariableLink) -> Value {
@@ -468,5 +704,42 @@ impl Machine {
                         || (entry.priority.level == priority.level && priority.above_equals)
                 })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn isolated_and_projected_instance_ids_meet_without_reuse() {
+        let mut machine = Machine::new(1, Variables::new(), 0, 100).unwrap();
+        assert_eq!(machine.next_instance_id(false), Ok(1));
+        assert_eq!(machine.next_instance_id(true), Ok(u16::MAX));
+
+        machine.claim_instance_id(u16::MAX - 2, false).unwrap();
+        machine.claim_instance_id(u16::MAX, true).unwrap();
+
+        let remaining = u16::MAX - 1;
+        assert_eq!(machine.next_instance_id(false), Ok(remaining));
+        assert_eq!(machine.next_instance_id(true), Ok(remaining));
+        machine.claim_instance_id(remaining, false).unwrap();
+
+        assert_eq!(
+            machine.next_instance_id(false),
+            Err(InitFault::InstanceIdExhausted)
+        );
+        assert_eq!(
+            machine.next_instance_id(true),
+            Err(InitFault::InstanceIdExhausted)
+        );
+        assert!(
+            machine.snapshot.instances.is_empty(),
+            "retirement must not make an allocated ID available"
+        );
+        assert_eq!(
+            machine.clone().next_instance_id(true),
+            Err(InitFault::InstanceIdExhausted)
+        );
     }
 }

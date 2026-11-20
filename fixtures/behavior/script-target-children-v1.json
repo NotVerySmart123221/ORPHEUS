@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "case_id": "script-target-children.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "input": {
+    "bundle": {
+      "version": 1,
+      "authored_classes": [
+        {"class": "authored.membership", "behavior": "track_entities_state"},
+        {"class": "authored.pulse", "behavior": "interval_state"}
+      ],
+      "graphs": [
+        {
+          "index": 115, "items": 4,
+          "header": {"m_nodesBitCount": 4, "m_statesBitCount": 4, "m_remoteSyncNodesBitCount": 4, "m_syncVarsBitCount": 4},
+          "fields": {}, "containers": {}, "unknown_nodes": [],
+          "states": [0], "entries": [1, 2, 3], "remote": [], "sync_vars": [],
+          "nodes": [
+            {
+              "pos": 0, "uid": 0, "rid": 0, "remote": -1, "state": 0,
+              "class": "authored.membership", "client_only": false, "server_only": false,
+              "fields": {
+                "targets": {"$": "STUConfigVarDynamic", "m_identifier": 1, "m_60DB8F99": true},
+                "child_graph": 116,
+                "target_variable": 7
+              }
+            },
+            {
+              "pos": 1, "uid": 1, "rid": 1, "remote": -1, "state": null,
+              "class": "STUStatescriptEntryGameMessage", "client_only": false, "server_only": false,
+              "fields": {
+                "m_gameMessage": {"m_gameMessage": "0x0000000000000031"},
+                "m_outPlug": {"$": "Plug", "links": [[0, "m_F198FD3A"]]}
+              }
+            },
+            {
+              "pos": 2, "uid": 2, "rid": 2, "remote": -1, "state": null,
+              "class": "STUStatescriptEntryGameMessage", "client_only": false, "server_only": false,
+              "fields": {
+                "m_gameMessage": {"m_gameMessage": "0x0000000000000032"},
+                "m_outPlug": {"$": "Plug", "links": [[0, "m_beginPlug"]]}
+              }
+            },
+            {
+              "pos": 3, "uid": 3, "rid": 3, "remote": -1, "state": null,
+              "class": "STUStatescriptEntryGameMessage", "client_only": false, "server_only": false,
+              "fields": {
+                "m_gameMessage": {"m_gameMessage": "0x0000000000000033"},
+                "m_outPlug": {"$": "Plug", "links": []}
+              }
+            }
+          ]
+        },
+        {
+          "index": 116, "items": 4,
+          "header": {"m_nodesBitCount": 4, "m_statesBitCount": 4, "m_remoteSyncNodesBitCount": 4, "m_syncVarsBitCount": 4},
+          "fields": {}, "containers": {}, "unknown_nodes": [],
+          "states": [2], "entries": [0, 3], "remote": [], "sync_vars": [],
+          "nodes": [
+            {
+              "pos": 0, "uid": 0, "rid": 0, "remote": -1, "state": null,
+              "class": "STUStatescriptEntry", "client_only": false, "server_only": false,
+              "fields": {"m_outPlug": {"$": "Plug", "links": [[1, "m_inPlug"], [2, "m_beginPlug"]]}}
+            },
+            {
+              "pos": 1, "uid": 1, "rid": 1, "remote": -1, "state": null,
+              "class": "STUStatescriptActionSetVar", "client_only": false, "server_only": false,
+              "fields": {
+                "m_ADEB6E05": true,
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 8, "m_60DB8F99": false},
+                "m_value": {"$": "STUConfigVarDynamic", "m_identifier": 7, "m_60DB8F99": false}
+              }
+            },
+            {
+              "pos": 2, "uid": 2, "rid": 2, "remote": -1, "state": 0,
+              "class": "authored.pulse", "client_only": false, "server_only": false,
+              "fields": {"interval_frames": 100, "on_interval": {"$": "Plug", "links": []}}
+            },
+            {
+              "pos": 3, "uid": 3, "rid": 3, "remote": -1, "state": null,
+              "class": "STUStatescriptEntryGameMessage", "client_only": false, "server_only": false,
+              "fields": {
+                "m_gameMessage": {"m_gameMessage": "0x0000000000000034"},
+                "m_outPlug": {"$": "Plug", "links": []}
+              }
+            }
+          ]
+        }
+      ],
+      "bodies": {},
+      "missing": []
+    },
+    "fatal_cleanup": {
+      "work_budget": 1024,
+      "duplicate_targets": 2048,
+      "target": 99,
+      "installed_tag": "0x0D6000000000EA81",
+      "pending_timer_tag": "0x0D6000000000EA82"
+    },
+    "actor_identity": {
+      "target": 99,
+      "initial_token": 1101,
+      "replacement_token": 2202,
+      "recovered_token": 3303,
+      "interval_frames": 2,
+      "stale_child_value": 987,
+      "initial_frame": 1,
+      "retained_frame": 2,
+      "replacement_frame": 3,
+      "first_pulse_frame": 5,
+      "unavailable_frame": 7,
+      "identity_only_frame": 8,
+      "recovery_frame": 9,
+      "recovery_pulse_frame": 11,
+      "known_query_identity_loss_frame": 4,
+      "known_query_identity_recovery_frame": 6,
+      "child_message": 52
+    },
+    "radius_expression": {
+      "$": "EntitiesInRadius",
+      "center": {"$": "STUConfigVarDynamic", "m_identifier": 2, "m_60DB8F99": true},
+      "radius": 2
+    },
+    "cases": [
+      {
+        "name": "authored list",
+        "steps": [
+          {"frame": 1, "values": [7, 3, 7], "children": [[3, 2], [7, 3]]},
+          {"frame": 2, "values": [3, 7], "children": [[3, 2], [7, 3]]},
+          {"frame": 3, "values": [9, 3], "children": [[3, 2], [9, 4]]},
+          {"frame": 4, "values": [10, false], "children": [[3, 2], [9, 4]]},
+          {"frame": 5, "unique_count": 65, "children": [[3, 2], [9, 4]]},
+          {"frame": 6, "values": [9, 7], "children": [[7, 5], [9, 4]]},
+          {"frame": 7, "values": [], "children": []},
+          {"frame": 8, "values": [9], "children": [[9, 6]]},
+          {"frame": 9, "message": 49, "active": false, "children": []},
+          {"frame": 10, "values": [10], "active": false, "children": []},
+          {"frame": 11, "message": 50, "children": []},
+          {"frame": 12, "children": [[10, 7]]}
+        ]
+      },
+      {
+        "name": "room radius snapshot", "radius": true,
+        "steps": [
+          {"frame": 1, "candidates": [18, 12], "reads": 1, "children": [[12, 2], [18, 3]]},
+          {"frame": 2, "reads": 1, "wake_offsets": [3, 9, 14], "children": [[12, 2], [18, 3]]},
+          {"frame": 3, "candidates": [18], "reads": 1, "children": [[18, 3]]},
+          {"frame": 4, "candidates": [], "reads": 1, "children": []}
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "case_id": "training-bot-respawn-delivery-v1",
+  "source": {
+    "basis": "Synthetic training-bot generations and per-peer world acknowledgements."
+  },
+  "evidence": "rust-synthetic",
+  "input": {
+    "bot_ids": [
+      3221233152,
+      3221233153,
+      3221233154,
+      3221233168,
+      3221233169
+    ],
+    "replacement_interval_ms": 3000,
+    "notice_grace_ms": 10000
+  },
+  "expected": {
+    "independent_transition": [
+      [
+        3221233168,
+        3
+      ],
+      [
+        3221233169,
+        1
+      ]
+    ],
+    "coalesced_transition": [
+      [
+        3221233152,
+        3
+      ],
+      [
+        3221233154,
+        1
+      ]
+    ],
+    "first_transition": [
+      [
+        3221233152,
+        3
+      ],
+      [
+        3221233153,
+        1
+      ]
+    ],
+    "second_transition": [
+      [
+        3221233153,
+        3
+      ],
+      [
+        3221233154,
+        1
+      ]
+    ]
+  }
+}

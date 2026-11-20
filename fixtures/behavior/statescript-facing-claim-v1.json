@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "case_id": "statescript-facing-claim.synthetic.v1",
+  "source": {"basis": "Original direction inputs, body identity, and state lifetime."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "body": 701,
+    "graph": 467,
+    "work_budget": 24,
+    "priority": {"level": 17, "above_equals": true},
+    "initial": [0, 0, 5],
+    "refresh": [1e300, 0, 0],
+    "invalid": [0, 0, 0],
+    "npc_navigation": {
+      "graph": 468,
+      "position": [-3, 0.5, 0.25],
+      "claim_direction": [1, 0, 0],
+      "navigation_direction": [0, 0, 1],
+      "max_distance": 4,
+      "sample_variable": 892,
+      "claimed_frames": [1, 2],
+      "release_frame": 3,
+      "released_frame": 4
+    }
+  },
+  "expected": {
+    "initial": [0, 0, 1],
+    "refresh": [1, 0, 0],
+    "npc_navigation": {
+      "claimed_angles": [16384, 0],
+      "navigation_angles": [0, 0],
+      "hit_distance": 2,
+      "hit_point": [-1, 0.5, 0.25],
+      "miss_end": [-3, 0.5, 4.25]
+    }
+  }
+}

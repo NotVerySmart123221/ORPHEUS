@@ -121,6 +121,9 @@ fn assert_snapshot(
         seed.wrapping_add(draws.wrapping_mul(RANDOM_INCREMENT)),
         "{case}: random consumption"
     );
+    let checkpoint = component.random_checkpoint();
+    assert_eq!(checkpoint.initial_seed, seed, "{case}: random provenance");
+    assert_eq!(checkpoint.draws, draws, "{case}: checkpoint draws");
     if let Some(remaining) = expected.get("work_remaining") {
         assert_eq!(
             component.machine.work_left as u64,
@@ -278,4 +281,53 @@ fn actions_preserve_the_pinned_synthetic_reference_contract() {
             }
         }
     }
+}
+
+#[test]
+fn rng_checkpoints_preserve_the_stream_and_clone_state() {
+    let component = Component::start(
+        Arc::new(store(vec![graph(42, Vec::new(), json!([]), json!([]))])),
+        u32::MAX,
+        Variables::new(),
+        vec![Root::listener(1, 42, None)],
+        17,
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let initial = component.random_checkpoint();
+    assert_eq!(
+        initial,
+        RandomCheckpoint {
+            model: "splitmix64",
+            initial_seed: 0xffff_ffff_0000_0011,
+            draws: 0,
+        }
+    );
+
+    let control = component.clone();
+    assert_eq!(component.random_checkpoint(), initial);
+    assert_eq!(component.machine.random_u64(), control.machine.random_u64());
+    let after_wrap = component.random_checkpoint();
+    assert_eq!(
+        after_wrap,
+        RandomCheckpoint {
+            draws: 1,
+            ..initial
+        }
+    );
+
+    let fork = component.clone();
+    assert_eq!(fork.random_checkpoint(), after_wrap);
+    let second = component.machine.random_u64();
+    assert_eq!(fork.random_checkpoint(), after_wrap);
+    assert_eq!(fork.machine.random_u64(), second);
+    assert_eq!(
+        component.random_checkpoint(),
+        RandomCheckpoint {
+            draws: 2,
+            ..initial
+        }
+    );
+    assert_eq!(fork.random_checkpoint(), component.random_checkpoint());
 }

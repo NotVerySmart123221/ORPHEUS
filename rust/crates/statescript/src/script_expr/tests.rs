@@ -5,6 +5,9 @@ use serde_json::json;
 
 use crate::script_graph::GraphStore;
 
+mod degree_trigonometry;
+mod entity_ray_cast;
+
 #[derive(Default)]
 struct Vars {
     instance: BTreeMap<u32, Value>,
@@ -940,6 +943,176 @@ fn enemy_hero_and_health_queries_preserve_known_and_unknown_entities() {
 }
 
 #[test]
+fn body_health_queries_return_zero_only_for_explicit_unbound_targets() {
+    struct HealthHost {
+        variable: u32,
+        target: Value,
+        reads: Vec<(u32, Option<PoolKind>, bool)>,
+    }
+
+    impl Context for HealthHost {
+        fn variable(&mut self, variable: Variable) -> Value {
+            assert_eq!(variable.id, self.variable);
+            self.target.clone()
+        }
+
+        fn body_health(
+            &mut self,
+            entity: u32,
+            kind: Option<PoolKind>,
+            maximum: bool,
+        ) -> Option<f64> {
+            self.reads.push((entity, kind, maximum));
+            None
+        }
+    }
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../../../fixtures/behavior/script-health-target-v1.json"
+    ))
+    .unwrap();
+    let input = &fixture["input"];
+    let expected = &fixture["expected"];
+    let target_variable = u32::try_from(input["target_variable"].as_u64().unwrap()).unwrap();
+    let unbound = u32::try_from(input["unbound_entity"].as_u64().unwrap()).unwrap();
+    let unbound_integer = input["unbound_integer"].as_i64().unwrap();
+    let unavailable = u32::try_from(input["unavailable_entity"].as_u64().unwrap()).unwrap();
+    let unbound_value = Value::Float(expected["unbound_result"].as_f64().unwrap());
+    for query_case in input["queries"].as_array().unwrap() {
+        let class = query_case["class"].as_str().unwrap();
+        let kind = match &query_case["pool"] {
+            Json::Null => None,
+            Json::String(pool) if pool == "armour" => Some(PoolKind::Armour),
+            pool => panic!("unsupported fixture pool {pool}"),
+        };
+        let maximum = query_case["maximum"].as_bool().unwrap();
+        let mut query = json!({"$":class,"m_entity":variable(target_variable, Scope::Instance)});
+        if kind.is_some() {
+            query["m_7E8B666C"] = json!({"$":"STU_297E1A30","m_7E8B666C":1});
+        }
+        let mut host = HealthHost {
+            variable: target_variable,
+            target: Value::Null,
+            reads: Vec::new(),
+        };
+        for target in [
+            Value::Null,
+            Value::Entity(unbound),
+            Value::Integer(unbound_integer),
+        ] {
+            host.target = target;
+            assert_eq!(
+                evaluate(&query, &mut host),
+                Ok(unbound_value.clone()),
+                "{class}"
+            );
+            assert_eq!(
+                json!(host.reads.len()),
+                expected["unbound_provider_reads"],
+                "{class}"
+            );
+        }
+
+        let unsupported = Err(EvalError::UnsupportedConfig(class.into()));
+        host.target = Value::Bool(false);
+        assert_eq!(evaluate(&query, &mut host), unsupported);
+        host.target = Value::Integer(i64::from(unavailable));
+        assert_eq!(evaluate(&query, &mut host), unsupported);
+        let mut missing_target = query.clone();
+        missing_target.as_object_mut().unwrap().remove("m_entity");
+        assert_eq!(evaluate(&missing_target, &mut host), unsupported);
+        if kind.is_some() {
+            host.target = Value::Entity(unbound);
+            let mut malformed_selector = query.clone();
+            malformed_selector["m_7E8B666C"]["m_7E8B666C"] = input["invalid_pool_selector"].clone();
+            assert_eq!(evaluate(&malformed_selector, &mut host), unsupported);
+        }
+        assert!(host.reads.is_empty(), "{class}");
+
+        host.target = Value::Entity(unavailable);
+        assert_eq!(evaluate(&query, &mut host), unsupported);
+        assert_eq!(
+            json!(host.reads.len()),
+            expected["unavailable_provider_reads"]
+        );
+        assert_eq!(host.reads, [(unavailable, kind, maximum)]);
+    }
+}
+
+#[test]
+fn owned_entity_count_distinguishes_absent_owner_and_unavailable_index() {
+    struct OwnershipProbe {
+        owner: Value,
+        native_count: Option<i64>,
+        native_reads: u64,
+    }
+
+    impl Context for OwnershipProbe {
+        fn owner(&mut self) -> Value {
+            Value::Entity(11)
+        }
+
+        fn variable(&mut self, _: Variable) -> Value {
+            self.owner.clone()
+        }
+
+        fn native(&mut self, config: &Json) -> Option<Value> {
+            assert_eq!(class(config), Some("STU_967463AB"));
+            self.native_reads += 1;
+            self.native_count.map(Value::Integer)
+        }
+    }
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../../../fixtures/behavior/statescript-owned-entity-count-v1.json"
+    ))
+    .unwrap();
+    let input = &fixture["input"];
+    let initial = Value::Integer(input["initial"].as_i64().unwrap());
+    let slot = u32::try_from(input["owner_variable"].as_u64().unwrap()).unwrap();
+    for case in fixture["cases"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let mut query = json!({
+            "$":"STU_967463AB",
+            "m_92D12BE6":variable(slot, Scope::Instance),
+            "m_C8655030":{"$":"STU_8556841E","m_entityDef":input["definition"]}
+        });
+        if let Some(operand) = case.get("definition_operand") {
+            query["m_C8655030"] = operand.clone();
+        }
+        if case["missing_owner"] == true {
+            query.as_object_mut().unwrap().remove("m_92D12BE6");
+        }
+        if case["related_owner"] == true {
+            query["m_92D12BE6"] = json!({"$":"STU_DB742151","m_entity":{"$":"STU_B5A0CAF0"}});
+        }
+        let mut host = OwnershipProbe {
+            owner: match &case["owner"] {
+                Json::Null => Value::Null,
+                Json::Bool(value) => Value::Bool(*value),
+                value => Value::Entity(u32::try_from(value.as_u64().unwrap()).unwrap()),
+            },
+            native_count: case["native_count"].as_i64(),
+            native_reads: 0,
+        };
+        let expected = match case["error"].as_str() {
+            Some(class) => Err(EvalError::UnsupportedConfig(class.into())),
+            None => Ok(Value::Integer(case["value"].as_i64().unwrap())),
+        };
+        assert_eq!(
+            evaluate_with_initial(&query, &mut host, initial.clone()),
+            expected,
+            "{name}"
+        );
+        assert_eq!(
+            host.native_reads,
+            case["native_reads"].as_u64().unwrap(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn authored_message_map_looks_up_the_first_matching_key() {
     use crate::script_wire::{ValueEncoding, WireError, write_value};
     use orpheus_wire::bits::BitWriter;
@@ -1634,6 +1807,1427 @@ fn short_circuit_preserves_the_deciding_operand_and_scope_reads() {
 }
 
 #[test]
+fn authored_spatial_queries_read_current_entity_vectors() {
+    #[derive(serde::Deserialize)]
+    struct Sample {
+        position: [f64; 3],
+        direction: [f64; 3],
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        entity: u32,
+        position: Json,
+        direction: Json,
+        samples: [Sample; 2],
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Contract {
+        schema_version: u8,
+        case_id: String,
+        evidence: String,
+        input: Input,
+        expected: [Sample; 2],
+    }
+
+    struct Host {
+        operand: Value,
+        position: Option<[f64; 3]>,
+        direction: Option<[f64; 3]>,
+        reads: Vec<(&'static str, u32)>,
+    }
+
+    impl Context for Host {
+        fn variable(&mut self, variable: Variable) -> Value {
+            assert_eq!(variable.scope, Scope::Instance);
+            assert_eq!(variable.id, 61);
+            self.operand.clone()
+        }
+
+        fn position(&mut self, entity: u32) -> Option<[f64; 3]> {
+            self.reads.push(("legacy_position", entity));
+            Some([3.0, 4.0, 0.0])
+        }
+
+        fn forward(&mut self, entity: u32) -> Option<[f64; 3]> {
+            self.reads.push(("legacy_forward", entity));
+            Some([0.0, 0.0, 1.0])
+        }
+
+        fn authored_position(&mut self, entity: u32) -> Option<[f64; 3]> {
+            self.reads.push(("authored_position", entity));
+            self.position
+        }
+
+        fn authored_forward(&mut self, entity: u32) -> Option<[f64; 3]> {
+            self.reads.push(("authored_forward", entity));
+            self.direction
+        }
+
+        fn known_position(&mut self, _: u32) -> Option<[f64; 3]> {
+            panic!("the transform operands do not use the known-position query");
+        }
+    }
+
+    let contract: Contract = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/statescript-entity-spatial-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    assert_eq!(contract.case_id, "statescript-entity-spatial.synthetic.v1");
+    assert_eq!(contract.evidence, "synthetic-rust");
+
+    let Input {
+        entity,
+        position,
+        direction,
+        samples,
+    } = contract.input;
+    let mut host = Host {
+        operand: Value::Entity(entity),
+        position: None,
+        direction: None,
+        reads: Vec::new(),
+    };
+    let expected_reads = [("authored_position", entity), ("authored_forward", entity)];
+    for (sample, expected) in samples.into_iter().zip(contract.expected) {
+        host.position = Some(sample.position);
+        host.direction = Some(sample.direction);
+        assert_eq!(
+            evaluate(&position, &mut host),
+            Ok(Value::Vector(expected.position))
+        );
+        assert_eq!(
+            evaluate(&direction, &mut host),
+            Ok(Value::Vector(expected.direction))
+        );
+        assert_eq!(std::mem::take(&mut host.reads), expected_reads);
+    }
+
+    let legacy_position = expression(
+        json!([8, 0, 50, 0]),
+        &[variable(61, Scope::Instance)],
+        &[],
+        &[],
+    );
+    let legacy_forward = json!({"$": "STU_021D01CD", "m_entity": &direction["entity"]});
+    for (host_position, host_direction) in [
+        (None, None),
+        (Some([f64::NAN, 0.0, 0.0]), Some([0.0, f64::INFINITY, 0.0])),
+    ] {
+        host.position = host_position;
+        host.direction = host_direction;
+        assert_eq!(
+            evaluate(&position, &mut host),
+            Err(EvalError::UnavailableEntityPosition(entity))
+        );
+        assert_eq!(
+            evaluate(&direction, &mut host),
+            Err(EvalError::UnavailableEntityDirection(entity))
+        );
+        assert_eq!(std::mem::take(&mut host.reads), expected_reads);
+        assert_eq!(evaluate(&legacy_position, &mut host), Ok(Value::Float(5.0)));
+        assert_eq!(
+            evaluate(&legacy_forward, &mut host),
+            Ok(Value::Vector([0.0, 0.0, 1.0]))
+        );
+        assert_eq!(
+            std::mem::take(&mut host.reads),
+            [("legacy_position", entity), ("legacy_forward", entity)]
+        );
+    }
+
+    for config in [&position, &direction] {
+        host.operand = Value::Entity(entity);
+        for malformed in [
+            json!({"$": &config["$"]}),
+            json!({"$": &config["$"], "entity": &config["entity"], "extra": null}),
+        ] {
+            assert!(matches!(
+                evaluate(&malformed, &mut host),
+                Err(EvalError::MalformedConfig(_))
+            ));
+        }
+        for invalid_entity in [Value::Entity(0), Value::Integer(i64::from(entity))] {
+            host.operand = invalid_entity;
+            assert!(matches!(
+                evaluate(config, &mut host),
+                Err(EvalError::MalformedConfig(_))
+            ));
+        }
+        host.operand = Value::Entity(entity);
+        let limited = json!({
+            "$": &config["$"],
+            "entity": {"$": "ClientOnly", "value": null, "server_fallback": &config["entity"]}
+        });
+        assert_eq!(
+            evaluate_with_budget(&limited, &mut host, 1),
+            Err(EvalError::BudgetExceeded {
+                offset: 0,
+                limit: 1
+            })
+        );
+        assert!(host.reads.is_empty());
+    }
+}
+
+#[test]
+fn native_pitched_direction_reads_known_entity_pose_without_a_placement_gate() {
+    struct Host {
+        entity: Value,
+        direction: Option<[f64; 3]>,
+        override_value: Option<Value>,
+        reads: Vec<u32>,
+    }
+
+    impl Context for Host {
+        fn variable(&mut self, variable: Variable) -> Value {
+            assert_eq!(
+                variable,
+                Variable {
+                    scope: Scope::Instance,
+                    id: 61
+                }
+            );
+            self.entity.clone()
+        }
+
+        fn authored_forward(&mut self, entity: u32) -> Option<[f64; 3]> {
+            self.reads.push(entity);
+            self.direction
+        }
+
+        fn forward(&mut self, _: u32) -> Option<[f64; 3]> {
+            panic!("pitched direction must not use the horizontal-facing query")
+        }
+
+        fn native(&mut self, _: &Json) -> Option<Value> {
+            self.override_value.clone()
+        }
+    }
+
+    let contract: Json = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/statescript-native-direction-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract["schema_version"], 1);
+    assert_eq!(
+        contract["case_id"],
+        "statescript-native-direction.synthetic.v1"
+    );
+    let config = &contract["input"]["config"];
+    let mut host = Host {
+        entity: Value::Null,
+        direction: None,
+        override_value: None,
+        reads: Vec::new(),
+    };
+    for (sample, expected) in contract["input"]["samples"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(contract["expected"].as_array().unwrap())
+    {
+        let entity = sample["entity"].as_u64().unwrap() as u32;
+        let direction: [f64; 3] = serde_json::from_value(sample["direction"].clone()).unwrap();
+        host.entity = Value::Entity(entity);
+        host.direction = Some(direction);
+        assert_eq!(
+            evaluate(config, &mut host),
+            Ok(Value::Vector(
+                serde_json::from_value(expected.clone()).unwrap()
+            ))
+        );
+        assert_eq!(std::mem::take(&mut host.reads), [entity]);
+        let mut with_header = config.clone();
+        with_header["m_EE729DCB"] = json!(0);
+        assert_eq!(
+            evaluate(&with_header, &mut host),
+            Ok(Value::Vector(direction))
+        );
+        assert_eq!(std::mem::take(&mut host.reads), [entity]);
+    }
+
+    host.entity = Value::Entity(17);
+    for direction in [
+        None,
+        Some([f64::NAN, 0.0, 1.0]),
+        Some([0.0, f64::INFINITY, 1.0]),
+    ] {
+        host.direction = direction;
+        assert_eq!(
+            evaluate(config, &mut host),
+            Err(EvalError::UnavailableEntityDirection(17))
+        );
+        assert_eq!(std::mem::take(&mut host.reads), [17]);
+    }
+
+    for entity in [
+        Value::Null,
+        Value::Entity(0),
+        Value::Integer(17),
+        Value::Array(vec![Value::Entity(17)]),
+    ] {
+        host.entity = entity;
+        assert!(matches!(
+            evaluate(config, &mut host),
+            Err(EvalError::MalformedConfig(_))
+        ));
+        assert!(host.reads.is_empty());
+    }
+    host.entity = Value::Entity(17);
+    for malformed in [
+        json!({"$":"STU_2200A66D"}),
+        json!({"$":"STU_2200A66D", "m_entity":config["m_entity"], "extra":null}),
+        json!({"$":"STU_2200A66D", "m_entity":config["m_entity"], "m_EE729DCB":1}),
+    ] {
+        assert!(matches!(
+            evaluate(&malformed, &mut host),
+            Err(EvalError::MalformedConfig(_))
+        ));
+        assert!(host.reads.is_empty());
+    }
+    let nested = json!({
+        "$":"STU_2200A66D", "m_entity":{
+            "$":"ClientOnly", "value":null, "server_fallback":config["m_entity"]
+        }
+    });
+    assert_eq!(
+        evaluate_with_budget(&nested, &mut host, 1),
+        Err(EvalError::BudgetExceeded {
+            offset: 0,
+            limit: 1
+        })
+    );
+    assert!(host.reads.is_empty());
+
+    host.override_value = Some(Value::Vector([0.0, -0.5, 1.0]));
+    assert_eq!(
+        evaluate(config, &mut host),
+        Ok(Value::Vector([0.0, -0.5, 1.0]))
+    );
+    assert!(host.reads.is_empty());
+    for invalid_override in [Value::Bool(false), Value::Vector([0.0, f64::INFINITY, 1.0])] {
+        host.override_value = Some(invalid_override);
+        assert_eq!(
+            evaluate(config, &mut host),
+            Err(EvalError::UnavailableEntityDirection(17))
+        );
+        assert!(host.reads.is_empty());
+    }
+    host.override_value = Some(Value::Null);
+    let host_owned_selector = json!({
+        "$":"STU_2200A66D", "m_entity":{"$":"STU_SyntheticHostSelector"}
+    });
+    assert_eq!(evaluate(&host_owned_selector, &mut host), Ok(Value::Null));
+    assert!(host.reads.is_empty());
+    host.override_value = None;
+    assert!(matches!(
+        evaluate(&host_owned_selector, &mut host),
+        Err(EvalError::UnsupportedConfig(_))
+    ));
+    assert!(host.reads.is_empty());
+}
+
+#[test]
+fn native_eye_position_resolves_the_selected_body_and_requires_a_finite_anchor() {
+    struct Host {
+        owner: u32,
+        foreign: Value,
+        anchors: BTreeMap<u32, [f64; 3]>,
+        lookups: Vec<u32>,
+    }
+
+    impl Context for Host {
+        fn owner(&mut self) -> Value {
+            Value::Entity(self.owner)
+        }
+
+        fn variable(&mut self, variable: Variable) -> Value {
+            assert_eq!(variable.scope, Scope::Instance);
+            assert_eq!(variable.id, 37);
+            self.foreign.clone()
+        }
+
+        fn body_eye_position(&mut self, entity: u32) -> Option<[f64; 3]> {
+            self.lookups.push(entity);
+            self.anchors.get(&entity).copied()
+        }
+
+        fn position(&mut self, _: u32) -> Option<[f64; 3]> {
+            panic!("an eye anchor must not use the generic position lookup");
+        }
+
+        fn native(&mut self, _: &Json) -> Option<Value> {
+            panic!("an eye anchor must use the dedicated host method");
+        }
+    }
+
+    let contract: Json = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/statescript-native-eye-position-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract["schema_version"], 1);
+    assert_eq!(
+        contract["case_id"],
+        "statescript-native-eye-position.synthetic.v1"
+    );
+    assert_eq!(contract["evidence"], "synthetic-rust");
+    let input = &contract["input"];
+    let owner = serde_json::from_value(input["owner"].clone()).unwrap();
+    let foreign = serde_json::from_value(input["foreign"].clone()).unwrap();
+    let anchors: [[f64; 3]; 2] = serde_json::from_value(input["anchors"].clone()).unwrap();
+    let mut host = Host {
+        owner,
+        foreign: Value::Entity(foreign),
+        anchors: BTreeMap::from_iter([owner, foreign].into_iter().zip(anchors)),
+        lookups: Vec::new(),
+    };
+    let selectors = input["selectors"].as_array().unwrap();
+    let expected: [[f64; 3]; 2] =
+        serde_json::from_value(contract["expected"]["positions"].clone()).unwrap();
+    for (selector, position) in selectors.iter().zip(expected) {
+        let config = json!({"$":"STU_21A13145", "m_entity":selector, "m_EE729DCB":0});
+        assert_eq!(evaluate(&config, &mut host), Ok(Value::Vector(position)));
+    }
+    let lookups: Vec<u32> =
+        serde_json::from_value(contract["expected"]["lookups"].clone()).unwrap();
+    assert_eq!(std::mem::take(&mut host.lookups), lookups);
+
+    let config = json!({"$":"STU_21A13145", "m_entity":selectors[1]});
+    host.anchors.remove(&foreign);
+    assert_eq!(
+        evaluate(&config, &mut host),
+        Err(EvalError::UnavailableBodyEyePosition(foreign))
+    );
+    host.anchors.insert(foreign, [f64::NAN, 0.0, 0.0]);
+    assert_eq!(
+        evaluate(&config, &mut host),
+        Err(EvalError::UnavailableBodyEyePosition(foreign))
+    );
+    assert_eq!(std::mem::take(&mut host.lookups), [foreign, foreign]);
+
+    for malformed in [
+        json!({"$":"STU_21A13145"}),
+        json!({"$":"STU_21A13145", "m_entity":selectors[0], "m_EE729DCB":1}),
+        json!({"$":"STU_21A13145", "m_entity":selectors[0], "extra":null}),
+    ] {
+        assert_eq!(
+            evaluate(&malformed, &mut host),
+            Err(EvalError::MalformedConfig(
+                "expected one native eye position entity operand"
+            ))
+        );
+    }
+    for unbound in [Value::Null, Value::Entity(0), Value::Entity(0x1fff_ffff)] {
+        host.foreign = unbound;
+        assert_eq!(
+            evaluate(&config, &mut host),
+            Err(EvalError::MalformedConfig("expected a bound entity"))
+        );
+    }
+    assert!(host.lookups.is_empty());
+    host.foreign = Value::Entity(foreign);
+    let wrapped = json!({"$":"ClientOnly", "value":null, "server_fallback":config});
+    assert_eq!(
+        evaluate_with_budget(&wrapped, &mut host, 1),
+        Err(EvalError::BudgetExceeded {
+            offset: 0,
+            limit: 1
+        })
+    );
+    assert!(host.lookups.is_empty());
+}
+
+#[test]
+fn body_activity_reads_a_known_boolean_and_rejects_unavailable_or_malformed_inputs() {
+    struct Host {
+        active: Option<bool>,
+        reads: usize,
+    }
+
+    impl Context for Host {
+        fn body_active(&mut self) -> Option<bool> {
+            self.reads += 1;
+            self.active
+        }
+
+        fn watches_natives(&self) -> bool {
+            true
+        }
+
+        fn reference_native(&mut self, class: &str) {
+            panic!("authored body activity was treated as reference-native: {class}");
+        }
+    }
+
+    let config = json!({"$": "BodyActive"});
+    let mut host = Host {
+        active: Some(true),
+        reads: 0,
+    };
+    assert_eq!(
+        evaluate_with_budget(&config, &mut host, 1),
+        Ok(Value::Bool(true))
+    );
+    host.active = Some(false);
+    assert_eq!(evaluate(&config, &mut host), Ok(Value::Bool(false)));
+    host.active = None;
+    assert_eq!(
+        evaluate(&config, &mut host),
+        Err(EvalError::UnavailableBodyActivity)
+    );
+    assert_eq!(host.reads, 3);
+    assert_eq!(
+        evaluate(&json!({"$": "BodyActive", "entity": null}), &mut host),
+        Err(EvalError::MalformedConfig("BodyActive takes no operands"))
+    );
+    let wrapped = json!({"$":"ClientOnly", "value":null, "server_fallback":config});
+    assert_eq!(
+        evaluate_with_budget(&wrapped, &mut host, 1),
+        Err(EvalError::BudgetExceeded {
+            offset: 0,
+            limit: 1
+        })
+    );
+    assert_eq!(host.reads, 3);
+}
+
+#[test]
+fn authored_stack_admission_passes_strict_scoped_inputs_to_the_context() {
+    #[derive(Default)]
+    struct StackContext {
+        admitted: Option<bool>,
+        calls: Vec<(Variable, StackPriority)>,
+    }
+
+    impl Context for StackContext {
+        fn would_stack_to_top(
+            &mut self,
+            variable: Variable,
+            priority: StackPriority,
+        ) -> Option<bool> {
+            self.calls.push((variable, priority));
+            self.admitted
+        }
+
+        fn reference_native(&mut self, class: &str) {
+            panic!("authored stack admission was treated as a native expression: {class}");
+        }
+    }
+
+    let entity = json!({
+        "$":"StackAllows",
+        "variable":{"scope":"entity","id":u32::MAX},
+        "priority":{"level":-128,"above_equals":false}
+    });
+    let instance = json!({
+        "$":"StackAllows",
+        "variable":{"scope":"instance","id":7},
+        "priority":{"level":127,"above_equals":true}
+    });
+    let mut context = StackContext {
+        admitted: Some(true),
+        ..Default::default()
+    };
+    assert_eq!(evaluate(&entity, &mut context), Ok(Value::Bool(true)));
+    context.admitted = Some(false);
+    assert_eq!(evaluate(&instance, &mut context), Ok(Value::Bool(false)));
+    assert_eq!(
+        context.calls,
+        [
+            (
+                Variable {
+                    scope: Scope::Entity,
+                    id: u32::MAX
+                },
+                StackPriority {
+                    level: -128,
+                    above_equals: false
+                }
+            ),
+            (
+                Variable {
+                    scope: Scope::Instance,
+                    id: 7
+                },
+                StackPriority {
+                    level: 127,
+                    above_equals: true
+                }
+            )
+        ]
+    );
+    assert_eq!(
+        evaluate(&entity, &mut EmptyContext),
+        Err(EvalError::UnavailableStackAdmission)
+    );
+
+    context.calls.clear();
+    for invalid in [
+        json!({"$":"StackAllows","priority":entity["priority"]}),
+        json!({"$":"StackAllows","variable":entity["variable"]}),
+        json!({ "$":"StackAllows","variable":entity["variable"],"priority":entity["priority"],"extra":true }),
+    ] {
+        assert!(matches!(
+            evaluate(&invalid, &mut context),
+            Err(EvalError::MalformedConfig(_))
+        ));
+    }
+    for invalid in [
+        Json::Null,
+        json!({"scope":"entity"}),
+        json!({"scope":"parent","id":1}),
+        json!({"scope":"entity","id":0}),
+        json!({"scope":"entity","id":1.0}),
+        json!({"scope":"instance","id":u64::from(u32::MAX) + 1}),
+        json!({"scope":"entity","id":1,"extra":false}),
+    ] {
+        let mut config = entity.clone();
+        config["variable"] = invalid;
+        assert!(matches!(
+            evaluate(&config, &mut context),
+            Err(EvalError::MalformedConfig(_))
+        ));
+    }
+    for invalid in [
+        Json::Null,
+        json!({"level":1}),
+        json!({"level":-129,"above_equals":false}),
+        json!({"level":128,"above_equals":false}),
+        json!({"level":1.0,"above_equals":true}),
+        json!({"level":1,"above_equals":1}),
+        json!({"level":1,"above_equals":false,"extra":0}),
+    ] {
+        let mut config = entity.clone();
+        config["priority"] = invalid;
+        assert!(matches!(
+            evaluate(&config, &mut context),
+            Err(EvalError::MalformedConfig(_))
+        ));
+    }
+    assert!(context.calls.is_empty());
+}
+
+#[test]
+fn authored_room_predicates_share_radius_relation_and_tag_checks() {
+    use crate::script_init::{TargetTagEffect, TargetTagEffects};
+    use std::collections::BTreeSet;
+
+    #[derive(serde::Deserialize)]
+    struct Actor {
+        id: u32,
+        team: Option<u8>,
+        alive: bool,
+        tags: Option<Vec<String>>,
+        #[serde(default)]
+        granted: Vec<String>,
+        #[serde(default)]
+        suppressed: Vec<String>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        entity: Json,
+        source: Json,
+        center: Json,
+        actors: Vec<Actor>,
+        candidates: Vec<(u32, [f64; 3])>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Predicate {
+        entity: u32,
+        source: Option<u32>,
+        filter: Option<Json>,
+        result: Option<bool>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Radius {
+        source: Option<u32>,
+        filter: Json,
+        result: Option<Vec<u32>>,
+        #[serde(default)]
+        without_facts: bool,
+        missing_facts_entity: Option<u32>,
+        #[serde(default)]
+        spatial_unavailable: bool,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Expected {
+        predicates: Vec<Predicate>,
+        radii: Vec<Radius>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Contract {
+        schema_version: u8,
+        case_id: String,
+        evidence: String,
+        input: Input,
+        expected: Expected,
+    }
+
+    struct Host {
+        entity: Value,
+        source: u32,
+        facts: BTreeMap<u32, RoomEntityFacts>,
+        provide_facts: bool,
+        candidates: Vec<SpatialCandidate>,
+        metadata_reads: usize,
+        rays: usize,
+    }
+
+    impl Context for Host {
+        fn variable(&mut self, variable: Variable) -> Value {
+            assert_eq!(variable.scope, Scope::Instance);
+            match variable.id {
+                1 => self.entity.clone(),
+                2 => Value::Entity(self.source),
+                3 => Value::Vector([0.0; 3]),
+                id => panic!("unknown fixture operand {id}"),
+            }
+        }
+
+        fn spatial_candidates(&mut self) -> Option<&[SpatialCandidate]> {
+            Some(&self.candidates)
+        }
+
+        fn room_entities(&mut self) -> Option<&BTreeMap<u32, RoomEntityFacts>> {
+            self.metadata_reads += 1;
+            self.provide_facts.then_some(&self.facts)
+        }
+
+        fn spatial_line_clear(&mut self, _origin: [f64; 3], _target: [f64; 3]) -> Option<bool> {
+            self.rays += 1;
+            Some(true)
+        }
+    }
+
+    let contract: Contract = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/statescript-room-entity-filter-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    assert_eq!(
+        contract.case_id,
+        "statescript-room-entity-filter.synthetic.v1"
+    );
+    assert_eq!(contract.evidence, "synthetic-rust");
+
+    let input = contract.input;
+    let facts: BTreeMap<_, _> = input
+        .actors
+        .into_iter()
+        .map(|actor| {
+            let authored = actor.tags.map(|tags| {
+                tags.iter()
+                    .map(|tag| parse_guid(tag).unwrap())
+                    .collect::<BTreeSet<_>>()
+            });
+            let mut effects = TargetTagEffects::default();
+            for (present, tags) in [(true, actor.granted), (false, actor.suppressed)] {
+                for tag in tags {
+                    assert!(effects.apply(
+                        TargetTagEffect {
+                            entity: actor.id,
+                            tag: parse_guid(&tag).unwrap(),
+                            present,
+                        },
+                        true,
+                    ));
+                }
+            }
+            (
+                actor.id,
+                RoomEntityFacts {
+                    team: actor.team,
+                    alive: actor.alive,
+                    tags: effects.snapshot(authored.as_ref()),
+                },
+            )
+        })
+        .collect();
+    let candidates = input
+        .candidates
+        .into_iter()
+        .map(|(entity, position)| SpatialCandidate {
+            entity,
+            position,
+            team: facts[&entity].team,
+        })
+        .collect();
+    let mut host = Host {
+        entity: Value::Null,
+        source: 0,
+        facts,
+        provide_facts: true,
+        candidates,
+        metadata_reads: 0,
+        rays: 0,
+    };
+
+    let predicate = json!({"$":"EntityMatches","entity":input.entity});
+    for case in contract.expected.predicates {
+        host.entity = Value::Entity(case.entity);
+        host.source = case.source.unwrap_or_default();
+        let mut query = predicate.clone();
+        if let Some(mut filter) = case.filter {
+            if case.source.is_some() {
+                filter["source"] = input.source.clone();
+            }
+            query["filter"] = filter;
+        }
+        assert_eq!(
+            evaluate(&query, &mut host),
+            case.result
+                .map(Value::Bool)
+                .ok_or(EvalError::UnavailableRoomEntityFacts),
+            "entity {} predicate {query}",
+            case.entity,
+        );
+    }
+
+    for case in contract.expected.radii {
+        host.source = case.source.unwrap_or_default();
+        host.provide_facts = !case.without_facts;
+        let removed_facts = case
+            .missing_facts_entity
+            .map(|entity| (entity, host.facts.remove(&entity).unwrap()));
+        let mut filter = case.filter;
+        if case.source.is_some() {
+            filter["source"] = input.source.clone();
+        }
+        let mut query = json!({
+            "$":"EntitiesInRadius",
+            "center":input.center,
+            "radius":5,
+            "filter":filter,
+        });
+        if case.result.is_none() && !case.spatial_unavailable {
+            // Unknown fact aborts the whole query before any visibility requests.
+            query["line_of_sight"] = Json::Bool(true);
+        }
+        host.metadata_reads = 0;
+        host.rays = 0;
+        let expected = case
+            .result
+            .map(|ids| Value::Array(ids.into_iter().map(Value::Entity).collect()))
+            .ok_or(if case.spatial_unavailable {
+                EvalError::UnavailableSpatialCandidates
+            } else {
+                EvalError::UnavailableRoomEntityFacts
+            });
+        assert_eq!(evaluate(&query, &mut host), expected, "radius {query}");
+        assert_eq!(host.rays, 0);
+        if case.without_facts || case.spatial_unavailable {
+            assert_eq!(host.metadata_reads, 0, "radius {query}");
+        }
+        if let Some((entity, facts)) = removed_facts {
+            host.facts.insert(entity, facts);
+        }
+    }
+
+    host.entity = Value::Entity(34);
+    host.source = 700;
+    host.metadata_reads = 0;
+    let mut left = predicate.clone();
+    left["filter"] = json!({"alive":true});
+    let mut right = predicate.clone();
+    right["filter"] = json!({"relation":"ally","source":input.source});
+    let combined = expression(json!([14, 0, 2, 4, 14, 1, 0]), &[], &[], &[left, right]);
+    assert_eq!(evaluate(&combined, &mut host), Ok(Value::Bool(false)));
+    assert_eq!(host.metadata_reads, 1);
+    host.entity = Value::Entity(41);
+    assert_eq!(
+        evaluate(&combined, &mut host),
+        Err(EvalError::UnavailableRoomEntityFacts)
+    );
+    assert_eq!(host.metadata_reads, 3);
+
+    for filter in [
+        Json::Null,
+        json!({"relation":"ally"}),
+        json!({"source":input.source}),
+        json!({"alive":0}),
+        json!({"tags":{"all":["0x0000000000000000"]}}),
+        json!({"tags":{"any":"0xF100000000000001"}}),
+        json!({"tags":{"unknown":[]}}),
+        json!({"depth":2}),
+    ] {
+        let mut query = predicate.clone();
+        query["filter"] = filter;
+        assert!(matches!(
+            evaluate(&query, &mut host),
+            Err(EvalError::MalformedConfig(_))
+        ));
+    }
+    for invalid in [
+        Value::Entity(0),
+        Value::Entity(0x1fff_ffff),
+        Value::Integer(41),
+    ] {
+        host.entity = invalid;
+        assert!(matches!(
+            evaluate(&predicate, &mut host),
+            Err(EvalError::MalformedConfig(_))
+        ));
+    }
+
+    host.entity = Value::Entity(41);
+    host.provide_facts = false;
+    assert_eq!(
+        evaluate(&predicate, &mut host),
+        Err(EvalError::UnavailableRoomEntityFacts)
+    );
+    host.provide_facts = true;
+    let mut query = predicate.clone();
+    query["filter"] = json!({"tags":{"all":["0xF100000000000001"]}});
+    assert_eq!(
+        evaluate_with_budget(&query, &mut host, 2),
+        Err(EvalError::BudgetExceeded {
+            offset: 0,
+            limit: 2
+        })
+    );
+    host.facts.clear();
+    assert_eq!(evaluate(&predicate, &mut host), Ok(Value::Bool(false)));
+}
+
+#[test]
+fn radial_health_uses_measured_distance_and_preserves_ordinary_duplicate_rules() {
+    struct Host(Vec<SpatialCandidate>);
+
+    impl Context for Host {
+        fn variable(&mut self, _: Variable) -> Value {
+            Value::Vector([0.0; 3])
+        }
+
+        fn spatial_candidates(&mut self) -> Option<&[SpatialCandidate]> {
+            Some(&self.0)
+        }
+    }
+
+    let candidate = |entity, x| SpatialCandidate {
+        entity,
+        position: [x, 0.0, 0.0],
+        team: None,
+    };
+    let mut host = Host(vec![
+        candidate(29, 8.0),
+        candidate(19, 4.0),
+        candidate(13, 0.0),
+        candidate(19, 4.0),
+    ]);
+    let mut area = json!({
+        "$":"EntitiesInRadius",
+        "center":variable(1, Scope::Instance),
+        "radius":8,
+    });
+    assert_eq!(
+        radial_health_changes(&area, &json!(-32), Some(&json!(0.25)), &mut host),
+        Ok(vec![(13, -32.0), (19, -20.0), (29, -8.0)])
+    );
+    assert_eq!(
+        radial_health_changes(&area, &json!(3.5), Some(&json!(0)), &mut host),
+        Ok(vec![(13, 3.5), (19, 1.75)])
+    );
+    assert_eq!(
+        radial_health_changes(&area, &json!(1), None, &mut host),
+        Ok(vec![(13, 1.0), (19, 1.0), (29, 1.0)])
+    );
+    area["radius"] = json!(0);
+    assert_eq!(
+        radial_health_changes(&area, &json!(1), Some(&json!(0)), &mut host),
+        Ok(vec![(13, 1.0)])
+    );
+    area["radius"] = json!(8);
+    host.0.push(candidate(19, 5.0));
+    assert_eq!(
+        radial_health_changes(&area, &json!(1), None, &mut host),
+        Err(EvalError::UnavailableSpatialCandidates)
+    );
+    assert_eq!(
+        evaluate(&area, &mut host),
+        Ok(Value::Array(vec![
+            Value::Entity(13),
+            Value::Entity(19),
+            Value::Entity(29)
+        ]))
+    );
+}
+
+#[test]
+fn authored_radius_query_filters_and_bounds_spatial_candidates() {
+    type CandidateRows = Vec<(u32, [f64; 3])>;
+    type RelationRows = Vec<(u32, [f64; 3], Option<u8>)>;
+
+    #[derive(serde::Deserialize)]
+    struct ConeQuery {
+        direction: [f64; 3],
+        half_angle_degrees: Json,
+        opponent_of: Option<u32>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        config: Json,
+        center: [f64; 3],
+        candidates: CandidateRows,
+        budget_after_first_candidate: usize,
+        large_radius: Json,
+        large_candidates: CandidateRows,
+        relation_source: Json,
+        relation_candidates: RelationRows,
+        relation_queries: Vec<(String, u32)>,
+        cone_direction: Json,
+        cone_candidates: RelationRows,
+        cone_queries: Vec<ConeQuery>,
+        visibility_responses: Vec<([f64; 3], bool)>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Expected {
+        matches: Vec<u32>,
+        large_matches: Vec<u32>,
+        relation_matches: Vec<Option<Vec<u32>>>,
+        cone_matches: Vec<Vec<u32>>,
+        visible_matches: Vec<u32>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Contract {
+        schema_version: u8,
+        case_id: String,
+        evidence: String,
+        input: Input,
+        expected: Expected,
+    }
+
+    struct Host {
+        center: [f64; 3],
+        source: u32,
+        direction: [f64; 3],
+        candidates: Option<Vec<SpatialCandidate>>,
+        visibility: Vec<([f64; 3], bool)>,
+        rays: Vec<([f64; 3], [f64; 3])>,
+    }
+
+    impl Context for Host {
+        fn variable(&mut self, variable: Variable) -> Value {
+            assert_eq!(variable.scope, Scope::Instance);
+            match variable.id {
+                61 => Value::Vector(self.center),
+                62 => Value::Entity(self.source),
+                63 => Value::Vector(self.direction),
+                64 => Value::Float(f64::INFINITY),
+                id => panic!("unexpected variable {id}"),
+            }
+        }
+
+        fn spatial_candidates(&mut self) -> Option<&[SpatialCandidate]> {
+            self.candidates.as_deref()
+        }
+
+        fn spatial_line_clear(&mut self, origin: [f64; 3], target: [f64; 3]) -> Option<bool> {
+            self.rays.push((origin, target));
+            self.visibility
+                .iter()
+                .find(|(point, _)| *point == target)
+                .map(|(_, clear)| *clear)
+        }
+    }
+
+    let contract: Contract = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/statescript-entities-in-radius-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    assert_eq!(
+        contract.case_id,
+        "statescript-entities-in-radius.synthetic.v1"
+    );
+    assert_eq!(contract.evidence, "synthetic-rust");
+
+    let Input {
+        config,
+        center,
+        candidates,
+        budget_after_first_candidate,
+        large_radius,
+        large_candidates,
+        relation_source,
+        relation_candidates,
+        relation_queries,
+        cone_direction,
+        cone_candidates,
+        cone_queries,
+        visibility_responses,
+    } = contract.input;
+    let spatial_candidates = |rows: CandidateRows| {
+        rows.into_iter()
+            .map(|(entity, position)| SpatialCandidate {
+                entity,
+                position,
+                team: None,
+            })
+            .collect()
+    };
+    let entities =
+        |matches: Vec<u32>| Value::Array(matches.into_iter().map(Value::Entity).collect());
+    let mut host = Host {
+        center,
+        source: 0,
+        direction: [0.0; 3],
+        candidates: Some(spatial_candidates(candidates)),
+        visibility: Vec::new(),
+        rays: Vec::new(),
+    };
+    assert_eq!(
+        evaluate(&config, &mut host),
+        Ok(entities(contract.expected.matches))
+    );
+    assert_eq!(
+        evaluate_with_budget(&config, &mut host, budget_after_first_candidate),
+        Err(EvalError::BudgetExceeded {
+            offset: 0,
+            limit: budget_after_first_candidate
+        })
+    );
+
+    host.candidates = Some(Vec::new());
+    assert_eq!(
+        evaluate_with_budget(&config, &mut host, 1),
+        Ok(Value::Array(Vec::new()))
+    );
+    host.candidates = None;
+    assert_eq!(
+        evaluate(&config, &mut host),
+        Err(EvalError::UnavailableSpatialCandidates)
+    );
+
+    host.candidates = Some(spatial_candidates(large_candidates));
+    let mut large_config = config.clone();
+    large_config["radius"] = large_radius;
+    assert_eq!(
+        evaluate(&large_config, &mut host),
+        Ok(entities(contract.expected.large_matches))
+    );
+
+    for invalid in [
+        SpatialCandidate {
+            entity: 0,
+            position: center,
+            team: None,
+        },
+        SpatialCandidate {
+            entity: 42,
+            position: [0.0, f64::NAN, 0.0],
+            team: None,
+        },
+    ] {
+        host.candidates = Some(vec![
+            SpatialCandidate {
+                entity: 17,
+                position: center,
+                team: None,
+            },
+            invalid,
+        ]);
+        assert_eq!(
+            evaluate(&config, &mut host),
+            Err(EvalError::UnavailableSpatialCandidates)
+        );
+    }
+
+    let team_candidates = |rows: RelationRows| {
+        rows.into_iter()
+            .map(|(entity, position, team)| SpatialCandidate {
+                entity,
+                position,
+                team,
+            })
+            .collect()
+    };
+    let limit = relation_candidates.len();
+    host.candidates = Some(team_candidates(relation_candidates));
+    let filter = |relation: &str| json!({"relation": relation, "source": &relation_source});
+    let mut filtered = config;
+    assert_eq!(
+        relation_queries.len(),
+        contract.expected.relation_matches.len()
+    );
+    for ((relation, source), expected) in relation_queries
+        .into_iter()
+        .zip(contract.expected.relation_matches)
+    {
+        filtered["filter"] = filter(&relation);
+        host.source = source;
+        assert_eq!(
+            evaluate(&filtered, &mut host),
+            expected
+                .map(entities)
+                .ok_or(EvalError::UnavailableSpatialCandidates),
+            "{relation} relative to {source}"
+        );
+    }
+
+    // An independent source has no allies, but the whole snapshot still costs work.
+    host.source = 25;
+    filtered["filter"] = filter("ally");
+    assert_eq!(
+        evaluate_with_budget(&filtered, &mut host, limit),
+        Err(EvalError::BudgetExceeded { offset: 0, limit })
+    );
+
+    host.source = 0;
+    assert!(matches!(
+        evaluate(&filtered, &mut host),
+        Err(EvalError::MalformedConfig(_))
+    ));
+    host.source = 31;
+    for malformed in [
+        Json::Null,
+        filter("unknown"),
+        json!({"relation":"ally", "source":31}),
+        json!({"relation":"ally", "source":&relation_source, "extra":null}),
+    ] {
+        filtered["filter"] = malformed;
+        assert!(matches!(
+            evaluate(&filtered, &mut host),
+            Err(EvalError::MalformedConfig(_))
+        ));
+    }
+
+    host.candidates.as_mut().unwrap().push(SpatialCandidate {
+        entity: 31,
+        position: center,
+        team: Some(1),
+    });
+    filtered["filter"] = filter("ally");
+    assert_eq!(
+        evaluate(&filtered, &mut host),
+        Err(EvalError::UnavailableSpatialCandidates)
+    );
+
+    let limit = cone_candidates.len();
+    host.candidates = Some(team_candidates(cone_candidates));
+    let cone = |degrees: Json| json!({"direction": &cone_direction, "half_angle_degrees": degrees});
+    assert_eq!(cone_queries.len(), contract.expected.cone_matches.len());
+    for (query, expected) in cone_queries.into_iter().zip(contract.expected.cone_matches) {
+        host.direction = query.direction;
+        filtered["cone"] = cone(query.half_angle_degrees);
+        if let Some(source) = query.opponent_of {
+            host.source = source;
+            filtered["filter"] = filter("opponent");
+        } else {
+            filtered.as_object_mut().unwrap().remove("filter");
+        }
+        assert_eq!(
+            evaluate(&filtered, &mut host),
+            Ok(entities(expected)),
+            "{filtered}"
+        );
+    }
+    filtered.as_object_mut().unwrap().remove("filter");
+
+    host.direction = [0.0, -1.0, 0.0];
+    filtered["cone"] = cone(json!(0));
+    assert_eq!(evaluate(&filtered, &mut host), Ok(Value::Array(Vec::new())));
+    assert_eq!(
+        evaluate_with_budget(&filtered, &mut host, limit),
+        Err(EvalError::BudgetExceeded { offset: 0, limit })
+    );
+
+    for direction in [[0.0; 3], [0.0, f64::NAN, 1.0], [0.0, f64::INFINITY, 1.0]] {
+        host.direction = direction;
+        assert!(matches!(
+            evaluate(&filtered, &mut host),
+            Err(EvalError::MalformedConfig(_))
+        ));
+    }
+    host.direction = [0.0, 0.0, 1.0];
+    for malformed in [
+        Json::Null,
+        json!({"direction": &cone_direction}),
+        json!({"direction": &cone_direction, "half_angle_degrees": 45, "extra": null}),
+        json!({"direction": 1, "half_angle_degrees": 45}),
+        cone(json!(-1)),
+        cone(json!(180.1)),
+        cone(json!(true)),
+        cone(variable(64, Scope::Instance)),
+    ] {
+        filtered["cone"] = malformed;
+        assert!(matches!(
+            evaluate(&filtered, &mut host),
+            Err(EvalError::MalformedConfig(_))
+        ));
+    }
+
+    assert!(
+        host.rays.is_empty(),
+        "omission must leave visibility unused"
+    );
+    host.direction = [0.0, 0.0, 1.0];
+    host.source = 31;
+    filtered["cone"] = cone(json!(45));
+    filtered["filter"] = filter("opponent");
+    filtered["line_of_sight"] = json!(false);
+    assert_eq!(
+        evaluate(&filtered, &mut host),
+        Ok(entities(vec![15, 17, 23]))
+    );
+    assert!(host.rays.is_empty(), "false must leave visibility unused");
+
+    for malformed in [Json::Null, json!(1), json!("true")] {
+        filtered["line_of_sight"] = malformed;
+        assert!(matches!(
+            evaluate(&filtered, &mut host),
+            Err(EvalError::MalformedConfig(_))
+        ));
+    }
+    assert!(host.rays.is_empty());
+
+    filtered["line_of_sight"] = json!(true);
+    let expected_rays: Vec<_> = visibility_responses
+        .iter()
+        .map(|&(target, _)| (center, target))
+        .collect();
+    assert_eq!(
+        evaluate(&filtered, &mut host),
+        Err(EvalError::UnavailableSpatialVisibility)
+    );
+    assert_eq!(std::mem::take(&mut host.rays), expected_rays[..1]);
+
+    host.visibility = visibility_responses.clone();
+    assert_eq!(
+        evaluate(&filtered, &mut host),
+        Ok(entities(contract.expected.visible_matches))
+    );
+    assert_eq!(std::mem::take(&mut host.rays), expected_rays);
+
+    // An unavailable final ray cannot return the visible prefix.
+    host.visibility.pop().unwrap();
+    assert_eq!(
+        evaluate(&filtered, &mut host),
+        Err(EvalError::UnavailableSpatialVisibility)
+    );
+    assert_eq!(std::mem::take(&mut host.rays), expected_rays);
+
+    host.visibility = visibility_responses;
+    // One query step, every candidate, then one ray before exhaustion.
+    let limit = limit + 2;
+    assert_eq!(
+        evaluate_with_budget(&filtered, &mut host, limit),
+        Err(EvalError::BudgetExceeded { offset: 0, limit })
+    );
+    assert_eq!(std::mem::take(&mut host.rays), expected_rays[..1]);
+
+    let conflicting_position = [0.0, 0.0, 3.0];
+    host.visibility.push((conflicting_position, true));
+    host.candidates.as_mut().unwrap().push(SpatialCandidate {
+        entity: 23,
+        position: conflicting_position,
+        team: Some(1),
+    });
+    assert_eq!(
+        evaluate(&filtered, &mut host),
+        Err(EvalError::UnavailableSpatialVisibility)
+    );
+    assert!(host.rays.is_empty(), "conflicts precede visibility reads");
+}
+
+#[test]
+fn client_only_operand_reads_only_the_selected_server_fallback() {
+    struct NoClientReads;
+
+    impl Context for NoClientReads {
+        fn watches_natives(&self) -> bool {
+            true
+        }
+
+        fn reference_native(&mut self, _: &str) {
+            panic!("the skipped operand must not register a native read");
+        }
+
+        fn variable(&mut self, _: Variable) -> Value {
+            panic!("the skipped operand must not read variables");
+        }
+
+        fn random_u64(&mut self) -> Option<u64> {
+            panic!("the skipped operand must not consume randomness");
+        }
+    }
+
+    let opaque = json!({"$":"ClientOnly", "value":variable(4, Scope::Instance)});
+    let mut ctx = NoClientReads;
+    assert_eq!(evaluate(&opaque, &mut ctx), Ok(Value::Null));
+    assert_eq!(
+        evaluate_with_initial(&opaque, &mut ctx, Value::Integer(16)),
+        Ok(Value::Integer(16))
+    );
+    let group =
+        |first| json!({"$":"STU_06610EBC", "m_configVars":[first, {"$":"ClientPresentation"}]});
+    assert_eq!(
+        evaluate_scalar_with_initial(&group(opaque.clone()), &mut ctx, Value::Integer(16)),
+        Ok(Value::Integer(16))
+    );
+    let mut explicit = opaque;
+    explicit["server_fallback"] = json!(8);
+    assert_eq!(evaluate(&explicit, &mut ctx), Ok(Value::Integer(8)));
+    explicit["server_fallback"] = group(json!(9));
+    assert_eq!(
+        evaluate_scalar_with_initial(&explicit, &mut ctx, Value::Integer(16)),
+        Ok(Value::Integer(9))
+    );
+}
+
+#[test]
+fn client_only_operand_is_an_explicit_budgeted_declaration() {
+    let wrapper = |value| json!({"$":"ClientOnly", "value":false, "server_fallback": value});
+    let nested = wrapper(wrapper(json!(8)));
+    assert!(matches!(
+        evaluate_with_budget(&nested, &mut EmptyContext, 1),
+        Err(EvalError::BudgetExceeded { .. })
+    ));
+    assert_eq!(
+        evaluate_with_budget(&nested, &mut EmptyContext, 2),
+        Ok(Value::Integer(8))
+    );
+    let too_deep = (0..=MAX_CONFIG_DEPTH).fold(json!(8), |value, _| wrapper(value));
+    assert_eq!(
+        evaluate(&too_deep, &mut EmptyContext),
+        Err(EvalError::NestingExceeded)
+    );
+    for malformed in [
+        json!({"$":"ClientOnly", "server_fallback":8}),
+        json!({"$":"ClientOnly", "value":false, "serverFallback":8}),
+    ] {
+        assert_eq!(
+            evaluate(&malformed, &mut EmptyContext),
+            Err(EvalError::MalformedConfig("invalid client-only operand"))
+        );
+    }
+    let unknown = json!({"$":"ClientPresentation"});
+    assert_eq!(
+        evaluate(&wrapper(unknown.clone()), &mut EmptyContext),
+        evaluate(&unknown, &mut EmptyContext)
+    );
+    assert!(matches!(
+        evaluate(&unknown, &mut EmptyContext),
+        Err(EvalError::UnsupportedConfig(_))
+    ));
+}
+
+#[test]
 fn executes_only_the_selected_path_and_bounds_nested_expressions() {
     let untaken = expression(json!([6, 0, 2, 255, 6, 1, 0]), &[], &[1.0, 7.0], &[]);
     assert_eq!(
@@ -1943,4 +3537,386 @@ fn shared_body_field_contract() {
             .as_str()
             .unwrap()
     );
+}
+
+#[test]
+fn segment_clear_queries_finite_endpoints_in_order_and_costs_one_step() {
+    const ORIGIN: Variable = Variable {
+        scope: Scope::Instance,
+        id: 71,
+    };
+    const TARGET: Variable = Variable {
+        scope: Scope::Entity,
+        id: 26,
+    };
+
+    #[derive(serde::Deserialize)]
+    struct Contract {
+        schema_version: u8,
+        case_id: String,
+        evidence: String,
+        input: Input,
+        expected: Expected,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        query: Json,
+        world: Vec<Sample>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Sample {
+        origin: [f64; 3],
+        target: [f64; 3],
+        visibility: Option<bool>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Expected {
+        outputs: Vec<Option<bool>>,
+        query_steps: usize,
+        shape_error: String,
+        endpoint_error: String,
+    }
+
+    #[derive(Debug, PartialEq)]
+    enum Call {
+        Read(Variable),
+        Segment([f64; 3], [f64; 3]),
+    }
+
+    struct Host {
+        origin: Value,
+        target: Value,
+        reply: Option<bool>,
+        calls: Vec<Call>,
+    }
+
+    impl Context for Host {
+        fn variable(&mut self, variable: Variable) -> Value {
+            self.calls.push(Call::Read(variable));
+            match variable {
+                ORIGIN => self.origin.clone(),
+                TARGET => self.target.clone(),
+                _ => panic!("unexpected fixture operand {variable:?}"),
+            }
+        }
+
+        fn spatial_line_clear(&mut self, origin: [f64; 3], target: [f64; 3]) -> Option<bool> {
+            self.calls.push(Call::Segment(origin, target));
+            self.reply
+        }
+    }
+
+    let contract: Contract = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/statescript-segment-clear-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    assert_eq!(contract.case_id, "statescript-segment-clear.synthetic.v1");
+    assert_eq!(contract.evidence, "synthetic-rust");
+    let Input { query, world } = contract.input;
+    let Expected {
+        outputs,
+        query_steps,
+        shape_error,
+        endpoint_error,
+    } = contract.expected;
+    assert_eq!(world.len(), outputs.len());
+    assert_eq!(query_steps, 1);
+    let wrapped = json!({"$":"ClientOnly","value":null,"server_fallback":query});
+
+    for (sample, expected) in world.into_iter().zip(outputs) {
+        let mut host = Host {
+            origin: Value::Vector(sample.origin),
+            target: Value::Vector(sample.target),
+            reply: sample.visibility,
+            calls: Vec::new(),
+        };
+        assert_eq!(
+            evaluate_with_budget(&query, &mut host, query_steps),
+            expected
+                .map(Value::Bool)
+                .ok_or(EvalError::UnavailableSpatialVisibility)
+        );
+        assert_eq!(
+            std::mem::take(&mut host.calls),
+            [
+                Call::Read(ORIGIN),
+                Call::Read(TARGET),
+                Call::Segment(sample.origin, sample.target),
+            ]
+        );
+        // The wrapper consumes a unit before the segment reaches the host.
+        let limit = query_steps;
+        assert_eq!(
+            evaluate_with_budget(&wrapped, &mut host, limit),
+            Err(EvalError::BudgetExceeded { offset: 0, limit })
+        );
+        assert_eq!(host.calls, [Call::Read(ORIGIN), Call::Read(TARGET)]);
+    }
+
+    let mut host = Host {
+        origin: Value::Vector([1.0, 2.0, 3.0]),
+        target: Value::Vector([-3.0, -2.0, -1.0]),
+        reply: Some(true),
+        calls: Vec::new(),
+    };
+    for missing in ["origin", "target"] {
+        let mut malformed = query.clone();
+        malformed.as_object_mut().unwrap().remove(missing);
+        assert!(matches!(
+            evaluate(&malformed, &mut host),
+            Err(EvalError::MalformedConfig(reason)) if reason == shape_error
+        ));
+        assert!(host.calls.is_empty());
+    }
+    let mut extra = query.clone();
+    extra["unexpected"] = Json::Null;
+    assert!(matches!(
+        evaluate(&extra, &mut host),
+        Err(EvalError::MalformedConfig(reason)) if reason == shape_error
+    ));
+    assert!(host.calls.is_empty());
+
+    let origin = host.origin.clone();
+    let target = host.target.clone();
+    for malformed in [
+        Value::Null,
+        Value::Integer(1),
+        Value::Vector([1.0, f64::NAN, 3.0]),
+        Value::Vector([1.0, 2.0, f64::INFINITY]),
+    ] {
+        host.origin = malformed.clone();
+        host.target = target.clone();
+        assert!(matches!(
+            evaluate(&query, &mut host),
+            Err(EvalError::MalformedConfig(reason)) if reason == endpoint_error
+        ));
+        assert_eq!(std::mem::take(&mut host.calls), [Call::Read(ORIGIN)]);
+
+        host.origin = origin.clone();
+        host.target = malformed;
+        assert!(matches!(
+            evaluate(&query, &mut host),
+            Err(EvalError::MalformedConfig(reason)) if reason == endpoint_error
+        ));
+        assert_eq!(
+            std::mem::take(&mut host.calls),
+            [Call::Read(ORIGIN), Call::Read(TARGET)]
+        );
+    }
+}
+
+#[test]
+fn ray_cast_distinguishes_hits_misses_invalid_inputs_and_unavailable_geometry() {
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct Contract {
+        schema_version: u8,
+        case_id: String,
+        evidence: String,
+        input: Input,
+        expected: Expected,
+    }
+
+    #[derive(Deserialize)]
+    struct Input {
+        query: Json,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: i64,
+        hit: Hit,
+    }
+
+    #[derive(Deserialize)]
+    struct Hit {
+        distance: f64,
+        point: [f64; 3],
+        normal: [f64; 3],
+    }
+
+    #[derive(Deserialize)]
+    struct Expected {
+        normalized_direction: [f64; 3],
+        hit: (f64, [f64; 3], [f64; 3]),
+        miss: Vec<()>,
+        query_steps: usize,
+    }
+
+    #[derive(Debug, PartialEq)]
+    enum Call {
+        Read(Variable),
+        Cast([f64; 3], [f64; 3], f64),
+    }
+
+    struct Host {
+        operands: [Value; 3],
+        reply: Option<Option<SpatialRayHit>>,
+        calls: Vec<Call>,
+    }
+
+    const VARIABLES: [Variable; 3] = [
+        Variable {
+            scope: Scope::Instance,
+            id: 40,
+        },
+        Variable {
+            scope: Scope::Entity,
+            id: 41,
+        },
+        Variable {
+            scope: Scope::Instance,
+            id: 42,
+        },
+    ];
+
+    impl Context for Host {
+        fn variable(&mut self, variable: Variable) -> Value {
+            self.calls.push(Call::Read(variable));
+            let index = VARIABLES.iter().position(|&item| item == variable).unwrap();
+            self.operands[index].clone()
+        }
+
+        fn spatial_ray_cast(
+            &mut self,
+            origin: [f64; 3],
+            direction: [f64; 3],
+            max_distance: f64,
+        ) -> Option<Option<SpatialRayHit>> {
+            self.calls.push(Call::Cast(origin, direction, max_distance));
+            self.reply
+        }
+    }
+
+    let contract: Contract = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/statescript-ray-cast-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    assert_eq!(contract.case_id, "statescript-ray-cast.synthetic.v1");
+    assert_eq!(contract.evidence, "synthetic-rust");
+    let Input {
+        query,
+        origin,
+        direction,
+        max_distance,
+        hit,
+    } = contract.input;
+    let Expected {
+        normalized_direction,
+        hit: (distance, point, normal),
+        miss,
+        query_steps,
+    } = contract.expected;
+    assert!(miss.is_empty());
+    assert_eq!(query_steps, 1);
+    let hit = SpatialRayHit {
+        distance: hit.distance,
+        point: hit.point,
+        normal: hit.normal,
+    };
+    let operands = [
+        Value::Vector(origin),
+        Value::Vector(direction),
+        Value::Integer(max_distance),
+    ];
+    let mut host = Host {
+        operands: operands.clone(),
+        reply: None,
+        calls: Vec::new(),
+    };
+    let unavailable = Err(EvalError::UnavailableSpatialRayCast);
+    for (reply, expected) in [
+        (
+            Some(Some(hit)),
+            Ok(Value::Array(vec![
+                Value::Float(distance),
+                Value::Vector(point),
+                Value::Vector(normal),
+            ])),
+        ),
+        (Some(None), Ok(Value::Array(Vec::new()))),
+        (None, unavailable.clone()),
+        (
+            Some(Some(SpatialRayHit {
+                distance: 7.0,
+                ..hit
+            })),
+            unavailable.clone(),
+        ),
+        (
+            Some(Some(SpatialRayHit {
+                point: [f64::NAN; 3],
+                ..hit
+            })),
+            unavailable.clone(),
+        ),
+        (
+            Some(Some(SpatialRayHit {
+                normal: [0.0; 3],
+                ..hit
+            })),
+            unavailable,
+        ),
+    ] {
+        host.reply = reply;
+        assert_eq!(
+            evaluate_with_budget(&query, &mut host, query_steps),
+            expected
+        );
+        assert_eq!(
+            std::mem::take(&mut host.calls),
+            [
+                Call::Read(VARIABLES[0]),
+                Call::Read(VARIABLES[1]),
+                Call::Read(VARIABLES[2]),
+                Call::Cast(origin, normalized_direction, max_distance as f64),
+            ]
+        );
+    }
+
+    let wrapped = json!({"$":"ClientOnly","value":null,"server_fallback":query});
+    assert_eq!(
+        evaluate_with_budget(&wrapped, &mut host, query_steps),
+        Err(EvalError::BudgetExceeded {
+            offset: 0,
+            limit: query_steps
+        })
+    );
+    assert_eq!(std::mem::take(&mut host.calls), VARIABLES.map(Call::Read));
+
+    for (index, invalid) in [
+        (0, Value::Vector([f64::NAN, 0.0, 0.0])),
+        (1, Value::Vector([0.0; 3])),
+        (1, Value::Vector([f64::INFINITY, 0.0, 0.0])),
+        (2, Value::Integer(0)),
+        (2, Value::Float(-1.0)),
+        (2, Value::Float(f64::INFINITY)),
+        (2, Value::Bool(true)),
+    ] {
+        host.operands = operands.clone();
+        host.operands[index] = invalid;
+        assert!(matches!(
+            evaluate(&query, &mut host),
+            Err(EvalError::MalformedConfig(_))
+        ));
+        let expected_reads: Vec<_> = VARIABLES[..=index]
+            .iter()
+            .copied()
+            .map(Call::Read)
+            .collect();
+        assert_eq!(std::mem::take(&mut host.calls), expected_reads);
+    }
+    let mut malformed = query.clone();
+    malformed["unexpected"] = Json::Null;
+    assert!(matches!(
+        evaluate(&malformed, &mut host),
+        Err(EvalError::MalformedConfig(_))
+    ));
+    assert!(host.calls.is_empty());
 }

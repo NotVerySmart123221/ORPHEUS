@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "case_id": "statescript-owned-entity-count.synthetic.v1",
+  "source": {"basis": "Invented entity ids, definition, and ownership-provider results."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "initial": 91,
+    "definition": "0x04000000F1010002",
+    "owner_variable": 7
+  },
+  "cases": [
+    {"name": "unset owner", "owner": null, "native_count": 5, "value": 91, "native_reads": 0},
+    {"name": "explicit unbound owner", "owner": 0, "native_count": 5, "value": 91, "native_reads": 0},
+    {"name": "known empty index", "owner": 37, "native_count": 0, "value": 0, "native_reads": 1},
+    {"name": "known populated index", "owner": 37, "native_count": 2, "value": 2, "native_reads": 1},
+    {"name": "unavailable index", "owner": 37, "error": "STU_967463AB", "native_reads": 1},
+    {"name": "invalid negative count", "owner": 37, "native_count": -1, "error": "STU_967463AB", "native_reads": 1},
+    {"name": "wrong owner type", "owner": false, "native_count": 5, "error": "STU_967463AB", "native_reads": 0},
+    {"name": "missing owner operand", "missing_owner": true, "native_count": 5, "error": "STU_967463AB", "native_reads": 0},
+    {"name": "wrong definition type", "owner": 0, "definition_operand": false, "native_count": 5, "error": "STU_967463AB", "native_reads": 0},
+    {"name": "unknown related owner", "related_owner": true, "native_count": 5, "error": "STU_DB742151", "native_reads": 0}
+  ]
+}

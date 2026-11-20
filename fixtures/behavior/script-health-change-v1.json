@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "case_id": "script-health-change.synthetic.v1",
+  "source": {
+    "basis": "Original message-driven graph for validating and admitting signed health change requests."
+  },
+  "evidence": "synthetic-rust",
+  "input": {
+    "bundle": {
+      "version": 1,
+      "authored_classes": [{"class": "authored.adjust", "behavior": "health_change_action"}],
+      "graphs": [
+        {
+          "index": 109,
+          "items": 3,
+          "header": {
+            "m_nodesBitCount": 4,
+            "m_statesBitCount": 4,
+            "m_remoteSyncNodesBitCount": 4,
+            "m_syncVarsBitCount": 4
+          },
+          "fields": {},
+          "containers": {},
+          "nodes": [
+            {
+              "pos": 0, "class": "STUStatescriptEntryGameMessage",
+              "uid": 0, "rid": 0, "remote": -1, "state": null,
+              "client_only": false, "server_only": false,
+              "fields": {
+                "m_gameMessage": {"m_gameMessage": "0x0000000000000049"},
+                "m_outPlug": {"$": "Plug", "links": [[1, "m_inPlug"]], "m_FF3DAF1E": []}
+              }
+            },
+            {
+              "pos": 1, "class": "authored.adjust",
+              "uid": 1, "rid": 1, "remote": -1, "state": null,
+              "client_only": false, "server_only": false,
+              "fields": {
+                "target": {"$": "STUConfigVarDynamic", "m_identifier": 1, "m_60DB8F99": true},
+                "delta": {"$": "STUConfigVarDynamic", "m_identifier": 2, "m_60DB8F99": true},
+                "m_outPlug": {"$": "Plug", "links": [[2, "m_inPlug"]], "m_FF3DAF1E": []}
+              }
+            },
+            {
+              "pos": 2, "class": "STUStatescriptActionSetVar",
+              "uid": 2, "rid": 2, "remote": -1, "state": null,
+              "client_only": false, "server_only": false,
+              "fields": {
+                "m_ADEB6E05": true,
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 3, "m_60DB8F99": true},
+                "m_value": true
+              }
+            }
+          ],
+          "unknown_nodes": [],
+          "states": [],
+          "entries": [0],
+          "remote": [],
+          "sync_vars": []
+        }
+      ],
+      "bodies": {},
+      "missing": []
+    },
+    "steps": [
+      {"target": {"entity": 29}, "delta": 7.5, "accept": true},
+      {"target": {"entity": 30}, "delta": -2, "accept": true},
+      {"target": 29, "delta": 1, "accept": true},
+      {"target": {"entity": 0}, "delta": 1, "accept": true},
+      {"target": {"entity": 29}, "delta": true, "accept": true},
+      {"target": {"entity": 29}, "delta": 0, "accept": true},
+      {"target": {"entity": 29}, "delta": -0.0, "accept": true},
+      {"target": {"entity": 29}, "delta": {"nonfinite": "infinity"}, "accept": true},
+      {"target": {"entity": 29}, "delta": {"nonfinite": "nan"}, "accept": true},
+      {"target": {"entity": 29}, "delta": -1, "accept": false}
+    ]
+  },
+  "expected": [
+    {"request": [29, 7.5], "continued": true},
+    {"request": [30, -2.0], "continued": true},
+    {"continued": false, "diagnostic": "target"},
+    {"continued": false, "diagnostic": "target"},
+    {"continued": false, "diagnostic": "delta"},
+    {"continued": false, "diagnostic": "delta"},
+    {"continued": false, "diagnostic": "delta"},
+    {"continued": false, "diagnostic": "delta"},
+    {"continued": false, "diagnostic": "delta"},
+    {"request": [29, -1.0], "continued": false, "diagnostic": "unavailable"}
+  ]
+}

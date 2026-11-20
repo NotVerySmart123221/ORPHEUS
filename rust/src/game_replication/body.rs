@@ -1,4 +1,5 @@
 use super::{delivery::*, *};
+use crate::{script_control::LEGACY_PROJECTILE_CONTROL, script_snapshot_wire::SnapshotError};
 
 pub(super) struct StepBuffers<'a> {
     pub(super) frame: &'a mut u32,
@@ -7,13 +8,60 @@ pub(super) struct StepBuffers<'a> {
     pub(super) hitscan: &'a mut Vec<PosedHitscan>,
 }
 
+pub(super) fn stage_scripted_motion(runtime: &mut dyn OwnerBodyRuntime, mover: &mut Mover) {
+    if mover.has_pending_script_motion() {
+        return;
+    }
+    if let Some((frame, motion)) = runtime.take_scripted_motion() {
+        mover.queue_scripted_motion(frame, motion);
+    }
+}
+
 pub(super) struct BodyScript {
     pub(super) id: BodyId,
     pub(super) stream: BodyStream<ProjectedSnapshot>,
     pub(super) frame: u32,
     pub(super) unsent_delta: Option<(u32, DeltaKind)>,
     pub(super) corrections: Option<CorrectionHistory>,
+    continuous_corrections: bool,
+    processed_at_spawn: Option<u32>,
     pub(super) projectiles: Option<OwnerProjectiles>,
+}
+
+fn startup_snapshot(runtime: &dyn OwnerBodyRuntime, entity: u32) -> io::Result<&Snapshot> {
+    let snapshot = runtime
+        .snapshot()
+        .ok_or_else(|| invalid("body VM is unavailable"))?;
+    if snapshot.entity != entity {
+        return Err(invalid("body VM has the wrong entity"));
+    }
+    Ok(snapshot)
+}
+
+pub(crate) fn validate_body_baselines(
+    runtime: &dyn OwnerBodyRuntime,
+    entity: u32,
+) -> io::Result<()> {
+    let snapshot = startup_snapshot(runtime, entity)?;
+    let encoder = runtime.encoder();
+    for (view, budget_error) in [
+        (
+            View::Owner,
+            "owner script baseline exceeds the datagram budget",
+        ),
+        (
+            View::Observer,
+            "observer script baseline exceeds the datagram budget",
+        ),
+    ] {
+        let baseline_error = |error| invalid(format!("{view:?} script baseline: {error}"));
+        let projected = encoder.project(snapshot, view).map_err(baseline_error)?;
+        let chunk = encoder
+            .queue_full(&mut BodyStream::new(entity), &projected)
+            .map_err(baseline_error)?;
+        ensure_script_chunk_fits(&chunk.update, budget_error)?;
+    }
+    Ok(())
 }
 
 impl BodyScript {
@@ -23,19 +71,10 @@ impl BodyScript {
         processed_at_spawn: Option<u32>,
         runtime: &dyn OwnerBodyRuntime,
     ) -> io::Result<Self> {
-        let snapshot = runtime
-            .snapshot()
-            .ok_or_else(|| invalid("body VM is unavailable"))?;
-        if snapshot.entity != body.id.entity {
-            return Err(invalid("body VM has the wrong entity"));
-        }
-        runtime
-            .encoder()
-            .project(snapshot, View::Owner)
-            .map_err(invalid)?;
-        let corrections = (matches!(body.hero, SOLDIER | CASSIDY)
-            && runtime.movement_modifiers().is_some())
-        .then(|| {
+        startup_snapshot(runtime, body.id.entity)?;
+        let continuous_corrections =
+            matches!(body.hero, SOLDIER | CASSIDY) && runtime.movement_modifiers().is_some();
+        let corrections = continuous_corrections.then(|| {
             CorrectionHistory::new(body.id.entity, body.id.generation)
                 .with_processed_at_spawn(processed_at_spawn)
         });
@@ -49,8 +88,45 @@ impl BodyScript {
             frame,
             unsent_delta: None,
             corrections,
+            continuous_corrections,
+            processed_at_spawn,
             projectiles,
         })
+    }
+
+    pub(super) fn record_scripted_movement(
+        &mut self,
+        mover: &Mover,
+        frame: u32,
+        frame_us: u32,
+        previously_processed: Option<u32>,
+    ) {
+        if frame_us == 0 || !mover.scripted_motion_at(frame) {
+            return;
+        }
+        let history = self.corrections.get_or_insert_with(|| {
+            CorrectionHistory::new(self.id.entity, self.id.generation)
+                .with_processed_at_spawn(self.processed_at_spawn.max(previously_processed))
+        });
+        history.swept_motion(frame, frame_us);
+        history.record(mover.pose());
+    }
+
+    pub(super) fn scripted_motion_history(&mut self) -> Option<&mut CorrectionHistory> {
+        self.corrections
+            .as_mut()
+            .filter(|history| history.impulse_correction().is_some())
+    }
+
+    pub(super) fn correction_sent(&mut self, correction: &crate::mover_correction::Correction) {
+        if let Some(history) = &mut self.corrections {
+            if history.sent(correction)
+                && !self.continuous_corrections
+                && history.impulse_correction().is_none()
+            {
+                self.corrections = None;
+            }
+        }
     }
 
     pub(super) fn advance_step(
@@ -62,36 +138,42 @@ impl BodyScript {
         step: BodyStep,
     ) -> io::Result<()> {
         if command.frame > *buffers.frame {
-            runtime.advance(command, mover, step)?;
+            if let Err(error) = runtime.advance(command, mover, step) {
+                mover.set_authored_facing(None);
+                return Err(error);
+            }
             *buffers.frame = command.frame;
             self.frame = command.frame;
         }
         match runtime.snapshot() {
             Some(snapshot) if snapshot.initialization_complete() => {}
             Some(snapshot) => {
-                let sites: Vec<String> = snapshot
-                    .diagnostics
-                    .iter()
-                    .map(|diagnostic| match diagnostic.site.node {
-                        Some(node) => {
-                            format!(
-                                "{:04X}:{node}:{:?}",
-                                diagnostic.site.graph, diagnostic.issue
-                            )
-                        }
-                        None => format!("{:04X}:-:{:?}", diagnostic.site.graph, diagnostic.issue),
-                    })
-                    .collect();
-                return Err(invalid(format!(
-                    "body VM reached an unsupported state: {}",
-                    sites.join(", ")
-                )));
+                mover.set_authored_facing(None);
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    SnapshotError::Incomplete {
+                        entity: snapshot.entity,
+                        diagnostics: snapshot.diagnostics.clone(),
+                    },
+                ));
             }
-            None => return Err(invalid("body VM has no snapshot")),
+            None => {
+                mover.set_authored_facing(None);
+                return Err(invalid("body VM has no snapshot"));
+            }
         }
         mover.set_cinematic_aim(runtime.cinematic_aim());
-        for (frame, change) in runtime.take_velocity_changes() {
-            mover.queue_velocity_change(frame, change);
+        mover.set_authored_facing(runtime.authored_facing());
+        let velocity_changes = runtime.take_velocity_changes();
+        if runtime
+            .vitals()
+            .is_some_and(|vitals| vitals.death().is_some())
+        {
+            mover.clear_pending_script_motion();
+        } else {
+            for (frame, change) in velocity_changes {
+                mover.queue_velocity_change(frame, change);
+            }
         }
         if step == BodyStep::UnposedTimer {
             // Combat discards the neutral interval's reports at its boundary.
@@ -101,7 +183,7 @@ impl BodyScript {
         }
         if let Some(modifiers) = runtime.movement_modifiers() {
             mover.track_modifiers(command.frame, modifiers);
-        } else if self.corrections.is_some() {
+        } else if self.continuous_corrections {
             return Err(invalid("body VM lost its movement projection"));
         }
         if let Some(history) = self
@@ -117,6 +199,9 @@ impl BodyScript {
                 PosedShot::Projectile(shot) => self.launch_projectile(*shot, buffers.launches),
                 PosedShot::BioticField(shot) => self.launch_biotic_field(shot, buffers.fields),
             }
+        }
+        if step == BodyStep::Posed {
+            stage_scripted_motion(runtime, mover);
         }
         Ok(())
     }
@@ -165,13 +250,9 @@ impl BodyScript {
                 token,
                 flight,
                 stun: projectile.stun,
-                hit_effect: (projectile.stun.is_some() && projectile.shot.graph == 0x01e9)
-                    .then_some(crate::script_init::Site {
-                        entity: projectile.shot.entity,
-                        instance: projectile.shot.instance,
-                        graph: projectile.shot.graph,
-                        node: Some(7),
-                    }),
+                hit_effect: projectile
+                    .stun
+                    .and_then(|_| LEGACY_PROJECTILE_CONTROL.flight_site(&projectile.shot)),
             });
         }
     }
@@ -219,12 +300,10 @@ impl BodyScript {
         };
         // An individual chunk that cannot fit alone needs fragmentation.
         // Fail this VM closed so it cannot hold up other entity records.
-        let packet = frame(u32::MAX, u32::MAX, &[], &[], &[&chunk.update]).map_err(invalid)?;
-        if packet.len() > MAX_PAYLOAD {
-            return Err(invalid(
-                "body script chunk exceeds the game datagram budget",
-            ));
-        }
+        ensure_script_chunk_fits(
+            &chunk.update,
+            "body script chunk exceeds the game datagram budget",
+        )?;
         let last = chunk.last;
         let replaced = kind.and_then(|kind| {
             self.unsent_delta.replace((last, kind)).map(|(last, _)| {

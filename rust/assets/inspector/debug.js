@@ -247,6 +247,7 @@ function render() {
   renderFaults(snapshot?.faults);
   renderActors(actors);
   renderScripts(room);
+  renderScriptRaySamples(room);
   for (const view of views) {
     renderView(view, sample, room);
   }
@@ -257,13 +258,20 @@ function formatOverlaySummary(room) {
   const parts = [];
   if (room.physics) {
     const p = room.physics;
+    const rays = Array.isArray(p.rays) ? p.rays : [];
+    const scripted = rays.filter(isScriptRay).length;
+    const unavailable = rays.filter((ray) => ray?.hit === "unavailable").length;
+    const rayNotes = [];
+    if (scripted) rayNotes.push(scripted + " scripted");
+    if (unavailable) rayNotes.push(unavailable + " unavailable");
     const t = [];
     if (p.truncated?.rays) t.push("rays");
     if (p.truncated?.contact_normals) t.push("normals");
     if (p.truncated?.ground_probes) t.push("probes");
     parts.push(
-      p.rays.length + " rays, " + p.contact_normals.length + " normals, "
-      + p.ground_probes.length + " ground probes" + (t.length ? " (capped " + t.join(", ") + ")" : "")
+      rays.length + " rays" + (rayNotes.length ? " (" + rayNotes.join(", ") + ")" : "")
+      + ", " + (p.contact_normals?.length ?? 0) + " normals, "
+      + (p.ground_probes?.length ?? 0) + " ground probes" + (t.length ? " (capped " + t.join(", ") + ")" : "")
     );
   }
   if (room.navigation) {
@@ -277,6 +285,47 @@ function formatOverlaySummary(room) {
     );
   }
   return parts.join(" · ");
+}
+
+function isScriptRay(ray) {
+  return ray?.kind === "script_static" || ray?.kind === "script_actor";
+}
+
+function rayAppearance(ray) {
+  const unavailable = ray.hit === "unavailable";
+  return {
+    color: unavailable ? "ray-unavailable" : ray.hit === "actor" ? "ray-hit"
+      : ray.hit === "world" ? "ray-world" : "ray-miss",
+    dash: unavailable ? [2, 3] : isScriptRay(ray) ? [7, 4] : ray.hit === "none" ? [4, 3] : [],
+    unavailable,
+    scripted: isScriptRay(ray),
+  };
+}
+
+function renderScriptRaySamples(room) {
+  const allRays = Array.isArray(room?.physics?.rays) ? room.physics.rays : [];
+  const rays = allRays.filter(isScriptRay);
+  byId("script-ray-panel").hidden = rays.length === 0;
+  setText(byId("script-ray-count"), rays.length
+    ? rays.length + (room?.physics?.truncated?.rays ? " · shared history capped" : "") : "");
+  const rows = document.createDocumentFragment();
+  const identifier = (value) => Number.isInteger(value) && value >= 0 ? String(value) : "—";
+  for (const ray of rays.slice().reverse()) {
+    const site = ray.script;
+    const graph = Number.isInteger(site?.graph) && site.graph >= 0
+      ? "0x" + site.graph.toString(16) : "—";
+    const outcome = ray.hit === "actor" ? "Actor " + identifier(ray.target)
+      : ray.hit === "world" ? "World hit" : ray.hit === "none" ? "Miss"
+      : ray.hit === "unavailable" ? "Unavailable" : "Unknown";
+    const row = rows.appendChild(document.createElement("tr"));
+    for (const value of [identifier(ray.tick), identifier(site?.vm_frame), identifier(ray.source),
+      ray.kind === "script_static" ? "Static" : "Actor", outcome,
+      graph + " / " + identifier(site?.instance) + " / " + identifier(site?.node)]) {
+      row.insertCell().textContent = value;
+    }
+    if (ray.hit === "unavailable") row.className = "ray-unavailable";
+  }
+  byId("script-ray-rows").replaceChildren(rows);
 }
 
 function formatVarList(vars, truncated) {
@@ -318,11 +367,32 @@ function renderScripts(room) {
   vmEntitySelect.disabled = false;
 
   const selected = scripts.find((entry) => keyOf(entry) === vmEntitySelect.value) ?? scripts[0];
-  setText(
-    byId("vm-meta"),
-    "now " + selected.now_ms + " ms · " + selected.diagnostics + " diagnostics"
-      + (selected.instances_truncated ? " · instances capped" : ""),
-  );
+  const details = ["now " + selected.now_ms + " ms", selected.diagnostics + " diagnostics"];
+  const rejected = selected.registration_rejections ?? 0;
+  if (rejected > 0) {
+    const sites = selected.registration_rejection_sites ?? [];
+    const positions = sites.map(({ graph, node }) =>
+      "graph 0x" + graph.toString(16) + (node == null ? "" : " node " + node));
+    if (rejected > sites.length && sites.length > 0) {
+      positions.push("+" + (rejected - sites.length) + " more");
+    }
+    const where = positions.length > 0 ? " (" + positions.join(", ") + ")" : "";
+    details.push(rejected + " registration policy " + (rejected === 1 ? "rejection" : "rejections") + where);
+  }
+  const unsupported = selected.unsupported_nodes ?? 0;
+  if (unsupported > 0) {
+    details.push(unsupported + (unsupported === 1 ? " unsupported node" : " unsupported nodes"));
+  }
+  const observations = selected.node_observations;
+  if (observations == null) {
+    details.push("node observation disabled");
+  } else {
+    const count = observations.sites.length;
+    const label = count === 1 ? " observed node site" : " observed node sites";
+    details.push(count + label + (observations.truncated ? " (capped)" : ""));
+  }
+  if (selected.instances_truncated) details.push("instances capped");
+  setText(byId("vm-meta"), details.join(" · "));
   setText(
     byId("vm-entity-vars"),
     "Entity vars: " + formatVarList(selected.variables, selected.variables_truncated),
@@ -529,21 +599,32 @@ function renderView({ canvas, vertical, up }, sample, room) {
       ctx.fill();
     }
 
-    for (const ray of physics.rays ?? []) {
-      if (!finitePoint(ray.origin) || !finitePoint(ray.end)) continue;
-      const tint = color(ray.hit === "actor" ? "ray-hit" : ray.hit === "world" ? "ray-world" : "ray-miss");
+    for (const ray of Array.isArray(physics.rays) ? physics.rays : []) {
+      if (!finitePoint(ray?.origin) || !finitePoint(ray.end)) continue;
+      const appearance = rayAppearance(ray);
+      const tint = color(appearance.color);
       ctx.strokeStyle = tint;
       ctx.fillStyle = tint;
-      ctx.setLineDash(ray.hit === "none" ? [4, 3] : []);
+      ctx.setLineDash(appearance.dash);
       const [sx, sy] = project(ray.origin);
       const [ex, ey] = project(ray.end);
       ctx.beginPath();
       ctx.moveTo(sx, sy);
       ctx.lineTo(ex, ey);
       ctx.stroke();
+      ctx.setLineDash([]);
       ctx.beginPath();
-      ctx.arc(ex, ey, 2.5, 0, 2 * Math.PI);
-      ctx.fill();
+      if (appearance.unavailable) {
+        ctx.moveTo(ex - 3, ey - 3);
+        ctx.lineTo(ex + 3, ey + 3);
+        ctx.moveTo(ex - 3, ey + 3);
+        ctx.lineTo(ex + 3, ey - 3);
+        ctx.stroke();
+      } else {
+        ctx.arc(ex, ey, 2.5, 0, 2 * Math.PI);
+        if (appearance.scripted) ctx.stroke();
+        else ctx.fill();
+      }
     }
     ctx.setLineDash([]);
   }

@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "case_id": "script-frame-wait.synthetic.v1",
+  "source": {"basis": "Invented graph placements and frame counts tested against the VM clock."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "start_frame": 17,
+    "cases": [
+      {
+        "name": "projected wait crosses three VM frames",
+        "graph": 61041, "node": 1, "server_only": false,
+        "fields": {"m_3016B9A1": {"$": "STUConfigVarInt", "m_value": 3}},
+        "finishes_at": 20
+      },
+      {
+        "name": "server-only wait crosses the same three VM frames",
+        "graph": 61042, "node": 2, "server_only": true,
+        "fields": {"m_3016B9A1": {"$": "STUConfigVarInt", "m_value": 3}},
+        "finishes_at": 20
+      },
+      {
+        "name": "zero duration finishes on entry",
+        "graph": 61043, "node": 1, "server_only": true,
+        "fields": {"m_3016B9A1": {"$": "STUConfigVarInt", "m_value": 0}},
+        "finishes_at": 17
+      },
+      {
+        "name": "wrong operand class",
+        "graph": 61044, "node": 1, "server_only": false,
+        "fields": {"m_3016B9A1": {"$": "STUConfigVarFloat", "m_value": 3}},
+        "finishes_at": null
+      },
+      {
+        "name": "float inside integer operand",
+        "graph": 61045, "node": 1, "server_only": true,
+        "fields": {"m_3016B9A1": {"$": "STUConfigVarInt", "m_value": 3.0}},
+        "finishes_at": null
+      },
+      {
+        "name": "negative duration",
+        "graph": 61046, "node": 1, "server_only": false,
+        "fields": {"m_3016B9A1": {"$": "STUConfigVarInt", "m_value": -1}},
+        "finishes_at": null
+      },
+      {
+        "name": "duration exceeds signed frame operand range",
+        "graph": 61047, "node": 1, "server_only": false,
+        "fields": {"m_3016B9A1": {"$": "STUConfigVarInt", "m_value": 2147483648}},
+        "finishes_at": null
+      },
+      {
+        "name": "rearm is configured",
+        "graph": 61048, "node": 1, "server_only": false,
+        "fields": {"m_0DBAFD7F": 1, "m_3016B9A1": {"$": "STUConfigVarInt", "m_value": 3}},
+        "finishes_at": null
+      },
+      {
+        "name": "wait has a remote slot",
+        "graph": 61049, "node": 2, "server_only": false, "remote_bound": true,
+        "fields": {"m_3016B9A1": {"$": "STUConfigVarInt", "m_value": 3}},
+        "finishes_at": null
+      }
+    ]
+  }
+}

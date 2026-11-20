@@ -25,6 +25,7 @@ use crate::{
 };
 
 const GATE_ENTITY: u32 = 0x8000_0032;
+const FIXTURE_MODE: u64 = 0x0230_0000_0000_019f;
 const GATE_DAMAGE_MSG: u64 = 0x0240_0000_0000_06b2;
 const GATE_PING_MSG: u64 = 0x0240_0000_0000_06f9;
 const CLEAR_COUNTDOWN_MSG: u64 = 0x0240_0000_0000_06fa;
@@ -723,6 +724,8 @@ fn build_registration(
         vec![Root::new(1, gate.graph)],
         0,
         &mut GateWorld {
+            graphs: &graphs,
+            mode: FIXTURE_MODE,
             entity: gate.entity,
             state: &mut gate_state,
             bodies: room,
@@ -741,6 +744,8 @@ fn build_registration(
     let mut screens_complete = false;
     let script = {
         let mut startup = EncounterWorld {
+            graphs: &graphs,
+            mode: FIXTURE_MODE,
             gate: &gate,
             anchors: &anchors,
             gate_variables: &gate_variables,
@@ -773,7 +778,7 @@ fn build_registration(
         npcs: None,
         heroes: Arc::new(HeroCatalog::default()),
         movers: Arc::new(MoverCatalog::default()),
-        mode: 0x0230_0000_0000_019f,
+        mode: FIXTURE_MODE,
         script,
         codecs: Some(codecs),
         gate_script,
@@ -795,6 +800,64 @@ fn setup_registered_room() -> (RoomSimulation, Arc<GraphStore>, Arc<CodecTable>)
     let reg = build_registration(&mut room, Arc::clone(&graphs), Arc::clone(&codecs));
     room.register_junkenstein_encounter(reg).unwrap();
     (room, graphs, codecs)
+}
+
+#[test]
+fn gate_and_encounter_hosts_read_the_selected_mode_engine_table() {
+    use crate::{
+        script_expr::EngineSetting,
+        script_init::{Site, World},
+    };
+
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/script-mode-rulesets-v1.json"
+    ))
+    .unwrap();
+    let graphs =
+        GraphStore::from_json(&serde_json::to_vec(&contract["input"]["bundle"]).unwrap()).unwrap();
+    let gate = synthetic_gate();
+    let anchors = SpawnAnchors::default();
+    let variables = Variables::new();
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    let gate_site = Site {
+        entity: gate.entity,
+        instance: 1,
+        graph: gate.graph,
+        node: None,
+    };
+    let mode_site = Site {
+        entity: GAME_MODE_ENTITY,
+        instance: ENCOUNTER_INSTANCE,
+        graph: 911,
+        node: None,
+    };
+    for (mode, expected) in [(0xa1, false), (0xa4, true)] {
+        let gate_world = GateWorld {
+            graphs: &graphs,
+            mode,
+            entity: gate.entity,
+            state: &mut GateState::default(),
+            bodies: &room,
+            mode_variables: &variables,
+        };
+        let expected = EngineSetting::Present(Value::Bool(expected));
+        assert_eq!(gate_world.engine_setting(gate_site, 101), expected);
+
+        let encounter = EncounterWorld {
+            graphs: &graphs,
+            mode,
+            gate: &gate,
+            anchors: &anchors,
+            gate_variables: &variables,
+            bodies: &mut room,
+            creator: None,
+            result_action: &mut None,
+            screens_complete: &mut false,
+            team: 0,
+            difficulty: 0,
+        };
+        assert_eq!(encounter.engine_setting(mode_site, 101), expected);
+    }
 }
 
 #[test]
@@ -914,7 +977,7 @@ fn encounter_phases_and_vm_event_order_preserve_step_sequence() {
             codecs: Arc::clone(&codecs),
             definition: &definition,
             request: &request,
-            mode: 0x0230_0000_0000_019f,
+            mode: FIXTURE_MODE,
             mode_variables: Arc::new(Variables::new()),
             tick: 1,
             walk: BotWalk::default(),

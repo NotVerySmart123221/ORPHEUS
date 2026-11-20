@@ -1,5 +1,7 @@
 //! Voice stimulus host and StateScript expression evaluation context.
 
+use std::collections::BTreeMap;
+
 use serde_json::Value as Json;
 
 use crate::{
@@ -10,11 +12,11 @@ use crate::{
 };
 
 use super::{
-    machine::{Event, Machine, StateKey, VarKey},
+    machine::{Event, Machine, ObservedSample, StateKey, VarKey},
     shapes::{field, source_key},
     types::{InitFault, Issue, StateKind},
     vm::Vm,
-    world::{Site, World},
+    world::{HealthTargetFacts, Site, World},
 };
 
 pub(super) enum VoiceFault {
@@ -363,8 +365,11 @@ pub(super) struct InstanceContext<'a, W> {
     pub(super) reads: Vec<VarKey>,
     pub(super) foreign_reads: Vec<(u32, u32)>,
     pub(super) parameters: Option<&'a Variables>,
+    pub(super) health_target_facts: Option<&'a HealthTargetFacts>,
+    pub(super) observed_sample: Option<&'a ObservedSample>,
     pub(super) watcher: Option<StateKey>,
     pub(super) read_native: bool,
+    pub(super) read_clock: bool,
     pub(super) untrusted_native: bool,
 }
 
@@ -384,6 +389,12 @@ pub(super) const CLIENT_AGREED_NATIVES: [&str; 9] = [
 ];
 
 impl<W: World> InstanceContext<'_, W> {
+    fn settled_target(&self, entity: u32) -> Option<&HealthTargetFacts> {
+        self.health_target_facts.filter(|facts| {
+            self.watcher.is_none() && entity != self.site.entity && facts.target == entity
+        })
+    }
+
     pub(super) fn read(&mut self, key: VarKey) -> Value {
         if !self.reads.contains(&key) {
             self.reads.push(key);
@@ -399,7 +410,16 @@ impl<W: World> InstanceContext<'_, W> {
                         && state.linked_variable == Some(key)
                 })
         });
-        self.machine.value(key, below)
+        let sampled_base = self
+            .observed_sample
+            .and_then(|sample| sample.input.as_ref())
+            .filter(|(output, _)| *output == key)
+            .map(|(_, value)| value);
+        let (value, read_clock) =
+            self.machine
+                .value_with_clock_dependency(key, below, sampled_base);
+        self.read_clock |= read_clock;
+        value
     }
 }
 
@@ -439,6 +459,9 @@ impl<W: World> Context for InstanceContext<'_, W> {
             Some(self.read(VarKey::Entity(id)))
         } else {
             self.read_native = true;
+            if let Some(facts) = self.settled_target(entity) {
+                return facts.script_state.read(id);
+            }
             if !self.foreign_reads.contains(&(entity, id)) {
                 self.foreign_reads.push((entity, id));
             }
@@ -479,6 +502,84 @@ impl<W: World> Context for InstanceContext<'_, W> {
         self.world.forward(entity)
     }
 
+    fn authored_position(&mut self, entity: u32) -> Option<[f64; 3]> {
+        self.read_native = true;
+        self.world.authored_position(entity)
+    }
+
+    fn authored_forward(&mut self, entity: u32) -> Option<[f64; 3]> {
+        self.read_native = true;
+        self.world.authored_forward(entity)
+    }
+
+    fn body_eye_position(&mut self, entity: u32) -> Option<[f64; 3]> {
+        self.read_native = true;
+        self.world.body_eye_position(entity)
+    }
+
+    fn body_has_hardpoint(&mut self, entity: u32, hardpoint: u64) -> Option<bool> {
+        self.read_native = true;
+        self.world.body_has_hardpoint(self.site, entity, hardpoint)
+    }
+
+    fn body_active(&mut self) -> Option<bool> {
+        self.read_native = true;
+        self.world.body_active(self.site)
+    }
+
+    fn spatial_candidates(&mut self) -> Option<&[script_expr::SpatialCandidate]> {
+        self.read_native = true;
+        self.world.spatial_candidates()
+    }
+
+    fn room_entities(&mut self) -> Option<&BTreeMap<u32, script_expr::RoomEntityFacts>> {
+        self.read_native = true;
+        self.world.room_entities()
+    }
+
+    fn settled_health_target(&self, entity: u32) -> Option<&HealthTargetFacts> {
+        self.settled_target(entity)
+    }
+
+    fn spatial_line_clear(&mut self, origin: [f64; 3], target: [f64; 3]) -> Option<bool> {
+        self.read_native = true;
+        self.world.spatial_line_clear(origin, target)
+    }
+
+    fn spatial_ray_cast(
+        &mut self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+    ) -> Option<Option<script_expr::SpatialRayHit>> {
+        self.read_native = true;
+        self.world.spatial_ray_cast(
+            self.site,
+            self.machine.frame,
+            origin,
+            direction,
+            max_distance,
+        )
+    }
+
+    fn spatial_actor_ray_cast(
+        &mut self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+        targets: &[u32],
+    ) -> Option<Option<script_expr::SpatialActorRayHit>> {
+        self.read_native = true;
+        self.world.spatial_actor_ray_cast(
+            self.site,
+            self.machine.frame,
+            origin,
+            direction,
+            max_distance,
+            targets,
+        )
+    }
+
     fn combat_targets(&mut self, config: &Json) -> Option<Vec<u32>> {
         self.read_native = true;
         self.world.combat_targets(self.site, config)
@@ -503,6 +604,11 @@ impl<W: World> Context for InstanceContext<'_, W> {
     fn body_health(&mut self, entity: u32, kind: Option<PoolKind>, maximum: bool) -> Option<f64> {
         self.read_native = true;
         self.world.entity_health(self.site, entity, kind, maximum)
+    }
+
+    fn temporary_shield_current(&mut self, identifier: u64) -> Option<f64> {
+        self.read_native = true;
+        self.world.temporary_shield_current(self.site, identifier)
     }
 
     fn total_health(&mut self, entity: u32) -> script_expr::HealthQuery {
@@ -535,6 +641,11 @@ impl<W: World> Context for InstanceContext<'_, W> {
 
     fn native(&mut self, config: &Json) -> Option<Value> {
         self.read_native = true;
+        if script_expr::native_shape(config, "STU_D3685C04", None)
+            && self.world.local_command_present(self.site) == Some(false)
+        {
+            return Some(Value::Bool(false));
+        }
         self.world.native(self.site, config)
     }
 
@@ -555,7 +666,10 @@ impl<W: World> Context for InstanceContext<'_, W> {
 
     fn has_target_tag(&mut self, entity: u32, tag: u64) -> Option<bool> {
         self.read_native = true;
-        self.world.has_target_tag(self.site, entity, tag)
+        match self.settled_target(entity) {
+            Some(facts) => facts.tags.presence(tag),
+            None => self.world.has_target_tag(self.site, entity, tag),
+        }
     }
 
     fn scene_filter_policy(&mut self, filter: &Json) -> Option<script_expr::SceneFilterPolicy> {
@@ -564,7 +678,10 @@ impl<W: World> Context for InstanceContext<'_, W> {
     }
     fn entity_filter_flags(&mut self, entity: u32) -> Option<u64> {
         self.read_native = true;
-        self.world.entity_filter_flags(self.site, entity)
+        match self.settled_target(entity) {
+            Some(facts) => facts.filter_flags,
+            None => self.world.entity_filter_flags(self.site, entity),
+        }
     }
     fn entities_hostile(&mut self, source: u32, target: u32, option: bool) -> Option<bool> {
         self.read_native = true;

@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "case_id": "script-base-action-placement.synthetic.v1",
+  "source": {"basis": "Invented action placements and a marker output."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "class": "STU_43B63AD0",
+    "marker_variable": 100,
+    "marker_value": 947,
+    "cases": [
+      {"graph": 41031, "node": 1, "output_node": 2, "action_header": true, "remote_slot": -1},
+      {"graph": 41078, "node": 2, "output_node": 1, "action_header": 1, "remote_slot": -1},
+      {"graph": 41031, "node": 1, "output_node": 2, "action_header": false, "remote_slot": -1},
+      {"graph": 41078, "node": 2, "output_node": 1, "action_header": true, "remote_slot": 0},
+      {"graph": 41031, "node": 1, "output_node": 2, "action_header": 2, "remote_slot": -1}
+    ]
+  },
+  "expected": [
+    {"continues": true},
+    {"continues": true},
+    {"continues": false},
+    {"continues": false},
+    {"continues": false}
+  ]
+}

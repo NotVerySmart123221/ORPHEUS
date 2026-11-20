@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "case_id": "native-regular-actor-contact.synthetic.v1",
+  "evidence": "synthetic-native",
+  "source": {
+    "basis": "Original upright capsules and constant momentum over recovered command frames. No client assets or ability parameters."
+  },
+  "input": {
+    "warmup_frame": 1,
+    "final_frame": 5,
+    "dt": 0.25,
+    "velocity": [0, 0, 4],
+    "actor_feet": [0, 0, 2],
+    "stand_height": 1,
+    "stand_radius": 0.25
+  },
+  "expected": {
+    "minimum_z": 0,
+    "maximum_z": 2,
+    "sample_count": 1,
+    "posed_frames": 4
+  }
+}

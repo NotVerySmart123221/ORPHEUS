@@ -510,39 +510,166 @@ mod tests {
         }
     }
 
-    #[test]
-    fn base_health_pool_keeps_remaining_amount_before_on_end_and_restarts_fresh() {
-        struct PoolWorld(Vitals);
-        impl World for PoolWorld {
-            fn body_health(&self, _: Site, kind: Option<PoolKind>, maximum: bool) -> Option<f64> {
-                Some(self.0.amount(kind, maximum))
-            }
-
-            fn add_health_pool(
-                &mut self,
-                _: Site,
-                kind: PoolKind,
-                maximum: f64,
-                current: f64,
-            ) -> Option<u32> {
-                self.0.add_pool(kind, maximum, current)
-            }
-
-            fn health_pool_current(&self, _: Site, pool: u32) -> Option<f64> {
-                self.0.pool_current(pool)
-            }
-
-            fn remove_health_pool(&mut self, _: Site, pool: u32) -> Option<f64> {
-                self.0.remove_pool(pool)
-            }
-            fn position(&mut self, _entity: u32) -> Option<[f64; 3]> {
-                None
-            }
-            fn entity_variable(&mut self, _entity: u32, _id: u32) -> Option<Value> {
-                None
-            }
+    struct PoolWorld(Vitals);
+    impl World for PoolWorld {
+        fn body_health(&self, _: Site, kind: Option<PoolKind>, maximum: bool) -> Option<f64> {
+            Some(self.0.amount(kind, maximum))
         }
 
+        fn add_health_pool(
+            &mut self,
+            _: Site,
+            kind: PoolKind,
+            maximum: f64,
+            current: f64,
+        ) -> Option<u32> {
+            self.0.add_pool(kind, maximum, current)
+        }
+
+        fn health_pool_current(&self, _: Site, pool: u32) -> Option<f64> {
+            self.0.pool_current(pool)
+        }
+
+        fn remove_health_pool(&mut self, _: Site, pool: u32) -> Option<f64> {
+            self.0.remove_pool(pool)
+        }
+        fn position(&mut self, _entity: u32) -> Option<[f64; 3]> {
+            None
+        }
+        fn entity_variable(&mut self, _entity: u32, _id: u32) -> Option<Value> {
+            None
+        }
+    }
+
+    #[test]
+    fn ordinary_health_pool_dispatches_by_shape_at_any_placement() {
+        let contract: Json = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/script-base-health-pool-placement-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(contract["schema_version"], 1);
+        assert_eq!(contract["evidence"], "synthetic-rust");
+        const REMAINING: u32 = 711;
+        const BEFORE_EXIT: u32 = 712;
+        const ABORT_MESSAGE: u64 = 0xF020_0000_0000_0011;
+
+        for case in contract["input"]["cases"].as_array().unwrap() {
+            let graph_index = u32::try_from(case["graph"].as_u64().unwrap()).unwrap();
+            let position = u16::try_from(case["state_node"].as_u64().unwrap()).unwrap();
+            let exit = if position == 1 { 2 } else { 1 };
+            let initial = case["current"].as_f64().unwrap();
+            let capacity = case["capacity"].as_f64().unwrap();
+            let flag = |value| json!({"$":"STUConfigVarBool","m_value":value});
+            let owner = json!({"$":"STU_B5A0CAF0"});
+            let fixture = graph(
+                graph_index,
+                vec![
+                    node(
+                        0,
+                        "STUStatescriptEntry",
+                        None,
+                        json!({"m_outPlug": plug(&[(position,"m_beginPlug")], &[])}),
+                    ),
+                    node(
+                        position,
+                        "STUStatescriptStateHealthPool",
+                        Some(0),
+                        json!({
+                            "m_FA3ECC43": owner, "m_7E8B666C": 0,
+                            "m_amount": capacity, "m_BCFDD2E9": initial,
+                            "m_69A20070": {"$":"STU_FEDD683C", "m_entity":owner},
+                            "m_4895B8B6": flag(case["base_flag"].as_bool().unwrap()),
+                            "m_64839023": flag(false), "m_0E8A5C8E": flag(false),
+                            "m_CEAB19E8": var(REMAINING, true),
+                            "m_onEndPlug": plug(&[(exit,"m_inPlug")], &[])
+                        }),
+                    ),
+                    node(
+                        exit,
+                        "STUStatescriptActionSetVar",
+                        None,
+                        json!({"m_out_Var": var(BEFORE_EXIT,true), "m_value":var(REMAINING,true)}),
+                    ),
+                    node(
+                        3,
+                        "STUStatescriptEntryGameMessage",
+                        None,
+                        json!({
+                            "m_gameMessage": {"m_gameMessage":format!("0x{ABORT_MESSAGE:016X}")},
+                            "m_outPlug": plug(&[(position,ABORT_PLUG)], &[]),
+                        }),
+                    ),
+                ],
+                json!([position]),
+                json!([0, 3]),
+            );
+            let mut world = PoolWorld(Vitals::empty());
+            let mut component = Component::start(
+                Arc::new(store(vec![fixture])),
+                839,
+                Variables::new(),
+                vec![Root::new(1, graph_index)],
+                0,
+                &mut world,
+                MAX_INIT_WORK,
+            )
+            .unwrap();
+            let snapshot = component.snapshot().unwrap();
+            let label = case["name"].as_str().unwrap();
+            if case["admitted"] == true {
+                assert!(
+                    snapshot.diagnostics.is_empty(),
+                    "{label}: {:?}",
+                    snapshot.diagnostics
+                );
+                assert!(snapshot.instances[&1].states[&0].active, "{label}");
+                assert_eq!(
+                    (world.0.total(), world.0.maximum()),
+                    (initial, capacity),
+                    "{label}"
+                );
+                assert_eq!(
+                    snapshot.variables[&REMAINING],
+                    Value::Float(initial),
+                    "{label}"
+                );
+                assert!(!snapshot.variables.contains_key(&BEFORE_EXIT), "{label}");
+
+                assert_eq!(
+                    component
+                        .queue_message(1, ABORT_MESSAGE, Variables::new())
+                        .unwrap(),
+                    1
+                );
+                component.run_now(&mut world).unwrap();
+                let ended = component.snapshot().unwrap();
+                assert!(!ended.instances[&1].states[&0].active, "{label}");
+                assert_eq!(
+                    ended.variables[&BEFORE_EXIT],
+                    Value::Float(initial),
+                    "{label}"
+                );
+                assert_eq!((world.0.total(), world.0.maximum()), (0.0, 0.0), "{label}");
+            } else {
+                assert!(
+                    matches!(
+                        snapshot.diagnostics.as_slice(),
+                        [crate::script_init::Diagnostic {
+                            issue: crate::script_init::Issue::UnsupportedState(class),
+                            ..
+                        }] if class == "STUStatescriptStateHealthPool"
+                    ),
+                    "{label}: {:?}",
+                    snapshot.diagnostics
+                );
+                assert!(!snapshot.variables.contains_key(&REMAINING), "{label}");
+                assert_eq!(world.0.maximum(), 0.0, "{label}");
+            }
+        }
+    }
+
+    #[test]
+    fn base_health_pool_keeps_remaining_amount_before_on_end_and_restarts_fresh() {
         let entry = |position, class, message, input| {
             node(
                 position,
@@ -1472,6 +1599,10 @@ mod tests {
     fn authored_boss_control_links_active_instances_and_releases_the_model() {
         struct Model(Vec<bool>);
         impl World for Model {
+            fn supports_static_model_protection(&self, site: Site) -> bool {
+                site.entity == 0xc000_1000
+            }
+
             fn set_encounter_model_enabled(&mut self, _: Site, enabled: bool) -> bool {
                 self.0.push(enabled);
                 true

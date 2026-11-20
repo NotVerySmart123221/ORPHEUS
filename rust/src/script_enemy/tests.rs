@@ -1,4 +1,142 @@
 use super::{policy::*, *};
+use crate::script_control::LEGACY_PROJECTILE_CONTROL;
+
+#[test]
+fn authored_pose_queries_read_live_npc_pose_with_static_fallback() {
+    let (graphs, _, definition, _) = fixture(false);
+    let gate = EnemyGate {
+        entity: 0x8000_0077,
+        position: [0.0, 5.5, -3.0],
+    };
+    let pose = Movement {
+        position: [-2.0, 0.0, 9.0],
+        yaw: -16_384,
+        pitch: 8_192,
+        ..Movement::default()
+    };
+    let binding = EnemyBinding {
+        body: 0xc000_1000,
+        controller: 0xc000_1001,
+        hero: definition.hero,
+        pair: graphs.enemy_pair(definition.hero).unwrap(),
+        mode: crate::game_content::PRACTICE_RANGE_MODE,
+        mode_variables: Arc::default(),
+        team: 1,
+        skin: None,
+        pose,
+        gate: Some(gate),
+        spatial_frame: None,
+        roster: None,
+        retired_entities: Arc::default(),
+        frame: 0,
+        now_secs: 0.0,
+        spawn_anchors: None,
+        mode_voice_set: None,
+    };
+    let mut vitals = definition.pools.vitals();
+    let mut retirement_requested = false;
+    let mut messages = VecDeque::new();
+    let mut tags = TargetTagEffects::default();
+    let mut behaviors = Default::default();
+    let mut control = AiControlRecords::default();
+    let empty = Variables::new();
+    let mut world = EnemyWorld {
+        retirement_requested: &mut retirement_requested,
+        messages: &mut messages,
+        target_tag_effects: &mut tags,
+        behavior_records: &mut behaviors,
+        control_records: &mut control,
+        binding: &binding,
+        graphs: &graphs,
+        vitals: &mut vitals,
+        body_variables: &empty,
+        controller_variables: &empty,
+    };
+    assert_eq!(world.authored_position(binding.body), Some(pose.position));
+    assert_eq!(world.forward(binding.body), None);
+    let axis = std::f64::consts::FRAC_1_SQRT_2;
+    let direction = world.authored_forward(binding.body).unwrap();
+    for (actual, expected) in direction.into_iter().zip([-axis, -axis, 0.0]) {
+        assert!((actual - expected).abs() < 1e-12);
+    }
+
+    assert_eq!(world.authored_position(gate.entity), Some(gate.position));
+    assert_eq!(world.authored_forward(gate.entity), None);
+    assert_eq!(world.authored_position(binding.controller), None);
+    assert_eq!(world.authored_forward(binding.controller), None);
+}
+
+#[test]
+fn npc_bound_body_angles_follow_the_live_pose_outside_encounter_mode() {
+    use crate::script_expr::{AngleQuery, BodyAngle};
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-bound-body-angle-v1.json"
+    ))
+    .unwrap();
+    let poses = contract["input"]["poses"].as_array().unwrap();
+    let expected = contract["expected"].as_array().unwrap();
+    assert_eq!(poses.len(), expected.len());
+    let (graphs, _, definition, _) = fixture(false);
+    let mut binding = EnemyBinding {
+        body: 0xc000_1000,
+        controller: 0xc000_1001,
+        hero: definition.hero,
+        pair: graphs.enemy_pair(definition.hero).unwrap(),
+        mode: crate::game_content::PRACTICE_RANGE_MODE,
+        mode_variables: Arc::default(),
+        team: 1,
+        skin: None,
+        pose: Movement::default(),
+        gate: None,
+        spatial_frame: None,
+        roster: None,
+        retired_entities: Arc::default(),
+        frame: 0,
+        now_secs: 0.0,
+        spawn_anchors: None,
+        mode_voice_set: None,
+    };
+    let mut vitals = definition.pools.vitals();
+    let mut retirement_requested = false;
+    let mut messages = VecDeque::new();
+    let mut tags = TargetTagEffects::default();
+    let mut behaviors = Default::default();
+    let mut control = AiControlRecords::default();
+    let empty = Variables::new();
+    for (pose, angles) in poses.iter().zip(expected) {
+        binding.pose.yaw = i32::try_from(pose["yaw"].as_i64().unwrap()).unwrap();
+        binding.pose.pitch = i32::try_from(pose["pitch"].as_i64().unwrap()).unwrap();
+        let world = EnemyWorld {
+            retirement_requested: &mut retirement_requested,
+            messages: &mut messages,
+            target_tag_effects: &mut tags,
+            behavior_records: &mut behaviors,
+            control_records: &mut control,
+            binding: &binding,
+            graphs: &graphs,
+            vitals: &mut vitals,
+            body_variables: &empty,
+            controller_variables: &empty,
+        };
+        for (axis, key) in [(BodyAngle::Yaw, "yaw"), (BodyAngle::Pitch, "pitch")] {
+            assert_eq!(world.body_angle(0, axis), AngleQuery::Unbound);
+            assert_eq!(
+                world.body_angle(binding.body, axis),
+                angles[key]
+                    .as_f64()
+                    .map_or(AngleQuery::Unavailable, AngleQuery::Present)
+            );
+            assert_eq!(
+                world.body_angle(binding.controller, axis),
+                AngleQuery::Unavailable
+            );
+            assert_eq!(
+                world.body_angle(binding.body + 2, axis),
+                AngleQuery::Unavailable
+            );
+        }
+    }
+}
 
 #[test]
 fn shared_captured_aim_lifecycle_contract() {
@@ -18,6 +156,7 @@ fn shared_captured_aim_lifecycle_contract() {
         skin: None,
         pose: Movement::default(),
         gate: None,
+        spatial_frame: None,
         roster: None,
         retired_entities: Arc::default(),
         frame: 0,
@@ -142,19 +281,28 @@ fn shared_captured_aim_lifecycle_contract() {
 
 #[test]
 fn shared_flashbang_velocity_action_contract() {
+    use crate::mover::VelocityChange;
+
     let fixture: Json = serde_json::from_str(include_str!(
         "../../../fixtures/behavior/flashbang-horizontal-cap-v1.json"
     ))
     .unwrap();
-    for (low, high, selector, encounter, accepted) in [
-        (0.0, 3.0, 1, true, true),
-        (0.0, 1.5, 1, true, true),
-        (1.0, 3.0, 1, true, false),
-        (0.0, -1.0, 1, true, false),
-        (0.0, 3.0, 0, true, false),
-        (0.0, 3.0, 1, false, false),
+    let source_frame = u32::try_from(fixture["source_frame"].as_u64().unwrap()).unwrap();
+    let active_frame = u32::try_from(fixture["active_frame"].as_u64().unwrap()).unwrap();
+    let original = (0x224e, 31);
+    let relocated = (0xf402, 12);
+    for ((index, position), low, high, selector, encounter, accepted) in [
+        (original, 0.0, 3.0, 1, true, true),
+        (relocated, 0.0, 1.5, 1, true, true),
+        (relocated, 1.0, 3.0, 1, true, false),
+        (relocated, 0.0, -1.0, 1, true, false),
+        (relocated, 0.0, 3.0, 0, true, false),
+        (relocated, 0.0, 3.0, 1, false, false),
     ] {
         let mut graph = fixture["graph"].clone();
+        graph["index"] = Json::from(index);
+        graph["nodes"][0]["fields"]["m_outPlug"]["links"][0][0] = Json::from(position);
+        graph["nodes"][1]["pos"] = Json::from(position);
         let row = &mut graph["nodes"][1]["fields"]["m_BC5E91CF"][0];
         row["m_8AD739CE"]["m_value"] = serde_json::json!(low);
         row["m_8213EB22"]["m_value"] = serde_json::json!(high);
@@ -175,9 +323,10 @@ fn shared_flashbang_velocity_action_contract() {
             skin: None,
             pose: Movement::default(),
             gate: None,
+            spatial_frame: None,
             roster: None,
             retired_entities: Arc::default(),
-            frame: 100,
+            frame: source_frame,
             now_secs: 1.6,
             spawn_anchors: None,
             mode_voice_set: None,
@@ -201,22 +350,45 @@ fn shared_flashbang_velocity_action_contract() {
             body_variables: &empty,
             controller_variables: &empty,
         };
+        let site = Site {
+            entity: binding.body,
+            instance: 1,
+            graph: index,
+            node: Some(position),
+        };
+        assert_eq!(
+            world.player_stats_available(site),
+            encounter.then_some(false)
+        );
+        for entity in [binding.controller, 999] {
+            assert_eq!(world.player_stats_available(Site { entity, ..site }), None);
+        }
         let component = Component::start(
             Arc::clone(&graphs),
             binding.body,
             Variables::new(),
-            vec![script_init::Root::new(1, 0x224e)],
-            100,
+            vec![script_init::Root::new(1, index)],
+            source_frame,
             &mut world,
             MAX_INIT_WORK,
         )
         .unwrap();
         let snapshot = component.snapshot().unwrap();
-        assert!(
-            snapshot.initialization_complete(),
-            "{:?}",
-            snapshot.diagnostics
-        );
+        if selector == 0 {
+            assert!(matches!(
+                snapshot.diagnostics.as_slice(),
+                [diagnostic]
+                    if diagnostic.site == site
+                        && diagnostic.issue
+                            == script_init::Issue::UnsupportedAction("STU_FF3471E9".into())
+            ));
+        } else {
+            assert!(
+                snapshot.initialization_complete(),
+                "{:?}",
+                snapshot.diagnostics
+            );
+        }
         assert_eq!(
             snapshot.variables.get(&900),
             accepted.then_some(&Value::Bool(true))
@@ -224,29 +396,45 @@ fn shared_flashbang_velocity_action_contract() {
         assert_eq!(
             world.control_records.velocity_changes,
             if accepted {
-                vec![(101, crate::mover::VelocityChange::HorizontalCap(high))]
+                vec![(active_frame, VelocityChange::HorizontalCap(high))]
             } else {
                 vec![]
             }
         );
-        if accepted {
-            let site = Site {
-                entity: binding.body,
-                instance: 1,
-                graph: 0x224e,
-                node: Some(31),
-            };
-            assert!(!world.edit_velocity(
-                Site {
-                    node: Some(30),
-                    ..site
-                },
-                100,
-                Value::Float(3.0),
-                true
-            ));
-            assert!(!world.edit_velocity(site, 100, Value::Float(3.0), false));
-            assert!(!world.edit_velocity(site, 100, Value::Float(f64::INFINITY), true));
+        if accepted && (index, position) == relocated {
+            for entity in [binding.controller, 999] {
+                assert!(!world.cap_horizontal_velocity(
+                    Site { entity, ..site },
+                    source_frame,
+                    high
+                ));
+            }
+            for invalid in [-1.0, f64::INFINITY, f64::NAN, f64::MAX] {
+                assert!(!world.cap_horizontal_velocity(site, source_frame, invalid));
+            }
+            assert!(!world.edit_velocity(site, source_frame, Value::Float(high), true));
+            world.control_records.velocity_changes.resize(
+                MAX_INIT_WORK,
+                (active_frame, VelocityChange::HorizontalCap(high)),
+            );
+            assert!(!world.cap_horizontal_velocity(site, source_frame, high));
+            assert_eq!(world.control_records.velocity_changes.len(), MAX_INIT_WORK);
+            world.control_records.velocity_changes.clear();
+            assert!(
+                world
+                    .vitals
+                    .damage(
+                        f64::MAX,
+                        crate::vitals::Death {
+                            time: binding.now_secs,
+                            frame: source_frame,
+                            killer: 999,
+                        },
+                    )
+                    .killed
+            );
+            assert!(!world.cap_horizontal_velocity(site, source_frame, high));
+            assert!(world.control_records.velocity_changes.is_empty());
         }
     }
 }
@@ -279,6 +467,7 @@ fn shared_flashbang_targeted_message_contract() {
         skin: None,
         pose: Movement::default(),
         gate: None,
+        spatial_frame: None,
         roster: None,
         retired_entities: Arc::default(),
         frame: 0,
@@ -440,6 +629,7 @@ fn shared_self_damage_clock_contract() {
                 ..Movement::default()
             },
             gate: None,
+            spatial_frame: None,
             roster: None,
             retired_entities: Arc::default(),
             frame,
@@ -507,6 +697,119 @@ fn shared_self_damage_clock_contract() {
 }
 
 #[test]
+fn local_health_events_capture_ai_self_damage_only_when_enabled() {
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-local-health-outcomes-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(contract["schema_version"], 1);
+    assert_eq!(
+        contract["case_id"],
+        "script-local-health-outcomes.synthetic.v1"
+    );
+    assert_eq!(contract["evidence"], "synthetic-rust");
+    let input = &contract["input"]["ai"];
+    let expected = &contract["expected"]["ai"];
+    let body = u32::try_from(input["body"].as_u64().unwrap()).unwrap();
+    let controller = u32::try_from(input["controller"].as_u64().unwrap()).unwrap();
+    let attempts = input["attempts"].as_array().unwrap();
+    let accepted = expected["accepted"].as_array().unwrap();
+    let remaining = expected["remaining_health"].as_array().unwrap();
+    assert_eq!(attempts.len(), accepted.len());
+    assert_eq!(attempts.len(), remaining.len());
+    let expected_changes: Vec<_> = expected["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|change| {
+            (
+                u32::try_from(change["source"].as_u64().unwrap()).unwrap(),
+                change["delta"].as_f64().unwrap(),
+                change["killed"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+
+    for enabled in [false, true] {
+        let extra = enabled.then(|| input["listener_graph"].clone());
+        let (graphs, _, definition, _) = fixture_with_graphs(false, extra.as_slice());
+        assert_eq!(graphs.uses_host_health_events(), enabled);
+        let binding = EnemyBinding {
+            body,
+            controller,
+            hero: definition.hero,
+            pair: graphs.enemy_pair(definition.hero).unwrap(),
+            mode: 0,
+            mode_variables: Arc::default(),
+            team: 1,
+            skin: None,
+            pose: Movement::default(),
+            gate: None,
+            spatial_frame: None,
+            roster: None,
+            retired_entities: Arc::default(),
+            frame: 3,
+            now_secs: 0.048,
+            spawn_anchors: None,
+            mode_voice_set: None,
+        };
+        let mut vitals = Vitals::new(input["initial_health"].as_f64().unwrap(), 0.0, 0.0);
+        let mut scripts = EnemyScripts::start(
+            Arc::clone(&graphs),
+            &definition,
+            &binding,
+            binding.frame,
+            &mut vitals,
+        )
+        .unwrap();
+        let empty = Variables::new();
+        let mut world = EnemyWorld {
+            retirement_requested: &mut scripts.retirement_requested,
+            messages: &mut scripts.messages,
+            behavior_records: &mut scripts.behavior_records,
+            control_records: &mut scripts.control_records,
+            target_tag_effects: &mut scripts.target_tag_effects,
+            binding: &binding,
+            graphs: &graphs,
+            vitals: &mut vitals,
+            body_variables: &empty,
+            controller_variables: &empty,
+        };
+        for ((attempt, accepted), remaining) in attempts.iter().zip(accepted).zip(remaining) {
+            let site = Site {
+                entity: u32::try_from(attempt["actor"].as_u64().unwrap()).unwrap(),
+                instance: 1,
+                graph: 42,
+                node: None,
+            };
+            let damage = attempt["damage"].as_f64().unwrap();
+            assert_eq!(
+                world.self_damage(site, damage),
+                accepted.as_bool().unwrap(),
+                "{attempt}"
+            );
+            assert_eq!(
+                world.vitals.total(),
+                remaining.as_f64().unwrap(),
+                "{attempt}"
+            );
+        }
+        let changes: Vec<_> = scripts
+            .take_local_health_changes()
+            .into_iter()
+            .map(|change| (change.source, change.delta, change.killed))
+            .collect();
+        let expected = if enabled {
+            expected_changes.as_slice()
+        } else {
+            &[]
+        };
+        assert_eq!(changes.as_slice(), expected);
+        assert!(scripts.take_local_health_changes().is_empty());
+    }
+}
+
+#[test]
 fn shared_flashbang_exclusion_guard_contract() {
     use serde_json::json;
     let contract: Json = serde_json::from_str(include_str!(
@@ -536,14 +839,19 @@ fn shared_flashbang_exclusion_guard_contract() {
             .map(|tag| 0x0d60_0000_0000_0000 | tag.as_u64().unwrap())
             .collect();
         let mut effects = TargetTagEffects::default();
-        let actual = flashbang_exclusions_admit(&filter, |tag| {
-            effects
-                .presence(tag)
-                .or_else(|| Some(inventory.contains(&tag)))
-        })
-        .unwrap();
+        let actual = LEGACY_PROJECTILE_CONTROL
+            .exclusions_admit(&filter, |tag| {
+                effects
+                    .presence(tag)
+                    .or_else(|| Some(inventory.contains(&tag)))
+            })
+            .unwrap();
         assert_eq!(actual, case["accepted"].as_bool().unwrap(), "{case}");
-        assert!(flashbang_exclusions_admit(&filter, |_| None).is_err());
+        assert!(
+            LEGACY_PROJECTILE_CONTROL
+                .exclusions_admit(&filter, |_| None)
+                .is_err()
+        );
         let grant = TargetTagEffect {
             entity: 1,
             tag: 0x0d60_0000_0000_02cb,
@@ -551,12 +859,13 @@ fn shared_flashbang_exclusion_guard_contract() {
         };
         assert!(effects.apply(grant, true));
         assert!(
-            !flashbang_exclusions_admit(&filter, |tag| {
-                effects
-                    .presence(tag)
-                    .or_else(|| Some(inventory.contains(&tag)))
-            })
-            .unwrap()
+            !LEGACY_PROJECTILE_CONTROL
+                .exclusions_admit(&filter, |tag| {
+                    effects
+                        .presence(tag)
+                        .or_else(|| Some(inventory.contains(&tag)))
+                })
+                .unwrap()
         );
         assert!(effects.apply(grant, false));
         // A live suppression masks an immutable tag and releasing that
@@ -572,12 +881,13 @@ fn shared_flashbang_exclusion_guard_contract() {
             ));
         }
         assert!(
-            flashbang_exclusions_admit(&filter, |tag| {
-                effects
-                    .presence(tag)
-                    .or_else(|| Some(inventory.contains(&tag)))
-            })
-            .unwrap()
+            LEGACY_PROJECTILE_CONTROL
+                .exclusions_admit(&filter, |tag| {
+                    effects
+                        .presence(tag)
+                        .or_else(|| Some(inventory.contains(&tag)))
+                })
+                .unwrap()
         );
         for &tag in &inventory {
             assert!(effects.apply(
@@ -590,12 +900,13 @@ fn shared_flashbang_exclusion_guard_contract() {
             ));
         }
         assert_eq!(
-            flashbang_exclusions_admit(&filter, |tag| {
-                effects
-                    .presence(tag)
-                    .or_else(|| Some(inventory.contains(&tag)))
-            })
-            .unwrap(),
+            LEGACY_PROJECTILE_CONTROL
+                .exclusions_admit(&filter, |tag| {
+                    effects
+                        .presence(tag)
+                        .or_else(|| Some(inventory.contains(&tag)))
+                })
+                .unwrap(),
             actual
         );
         checked += 1;
@@ -709,7 +1020,7 @@ fn shared_flashbang_entry_guard_contract() {
         )
         .unwrap();
         assert!(component.snapshot().unwrap().initialization_complete());
-        let actual = flashbang_entry_admits(&graphs, |variable| {
+        let actual = LEGACY_PROJECTILE_CONTROL.entry_admits(&graphs, |variable| {
             assert_eq!(variable.scope, crate::script_expr::Scope::Entity);
             assert_eq!(variable.id, 2547);
             if case["unavailable"] == true {
@@ -731,6 +1042,42 @@ fn shared_flashbang_entry_guard_contract() {
     }
 }
 
+fn projectile_control_fixture(
+    mode: u64,
+    extra: &[Json],
+) -> (Arc<GraphStore>, EnemyBinding, EnemyScripts, Vitals) {
+    let (graphs, _, definition, _) = fixture_with_graphs(false, extra);
+    let binding = EnemyBinding {
+        body: 0xc0001000,
+        controller: 0xc0001001,
+        hero: definition.hero,
+        pair: graphs.enemy_pair(definition.hero).unwrap(),
+        mode,
+        mode_variables: Arc::default(),
+        team: 1,
+        skin: None,
+        pose: Default::default(),
+        gate: None,
+        spatial_frame: None,
+        roster: None,
+        retired_entities: Arc::default(),
+        frame: 0,
+        now_secs: 0.0,
+        spawn_anchors: None,
+        mode_voice_set: None,
+    };
+    let mut vitals = definition.pools.vitals();
+    let scripts = EnemyScripts::start(
+        Arc::clone(&graphs),
+        &definition,
+        &binding,
+        1000,
+        &mut vitals,
+    )
+    .unwrap();
+    (graphs, binding, scripts, vitals)
+}
+
 #[test]
 fn shared_flashbang_effect_dispatch_contract() {
     use serde_json::json;
@@ -741,36 +1088,10 @@ fn shared_flashbang_effect_dispatch_contract() {
     assert_eq!(contract["schema_version"], 1);
     assert_eq!(contract["case_id"], "flashbang.effect-dispatch.v1");
     for case in contract["input"]["cases"].as_array().unwrap() {
-        let (graphs, _, definition, _) =
-            fixture_with_graphs(false, &[contract["input"]["graph"].clone()]);
-        let binding = EnemyBinding {
-            body: 0xc0001000,
-            controller: 0xc0001001,
-            hero: definition.hero,
-            pair: graphs.enemy_pair(definition.hero).unwrap(),
-            mode: crate::accounts::parse_guid(case["mode"].as_str().unwrap()).unwrap(),
-            mode_variables: Arc::default(),
-            team: 1,
-            skin: None,
-            pose: Default::default(),
-            gate: None,
-            roster: None,
-            retired_entities: Arc::default(),
-            frame: 0,
-            now_secs: 0.0,
-            spawn_anchors: None,
-            mode_voice_set: None,
-        };
-        let mut vitals = definition.pools.vitals();
-        let mut scripts = EnemyScripts::start(
-            Arc::clone(&graphs),
-            &definition,
-            &binding,
-            1000,
-            &mut vitals,
-        )
-        .unwrap();
-        scripts.queue_flashbang_effect(
+        let mode = crate::accounts::parse_guid(case["mode"].as_str().unwrap()).unwrap();
+        let (graphs, binding, mut scripts, mut vitals) =
+            projectile_control_fixture(mode, &[contract["input"]["graph"].clone()]);
+        scripts.queue_legacy_projectile_effect(
             &binding,
             Site {
                 entity: u32::try_from(case["source"].as_u64().unwrap()).unwrap(),
@@ -801,6 +1122,133 @@ fn shared_flashbang_effect_dispatch_contract() {
 }
 
 #[test]
+fn legacy_projectile_control_keeps_effect_delivery_separate_from_admission() {
+    use serde_json::json;
+
+    let dispatch: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/flashbang-effect-dispatch-v1.json"
+    ))
+    .unwrap();
+    let guard: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/flashbang-entry-guard-v1.json"
+    ))
+    .unwrap();
+    let normal = &dispatch["input"]["cases"][0];
+    assert_eq!(normal["name"], "normal");
+    let other_mode = &dispatch["input"]["cases"][1];
+    assert_eq!(other_mode["name"], "other-mode");
+    let mode = |case: &Json| crate::accounts::parse_guid(case["mode"].as_str().unwrap()).unwrap();
+    let caller = Site {
+        entity: u32::try_from(normal["source"].as_u64().unwrap()).unwrap(),
+        instance: 1,
+        graph: u32::try_from(normal["graph"].as_u64().unwrap()).unwrap(),
+        node: Some(u16::try_from(normal["node"].as_u64().unwrap()).unwrap()),
+    };
+    let mut wrapper = dispatch["input"]["graph"].clone();
+    let wrapper_index = u32::try_from(wrapper["index"].as_u64().unwrap()).unwrap();
+    let hit = asset_guid(&wrapper["nodes"][0]["fields"]["m_gameMessage"]["m_gameMessage"]).unwrap();
+    let test_node = |position, fields| {
+        json!({
+            "pos": position, "class": "FixtureDescriptor", "uid": position, "rid": position,
+            "remote": -1, "state": null, "client_only": false, "server_only": false, "fields": fields,
+        })
+    };
+    let mut effect = wrapper.clone();
+    effect["index"] = json!(0x224e);
+    effect["items"] = json!(123);
+    effect["header"]["m_nodesBitCount"] = json!(7);
+    effect["entries"] = json!([]);
+    effect["nodes"] = json!([
+        test_node(4, json!({"m_condition":guard["condition"]})),
+        test_node(
+            9,
+            json!({"m_condition":{"m_filter":{"$":"STUConfigVarFilter"}}})
+        ),
+        test_node(
+            122,
+            json!({"m_condition":{
+                "$":"STU_3ACE35FB",
+                "m_E50CF556":{"$":"STUConfigVarDynamic","m_identifier":668,"m_60DB8F99":true}
+            }})
+        )
+    ]);
+    effect["fields"] = json!({
+        "m_publicSchema":{"m_entries":[{
+            "m_0D09D2D9":"0x0D80000000007312",
+            "m_value":false
+        }]}
+    });
+    wrapper["items"] = json!(8);
+    wrapper["nodes"].as_array_mut().unwrap().push(test_node(
+        7,
+        json!({"m_69F4B52C":{"m_6525E98B":{"m_1EB5A024":[{
+            "m_0D09D2D9":"0x0D800000000000D7","m_value":1.25
+        }]}}}),
+    ));
+
+    let compatible_mode = mode(normal);
+    for (mode, include_guard, blocked, expected) in [
+        (compatible_mode, true, false, Ok(true)),
+        (compatible_mode, true, true, Ok(false)),
+        (compatible_mode, false, false, Err(())),
+        (mode(other_mode), false, false, Ok(true)),
+    ] {
+        let mut extra = vec![wrapper.clone()];
+        if include_guard {
+            extra.push(effect.clone());
+        }
+        let (graphs, binding, mut scripts, mut vitals) = projectile_control_fixture(mode, &extra);
+        assert_eq!(
+            LEGACY_PROJECTILE_CONTROL.duration(&graphs),
+            Some(&json!(1.25))
+        );
+        scripts
+            .body
+            .set_entity_variable(2547, Value::Bool(blocked), &mut script_init::EmptyWorld)
+            .unwrap();
+        let admitted = scripts.apply_legacy_projectile_control(&graphs, &binding, caller);
+        assert_eq!(admitted.map_err(|_| ()), expected);
+
+        if mode != compatible_mode {
+            assert!(scripts.messages.is_empty());
+            assert!(
+                !scripts
+                    .body
+                    .snapshot()
+                    .unwrap()
+                    .variables
+                    .contains_key(&900)
+            );
+            continue;
+        }
+
+        assert_eq!(scripts.messages.len(), 2);
+        let play = &scripts.messages[0];
+        assert_eq!(play.target, binding.body);
+        assert!(matches!(
+            &play.input,
+            PairInput::PlayScript { caller: site, request }
+                if *site == caller && request.graph == wrapper_index && request.source == caller.entity
+        ));
+        let message = &scripts.messages[1];
+        assert_eq!(message.target, binding.body);
+        assert!(matches!(
+            &message.input,
+            PairInput::Message { sender, message, required_graph, .. }
+                if *sender == caller.entity && *message == hit && *required_graph == Some(wrapper_index)
+        ));
+        if expected.is_ok() {
+            scripts
+                .deliver_messages(&graphs, &binding, &mut vitals)
+                .unwrap();
+            let snapshot = scripts.body.snapshot().unwrap();
+            assert_eq!(snapshot.variables[&900], Value::Integer(1));
+            assert_eq!(snapshot.variables[&901], Value::Entity(caller.entity));
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires the prepared 104319 Boss intro and controller graphs"]
 fn authored_boss_intro_end_releases_the_paired_controller_facing() {
     use crate::{game_content::JUNKENSTEIN_REVENGE, script_init::Root};
@@ -819,6 +1267,7 @@ fn authored_boss_intro_end_releases_the_paired_controller_facing() {
         skin: None,
         pose: Movement::default(),
         gate: None,
+        spatial_frame: None,
         roster: None,
         retired_entities: Arc::default(),
         frame: 0,
@@ -964,6 +1413,7 @@ fn authored_flashbang_wrapper_sets_the_loaded_hit_effect_schema() {
             skin: None,
             pose: Movement::default(),
             gate: None,
+            spatial_frame: None,
             roster: Some(Arc::new(Vec::new())),
             retired_entities: Arc::default(),
             frame: 0,
@@ -1007,13 +1457,7 @@ fn authored_flashbang_wrapper_sets_the_loaded_hit_effect_schema() {
             MAX_INIT_WORK,
         )
         .unwrap();
-        let exclusion_filter = graphs
-            .graph(0x224e)
-            .unwrap()
-            .node(9)
-            .unwrap()
-            .field("m_condition.m_filter")
-            .unwrap();
+        let exclusion_filter = LEGACY_PROJECTILE_CONTROL.exclusion_filter(&graphs).unwrap();
         let tag_site = Site {
             entity: binding.body,
             instance: 0,
@@ -1021,10 +1465,11 @@ fn authored_flashbang_wrapper_sets_the_loaded_hit_effect_schema() {
             node: Some(9),
         };
         assert!(
-            flashbang_exclusions_admit(exclusion_filter, |tag| {
-                world.has_target_tag(tag_site, binding.body, tag)
-            })
-            .unwrap()
+            LEGACY_PROJECTILE_CONTROL
+                .exclusions_admit(exclusion_filter, |tag| {
+                    world.has_target_tag(tag_site, binding.body, tag)
+                })
+                .unwrap()
         );
         let immunity = TargetTagEffect {
             entity: binding.body,
@@ -1033,17 +1478,19 @@ fn authored_flashbang_wrapper_sets_the_loaded_hit_effect_schema() {
         };
         assert!(world.set_target_tag_effect(tag_site, immunity, true));
         assert!(
-            !flashbang_exclusions_admit(exclusion_filter, |tag| {
-                world.has_target_tag(tag_site, binding.body, tag)
-            })
-            .unwrap()
+            !LEGACY_PROJECTILE_CONTROL
+                .exclusions_admit(exclusion_filter, |tag| {
+                    world.has_target_tag(tag_site, binding.body, tag)
+                })
+                .unwrap()
         );
         assert!(world.set_target_tag_effect(tag_site, immunity, false));
         assert!(
-            flashbang_exclusions_admit(exclusion_filter, |tag| {
-                world.has_target_tag(tag_site, binding.body, tag)
-            })
-            .unwrap()
+            LEGACY_PROJECTILE_CONTROL
+                .exclusions_admit(exclusion_filter, |tag| {
+                    world.has_target_tag(tag_site, binding.body, tag)
+                })
+                .unwrap()
         );
         if entry_rejected {
             component
@@ -1061,8 +1508,9 @@ fn authored_flashbang_wrapper_sets_the_loaded_hit_effect_schema() {
         let native_entry = component
             .evaluate_state_config(1, 0, entry_guard, &mut world)
             .unwrap();
-        let admitted =
-            flashbang_entry_admits(&graphs, |var| component.resolved_variable(0, var)).unwrap();
+        let admitted = LEGACY_PROJECTILE_CONTROL
+            .entry_admits(&graphs, |var| component.resolved_variable(0, var))
+            .unwrap();
         assert_eq!(admitted, crate::script_expr::truthy(&native_entry));
         if entry_rejected {
             assert!(!admitted);
@@ -1075,7 +1523,9 @@ fn authored_flashbang_wrapper_sets_the_loaded_hit_effect_schema() {
             .field("m_condition")
             .unwrap();
         assert_eq!(
-            flashbang_stack_admits(&component, &graphs).unwrap(),
+            LEGACY_PROJECTILE_CONTROL
+                .stack_admits(&component, &graphs)
+                .unwrap(),
             !control_immune
         );
         assert_eq!(
@@ -1182,6 +1632,7 @@ fn prepared_boss_pools_register_without_profile_duplication() {
             skin: None,
             pose: Movement::default(),
             gate: None,
+            spatial_frame: None,
             roster: None,
             retired_entities: Arc::default(),
             frame: 0,
@@ -1326,6 +1777,7 @@ fn common_enemy_pools_replace_bootstrap_and_follow_damage_abort_and_reentry() {
         skin: None,
         pose: Movement::default(),
         gate: None,
+        spatial_frame: None,
         roster: None,
         retired_entities: Arc::default(),
         frame: 0,
@@ -1462,6 +1914,7 @@ fn shared_retired_entity_contract() {
             } else {
                 BTreeSet::new()
             }),
+            spatial_frame: None,
             roster: (!matches!(state, "retired" | "unavailable")).then(|| {
                 Arc::new(vec![EnemyTarget {
                     hero: None,
@@ -1544,6 +1997,7 @@ fn enemy_registries_validate_owners_and_preserve_priority_order() {
         skin: None,
         pose: Movement::default(),
         gate: None,
+        spatial_frame: None,
         roster: None,
         retired_entities: Arc::default(),
         frame: 0,

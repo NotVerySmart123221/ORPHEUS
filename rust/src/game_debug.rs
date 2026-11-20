@@ -1,7 +1,10 @@
 //! Read-only simulation facts copied by the game worker for local diagnostics.
 
 #[cfg(any(test, feature = "inspector"))]
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, VecDeque},
+    sync::Mutex,
+};
 
 #[cfg(any(test, feature = "inspector"))]
 use indexmap::IndexMap;
@@ -10,7 +13,7 @@ use serde::Serialize;
 #[cfg(any(test, feature = "inspector"))]
 use crate::{
     game_timing::WorkerTiming,
-    script_init::{Issue as ScriptIssue, Snapshot as ScriptSnapshot, StateKind},
+    script_init::{Issue as ScriptIssue, NodeObservations, Snapshot as ScriptSnapshot, StateKind},
     script_wire::{Value as ScriptValue, Variables},
 };
 
@@ -154,6 +157,64 @@ pub(crate) struct DebugRay {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<u32>,
     pub critical: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script: Option<DebugScriptRay>,
+}
+
+#[cfg(any(test, feature = "inspector"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct DebugScriptRay {
+    pub graph: u32,
+    pub instance: u16,
+    pub node: Option<u16>,
+    pub vm_frame: u32,
+}
+
+/// One bounded history shared by combat and frozen-frame script queries.
+#[cfg(any(test, feature = "inspector"))]
+#[derive(Debug, Default)]
+pub(crate) struct DebugRayHistory {
+    state: Mutex<DebugRayBuffer>,
+}
+
+#[cfg(any(test, feature = "inspector"))]
+#[derive(Debug, Default)]
+struct DebugRayBuffer {
+    rays: VecDeque<DebugRay>,
+    truncated: bool,
+}
+
+#[cfg(any(test, feature = "inspector"))]
+impl DebugRayHistory {
+    pub(crate) fn push(&self, ray: DebugRay) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if state.rays.len() == MAX_DEBUG_RAYS {
+            state.rays.pop_front();
+            state.truncated = true;
+        }
+        state.rays.push_back(ray);
+    }
+
+    pub(crate) fn snapshot(&self) -> (Vec<DebugRay>, bool) {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        (state.rays.iter().copied().collect(), state.truncated)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn clear(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        state.rays.clear();
+        state.truncated = false;
+    }
 }
 
 #[cfg(any(test, feature = "inspector"))]
@@ -235,6 +296,7 @@ pub(crate) struct EntityScriptSnapshot {
     pub registration_rejections: usize,
     pub registration_rejection_sites: Vec<ScriptDiagnosticSite>,
     pub unsupported_nodes: usize,
+    pub node_observations: Option<ScriptNodeObservations>,
     pub instances: Vec<ScriptInstanceSummary>,
     pub instances_truncated: bool,
     pub variables: Vec<ScriptVarSummary>,
@@ -246,6 +308,21 @@ pub(crate) struct EntityScriptSnapshot {
 pub(crate) struct ScriptDiagnosticSite {
     pub graph: u32,
     pub node: Option<u16>,
+}
+
+#[cfg(any(test, feature = "inspector"))]
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct ScriptNodeObservations {
+    pub sites: Vec<ScriptNodeObservation>,
+    pub truncated: bool,
+}
+
+#[cfg(any(test, feature = "inspector"))]
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct ScriptNodeObservation {
+    pub graph: u32,
+    pub node: u16,
+    pub client_scope_skipped: bool,
 }
 
 #[cfg(any(test, feature = "inspector"))]
@@ -378,11 +455,30 @@ pub(crate) fn summarize_script_snapshot(
             }
         } else if matches!(
             &diagnostic.issue,
-            ScriptIssue::UnsupportedAction(_) | ScriptIssue::UnsupportedState(_)
+            ScriptIssue::UnsupportedAction(_)
+                | ScriptIssue::UnsupportedState(_)
+                | ScriptIssue::UnsupportedMessageRegistration
         ) {
             unsupported_nodes += 1;
         }
     }
+    let node_observations = snapshot.node_observations().map(|observations| {
+        let sites = observations.sites();
+        let limit = NodeObservations::DEFAULT_SITE_LIMIT;
+        ScriptNodeObservations {
+            truncated: observations.truncated() || sites.len() > limit,
+            sites: sites
+                .take(limit)
+                .map(
+                    |(graph, node, client_scope_skipped)| ScriptNodeObservation {
+                        graph,
+                        node,
+                        client_scope_skipped,
+                    },
+                )
+                .collect(),
+        }
+    });
     EntityScriptSnapshot {
         entity,
         kind,
@@ -391,6 +487,7 @@ pub(crate) fn summarize_script_snapshot(
         registration_rejections,
         registration_rejection_sites,
         unsupported_nodes,
+        node_observations,
         instances,
         instances_truncated,
         variables,
@@ -481,6 +578,7 @@ fn state_kind_summary(kind: StateKind) -> (&'static str, Option<u8>) {
         StateKind::SummonerBeamDamage => ("SummonerBeamDamage", None),
         StateKind::ModifyHealth => ("ModifyHealth", None),
         StateKind::ShieldRecharge => ("ShieldRecharge", None),
+        StateKind::NamedShieldDecay => ("NamedShieldDecay", None),
         StateKind::ForCode => ("ForCode", None),
         StateKind::AiBehavior { .. } => ("AiBehavior", None),
         StateKind::AiControlSetting => ("AiControlSetting", None),
@@ -520,16 +618,20 @@ fn state_kind_summary(kind: StateKind) -> (&'static str, Option<u8>) {
         StateKind::VictoryVoice => ("VictoryVoice", None),
         StateKind::SameTeamContact { .. } => ("SameTeamContact", None),
         StateKind::OutgoingDamageFilter { .. } => ("OutgoingDamageFilter", None),
-        StateKind::MovementSample(_) => ("MovementSample", None),
+        StateKind::MovementSample { .. } => ("MovementSample", None),
         StateKind::Anim => ("Anim", None),
         StateKind::Effect => ("Effect", None),
         StateKind::ClientPulse { .. } => ("ClientPulse", None),
         StateKind::EmptyTargets => ("EmptyTargets", None),
         StateKind::SendMessage => ("SendMessage", None),
+        StateKind::ProjectedSelfSend => ("ProjectedSelfSend", None),
         StateKind::PersistentSend(_) => ("PersistentSend", None),
         StateKind::CosmeticEntity => ("CosmeticEntity", None),
         StateKind::ChaseVar => ("ChaseVar", None),
         StateKind::Watch => ("Watch", None),
+        StateKind::Observe { .. } => ("Observe", None),
+        StateKind::TrackEntities { .. } => ("TrackEntities", None),
+        StateKind::Interval { .. } => ("Interval", None),
         StateKind::SpawnSearch => ("SpawnSearch", None),
         StateKind::RecentInput => ("RecentInput", None),
         StateKind::LivingBodyArray => ("LivingBodyArray", None),

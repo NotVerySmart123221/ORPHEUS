@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "case_id": "owner-swept-motion.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "source": {
+    "basis": "Original movement request, body lifetime, and correction scheduling."
+  },
+  "input": {
+    "actor": 7,
+    "spawn_frame": 90,
+    "displacement": [2.25, 0, 0],
+    "due_frame": 101,
+    "tail_pose": 118,
+    "later_ack": 150
+  }
+}

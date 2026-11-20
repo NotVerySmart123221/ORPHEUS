@@ -128,11 +128,14 @@ impl State {
             if payload.len() > MAX_PAYLOAD {
                 return Err(invalid("match roster exceeds the game datagram budget").into());
             }
-            if let Some(WorldStart { scene, card }) = world {
+            if let Some(WorldStart { mut scene, card }) = world {
                 let patrol = match preloaded {
                     Some(patrol) => patrol,
                     None => PatrolScript::from_source(&active_source)?,
                 };
+                scene
+                    .simulation_mut()
+                    .set_team_member_counts(room.team_member_counts());
                 room.world = Some(RoomWorld {
                     scene,
                     card,
@@ -991,12 +994,12 @@ impl State {
                             world.scene.try_step_encounter(room_tick, encounter_hero)?;
                             peer.world.queue_encounter_presentation(&world.scene)?;
                         }
-                        let active = world.scene.simulation().encounter_active();
+                        let activity = world.scene.owner_room_activity();
                         if let Some(body_id) = peer.world.active_body_id() {
                             world
                                 .scene
                                 .simulation_mut()
-                                .set_player_encounter_active(body_id, active);
+                                .set_player_activity(body_id, activity);
                         }
                         let context = ShotContext {
                             team: player.info.team,
@@ -1004,15 +1007,21 @@ impl State {
                             tick: room_tick,
                             now: room_now,
                         };
-                        let pulses = peer
+                        if let Some((source, pulses)) = peer
                             .world
-                            .advance_fields(world.scene.simulation_mut(), room_tick)?;
-                        let skip_wire = peer.world.spawned_body();
-                        let (bots, queries) = world.scene.bot_simulation();
-                        for update in
-                            bots.heal_allies(&queries, context.team, skip_wire, &pulses)?
+                            .advance_fields(world.scene.simulation_mut(), room_tick)?
                         {
-                            peer.world.queue_health(update);
+                            let skip_wire = peer.world.spawned_body();
+                            let (bots, queries) = world.scene.bot_simulation();
+                            for update in bots.heal_allies(
+                                &queries,
+                                context.team,
+                                skip_wire,
+                                Some(source),
+                                &pulses,
+                            )? {
+                                peer.world.queue_health(update);
+                            }
                         }
                         peer.world
                             .advance_biotic_views(world.scene.simulation(), room_tick)?;
@@ -1145,6 +1154,20 @@ impl State {
                             }
                         }
                     }
+                    // A synchronous script stop is newer than the health
+                    // already collected during combat or owner projection.
+                    if let Some(events) = player_events.get(&id) {
+                        for event in events {
+                            if let crate::game_combat::PlayerBodyEvent::ScriptHalted {
+                                owner,
+                                id,
+                                health,
+                            } = event
+                            {
+                                peer.world.player_script_halted(*owner, *id, health.clone());
+                            }
+                        }
+                    }
                     if let Some(records) = retired_enemies.get(&id) {
                         for &entity in records {
                             peer.world.retire_enemy(entity);
@@ -1153,12 +1176,10 @@ impl State {
                     if let Some(replacements) =
                         spawned.get(&id).filter(|_| peer.world.world_started())
                     {
-                        peer.combat_ui.replacements.extend(
-                            replacements
-                                .iter()
-                                .cloned()
-                                .map(|bot| (room_now.saturating_add(SILENCE_TIME), bot)),
-                        );
+                        let expires = room_now.saturating_add(SILENCE_TIME);
+                        for replacement in replacements {
+                            peer.queue_bot_replacement(replacement.clone(), expires);
+                        }
                     }
                     Ok(leave)
                 })
@@ -1187,7 +1208,8 @@ impl State {
                         return Ok(());
                     }
                     if !reliable_only {
-                        peer.flush_combat(&schemas, room_now)?;
+                        let simulation = room.world.as_ref().map(|world| world.scene.simulation());
+                        peer.flush_combat(&schemas, room_now, simulation)?;
                     }
                     let movements = if reliable_only {
                         Vec::new()

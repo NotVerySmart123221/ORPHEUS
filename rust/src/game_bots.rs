@@ -17,14 +17,16 @@ use crate::accounts::parse_guid;
 use crate::ai_script::{AiActorSnapshot, AiPatrolSnapshot};
 use crate::collision_scene::CollisionScene;
 use crate::contact_body::CharacterBody;
+use crate::contact_cache::CapsulePose;
 use crate::contact_math::{add, sub};
 use crate::contact_world::ContactWorld;
 use crate::game_clock::TICK_PERIOD;
 use crate::game_debug::ContactClip;
-use crate::mover_ground::{pogo, standing_body, standing_origin};
+use crate::mover_ground::{pogo, standing_body, standing_capsule, standing_origin};
 use crate::mover_settings::MoverSettings;
 use crate::navigation::{PathOptions, PathQuery, find_path};
 use crate::patrol_script::{PatrolScript, WaitEvent};
+use crate::script_init::ScriptedMotion;
 use crate::world::{Movement, NO_INPUT};
 
 pub const BOT_ENTITY: u32 = 0xc000_1000;
@@ -295,15 +297,36 @@ impl PatrolCollision {
         })
     }
 
-    fn advance(&mut self, tick: u32, from: [f64; 3], to: [f64; 3], dt: f64) -> [f64; 3] {
+    fn advance(
+        &mut self,
+        tick: u32,
+        from: [f64; 3],
+        to: [f64; 3],
+        dt: f64,
+        blockers: &[CapsulePose],
+    ) -> [f64; 3] {
+        self.try_advance(tick, from, to, dt, blockers)
+            .unwrap_or(from)
+    }
+
+    fn try_advance(
+        &mut self,
+        tick: u32,
+        from: [f64; 3],
+        to: [f64; 3],
+        dt: f64,
+        actor_capsules: &[CapsulePose],
+    ) -> Result<[f64; 3], crate::contact_hull::HullContactError> {
         let start = standing_origin(from, self.lift);
         self.body.teleport(start);
         let delta = sub(standing_origin(to, self.lift), start);
         let mut clip = None;
         let movement = if self.trace.is_some() {
-            self.body.move_capsule_traced(delta, dt as f32, &mut clip)
+            self.body
+                .move_capsule_against_traced(delta, dt as f32, actor_capsules, &mut clip)
         } else {
-            self.body.move_capsule(delta, dt as f32)
+            self.body
+                .move_capsule_against(delta, dt as f32, actor_capsules)
         };
         let after = match movement {
             Ok(moved) => {
@@ -331,12 +354,13 @@ impl PatrolCollision {
                 }
                 after
             }
-            Err(_) => {
+            Err(error) => {
+                self.body.teleport(start);
                 #[cfg(any(test, feature = "inspector"))]
                 if let Some(trace) = &mut self.trace {
                     trace.last_normals.clear();
                 }
-                return from;
+                return Err(error);
             }
         };
         if let (Some(trace), Some(clip)) = (&mut self.trace, clip) {
@@ -350,7 +374,7 @@ impl PatrolCollision {
                 after,
             });
         }
-        after
+        Ok(after)
     }
 }
 
@@ -372,6 +396,7 @@ pub struct Bot {
     target: Option<[f64; 3]>,
     waypoints: VecDeque<[f64; 3]>,
     collision: Option<PatrolCollision>,
+    movement_blockers: Option<(u32, Arc<[CapsulePose]>)>,
     plans: Option<Arc<PatrolPlans>>,
     start: [f64; 3],
     keys: bool,
@@ -438,6 +463,7 @@ impl Bot {
             target: None,
             waypoints: VecDeque::new(),
             collision: None,
+            movement_blockers: None,
             plans: None,
             start: spawn.position,
             keys: false,
@@ -742,12 +768,14 @@ impl Bot {
         script: &PatrolScript,
         ground: &mut impl FnMut(f64, f64, f64, f64) -> Option<f64>,
     ) -> io::Result<()> {
+        let blockers = self.movement_blocker_snapshot(tick);
+        let blockers = blockers.as_deref().unwrap_or(&[]);
         if first_step {
             self.wait = script.wait(self.ai_actor_snapshot(tick), WaitEvent::Spawn, tick)?;
         }
         let dt = TICK_PERIOD.as_secs_f64();
         for at in tick - (ticks - 1)..=tick {
-            self.tick(at, dt, script, ground)?;
+            self.tick(at, dt, script, ground, blockers)?;
         }
         Ok(())
     }
@@ -758,6 +786,7 @@ impl Bot {
         dt: f64,
         script: &PatrolScript,
         ground: &mut impl FnMut(f64, f64, f64, f64) -> Option<f64>,
+        blockers: &[CapsulePose],
     ) -> io::Result<()> {
         let before = (self.position, self.yaw.round_ties_even());
         self.held = [0; 2];
@@ -779,10 +808,10 @@ impl Bot {
             }
         }
         if self.keys {
-            self.walk(tick, dt, script, ground)?;
+            self.walk(tick, dt, script, ground, blockers)?;
         } else {
             if self.target.is_some() {
-                self.slide(tick, dt, ground);
+                self.slide(tick, dt, ground, blockers);
             }
             if self.turning > EPSILON {
                 self.turning -= dt;
@@ -801,6 +830,7 @@ impl Bot {
         dt: f64,
         script: &PatrolScript,
         ground: &mut impl FnMut(f64, f64, f64, f64) -> Option<f64>,
+        blockers: &[CapsulePose],
     ) -> io::Result<()> {
         let mut offset = self.to_target();
         let mut distance = offset[0].hypot(offset[1]);
@@ -838,7 +868,7 @@ impl Bot {
         self.held = throttles(self.yaw, self.direction);
         self.last_held = self.held;
         self.input_tick = Some(tick);
-        self.advance(tick, stride, distance, dt, ground);
+        self.advance(tick, stride, distance, ground, blockers);
         Ok(())
     }
 
@@ -847,13 +877,14 @@ impl Bot {
         tick: u32,
         dt: f64,
         ground: &mut impl FnMut(f64, f64, f64, f64) -> Option<f64>,
+        blockers: &[CapsulePose],
     ) {
         self.pace = (self.pace - self.walk.brake * dt).max(0.0);
         let [dx, dz] = self.to_target();
         let distance = dx.hypot(dz);
         if self.pace > 0.0
             && distance > EPSILON
-            && self.advance(tick, self.pace * dt, distance, dt, ground) < distance - EPSILON
+            && self.advance(tick, self.pace * dt, distance, ground, blockers) < distance - EPSILON
         {
             return;
         }
@@ -901,9 +932,10 @@ impl Bot {
         tick: u32,
         mut stride: f64,
         distance: f64,
-        dt: f64,
         ground: &mut impl FnMut(f64, f64, f64, f64) -> Option<f64>,
+        blockers: &[CapsulePose],
     ) -> f64 {
+        let dt = TICK_PERIOD.as_secs_f64();
         let [x, y, z] = self.position;
         let [dx, dz] = self.direction;
         let probe = stride.min(distance);
@@ -927,7 +959,7 @@ impl Bot {
         };
         let intended = [nx, ny, nz];
         let [nx, ny, nz] = self.collision.as_mut().map_or(intended, |collision| {
-            collision.advance(tick, self.position, intended, dt)
+            collision.advance(tick, self.position, intended, dt, blockers)
         });
         self.position = [nx, ny, nz];
         self.velocity = [(nx - x) / dt, (ny - y) / dt, (nz - z) / dt];
@@ -965,6 +997,8 @@ impl Bot {
 
     pub fn died(&mut self, tick: u32) {
         self.dead = true;
+        self.movement_blockers = None;
+        self.clear_velocity_changes();
         self.keys = false;
         self.held = [0; 2];
         self.stand();
@@ -1019,6 +1053,102 @@ impl Bot {
         self.velocity_changes.extend(changes);
     }
 
+    /// Cancel pending script edits without changing already resolved motion.
+    pub(crate) fn clear_velocity_changes(&mut self) {
+        self.velocity_changes.clear();
+    }
+
+    /// Freeze the room's actor-contact admission for this update tick.
+    pub(crate) fn set_movement_blockers(&mut self, tick: u32, blockers: Vec<CapsulePose>) {
+        self.movement_blockers = Some((tick, blockers.into()));
+    }
+
+    pub(crate) fn has_movement_blockers(&self, tick: u32) -> bool {
+        self.movement_blockers
+            .as_ref()
+            .is_some_and(|(at, _)| *at == tick)
+    }
+
+    pub(crate) fn movement_blockers(&self, tick: u32) -> &[CapsulePose] {
+        self.movement_blockers
+            .as_ref()
+            .filter(|(at, _)| *at == tick)
+            .map_or(&[], |(_, blockers)| blockers.as_ref())
+    }
+
+    fn movement_blocker_snapshot(&self, tick: u32) -> Option<Arc<[CapsulePose]>> {
+        self.movement_blockers
+            .as_ref()
+            .filter(|(at, _)| *at == tick)
+            .map(|(_, blockers)| Arc::clone(blockers))
+    }
+
+    /// Use the bound physical capsule, or the same standing geometry before binding.
+    pub(crate) fn contact_capsule(&self, settings: &MoverSettings) -> CapsulePose {
+        self.collision.as_ref().map_or_else(
+            || standing_capsule(settings, self.position),
+            |collision| CapsulePose {
+                position: standing_origin(self.position, collision.lift),
+                ..collision.body.capsule_pose()
+            },
+        )
+    }
+
+    /// Attempt one scheduled capsule move without changing steering or velocity.
+    pub(crate) fn apply_scripted_motion(&mut self, tick: u32, motion: ScriptedMotion) -> bool {
+        if self.dead {
+            return false;
+        }
+        let blockers = self.movement_blocker_snapshot(tick);
+        let Some(collision) = self.collision.as_mut() else {
+            return false;
+        };
+        let from = self.position;
+        let blockers = blockers.as_deref().unwrap_or(&[]);
+        let after = match motion {
+            ScriptedMotion::Sweep(displacement) => {
+                let delta = displacement.delta();
+                let to = std::array::from_fn(|axis| from[axis] + f64::from(delta[axis]));
+                if !from
+                    .into_iter()
+                    .chain(to)
+                    .all(|axis| (axis as f32).is_finite())
+                {
+                    return false;
+                }
+                let Ok(after) =
+                    collision.try_advance(tick, from, to, TICK_PERIOD.as_secs_f64(), blockers)
+                else {
+                    return false;
+                };
+                after
+            }
+            ScriptedMotion::Relocate(relocation) => {
+                let Some(to) = relocation.destination_from(from) else {
+                    return false;
+                };
+                if !collision
+                    .body
+                    .relocate_if_clear(standing_origin(to, collision.lift), blockers)
+                    .unwrap_or(false)
+                {
+                    return false;
+                }
+                if let Some(trace) = &mut collision.trace {
+                    trace.last_clip = None;
+                    #[cfg(any(test, feature = "inspector"))]
+                    trace.last_normals.clear();
+                }
+                to
+            }
+        };
+        self.position = after;
+        if after != from {
+            self.moved_tick = Some(tick);
+        }
+        true
+    }
+
     pub(crate) fn move_to_objective(&mut self, tick: u32, target: [f64; 3], speed: f64) {
         let start = self.position;
         let [x, y, z] = std::array::from_fn(|axis| target[axis] - start[axis]);
@@ -1050,8 +1180,15 @@ impl Bot {
             intended = std::array::from_fn(|axis| start[axis] + velocity[axis] * dt);
         }
         self.velocity_changes.retain(|&(frame, _)| frame > tick);
+        let blockers = self.movement_blocker_snapshot(tick);
         let collision = self.collision.as_mut().expect("bound objective capsule");
-        self.position = collision.advance(tick, start, intended, dt);
+        self.position = collision.advance(
+            tick,
+            start,
+            intended,
+            dt,
+            blockers.as_deref().unwrap_or(&[]),
+        );
         if self.position == start {
             self.stop_objective(tick);
             return;
@@ -1159,6 +1296,207 @@ mod tests {
             }),
             BotWalk::from_mover(4.5, 1.0, 15.0),
         )
+    }
+
+    #[test]
+    fn swept_bot_displacement_requires_a_live_capsule_and_preserves_motion() {
+        use crate::{
+            collision_cache::{Mesh, Triangle},
+            contact_mesh::ContactMesh,
+            contact_world::{StaticGeometry, StaticShape},
+            script_init::{Relocation, SweptDisplacement},
+        };
+
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/native-swept-displacement-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(fixture["schema_version"], 1);
+        assert_eq!(fixture["case_id"], "native-swept-displacement.synthetic.v1");
+        assert_eq!(fixture["evidence"], "synthetic-native");
+        let input = &fixture["input"];
+        let category: u16 = input["category"].as_u64().unwrap().try_into().unwrap();
+        let settings = MoverSettings {
+            stand_height: input["stand_height"].as_f64().unwrap(),
+            stand_radius: input["stand_radius"].as_f64().unwrap(),
+            ..MoverSettings::default()
+        };
+        let displacement =
+            SweptDisplacement::new(serde_json::from_value(input["displacement"].clone()).unwrap())
+                .unwrap();
+        let mut free = walker([0.0, 0.0, 10.0]);
+        assert!(!free.apply_scripted_motion(1, ScriptedMotion::Sweep(displacement)));
+        assert_eq!(free.position, [0.0; 3]);
+        free.attach_collision(
+            &settings,
+            Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+            category,
+            |_, _, _, _| Some(0.0),
+        );
+        free.velocity = serde_json::from_value(input["velocity"].clone()).unwrap();
+        free.yaw = 8192.0;
+        free.pitch = -2048;
+        free.held = [21, -32];
+        let before = free.movement(1);
+        let input_tick = free.input_tick;
+        assert!(free.apply_scripted_motion(2, ScriptedMotion::Sweep(displacement)));
+        assert_eq!(free.position, displacement.delta().map(f64::from));
+        let after = free.movement(2);
+        assert_eq!(after.velocity, before.velocity);
+        assert_eq!(
+            (after.yaw, after.pitch, after.throttles),
+            (before.yaw, before.pitch, before.throttles)
+        );
+        assert_eq!(free.input_tick, input_tick);
+        assert_eq!(free.moved_tick, Some(2));
+        free.dead = true;
+        let stopped = free.position;
+        assert!(!free.apply_scripted_motion(3, ScriptedMotion::Sweep(displacement)));
+        assert_eq!(free.position, stopped);
+
+        let wall = Mesh {
+            vertices: serde_json::from_value(input["wall_vertices"].clone()).unwrap(),
+            triangles: input["wall_triangles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|corners| Triangle {
+                    corners: serde_json::from_value(corners.clone()).unwrap(),
+                    wings: [-1; 3],
+                    mask: category,
+                    surface: 0,
+                })
+                .collect(),
+        };
+        let mesh = ContactMesh::new(wall, [1.0; 3], u16::MAX).unwrap();
+        let shape = StaticShape::new(StaticGeometry::Mesh(Arc::new(mesh)), None).unwrap();
+        let mut blocked = walker([0.0, 0.0, 10.0]);
+        blocked.attach_collision(
+            &settings,
+            Arc::new(ContactWorld::new(vec![shape]).unwrap()),
+            category,
+            |_, _, _, _| Some(0.0),
+        );
+        blocked.enable_contact_trace();
+        blocked.velocity = before.velocity;
+        blocked.yaw = f64::from(before.yaw);
+        blocked.pitch = before.pitch;
+        let displacement = SweptDisplacement::new(
+            serde_json::from_value(input["wall_displacement"].clone()).unwrap(),
+        )
+        .unwrap();
+        let sweep = ScriptedMotion::Sweep(displacement);
+        assert!(blocked.apply_scripted_motion(10, sweep));
+        assert!(blocked.position[2] > fixture["expected"]["wall_min_z"].as_f64().unwrap());
+        assert!(blocked.position[2] < fixture["expected"]["wall_max_z"].as_f64().unwrap());
+        assert_eq!(blocked.velocity, before.velocity);
+        assert_eq!(
+            (blocked.movement(10).yaw, blocked.pitch),
+            (before.yaw, before.pitch)
+        );
+        assert_eq!(blocked.moved_tick, Some(10));
+        let clip = blocked.last_contact_clip().unwrap();
+        assert_eq!(clip.tick, 10);
+        assert_eq!(clip.after, blocked.position);
+        let stopped = blocked.position;
+        assert!(blocked.apply_scripted_motion(11, sweep));
+        let tolerance = fixture["expected"]["repeated_block_tolerance"]
+            .as_f64()
+            .unwrap();
+        assert!((blocked.position[2] - stopped[2]).abs() <= tolerance);
+        assert_eq!(blocked.velocity, before.velocity);
+
+        let behind_wall = displacement.delta().map(f64::from);
+        let relocation = ScriptedMotion::Relocate(Relocation::new(behind_wall).unwrap());
+        assert!(blocked.apply_scripted_motion(12, relocation));
+        assert_eq!(blocked.position, behind_wall);
+        assert!(blocked.last_contact_clip().is_none());
+        assert_eq!(blocked.velocity, before.velocity);
+        assert_eq!(blocked.moved_tick, Some(12));
+
+        let mut actor_blocked = walker([0.0, 0.0, 10.0]);
+        let fallback = actor_blocked.contact_capsule(&settings);
+        actor_blocked.attach_collision(
+            &settings,
+            Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+            category,
+            |_, _, _, _| Some(0.0),
+        );
+        assert_eq!(actor_blocked.contact_capsule(&settings), fallback);
+        actor_blocked.enable_contact_trace();
+        actor_blocked.velocity = before.velocity;
+        let actor_feet = serde_json::from_value(input["actor_feet"].clone()).unwrap();
+        let actor = standing_capsule(&settings, actor_feet);
+        actor_blocked.set_movement_blockers(20, vec![actor]);
+        assert!(actor_blocked.apply_scripted_motion(20, sweep));
+        assert!(actor_blocked.position[2] > fixture["expected"]["wall_min_z"].as_f64().unwrap());
+        assert!(actor_blocked.position[2] < fixture["expected"]["wall_max_z"].as_f64().unwrap());
+        assert_eq!(actor_blocked.velocity, before.velocity);
+        assert_eq!(actor_blocked.moved_tick, Some(20));
+        assert!(actor_blocked.last_contact_clip().is_none());
+        assert_eq!(
+            actor_blocked.contact_capsule(&settings),
+            standing_capsule(&settings, actor_blocked.position)
+        );
+        let before_relocation = actor_blocked.position;
+        let occupied = ScriptedMotion::Relocate(Relocation::new(actor_feet).unwrap());
+        assert!(!actor_blocked.apply_scripted_motion(20, occupied));
+        assert_eq!(actor_blocked.position, before_relocation);
+    }
+
+    #[test]
+    fn patrol_catch_up_and_objective_movement_share_tick_scoped_actor_contacts() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/native-regular-actor-contact-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(fixture["evidence"], "synthetic-native");
+        let input = &fixture["input"];
+        let settings = MoverSettings {
+            stand_height: input["stand_height"].as_f64().unwrap(),
+            stand_radius: input["stand_radius"].as_f64().unwrap(),
+            ..MoverSettings::default()
+        };
+        let actor = standing_capsule(
+            &settings,
+            serde_json::from_value(input["actor_feet"].clone()).unwrap(),
+        );
+        let world = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+        let patrol = PatrolScript::load().unwrap();
+        let mut blocked = walker([0.0, 0.0, 10.0]);
+        let mut free = walker([0.0, 0.0, 10.0]);
+        for bot in [&mut blocked, &mut free] {
+            bot.attach_collision(&settings, Arc::clone(&world), 0x18, |_, _, _, _| Some(0.0));
+            bot.keys = true;
+            bot.target = Some([0.0, 0.0, 10.0]);
+            bot.pace = bot.walk.speed;
+            bot.last_tick = Some(0);
+        }
+        blocked.set_movement_blockers(100, vec![actor]);
+        assert!(blocked.has_movement_blockers(100));
+        assert_eq!(blocked.movement_blockers(100), &[actor]);
+        assert!(!blocked.has_movement_blockers(99));
+        assert!(blocked.movement_blockers(99).is_empty());
+        blocked.step(100, &patrol, |_, _, _, _| Some(0.0)).unwrap();
+        free.step(100, &patrol, |_, _, _, _| Some(0.0)).unwrap();
+        let maximum_z = fixture["expected"]["maximum_z"].as_f64().unwrap();
+        assert!(blocked.position[2] > fixture["expected"]["minimum_z"].as_f64().unwrap());
+        assert!(blocked.position[2] < maximum_z);
+        assert!(free.position[2] > maximum_z);
+        let fresh = blocked.respawned(BOT_ENTITY + 1, 101);
+        assert!(!fresh.has_movement_blockers(100));
+        assert!(fresh.movement_blockers(100).is_empty());
+
+        blocked.set_movement_blockers(101, vec![actor]);
+        blocked.move_to_objective(101, [0.0, 0.0, 10.0], 1000.0);
+        assert!(blocked.position[2] < maximum_z);
+        assert!(blocked.movement_blockers(102).is_empty());
+        blocked.move_to_objective(102, [0.0, 0.0, 10.0], 1000.0);
+        assert!(blocked.position[2] > maximum_z);
+        blocked.set_movement_blockers(103, vec![actor]);
+        blocked.died(103);
+        assert!(!blocked.has_movement_blockers(103));
+        assert!(blocked.movement_blockers(103).is_empty());
     }
 
     fn route_vector(bots: &mut [Bot], ticks: impl IntoIterator<Item = u32>) -> String {
@@ -1282,6 +1620,41 @@ mod tests {
             stopped.velocity_changes.is_empty(),
             "control pause expires the edit without deferred catch-up"
         );
+    }
+
+    #[test]
+    fn pending_velocity_edits_cancel_on_death_and_do_not_follow_replacement() {
+        use crate::mover::VelocityChange;
+
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/native-regular-actor-contact-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(fixture["evidence"], "synthetic-native");
+        let input = &fixture["input"];
+        let before_due: u32 = input["warmup_frame"].as_u64().unwrap().try_into().unwrap();
+        let due: u32 = input["final_frame"].as_u64().unwrap().try_into().unwrap();
+        assert!(before_due < due);
+        let velocity: [f64; 3] = serde_json::from_value(input["velocity"].clone()).unwrap();
+        let change = (due, VelocityChange::Delta(velocity));
+        let mut bot = walker([0.0, 0.0, 10.0]);
+        bot.velocity = velocity;
+        bot.queue_velocity_changes(vec![change]);
+        let resolved = bot.movement(before_due);
+        bot.clear_velocity_changes();
+        assert!(bot.velocity_changes.is_empty());
+        assert_eq!(bot.movement(before_due), resolved);
+
+        bot.queue_velocity_changes(vec![change]);
+        let fresh = bot.respawned(BOT_ENTITY + 1, due);
+        assert!(fresh.velocity_changes.is_empty());
+        assert_eq!(bot.velocity_changes, vec![change]);
+        let position = bot.position;
+        bot.died(before_due);
+        assert!(bot.velocity_changes.is_empty());
+        assert_eq!(bot.position, position);
+        assert_eq!(bot.velocity, [0.0; 3]);
+        assert!(bot.dead);
     }
 
     #[test]

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "case_id": "script-owner-startup-spatial.synthetic.v1",
+  "source": {"basis": "Invented room and command frames, positions, entity, and a one-shot query."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "graph": 732,
+    "variable": 63,
+    "owner_frame": 17,
+    "room_frame": 80,
+    "owner_position": [3.0, 1.5, -9.0],
+    "other_entity": 742,
+    "other_position": [5.0, 1.5, -9.0],
+    "moved_position": [18.0, 1.5, -9.0],
+    "radius": 4.0
+  },
+  "expected": {"selected": [742]}
+}

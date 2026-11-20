@@ -649,6 +649,122 @@ fn target_tag_snapshot_preserves_unknown_base_and_effect_lifetimes() {
 }
 
 #[test]
+fn authored_movement_scales_overlap_and_end_with_their_own_states() {
+    use crate::script_modifiers::Operation;
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct Step {
+        frame: u32,
+        message: Option<(u16, u64)>,
+        destroy: Option<u16>,
+    }
+
+    #[derive(Deserialize)]
+    struct Sample {
+        rows: Vec<(u16, f64)>,
+        finished: Vec<u16>,
+        aborted: Vec<u16>,
+    }
+
+    #[derive(Deserialize)]
+    struct Input {
+        bundle: Json,
+        roots: Vec<(u16, u32)>,
+        steps: Vec<Step>,
+    }
+
+    #[derive(Deserialize)]
+    struct Contract {
+        schema_version: u8,
+        case_id: String,
+        evidence: String,
+        input: Input,
+        expected: Vec<Sample>,
+    }
+
+    let contract: Contract = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/script-movement-scale-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    assert_eq!(contract.case_id, "script-movement-scale.synthetic.v1");
+    assert_eq!(contract.evidence, "synthetic-rust");
+    assert_eq!(contract.input.steps.len(), contract.expected.len());
+
+    let graphs = Arc::new(
+        GraphStore::from_json(&serde_json::to_vec(&contract.input.bundle).unwrap()).unwrap(),
+    );
+    let roots = contract
+        .input
+        .roots
+        .into_iter()
+        .map(|(instance, graph)| Root::new(instance, graph))
+        .collect();
+    let mut world = EmptyWorld;
+    let mut component = Component::start(
+        graphs,
+        52,
+        Variables::new(),
+        roots,
+        0,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let mut frame = 0;
+    for (step, expected) in contract.input.steps.into_iter().zip(contract.expected) {
+        if let Some((instance, message)) = step.message {
+            assert_eq!(
+                component
+                    .queue_frame_message(step.frame, instance, message, Variables::new())
+                    .unwrap(),
+                1
+            );
+        }
+        if step.frame != frame {
+            assert!(step.frame > frame);
+            component.advance_frame(step.frame, &mut world).unwrap();
+            frame = step.frame;
+        }
+        if let Some(instance) = step.destroy {
+            component
+                .run(&mut world, |vm| vm.destroy(instance))
+                .unwrap();
+            let snapshot = component.snapshot().unwrap();
+            assert!(!snapshot.instances.contains_key(&instance));
+            assert!(!snapshot.pending_timers.contains_key(&instance));
+        }
+        let rows = component.movement_modifiers(&mut world).unwrap().unwrap();
+        let movement: Vec<_> = rows
+            .iter()
+            .map(|(key, row)| {
+                assert_eq!((key.state, key.slot), (0, 0));
+                assert_eq!(row.index, 0);
+                assert_eq!(row.operation, Operation::Multiply);
+                (key.instance, row.value)
+            })
+            .collect();
+        assert_eq!(movement, expected.rows, "movement rows at frame {frame}");
+
+        let snapshot = component.snapshot().unwrap();
+        let marked = |variable| {
+            snapshot
+                .instances
+                .iter()
+                .filter(|(_, instance)| {
+                    instance.variables.get(&variable) == Some(&Value::Bool(true))
+                })
+                .map(|(&id, _)| id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(marked(61), expected.finished, "finish at frame {frame}");
+        assert_eq!(marked(62), expected.aborted, "abort at frame {frame}");
+    }
+}
+
+#[test]
 fn movement_modifier_values_follow_lifecycle_and_dependencies_without_read_side_effects() {
     for per_frame in [false, true] {
         let graphs = Arc::new(store(vec![graph(
@@ -751,78 +867,6 @@ fn movement_modifier_values_follow_lifecycle_and_dependencies_without_read_side_
         let restarted = read(&mut component);
         assert_eq!(restarted.0, 3.0);
         assert_ne!(restarted.1, changed.1);
-    }
-}
-
-#[test]
-fn authored_encounter_cleanup_damages_only_a_living_owner_once() {
-    #[derive(Default)]
-    struct Damage(Vec<f64>);
-    impl World for Damage {
-        fn self_damage(&mut self, site: Site, amount: f64) -> bool {
-            assert_eq!((site.entity, site.graph, site.node), (42, 0x0cbc, Some(69)));
-            self.0.push(amount);
-            true
-        }
-        fn position(&mut self, _entity: u32) -> Option<[f64; 3]> {
-            None
-        }
-        fn entity_variable(&mut self, _entity: u32, _id: u32) -> Option<Value> {
-            None
-        }
-    }
-
-    let owner = json!({"$":"STU_B5A0CAF0"});
-    let mut authored = graph(
-        0x0cbc,
-        vec![node(
-            69,
-            "STUStatescriptStateModifyHealth",
-            Some(0),
-            json!({
-                "m_FA3ECC43":owner,
-                "m_8B707686":1,
-                "m_modifyHealth":{
-                    "m_724CBA57":owner,
-                    "m_93CDFD2F":1,
-                    "m_amount":{"$":"STUConfigVarInt","m_value":10000}
-                }
-            }),
-        )],
-        json!([69]),
-        json!([]),
-    );
-    authored["items"] = json!(70);
-    authored["header"]["m_nodesBitCount"] = json!(7);
-    let graphs = Arc::new(store(vec![authored]));
-    for already_dead in [false, true] {
-        let mut world = Damage::default();
-        let mut component = Component::start(
-            Arc::clone(&graphs),
-            42,
-            Variables::new(),
-            vec![Root::listener(1, 0x0cbc, None)],
-            0,
-            &mut world,
-            MAX_INIT_WORK,
-        )
-        .unwrap();
-        component.set_owner_dead(already_dead);
-        let key = StateKey {
-            instance: 1,
-            raw: 0,
-        };
-        component.run(&mut world, |vm| vm.begin(key, 0)).unwrap();
-        for frame in 1..=4 {
-            component.advance_frame(frame, &mut world).unwrap();
-        }
-        let snapshot = component.snapshot().unwrap();
-        assert!(
-            snapshot.initialization_complete(),
-            "{:?}",
-            snapshot.diagnostics
-        );
-        assert_eq!(world.0, if already_dead { vec![] } else { vec![10_000.0] });
     }
 }
 
@@ -1149,6 +1193,117 @@ pub(super) fn shared_spatial_owner_absence_contract() {
         }
     }
 }
+
+#[test]
+fn auxiliary_presentation_absence_preserves_lifecycle_at_unrelated_placement() {
+    use std::cell::Cell;
+
+    struct Host {
+        outline: bool,
+        available: Option<bool>,
+        reads: Cell<u8>,
+    }
+    impl World for Host {
+        fn entity_variable(&mut self, _entity: u32, _id: u32) -> Option<Value> {
+            None
+        }
+        fn position(&mut self, _entity: u32) -> Option<[f64; 3]> {
+            None
+        }
+        fn spatial_binding_owner_available(&self, _site: Site) -> Option<bool> {
+            assert!(!self.outline);
+            self.reads.set(self.reads.get() + 1);
+            self.available
+        }
+        fn outline_context_available(&self, _site: Site) -> Option<bool> {
+            assert!(self.outline);
+            self.reads.set(self.reads.get() + 1);
+            self.available
+        }
+    }
+
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../../../../fixtures/behavior/statescript-spatial-owner-absence-v1.json"
+    ))
+    .unwrap();
+    let portable = &contract["input"]["portable_only"];
+    let index = u32::try_from(portable["graph"].as_u64().unwrap()).unwrap();
+    let position = u16::try_from(portable["position"].as_u64().unwrap()).unwrap();
+    let child = position + 1;
+    for case in portable["classes"].as_array().unwrap() {
+        let class = case["class"].as_str().unwrap();
+        for (available, client_only) in [
+            (Some(false), false),
+            (Some(true), false),
+            (None, false),
+            (Some(false), true),
+        ] {
+            let mut fields = case["fields"].clone();
+            fields["m_subgraphPlug"] = plug(&[(child, "m_beginPlug")], &[1]);
+            let mut state = node(position, class, Some(0), fields);
+            state["client_only"] = json!(client_only);
+            let mut graph = graph(
+                index,
+                vec![
+                    state,
+                    node(child, "STUStatescriptState", Some(1), json!({})),
+                ],
+                json!([position, child]),
+                json!([]),
+            );
+            graph["items"] = json!(child + 1);
+            let bundle = json!({
+                "version": 1, "graphs": [graph], "bodies": {}, "missing": [],
+                "runtime_state_metadata": {"plain_classes": [class]}
+            });
+            let graphs =
+                Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+            let mut world = Host {
+                outline: class == "STU_DC80F7E6",
+                available,
+                reads: Cell::new(0),
+            };
+            let mut component = Component::start(
+                graphs,
+                0xa000_0101,
+                Variables::new(),
+                vec![Root::listener(1, index, Some(0))],
+                0,
+                &mut world,
+                MAX_INIT_WORK,
+            )
+            .unwrap();
+            let snapshot = component.snapshot().unwrap();
+            assert_eq!(world.reads.get(), u8::from(!client_only));
+            if client_only {
+                assert!(snapshot.initialization_complete());
+                assert!(active(snapshot, 1).is_empty());
+            } else if available == Some(false) {
+                assert!(
+                    snapshot.initialization_complete(),
+                    "{:?}",
+                    snapshot.diagnostics
+                );
+                assert_eq!(snapshot.instances[&1].states[&0].kind, StateKind::Plain);
+                assert_eq!(active(snapshot, 1), [0, 1]);
+                component
+                    .machine
+                    .queues
+                    .push(1, frame_start(1), Event::Abort(0))
+                    .unwrap();
+                component.advance_frame(1, &mut world).unwrap();
+                assert!(active(component.snapshot().unwrap(), 1).is_empty());
+                assert_eq!(world.reads.get(), 1);
+            } else {
+                assert!(active(snapshot, 1).is_empty());
+                assert!(snapshot.diagnostics.iter().any(|diagnostic| {
+                    matches!(&diagnostic.issue, Issue::UnsupportedState(rejected) if rejected == class)
+                }));
+            }
+        }
+    }
+}
+
 #[test]
 fn public_schema_evaluates_before_assignment_and_inherits_to_children() {
     let entry = |links: &[(u16, &str)]| {

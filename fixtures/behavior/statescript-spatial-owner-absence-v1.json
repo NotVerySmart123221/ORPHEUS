@@ -102,6 +102,15 @@
       "class": "STU_E8D976BE",
       "position": 6,
       "fields": {}
+    },
+    "portable_only": {
+      "graph": 327,
+      "position": 9,
+      "classes": [
+        {"class": "STU_96333BBE", "fields": {"m_9524A8D6": {"$": "Unreachable"}, "m_A7B12CE0": {"$": "Unreachable"}}},
+        {"class": "STU_E8D976BE", "fields": {}},
+        {"class": "STU_DC80F7E6", "fields": {"m_targets": {"$": "Unreachable"}}}
+      ]
     }
   }
 }

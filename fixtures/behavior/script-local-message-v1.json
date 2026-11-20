@@ -1,0 +1,234 @@
+{
+  "schema_version": 1,
+  "case_id": "script-local-message.synthetic.v1",
+  "source": {
+    "basis": "Original synthetic graphs for local queued message delivery in the StateScript VM."
+  },
+  "evidence": "synthetic-rust",
+  "input": {
+    "version": 1,
+    "authored_classes": [{"class": "authored.notify", "behavior": "local_message_action"}],
+    "graphs": [
+      {
+        "index": 61,
+        "items": 4,
+        "header": {
+          "m_nodesBitCount": 4,
+          "m_statesBitCount": 4,
+          "m_remoteSyncNodesBitCount": 4,
+          "m_syncVarsBitCount": 4
+        },
+        "fields": {},
+        "containers": {},
+        "nodes": [
+          {
+            "pos": 0,
+            "class": "STUStatescriptEntry",
+            "uid": 0,
+            "rid": 0,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {"m_outPlug": {"$": "Plug", "links": [[1, "m_inPlug"]], "m_FF3DAF1E": []}}
+          },
+          {
+            "pos": 1,
+            "class": "STUStatescriptActionSetVar",
+            "uid": 1,
+            "rid": 1,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_ADEB6E05": true,
+              "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 10, "m_60DB8F99": false},
+              "m_value": 17,
+              "m_outPlug": {"$": "Plug", "links": [[2, "m_inPlug"]], "m_FF3DAF1E": []}
+            }
+          },
+          {
+            "pos": 2,
+            "class": "authored.notify",
+            "uid": 2,
+            "rid": 2,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_gameMessage": {"$": "STUConfigVarGameMessage", "m_gameMessage": "0xF00000000000008A"},
+              "m_params": [
+                {
+                  "m_B5051BCE": "0xF10000000000003D",
+                  "m_value": {"$": "STUConfigVarDynamic", "m_identifier": 10, "m_60DB8F99": false}
+                }
+              ],
+              "m_outPlug": {"$": "Plug", "links": [[3, "m_inPlug"]], "m_FF3DAF1E": []}
+            }
+          },
+          {
+            "pos": 3,
+            "class": "STUStatescriptActionSetVar",
+            "uid": 3,
+            "rid": 3,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_ADEB6E05": true,
+              "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 10, "m_60DB8F99": false},
+              "m_value": 99
+            }
+          }
+        ],
+        "unknown_nodes": [],
+        "states": [],
+        "entries": [0],
+        "remote": [],
+        "sync_vars": []
+      },
+      {
+        "index": 83,
+        "items": 5,
+        "header": {
+          "m_nodesBitCount": 4,
+          "m_statesBitCount": 4,
+          "m_remoteSyncNodesBitCount": 4,
+          "m_syncVarsBitCount": 4
+        },
+        "fields": {},
+        "containers": {},
+        "nodes": [
+          {
+            "pos": 3,
+            "class": "STUStatescriptEntryGameMessage",
+            "uid": 3,
+            "rid": 3,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_gameMessage": {"$": "STUConfigVarGameMessage", "m_gameMessage": "0xF00000000000008A"},
+              "m_params": [
+                {
+                  "m_B5051BCE": "0xF10000000000003D",
+                  "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 20, "m_60DB8F99": false}
+                }
+              ]
+            }
+          },
+          {
+            "pos": 0,
+            "class": "STUStatescriptEntryGameMessage",
+            "uid": 0,
+            "rid": 0,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_gameMessage": {"$": "STUConfigVarGameMessage", "m_gameMessage": "0xF00000000000008B"},
+              "m_params": [
+                {
+                  "m_B5051BCE": "0xF10000000000003D",
+                  "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 31, "m_60DB8F99": false}
+                }
+              ]
+            }
+          },
+          {
+            "pos": 1,
+            "class": "STUStatescriptEntryGameMessage",
+            "uid": 1,
+            "rid": 1,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_gameMessage": {"$": "STUConfigVarGameMessage", "m_gameMessage": "0xF00000000000008A"},
+              "m_params": [
+                {
+                  "m_B5051BCE": "0xF10000000000003D",
+                  "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 21, "m_60DB8F99": false}
+                }
+              ],
+              "m_outPlug": {"$": "Plug", "links": [[2, "m_inPlug"]], "m_FF3DAF1E": []}
+            }
+          },
+          {
+            "pos": 2,
+            "class": "STUStatescriptActionSetVar",
+            "uid": 2,
+            "rid": 2,
+            "remote": -1,
+            "state": null,
+            "client_only": false,
+            "server_only": false,
+            "fields": {
+              "m_ADEB6E05": true,
+              "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 22, "m_60DB8F99": false},
+              "m_value": {"$": "STUConfigVarDynamic", "m_identifier": 20, "m_60DB8F99": false}
+            }
+          },
+          {
+            "pos": 4,
+            "class": "STUStatescriptEntryGameMessage",
+            "uid": 4,
+            "rid": 4,
+            "remote": -1,
+            "state": null,
+            "client_only": true,
+            "server_only": false,
+            "fields": {
+              "m_gameMessage": {"$": "STUConfigVarGameMessage", "m_gameMessage": "0xF00000000000008A"},
+              "m_params": [
+                {
+                  "m_B5051BCE": "0xF10000000000003D",
+                  "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 30, "m_60DB8F99": false}
+                }
+              ]
+            }
+          }
+        ],
+        "unknown_nodes": [],
+        "states": [],
+        "entries": [3, 0, 1, 4],
+        "remote": [],
+        "sync_vars": []
+      }
+    ],
+    "bodies": {},
+    "missing": []
+  },
+  "expected": [
+    {"graph": 61, "instance": 11, "variables": {"10": 99}},
+    {"graph": 83, "instance": 22, "variables": {"20": 17, "21": 17, "22": 17}}
+  ],
+  "receiver_bindings": {
+    "entity": 752,
+    "sender": 753,
+    "message": 153,
+    "parameters": {"61": 17, "62": 29},
+    "initial": {"21": 5, "22": 6},
+    "outputs": [
+      ["0xF10000000000003D", 21],
+      ["0xF10000000000003E", 21],
+      ["0xF10000000000003F", 22]
+    ],
+    "child_abort_write": 777,
+    "malformed_issue": "variable identifier out of range",
+    "cases": [
+      {"name": "valid entry preserves write order and clears a missing value", "stateful": false},
+      {"name": "malformed later parameter does not write the earlier one", "stateful": false, "malformed": "parameter"},
+      {"name": "malformed sender alias preserves parameter and first sender outputs", "stateful": false, "malformed": "sender"},
+      {"name": "valid state delivery applies writes after exiting the active branch", "stateful": true},
+      {"name": "malformed state delivery keeps the previous branch active", "stateful": true, "malformed": "parameter"}
+    ],
+    "accepted": {"21": 29, "22": null}
+  }
+}

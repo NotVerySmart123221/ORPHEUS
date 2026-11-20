@@ -6,24 +6,58 @@ use crate::{
     script_expr::{self, EntityRelation, EvalError, equal, truthy},
     script_graph::{Node, asset_guid},
     script_runtime::{ENCOUNTER_RESULT, FRAME_MS, POST_MATCH_COMPLETE, VICTORY_VIEW},
-    script_wire::{Value, Variables},
+    script_wire::Value,
 };
 
 use super::super::{
     MAX_PLUG_DEPTH, MOVEMENT_BOOLEAN_OUTPUTS,
     machine::{ArrayInsertion, Event, StateKey},
     shapes::{
-        array_field, array_insertion_index, case_path, configured, excluded_target_tags, field,
-        is_bare_header_action, is_base_health_pool, is_client_subgraph_controller,
-        is_encounter_base_state, is_entry, is_networked_for_code_synced, is_owner_movement_sampler,
-        is_self_target, is_wave_health_pool, living_body_array_shape, participant_filter,
-        persistent_message, pool_number, raw_indices, registered_state, source_key,
-        static_target_operand, stored,
+        array_field, array_insertion_index, case_path, configured, encounter_base_state_shape,
+        excluded_target_tags, field, immediate_self_damage, is_bare_header_action,
+        is_base_health_pool, is_cinematic_time_scale_envelope, is_client_subgraph_controller,
+        is_elapsed_wait, is_entry, is_horizontal_velocity_clamp, is_literal_frame_wait,
+        is_message_recipient_set, is_named_shield_decay, is_networked_for_code_synced,
+        is_owner_movement_sampler, is_parent_owned_timed_graph, is_projected_self_message,
+        is_self_shield_recharge, is_self_stat_timer, is_self_target, is_static_map_explosion,
+        is_vertical_velocity_impulse, is_wave_health_pool, living_body_array_shape,
+        named_temporary_shield, parent_owned_graph_duration, participant_filter,
+        persistent_message, placement_collection_tag, pool_number, raw_indices, registered_state,
+        source_key, static_target_operand, stored,
     },
     types::{InitFault, Issue, SpawnSearch, SpawnSearchKey, State, StateKind},
-    world::{CreationKind, EntityCreation, Site, World},
+    world::{
+        CreationKind, EntityCreation, Relocation, ScriptedMotion, Site, SweptDisplacement, World,
+    },
 };
 use super::Vm;
+
+#[derive(Default)]
+struct RegistrationChecks {
+    admitted: Option<bool>,
+    shape_considered: bool,
+}
+
+impl RegistrationChecks {
+    fn permits(&mut self, allowed: bool) -> bool {
+        self.admitted = Some(self.admitted.unwrap_or(false) || allowed);
+        allowed
+    }
+
+    fn shape(&mut self, compatible: bool) -> bool {
+        self.shape_considered = true;
+        compatible
+    }
+
+    fn allows_runtime_fallback(&self) -> bool {
+        self.admitted.is_none() && !self.shape_considered
+    }
+
+    fn rejected(&self) -> bool {
+        // A compatible placement can still fail independent field checks.
+        self.admitted == Some(false)
+    }
+}
 
 impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
     pub(in crate::script_init) fn run_node(
@@ -33,16 +67,168 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         caller: Option<StateKey>,
         depth: usize,
     ) -> Result<bool, InitFault> {
-        if !node.runs_on_server() {
+        if node.host_event_kind().is_some() || !self.observed_server_path(id, node) {
             return Ok(false);
         }
         self.spend("node execution")?;
+        let mut registration = RegistrationChecks::default();
         match node.class.as_str() {
-            _ if is_entry(node) => self.follow(id, node, "m_outPlug", None, depth),
+            _ if is_entry(node) || node.declares_forward_action() => {
+                self.follow(id, node, "m_outPlug", None, depth)
+            }
+            _ if node.declares_branch_action() => {
+                let Some(value) = self.evaluate(id, node, field(&node.fields, "m_condition"), caller)
+                else {
+                    return Ok(false);
+                };
+                let output = if truthy(&value) {
+                    "m_truePlug"
+                } else {
+                    "m_falsePlug"
+                };
+                self.follow(id, node, output, caller, depth)
+            }
+            _ if node.declares_room_message_action() => {
+                if !self.send_room_message(id, node, caller)? {
+                    return Ok(false);
+                }
+                self.follow(id, node, "m_outPlug", caller, depth)?;
+                Ok(true)
+            }
+            _ if node.declares_room_cue_action() => {
+                if !self.send_room_cue(id, node, caller)? {
+                    return Ok(false);
+                }
+                self.follow(id, node, "m_outPlug", caller, depth)?;
+                Ok(true)
+            }
+            _ if node.declares_radial_health_action() => {
+                if !self.request_radial_health(id, node, caller) {
+                    return Ok(false);
+                }
+                self.follow(id, node, "m_outPlug", caller, depth)?;
+                Ok(true)
+            }
+            _ if node.declares_swept_displacement_action() => {
+                let site = self.site(id, node);
+                if !script_expr::valid_entity(site.entity) {
+                    self.report(site, Issue::UnsupportedField("swept displacement source"));
+                    return Ok(false);
+                }
+                let Some(delta) = self.evaluate(id, node, field(&node.fields, "delta"), caller) else {
+                    return Ok(false);
+                };
+                let displacement = match delta {
+                    Value::Vector(delta) => SweptDisplacement::new(delta),
+                    _ => None,
+                };
+                let Some(displacement) = displacement else {
+                    self.report(site, Issue::Expression(EvalError::MalformedConfig(
+                        "expected a finite nonzero swept displacement of at most 32 world units",
+                    )));
+                    return Ok(false);
+                };
+                let Some(frame) = self.machine.frame.checked_add(1) else {
+                    self.report(site, Issue::UnsupportedField("swept displacement frame"));
+                    return Ok(false);
+                };
+                match self.world.queue_swept_displacement(site, frame, displacement) {
+                    Some(true) => {
+                        self.follow(id, node, "m_outPlug", caller, depth)?;
+                        Ok(true)
+                    }
+                    Some(false) => Ok(false),
+                    None => {
+                        self.report(site, Issue::UnsupportedField("swept displacement service"));
+                        Ok(false)
+                    }
+                }
+            }
+            _ if node.declares_relocation_action() => {
+                let site = self.site(id, node);
+                if !script_expr::valid_entity(site.entity) {
+                    self.report(site, Issue::UnsupportedField("relocation source"));
+                    return Ok(false);
+                }
+                let Some(destination) =
+                    self.evaluate(id, node, field(&node.fields, "destination"), caller)
+                else {
+                    return Ok(false);
+                };
+                let relocation = match destination {
+                    Value::Vector(destination) => Relocation::new(destination),
+                    _ => None,
+                };
+                let Some(relocation) = relocation else {
+                    self.report(site, Issue::Expression(EvalError::MalformedConfig(
+                        "expected a finite float32-representable relocation destination",
+                    )));
+                    return Ok(false);
+                };
+                let Some(frame) = self.machine.frame.checked_add(1) else {
+                    self.report(site, Issue::UnsupportedField("relocation frame"));
+                    return Ok(false);
+                };
+                match self.world.queue_scripted_motion(
+                    site,
+                    frame,
+                    ScriptedMotion::Relocate(relocation),
+                ) {
+                    Some(true) => {
+                        self.follow(id, node, "m_outPlug", caller, depth)?;
+                        Ok(true)
+                    }
+                    Some(false) => Ok(false),
+                    None => {
+                        self.report(site, Issue::UnsupportedField("relocation service"));
+                        Ok(false)
+                    }
+                }
+            }
+            _ if node.declares_health_change_action() => {
+                let site = self.site(id, node);
+                let Some(target) = self.evaluate(id, node, field(&node.fields, "target"), caller)
+                else {
+                    return Ok(false);
+                };
+                let entity = match target {
+                    Value::Entity(entity) if script_expr::valid_entity(entity) => entity,
+                    _ => {
+                        self.report(
+                            site,
+                            Issue::Expression(EvalError::MalformedConfig("expected a bound health change target")),
+                        );
+                        return Ok(false);
+                    }
+                };
+                let Some(delta) = self.evaluate(id, node, field(&node.fields, "delta"), caller)
+                else {
+                    return Ok(false);
+                };
+                let delta = match delta {
+                    Value::Integer(amount) if amount != 0 => amount as f64,
+                    Value::Float(amount) if amount.is_finite() && amount != 0.0 => amount,
+                    _ => {
+                        self.report(
+                            site,
+                            Issue::Expression(EvalError::MalformedConfig("expected a finite nonzero health change delta")),
+                        );
+                        return Ok(false);
+                    }
+                };
+                if !self.expired_health_target(entity)
+                    && !self.world.queue_health_change(site, entity, delta)
+                {
+                    self.report(site, Issue::UnsupportedField("health change request"));
+                    return Ok(false);
+                }
+                self.follow(id, node, "m_outPlug", caller, depth)?;
+                Ok(true)
+            }
             "STU_BB4AC733" => self.follow(id, node, "m_outPlug", None, depth),
             "STUStatescriptActionCreateEntity" => self.create_entity(id, node, depth),
             "STU_6E18DEA0"
-                if self.graph(id).index == 0x0ca7
+                if registration.permits(self.graph(id).index == 0x0ca7)
                     && field(&node.fields, "m_A9220BE5").is_null() =>
             {
                 let handle =
@@ -58,10 +244,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             "STU_523EE38D"
-                if matches!(
+                if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
                     (0x0c89, 43) | (0x0c93, 11) | (0x0cbc, 36 | 38 | 57 | 58)
-                ) =>
+                )) =>
             {
                 let Some(Value::Entity(entity)) =
                     self.creation_scalar(id, node, field(&node.fields, "m_entity"), Value::Null)?
@@ -86,22 +272,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
-            "STU_D38D0035" | "STU_6E5C5F66"
-                if node.class == "STU_D38D0035"
-                    || matches!(
-                        (self.graph(id).index, node.pos),
-                        (0x0cb3, 1) | (0x0cba, 52) | (0x0c95, 16)
-                    ) =>
-            {
-                // These 104319 handlers forward without changing graph state.
+            "STU_147B34C6" if registration.permits((self.graph(id).index, node.pos) == (0x180a, 22)) => {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
-            "STU_147B34C6" if (self.graph(id).index, node.pos) == (0x180a, 22) => {
-                self.follow(id, node, "m_outPlug", None, depth)?;
-                Ok(true)
-            }
-            "STU_88DE7AD3" if (self.graph(id).index, node.pos) == (0x0c8c, 72) => {
+            "STU_88DE7AD3" if registration.permits((self.graph(id).index, node.pos) == (0x0c8c, 72)) => {
                 // In 104319 this base action forwards the authored phase handoff.
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
@@ -209,7 +384,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             "STU_42578342"
                 if node.is_action()
                     && (participant_filter(node).is_some()
-                        || (self.graph(id).index, node.pos) == (0x0c95, 9)) =>
+                        || placement_collection_tag(node).is_some()) =>
             {
                 if !self.collect_targets(id, node)? {
                     return Ok(false);
@@ -217,11 +392,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
+            // Effects without the dynamic operand already use the base action.
+            // The alternate shape remains limited to the verified placements.
             "STUStatescriptActionEffect"
-                if matches!(
-                    (self.graph(id).index, node.pos),
-                    (0x01c7, 74) | (0x0257, 32) | (0x01c6, 37 | 38)
-                ) && script_expr::native_shape(
+                if field(&node.fields, "m_37B02425").is_null()
+                    || (registration.permits(matches!(
+                        (self.graph(id).index, node.pos),
+                        (0x01c7, 74) | (0x0257, 32) | (0x01c6, 37 | 38)
+                    )) && script_expr::native_shape(
                     field(&node.fields, "m_3E3E203A"),
                     "STU_B5A0CAF0",
                     None,
@@ -233,16 +411,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         _ => 0x0300_0000_0000_330f,
                     })
                     && field(field(&node.fields, "m_effect"), "m_resourceKey").is_null()
-                    && field(&node.fields, "m_dataFlow").is_null() =>
+                    && field(&node.fields, "m_dataFlow").is_null()) =>
             {
-                // The Python reference advances these local effects without
-                // a server-side effect entity or a graph value to replicate.
-                self.follow(id, node, "m_outPlug", None, depth)?;
-                Ok(true)
-            }
-            "STU_6E5C5F66" | "STUStatescriptActionCriteria"
-                if matches!((self.graph(id).index, node.pos), (0x0257, 13 | 9)) =>
-            {
+                // Preserve the graph continuation without a server-side
+                // effect entity or a graph value to replicate.
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
@@ -308,18 +480,20 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
-            "STU_C43F9944" if (self.graph(id).index, node.pos) == (0x180a, 28) => {
+            "STU_C43F9944" if registration.permits((self.graph(id).index, node.pos) == (0x180a, 28)) => {
                 let site = self.site(id, node);
                 let message = POST_MATCH_COMPLETE;
-                if node
-                    .field("m_gameMessage.m_gameMessage")
-                    .and_then(asset_guid)
-                    != Some(message)
-                    || !field(&node.fields, "m_params").is_null()
-                    || !self
-                        .world
-                        .route_game_message(site, message, &Variables::new())
+                let delivered = if node.game_message_id() == Some(message)
+                    && field(&node.fields, "m_params").is_null()
                 {
+                    let Some(parameters) = self.game_message_parameters(id, node)? else {
+                        return Ok(false);
+                    };
+                    self.world.route_game_message(site, message, &parameters)
+                } else {
+                    false
+                };
+                if !delivered {
                     self.report(site, Issue::UnsupportedField("post-match completion"));
                     return Ok(false);
                 }
@@ -327,7 +501,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             "STU_100EF8C2"
-                if (self.graph(id).index, node.pos) == (0x0cec, 11)
+                if registration.permits((self.graph(id).index, node.pos) == (0x0cec, 11))
                     && node
                         .field("m_gameMessage.m_gameMessage")
                         .and_then(asset_guid)
@@ -342,8 +516,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             "STU_100EF8C2"
-                if self.graph(id).index == 0x1188
-                    && matches!(node.pos, 58 | 59)
+                if registration.permits(self.graph(id).index == 0x1188
+                    && matches!(node.pos, 58 | 59))
                     && node.is_action()
                     && node.is_networked()
                     && node
@@ -363,8 +537,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             "STU_100EF8C2"
-                if self.graph(id).index == 0x0019
-                    && matches!(node.pos, 48 | 50)
+                if registration.permits(self.graph(id).index == 0x0019
+                    && matches!(node.pos, 48 | 50))
                     && is_self_target(node, "m_targets")
                     && node
                         .field("m_gameMessage.m_gameMessage")
@@ -377,7 +551,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             "STU_100EF8C2"
-                if self.graph(id).index == 0x0c8c
+                if registration.permits(self.graph(id).index == 0x0c8c)
                     && node.is_action()
                     && node.is_networked()
                     && node.remote >= 0
@@ -402,21 +576,21 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             // These placements resolve to the 104319 base action.
-            "STU_0FC6DAEA" if self.graph(id).index == 0x0ca5 && matches!(node.pos, 66..=69) => {
+            "STU_0FC6DAEA" if registration.permits(self.graph(id).index == 0x0ca5 && matches!(node.pos, 66..=69)) => {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
             "STU_9F3FE778"
-                if matches!(
+                if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
                     (0x0ce2, 7) | (0x0019, 38) | (0x0079, 8 | 14)
-                ) =>
+                )) =>
             {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
             "STU_C43F9944"
-                if (self.graph(id).index, node.pos) == (0x0c8c, 236)
+                if registration.permits((self.graph(id).index, node.pos) == (0x0c8c, 236))
                     && field(&node.fields, "m_condition").is_null()
                     && field(&node.fields, "m_params").is_null()
                     && node
@@ -427,7 +601,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", caller, depth)
             }
             "STU_C43F9944"
-                if self.graph(id).index == 0x0ce0
+                if registration.permits(self.graph(id).index == 0x0ce0)
                     && node.is_action()
                     && field(&node.fields, "m_condition").is_null()
                     && field(&node.fields, "m_params").is_null()
@@ -444,75 +618,88 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
-            // Python's no_op. Networked effects are remote-synced nodes; like
-            // Python, the server never flags their remote slot. The role of a
-            // dynamic m_37B02425 is unknown, so those effects stay unsupported.
-            "STUStatescriptActionEffect" if field(&node.fields, "m_37B02425").is_null() => {
-                self.follow(id, node, "m_outPlug", None, depth)?;
-                Ok(true)
-            }
             "STU_CEBDAF17"
-                if self.graph(id).index == 0x0b8b
-                    && matches!(node.pos, 50 | 51 | 74)
-                    && node.server_only
+                if ((registration.permits(self.graph(id).index == 0x0b8b
+                    && matches!(node.pos, 50 | 51 | 74))
+                    && node.server_only)
+                    || (registration.permits(self.graph(id).index == 0x0043
+                        && matches!(node.pos, 1 | 40 | 53..=55))
+                        && node.is_action()))
                     && node.remote < 0
                     && is_self_target(node, "m_targets") =>
             {
-                self.follow(id, node, "m_outPlug", caller, depth)
-            }
-            "STU_CEBDAF17"
-                if self.graph(id).index == 0x0043
-                    && matches!(node.pos, 1 | 40 | 53..=55)
-                    && node.is_action()
-                    && node.remote < 0
-                    && is_self_target(node, "m_targets") =>
-            {
-                // Player stat criteria recording does not alter VM control flow;
-                // preserve continuation along m_outPlug on Quick Melee (0x0043).
+                // These player stat continuations preserve the caller and
+                // report whether the output took a transition.
                 self.follow(id, node, "m_outPlug", caller, depth)
             }
             "STU_43B63AD0"
-                if self.graph(id).index == 0x0b8b
-                    && matches!(node.pos, 14 | 16)
-                    && node.is_action()
-                    && node.remote < 0 =>
+                if registration.shape(
+                    node.state.is_none()
+                        && !node.is_state()
+                        && node.remote == -1
+                        && (field(&node.fields, "m_ADEB6E05").as_bool() == Some(true)
+                            || field(&node.fields, "m_ADEB6E05").as_u64() == Some(1)),
+                ) =>
             {
+                // This class uses the base Action continuation.
                 self.follow(id, node, "m_outPlug", caller, depth)
             }
-            "STU_FF3471E9" if (self.graph(id).index, node.pos) == (0x224e, 31) => {
-                let [row] = array_field(&node.fields, "m_BC5E91CF") else {
-                    return Ok(false);
-                };
-                if row.get("$").and_then(Json::as_str) != Some("STU_20E18047")
-                    || row.get("m_A9561CA0").and_then(Json::as_u64) != Some(1)
-                    || !field(row, "m_priority").is_null()
-                {
-                    return Ok(false);
-                }
-                let Some(Value::Float(low)) =
-                    self.evaluate(id, node, field(row, "m_8AD739CE"), None)
+            "STU_FF3471E9" if registration.shape(is_horizontal_velocity_clamp(node)) => {
+                let row = &array_field(&node.fields, "m_BC5E91CF")[0];
+                let Some(low) = self
+                    .evaluate(id, node, field(row, "m_8AD739CE"), None)
+                    .and_then(pool_number)
                 else {
                     return Ok(false);
                 };
-                let Some(Value::Float(high)) =
-                    self.evaluate(id, node, field(row, "m_8213EB22"), None)
+                let Some(high) = self
+                    .evaluate(id, node, field(row, "m_8213EB22"), None)
+                    .and_then(pool_number)
                 else {
                     return Ok(false);
                 };
-                // Slot1 changes horizontal magnitude; a zero lower bound is a cap.
+                // Selector 1 clamps horizontal magnitude. A zero lower bound cannot
+                // add velocity, so the host only needs to apply the upper cap.
                 if low != 0.0
-                    || !self.world.edit_velocity(
+                    || !(high as f32).is_finite()
+                    || high < 0.0
+                    || !self.world.cap_horizontal_velocity(
                         self.site(id, node),
                         self.machine.frame,
-                        Value::Float(high),
-                        true,
+                        high,
                     )
                 {
                     return Ok(false);
                 }
                 self.follow(id, node, "m_outPlug", caller, depth)
             }
-            "STU_FF3471E9" if self.graph(id).index == 0x01f0 && matches!(node.pos, 8 | 11 | 17) => {
+            "STU_FF3471E9" if registration.shape(is_vertical_velocity_impulse(node)) => {
+                let rows = array_field(&node.fields, "m_BC5E91CF");
+                let Some(reset) = self.evaluate(id, node, field(&rows[0], "m_9B7A63EA"), caller) else {
+                    return Ok(false);
+                };
+                let Some(impulse) = self.evaluate(id, node, field(&rows[1], "m_9B7A63EA"), caller) else {
+                    return Ok(false);
+                };
+                let site = self.site(id, node);
+                let (Some(vertical), Value::Vector(delta)) = (pool_number(reset), impulse) else {
+                    self.report(site, Issue::Expression(EvalError::MalformedConfig("velocity impulse operands")));
+                    return Ok(false);
+                };
+                if !(vertical as f32).is_finite()
+                    || !delta.iter().all(|&axis| (axis as f32).is_finite())
+                    || !(vertical as f32 + delta[1] as f32).is_finite()
+                {
+                    self.report(site, Issue::Expression(EvalError::MalformedConfig("nonfinite velocity impulse")));
+                    return Ok(false);
+                }
+                if !self.world.apply_velocity_impulse(site, self.machine.frame, vertical, delta) {
+                    self.report(site, Issue::UnsupportedField("velocity impulse service"));
+                    return Ok(false);
+                }
+                self.follow(id, node, "m_outPlug", caller, depth)
+            }
+            "STU_FF3471E9" if registration.permits(self.graph(id).index == 0x01f0 && matches!(node.pos, 8 | 11 | 17)) => {
                 let rows = array_field(&node.fields, "m_BC5E91CF");
                 let [row] = rows else { return Ok(false) };
                 let cap = node.pos == 17;
@@ -539,10 +726,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", caller, depth)
             }
             "STU_D087B558"
-                if matches!(
+                if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
                     (0x022f, 121) | (0x01f0, 43)
-                ) && is_self_target(node, "m_target")
+                )) && is_self_target(node, "m_target")
                     && field(&node.fields, "m_instigator").is_null()
                     && node.field("m_D7DDEEAD.m_value").and_then(Json::as_u64)
                         == Some(if self.graph(id).index == 0x01f0 {
@@ -556,7 +743,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             "STU_6FEE499E"
-                if (self.graph(id).index, node.pos) == (0x01f0, 31)
+                if registration.permits((self.graph(id).index, node.pos) == (0x01f0, 31))
                     && field(&node.fields, "m_93CDFD2F").as_u64() == Some(1) =>
             {
                 // Pinned Python Roll fallback; the native service remains unverified.
@@ -564,17 +751,18 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             "STU_CEBDAF17"
-                if matches!(
+                if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
                     (0x0079, 22) | (0x157c, 44 | 134 | 137 | 148..=150 | 153..=155 | 192 | 193 | 196)
-                ) =>
+                )) =>
             {
                 // The healer is a scene NPC with no player stats record.
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }
-            // Python's no_op for stat criteria.
-            "STUStatescriptActionCriteria" | "STU_6E5C5F66" => {
+            // Base actions and the stat criteria fallback consume the input
+            // and run its output without evaluating an action payload.
+            "STU_D38D0035" | "STUStatescriptActionCriteria" | "STU_6E5C5F66" => {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
@@ -631,7 +819,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             "STU_3387AB5D" | "STU_7DEB522D" => {
                 let condition = if node.class == "STU_7DEB522D" {
-                    self.logical_button_id(id, node)
+                    self.logical_button_id(id, node, None)
                         .is_some_and(|button| self.effective_button_held(button))
                 } else {
                     let active = if (self.graph(id).index, node.pos) == (0x0c87, 21) {
@@ -720,12 +908,27 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             _ => {
-                self.report(
+                self.report_diagnostic(
                     self.site(id, node),
                     Issue::UnsupportedAction(node.class.clone()),
+                    registration.rejected(),
                 );
                 Ok(false)
             }
+        }
+    }
+
+    pub(super) fn assignment_value(
+        &mut self,
+        id: u16,
+        node: &Node,
+        config: &Json,
+        initial: Value,
+    ) -> Result<Option<Value>, InitFault> {
+        if script_expr::assignment_group_source(config).is_some() {
+            self.assignment_group(id, node, config)
+        } else {
+            Ok(self.evaluate_at_with_initial(self.site(id, node), config, None, initial))
         }
     }
 
@@ -738,8 +941,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let mut pending = vec![(config, 0)];
         let mut values = Vec::new();
         while let Some((config, depth)) = pending.pop() {
-            self.spend("assignment config group")?;
-            if depth >= 64 {
+            let group = script_expr::assignment_group_source(config);
+            let wrappers = group.map_or(0, |(_, wrappers)| wrappers);
+            for _ in 0..=wrappers {
+                self.spend("assignment config group")?;
+            }
+            let depth = depth + wrappers;
+            if depth >= script_expr::MAX_CONFIG_DEPTH {
                 self.report(
                     self.site(id, node),
                     Issue::Expression(script_expr::EvalError::NestingExceeded),
@@ -749,8 +957,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             if config.is_null() {
                 continue;
             }
-            if script_expr::native_shape(config, "STU_06610EBC", Some("m_configVars")) {
-                let configs = field(config, "m_configVars");
+            if let Some((configs, _)) = group {
                 if configs.is_null() {
                     continue;
                 }
@@ -773,7 +980,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             let mut items = vec![(value, depth)];
             while let Some((value, depth)) = items.pop() {
                 self.spend("assignment value array")?;
-                if depth >= 64 {
+                if depth >= script_expr::MAX_CONFIG_DEPTH {
                     self.report(
                         self.site(id, node),
                         Issue::Expression(script_expr::EvalError::NestingExceeded),
@@ -799,11 +1006,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
     ) -> Result<bool, InitFault> {
         let config = field(fields, "m_value");
         let site = self.site(id, node);
-        let value = if script_expr::native_shape(config, "STU_06610EBC", Some("m_configVars")) {
-            self.assignment_group(id, node, config)?
-        } else {
-            self.evaluate_at_with_initial(site, config, None, Value::Integer(0))
-        };
+        let value = self.assignment_value(id, node, config, Value::Integer(0))?;
         let Some(value) = value else { return Ok(false) };
         let destination = match script_expr::destination(field(fields, "m_out_Var")) {
             Ok(Some(target)) => target,
@@ -949,7 +1152,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             );
             return Ok(());
         };
-        if !node.runs_on_server() {
+        if !self.observed_server_path(id, node) {
             return Ok(());
         }
         if let Some(state) = self.state(key).filter(|state| state.active) {
@@ -973,6 +1176,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         self.machine
                             .queues
                             .retain(id, |_, event| event.state() != Some(key.raw));
+                        self.clear_tick(key);
                         self.state_mut(key).expect("active wait").start_ms = self.machine.now_ms;
                         self.arm_wait(key, node)?;
                     }
@@ -986,11 +1190,18 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             return Ok(());
         }
-        let mut registration_rejected = false;
-        let mut checked_registration = |allowed: bool| {
-            registration_rejected |= !allowed;
-            allowed
+        let mut registration = RegistrationChecks::default();
+        let interval_frames = node.interval_frames();
+        let button_lock = node.button_lock();
+        let movement_scale = node.movement_scale();
+        let legacy_timed_graph =
+            node.class == "STU_54FEB21C" && (self.graph(id).index, node.pos) == (0x01f0, 14);
+        let timed_graph_duration = if legacy_timed_graph {
+            None
+        } else {
+            parent_owned_graph_duration(node)
         };
+        let mut wave_bonus = false;
         let kind = match node.class.as_str() {
             // These client presentation states use the base state lifecycle on the server.
             "STUStatescriptState"
@@ -1004,104 +1215,138 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             // registration 160, constructor AA826B0, vtable 8B6BC800.
             "STU_E9485CAF" => StateKind::Plain,
             "STUStatescriptStateAnimatedCamera"
-                if checked_registration((self.graph(id).index, node.pos) == (0x0ca5, 43)) =>
+                if registration.permits((self.graph(id).index, node.pos) == (0x0ca5, 43)) =>
             {
                 StateKind::Plain
             }
             "STU_96333BBE" | "STU_E8D976BE"
-                if matches!(
-                    (self.graph(id).index, node.pos, node.class.as_str()),
-                    (0x0ced, 0 | 4, "STU_96333BBE") | (0x0ced, 6, "STU_E8D976BE")
-                ) && self
-                    .world
-                    .spatial_binding_owner_available(self.site(id, node))
-                    == Some(false) =>
+                if registration.shape(
+                    self.world
+                        .spatial_binding_owner_available(self.site(id, node))
+                        == Some(false),
+                ) =>
             {
                 // 911920 and AE03F0 return before any binding/field access
                 // when 978A30 cannot resolve the auxiliary client owner.
                 StateKind::Plain
             }
-            "STU_33A46033" | "STU_9028E035" | "STU_43994F1B" | "STU_93B8758C" | "STU_9935FBC8"
-                if checked_registration(registered_state(self.graph(id).index, node).is_some()) =>
+            "STU_9028E035" | "STU_43994F1B" | "STU_93B8758C"
+                if registration.shape(registered_state(self.graph(id), node).is_some()) =>
             {
                 StateKind::Registered { next: None }
             }
-            "STU_F08E1453"
-                if matches!(
-                    (self.graph(id).index, node.pos),
-                    (0x01cb, 85) | (0x0ce0, 39) | (0x0d03, 3)
-                ) && is_self_target(node, "m_64C3E07E") =>
+            "STU_33A46033" => {
+                let site = self.site(id, node);
+                let Some(entry) = registered_state(self.graph(id), node) else {
+                    self.report(site, Issue::UnsupportedState(node.class.clone()));
+                    return Ok(());
+                };
+                if entry.suppresses_model
+                    && (self.machine.snapshot.instances[&id].is_server_only()
+                        || !self.world.supports_static_model_protection(site))
+                {
+                    self.report(
+                        site,
+                        Issue::UnsupportedField("static model protection context"),
+                    );
+                    return Ok(());
+                }
+                StateKind::Registered { next: None }
+            }
+            "STU_9935FBC8"
+                if registration.permits(registered_state(self.graph(id), node).is_some()) =>
             {
-                StateKind::Plain
+                StateKind::Registered { next: None }
             }
             // The authored zero-valued form inherits the base state reader.
             "STU_D9843704"
-                if node.is_networked() && node.remote == -1 && {
-                    let value = field(&node.fields, "m_0B528B1E");
-                    script_expr::native_shape(value, "STUConfigVarFloat", Some("m_value"))
-                        && field(value, "m_value").as_f64() == Some(0.0)
-                } =>
+                if registration.shape(
+                    node.is_networked() && node.remote == -1 && {
+                        let value = field(&node.fields, "m_0B528B1E");
+                        script_expr::native_shape(value, "STUConfigVarFloat", Some("m_value"))
+                            && field(value, "m_value").as_f64() == Some(0.0)
+                    },
+                ) =>
             {
                 StateKind::Plain
             }
-            "STU_BD02E168" if is_client_subgraph_controller(self.graph(id), node) => {
+            "STU_BD02E168"
+                if registration.shape(is_client_subgraph_controller(self.graph(id), node)) =>
+            {
                 StateKind::Plain
             }
             // ForCodeSynced publishes to native game-code registration outside
             // the graph. Its VM plugs and empty wire payload use the base state.
             "STU_CD46AF93" | "STU_6A926B21"
-                if is_networked_for_code_synced(node)
-                    || self.world.for_code_transport(self.site(id, node)) == Some(false) =>
+                if registration.shape(
+                    is_networked_for_code_synced(node)
+                        || self.world.for_code_transport(self.site(id, node)) == Some(false),
+                ) =>
             {
                 StateKind::ForCode
             }
             // Tips register their state key with native presentation code.
             // The graph still runs the base state's plugs and lifecycle.
             "STU_F5A99B2A"
-                if node.is_networked()
-                    && field(&node.fields, "m_tips")
-                        .as_array()
-                        .is_some_and(|tips| {
-                            !tips.is_empty()
-                                && tips
-                                    .iter()
-                                    .all(|tip| field(tip, "$").as_str() == Some("STUTip"))
-                        }) =>
+                if registration.shape(
+                    node.is_networked()
+                        && field(&node.fields, "m_tips")
+                            .as_array()
+                            .is_some_and(|tips| {
+                                !tips.is_empty()
+                                    && tips
+                                        .iter()
+                                        .all(|tip| field(tip, "$").as_str() == Some("STUTip"))
+                            }),
+                ) =>
             {
                 StateKind::Plain
             }
             "STU_7B9E8909" => StateKind::Plain,
             "STU_6A6BBB8D" | "STU_918B3FA9" | "STU_14611C1B" | "STU_200B27C5" | "STU_D52B9026"
             | "STU_4531992F" | "STU_55F72184" | "STU_632B74B9"
-                if self.graph(id).index == 0x0c87 =>
+                if registration.permits(self.graph(id).index == 0x0c87) =>
             {
                 StateKind::Plain
             }
-            "STU_724DFBC6" | "STU_531AA630" if self.graph(id).index == 0x0cf3 => StateKind::Plain,
-            _ if is_encounter_base_state(self.graph(id).index, node) => StateKind::Plain,
-            "STU_B5C87F3D"
-                if self
-                    .world
-                    .local_combat_context_available(self.site(id, node))
-                    == Some(false) =>
+            "STU_724DFBC6" | "STU_531AA630"
+                if registration.permits(self.graph(id).index == 0x0cf3) =>
             {
+                StateKind::Plain
+            }
+            _ if encounter_base_state_shape(self.graph(id).index, node)
+                .is_some_and(|allowed| registration.shape(allowed)) =>
+            {
+                StateKind::Plain
+            }
+            "STU_B5C87F3D" => {
+                // The native state skips tick registration when its local context is absent.
+                let site = self.site(id, node);
+                if self.world.local_combat_context_available(site) != Some(false) {
+                    self.report(site, Issue::UnsupportedState(node.class.clone()));
+                    return Ok(());
+                }
                 StateKind::Plain
             }
             "STU_76F3EAEF"
-                if self.graph(id).index == 0x0cbc
-                    && matches!(node.pos, 60 | 61 | 62 | 63 | 64 | 110) =>
+                if registration.permits(
+                    self.graph(id).index == 0x0cbc
+                        && matches!(node.pos, 60 | 61 | 62 | 63 | 64 | 110),
+                ) =>
             {
                 StateKind::Plain
             }
             "STU_6CC90892"
-                if (self.graph(id).index, node.pos) == (0x0cbc, 129)
+                if registration.permits((self.graph(id).index, node.pos) == (0x0cbc, 129))
                     && is_self_target(node, "m_D7AC2990") =>
             {
                 StateKind::SameTeamContact { registered: false }
             }
             "STUStatescriptStateCombatModFilter"
-                if asset_guid(field(&node.fields, "m_60703B1E")) == Some(0x0d80_0000_0000_0317)
-                    && field(&node.fields, "m_41B10FF2").as_u64() == Some(0) =>
+                if registration.shape(
+                    asset_guid(field(&node.fields, "m_60703B1E")) == Some(0x0d80_0000_0000_0317)
+                        && field(&node.fields, "m_41B10FF2").as_u64() == Some(0),
+                ) =>
             {
                 StateKind::OutgoingDamageFilter { registered: false }
             }
@@ -1125,45 +1370,30 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             "STU_40E05F6B" => StateKind::VoiceStimulus,
             "STU_DC80F7E6"
-                if self.world.outline_context_available(self.site(id, node)) == Some(false) =>
+                if registration.shape(
+                    self.world.outline_context_available(self.site(id, node)) == Some(false),
+                ) =>
             {
                 StateKind::Plain
             }
             "STU_441B50E4"
-                if self.graph(id).index == 0x0b8b
-                    && matches!(
-                        (node.pos, node.field("m_stat").and_then(asset_guid)),
-                        (52, Some(0x0860_0000_0000_0466)) | (66, Some(0x0860_0000_0000_05bf))
-                    )
-                    && node.server_only
-                    && field(&node.fields, "m_D32CB484").is_null()
-                    && field(&node.fields, "m_stats").is_null()
-                    && is_self_target(node, "m_targets")
+                if registration.shape(is_self_stat_timer(node))
                     && self.world.player_stats_available(self.site(id, node)) == Some(false) =>
             {
                 StateKind::Plain
             }
-            "STU_441B50E4"
-                if (self.graph(id).index, node.pos) == (0x01a3, 14)
-                    && !node.server_only
-                    && field(&node.fields, "m_stat").is_null()
-                    && field(&node.fields, "m_stats").is_null()
-                    && matches!(array_field(&node.fields, "m_D32CB484"),
-                        [stat] if asset_guid(stat) == Some(0x0860_0000_0000_037a))
-                    && is_self_target(node, "m_targets")
-                    && self
-                        .world
-                        .local_combat_context_available(self.site(id, node))
-                        == Some(false) =>
+            "STU_97B1B3EC"
+                if registration.permits((self.graph(id).index, node.pos) == (0x0c93, 26)) =>
             {
-                StateKind::Plain
-            }
-            "STU_97B1B3EC" if (self.graph(id).index, node.pos) == (0x0c93, 26) => {
                 StateKind::AiControlSetting
             }
             "STU_473549CA" | "STU_CF8C7CC5" => StateKind::AiControlOverride { record: None },
+            "StateFacingClaim" if node.declares_facing_claim() => StateKind::AiFacing(None),
             "STU_FC16FF45"
-                if matches!((self.graph(id).index, node.pos), (0x0c95, 5) | (0x185d, 57)) =>
+                if registration.permits(matches!(
+                    (self.graph(id).index, node.pos),
+                    (0x0c95, 5) | (0x185d, 57)
+                )) =>
             {
                 StateKind::AiFacing(None)
             }
@@ -1172,27 +1402,32 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             "STU_066B4605" if self.has_no_ai_control_target(id, node) => StateKind::Plain,
             "STU_066B4605" => StateKind::AiWeaponOverride { record: None },
-            "STUStatescriptStateHealthPool" if (self.graph(id).index, node.pos) == (0x0c89, 5) => {
+            "STUStatescriptStateHealthPool"
+                if registration.shape((self.graph(id).index, node.pos) == (0x0c89, 5)) =>
+            {
                 StateKind::HealthCapacity
             }
             "STUStatescriptStateHealthPool"
-                if self.graph(id).index != 0x0cbc && is_base_health_pool(node) =>
+                if is_base_health_pool(node) || named_temporary_shield(node, key.raw).is_some() =>
             {
                 StateKind::HealthPool { pool: None }
             }
             "STUStatescriptStateHealthPool"
                 if self.graph(id).index == 0x0cbc && is_wave_health_pool(node) =>
             {
+                wave_bonus = true;
                 StateKind::HealthPool { pool: None }
             }
             "STU_B7D2C9C0" => StateKind::DisplayName { binding: None },
-            "STU_E56BA8D8" if node.is_networked() && node.remote == -1 => {
+            "STU_E56BA8D8" if registration.shape(node.is_networked() && node.remote == -1) => {
                 StateKind::TargetTag { effect: None }
             }
             "STU_160F2578"
-                if static_target_operand(node).is_some()
-                    || participant_filter(node).is_some()
-                    || excluded_target_tags(self.graph(id).index, node).is_some() =>
+                if registration.shape(
+                    static_target_operand(node).is_some()
+                        || participant_filter(node).is_some()
+                        || excluded_target_tags(node).is_some(),
+                ) =>
             {
                 StateKind::Plain
             }
@@ -1211,7 +1446,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::BossPauseReceiver { receiving: false }
             }
             "STUStatescriptStateGameMessageEntry" => StateKind::MessageIdle,
-            "STUStatescriptStateWait" if !configured(node, "m_BF1A93B0") => StateKind::Wait,
+            "STUStatescriptStateWait" if registration.shape(is_elapsed_wait(node)) => {
+                StateKind::Wait
+            }
             "STUStatescriptStateShockwave" => StateKind::Shockwave { managed: false },
             "STU_4C96470A" => StateKind::PlacementSelector {
                 confirmed: false,
@@ -1219,50 +1456,60 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             },
             "STUStatescriptStateMoveTo" => StateKind::MoveTo { movement: None },
             "STU_54FEB21C"
-                if matches!(
-                    (self.graph(id).index, node.pos),
-                    (0x01f0, 14) | (0x0043, 38)
-                ) && ["m_7C8AD485", "m_C7A42E2A", "m_F8CE386A", "m_C46403A5"]
-                    .iter()
-                    .all(|name| field(&node.fields, name).is_null())
-                    && node.links("m_E5790891").next().is_none() =>
+                if registration
+                    .shape(is_parent_owned_timed_graph(node) || timed_graph_duration.is_some())
+                    || (registration.permits(legacy_timed_graph)
+                        && ["m_7C8AD485", "m_C7A42E2A", "m_F8CE386A", "m_C46403A5"]
+                            .iter()
+                            .all(|name| field(&node.fields, name).is_null())
+                        && node.links("m_E5790891").next().is_none()) =>
             {
-                // With no finish predicate or alternate graph the Python timer
-                // cannot finish this state; its parent owns the end plug.
+                // This class uses the base lifecycle and wire state. The
+                // duration shape arms a regular state-owned timer on entry.
                 StateKind::Plain
             }
             "STUStatescriptStatePhysicsExplosion"
-                if matches!(
-                    (self.graph(id).index, node.pos),
-                    (0x01f0, 34) | (0x0043, 43 | 64)
-                ) =>
+                if registration.shape(is_static_map_explosion(self.graph(id), node, key.raw)) =>
             {
-                // This host has no dynamic map rigid bodies. Preserve the
-                // networked lifecycle; this does not apply actor damage.
+                let site = self.site(id, node);
+                if self.world.has_dynamic_map_rigid_bodies(site) != Some(false) {
+                    self.report(site, Issue::UnsupportedState(node.class.clone()));
+                    return Ok(());
+                }
+                // No map body can receive the impulse. The ordinary lifecycle
+                // still drives authored transitions and boundary projection.
                 StateKind::Plain
             }
             "STU_D74D4F47" => StateKind::WaitFrames { target: 0 },
             "STU_2F07848F"
-                if matches!(
-                    (self.graph(id).index, node.pos),
-                    (0x0cec, 6) | (0x0ce0, 3) | (0x181e, 0)
-                ) =>
+                if registration.shape(is_cinematic_time_scale_envelope(
+                    self.graph(id),
+                    node,
+                    key.raw,
+                )) =>
             {
                 StateKind::CinematicTimeScale { boundary_frame: 0 }
             }
             "STU_91EF24A9" => StateKind::AiCandidate { selected: false },
             "STUStatescriptStateLogicalButton" => StateKind::LogicalButton { down: false },
             "STU_E4A30BCF" => StateKind::ButtonBlock(None),
-            "STUStatescriptStateStack" | "STU_A97E6999" => StateKind::Stack {
-                top: false,
-                under: false,
-            },
+            _ if button_lock.is_some() => StateKind::ButtonBlock(None),
+            class
+                if matches!(class, "STUStatescriptStateStack" | "STU_A97E6999")
+                    || node.declares_stack_claim() =>
+            {
+                StateKind::Stack {
+                    top: false,
+                    under: false,
+                }
+            }
             "STUStatescriptStateAbility" => StateKind::Ability { flags: 0 },
             "STU_316CFEF2" => StateKind::MovementMod,
+            _ if movement_scale.is_some() => StateKind::MovementMod,
             "STU_9C9A422A" => StateKind::Defer,
             "STU_75D1C308"
-                if self.graph(id).index == 0x01f0
-                    && matches!(node.pos, 18 | 22)
+                if registration
+                    .permits(self.graph(id).index == 0x01f0 && matches!(node.pos, 18 | 22))
                     && field(&node.fields, "m_069C6F7E").as_u64() == Some(1)
                     && field(&node.fields, "m_54613F6A").as_u64()
                         == Some(u64::from(node.pos == 22)) =>
@@ -1272,10 +1519,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 // not yet reconstructed; it must not be treated as damage.
                 StateKind::RollMovementParameter
             }
-            "STU_96F1DBCF" if is_owner_movement_sampler(node) => {
+            "STU_96F1DBCF" if registration.shape(is_owner_movement_sampler(node)) => {
                 match self.state(key).map(|state| state.kind) {
-                    Some(kind @ StateKind::MovementSample(_)) => kind,
-                    _ => StateKind::MovementSample(0),
+                    Some(kind @ StateKind::MovementSample { .. }) => kind,
+                    _ => StateKind::MovementSample {
+                        flags: 0,
+                        pose_frame: None,
+                        sampled_at: None,
+                    },
                 }
             }
             "STUStatescriptStateAnim" => StateKind::Anim,
@@ -1290,112 +1541,167 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             // in the Python reference (`world.tracked_targets` returns
             // NotImplemented / empty targets).
             "STUStatescriptStateTrackTargets"
-                if matches!(
+                if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
                     (0x0043, 11) | (0x0257, 11) | (0x00ca, 90)
-                ) =>
+                )) =>
             {
                 StateKind::EmptyTargets
             }
             "STU_691BFA55" | "STU_7CA2FBAF" => StateKind::Effect,
-            "STU_23A00A53" if self.graph(id).index == 0x0043 && matches!(node.pos, 0 | 9) => {
+            "STU_23A00A53"
+                if registration
+                    .permits(self.graph(id).index == 0x0043 && matches!(node.pos, 0 | 9)) =>
+            {
                 StateKind::Plain
             }
-            "STU_23A00A53" if (self.graph(id).index, node.pos) == (0x0c89, 49) => {
+            "STU_23A00A53"
+                if registration.permits((self.graph(id).index, node.pos) == (0x0c89, 49)) =>
+            {
                 StateKind::ExplosionContact
             }
             "STUStatescriptStateModifyHealth"
-                if (self.graph(id).index, node.pos) == (0x0043, 10) =>
+                if registration.permits((self.graph(id).index, node.pos) == (0x0043, 10)) =>
             {
                 StateKind::Plain
             }
             "STUStatescriptStateModifyHealth"
-                if (self.graph(id).index, node.pos) == (0x0033, 5) =>
+                if registration.shape(is_named_shield_decay(node, key.raw)) =>
+            {
+                StateKind::NamedShieldDecay
+            }
+            "STUStatescriptStateModifyHealth"
+                if registration.shape(is_self_shield_recharge(node, key.raw)) =>
             {
                 StateKind::ShieldRecharge
             }
             "STUStatescriptStateModifyHealth"
-                if matches!(
-                    (self.graph(id).index, node.pos),
-                    (0x0c89, 38 | 46 | 48) | (0x0cbc, 69) | (0x0b27, 93)
-                ) =>
+                if registration.shape(immediate_self_damage(node, key.raw).is_some())
+                    || registration.permits(matches!(
+                        (self.graph(id).index, node.pos),
+                        (0x0c89, 38 | 48) | (0x0b27, 93)
+                    )) =>
             {
                 StateKind::ModifyHealth
             }
             "STUStatescriptStateTrackTargets"
-                if matches!(
+                if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
                     (0x0c89, 47 | 52) | (0x022f, 26 | 86) | (0x006b, 6 | 7 | 121)
-                ) =>
+                )) =>
             {
                 StateKind::TrackedTargets
             }
-            "STU_431F3FCC" if (self.graph(id).index, node.pos) == (0x022f, 11) => {
+            "STU_431F3FCC"
+                if registration.permits((self.graph(id).index, node.pos) == (0x022f, 11)) =>
+            {
                 StateKind::DeadeyeEffects
             }
-            "STU_431F3FCC" if (self.graph(id).index, node.pos) == (0x006b, 62) => {
+            "STU_431F3FCC"
+                if registration.permits((self.graph(id).index, node.pos) == (0x006b, 62)) =>
+            {
                 StateKind::WitchStaffEffect
             }
             "STUStatescriptStateModifyHealth"
-                if (self.graph(id).index, node.pos) == (0x0079, 0) =>
+                if registration.permits((self.graph(id).index, node.pos) == (0x0079, 0)) =>
             {
                 StateKind::WitchStaffHealing
             }
             "STUStatescriptStateTrackRay"
-                if self.graph(id).index == 0x157c
-                    && matches!(node.pos, 202 | 203)
+                if registration
+                    .permits(self.graph(id).index == 0x157c && matches!(node.pos, 202 | 203))
                     && node.server_only =>
             {
                 StateKind::SummonerBeamRay
             }
             "STUStatescriptStateModifyHealth"
-                if (self.graph(id).index, node.pos) == (0x157c, 170) && node.server_only =>
+                if registration.permits((self.graph(id).index, node.pos) == (0x157c, 170))
+                    && node.server_only =>
             {
                 StateKind::SummonerBeamDamage
             }
             "STU_BA4C2296"
-                if (self.graph(id).index, node.pos) == (0x157c, 143)
+                if registration.permits((self.graph(id).index, node.pos) == (0x157c, 143))
                     && self.world.outline_context_available(self.site(id, node)) == Some(false) =>
             {
                 StateKind::Plain
             }
             "STU_431F3FCC"
-                if (self.graph(id).index, node.pos) == (0x157c, 200) && node.server_only =>
+                if registration.permits((self.graph(id).index, node.pos) == (0x157c, 200))
+                    && node.server_only =>
             {
                 // This effect tracks player criteria. The NPC caster has no player stats.
                 StateKind::Plain
             }
-            "STU_B5C87F3D"
-                if matches!(
-                    (self.graph(id).index, node.pos),
-                    (0x0043, 24) | (0x022f, 85)
-                ) =>
-            {
-                // The headless owner has no local combat accumulator.
-                StateKind::Plain
-            }
-            "STU_E3CEF6B9" if (self.graph(id).index, node.pos) == (0x022f, 116) => {
+            "STU_E3CEF6B9" if registration.shape(is_literal_frame_wait(node)) => {
                 StateKind::WaitFrames { target: 0 }
+            }
+            "STU_38EE1100"
+                if node
+                    .game_message_id()
+                    .is_some_and(|topic| self.graphs.is_projected_message_topic(topic)) =>
+            {
+                if !script_expr::valid_entity(self.machine.snapshot.entity)
+                    || self.machine.snapshot.instances[&id].is_server_only()
+                    || !is_projected_self_message(self.graph(id), node, key.raw)
+                {
+                    self.report(self.site(id, node), Issue::UnsupportedMessageRegistration);
+                    return Ok(());
+                }
+                StateKind::ProjectedSelfSend
             }
             "STU_38EE1100" => persistent_message(self.graph(id).index, node)
                 .map_or(StateKind::SendMessage, StateKind::PersistentSend),
             "STUStatescriptStateCosmeticEntity" => StateKind::CosmeticEntity,
             "STUStatescriptStateChaseVar" => StateKind::ChaseVar,
-            "STU_77E13026" if (self.graph(id).index, node.pos) == (0x0043, 60) => StateKind::Plain,
-            "STU_77E13026" if (self.graph(id).index, node.pos) == (0x180a, 42) => {
+            "STU_77E13026"
+                if registration.permits((self.graph(id).index, node.pos) == (0x0043, 60)) =>
+            {
+                StateKind::Plain
+            }
+            "STU_77E13026"
+                if registration.permits((self.graph(id).index, node.pos) == (0x180a, 42)) =>
+            {
                 StateKind::PhaseScriptList
             }
-            "STU_CB4905E9" if (self.graph(id).index, node.pos) == (0x180a, 41) => {
+            "STU_CB4905E9"
+                if registration.permits((self.graph(id).index, node.pos) == (0x180a, 41)) =>
+            {
                 StateKind::PhaseScript
             }
-            "STU_4BD2E886" if (self.graph(id).index, node.pos) == (0x180a, 46) => {
+            "STU_4BD2E886"
+                if registration.permits((self.graph(id).index, node.pos) == (0x180a, 46)) =>
+            {
                 StateKind::PhaseTransition
             }
             "STU_2F4E2E3F" => StateKind::Watch,
-            "STU_BA2FCDEB" if self.graph(id).index == 0x0cba => StateKind::SpawnSearch,
-            "STU_5E805B5A" if self.graph(id).index == 0x0cba => StateKind::RecentInput,
-            "STU_0A6BE10E" if (self.graph(id).index, node.pos) == (0x0043, 63) => StateKind::Plain,
-            "STU_0A6BE10E" if (self.graph(id).index, node.pos) == (0x0cba, 6) => {
+            _ if node.declares_observe_state() => StateKind::Observe {
+                sampled_frame: self.machine.frame,
+            },
+            _ if node.target_child_binding().is_some() => StateKind::TrackEntities {
+                sampled_frame: self.machine.frame,
+            },
+            _ if interval_frames.is_some() => {
+                let period_frames = interval_frames.expect("checked authored interval");
+                StateKind::Interval {
+                    period_frames,
+                    next_frame: self.machine.frame.checked_add(period_frames.get()),
+                }
+            }
+            "STU_BA2FCDEB" if registration.permits(self.graph(id).index == 0x0cba) => {
+                StateKind::SpawnSearch
+            }
+            "STU_5E805B5A" if registration.permits(self.graph(id).index == 0x0cba) => {
+                StateKind::RecentInput
+            }
+            "STU_0A6BE10E"
+                if registration.permits((self.graph(id).index, node.pos) == (0x0043, 63)) =>
+            {
+                StateKind::Plain
+            }
+            "STU_0A6BE10E"
+                if registration.permits((self.graph(id).index, node.pos) == (0x0cba, 6)) =>
+            {
                 StateKind::LivingBodyArray
             }
             "STUStatescriptStateWeaponVolley" => StateKind::WeaponVolley {
@@ -1404,11 +1710,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 ammo0: 0,
                 ammo_var: None,
             },
+            _ if registration.allows_runtime_fallback() && node.declares_runtime_plain_state() => {
+                StateKind::Plain
+            }
             _ => {
                 self.report_diagnostic(
                     self.site(id, node),
                     Issue::UnsupportedState(node.class.clone()),
-                    registration_rejected,
+                    registration.rejected(),
                 );
                 return Ok(());
             }
@@ -1432,6 +1741,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 ..State::dormant(kind)
             },
         );
+        if let Some(duration) = timed_graph_duration {
+            self.arm_parent_owned_duration(key, node, duration)?;
+        }
         match kind {
             StateKind::Registered { .. } => self.register_state(key, node)?,
             StateKind::GamePadVibration => self.post(id, Event::Finish(key.raw))?,
@@ -1442,6 +1754,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             StateKind::PlacementSelector { .. } => self.begin_placement_selector(key, node)?,
             StateKind::MoveTo { .. } => self.begin_move_to(key, node)?,
             StateKind::ShieldRecharge => self.begin_shield_recharge(key, node)?,
+            StateKind::NamedShieldDecay => {
+                if self.update_named_shield_decay(key, node, 0)? {
+                    self.register_tick(key, self.machine.now_ms);
+                }
+            }
             StateKind::TrackedTargets => self.refresh_tracked_targets(key, node)?,
             StateKind::DeadeyeEffects => self.refresh_deadeye_effects(key, node)?,
             StateKind::WitchStaffEffect | StateKind::WitchStaffHealing => {
@@ -1458,7 +1775,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     return Ok(());
                 }
             }
-            StateKind::HealthPool { .. } => self.begin_health_pool(key, node)?,
+            StateKind::HealthPool { .. } => self.begin_health_pool(key, node, wave_bonus)?,
             StateKind::HealthCapacity => self.check_health_capacity(key, node)?,
             StateKind::SameTeamContact { .. } => {
                 let site = self.site(id, node);
@@ -1553,11 +1870,28 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             StateKind::LogicalButton { .. } => self.enter_button(key, node, depth)?,
             StateKind::ButtonBlock(_) => {
-                if let Some(button) = self.logical_button_id(id, node) {
+                let button = button_lock
+                    .map(|(button, _)| button)
+                    .or_else(|| self.logical_button_id(id, node, None));
+                if let Some(button) = button {
+                    if let Some((_, duration)) = button_lock {
+                        // Resynchronizing logical buttons can synchronously end this lock.
+                        if let Some(frames) = duration {
+                            self.post_after(
+                                id,
+                                u64::from(frames.get()) * FRAME_MS,
+                                Event::Finish(key.raw),
+                            )?;
+                        }
+                        self.machine.ability_presses.retain(|_, presses| {
+                            presses.retain(|press| press.button != button);
+                            !presses.is_empty()
+                        });
+                    }
                     self.state_mut(key).expect("active button block").kind =
                         StateKind::ButtonBlock(Some(button));
                     self.machine.button_blocks[usize::from(button)] += 1;
-                    self.resync_logical_buttons(button, depth + 1)?;
+                    self.resync_logical_buttons(Some(button), depth + 1)?;
                 }
             }
             StateKind::Stack { .. } => self.begin_stack(key, node, depth)?,
@@ -1585,22 +1919,39 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 }
             }
             StateKind::MovementMod => {
+                if let Some((_, Some(frames))) = movement_scale {
+                    self.post_after(
+                        id,
+                        u64::from(frames.get()) * FRAME_MS,
+                        Event::Finish(key.raw),
+                    )?;
+                }
                 self.refresh_movement_modifier(key, node)?;
-                if self
-                    .evaluate(id, node, field(&node.fields, "m_485109CB"), Some(key))
-                    .is_some_and(|value| script_expr::truthy(&value))
+                if movement_scale.is_none()
+                    && self
+                        .evaluate(id, node, field(&node.fields, "m_485109CB"), Some(key))
+                        .is_some_and(|value| script_expr::truthy(&value))
                 {
                     self.register_tick(key, self.machine.now_ms);
                 }
             }
-            StateKind::MovementSample(previous) => {
-                self.update_movement_sample(key, node, previous)?;
+            StateKind::MovementSample { .. } => {
+                self.update_movement_sample(key, node, depth)?;
                 self.register_tick(key, self.machine.now_ms);
             }
             StateKind::PhaseScriptList => self.refresh_phase_scripts(key, node)?,
             StateKind::PhaseScript => self.begin_phase_script(key, node)?,
             StateKind::PhaseTransition => self.arm_phase_transition(key, node)?,
             StateKind::Anim => self.arm_animation(key, node)?,
+            StateKind::SendMessage
+                if node.field("m_targets").is_none()
+                    && node.game_message_id().is_some_and(|message| message != 0)
+                    && is_message_recipient_set(field(&node.fields, "m_target")) =>
+            {
+                // A state-managed recipient set is a registration, not an
+                // expression for the ordinary one-shot message path.
+                self.report(self.site(id, node), Issue::UnsupportedMessageRegistration);
+            }
             StateKind::SendMessage => {
                 self.send_game_message(id, node)?;
             }
@@ -1620,6 +1971,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             StateKind::CosmeticEntity => self.begin_cosmetic(key, node, depth)?,
             StateKind::ChaseVar => self.begin_chase(key, node, depth)?,
+            StateKind::Observe { .. } | StateKind::TrackEntities { .. } => {
+                self.register_tick(key, self.machine.now_ms);
+            }
+            StateKind::Interval { next_frame, .. } => self.schedule_interval(key, next_frame)?,
             StateKind::Watch => {
                 let seen = self.evaluate(id, node, field(&node.fields, "m_B7A3CF78"), Some(key));
                 self.state_mut(key).expect("active Watch").watch_seen = seen;
@@ -1639,6 +1994,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             StateKind::WeaponVolley { .. } => self.begin_volley(key, node, depth)?,
             StateKind::Plain
+            | StateKind::ProjectedSelfSend
             | StateKind::PersistentSend(_)
             | StateKind::Effect
             | StateKind::ClientPulse { .. }
@@ -2398,7 +2754,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 return Ok(false);
             }
         };
-        if let Some((tag, excluded)) = excluded_target_tags(self.graph(id).index, node) {
+        if let Some((tag, excluded)) = excluded_target_tags(node) {
             let Some(entities) = self.world.targets_with_tag(site, tag, excluded) else {
                 self.report(
                     site,
@@ -2446,15 +2802,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.world.participant_targets(site, filter),
                 "scene participant filter",
             )
-        } else if field(&node.fields, "m_9C7BD8B8").is_null()
-            && script_expr::target_tag_config(field(&node.fields, "m_B486603E"))
-                == Some(0x0d60_0000_0000_0321)
-            && static_target_operand(node).is_some()
-        {
+        } else if let Some(tag) = placement_collection_tag(node) {
             (
-                self.world
-                    .tagged_placements(site, 0x0d60_0000_0000_0321)
-                    .map(<[u32]>::to_vec),
+                self.world.tagged_placements(site, tag).map(<[u32]>::to_vec),
                 "scene target collection",
             )
         } else {
@@ -2490,23 +2840,40 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         &mut self,
         key: StateKey,
         node: &Node,
-        previous: u16,
+        depth: usize,
     ) -> Result<(), InitFault> {
+        let frame = self.machine.frame;
+        let Some(state) = self.state_mut(key) else {
+            return Ok(());
+        };
+        let StateKind::MovementSample {
+            flags: previous,
+            pose_frame: previous_pose_frame,
+            sampled_at,
+        } = &mut state.kind
+        else {
+            return Ok(());
+        };
+        if *sampled_at == Some(frame) {
+            return Ok(());
+        }
+        let (previous, previous_pose_frame) = (*previous, *previous_pose_frame);
+        *sampled_at = Some(frame);
         let site = self.site(key.instance, node);
         let Some(sample) = self
             .world
             .movement_sample(site)
-            .filter(|&mask| mask < 1 << 13)
+            .filter(|sample| sample.flags < 1 << 13)
         else {
             self.report(site, Issue::UnsupportedField("owner movement sample"));
             return Ok(());
         };
-        let changed = previous ^ sample;
-        if changed == 0 {
-            return Ok(());
-        }
-        self.state_mut(key).expect("active movement sample").kind =
-            StateKind::MovementSample(sample);
+        let changed = previous ^ sample.flags;
+        self.state_mut(key).expect("active movement sample").kind = StateKind::MovementSample {
+            flags: sample.flags,
+            pose_frame: sample.pose_frame,
+            sampled_at: Some(frame),
+        };
         for (bit, name) in MOVEMENT_BOOLEAN_OUTPUTS.iter().enumerate() {
             let mask = 1 << bit;
             if changed & mask == 0 {
@@ -2517,9 +2884,31 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             {
                 self.write(
                     source_key(key.instance, variable),
-                    Value::Bool(sample & mask != 0),
+                    Value::Bool(sample.flags & mask != 0),
                 )?;
             }
+        }
+        let was_airborne = previous & 1 != 0;
+        let airborne = sample.flags & 1 != 0;
+        // Gap frames can retain the last pose. A restart requires a fresh
+        // movement record with an authoritative zero air-tick count.
+        let airborne_restart = was_airborne
+            && airborne
+            && sample.air_ticks == 0
+            && sample.pose_frame.is_some()
+            && sample.pose_frame != previous_pose_frame;
+        if was_airborne
+            && (!airborne || airborne_restart)
+            && node.links("m_2102C541").next().is_some()
+        {
+            self.follow(key.instance, node, "m_2102C541", Some(key), depth + 1)?;
+        }
+        if airborne
+            && (!was_airborne || airborne_restart)
+            && self.state(key).is_some_and(|state| state.active)
+            && node.links("m_E37BC6C2").next().is_some()
+        {
+            self.follow(key.instance, node, "m_E37BC6C2", Some(key), depth + 1)?;
         }
         Ok(())
     }

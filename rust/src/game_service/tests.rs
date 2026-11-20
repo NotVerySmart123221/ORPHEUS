@@ -1,6 +1,8 @@
 use super::*;
 
 mod benchmark;
+mod bot_replacement;
+mod death_notice;
 mod harness;
 mod isolation;
 mod junkenstein_validation;
@@ -1698,7 +1700,7 @@ fn prepared_practice_rooms_hot_reload_and_roll_back_without_interrupting_patrol(
         let (bots, _) = scene.bot_simulation();
         bots.body_mut(BOT_ENTITY + 1).unwrap().position = [x - 4.0, y, z];
         let factory = Arc::clone(&factory);
-        scene.owner_body_factory = Some(Arc::new(move |hero, spawn| {
+        scene.owner_body_factory = Some(Arc::new(move |hero, spawn, _| {
             if hero.guid == SOLDIER {
                 Ok(Some(Box::new(factory.start(spawn)?)))
             } else {

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "case_id": "script-inherited-base-factory.synthetic.v1",
+  "source": {"basis": "Invented placements, selector and lifecycle markers for a verified inherited base state class."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "fixture_metadata": {"plain_classes": ["STU_F08E1453"]},
+    "cases": [
+      {"graph": 61701, "class": "STU_F08E1453", "selector": {"$": "STU_B5A0CAF0"}, "expected": "plain"},
+      {"graph": 61702, "class": "STU_F08E1453", "selector": {"$": "SyntheticUnavailableFactoryOperand"}, "expected": "plain"},
+      {"graph": 61703, "class": "STU_F08E1453", "client_only": true, "expected": "client_skipped"},
+      {"graph": 61704, "class": "SyntheticUnknownFactoryState", "expected": "unsupported"}
+    ]
+  }
+}

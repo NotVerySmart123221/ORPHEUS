@@ -32,12 +32,12 @@ use crate::{
     mover_modifiers::{Modifier, ModifierKey},
     projectile_flight::ProjectileFlight,
     scene_assets::PreparedScene,
-    script_init::Snapshot,
+    script_init::{HostEvent, HostHealthContext, InitFault, RoomMessage, Snapshot},
     script_player::OwnerBodySpawn,
     script_snapshot_wire::CountdownFrame,
     script_snapshot_wire::{ProjectedSnapshot, SnapshotEncoder, View},
     script_stream::{BodyStream, ChangeKey, DeltaKind, ScriptChunk, Stream},
-    vitals::{Death, Vitals},
+    vitals::{Damage, Death, Vitals},
     world::{
         Component as WorldComponent, Create, EntityUpdate, GAME_MODE_ENTITY, MAX_PAYLOAD, Movement,
         Operation, SkinTheme, frame,
@@ -65,6 +65,22 @@ pub(crate) struct BodyId {
     pub generation: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OwnerRoomActivity {
+    Regular,
+    Encounter { active: bool },
+}
+
+impl OwnerRoomActivity {
+    pub(crate) fn allows_body_activity(self) -> bool {
+        !matches!(self, Self::Encounter { active: false })
+    }
+
+    pub(crate) fn encounter_active(self) -> bool {
+        matches!(self, Self::Encounter { active: true })
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Body {
     id: BodyId,
@@ -76,6 +92,7 @@ struct Body {
 /// A supported modifier projection is required before the mover can correct
 /// the owner's prediction, even if the current set of modifiers is empty.
 pub(crate) trait OwnerBodyRuntime: Send + Sync {
+    fn set_room_activity(&mut self, _activity: OwnerRoomActivity) {}
     fn set_encounter_active(&mut self, _active: bool) -> io::Result<()> {
         Ok(())
     }
@@ -88,7 +105,29 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
     fn take_velocity_changes(&mut self) -> Vec<(u32, crate::mover::VelocityChange)> {
         Vec::new()
     }
+    fn take_scripted_motion(&mut self) -> Option<(u32, crate::script_init::ScriptedMotion)> {
+        None
+    }
+    fn take_script_requests(&mut self) -> Vec<crate::game_combat::RoomScriptRequest> {
+        Vec::new()
+    }
+    fn receive_room_message(
+        &mut self,
+        _sender: u32,
+        _message: RoomMessage,
+    ) -> Result<usize, InitFault> {
+        Ok(0)
+    }
+    fn receive_host_event(
+        &mut self,
+        _event: HostEvent,
+        _context: HostHealthContext,
+    ) -> Result<usize, InitFault> {
+        Ok(0)
+    }
+    fn set_spatial_frame(&mut self, _frame: Arc<crate::game_combat::RoomSpatialFrame>) {}
     fn set_defenders(&mut self, _defenders: Arc<[u32]>) {}
+    fn set_team_member_counts(&mut self, _counts: crate::game_instance::TeamMemberCounts) {}
     fn take_sightings(&mut self) -> Vec<crate::junkenstein_messages::DefenderSighting> {
         Vec::new()
     }
@@ -108,6 +147,10 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
         None
     }
 
+    fn authored_facing(&self) -> Option<[i32; 2]> {
+        None
+    }
+
     fn has_deadeye(&self) -> bool {
         false
     }
@@ -123,6 +166,10 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
     }
 
     fn snapshot(&self) -> Option<&Snapshot>;
+    #[cfg(test)]
+    fn random_checkpoint(&self) -> Option<crate::script_init::RandomCheckpoint> {
+        None
+    }
     fn encoder(&self) -> SnapshotEncoder<'_>;
     fn advance(&mut self, command: Command, mover: &Mover, step: BodyStep) -> io::Result<()>;
     fn frame_ms(&self) -> u32;
@@ -138,10 +185,15 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
         None
     }
 
-    fn heal(&mut self, _amount: f64) {}
+    /// Transfer modeled health to the native body when this runtime is retired.
+    fn take_vitals(&mut self) -> Option<Vitals>;
 
-    fn receive_damage(&mut self, _amount: f64, _source: Death) -> bool {
-        false
+    fn heal(&mut self, _amount: f64) -> f64 {
+        0.0
+    }
+
+    fn receive_damage(&mut self, _amount: f64, _source: Death) -> Damage {
+        Damage::default()
     }
 
     /// New health revisions supersede older ones, including any slot clears.
@@ -211,6 +263,15 @@ impl Borrow<EntityUpdate> for Ready<'_> {
     }
 }
 
+#[cfg(test)]
+struct OwnerScriptFault {
+    id: BodyId,
+    frame: u32,
+    // Owner egress can fail without attempting a script step.
+    step: Option<BodyStep>,
+    error: io::Error,
+}
+
 pub(crate) struct WorldDelivery {
     owner: u32,
     queued: Vec<Arc<Record>>,
@@ -218,6 +279,8 @@ pub(crate) struct WorldDelivery {
     bots: HashMap<u32, BotLifetime>,
     health_updates: HashMap<u32, u64>,
     health_revision: u64,
+    // These barriers belong to the peer's reliable stream and survive world clears.
+    entity_notice_ordinals: HashMap<u32, u32>,
     started: Option<u32>,
     pub(crate) presentation_due: bool,
     controller: Stream,
@@ -232,15 +295,20 @@ pub(crate) struct WorldDelivery {
     encounter_outcome_queued: bool,
     select_open: bool,
     body: Option<Body>,
+    player_respawn: Option<(BodyId, Duration)>,
     bound: Option<BodyId>,
     generation: u64,
     bodies: HashMap<u32, (u64, Lifetime)>,
     remote_players: HashMap<u32, (BodyId, BotLifetime)>,
     input: InputQueue,
     body_script: Option<BodyScript>,
+    detached_motion: Option<(BodyId, CorrectionHistory)>,
+    #[cfg(test)]
+    owner_script_fault: Option<OwnerScriptFault>,
     projectile_destroys: HashMap<u32, (BodyId, ProjectileToken)>,
     biotic_views: BTreeMap<u32, BioticView>,
     scene_views: BTreeMap<u32, BodyStream<ProjectedSnapshot>>,
+    bot_chunk_waited: bool,
     gate: Option<u32>,
     next_biotic_view: u32,
 }
@@ -248,6 +316,7 @@ pub(crate) struct WorldDelivery {
 mod body;
 mod delivery;
 
+pub(crate) use body::validate_body_baselines;
 use body::{BioticView, BodyScript, InputQueue};
 use delivery::{BotLifetime, Delivery, Lifetime};
 

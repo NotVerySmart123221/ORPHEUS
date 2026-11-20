@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "case_id": "script-parent-owned-duration.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "input": {
+    "seconds": 0.05,
+    "cancel_frame": 1,
+    "before_deadline_frame": 2,
+    "finish_frame": 3
+  },
+  "expected": { "timer_ms": 50, "timer_parameter": 1 }
+}

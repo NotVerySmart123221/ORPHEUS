@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "case_id": "room-spatial-liveness.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "input": {
+    "frame": 10,
+    "damage": 100.0
+  },
+  "expected": {
+    "next_frame_alive": false,
+    "next_frame_health_target": false,
+    "next_frame_candidates": 0
+  }
+}

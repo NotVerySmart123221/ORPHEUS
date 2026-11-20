@@ -10,30 +10,32 @@ use crate::{
     commands::Command,
     game_combat::{
         BIOTIC_CANISTER, PosedBioticField, PosedHitscan, PosedProjectile, PosedShot, Stun,
-        eye_height,
+        eye_height, script_eye_position,
     },
     game_content::is_junkenstein_mode,
     game_heroes::{CASSIDY, SOLDIER},
     game_hitscan::{HitDefinition, aim_direction},
+    game_instance::TeamMemberCounts,
     game_projectiles::{ProjectileLeases, authored_number, local_prediction, predicted_sync},
-    game_replication::{BodyStep, OwnerBodyRuntime},
+    game_replication::{BodyStep, OwnerBodyRuntime, OwnerRoomActivity},
     junkenstein_messages::{DefenderMessage, DefenderSighting, SIGHTING},
     mover::Mover,
     mover_modifiers::{Modifier, ModifierKey},
     projectile_flight::{ProjectileBallistics, authored_gravity, lifted_direction},
     script_codecs::CodecTable,
+    script_control::LEGACY_PROJECTILE_CONTROL,
     script_expr::to_float,
-    script_graph::GraphStore,
-    script_init::{Component, Snapshot},
+    script_init::{
+        Component, HostEvent, HostHealthContext, InitFault, RoomMessage, ScriptedMotion, Snapshot,
+    },
     script_runtime::FRAME_MS,
     script_snapshot_wire::SnapshotEncoder,
-    script_wire::{Value, Variables},
-    vitals::{Death, Vitals},
+    script_wire::Value,
+    vitals::{Damage, Death, Vitals},
     world::Component as EntityComponent,
 };
 
 pub(crate) struct PlayerBodyRuntime {
-    pub(super) encounter_active: bool,
     pub(super) component: Component,
     pub(super) world: BodyWorld,
     pub(super) codecs: Arc<CodecTable>,
@@ -42,52 +44,26 @@ pub(crate) struct PlayerBodyRuntime {
     pub(super) frame: u32,
 }
 
-pub(super) fn flashbang_duration(graphs: &GraphStore) -> Option<&Json> {
-    graphs
-        .graph(0x0228)?
-        .node(7)?
-        .field("m_69F4B52C.m_6525E98B.m_1EB5A024")?
-        .as_array()?
-        .iter()
-        .find(|row| {
-            row.get("m_0D09D2D9")
-                .and_then(crate::script_graph::asset_guid)
-                == Some(0x0d80_0000_0000_00d7)
-        })?
-        .get("m_value")
-}
-
 pub(super) const DEADEYE_GRAPH: u32 = 0x022f;
 pub(super) const DEADEYE_TARGET_EFFECT: u32 = 0x01ee;
 
-impl PlayerBodyRuntime {
-    pub(super) fn sync_charge_admission(&mut self, active: bool) -> io::Result<()> {
-        if !self.world.has_deadeye() {
-            return Ok(());
-        }
-        self.encounter_active = active;
-        let enabled = active && self.world.vitals.death().is_none();
-        let variable = crate::script_expr::Variable {
-            scope: crate::script_expr::Scope::Entity,
-            id: 2426,
-        };
-        if self.component.resolved_variable(0, variable) != Some(Value::Bool(enabled)) {
-            // The room owns this live defender capability. The authored 0B8B
-            // graph owns the passive wait, amount, multipliers, damage gates
-            // and cap; the former 60-second host fill is intentionally removed.
-            self.component
-                .set_entity_variable(2426, Value::Bool(enabled), &mut self.world)
-                .map_err(unsupported)?;
-            self.component
-                .run_now(&mut self.world)
-                .map_err(unsupported)?;
-        }
-        Ok(())
-    }
-}
-
 impl OwnerBodyRuntime for PlayerBodyRuntime {
+    fn set_room_activity(&mut self, activity: OwnerRoomActivity) {
+        self.world.room_activity = Some(activity);
+    }
+
     fn set_encounter_active(&mut self, active: bool) -> io::Result<()> {
+        // The room normally supplies this phase before synchronizing charge.
+        // Keep direct calls usable by supplying it here when necessary.
+        if self.world.charge_binding().is_some()
+            && self
+                .world
+                .room_activity
+                .map(OwnerRoomActivity::encounter_active)
+                != Some(active)
+        {
+            self.world.room_activity = Some(OwnerRoomActivity::Encounter { active });
+        }
         self.sync_charge_admission(active)
     }
 
@@ -95,65 +71,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         &mut self,
         damage: crate::game_combat::AppliedDamage,
     ) -> io::Result<()> {
-        if !self.world.has_deadeye()
-            || !self.encounter_active
-            || damage.source != self.world.entity
-            || self.world.vitals.death().is_some()
-            || !damage.amount.is_finite()
-            || damage.amount <= 0.0
-        {
-            return Ok(());
-        }
-        if self.component.snapshot().is_some_and(|snapshot| {
-            snapshot.instances.values().any(|instance| {
-                instance.graph == DEADEYE_GRAPH
-                    && instance
-                        .states
-                        .get(&0)
-                        .is_some_and(crate::script_init::State::ability_running)
-            })
-        }) {
-            return Ok(());
-        }
-        let instance = self
-            .component
-            .snapshot()
-            .and_then(|snapshot| {
-                snapshot
-                    .instances
-                    .iter()
-                    .find(|(_, instance)| instance.graph == 0x0b8b)
-                    .map(|(&id, _)| id)
-            })
-            .ok_or_else(|| {
-                unsupported("damage credit requires the authored common charge graph")
-            })?;
-        let parameters = Variables::from([
-            (0x13, Value::Float(f64::from(damage.amount as f32))),
-            (0x15, Value::Entity(damage.target)),
-            (
-                0x3d,
-                Value::Array(
-                    damage
-                        .tags
-                        .as_slice()
-                        .iter()
-                        .copied()
-                        .map(Value::Asset)
-                        .collect(),
-                ),
-            ),
-            // AppliedDamage is net pool loss; no gross mitigation contributions
-            // remain to subtract in the authored detail fold.
-            (0x624, Value::Array(Vec::new())),
-        ]);
-        self.component
-            .queue_message(instance, 0x0240_0000_0000_0012, parameters)
-            .map_err(unsupported)?;
-        self.world.damage_credit = Some(damage);
-        let result = self.component.run_now(&mut self.world).map_err(unsupported);
-        self.world.damage_credit = None;
-        result
+        self.credit_applied_damage(damage)
     }
 
     fn target_tags(&self) -> crate::script_init::TargetTagSnapshot {
@@ -172,6 +90,26 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
 
     fn set_deadeye_targets(&mut self, scene: crate::script_player::DeadeyeScene) {
         self.world.deadeye_scene = scene;
+    }
+
+    fn take_script_requests(&mut self) -> Vec<crate::game_combat::RoomScriptRequest> {
+        self.world.script_requests.take()
+    }
+
+    fn receive_room_message(
+        &mut self,
+        sender: u32,
+        message: RoomMessage,
+    ) -> Result<usize, InitFault> {
+        self.component.queue_room_message_from(sender, message)
+    }
+
+    fn set_spatial_frame(&mut self, frame: Arc<crate::game_combat::RoomSpatialFrame>) {
+        self.world.spatial_frame = Some(frame);
+    }
+
+    fn set_team_member_counts(&mut self, counts: TeamMemberCounts) {
+        self.world.team_member_counts = Some(counts);
     }
 
     fn set_defenders(&mut self, defenders: Arc<[u32]>) {
@@ -216,36 +154,60 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         self.world.cinematic_aim.map(|(_, aim)| aim)
     }
 
+    fn authored_facing(&self) -> Option<[i32; 2]> {
+        if self.world.vitals.death().is_some() {
+            return None;
+        }
+        let (_, record) = crate::facing::winner(self.world.facing_claims.iter())?;
+        crate::facing::angles(record.direction)
+    }
+
     fn vitals(&self) -> Option<&Vitals> {
         Some(&self.world.vitals)
     }
 
-    fn heal(&mut self, amount: f64) {
-        self.world.vitals.heal(amount);
+    fn take_vitals(&mut self) -> Option<Vitals> {
+        Some(std::mem::replace(&mut self.world.vitals, Vitals::empty()))
     }
 
-    fn receive_damage(&mut self, amount: f64, source: Death) -> bool {
+    fn receive_host_event(
+        &mut self,
+        event: HostEvent,
+        context: HostHealthContext,
+    ) -> Result<usize, InitFault> {
+        self.component.queue_host_event_with_context(event, context)
+    }
+
+    fn heal(&mut self, amount: f64) -> f64 {
+        self.world.vitals.heal(amount)
+    }
+
+    fn receive_damage(&mut self, amount: f64, source: Death) -> Damage {
         let result = self.world.vitals.damage(amount, source);
         if result.killed {
+            self.world.scripted_motion = None;
+            self.world.velocity_changes.clear();
             self.component.set_owner_dead(true);
-            if let Err(error) = self.sync_charge_admission(self.encounter_active) {
+            if let Err(error) = self.sync_charge_admission(false) {
                 eprintln!("Owner death charge cleanup failed: {error}");
             }
         }
-        result.killed
+        result
     }
 
     fn take_health_update(&mut self) -> Option<EntityComponent> {
-        let vitals = &mut self.world.vitals;
-        if !vitals.has_changed() {
-            return None;
-        }
-        vitals.clear_changed();
-        Some(vitals.cumulative_component())
+        self.world.vitals.take_cumulative_update()
     }
 
     fn snapshot(&self) -> Option<&Snapshot> {
         self.component.snapshot()
+    }
+
+    #[cfg(test)]
+    fn random_checkpoint(&self) -> Option<crate::script_init::RandomCheckpoint> {
+        self.component
+            .snapshot()
+            .map(|_| self.component.random_checkpoint())
     }
 
     fn encoder(&self) -> SnapshotEncoder<'_> {
@@ -262,6 +224,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         }
         let pose = mover.pose();
         self.world.position = pose.position;
+        self.world.eye_position = script_eye_position(self.world.hero, mover);
         // Command gaps and timer advances retain the last movement record.
         if step == BodyStep::Posed {
             self.world.movement = pose;
@@ -295,6 +258,13 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         std::mem::take(&mut self.world.velocity_changes)
     }
 
+    fn take_scripted_motion(&mut self) -> Option<(u32, ScriptedMotion)> {
+        self.world
+            .scripted_motion
+            .take()
+            .filter(|_| self.world.vitals.death().is_none())
+    }
+
     fn movement_modifiers(&self) -> Option<&BTreeMap<ModifierKey, Modifier>> {
         self.modifiers.as_ref()
     }
@@ -315,10 +285,13 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
             .into_iter()
             .filter_map(|shot| {
                 let node = self.component.shot_node(&shot)?;
-                // 0228/7 supplies the duration override for the Flashbang effect,
-                // including the mode-dependent branch. Keep policy in authored data.
-                let stun_duration = (hero == CASSIDY && (shot.graph, node.pos) == (0x01e9, 7))
-                    .then(|| flashbang_duration(&self.world.graphs).cloned())
+                let flashbang = LEGACY_PROJECTILE_CONTROL.matches_shot(hero, shot.graph, node.pos);
+                let stun_duration = flashbang
+                    .then(|| {
+                        LEGACY_PROJECTILE_CONTROL
+                            .duration(&self.world.graphs)
+                            .cloned()
+                    })
                     .flatten();
                 // Python e1128509 declares this primary-only implicit policy;
                 // it is not a recovered global native critical default.
@@ -353,7 +326,6 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                 if !speed.is_null() && to_float(&evaluate(speed).ok()?) != 0.0 {
                     // Admit only the known unconditional gravity path for Flashbang;
                     // other projectile motion/aim configurations remain unsupported.
-                    let flashbang = hero == CASSIDY && (shot.graph, node.pos) == (0x01e9, 7);
                     let gravity = flashbang
                         .then(|| authored_gravity(&node.fields, &mut evaluate))
                         .flatten();
@@ -409,7 +381,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                     }
                     let stun = if flashbang {
                         let effect = node.field("m_D2D11CE9.m_modifyHealth.m_277A4ECA")?;
-                        if evaluate(effect).ok()? != Value::Asset(0x04a0_0000_0000_0079) {
+                        if !LEGACY_PROJECTILE_CONTROL.has_effect_marker(&evaluate(effect).ok()?) {
                             return None;
                         }
                         Some(Stun::from_seconds(to_float(

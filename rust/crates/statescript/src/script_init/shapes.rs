@@ -4,7 +4,7 @@ use serde_json::Value as Json;
 
 use crate::{
     script_expr::{self, Scope, Variable},
-    script_graph::{Graph, Node, asset_guid},
+    script_graph::{Graph, Node, asset_guid, message_parameter_id},
     script_runtime::{
         BOSS_CAMERA, BOSS_PAUSE, POST_MATCH_PHASE, POST_MATCH_SIGNAL, PoolKind, RESULT_SUMMARY,
     },
@@ -26,15 +26,21 @@ pub(super) fn participant_filter(node: &Node) -> Option<&Json> {
     .then_some(filter)
 }
 
-pub(super) fn excluded_target_tags(graph: u32, node: &Node) -> Option<(u64, u64)> {
-    if (graph, node.pos) != (0x00ca, 33)
-        || !field(&node.fields, "m_filter").is_null()
-        || !field(&node.fields, "m_B486603E").is_null()
-    {
+pub(super) fn placement_collection_tag(node: &Node) -> Option<u64> {
+    if !field(&node.fields, "m_9C7BD8B8").is_null() {
         return None;
     }
-    let tag = script_expr::target_tag_config(field(&node.fields, "m_9C7BD8B8"))?;
-    let excluded = script_expr::target_tag_config(field(&node.fields, "m_8B2A4DF3"))?;
+    script_expr::target_tag_config(static_target_operand(node)?).filter(|&tag| tag != 0)
+}
+
+pub(super) fn excluded_target_tags(node: &Node) -> Option<(u64, u64)> {
+    if !field(&node.fields, "m_filter").is_null() || !field(&node.fields, "m_B486603E").is_null() {
+        return None;
+    }
+    let tag = script_expr::target_tag_config(field(&node.fields, "m_9C7BD8B8"))
+        .filter(|&tag| tag != 0)?;
+    let excluded = script_expr::target_tag_config(field(&node.fields, "m_8B2A4DF3"))
+        .filter(|&tag| tag != 0)?;
     Some((tag, excluded))
 }
 
@@ -55,16 +61,38 @@ pub(super) fn is_entry(node: &Node) -> bool {
     matches!(node.class.as_str(), "STUStatescriptEntry" | "STU_571CC72E")
 }
 
-pub(super) fn is_message_entry(node: &Node) -> bool {
-    node.class == "STUStatescriptEntryGameMessage"
-}
-
-pub(super) fn registered_state(graph: u32, node: &Node) -> Option<RegisteredState> {
-    let placement = (graph, node.pos);
-    if !node.is_networked() {
+pub(super) fn registered_state(graph: &Graph, node: &Node) -> Option<RegisteredState> {
+    let placement = (graph.index, node.pos);
+    let linked_state = node.class == "STU_9028E035";
+    if !node.runs_on_server() || (!node.is_networked() && !linked_state) {
         return None;
     }
-    let suppresses_model = matches!(placement, (0x01cb, 20) | (0x0ce0, 17) | (0x0d03, 2));
+    let fields = &node.fields;
+    let flag = |name, expected| {
+        let config = field(fields, name);
+        script_expr::native_shape(config, "STUConfigVarBool", Some("m_value"))
+            && (field(config, "m_value").as_bool() == Some(expected)
+                || field(config, "m_value").as_u64() == Some(u64::from(expected)))
+    };
+    let has_raw_state_slot = || {
+        node.is_state()
+            && !node.is_action()
+            && node
+                .state
+                .and_then(|slot| graph.state(usize::from(slot)))
+                .is_some_and(|linked| linked.pos == node.pos)
+    };
+    let has_local_state_slot = || node.remote == -1 && has_raw_state_slot();
+    // The static form has only the protected-entity rule. A phase-model rule
+    // or any other configured field needs its own verified consumer.
+    let suppresses_model = node.class == "STU_33A46033"
+        && has_raw_state_slot()
+        && usize::try_from(node.remote)
+            .ok()
+            .and_then(|slot| graph.remote_node(slot))
+            .is_some_and(|linked| linked.pos == node.pos)
+        && flag("m_7E42F868", true)
+        && registered_state_fields(node, "m_7E42F868");
     let class = match node.class.as_str() {
         "STU_9935FBC8" if placement == (0x224e, 34) && captured_aim_lock_shape(node) => {
             RegisteredClass::CinematicAim
@@ -75,38 +103,21 @@ pub(super) fn registered_state(graph: u32, node: &Node) -> Option<RegisteredStat
         {
             RegisteredClass::CinematicAim
         }
-        "STU_9028E035" if matches!(placement, (0x0ca5, 46 | 73) | (0x0ce0, 38) | (0x0d03, 1)) => {
+        // The native begin/end pair maintains one ordered list per class.
+        // Both authored type values use the same registration and link codec.
+        "STU_9028E035"
+            if has_local_state_slot()
+                && matches!(field(&node.fields, "m_type").as_u64(), Some(0 | 1)) =>
+        {
             RegisteredClass::State9028E035
         }
-        "STU_43994F1B"
-            if matches!(placement, (0x0ce0, 29) | (0x0d03, 5))
-                && is_self_target(node, "m_4A5CA514")
-                && field(&node.fields, "m_contactSet").is_null() =>
-        {
-            RegisteredClass::State43994F1B
+        "STU_43994F1B" | "STU_93B8758C" if has_local_state_slot() => {
+            resource_free_linked_class(node)?
         }
-        "STU_93B8758C"
-            if matches!(placement, (0x0ce0, 30) | (0x0d03, 4))
-                && is_self_target(node, "m_4A5CA514")
-                && field(&node.fields, "m_A5B7A147").is_null() =>
-        {
-            RegisteredClass::State93B8758C
-        }
-        "STU_33A46033" if suppresses_model || placement == (0x0ca5, 61) => {
-            let fields = &node.fields;
-            let flag = |name, expected| {
-                let config = field(fields, name);
-                script_expr::native_shape(config, "STUConfigVarBool", Some("m_value"))
-                    && (field(config, "m_value").as_bool() == Some(expected)
-                        || field(config, "m_value").as_u64() == Some(u64::from(expected)))
-            };
-            let model_flag = if suppresses_model {
-                field(fields, "m_D82DB14B").is_null()
-            } else {
-                flag("m_D82DB14B", false)
-            };
-            if !flag("m_7E42F868", suppresses_model)
-                || !model_flag
+        "STU_33A46033" if suppresses_model => RegisteredClass::EntityControl,
+        "STU_33A46033" if placement == (0x0ca5, 61) => {
+            if !flag("m_7E42F868", false)
+                || !flag("m_D82DB14B", false)
                 || [
                     "m_069FD7A5",
                     "m_72FD7742",
@@ -129,6 +140,38 @@ pub(super) fn registered_state(graph: u32, node: &Node) -> Option<RegisteredStat
         class,
         server_only: node.server_only,
         suppresses_model,
+    })
+}
+
+fn resource_free_linked_class(node: &Node) -> Option<RegisteredClass> {
+    let (resource, class) = match node.class.as_str() {
+        "STU_43994F1B" => ("m_contactSet", RegisteredClass::State43994F1B),
+        "STU_93B8758C" => ("m_A5B7A147", RegisteredClass::State93B8758C),
+        _ => return None,
+    };
+    // Native records 1122/1121 share the registered-state lifecycle.
+    // A configured contact or material resource requires a separate host effect.
+    (is_self_target(node, "m_4A5CA514")
+        && field(&node.fields, resource).is_null()
+        && registered_state_fields(node, "m_4A5CA514"))
+    .then_some(class)
+}
+
+fn registered_state_fields(node: &Node, operand: &str) -> bool {
+    node.fields.as_object().is_some_and(|fields| {
+        fields.iter().all(|(name, value)| {
+            value.is_null()
+                || name == operand
+                || match name.as_str() {
+                    "m_beginPlug" | "m_F198FD3A" | "m_onBeginPlug" | "m_onEndPlug"
+                    | "m_subgraphPlug" => true,
+                    "m_A2287776" | "m_AED90719" | "m_ADEB6E05" => {
+                        value.as_bool() == Some(false) || value.as_u64() == Some(0)
+                    }
+                    "m_2BBEEAB8" => value.as_bool() == Some(true) || value.as_u64() == Some(1),
+                    _ => false,
+                }
+        })
     })
 }
 
@@ -175,6 +218,483 @@ pub(super) fn is_self_target(node: &Node, name: &str) -> bool {
     script_expr::native_shape(field(&node.fields, name), "STU_B5A0CAF0", None)
 }
 
+pub(super) struct ImmediateSelfDamage {
+    pub(super) amount: f64,
+    pub(super) skip_dead_owner: bool,
+}
+
+pub(super) fn immediate_self_damage(node: &Node, state: u16) -> Option<ImmediateSelfDamage> {
+    let fields = &node.fields;
+    let effect = field(fields, "m_modifyHealth");
+    let amount = field(effect, "m_amount");
+    let source = field(effect, "m_724CBA57");
+    if !node.is_networked()
+        || node.state != Some(state)
+        || node.remote != -1
+        || !node.is_state()
+        || node.is_action()
+        || field(fields, "m_DD792FF0").as_u64() != Some(3)
+        || field(fields, "m_7B2B3F5C").as_u64() != Some(0)
+        || field(fields, "m_8B707686").as_u64() != Some(1)
+        || !is_self_target(node, "m_FA3ECC43")
+        || field(effect, "$").as_str() != Some("STUStatescriptModifyHealth")
+        || field(effect, "m_93CDFD2F").as_u64() != Some(1)
+        || !script_expr::native_shape(source, "STU_B5A0CAF0", None)
+        || !script_expr::native_shape(amount, "STUConfigVarInt", Some("m_value"))
+    {
+        return None;
+    }
+
+    let amount = i32::try_from(field(amount, "m_value").as_i64()?).ok()?;
+    if amount <= 0 {
+        return None;
+    }
+    let instigator = field(effect, "m_instigator");
+    let skip_dead_owner = instigator.is_null();
+    // The reference only handles the no-instigator cleanup at this amount.
+    if (skip_dead_owner && amount != 10_000)
+        || (!skip_dead_owner && !script_expr::native_shape(instigator, "STU_B5A0CAF0", None))
+        || !effect.as_object()?.iter().all(|(name, value)| {
+            value.is_null()
+                || match name.as_str() {
+                    "$" | "m_93CDFD2F" | "m_amount" | "m_724CBA57" | "m_instigator" => true,
+                    "m_EE729DCB" | "m_430E83BE" => value.as_u64() == Some(0),
+                    _ => false,
+                }
+        })
+        || !fields.as_object()?.iter().all(|(name, value)| {
+            value.is_null()
+                || match name.as_str() {
+                    "m_DD792FF0" | "m_7B2B3F5C" | "m_8B707686" | "m_modifyHealth"
+                    | "m_FA3ECC43" => true,
+                    "m_2BBEEAB8" => value.as_bool() == Some(true) || value.as_u64() == Some(1),
+                    "m_A2287776" | "m_AED90719" | "m_ADEB6E05" => {
+                        value.as_bool() == Some(false) || value.as_u64() == Some(0)
+                    }
+                    "m_79758CE9" | "m_FF9E82FA" | "m_48BED081" => {
+                        script_expr::native_shape(value, "STUConfigVarBool", Some("m_value"))
+                            && (field(value, "m_value").as_bool() == Some(false)
+                                || field(value, "m_value").as_u64() == Some(0))
+                    }
+                    "m_beginPlug" => is_unlinked_plug(fields, name, "STUStatescriptInputPlug"),
+                    "m_F198FD3A" => is_unlinked_plug(fields, name, "STU_1CCEA5F7"),
+                    "m_onBeginPlug" => is_unlinked_plug(fields, name, "STU_DA98CA6D"),
+                    "m_onAbortPlug" | "m_onFinishedPlug" | "m_onEndPlug" => {
+                        is_unlinked_plug(fields, name, "STUStatescriptOutputPlug")
+                    }
+                    "m_subgraphPlug" => {
+                        field(value, "$").as_str() == Some("STU_904BFCEC")
+                            && field(value, "links").as_array().is_some_and(Vec::is_empty)
+                            && field(value, "m_FF3DAF1E").is_null()
+                            && value.as_object().is_some_and(|plug| {
+                                plug.keys()
+                                    .all(|key| matches!(key.as_str(), "$" | "links" | "m_FF3DAF1E"))
+                            })
+                    }
+                    _ => false,
+                }
+        })
+    {
+        return None;
+    }
+
+    Some(ImmediateSelfDamage {
+        amount: f64::from(amount as f32),
+        skip_dead_owner,
+    })
+}
+
+pub(super) fn is_named_shield_decay(node: &Node, state: u16) -> bool {
+    let fields = &node.fields;
+    let effect = field(fields, "m_modifyHealth");
+    let interval = field(fields, "m_95F1FB0B");
+    let tags = field(effect, "m_148F3152");
+    let flag = |value: &Json, expected| {
+        script_expr::native_shape(value, "STUConfigVarBool", Some("m_value"))
+            && (field(value, "m_value").as_bool() == Some(expected)
+                || field(value, "m_value").as_u64() == Some(u64::from(expected)))
+    };
+    node.is_networked()
+        && node.state == Some(state)
+        && node.remote == -1
+        && node.is_state()
+        && !node.is_action()
+        && field(fields, "m_DD792FF0").as_u64() == Some(2)
+        && field(fields, "m_7B2B3F5C").as_u64() == Some(1)
+        && field(fields, "m_8B707686").as_u64() == Some(1)
+        && script_expr::native_shape(interval, "STUConfigVarInt", Some("m_value"))
+        && field(interval, "m_value").as_u64() == Some(1)
+        && script_expr::named_shield_identifier(field(fields, "m_7BE02F89")).is_some()
+        && is_self_target(node, "m_FA3ECC43")
+        && field(effect, "$").as_str() == Some("STUStatescriptModifyHealth")
+        && field(effect, "m_93CDFD2F").as_u64() == Some(1)
+        && script_expr::native_shape(field(effect, "m_724CBA57"), "STU_B5A0CAF0", None)
+        && !field(effect, "m_amount").is_null()
+        && (tags.is_null()
+            || tags.as_array().is_some_and(|tags| {
+                tags.len() <= super::world::MAX_HIT_TAGS
+                    && tags.iter().all(|tag| {
+                        script_expr::native_shape(
+                            tag,
+                            "STUStatescriptModifyHealthTag",
+                            Some("m_EE3055BD"),
+                        ) && script_expr::named_shield_identifier(field(tag, "m_EE3055BD"))
+                            .is_some()
+                    })
+            }))
+        && effect.as_object().is_some_and(|fields| {
+            fields.iter().all(|(name, value)| {
+                value.is_null()
+                    || match name.as_str() {
+                        "$" | "m_724CBA57" | "m_93CDFD2F" | "m_amount" | "m_148F3152" => true,
+                        "m_430E83BE" => value.as_u64() == Some(0),
+                        "m_62E3835A" => flag(value, false),
+                        "m_F8EA2036" => flag(value, true),
+                        _ => false,
+                    }
+            })
+        })
+        && fields.as_object().is_some_and(|fields| {
+            fields.iter().all(|(name, value)| {
+                value.is_null()
+                    || match name.as_str() {
+                        "m_DD792FF0" | "m_7B2B3F5C" | "m_8B707686" | "m_95F1FB0B"
+                        | "m_7BE02F89" | "m_FA3ECC43" | "m_modifyHealth" | "m_2BBEEAB8"
+                        | "m_beginPlug" | "m_F198FD3A" | "m_onBeginPlug" | "m_onEndPlug"
+                        | "m_subgraphPlug" | "m_onFinishedPlug" | "m_onAbortPlug" => true,
+                        "m_48BED081" | "m_79758CE9" | "m_FF9E82FA" => flag(value, false),
+                        "m_A2287776" | "m_AED90719" | "m_ADEB6E05" => {
+                            value.as_u64() == Some(0) || value.as_bool() == Some(false)
+                        }
+                        _ => false,
+                    }
+            })
+        })
+}
+
+pub(super) fn is_self_shield_recharge(node: &Node, state: u16) -> bool {
+    let fields = &node.fields;
+    let effect = field(fields, "m_modifyHealth");
+    let interval = field(fields, "m_95F1FB0B");
+    let amount = field(effect, "m_amount");
+    let off =
+        |value: &Json| matches!(value, Json::Null | Json::Bool(false)) || value.as_u64() == Some(0);
+    let supported_rate = match field(amount, "$").as_str() {
+        Some(class @ ("STUConfigVarInt" | "STUConfigVarFloat")) => {
+            script_expr::native_shape(amount, class, Some("m_value"))
+                && field(amount, "m_value").is_number()
+        }
+        Some("STUConfigVarDynamic") => {
+            script_expr::native_fields(amount, &["m_identifier", "m_60DB8F99"])
+                && script_expr::dynamic(amount).is_ok_and(|operand| operand.is_some())
+        }
+        Some("STU_919FD47C" | "STUConfigVarExpression") => {
+            script_expr::native_fields(amount, &["m_expression", "m_configVars"])
+                && field(amount, "m_expression").is_object()
+        }
+        _ => false,
+    };
+
+    node.server_only
+        && !node.client_only
+        && node.state == Some(state)
+        && node.remote == -1
+        && node.is_state()
+        && !node.is_action()
+        && field(fields, "m_DD792FF0").as_u64() == Some(3)
+        && field(fields, "m_7B2B3F5C").as_u64() == Some(1)
+        && off(field(fields, "m_8B707686"))
+        && script_expr::native_shape(interval, "STUConfigVarInt", Some("m_value"))
+        && field(interval, "m_value").as_u64() == Some(1)
+        && is_self_target(node, "m_FA3ECC43")
+        && field(effect, "$").as_str() == Some("STUStatescriptModifyHealth")
+        && field(effect, "m_93CDFD2F").as_u64() == Some(0)
+        && script_expr::native_shape(field(effect, "m_724CBA57"), "STU_B5A0CAF0", None)
+        && supported_rate
+        && effect.as_object().is_some_and(|fields| {
+            fields.iter().all(|(name, value)| match name.as_str() {
+                "$" | "m_93CDFD2F" | "m_amount" | "m_724CBA57" => true,
+                "m_EE729DCB" | "m_430E83BE" => value.as_u64() == Some(0),
+                _ => value.is_null(),
+            })
+        })
+        && fields.as_object().is_some_and(|fields| {
+            fields.iter().all(|(name, value)| match name.as_str() {
+                "m_DD792FF0" | "m_7B2B3F5C" | "m_8B707686" | "m_95F1FB0B" | "m_modifyHealth"
+                | "m_FA3ECC43" | "m_2BBEEAB8" | "m_beginPlug" | "m_F198FD3A" | "m_onBeginPlug"
+                | "m_onEndPlug" | "m_subgraphPlug" | "m_onAbortPlug" | "m_onFinishedPlug" => true,
+                "m_A2287776" | "m_AED90719" | "m_ADEB6E05" => off(value),
+                "m_48BED081" => {
+                    value.is_null()
+                        || (script_expr::native_shape(value, "STUConfigVarBool", Some("m_value"))
+                            && !field(value, "m_value").is_null()
+                            && off(field(value, "m_value")))
+                }
+                // Container bookkeeping has no health effect.
+                "m_0B1AA8CA" => {
+                    value.is_null()
+                        || value.as_object().is_some_and(|item| {
+                            item.len() == 1 && field(value, "item").as_u64().is_some()
+                        })
+                }
+                _ => value.is_null(),
+            })
+        })
+}
+
+pub(super) fn is_self_stat_timer(node: &Node) -> bool {
+    if node.remote != -1
+        || !field(&node.fields, "m_stats").is_null()
+        || !is_self_target(node, "m_targets")
+    {
+        return false;
+    }
+    let stat = field(&node.fields, "m_stat");
+    let stat_list = field(&node.fields, "m_D32CB484");
+    let is_stat = |value| asset_guid(value).is_some_and(|id| id >> 48 == 0x0860);
+    if node.server_only {
+        is_stat(stat) && stat_list.is_null()
+    } else {
+        node.is_networked()
+            && stat.is_null()
+            && matches!(stat_list.as_array().map(Vec::as_slice), Some([entry]) if is_stat(entry))
+    }
+}
+
+pub(super) fn is_elapsed_wait(node: &Node) -> bool {
+    let dynamic = field(&node.fields, "m_BF1A93B0");
+    if matches!(dynamic, Json::Null | Json::Bool(false)) || dynamic.as_u64() == Some(0) {
+        return true;
+    }
+    let rearm = field(&node.fields, "m_0DBAFD7F");
+    let timeout = field(&node.fields, "m_timeout");
+    let scope = field(timeout, "m_60DB8F99");
+    let is_flag = |value: &Json| {
+        matches!(value, Json::Null | Json::Bool(_)) || matches!(value.as_u64(), Some(0 | 1))
+    };
+    node.remote == -1
+        && (dynamic.as_bool() == Some(true) || dynamic.as_u64() == Some(1))
+        && is_flag(rearm)
+        && is_flag(scope)
+        && script_expr::native_fields(timeout, &["m_identifier", "m_60DB8F99"])
+        && script_expr::dynamic(timeout).is_ok_and(|value| value.is_some())
+}
+
+pub(super) fn is_literal_frame_wait(node: &Node) -> bool {
+    let duration = field(&node.fields, "m_3016B9A1");
+    let rearm = field(&node.fields, "m_0DBAFD7F");
+    node.remote == -1
+        && (matches!(rearm, Json::Null | Json::Bool(false)) || rearm.as_u64() == Some(0))
+        && script_expr::native_shape(duration, "STUConfigVarInt", Some("m_value"))
+        && field(duration, "m_value")
+            .as_u64()
+            .is_some_and(|count| i32::try_from(count).is_ok())
+}
+
+pub(super) fn is_cinematic_time_scale_envelope(graph: &Graph, node: &Node, state: u16) -> bool {
+    let scale = field(&node.fields, "m_E75DF5AC");
+    let scale_matches = match field(scale, "$").as_str() {
+        Some("STUConfigVarDynamic") => {
+            script_expr::native_fields(scale, &["m_identifier", "m_60DB8F99"])
+                && script_expr::dynamic(scale).is_ok_and(|value| value.is_some())
+        }
+        Some("STU_919FD47C") => {
+            script_expr::native_fields(scale, &["m_expression", "m_configVars"])
+                && field(scale, "m_expression").is_object()
+                && field(scale, "m_configVars").is_array()
+        }
+        _ => false,
+    };
+    node.is_networked()
+        && node.is_state()
+        && !node.is_action()
+        && node.state == Some(state)
+        && graph
+            .state(usize::from(state))
+            .is_some_and(|owner| owner.pos == node.pos)
+        && usize::try_from(node.remote)
+            .ok()
+            .and_then(|slot| graph.remote_node(slot))
+            .is_some_and(|remote| remote.pos == node.pos)
+        && ["m_17D12F6B", "m_D8989B37", "m_89C63AB3"]
+            .into_iter()
+            .all(|name| {
+                let operand = field(&node.fields, name);
+                script_expr::native_shape(operand, "STUConfigVarInt", Some("m_value"))
+                    && field(operand, "m_value")
+                        .as_i64()
+                        .is_some_and(|value| i32::try_from(value).is_ok())
+            })
+        && scale_matches
+}
+
+pub(super) fn is_static_map_explosion(graph: &Graph, node: &Node, state: u16) -> bool {
+    if !node.runs_on_server()
+        || !node.is_state()
+        || node.is_action()
+        || node.state != Some(state)
+        || graph
+            .state(usize::from(state))
+            .is_none_or(|owner| owner.pos != node.pos)
+    {
+        return false;
+    }
+    let visibility_matches = if node.server_only {
+        node.remote == -1
+    } else {
+        usize::try_from(node.remote)
+            .ok()
+            .and_then(|slot| graph.remote_node(slot))
+            .is_some_and(|remote| remote.pos == node.pos)
+    };
+
+    let fields = &node.fields;
+    let position = field(fields, "m_position");
+    let direction = field(fields, "m_direction");
+    let scalar = field(fields, "m_D80AEDB1");
+    let extra_scalar = field(fields, "m_3E3DFE0F");
+    let optional_float = field(fields, "m_015FF666");
+    let owner = field(fields, "m_0B1AA8CA");
+    let literal_number = |config| explosion_integer(config) || explosion_float(config);
+    let number = |config| literal_number(config) || explosion_expression(config);
+    visibility_matches
+        && field(fields, "m_86CE02DE").as_u64() == Some(1)
+        && field(fields, "m_A2287776").as_u64() == Some(0)
+        && field(fields, "m_AED90719").as_u64() == Some(0)
+        && ["m_17E9238F", "m_4A518273", "m_falloff"]
+            .into_iter()
+            .all(|name| field(fields, name).is_null())
+        && (owner.is_null()
+            || owner
+                .as_object()
+                .is_some_and(|item| item.len() == 1 && field(owner, "item").as_u64().is_some()))
+        && empty_explosion_plug(field(fields, "m_F198FD3A"), "STU_1CCEA5F7")
+        && empty_explosion_plug(field(fields, "m_subgraphPlug"), "STU_904BFCEC")
+        && explosion_position(position)
+        && (direction.is_null() || explosion_direction(direction))
+        && number(field(fields, "m_radius"))
+        && explosion_float(field(fields, "m_65438EEB"))
+        && explosion_integer(field(fields, "m_66D29548"))
+        && {
+            let strength = field(fields, "m_6EFD110C");
+            explosion_integer(strength) || explosion_expression(strength)
+        }
+        && number(scalar)
+        && (extra_scalar.is_null() || literal_number(extra_scalar))
+        && (optional_float.is_null() || explosion_float(optional_float))
+        && explosion_sync_matches(graph, fields)
+}
+
+fn empty_explosion_plug(config: &Json, class: &str) -> bool {
+    let data = field(config, "m_FF3DAF1E");
+    config.is_null()
+        || (field(config, "$").as_str() == Some(class)
+            && field(config, "links").as_array().is_some_and(Vec::is_empty)
+            && (data.is_null() || data.as_array().is_some_and(Vec::is_empty)))
+}
+
+fn explosion_sync_matches(graph: &Graph, fields: &Json) -> bool {
+    let sync = field(fields, "m_8BF03679");
+    sync == field(fields, "m_BF5B22B7")
+        && (sync.is_null()
+            || sync.as_array().is_some_and(|rows| {
+                rows.iter().all(|row| {
+                    script_expr::native_fields(row, &["m_0D09D2D9", "m_56341592"])
+                        && field(row, "$").as_str() == Some("STUStatescriptRemoteSyncVar")
+                        && field(row, "m_56341592").as_u64() == Some(0)
+                        && asset_guid(field(row, "m_0D09D2D9")).is_some_and(|resource| {
+                            let variable = resource as u32;
+                            resource >> 52 == 0x0d8
+                                && variable != 0
+                                && graph
+                                    .sync_vars
+                                    .iter()
+                                    .any(|entry| entry.0 == Some(variable) && entry.1 == 0)
+                        })
+                })
+            }))
+}
+
+fn explosion_position(config: &Json) -> bool {
+    match field(config, "$").as_str() {
+        Some("STU_71A87E92") => {
+            script_expr::native_shape(config, "STU_71A87E92", Some("m_entity"))
+                && explosion_dynamic(field(config, "m_entity"))
+        }
+        Some("STU_B5A0CAF0") => script_expr::native_shape(config, "STU_B5A0CAF0", None),
+        Some("STUConfigVarDynamic") => explosion_dynamic(config),
+        _ => explosion_expression(config),
+    }
+}
+
+fn explosion_direction(config: &Json) -> bool {
+    let Some(class) = field(config, "$").as_str() else {
+        return false;
+    };
+    match class {
+        "STU_2200A66D" | "STU_309B0570" => {
+            script_expr::native_fields(config, &["m_entity", "m_5B94EDB8"])
+                && field(config, "m_5B94EDB8").is_null()
+                && script_expr::native_shape(field(config, "m_entity"), "STU_B5A0CAF0", None)
+        }
+        "STUConfigVarDynamic" => explosion_dynamic(config),
+        _ => explosion_expression(config),
+    }
+}
+
+fn explosion_integer(config: &Json) -> bool {
+    script_expr::native_shape(config, "STUConfigVarInt", Some("m_value"))
+        && field(config, "m_value")
+            .as_i64()
+            .is_some_and(|value| i32::try_from(value).is_ok())
+}
+
+fn explosion_float(config: &Json) -> bool {
+    script_expr::native_shape(config, "STUConfigVarFloat", Some("m_value"))
+        && field(config, "m_value")
+            .as_f64()
+            .is_some_and(|value| (value as f32).is_finite())
+}
+
+fn explosion_expression(config: &Json) -> bool {
+    let vars = field(config, "m_configVars");
+    field(config, "$").as_str() == Some("STU_919FD47C")
+        && script_expr::native_fields(config, &["m_expression", "m_configVars"])
+        && field(config, "m_expression").is_object()
+        && (vars.is_null() || vars.is_array())
+}
+
+fn explosion_dynamic(config: &Json) -> bool {
+    field(config, "$").as_str() == Some("STUConfigVarDynamic")
+        && script_expr::native_fields(config, &["m_identifier", "m_60DB8F99"])
+        && script_expr::dynamic(config).is_ok_and(|value| value.is_some())
+}
+
+pub(super) fn is_message_recipient_set(target: &Json) -> bool {
+    field(target, "$").as_str() == Some("STU_9B213168")
+}
+
+pub(super) fn is_projected_self_message(graph: &Graph, node: &Node, state: u16) -> bool {
+    let target = field(&node.fields, "m_target");
+    let notification = field(&node.fields, "m_67FD6A60");
+    node.is_networked()
+        && node.is_state()
+        && !node.is_action()
+        && node.state == Some(state)
+        && usize::try_from(node.remote)
+            .ok()
+            .and_then(|slot| graph.remote_node(slot))
+            .is_some_and(|remote| remote.pos == node.pos)
+        && node.literal_game_message_id().is_some()
+        && script_expr::native_shape(target, "STU_9B213168", Some("m_targets"))
+        && script_expr::native_shape(field(target, "m_targets"), "STU_B5A0CAF0", None)
+        && (notification.as_u64() == Some(1) || notification.as_bool() == Some(true))
+        && field(&node.fields, "m_targets").is_null()
+        && field(&node.fields, "m_priority").is_null()
+        && !configured(node, "m_AED90719")
+        && node.valid_message_parameters(usize::MAX)
+}
+
 pub(super) fn persistent_message(graph: u32, node: &Node) -> Option<u64> {
     let message = node
         .field("m_gameMessage.m_gameMessage")
@@ -184,7 +704,7 @@ pub(super) fn persistent_message(graph: u32, node: &Node) -> Option<u64> {
     if (graph, node.pos, message) == (0x0cc7, 39, RESULT_SUMMARY)
         || (graph, node.pos, message) == (0x0cc7, 82, RESULT_SUMMARY)
     {
-        return (field(target, "$").as_str() == Some("STU_9B213168")
+        return (is_message_recipient_set(target)
             && script_expr::native_shape(field(target, "m_targets"), "STU_A3DEF368", None)
             && field(fields, "m_67FD6A60").as_u64() == Some(1)
             && field(fields, "m_priority").is_null())
@@ -192,7 +712,7 @@ pub(super) fn persistent_message(graph: u32, node: &Node) -> Option<u64> {
     }
     if (graph, node.pos, message) == (0x0cbc, 122, 0x0240_0000_0000_0744) {
         // The self-targeted receiver at 0D24:2 is client-only.
-        return (field(target, "$").as_str() == Some("STU_9B213168")
+        return (is_message_recipient_set(target)
             && script_expr::native_shape(field(target, "m_targets"), "STU_B5A0CAF0", None)
             && field(fields, "m_67FD6A60").as_u64() == Some(1)
             && field(fields, "m_params").is_null()
@@ -217,9 +737,9 @@ pub(super) fn persistent_message(graph: u32, node: &Node) -> Option<u64> {
             let [focus, bone] = array_field(fields, "m_params") else {
                 return None;
             };
-            if parameter_id(focus) != 8
+            if message_parameter_id(focus) != 8
                 || !script_expr::native_shape(field(focus, "m_value"), "STU_B5A0CAF0", None)
-                || parameter_id(bone) != 0x3b6
+                || message_parameter_id(bone) != 0x3b6
                 || !matches!(script_expr::dynamic(field(bone, "m_value")), Ok(Some(variable)) if variable.id == 8695)
             {
                 return None;
@@ -301,68 +821,124 @@ pub(super) fn is_bare_header_action(node: &Node) -> bool {
         && is_unlinked_plug(&node.fields, "m_outPlug", "STUStatescriptOutputPlug")
 }
 
-// These authored placements resolve to the PC base State.
-pub(super) fn is_encounter_base_state(graph: u32, node: &Node) -> bool {
-    !node.server_only
-        && matches!(
-            (graph, node.pos, node.class.as_str()),
-            (0x0033, 30, "STU_87621906")
-                | (0x006b, 38, "STU_0DB9E66B")
-                | (0x0079, 42, "STU_0DB9E66B")
-                | (0x01c9, 65, "STU_0DB9E66B")
-                | (0x224e, 25, "STU_0DB9E66B")
-                | (0x0aaa, 2, "STU_200B27C5")
-                | (0x0aaa, 3, "STU_AF1A4047")
-                | (0x0aaa, 4, "STU_55F72184")
-                | (0x0aaa, 5, "STU_E834E718")
-                | (0x0aaa, 10, "STU_632B74B9")
-                | (0x0aaa, 17 | 24, "STU_D3CDCF04")
-                | (0x0aaa, 28, "STU_D52B9026")
-                | (0x0aaa, 30, "STU_724DFBC6")
-                | (0x0aaa, 33, "STU_93088159")
-                | (0x0bc6, 6, "STU_632B74B9")
-                | (0x0bc6, 7, "STU_E834E718")
-                | (0x0bc6, 8, "STU_55F72184")
-                | (0x0bc6, 9, "STU_200B27C5")
-                | (0x0bc6, 12, "STU_AF1A4047")
-                | (0x0bc6, 14 | 25, "STU_E0D2F3AA")
-                | (0x0bc6, 27, "STU_D52B9026")
-                | (0x0bc6, 28, "STU_724DFBC6")
-                | (0x0cb5, 2, "STU_200B27C5")
-                | (0x0cb5, 3, "STU_E834E718")
-                | (0x0cb5, 10, "STU_55F72184")
-                | (0x0cb5, 12, "STU_D52B9026")
-                | (0x0cb5, 15, "STU_B17E88C9")
-                | (0x0cb5, 16, "STU_632B74B9")
-                | (0x0cb5, 19 | 31, "STU_724DFBC6")
-                | (0x0cb5, 20, "STU_4531992F")
-                | (0x0cba, 28, "STU_93088159")
-                | (0x0cd2, 17 | 27 | 29 | 51, "STU_724DFBC6")
-                | (0x0cd2, 18 | 53, "STU_632B74B9")
-                | (0x0cd2, 19 | 26, "STU_B17E88C9")
-                | (0x0cd2, 21, "STU_D52B9026")
-                | (0x0cd2, 22 | 31, "STU_55F72184")
-                | (0x0cd2, 23 | 30, "STU_E834E718")
-                | (0x0cd2, 24 | 52, "STU_200B27C5")
-                | (0x0cd2, 37, "STU_AF1A4047")
-                | (0x0cd2, 38, "STU_E0D2F3AA")
-                | (0x0cd2, 44 | 49, "STU_D3CDCF04")
-                | (0x185d, 2 | 41 | 49, "STU_200B27C5")
-                | (0x185d, 3 | 40, "STU_E834E718")
-                | (0x185d, 8 | 39, "STU_55F72184")
-                | (0x185d, 15 | 38, "STU_D52B9026")
-                | (0x185d, 22 | 36, "STU_B17E88C9")
-                | (0x185d, 23 | 35, "STU_632B74B9")
-                | (0x185d, 24 | 34, "STU_724DFBC6")
-                | (0x185d, 31, "STU_E0D2F3AA")
-                | (0x185d, 46, "STU_AF1A4047")
-                | (0x185d, 47, "STU_F4BBA185")
-                | (0x185d, 53, "STU_93088159")
-                | (0x0ce0, 6 | 40, "STU_93088159")
-                | (0x0ce0, 42 | 43, "STU_14611C1B")
-                | (0x0d03, 8 | 10, "STU_93088159")
-                | (0x0d03, 15 | 16, "STU_14611C1B")
+pub(super) fn is_horizontal_velocity_clamp(node: &Node) -> bool {
+    let [row] = array_field(&node.fields, "m_BC5E91CF") else {
+        return false;
+    };
+    is_local_velocity_action(node)
+        && field(row, "$").as_str() == Some("STU_20E18047")
+        && script_expr::native_fields(
+            row,
+            &["m_A9561CA0", "m_priority", "m_8AD739CE", "m_8213EB22"],
         )
+        && field(row, "m_A9561CA0").as_u64() == Some(1)
+        && field(row, "m_priority").is_null()
+        && !field(row, "m_8AD739CE").is_null()
+        && !field(row, "m_8213EB22").is_null()
+}
+
+pub(super) fn is_vertical_velocity_impulse(node: &Node) -> bool {
+    let [reset, impulse] = array_field(&node.fields, "m_BC5E91CF") else {
+        return false;
+    };
+    let is_row = |row: &Json, class: &str, selector: &str, index| {
+        field(row, "$").as_str() == Some(class)
+            && script_expr::native_fields(row, &[selector, "m_priority", "m_9B7A63EA"])
+            && field(row, selector).as_u64() == Some(index)
+            && field(row, "m_priority").is_null()
+            && !field(row, "m_9B7A63EA").is_null()
+    };
+    is_local_velocity_action(node)
+        && node.runs_on_server()
+        && is_row(reset, "STU_9AF0FA80", "m_A9561CA0", 2)
+        && is_row(impulse, "STU_4635C5E2", "m_CFEC5F76", 1)
+}
+
+fn is_local_velocity_action(node: &Node) -> bool {
+    let fields = &node.fields;
+    node.state.is_none()
+        && node.remote == -1
+        && node.is_action()
+        && !node.is_state()
+        && script_expr::native_fields(
+            fields,
+            &[
+                "m_BF5B22B7",
+                "m_8BF03679",
+                "m_A2287776",
+                "m_AED90719",
+                "m_2BBEEAB8",
+                "m_ADEB6E05",
+                "m_BC5E91CF",
+                "m_inPlug",
+                "m_outPlug",
+            ],
+        )
+        && field(fields, "m_BF5B22B7").is_null()
+        && field(fields, "m_8BF03679").is_null()
+        && ["m_A2287776", "m_AED90719"].iter().all(|name| {
+            let value = field(fields, name);
+            matches!(value, Json::Null | Json::Bool(false)) || value.as_u64() == Some(0)
+        })
+}
+
+// These authored placements resolve to the PC base State.
+pub(super) fn encounter_base_state_shape(graph: u32, node: &Node) -> Option<bool> {
+    let placement = (graph, node.pos);
+    let allowed = match node.class.as_str() {
+        "STU_87621906" => placement == (0x0033, 30),
+        "STU_0DB9E66B" => matches!(
+            placement,
+            (0x006b, 38) | (0x0079, 42) | (0x01c9, 65) | (0x224e, 25)
+        ),
+        "STU_200B27C5" => matches!(
+            placement,
+            (0x0aaa, 2) | (0x0bc6, 9) | (0x0cb5, 2) | (0x0cd2, 24 | 52) | (0x185d, 2 | 41 | 49)
+        ),
+        "STU_AF1A4047" => matches!(
+            placement,
+            (0x0aaa, 3) | (0x0bc6, 12) | (0x0cd2, 37) | (0x185d, 46)
+        ),
+        "STU_55F72184" => matches!(
+            placement,
+            (0x0aaa, 4) | (0x0bc6, 8) | (0x0cb5, 10) | (0x0cd2, 22 | 31) | (0x185d, 8 | 39)
+        ),
+        "STU_E834E718" => matches!(
+            placement,
+            (0x0aaa, 5) | (0x0bc6, 7) | (0x0cb5, 3) | (0x0cd2, 23 | 30) | (0x185d, 3 | 40)
+        ),
+        "STU_632B74B9" => matches!(
+            placement,
+            (0x0aaa, 10) | (0x0bc6, 6) | (0x0cb5, 16) | (0x0cd2, 18 | 53) | (0x185d, 23 | 35)
+        ),
+        "STU_D3CDCF04" => matches!(placement, (0x0aaa, 17 | 24) | (0x0cd2, 44 | 49)),
+        "STU_D52B9026" => matches!(
+            placement,
+            (0x0aaa, 28) | (0x0bc6, 27) | (0x0cb5, 12) | (0x0cd2, 21) | (0x185d, 15 | 38)
+        ),
+        "STU_724DFBC6" => matches!(
+            placement,
+            (0x0aaa, 30)
+                | (0x0bc6, 28)
+                | (0x0cb5, 19 | 31)
+                | (0x0cd2, 17 | 27 | 29 | 51)
+                | (0x185d, 24 | 34)
+        ),
+        "STU_93088159" => matches!(
+            placement,
+            (0x0aaa, 33) | (0x0cba, 28) | (0x185d, 53) | (0x0ce0, 6 | 40) | (0x0d03, 8 | 10)
+        ),
+        "STU_E0D2F3AA" => matches!(placement, (0x0bc6, 14 | 25) | (0x0cd2, 38) | (0x185d, 31)),
+        "STU_B17E88C9" => matches!(
+            placement,
+            (0x0cb5, 15) | (0x0cd2, 19 | 26) | (0x185d, 22 | 36)
+        ),
+        "STU_4531992F" => placement == (0x0cb5, 20),
+        "STU_F4BBA185" => placement == (0x185d, 47),
+        "STU_14611C1B" => matches!(placement, (0x0ce0, 42 | 43) | (0x0d03, 15 | 16)),
+        _ => return None,
+    };
+    Some(!node.server_only && allowed)
 }
 
 pub(super) fn is_client_subgraph_controller(graph: &Graph, node: &Node) -> bool {
@@ -392,9 +968,6 @@ pub(super) fn is_owner_movement_sampler(node: &Node) -> bool {
         ]
         .iter()
         .all(|name| field(&node.fields, name).is_null())
-        && ["m_E37BC6C2", "m_2102C541"]
-            .iter()
-            .all(|path| node.links(path).next().is_none())
         && MOVEMENT_BOOLEAN_OUTPUTS
             .iter()
             .all(|name| script_expr::lvalue(field(&node.fields, name)).is_ok())
@@ -450,6 +1023,78 @@ pub(super) fn is_base_health_pool(node: &Node) -> bool {
         && flag("m_0E8A5C8E", false)
         && (config("m_CEAB19E8").is_null()
             || matches!(script_expr::lvalue(config("m_CEAB19E8")), Ok(Some(_))))
+}
+
+pub(super) fn named_temporary_shield(node: &Node, raw: u16) -> Option<u64> {
+    let config = |name| field(&node.fields, name);
+    let flag = |name, enabled| {
+        let value = config(name);
+        script_expr::native_shape(value, "STUConfigVarBool", Some("m_value"))
+            && (field(value, "m_value").as_bool() == Some(enabled)
+                || field(value, "m_value").as_u64() == Some(u64::from(enabled)))
+    };
+    let source = config("m_69A20070");
+    if !node.is_networked()
+        || node.state != Some(raw)
+        || !node.is_state()
+        || node.is_action()
+        || pool_kind(config("m_7E8B666C")) != Some(PoolKind::Shields)
+        || !flag("m_0E8A5C8E", true)
+        || !flag("m_64839023", false)
+        || !is_self_target(node, "m_FA3ECC43")
+        || !script_expr::native_shape(source, "STU_FEDD683C", Some("m_entity"))
+        || !script_expr::native_shape(field(source, "m_entity"), "STU_B5A0CAF0", None)
+        || ![
+            "m_BCFDD2E9",
+            "m_4895B8B6",
+            "m_FF79E783",
+            "m_AF1104D0",
+            "m_BFA825EA",
+        ]
+        .into_iter()
+        .all(|name| config(name).is_null())
+        || !["m_CEAB19E8", "m_C99FAFDD"].into_iter().all(|name| {
+            config(name).is_null()
+                || matches!(
+                    script_expr::lvalue(config(name)),
+                    Ok(Some(Variable {
+                        scope: Scope::Instance,
+                        ..
+                    }))
+                )
+        })
+        || !node.fields.as_object()?.iter().all(|(name, value)| {
+            value.is_null()
+                || matches!(
+                    name.as_str(),
+                    "m_FA3ECC43"
+                        | "m_69A20070"
+                        | "m_7E8B666C"
+                        | "m_7BE02F89"
+                        | "m_0E8A5C8E"
+                        | "m_64839023"
+                        | "m_amount"
+                        | "m_CEAB19E8"
+                        | "m_C99FAFDD"
+                        | "m_A2287776"
+                        | "m_AED90719"
+                        | "m_2BBEEAB8"
+                        | "m_ADEB6E05"
+                        | "m_8BF03679"
+                        | "m_BF5B22B7"
+                        | "m_F198FD3A"
+                        | "m_beginPlug"
+                        | "m_onBeginPlug"
+                        | "m_onEndPlug"
+                        | "m_onAbortPlug"
+                        | "m_onFinishedPlug"
+                        | "m_subgraphPlug"
+                )
+        })
+    {
+        return None;
+    }
+    script_expr::named_shield_identifier(config("m_7BE02F89"))
 }
 
 pub(super) fn is_wave_health_pool(node: &Node) -> bool {
@@ -525,13 +1170,6 @@ pub(super) fn configured(node: &Node, name: &str) -> bool {
         Json::Object(value) => !value.is_empty(),
         Json::Bool(true) => true,
     }
-}
-
-pub(super) fn parameter_id(config: &Json) -> u32 {
-    config
-        .get("m_B5051BCE")
-        .and_then(asset_guid)
-        .map_or(0, |guid| u32::from(guid as u16))
 }
 
 pub(super) fn field<'a>(fields: &'a Json, name: &str) -> &'a Json {
@@ -668,4 +1306,47 @@ pub(super) fn chase_step(current: Value, destination: Value, step: f64) -> (Valu
         });
         (Value::Vector(next), false)
     }
+}
+
+pub(super) fn is_parent_owned_timed_graph(node: &Node) -> bool {
+    field(&node.fields, "m_ED97A97C").is_null() && is_parent_owned_graph(node)
+}
+
+pub(super) fn parent_owned_graph_duration(node: &Node) -> Option<&Json> {
+    if node.class != "STU_54FEB21C" {
+        return None;
+    }
+    let duration = field(&node.fields, "m_ED97A97C");
+    (duration.get("$").and_then(Json::as_str) == Some("STUConfigVarFloat")
+        && duration
+            .get("m_value")
+            .and_then(Json::as_f64)
+            .is_some_and(f64::is_finite)
+        && is_parent_owned_graph(node))
+    .then_some(duration)
+}
+
+fn is_parent_owned_graph(node: &Node) -> bool {
+    let has_no_finish_operand = ["m_7C8AD485", "m_C7A42E2A", "m_F8CE386A", "m_C46403A5"]
+        .iter()
+        .all(|name| field(&node.fields, name).is_null());
+    let alternate = field(&node.fields, "m_E5790891");
+    let has_no_alternate = alternate.is_null()
+        || (alternate.is_object()
+            && matches!(
+                alternate.get("$").and_then(Json::as_str),
+                Some("Plug" | "STUStatescriptOutputPlug" | "STU_904BFCEC")
+            )
+            && alternate.as_object().is_some_and(|fields| {
+                fields
+                    .keys()
+                    .all(|name| matches!(name.as_str(), "$" | "links" | "m_FF3DAF1E"))
+            })
+            && alternate
+                .get("links")
+                .is_some_and(|value| value.as_array().is_some_and(Vec::is_empty))
+            && alternate.get("m_FF3DAF1E").is_none_or(|value| {
+                value.is_null() || value.as_array().is_some_and(Vec::is_empty)
+            }));
+    has_no_finish_operand && has_no_alternate
 }

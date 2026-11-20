@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "case_id": "script-mode-entity-query.synthetic.v1",
+  "source": {"basis": "An invented catalog entry and missing mode exercise typed host facts through the owner VM."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "mode_variables": {"0x00000000000000A1": {"1": 42}},
+    "present_mode": 161,
+    "unknown_mode": 162,
+    "entity_variable": 400
+  },
+  "expected": {
+    "present": true,
+    "known_absent": false,
+    "unknown": "unsupported"
+  }
+}

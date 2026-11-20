@@ -9,16 +9,21 @@ use super::lifecycle::{DEADEYE_GRAPH, DEADEYE_TARGET_EFFECT};
 use crate::{
     collision_scene::CollisionScene,
     commands::Command,
-    game_combat::eye_height,
+    game_combat::{AppliedDamage, RoomScriptRequests, eye_height},
     game_content::{PRACTICE_RANGE_MODE, TUTORIAL_MODE, is_junkenstein_mode},
-    game_heroes::{CASSIDY, SOLDIER},
-    game_hitscan::{TargetPose, aim_direction},
+    game_heroes::CASSIDY,
+    game_hitscan::{TargetPose, aim_direction, direction_for_angles},
+    game_instance::TeamMemberCounts,
+    game_replication::OwnerRoomActivity,
     junkenstein_messages::{self, DefenderSighting, SIGHTING, SIGHTING_TAGS, SightingSource},
-    mover::sample_movement_flags,
+    mover::{VelocityChange, sample_movement_flags},
     scene_assets::MOVER_CATEGORY,
-    script_expr::{EntityRelation, OnFire, native_shape, valid_entity},
+    script_expr::{EntityRelation, OnFire, RoomEntityFacts, native_shape, valid_entity},
     script_graph::GraphStore,
-    script_init::{MAX_INIT_WORK, Site, TargetTagEffect, TargetTagEffects, World},
+    script_init::{
+        MAX_INIT_WORK, MovementSample, RoomMessage, ScriptedMotion, Site, TargetTagEffect,
+        TargetTagEffects, World,
+    },
     script_wire::{Value, Variables},
     static_ray::{Vec3, capsule_entry_distance, norm},
     vitals::{PoolKind, Vitals},
@@ -130,12 +135,18 @@ pub(super) fn target_delta(origin: Vec3, target: TargetPose) -> Vec3 {
 }
 
 pub(super) struct BodyWorld {
-    pub(super) damage_credit: Option<crate::game_combat::AppliedDamage>,
+    pub(super) damage_credit: Option<AppliedDamage>,
+    pub(super) uses_authored_charge: bool,
     pub(super) graphs: Arc<GraphStore>,
+    pub(super) spatial_frame: Option<Arc<crate::game_combat::RoomSpatialFrame>>,
+    pub(super) team_member_counts: Option<TeamMemberCounts>,
+    pub(super) room_activity: Option<OwnerRoomActivity>,
+    pub(super) script_requests: RoomScriptRequests,
     pub(super) controller: u32,
     pub(super) entity: u32,
     pub(super) body_filter: u64,
     pub(super) position: [f64; 3],
+    pub(super) eye_position: Option<[f64; 3]>,
     pub(super) movement: Movement,
     pub(super) throttles: [i8; 2],
     pub(super) mode: u64,
@@ -143,32 +154,53 @@ pub(super) struct BodyWorld {
     pub(super) vitals: Vitals,
     pub(super) pool_types_known: bool,
     pub(super) target_tags: Option<BTreeSet<u64>>,
+    pub(super) model_hardpoints: Option<Arc<BTreeSet<u64>>>,
     pub(super) target_tag_effects: TargetTagEffects,
     pub(super) controller_on_fire: bool,
     pub(super) defenders: Arc<[u32]>,
     pub(super) sightings: Vec<DefenderSighting>,
     pub(super) sighting_source: Option<SightingSource>,
     pub(super) cinematic_aim: Option<(Site, [i32; 2])>,
+    pub(super) facing_claims: indexmap::IndexMap<Site, crate::script_init::AiFacing>,
     pub(super) deadeye_scene: DeadeyeScene,
     pub(super) velocity_changes: Vec<(u32, crate::mover::VelocityChange)>,
+    pub(super) scripted_motion: Option<(u32, ScriptedMotion)>,
 }
 
 impl World for BodyWorld {
+    fn local_command_present(&self, site: Site) -> Option<bool> {
+        self.is_player_site(site).then_some(false)
+    }
+
+    fn local_combat_context_available(&self, site: Site) -> Option<bool> {
+        // The headless owner body has no client-local combat accumulator.
+        self.is_player_site(site).then_some(false)
+    }
+
+    fn has_dynamic_map_rigid_bodies(&self, site: Site) -> Option<bool> {
+        // Native rooms load only static map collision, including during startup.
+        self.is_player_site(site).then_some(false)
+    }
+
+    fn voice_context(&mut self, site: Site) -> Option<bool> {
+        // This body has no native voice manager. Authored room cues use
+        // the separate room request path.
+        self.is_player_site(site).then_some(false)
+    }
+
+    fn team_members(&self, team: u8) -> Option<u32> {
+        self.team_member_counts?.count(team)
+    }
+
     fn engine_setting(&self, _site: Site, key: u32) -> crate::script_expr::EngineSetting {
-        if is_junkenstein_mode(self.mode) {
-            crate::junkenstein_host::engine_setting(key)
-        } else {
-            crate::script_expr::EngineSetting::Unavailable
-        }
+        crate::body_ruleset::engine_setting(&self.graphs, self.mode, key)
     }
 
     fn edit_velocity(&mut self, site: Site, frame: u32, value: Value, cap: bool) -> bool {
-        use crate::mover::VelocityChange;
         if self.hero != CASSIDY
             || !self.is_player_site(site)
             || site.graph != 0x01f0
             || !matches!((site.node, cap), (Some(8 | 11), false) | (Some(17), true))
-            || self.vitals.death().is_some()
         {
             return false;
         }
@@ -179,12 +211,40 @@ impl World for BodyWorld {
             (Value::Float(cap), true) => VelocityChange::HorizontalCap(cap),
             _ => return false,
         };
-        if !change.valid() {
-            return false;
+        self.queue_velocity_change(frame, change)
+    }
+
+    fn cap_horizontal_velocity(&mut self, site: Site, frame: u32, cap: f64) -> bool {
+        self.is_player_site(site)
+            && self.queue_velocity_change(frame, VelocityChange::HorizontalCap(cap))
+    }
+
+    fn queue_scripted_motion(
+        &mut self,
+        site: Site,
+        frame: u32,
+        motion: ScriptedMotion,
+    ) -> Option<bool> {
+        if !self.is_player_site(site) {
+            return None;
         }
-        self.velocity_changes
-            .push((frame.saturating_add(1), change));
-        true
+        if self.vitals.death().is_some() || self.scripted_motion.is_some() {
+            return Some(false);
+        }
+        self.scripted_motion = Some((frame, motion));
+        Some(true)
+    }
+
+    fn apply_velocity_impulse(
+        &mut self,
+        site: Site,
+        frame: u32,
+        vertical: f64,
+        delta: [f64; 3],
+    ) -> bool {
+        self.is_player_site(site)
+            && self
+                .queue_velocity_change(frame, VelocityChange::VerticalImpulse { vertical, delta })
     }
 
     fn deadeye_target_alive(&self, site: Site, entity: u32) -> bool {
@@ -224,13 +284,13 @@ impl World for BodyWorld {
     }
 
     fn spatial_binding_owner_available(&self, site: Site) -> Option<bool> {
-        // This authoritative body host has no local client-world auxiliary
-        // owner. Its remote native client still evaluates the view bindings.
-        (self.is_player_site(site)
-            && is_junkenstein_mode(self.mode)
-            && site.graph == 0x0ced
-            && matches!(site.node, Some(0 | 4 | 6)))
-        .then_some(false)
+        // The headless body has no local auxiliary view owner.
+        self.is_player_site(site).then_some(false)
+    }
+
+    fn outline_context_available(&self, site: Site) -> Option<bool> {
+        // The headless body has no local outline presentation context.
+        self.is_player_site(site).then_some(false)
     }
 
     fn set_cinematic_aim_lock(&mut self, site: Site, active: bool) -> bool {
@@ -248,32 +308,42 @@ impl World for BodyWorld {
         true
     }
 
-    fn ruleset(&mut self, id: u32) -> Option<Value> {
-        if self.hero == CASSIDY && is_junkenstein_mode(self.mode) {
-            // 104319 Cassidy schemas 001B/0026, Python e1128509 rulesets.py.
-            match id {
-                0x2819 => return Some(Value::Float(1.0)),
-                0x290c => return Some(Value::Bool(true)),
-                _ => (),
-            }
-        }
-        if (self.mode, self.hero) != (PRACTICE_RANGE_MODE, SOLDIER) {
+    fn set_facing_claim(
+        &mut self,
+        site: Site,
+        record: crate::script_init::AiFacing,
+        active: bool,
+    ) -> Option<bool> {
+        if !self.is_player_site(site) {
             return None;
         }
-        // Defaults read by the target startup, from ow174/game/script/rulesets.py.
-        match id {
-            0x2538 | 0x2819 | 0x32e8 => Some(Value::Float(1.0)),
-            0x260f => Some(Value::Bool(true)),
-            0x281a | 0x32e0 | 0x32e9 => Some(Value::Bool(false)),
-            _ => None,
+        if active {
+            if record.target != self.entity
+                || self.vitals.death().is_some()
+                || crate::facing::angles(record.direction).is_none()
+            {
+                return Some(false);
+            }
+            self.facing_claims.insert(site, record);
+        } else {
+            self.facing_claims.shift_remove(&site);
         }
+        Some(true)
+    }
+
+    fn ruleset(&mut self, id: u32) -> Option<Value> {
+        crate::body_ruleset::get(
+            &self.graphs,
+            self.mode,
+            self.hero,
+            crate::body_ruleset::ActorKind::Player,
+            id,
+        )
     }
 
     fn entity_variable(&mut self, entity: u32, id: u32) -> Option<Value> {
-        if let Some(damage) = &self.damage_credit {
-            if damage.target == entity {
-                return damage.target_state.read(id);
-            }
+        if let Some(damage) = self.damage_credit_for(entity) {
+            return damage.target_facts.script_state.read(id);
         }
         if entity != GAME_MODE_ENTITY {
             return self
@@ -289,15 +359,21 @@ impl World for BodyWorld {
             .map(|variables| variables.get(&id).copied().map_or(Value::Null, Value::from))
     }
 
+    fn body_has_hardpoint(&self, site: Site, entity: u32, hardpoint: u64) -> Option<bool> {
+        if entity != self.entity || !self.is_player_site(site) {
+            return None;
+        }
+        self.model_hardpoints
+            .as_ref()
+            .map(|hardpoints| hardpoints.contains(&hardpoint))
+    }
+
     fn body_angle(
         &self,
         entity: u32,
         axis: crate::script_expr::BodyAngle,
     ) -> crate::script_expr::AngleQuery {
         use crate::script_expr::{AngleQuery, BodyAngle};
-        if !is_junkenstein_mode(self.mode) {
-            return AngleQuery::Unavailable;
-        }
         if entity == 0 {
             return AngleQuery::Unbound;
         }
@@ -326,10 +402,130 @@ impl World for BodyWorld {
             .map_or(VelocityQuery::Unavailable, VelocityQuery::Present)
     }
 
+    fn entity_exists(&self, entity: u32) -> Option<bool> {
+        if entity == GAME_MODE_ENTITY {
+            return match self.graphs.mode_variables(self.mode) {
+                Some(_) => Some(true),
+                None if is_junkenstein_mode(self.mode) => Some(false),
+                None => None,
+            };
+        }
+        (valid_entity(entity) && (entity == self.entity || entity == self.controller))
+            .then_some(true)
+    }
+
+    fn entity_team(&self, site: Site, entity: u32) -> Option<i8> {
+        if !self.is_player_site(site) || entity != self.entity {
+            return None;
+        }
+        let team = crate::match_scene::team_from_spawn_filter(self.body_filter)?;
+        i8::try_from(team).ok()
+    }
+
+    fn queue_health_change(&mut self, site: Site, target: u32, delta: f64) -> bool {
+        if !self.is_player_site(site) {
+            return false;
+        }
+        self.spatial_frame
+            .as_deref()
+            .is_some_and(|frame| self.script_requests.queue_health(frame, target, delta))
+    }
+
+    fn queue_health_changes(&mut self, site: Site, changes: &[(u32, f64)]) -> bool {
+        if !self.is_player_site(site) {
+            return false;
+        }
+        self.spatial_frame
+            .as_deref()
+            .is_some_and(|frame| self.script_requests.queue_health_changes(frame, changes))
+    }
+
+    fn room_body_generation(&self, wire: u32) -> Option<u64> {
+        self.spatial_frame.as_deref()?.body_generation(wire)
+    }
+
+    fn queue_room_message(&mut self, site: Site, target: u32, message: RoomMessage) -> bool {
+        if !self.is_player_site(site) {
+            return false;
+        }
+        self.spatial_frame
+            .as_deref()
+            .is_some_and(|frame| self.script_requests.queue_message(frame, target, message))
+    }
+
+    fn queue_room_cue(
+        &mut self,
+        site: Site,
+        targets: &[u32],
+        cue: crate::script_init::RoomCue,
+    ) -> bool {
+        self.is_player_site(site)
+            && self.spatial_frame.as_deref().is_some_and(|frame| {
+                self.script_requests
+                    .queue_cue(frame, site.entity, targets, cue)
+            })
+    }
+
+    fn spatial_candidates(&self) -> Option<&[crate::script_expr::SpatialCandidate]> {
+        Some(self.spatial_frame.as_deref()?.candidates())
+    }
+
+    fn room_entities(&self) -> Option<&BTreeMap<u32, RoomEntityFacts>> {
+        self.spatial_frame.as_deref()?.entity_facts()
+    }
+
+    fn room_actor_identity(&self, entity: u32) -> Option<u64> {
+        self.spatial_frame.as_deref()?.actor_identity(entity)
+    }
+
+    fn body_active(&self, site: Site) -> Option<bool> {
+        self.is_player_site(site).then_some(())?;
+        self.room_activity
+            .map(|activity| activity.allows_body_activity() && self.vitals.death().is_none())
+    }
+
+    fn spatial_line_clear(&self, origin: [f64; 3], target: [f64; 3]) -> Option<bool> {
+        self.spatial_frame.as_deref()?.line_clear(origin, target)
+    }
+
+    fn spatial_ray_cast(
+        &self,
+        site: Site,
+        vm_frame: u32,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+    ) -> Option<Option<crate::script_expr::SpatialRayHit>> {
+        self.spatial_frame
+            .as_deref()?
+            .ray_cast(site, vm_frame, origin, direction, max_distance)
+    }
+
+    fn spatial_actor_ray_cast(
+        &self,
+        site: Site,
+        vm_frame: u32,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+        targets: &[u32],
+    ) -> Option<Option<crate::script_expr::SpatialActorRayHit>> {
+        self.spatial_frame.as_deref()?.actor_ray_cast(
+            site,
+            vm_frame,
+            origin,
+            direction,
+            max_distance,
+            targets,
+        )
+    }
+
+    fn known_position(&self, entity: u32) -> Option<[f64; 3]> {
+        (entity == self.entity).then_some(self.position)
+    }
+
     fn position(&mut self, entity: u32) -> Option<[f64; 3]> {
-        if entity == self.entity {
-            Some(self.position)
-        } else {
+        self.known_position(entity).or_else(|| {
             self.sighting_source
                 .filter(|source| source.entity == entity)
                 .map(|source| source.position)
@@ -339,11 +535,40 @@ impl World for BodyWorld {
                         .get(&entity)
                         .map(|subject| subject.position)
                 })
+        })
+    }
+
+    fn authored_position(&mut self, entity: u32) -> Option<[f64; 3]> {
+        if let Some(position) = self.known_position(entity) {
+            return Some(position);
+        }
+        match self.spatial_frame.as_deref() {
+            Some(frame) => frame.actor_pose(entity).map(|(position, _)| position),
+            None => self.position(entity),
         }
     }
 
+    fn authored_forward(&self, entity: u32) -> Option<[f64; 3]> {
+        if entity == self.entity {
+            return Some(direction_for_angles(self.movement.yaw, self.movement.pitch));
+        }
+        match self.spatial_frame.as_deref() {
+            Some(frame) => frame
+                .actor_pose(entity)
+                .map(|(_, [yaw, pitch])| direction_for_angles(yaw, pitch)),
+            None => self.forward(entity),
+        }
+    }
+
+    fn body_eye_position(&self, entity: u32) -> Option<[f64; 3]> {
+        if entity == self.entity {
+            return self.eye_position.filter(|_| self.vitals.death().is_none());
+        }
+        self.spatial_frame.as_deref()?.actor_eye_position(entity)
+    }
+
     fn forward(&self, entity: u32) -> Option<[f64; 3]> {
-        if entity == self.entity && is_junkenstein_mode(self.mode) {
+        if entity == self.entity {
             let yaw = f64::from(self.movement.yaw) * std::f64::consts::TAU / 65_536.0;
             let (sin, cos) = yaw.sin_cos();
             Some([sin, 0.0, cos])
@@ -384,11 +609,16 @@ impl World for BodyWorld {
         true
     }
 
-    fn movement_sample(&self, site: Site) -> Option<u16> {
+    fn movement_sample(&self, site: Site) -> Option<MovementSample> {
         if !self.is_player_site(site) {
             return None;
         }
-        sample_movement_flags(&self.movement)
+        let pose = &self.movement;
+        Some(MovementSample {
+            flags: sample_movement_flags(pose)?,
+            air_ticks: pose.air_ticks,
+            pose_frame: pose.frame,
+        })
     }
 
     fn body_scale(&mut self, site: Site, target: u32, override_value: &Value) -> Option<f64> {
@@ -406,7 +636,11 @@ impl World for BodyWorld {
         if !self.is_player_site(site) || (kind.is_some() && !self.pool_types_known) {
             return None;
         }
-        let amount = self.vitals.amount(kind, maximum);
+        let amount = match kind {
+            None if maximum => self.vitals.maximum(),
+            None => self.vitals.total(),
+            Some(_) => self.vitals.amount(kind, maximum),
+        };
         (amount.is_finite() && amount >= 0.0).then_some(amount)
     }
 
@@ -475,6 +709,28 @@ impl World for BodyWorld {
         self.vitals.add_pool(kind, maximum, current)
     }
 
+    fn add_temporary_shield(
+        &mut self,
+        site: Site,
+        identifier: u64,
+        amount: f64,
+        stacked: bool,
+    ) -> Option<u32> {
+        if !self.is_player_site(site) {
+            return None;
+        }
+        self.vitals
+            .add_temporary_shield(identifier, amount, stacked)
+    }
+
+    fn temporary_shield_current(&self, site: Site, identifier: u64) -> Option<f64> {
+        (self.is_player_site(site)).then(|| self.vitals.temporary_shield_current(identifier))
+    }
+
+    fn drain_temporary_shield(&mut self, site: Site, identifier: u64, amount: f64) -> Option<f64> {
+        (self.is_player_site(site)).then(|| self.vitals.drain_temporary_shield(identifier, amount))
+    }
+
     fn health_pool_current(&self, site: Site, pool: u32) -> Option<f64> {
         if !self.is_player_site(site) {
             return None;
@@ -494,10 +750,8 @@ impl World for BodyWorld {
             return None;
         }
         if entity != self.entity {
-            if let Some(damage) = &self.damage_credit {
-                if damage.target == entity {
-                    return damage.target_tags.presence(tag);
-                }
+            if let Some(damage) = self.damage_credit_for(entity) {
+                return damage.target_facts.tags.presence(tag);
             }
             return self
                 .sighting_source
@@ -511,7 +765,8 @@ impl World for BodyWorld {
                         .view_subjects
                         .get(&entity)
                         .and_then(|subject| subject.tags.presence(tag))
-                });
+                })
+                .or_else(|| self.room_entities()?.get(&entity)?.tags.presence(tag));
         }
         if let Some(present) = self.target_tag_effects.presence(tag) {
             return Some(present);
@@ -533,10 +788,8 @@ impl World for BodyWorld {
         if entity == self.entity {
             Some(self.own_filter_flags())
         } else {
-            if let Some(damage) = &self.damage_credit {
-                if damage.target == entity {
-                    return damage.target_flags;
-                }
+            if let Some(damage) = self.damage_credit_for(entity) {
+                return damage.target_facts.filter_flags;
             }
             self.sighting_source
                 .filter(|source| source.entity == entity)?
@@ -567,12 +820,9 @@ impl World for BodyWorld {
         if !self.charge_site(site) || source != self.entity || option {
             return None;
         }
-        let damage = self
-            .damage_credit
-            .as_ref()
-            .filter(|event| event.target == target)?;
+        let damage = self.damage_credit_for(target)?;
         let left = self.own_filter_flags();
-        let right = damage.target_flags?;
+        let right = damage.target_facts.filter_flags?;
         crate::junkenstein_host::ordinary_hostility(left, right)
     }
 
@@ -660,14 +910,6 @@ impl World for BodyWorld {
             }
         }
         if self.is_player_site(site) && is_junkenstein_mode(self.mode) {
-            if (site.graph, site.node) == (0x01ca, Some(179))
-                && native_shape(config, "STU_E72F6348", Some("m_entity"))
-                && config
-                    .get("m_entity")
-                    .is_some_and(|mode| native_shape(mode, "STU_A3DEF368", None))
-            {
-                return Some(Value::Bool(self.graphs.mode_variables(self.mode).is_some()));
-            }
             if (site.graph, site.node) == (0x01ca, Some(126))
                 && junkenstein_messages::sighting_selector(config)
             {
@@ -696,8 +938,24 @@ impl World for BodyWorld {
                 Some(Value::Vector([right, forward, 0.0]))
             }
             "STU_37F20D24" => Some(Value::Asset(self.mode)),
-            "STU_A3DEF368" if self.graphs.mode_variables(self.mode).is_some() => {
+            "STU_A3DEF368"
+                if self.is_player_site(site)
+                    && native_shape(config, "STU_A3DEF368", None)
+                    && self.entity_exists(GAME_MODE_ENTITY) == Some(true) =>
+            {
                 Some(Value::Entity(GAME_MODE_ENTITY))
+            }
+            "STU_E72F6348"
+                if self.is_player_site(site)
+                    && self.entity_exists(GAME_MODE_ENTITY) == Some(false)
+                    && native_shape(config, "STU_E72F6348", Some("m_entity"))
+                    && config
+                        .get("m_entity")
+                        .is_some_and(|mode| native_shape(mode, "STU_A3DEF368", None)) =>
+            {
+                // An existence check still has an answer when the mode
+                // supplies no script entity for the bare selector to return.
+                Some(Value::Bool(false))
             }
             "STU_4A101787" => Some(Value::Bool(false)),
             "STU_ED45C5E8"
@@ -780,8 +1038,29 @@ fn is_owner_selector(config: &Json) -> bool {
 }
 
 impl BodyWorld {
+    fn queue_velocity_change(&mut self, frame: u32, change: VelocityChange) -> bool {
+        if !change.valid()
+            || self.vitals.death().is_some()
+            || self.velocity_changes.len() >= MAX_INIT_WORK
+        {
+            return false;
+        }
+        self.velocity_changes
+            .push((frame.saturating_add(1), change));
+        true
+    }
+
     fn charge_site(&self, site: Site) -> bool {
-        self.is_player_site(site) && self.has_deadeye() && site.graph == 0x0b8b
+        self.is_player_site(site)
+            && self
+                .charge_binding()
+                .is_some_and(|binding| site.graph == binding.graph)
+    }
+
+    fn damage_credit_for(&self, entity: u32) -> Option<&AppliedDamage> {
+        self.damage_credit
+            .as_ref()
+            .filter(|damage| damage.target_facts.target == entity)
     }
 
     pub(super) fn has_deadeye(&self) -> bool {

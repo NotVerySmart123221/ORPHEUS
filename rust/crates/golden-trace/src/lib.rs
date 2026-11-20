@@ -170,28 +170,66 @@ fn incompatible_fields(left: &Value, right: &Value) -> Vec<String> {
     fields
 }
 
+/// Observations from a fully validated pair with different RNG setup.
+#[derive(Debug)]
+pub struct RngSetupDiagnostic {
+    pub compared_ticks: u32,
+    pub first_observed_difference: Option<Difference>,
+}
+
+const RNG_SETUP_FIELDS: &[&str] = &[
+    "setup.host_initial_seed",
+    "setup.host_random_model",
+    "setup.player_vm_initial_seed",
+    "setup.player_vm_random_model",
+];
+
 /// Validate both complete traces (including all checksums) before exposing the first semantic difference.
 pub fn compare_bound<R: BufRead, S: BufRead>(
     reference: R,
     candidate: S,
 ) -> Result<Comparison, TraceError> {
+    compare_traces(reference, candidate, false).map(|(comparison, _)| comparison)
+}
+
+/// Also inspect recorded ticks when the only incompatibilities are RNG setup fields.
+/// The compatibility result follows the same rules as `compare_bound`.
+pub fn compare_with_rng_setup_diagnostic<R: BufRead, S: BufRead>(
+    reference: R,
+    candidate: S,
+) -> Result<(Comparison, Option<RngSetupDiagnostic>), TraceError> {
+    compare_traces(reference, candidate, true)
+}
+
+fn compare_traces<R: BufRead, S: BufRead>(
+    reference: R,
+    candidate: S,
+    diagnose_rng_setup: bool,
+) -> Result<(Comparison, Option<RngSetupDiagnostic>), TraceError> {
     let mut left = Stream::new(reference, "reference")?;
     let mut right = Stream::new(candidate, "candidate")?;
     let differences = incompatible_fields(&left.header, &right.header);
-    if !differences.is_empty() {
+    let scan_together = differences.is_empty()
+        || (diagnose_rng_setup
+            && differences
+                .iter()
+                .all(|field| RNG_SETUP_FIELDS.contains(&field.as_str())));
+    if !scan_together {
         while left.next()?.is_some() {}
         while right.next()?.is_some() {}
-        return Ok(Comparison::Incompatible(differences));
+        return Ok((Comparison::Incompatible(differences), None));
     }
-    let mut first = None;
+    let mut first_observed_difference = None;
+    let mut compared_ticks = 0;
     loop {
         match (left.next()?, right.next()?) {
             (Some(a), Some(b)) => {
-                if first.is_none() {
-                    first = first_difference(&a, &b);
+                compared_ticks += 1;
+                if first_observed_difference.is_none() {
+                    first_observed_difference = first_difference(&a, &b);
                 }
             }
-            (None, None) => return Ok(first.map_or(Comparison::Match, Comparison::Mismatch)),
+            (None, None) => break,
             _ => {
                 return Err(TraceError {
                     side: "comparison",
@@ -200,6 +238,18 @@ pub fn compare_bound<R: BufRead, S: BufRead>(
                 });
             }
         }
+    }
+    if differences.is_empty() {
+        let result = first_observed_difference.map_or(Comparison::Match, Comparison::Mismatch);
+        Ok((result, None))
+    } else {
+        Ok((
+            Comparison::Incompatible(differences),
+            Some(RngSetupDiagnostic {
+                compared_ticks,
+                first_observed_difference,
+            }),
+        ))
     }
 }
 

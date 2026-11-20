@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "case_id": "script-mode-rulesets.synthetic.v1",
+  "source": {"basis": "Original mode and body identifiers, rule values, and lookup cases."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "bundle": {
+      "version": 1,
+      "mode_rulesets": [
+        {
+          "mode": "0x00000000000000A1",
+          "rules": [
+            {"id": 101, "body": "0x00000000000000B1", "value": false},
+            {"id": 101, "value": true},
+            {"id": 102, "value": false},
+            {"id": 102, "body": "0x00000000000000B1", "value": 12},
+            {"id": 102, "body": "0x00000000000000B2", "value": null},
+            {"id": 103, "body": "0x00000000000000B1", "value": 1.25},
+            {"id": 104, "value": -9007199254740993},
+            {"id": 105, "value": null}
+          ],
+          "engine_settings": [
+            {"id": 101, "value": false},
+            {"id": 102, "value": -9007199254740993},
+            {"id": 103, "value": 1.0},
+            {"id": 104, "value": null},
+            {"id": 4294967295, "value": 0}
+          ]
+        },
+        {
+          "mode": "0x00000000000000A2",
+          "rules": [{"id": 102, "value": -0.5}]
+        },
+        {
+          "mode": "0x00000000000000A3",
+          "engine_settings": []
+        },
+        {
+          "mode": "0x00000000000000A4",
+          "engine_settings": [{"id": 101, "value": true}]
+        }
+      ],
+      "graphs": [
+        {
+          "index": 911,
+          "items": 1,
+          "header": {
+            "m_nodesBitCount": 1, "m_statesBitCount": 1,
+            "m_remoteSyncNodesBitCount": 1, "m_syncVarsBitCount": 1
+          },
+          "fields": {},
+          "containers": {},
+          "nodes": [
+            {
+              "pos": 0, "class": "authored.rule_probe", "uid": 0, "rid": 0,
+              "remote": -1, "state": 0, "client_only": false, "server_only": true,
+              "state_behavior": "plain", "fields": {}
+            }
+          ],
+          "unknown_nodes": [], "states": [0], "entries": [], "remote": [], "sync_vars": []
+        }
+      ],
+      "bodies": {},
+      "missing": []
+    },
+    "lookups": [
+      ["0x00000000000000A1", "0x00000000000000B1", 101],
+      ["0x00000000000000A1", "0x00000000000000B2", 101],
+      ["0x00000000000000A1", "0x0000000000000000", 101],
+      ["0x00000000000000A1", "0x0000000000000000", 102],
+      ["0x00000000000000A1", "0x00000000000000B1", 102],
+      ["0x00000000000000A1", "0x00000000000000B2", 102],
+      ["0x00000000000000A1", "0x00000000000000B1", 103],
+      ["0x00000000000000A1", "0x00000000000000B2", 103],
+      ["0x00000000000000A1", "0x00000000000000B1", 104],
+      ["0x00000000000000A1", "0x00000000000000B1", 105],
+      ["0x00000000000000A2", "0x00000000000000B1", 102],
+      ["0x00000000000000A2", "0x00000000000000B1", 101],
+      ["0x00000000000000A3", "0x00000000000000B1", 101]
+    ],
+    "expressions": [
+      {"lookup": 4, "entity_value": false},
+      {"lookup": 4, "entity_value": 5},
+      {"lookup": 4, "entity_value": null},
+      {"lookup": 5, "entity_value": null},
+      {"lookup": 7, "entity_value": null}
+    ]
+  },
+  "expected": {
+    "lookups": [[false], [true], [true], [false], [12], [null], [1.25], [], [-9007199254740993], [null], [-0.5], [], []],
+    "expressions": [false, 5, 12, null, 0]
+  }
+}

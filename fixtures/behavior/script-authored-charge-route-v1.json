@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "case_id": "script-authored-charge-route.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "input": {
+    "hit_tags": [731, 819],
+    "bundle": {
+      "version": 1,
+      "graphs": [
+        {
+          "index": 612,
+          "items": 1,
+          "header": {
+            "m_nodesBitCount": 1,
+            "m_statesBitCount": 1,
+            "m_remoteSyncNodesBitCount": 1,
+            "m_syncVarsBitCount": 1
+          },
+          "fields": {},
+          "containers": {},
+          "unknown_nodes": [],
+          "states": [],
+          "entries": [0],
+          "remote": [],
+          "sync_vars": [],
+          "nodes": [
+            {
+              "pos": 0,
+              "class": "EntryHostEvent",
+              "uid": 0,
+              "rid": 0,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": true,
+              "host_event_entry": "health_applied",
+              "fields": {"m_outPlug": {"$": "Plug", "links": []}}
+            }
+          ]
+        }
+      ],
+      "bodies": {
+        "0x040000000000B013": {
+          "hero": "0x02E000000000B013",
+          "name": "Fixture with an authored route",
+          "graphs": [],
+          "server_graphs": [{"graph": 612, "m_75408640": 0}],
+          "authored_charge_graph": "0x0580000000000264",
+          "manager": null,
+          "weapons": []
+        },
+        "0x040000000000B014": {
+          "hero": "0x02E000000000B014",
+          "name": "Fixture without an authored route",
+          "graphs": [],
+          "manager": null,
+          "weapons": []
+        }
+      },
+      "missing": []
+    }
+  }
+}

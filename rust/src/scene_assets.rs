@@ -23,17 +23,18 @@ use crate::{
     game_clock::FIRST_TICK,
     game_combat::{
         ENCOUNTER_INSTANCE, EncounterRegistration, EncounterWorld, GateState, GateWorld,
-        RoomSimulation,
+        RoomSimulation, script_eye_position,
     },
     game_content::{
         GameMap, JUNKENSTEIN_GATE, JunkensteinCard, PRACTICE_RANGE_MAP, PRACTICE_RANGE_MODE,
     },
     game_controller::Controller,
-    game_heroes::{CASSIDY, Hero, HeroCatalog, SOLDIER},
+    game_heroes::{CASSIDY, Hero, HeroCatalog},
     game_instance::RETAIL_QUANTA,
     game_pools::PoolCatalog,
-    game_replication::OwnerBodyRuntime,
+    game_replication::{OwnerBodyRuntime, OwnerRoomActivity},
     game_stats::{PlayerStats, StatsCatalog, initial_on_fire},
+    map_environment::EnvironmentCatalog,
     match_scene::{
         PlayerAppearance, initial_world, junkenstein_presentation, mode_presentation, team_bit,
     },
@@ -46,13 +47,14 @@ use crate::{
     script_expr::native_shape,
     script_graph::{GraphStore, ModeValue, asset_guid},
     script_init::{self, Root},
-    script_player::{OwnerBodySpawn, PlayerBodyFactory},
+    script_player::{OwnerBodyPreparationError, OwnerBodySetup, OwnerBodySpawn, PlayerBodyFactory},
     script_wire::{Value, Variables},
     world::{Component, EntityUpdate},
 };
 
 #[cfg(test)]
 use crate::{
+    game_heroes::SOLDIER,
     game_service::player_entity,
     junkenstein_messages::DefenderMessage,
     script_init::{Site, World},
@@ -64,6 +66,7 @@ use crate::{
 use crate::{debug_geometry::DebugGeometry, game_debug::Actor};
 
 pub(crate) const MOVER_CATEGORY: u16 = 0x18;
+const OWNER_PROBE_CONTROLLER: u32 = 0xa000_0100;
 
 fn mover_category(map: &GameMap, team: u8) -> u16 {
     match (map.free_for_all, team) {
@@ -89,8 +92,40 @@ fn ground_height(
     }
 }
 
-type OwnerBodyFactory =
-    dyn Fn(&Hero, OwnerBodySpawn) -> io::Result<Option<Box<dyn OwnerBodyRuntime>>> + Send + Sync;
+type OwnerBodyFactory = dyn Fn(&Hero, OwnerBodySpawn, OwnerBodySetup) -> io::Result<Option<Box<dyn OwnerBodyRuntime>>>
+    + Send
+    + Sync;
+
+fn practice_owner_selector(
+    factories: BTreeMap<u64, Result<PlayerBodyFactory, Arc<SceneOwnerPreparationError>>>,
+) -> Arc<OwnerBodyFactory> {
+    Arc::new(move |hero, spawn, setup| {
+        let Some(factory) = factories.get(&hero.guid) else {
+            return Ok(None);
+        };
+        let factory = factory
+            .as_ref()
+            .map_err(|error| io::Error::new(io::ErrorKind::Unsupported, Arc::clone(error)))?;
+        let runtime: Box<dyn OwnerBodyRuntime> = Box::new(factory.start_with_setup(spawn, setup)?);
+        Ok(Some(runtime))
+    })
+}
+
+#[derive(Debug, thiserror::Error)]
+enum SceneOwnerPreparationError {
+    #[error("the owner statescript codec table is unavailable")]
+    Codecs,
+    #[error("the controller's initial on-fire flag is unavailable")]
+    ControllerFlag,
+    #[error(transparent)]
+    SpawnMover(io::Error),
+    #[error(transparent)]
+    TeamFilter(io::Error),
+    #[error(transparent)]
+    SpatialFrame(CombatError),
+    #[error(transparent)]
+    Body(Box<OwnerBodyPreparationError>),
+}
 
 #[derive(Clone)]
 struct MapCollision {
@@ -113,6 +148,7 @@ pub struct SceneAssets {
     last_collision: Mutex<Option<(CollisionKey, MapCollision)>>,
     trace_contacts: bool,
     mode_props: BTreeMap<u64, BTreeSet<u64>>,
+    environment: EnvironmentCatalog,
     graphs: Arc<GraphStore>,
     codecs: Option<Arc<CodecTable>>,
     practice_owner_body: OnceLock<Option<Arc<OwnerBodyFactory>>>,
@@ -160,6 +196,7 @@ impl SceneAssets {
             trace_contacts: false,
             junkenstein_validation: None,
             mode_props: read_mode_props(&data.join("collision_props_174.json"))?,
+            environment: EnvironmentCatalog::load(data.join("map_environment_174.json"))?,
             graphs,
             codecs,
             practice_owner_body: OnceLock::new(),
@@ -255,6 +292,8 @@ impl SceneAssets {
             vec![Root::new(1, gate.graph)],
             0,
             &mut GateWorld {
+                graphs: &self.graphs,
+                mode: card.mode,
                 entity: gate.entity,
                 state: &mut gate_state,
                 bodies: scene.simulation(),
@@ -277,6 +316,8 @@ impl SceneAssets {
         let mut screens_complete = false;
         let encounter = {
             let mut startup = EncounterWorld {
+                graphs: &self.graphs,
+                mode: card.mode,
                 gate: &gate,
                 anchors: &anchors,
                 gate_variables: &gate_variables,
@@ -431,6 +472,23 @@ impl SceneAssets {
                 .component(&PlayerStats::default(), map.mode_guid, None, None);
         let junkenstein_anchors = Arc::new(junkenstein_anchors);
         let mut simulation = RoomSimulation::new(bots).map_err(io::Error::other)?;
+        simulation.set_environment(self.environment.for_map(map.map_guid));
+        if self.graphs.uses_host_health_events() {
+            simulation.enable_host_health_events();
+        }
+        if self.graphs.uses_room_spatial_frame() {
+            simulation.enable_spatial_queries(
+                map.free_for_all,
+                Arc::clone(&ground),
+                self.graphs.room_spatial_needs(),
+            );
+            if self.graphs.uses_spatial_actor_rays() {
+                simulation.enable_spatial_actor_rays(Arc::clone(&self.movers));
+            }
+        }
+        if contacts.is_some() {
+            simulation.enable_movement_contacts(map.free_for_all, Arc::clone(&self.movers));
+        }
         if let Some(gate) = junkenstein_gate {
             simulation
                 .register_junkenstein_gate(gate, Arc::clone(&junkenstein_anchors))
@@ -456,7 +514,7 @@ impl SceneAssets {
         if is_practice_range(scene.map()) && scripted_bots == 0 {
             scene.owner_body_factory = self
                 .practice_owner_body
-                .get_or_init(|| self.prepare_owner_body(&scene, SOLDIER))
+                .get_or_init(|| self.compile_practice_factories(&scene))
                 .clone();
         }
         Ok(scene)
@@ -533,53 +591,116 @@ impl SceneAssets {
         hero_guid: u64,
     ) -> Option<Arc<OwnerBodyFactory>> {
         let hero = self.heroes.get(hero_guid)?;
-        let prepared = self
-            .codecs
-            .as_ref()
-            .ok_or_else(|| "the owner statescript codec table is unavailable".to_owned())
-            .and_then(|codecs| {
-                let controller_on_fire =
-                    initial_on_fire(&scene.initial_board).ok_or_else(|| {
-                        "the controller's initial on-fire flag is unavailable".to_owned()
-                    })?;
-                let mover = scene
-                    .player_spawn_mover(hero.body, 0)
-                    .map_err(|error| error.to_string())?;
-                PlayerBodyFactory::prepare(
-                    Arc::clone(&self.graphs),
-                    Arc::clone(codecs),
-                    scene.map.mode_guid,
+        let prepared = scene
+            .simulation()
+            .capture_spatial_frame(FIRST_TICK)
+            .map_err(SceneOwnerPreparationError::SpatialFrame)
+            .and_then(|spatial_frame| {
+                self.prepare_owner_factory(
+                    scene,
                     hero,
-                    self.pools.hero_pools(hero.guid),
-                    controller_on_fire,
-                    OwnerBodySpawn {
-                        slot: 0,
-                        controller: 0xa000_0100,
-                        entity: 0xa000_0101,
-                        body_filter: team_bit(0).map_err(|error| error.to_string())?,
-                        frame: FIRST_TICK,
-                        pose: mover.pose(),
-                        quanta: RETAIL_QUANTA,
+                    OwnerBodySetup {
+                        spatial_frame,
+                        room_activity: Some(scene.owner_room_activity()),
+                        ..OwnerBodySetup::default()
                     },
                 )
-                .map_err(|error| error.to_string())
-            });
+            })
+            .map_err(Arc::new);
         if let Err(reason) = &prepared {
             eprintln!(
                 "{} owner statescript unavailable in {} ({reason})",
                 hero.name, scene.map.name
             );
         }
-        Some(Arc::new(move |hero, spawn| {
+        Some(Arc::new(move |hero, spawn, setup| {
             if hero.guid != hero_guid {
                 return Ok(None);
             }
             let factory = prepared
                 .as_ref()
-                .map_err(|reason| io::Error::new(io::ErrorKind::Unsupported, reason.clone()))?;
-            let runtime: Box<dyn OwnerBodyRuntime> = Box::new(factory.start(spawn)?);
+                .map_err(|reason| io::Error::new(io::ErrorKind::Unsupported, Arc::clone(reason)))?;
+            let runtime: Box<dyn OwnerBodyRuntime> =
+                Box::new(factory.start_with_setup(spawn, setup)?);
             Ok(Some(runtime))
         }))
+    }
+
+    fn compile_practice_factories(&self, scene: &PreparedScene) -> Option<Arc<OwnerBodyFactory>> {
+        // A scriptless scene omits the entire owner configuration.
+        let bodies = self.graphs.bodies();
+        if self.codecs.is_none()
+            && bodies.values().all(|body| body.hero.is_none())
+            && self
+                .heroes
+                .heroes()
+                .all(|hero| !bodies.contains_key(&hero.body))
+        {
+            return None;
+        }
+        // Cache graph layouts only. Each selected body starts with the current room context.
+        let factories: BTreeMap<_, _> = self
+            .heroes
+            .heroes()
+            .map(|hero| {
+                (
+                    hero.guid,
+                    self.compile_owner_factory(scene, hero).map_err(Arc::new),
+                )
+            })
+            .collect();
+        (!factories.is_empty()).then(|| practice_owner_selector(factories))
+    }
+
+    fn compile_owner_factory(
+        &self,
+        scene: &PreparedScene,
+        hero: &Hero,
+    ) -> Result<PlayerBodyFactory, SceneOwnerPreparationError> {
+        let codecs = self
+            .codecs
+            .as_ref()
+            .ok_or(SceneOwnerPreparationError::Codecs)?;
+        let controller_on_fire = initial_on_fire(&scene.initial_board)
+            .ok_or(SceneOwnerPreparationError::ControllerFlag)?;
+        PlayerBodyFactory::from_body(
+            Arc::clone(&self.graphs),
+            Arc::clone(codecs),
+            scene.map.mode_guid,
+            hero,
+            self.pools.hero_pools(hero.guid),
+            controller_on_fire,
+        )
+        .map_err(|source| SceneOwnerPreparationError::Body(Box::new(source)))
+    }
+
+    fn prepare_owner_factory(
+        &self,
+        scene: &PreparedScene,
+        hero: &Hero,
+        setup: OwnerBodySetup,
+    ) -> Result<PlayerBodyFactory, SceneOwnerPreparationError> {
+        let factory = self.compile_owner_factory(scene, hero)?;
+        let mover = scene
+            .player_spawn_mover(hero.body, 0)
+            .map_err(SceneOwnerPreparationError::SpawnMover)?;
+        factory
+            .probe_startup(
+                OwnerBodySpawn {
+                    slot: 0,
+                    controller: OWNER_PROBE_CONTROLLER,
+                    entity: 0xa000_0101,
+                    body_filter: team_bit(0).map_err(SceneOwnerPreparationError::TeamFilter)?,
+                    frame: FIRST_TICK,
+                    pose: mover.pose(),
+                    eye_position: script_eye_position(hero.guid, &mover),
+                    skin: 0,
+                    quanta: RETAIL_QUANTA,
+                },
+                setup,
+            )
+            .map_err(|source| SceneOwnerPreparationError::Body(Box::new(source)))?;
+        Ok(factory)
     }
 }
 

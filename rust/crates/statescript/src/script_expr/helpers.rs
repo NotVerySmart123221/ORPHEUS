@@ -4,8 +4,49 @@ pub(super) fn class(config: &Json) -> Option<&str> {
     config.get("$")?.as_str()
 }
 
+pub(crate) fn client_only_fallback(config: &Json) -> Result<Option<&Json>, EvalError> {
+    let fields = config
+        .as_object()
+        .filter(|fields| {
+            fields.contains_key("value")
+                && fields
+                    .keys()
+                    .all(|key| matches!(key.as_str(), "$" | "value" | "server_fallback"))
+        })
+        .ok_or(EvalError::MalformedConfig("invalid client-only operand"))?;
+    Ok(fields.get("server_fallback"))
+}
+
 pub fn native_shape(config: &Json, expected: &str, operand: Option<&str>) -> bool {
     class(config) == Some(expected) && native_fields(config, operand.as_slice())
+}
+
+pub(crate) fn native_entity_operand<'a>(config: &'a Json, expected: &str) -> Option<&'a Json> {
+    config
+        .get("m_entity")
+        .filter(|_| native_shape(config, expected, Some("m_entity")))
+}
+
+pub(crate) fn native_target_tag_operand(config: &Json) -> Option<(u64, &Json)> {
+    if class(config) != Some("STU_25ECB55F") || !native_fields(config, &["m_entity", "m_88B0050A"])
+    {
+        return None;
+    }
+    let tag = target_tag_guid(child(config, "m_88B0050A"))?;
+    Some((tag, child(config, "m_entity")))
+}
+
+pub(crate) fn named_shield_identifier(config: &Json) -> Option<u64> {
+    if class(config) != Some("STUConfigVarIdentifier")
+        || !native_fields(config, &["m_identifier", "m_resourceKey"])
+        || !child(config, "m_resourceKey").is_null()
+    {
+        return None;
+    }
+    child(config, "m_identifier")
+        .as_str()
+        .and_then(orpheus_runtime::format::parse_guid)
+        .filter(|id| id >> 52 == 0x0d8 && *id as u32 != 0)
 }
 
 pub fn native_fields(config: &Json, operands: &[&str]) -> bool {
@@ -328,7 +369,16 @@ pub(super) fn reference_native_class(config: &Json) -> Option<&str> {
         | "STU_3ACE35FB"
         | "STU_7197C080"
         | "STU_BE0BD267"
-        | "STUConfigVarVec3" => false,
+        | "STUConfigVarVec3"
+        | "EntityPosition"
+        | "EntityDirection"
+        | "BodyActive"
+        | "EntityMatches"
+        | "StackAllows"
+        | "EntitiesInRadius"
+        | "SegmentClear"
+        | "RayCast"
+        | "EntityRayCast" => false,
         "STU_B40ACFBA" | "STU_4BD39CFD" => false,
         "STU_45EDF12D" if child(config, "m_key").is_null() => false,
         "STUConfigVarTexture" | "STU_08305297" if child(config, "m_resourceKey").is_null() => false,

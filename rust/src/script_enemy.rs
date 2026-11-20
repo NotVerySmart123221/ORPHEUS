@@ -2,6 +2,7 @@
 
 use crate::{
     commands::{Command, FIRE, SECONDARY},
+    game_combat::RoomScriptRequests,
     game_content::{TUTORIAL_MODE, is_junkenstein_mode},
     game_hitscan::{HitDefinition, HitscanShot, TargetPose, aim_direction},
     junkenstein_messages::{
@@ -18,8 +19,8 @@ use crate::{
     script_expr::{EntityRelation, OnFire, native_shape},
     script_graph::{EnemyPair, GraphStore, asset_guid},
     script_init::{
-        self, AiWeaponOverride, BeamContact, Component, MAX_INIT_WORK, PlayScript, Site,
-        TargetTagEffect, TargetTagEffects, World,
+        self, AiWeaponOverride, BeamContact, Component, InitFault, MAX_INIT_WORK, PlayScript,
+        RoomMessage, Site, TargetTagEffect, TargetTagEffects, World,
     },
     script_wire::{Value, Variables},
     vitals::{PoolKind, Vitals},
@@ -45,6 +46,7 @@ pub(crate) struct AiControlRecords {
     same_team_contact_suppressions: HashSet<Site>,
     outgoing_damage_filters: IndexMap<Site, OutgoingDamageFilter>,
     velocity_changes: Vec<(u32, crate::mover::VelocityChange)>,
+    scripted_motion: Option<(u32, script_init::ScriptedMotion)>,
     defenders: Arc<[u32]>,
     sightings: Vec<DefenderSighting>,
     defender_messages: Vec<DefenderMessage>,
@@ -52,6 +54,8 @@ pub(crate) struct AiControlRecords {
     voice_requests: Vec<VoiceRequest>,
     voice_variation: u64,
     scripted_damage: Vec<EnemyDamage>,
+    local_health_changes: Vec<LocalHealthChange>,
+    script_requests: RoomScriptRequests,
     objective_route_active: Option<bool>,
     weapon_target: Option<BossTarget>,
     summoner_targets: [Option<u32>; 2],
@@ -62,6 +66,13 @@ pub(crate) struct AiControlRecords {
     witch_staff_effect: Option<(u32, f64)>,
     witch_staff_sources: IndexMap<u32, WitchStaffSource>,
     ai_control_setting: Option<(f32, bool)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct LocalHealthChange {
+    pub(crate) source: u32,
+    pub(crate) delta: f64,
+    pub(crate) killed: bool,
 }
 
 pub(crate) struct WitchStaffSource {
@@ -221,6 +232,7 @@ pub(crate) struct EnemyBinding {
     pub pose: Movement,
     pub gate: Option<EnemyGate>,
     pub roster: Option<Arc<Vec<EnemyTarget>>>,
+    pub spatial_frame: Option<Arc<crate::game_combat::RoomSpatialFrame>>,
     /// Explicit room retirement facts; absence from a target roster alone is unknown.
     pub retired_entities: Arc<BTreeSet<u32>>,
     /// Authoritative room clock, independent of optional movement wire fields.

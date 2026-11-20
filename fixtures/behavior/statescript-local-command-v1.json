@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "case_id": "statescript-local-command.synthetic.v1",
+  "source": {"basis": "Original switch and process-local command facts."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "remote_frame": 1,
+    "remote_buttons": 65,
+    "cases": [
+      {
+        "name": "cold startup with known local absence",
+        "with_remote_command": false,
+        "local_command_present": false,
+        "operand": {"$": "STU_D3685C04"}
+      },
+      {
+        "name": "held remote buttons with known local absence",
+        "with_remote_command": true,
+        "local_command_present": false,
+        "operand": {"$": "STU_D3685C04"}
+      },
+      {
+        "name": "unknown process-local context",
+        "with_remote_command": true,
+        "local_command_present": null,
+        "operand": {"$": "STU_D3685C04"}
+      },
+      {
+        "name": "host reports local context present",
+        "with_remote_command": true,
+        "local_command_present": true,
+        "operand": {"$": "STU_D3685C04"}
+      },
+      {
+        "name": "malformed operand must not query the host",
+        "with_remote_command": true,
+        "local_command_present": false,
+        "operand": {"$": "STU_D3685C04", "unexpected": true}
+      }
+    ]
+  },
+  "expected": [
+    {"branch_value": false, "query_count": 1},
+    {"branch_value": false, "query_count": 1},
+    {"unsupported": "STU_D3685C04", "query_count": 1},
+    {"unsupported": "STU_D3685C04", "query_count": 1},
+    {"unsupported": "STU_D3685C04", "query_count": 0}
+  ]
+}

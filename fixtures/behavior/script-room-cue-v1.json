@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "case_id": "script-room-cue.synthetic.v1",
+  "source": {
+    "basis": "Original graph, actor snapshot, delivery timing and invented cue identifiers for scoped presentation output."
+  },
+  "evidence": "synthetic-rust",
+  "input": {
+    "bundle": {
+      "version": 1,
+      "authored_classes": [
+        {"class": "authored.announce", "behavior": "room_cue_action"}
+      ],
+      "graphs": [
+        {
+          "index": 211,
+          "items": 3,
+          "header": {
+            "m_nodesBitCount": 4,
+            "m_statesBitCount": 4,
+            "m_remoteSyncNodesBitCount": 4,
+            "m_syncVarsBitCount": 4
+          },
+          "fields": {},
+          "containers": {},
+          "nodes": [
+            {
+              "pos": 0,
+              "class": "STUStatescriptEntryGameMessage",
+              "uid": 0,
+              "rid": 0,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": false,
+              "fields": {
+                "m_gameMessage": {"m_gameMessage": "0x000000000000003D"},
+                "m_outPlug": {"$": "Plug", "links": [[1, "m_inPlug"]], "m_FF3DAF1E": []}
+              }
+            },
+            {
+              "pos": 1,
+              "class": "authored.announce",
+              "uid": 1,
+              "rid": 1,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": false,
+              "fields": {
+                "audience": {
+                  "$": "EntitiesInRadius",
+                  "center": {
+                    "$": "EntityPosition",
+                    "entity": {"$": "STUConfigVarDynamic", "m_identifier": 1, "m_60DB8F99": true}
+                  },
+                  "radius": 3,
+                  "filter": {
+                    "relation": "ally",
+                    "source": {"$": "STUConfigVarDynamic", "m_identifier": 1, "m_60DB8F99": true},
+                    "alive": true
+                  }
+                },
+                "stimulus": "0x01000000000000AB",
+                "line": "0x02000000000000BC",
+                "m_outPlug": {"$": "Plug", "links": [[2, "m_inPlug"]], "m_FF3DAF1E": []}
+              }
+            },
+            {
+              "pos": 2,
+              "class": "STUStatescriptActionSetVar",
+              "uid": 2,
+              "rid": 2,
+              "remote": -1,
+              "state": null,
+              "client_only": false,
+              "server_only": false,
+              "fields": {
+                "m_ADEB6E05": true,
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 3, "m_60DB8F99": true},
+                "m_value": true
+              }
+            }
+          ],
+          "unknown_nodes": [],
+          "states": [],
+          "entries": [0],
+          "remote": [],
+          "sync_vars": []
+        }
+      ],
+      "bodies": {},
+      "missing": []
+    },
+    "speaker": 711,
+    "center": [10, 2, 4],
+    "actors": [
+      [714, [11, 2, 4], 8, true],
+      [711, [10, 2, 4], 8, true],
+      [703, [11, 2, 4], 2, true],
+      [704, [10, 2, 4], 8, false],
+      [705, [10, 2, 8], 8, true],
+      [706, [10, 2, 4], null, true],
+      [702, [10, 5, 4], 8, true]
+    ],
+    "scenarios": [
+      {"name": "team, radius and liveness use the room snapshot", "facts_available": true},
+      {"name": "room facts are unavailable"},
+      {"name": "direct input preserves first occurrences", "audience": [714, 702, 714]},
+      {"name": "empty direct input succeeds", "audience": []},
+      {"name": "host rejects a well-formed command", "audience": [714], "reject": true},
+      {"name": "malformed member invalidates the whole input", "audience": [714, "not-an-entity"]},
+      {"name": "zero does not identify any actor", "audience": [714, 0]},
+      {"name": "oversized input never stages a partial cue", "audience_count": 65}
+    ],
+    "reliable_admission": {"listener_generation": 4, "late_damage": 1000}
+  },
+  "expected": {
+    "stimulus": "0x01000000000000AB",
+    "line": "0x02000000000000BC",
+    "outputs": [
+      {"attempted": [702, 714], "queued": [702, 714], "continued": true},
+      {"continued": false},
+      {"attempted": [714, 702], "queued": [714, 702], "continued": true},
+      {"continued": true},
+      {"attempted": [714], "continued": false},
+      {"continued": false},
+      {"continued": false},
+      {"continued": false}
+    ],
+    "reliable_admission": {
+      "before_listener_death": {"authored": true, "legacy": true},
+      "after_listener_death": {"authored": false, "legacy": true}
+    }
+  }
+}

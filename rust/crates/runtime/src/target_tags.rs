@@ -3,48 +3,26 @@
 use std::{
     collections::BTreeSet,
     fs::{self, File},
-    io::{self, BufReader, Read},
+    io::{self, Read},
     path::Path,
 };
 
-use flate2::{Compression, bufread::MultiGzDecoder, write::GzEncoder};
 use roxmltree::{Document, Node};
 use serde_json::Value;
 
 use super::{RuntimeError, at};
-use crate::format::{MAX_GRAPH_BYTES, TARGET_TAG_TYPE, parse_guid};
+use crate::format::{TARGET_TAG_TYPE, parse_guid};
 
 const DRAGONML: &str = "https://yretenai.com/dragonml/v1";
 const ENTITY_TYPE: u64 = 0x400;
 const RESOURCE_INDEX_MASK: u64 = (1 << 48) - 1;
 const MAX_XML_BYTES: u64 = 16 * 1024 * 1024;
 
-pub(super) fn enrich(input: &Path, xml_dir: &Path) -> Result<Vec<u8>, RuntimeError> {
+pub(super) fn apply(input: &Path, xml_dir: &Path, bundle: &mut Value) -> Result<(), RuntimeError> {
     if !at(xml_dir, fs::metadata(xml_dir))?.is_dir() {
         return at(
             xml_dir,
             Err(invalid("expected a DataTool .003 XML directory")),
-        );
-    }
-
-    let decoder = MultiGzDecoder::new(BufReader::new(at(input, File::open(input))?));
-    let mut bytes = Vec::new();
-    at(
-        input,
-        decoder.take(MAX_GRAPH_BYTES + 1).read_to_end(&mut bytes),
-    )?;
-    if bytes.len() as u64 > MAX_GRAPH_BYTES {
-        return at(
-            input,
-            Err(invalid("state graph bundle exceeds the size limit")),
-        );
-    }
-    let mut bundle: Value = at(input, serde_json::from_slice(&bytes).map_err(invalid))?;
-    drop(bytes);
-    if bundle.get("version").and_then(Value::as_u64) != Some(1) {
-        return at(
-            input,
-            Err(invalid("unsupported state graph bundle version")),
         );
     }
 
@@ -86,12 +64,7 @@ pub(super) fn enrich(input: &Path, xml_dir: &Path) -> Result<Vec<u8>, RuntimeErr
         }
     }
 
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    at(
-        input,
-        serde_json::to_writer(&mut encoder, &bundle).map_err(invalid),
-    )?;
-    at(input, encoder.finish())
+    Ok(())
 }
 
 struct EntityMetadata {

@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "case_id": "script-assignment-client-fallback.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "input": [
+    {
+      "name": "ordinary group",
+      "destination": 411,
+      "value": {"$": "STU_06610EBC", "m_configVars": [3, null, 5]},
+      "expected": [3, 5]
+    },
+    {
+      "name": "wrapped group",
+      "bind_subscript": true,
+      "destination": 412,
+      "value": {
+        "$": "ClientOnly",
+        "value": {"$": "SyntheticClientMustRemainOpaque"},
+        "server_fallback": {
+          "$": "ClientOnly",
+          "value": {"$": "SyntheticClientMustRemainOpaque"},
+          "server_fallback": {"$": "STU_06610EBC", "m_configVars": [3, null, 5]}
+        }
+      },
+      "expected": [3, 5]
+    },
+    {
+      "name": "wrapped subgroup with an omitted item",
+      "bind_subscript": true,
+      "destination": 413,
+      "value": {
+        "$": "STU_06610EBC",
+        "m_configVars": [
+          6,
+          {
+            "$": "ClientOnly",
+            "value": {"$": "SyntheticClientMustRemainOpaque"},
+            "server_fallback": {
+              "$": "STU_06610EBC",
+              "m_configVars": [
+                8,
+                null,
+                {"$": "ClientOnly", "value": {"$": "SyntheticClientMustRemainOpaque"}},
+                11
+              ]
+            }
+          },
+          13
+        ]
+      },
+      "expected": [6, 8, 11, 13]
+    },
+    {
+      "name": "ordinary assignment with no fallback keeps its initial value",
+      "destination": 414,
+      "value": {"$": "ClientOnly", "value": {"$": "SyntheticClientMustRemainOpaque"}},
+      "expected": 0
+    },
+    {
+      "name": "ordinary assignment with a scalar fallback",
+      "destination": 415,
+      "value": {
+        "$": "ClientOnly",
+        "value": {"$": "SyntheticClientMustRemainOpaque"},
+        "server_fallback": 17
+      },
+      "expected": 17
+    }
+  ]
+}

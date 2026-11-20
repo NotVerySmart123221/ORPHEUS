@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "case_id": "training-bot-scripted-respawn-v1",
+  "evidence": "rust-headless-synthetic",
+  "input": {
+    "kill_tick": 3,
+    "kill_time_ms": 48,
+    "health_change": -200
+  },
+  "expected": {
+    "replacement_counts": [
+      0,
+      1,
+      0
+    ],
+    "fresh_health": 100
+  }
+}

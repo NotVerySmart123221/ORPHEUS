@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "case_id": "actor-input-node-shape-v1",
+  "source": {"basis": "Synthetic node fields and diagnostics for the private actor input report."},
+  "evidence": "rust-synthetic",
+  "input": {
+    "graph": 281,
+    "node": 0,
+    "class": "STU_A17C3011",
+    "fields": {
+      "m_ADEB6E05": true,
+      "m_target": {"$": "STUConfigVarDynamic", "m_identifier": 6123478},
+      "m_out_Value": {"$": "STUConfigVarDynamic", "m_identifier": 7612235, "m_60DB8F99": true},
+      "m_instigator": null,
+      "m_filters": [
+        {"$": "STUConfigVarFilter", "m_resourceKey": "0xDEADC0DE00001234"},
+        {"$": "unexpected natural-language label", "private/path": "C:/private/input.dat"}
+      ],
+      "m_amount": 456.75,
+      "private/path": "unfiltered text must stay private"
+    }
+  },
+  "expected": {
+    "suppressed_values": [
+      "6123478",
+      "7612235",
+      "0xDEADC0DE00001234",
+      "unexpected natural-language label",
+      "private/path",
+      "C:/private/input.dat",
+      "456.75",
+      "unfiltered text must stay private"
+    ]
+  }
+}

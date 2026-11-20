@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "case_id": "owner-script-fault-hitscan-v1",
+  "evidence": "rust-headless-synthetic",
+  "input": {
+    "heroes": [
+      207165582859063517,
+      207165582859063518
+    ],
+    "target_position": [
+      6,
+      0,
+      0
+    ],
+    "target_health": 100,
+    "shot_damage": 25,
+    "input_budgets": [
+      1,
+      3
+    ]
+  },
+  "expected": {
+    "hits": 1,
+    "target_health_after_shot": 75,
+    "replacement_generation": 2
+  }
+}

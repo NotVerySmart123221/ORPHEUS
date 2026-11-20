@@ -4,9 +4,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 const USAGE: &str = "Usage: prepare_server_runtime --source DIR --destination DIR [--map INDEX]...\n\
-    [--game-graphs FILE] [--target-tags-xml DIR]\n\
+    [--game-graphs FILE] [--target-tags-xml DIR] [--mode-rulesets FILE]\n\
     \nCopy runtime inputs from a prepared local checkout or runtime pack into a new directory.\n\
-    The optional XML directory supplies target tags, component 92 metadata and catalog-selected NPC movers from local DataTool .003 exports.";
+    The optional XML directory supplies target tags, component 92 metadata and catalog-selected NPC movers from local DataTool .003 exports.\n\
+    A local mode rules file supplies a JSON array of profiles for distinct modes.";
 
 struct Arguments {
     source: PathBuf,
@@ -14,11 +15,12 @@ struct Arguments {
     maps: Vec<String>,
     game_graphs: Option<PathBuf>,
     target_tags_xml: Option<PathBuf>,
+    mode_rulesets: Option<PathBuf>,
 }
 
 fn parse(mut args: impl Iterator<Item = OsString>) -> Result<Option<Arguments>, String> {
-    let (mut source, mut destination, mut game_graphs, mut target_tags_xml) =
-        (None, None, None, None);
+    let (mut source, mut destination, mut game_graphs, mut target_tags_xml, mut mode_rulesets) =
+        (None, None, None, None, None);
     let mut maps = Vec::new();
     while let Some(argument) = args.next() {
         let argument = argument.to_str().ok_or("Expected a command-line option")?;
@@ -40,6 +42,7 @@ fn parse(mut args: impl Iterator<Item = OsString>) -> Result<Option<Arguments>, 
             "--destination" => destination = Some(PathBuf::from(value()?)),
             "--game-graphs" => game_graphs = Some(PathBuf::from(value()?)),
             "--target-tags-xml" => target_tags_xml = Some(PathBuf::from(value()?)),
+            "--mode-rulesets" => mode_rulesets = Some(PathBuf::from(value()?)),
             "--map" => maps.push(value()?.into_string().map_err(|_| "Invalid map index")?),
             _ => return Err(format!("Unknown option {option}")),
         }
@@ -50,6 +53,7 @@ fn parse(mut args: impl Iterator<Item = OsString>) -> Result<Option<Arguments>, 
         maps,
         game_graphs,
         target_tags_xml,
+        mode_rulesets,
     }))
 }
 
@@ -58,12 +62,15 @@ fn run() -> Result<(), String> {
         println!("{USAGE}");
         return Ok(());
     };
-    let destination = runtime::prepare_with_target_tags(
+    let destination = runtime::prepare_with_graph_metadata(
         &args.source,
         &args.destination,
         &args.maps,
         args.game_graphs.as_deref(),
-        args.target_tags_xml.as_deref(),
+        runtime::GraphMetadata {
+            target_tags_xml: args.target_tags_xml.as_deref(),
+            mode_rulesets: args.mode_rulesets.as_deref(),
+        },
     )
     .map_err(|error| error.to_string())?;
     println!("Prepared runtime data at {}", destination.display());

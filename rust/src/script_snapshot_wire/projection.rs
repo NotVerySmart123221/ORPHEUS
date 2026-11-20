@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::script_codecs::{Codec, PayloadError, StatePayload};
 use crate::script_graph::{Graph, Node, asset_guid};
-use crate::script_init::{Snapshot, StackBinding, State, StateKind};
+use crate::script_init::{Issue, Snapshot, StackBinding, State, StateKind};
 use crate::script_wire::{Binding, Value, Variables};
 
 use super::{
@@ -48,7 +48,9 @@ impl<'a> SnapshotEncoder<'a> {
         only_instance: Option<u16>,
     ) -> Result<ProjectedSnapshot, SnapshotError> {
         let relevant = |diagnostic: &&crate::script_init::Diagnostic| {
-            only_instance.is_none_or(|id| diagnostic.site.instance == id)
+            !diagnostic.server_only
+                && diagnostic.issue != Issue::ObservationUnavailable
+                && only_instance.is_none_or(|id| diagnostic.site.instance == id)
         };
         if snapshot
             .diagnostics
@@ -61,15 +63,7 @@ impl<'a> SnapshotEncoder<'a> {
                     .diagnostics
                     .iter()
                     .filter(relevant)
-                    .map(|diagnostic| {
-                        let site = diagnostic.site;
-                        match site.node {
-                            Some(node) => {
-                                format!("{:04X}:{node}:{:?}", site.graph, diagnostic.issue)
-                            }
-                            None => format!("{:04X}:-:{:?}", site.graph, diagnostic.issue),
-                        }
-                    })
+                    .cloned()
                     .collect(),
             });
         }
@@ -78,7 +72,7 @@ impl<'a> SnapshotEncoder<'a> {
             .unwrap_or_else(|| BTreeSet::from([OWNER_HEALTH]));
         let mut instances = BTreeMap::new();
         for (&id, instance) in &snapshot.instances {
-            if only_instance.is_some_and(|only| id != only) {
+            if instance.is_server_only() || only_instance.is_some_and(|only| id != only) {
                 continue;
             }
             let graph = self.graph(id, instance.graph)?;
@@ -125,13 +119,16 @@ impl<'a> SnapshotEncoder<'a> {
                         active: state.active,
                         payload,
                         link: match state.kind {
-                            StateKind::Registered { next: Some(link) } => Some(
-                                self.project_state_link(snapshot, view, link)
-                                    .ok_or_else(|| SnapshotError::Payload {
+                            StateKind::Registered { next: Some(link) }
+                                if !server_only_instance(snapshot, link.0) =>
+                            {
+                                Some(self.project_state_link(snapshot, view, link).ok_or_else(
+                                    || SnapshotError::Payload {
                                         site,
                                         source: PayloadError::Field("link".into()),
-                                    })?,
-                            ),
+                                    },
+                                )?)
+                            }
                             _ => None,
                         },
                         volley: match state.kind {
@@ -230,9 +227,21 @@ impl<'a> SnapshotEncoder<'a> {
         excluded: &BTreeSet<u32>,
         view: View,
     ) -> Result<ProjectedVariables, SnapshotError> {
+        let owner_only = if view == View::Observer && owner != 0 {
+            snapshot
+                .instances
+                .get(&owner)
+                .map(|instance| self.graph(owner, instance.graph))
+                .transpose()?
+                .map(Graph::owner_only_instance_vars)
+        } else {
+            None
+        };
         let mut projected = ProjectedVariables::default();
         for (&variable, base) in values {
-            if excluded.contains(&variable) {
+            if excluded.contains(&variable)
+                || owner_only.is_some_and(|private| private.binary_search(&variable).is_ok())
+            {
                 continue;
             }
             let key = (owner, variable);
@@ -285,6 +294,9 @@ impl<'a> SnapshotEncoder<'a> {
                 .instances
                 .get(&binding.instance)
                 .ok_or_else(invalid)?;
+            if source.is_server_only() {
+                continue;
+            }
             if !source.states.get(&binding.raw_state).is_some_and(|state| {
                 state.active
                     && matches!(
@@ -320,11 +332,11 @@ impl<'a> SnapshotEncoder<'a> {
         &self,
         snapshot: &Snapshot,
     ) -> Result<Option<ProjectedSnapshot>, SnapshotError> {
-        let Some((&id, _)) = snapshot
-            .instances
-            .iter()
-            .find(|(_, instance)| instance.graph == 0x1188 && instance.parent == Some((2, 68)))
-        else {
+        let Some((&id, _)) = snapshot.instances.iter().find(|(_, instance)| {
+            !instance.is_server_only()
+                && instance.graph == 0x1188
+                && instance.parent == Some((2, 68))
+        }) else {
             return Ok(None);
         };
         self.project_with_exclusions(snapshot, View::Observer, None, Some(id))
@@ -336,7 +348,8 @@ impl<'a> SnapshotEncoder<'a> {
         snapshot: &Snapshot,
     ) -> Result<Option<ProjectedSnapshot>, SnapshotError> {
         let Some((&manager, screen_manager)) = snapshot.instances.iter().find(|(_, instance)| {
-            instance.graph == 0x180a
+            !instance.is_server_only()
+                && instance.graph == 0x180a
                 && instance.parent.is_some_and(|(parent, raw)| {
                     raw == 45 && snapshot.instances[&parent].graph == 0x0cbb
                 })
@@ -348,6 +361,9 @@ impl<'a> SnapshotEncoder<'a> {
         // The native observer excludes server-only list rows. A graph played
         // by a row is an independent observer root with its resolved start values.
         for (&id, instance) in &snapshot.instances {
+            if instance.is_server_only() {
+                continue;
+            }
             let mut parent = instance.parent;
             if id != manager {
                 let Some((owner, raw)) = parent else { continue };
@@ -505,6 +521,13 @@ impl<'a> SnapshotEncoder<'a> {
     }
 }
 
+fn server_only_instance(snapshot: &Snapshot, id: u16) -> bool {
+    snapshot
+        .instances
+        .get(&id)
+        .is_some_and(|instance| instance.is_server_only())
+}
+
 fn server_only_variables(graph: &Graph) -> BTreeSet<u32> {
     graph
         .fields
@@ -543,6 +566,7 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             | StateKind::PlacementSelector { .. }
             | StateKind::MoveTo { .. }
             | StateKind::ShieldRecharge
+            | StateKind::NamedShieldDecay
             | StateKind::ExplosionContact
             | StateKind::DeadeyeEffects
             | StateKind::WitchStaffEffect
@@ -562,6 +586,7 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             | StateKind::WaitFrames { .. }
             | StateKind::AiCandidate { .. }
             | StateKind::MovementMod
+            | StateKind::VoiceStimulus
             | StateKind::BossIntroVoice(_)
             | StateKind::GateVoice(_)
             | StateKind::VictoryVoice
@@ -582,7 +607,7 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
                 ("undecided".into(), Value::Bool(undecided)),
             ])
         }
-        (StateKind::MovementSample(mask), Some("flags13")) => {
+        (StateKind::MovementSample { flags: mask, .. }, Some("flags13")) => {
             StatePayload::from([("value".into(), Value::Integer(i64::from(mask)))])
         }
         (StateKind::SubScript { child }, Some("subscript")) => StatePayload::from([(
@@ -639,9 +664,10 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             "counter".into(),
             Value::Integer(i64::from(state.activation & 3)),
         )]),
-        (StateKind::SendMessage | StateKind::PersistentSend(_), Some("send")) => {
-            StatePayload::new()
-        }
+        (
+            StateKind::SendMessage | StateKind::ProjectedSelfSend | StateKind::PersistentSend(_),
+            Some("send"),
+        ) => StatePayload::new(),
         (StateKind::ClientPulse { count, fresh_at }, Some("pulser")) => StatePayload::from([
             ("count".into(), Value::Integer(i64::from(count))),
             (

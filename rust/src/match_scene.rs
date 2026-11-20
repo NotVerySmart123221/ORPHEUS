@@ -344,6 +344,15 @@ pub(crate) fn team_bit(team: u8) -> io::Result<u64> {
     Ok(TEAM_BIT << team)
 }
 
+/// Recover the assigned slot only from a canonical spawn team bit.
+pub(crate) fn team_from_spawn_filter(filter: u64) -> Option<u8> {
+    let slot = filter
+        .trailing_zeros()
+        .checked_sub(TEAM_BIT.trailing_zeros())?;
+    let team = u8::try_from(slot).ok()?;
+    (team_bit(team).ok()? == filter).then_some(team)
+}
+
 fn invalid(error: impl std::fmt::Display) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, error.to_string())
 }

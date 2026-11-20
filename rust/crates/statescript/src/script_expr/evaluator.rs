@@ -7,6 +7,102 @@ pub(super) struct Fold {
     item: Option<Value>,
 }
 
+struct SpatialRay {
+    origin: [f64; 3],
+    direction: [f64; 3],
+    max_distance: f64,
+}
+
+struct SpatialCone {
+    direction: [f64; 3],
+    angle_limit: f64,
+}
+
+impl SpatialCone {
+    fn scale_direction(vector: [f64; 3]) -> Option<[f64; 3]> {
+        if !vector.iter().all(|part| part.is_finite()) {
+            return None;
+        }
+        let largest = vector.into_iter().map(f64::abs).fold(0.0, f64::max);
+        (largest > 0.0).then(|| vector.map(|part| part / largest))
+    }
+
+    fn contains(&self, offset: [f64; 3]) -> bool {
+        let Some([x, y, z]) = Self::scale_direction(offset) else {
+            return false;
+        };
+        let [a, b, c] = self.direction;
+        // Scaling each vector keeps the cross and dot finite without changing
+        // the angle. atan2 distinguishes narrow cones and exact right angles.
+        let cross = (b * z - c * y).hypot(c * x - a * z).hypot(a * y - b * x);
+        let dot = a * x + b * y + c * z;
+        cross.atan2(dot) <= self.angle_limit
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TeamRelation {
+    Ally,
+    Opponent,
+}
+
+impl TeamRelation {
+    fn matches(self, source: Option<u8>, target: Option<u8>) -> bool {
+        let same_team = source.is_some() && source == target;
+        match self {
+            Self::Ally => same_team,
+            Self::Opponent => !same_team,
+        }
+    }
+}
+
+#[derive(Default)]
+struct RoomEntityFilter {
+    relation: Option<(u32, TeamRelation)>,
+    alive: Option<bool>,
+    tags: Option<RoomTagFilter>,
+}
+
+impl RoomEntityFilter {
+    fn needs_facts(&self) -> bool {
+        self.alive.is_some() || self.tags.is_some()
+    }
+}
+
+#[derive(Default)]
+struct RoomTagFilter {
+    all: Vec<u64>,
+    any: Vec<u64>,
+    none: Vec<u64>,
+}
+
+#[derive(Clone, Copy)]
+enum RoomTagClause {
+    All,
+    Any,
+    None,
+}
+
+fn health_amount(
+    target: &Json,
+    value: &Value,
+    kind: Option<PoolKind>,
+    maximum: bool,
+    context: &mut impl Context,
+) -> Option<f64> {
+    match value {
+        Value::Entity(0) => Some(0.0),
+        Value::Entity(entity) if valid_entity(*entity) => {
+            context.body_health(*entity, kind, maximum)
+        }
+        // A target slot can be reset before it has been bound to an entity.
+        Value::Null | Value::Integer(0) if matches!(dynamic(target), Ok(Some(variable)) if variable.id != 0) => {
+            Some(0.0)
+        }
+        _ => None,
+    }
+}
+
 pub(super) struct Evaluator {
     pub(super) limit: usize,
     pub(super) steps: usize,
@@ -17,6 +113,17 @@ pub(super) struct Evaluator {
 }
 
 impl Evaluator {
+    pub(super) fn new(limit: usize, context: &impl Context) -> Self {
+        Self {
+            limit,
+            steps: 0,
+            folds: Vec::new(),
+            scoped_parameters: Vec::new(),
+            // An unwatched evaluation has no use for the record.
+            in_native: !context.watches_natives(),
+        }
+    }
+
     fn collect_group(
         &mut self,
         config: &Json,
@@ -210,31 +317,12 @@ impl Evaluator {
     /// The native +20 selector path reads only the first config of a group.
     pub(super) fn scalar_config(
         &mut self,
-        mut config: &Json,
+        config: &Json,
         context: &mut impl Context,
-        mut depth: usize,
+        depth: usize,
         initial: Value,
     ) -> Result<Value, EvalError> {
-        loop {
-            if depth >= MAX_CONFIG_DEPTH {
-                return Err(EvalError::NestingExceeded);
-            }
-            if config.is_null() {
-                return Ok(initial);
-            }
-            if class(config) != Some("STU_06610EBC") {
-                return self.config_with_initial(config, context, depth, initial);
-            }
-            if !native_shape(config, "STU_06610EBC", Some("m_configVars")) {
-                return Err(EvalError::UnsupportedConfig("STU_06610EBC".into()));
-            }
-            self.charge()?;
-            let Some(first) = array_field(config, "m_configVars")?.first() else {
-                return Ok(initial);
-            };
-            config = first;
-            depth += 1;
-        }
+        self.config_in_mode(config, context, depth, initial, true)
     }
 
     pub(super) fn config_with_initial(
@@ -244,6 +332,53 @@ impl Evaluator {
         depth: usize,
         initial: Value,
     ) -> Result<Value, EvalError> {
+        self.config_in_mode(config, context, depth, initial, false)
+    }
+
+    fn config_in_mode(
+        &mut self,
+        mut config: &Json,
+        context: &mut impl Context,
+        mut depth: usize,
+        initial: Value,
+        scalar: bool,
+    ) -> Result<Value, EvalError> {
+        loop {
+            let selected = match class(config) {
+                Some("ClientOnly") => {
+                    if depth >= MAX_CONFIG_DEPTH {
+                        return Err(EvalError::NestingExceeded);
+                    }
+                    let fallback = client_only_fallback(config)?;
+                    self.charge()?;
+                    fallback
+                }
+                Some("STU_06610EBC") if scalar => {
+                    if depth >= MAX_CONFIG_DEPTH {
+                        return Err(EvalError::NestingExceeded);
+                    }
+                    if !native_shape(config, "STU_06610EBC", Some("m_configVars")) {
+                        return Err(EvalError::UnsupportedConfig("STU_06610EBC".into()));
+                    }
+                    self.charge()?;
+                    array_field(config, "m_configVars")?.first()
+                }
+                _ => break,
+            };
+            let Some(next) = selected else {
+                return Ok(initial);
+            };
+            config = next;
+            depth += 1;
+        }
+        if scalar {
+            if depth >= MAX_CONFIG_DEPTH {
+                return Err(EvalError::NestingExceeded);
+            }
+            if config.is_null() {
+                return Ok(initial);
+            }
+        }
         let Some(class) = (!self.in_native)
             .then(|| reference_native_class(config))
             .flatten()
@@ -515,6 +650,139 @@ impl Evaluator {
                     .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?;
                 Value::Entity(entity)
             }
+            "EntityPosition" | "EntityDirection" => {
+                let operand = fields
+                    .get("entity")
+                    .filter(|_| fields.len() == 2)
+                    .ok_or(EvalError::MalformedConfig("expected one entity operand"))?;
+                self.charge()?;
+                let Value::Entity(entity @ 1..) = self.config(operand, context, nested)? else {
+                    return Err(EvalError::MalformedConfig("expected a bound entity"));
+                };
+                let (value, unavailable) = if class == "EntityPosition" {
+                    (
+                        context.authored_position(entity),
+                        EvalError::UnavailableEntityPosition(entity),
+                    )
+                } else {
+                    (
+                        context.authored_forward(entity),
+                        EvalError::UnavailableEntityDirection(entity),
+                    )
+                };
+                Value::Vector(
+                    value
+                        .filter(|parts| parts.iter().all(|part| part.is_finite()))
+                        .ok_or(unavailable)?,
+                )
+            }
+            "STU_2200A66D" => {
+                let operand = native_entity_operand(config, class).ok_or(
+                    EvalError::MalformedConfig("expected one native direction entity operand"),
+                )?;
+                let native = context.native(config);
+                if matches!(&native, Some(Value::Null)) {
+                    // A host can explicitly report that this query has no target.
+                    return Ok(Value::Null);
+                }
+                self.charge()?;
+                let Value::Entity(entity) = self.config(operand, context, nested)? else {
+                    return Err(EvalError::MalformedConfig("expected a bound entity"));
+                };
+                if !valid_entity(entity) {
+                    return Err(EvalError::MalformedConfig("expected a bound entity"));
+                }
+                // Preserve existing host-specific numeric adapters before using
+                // the room's authoritative pitched direction.
+                let direction = match native {
+                    Some(Value::Vector(direction)) => Some(direction),
+                    Some(_) => None,
+                    None => context.authored_forward(entity),
+                };
+                Value::Vector(
+                    direction
+                        .filter(|parts| parts.iter().all(|part| part.is_finite()))
+                        .ok_or(EvalError::UnavailableEntityDirection(entity))?,
+                )
+            }
+            "STU_21A13145" => {
+                let operand = native_entity_operand(config, class).ok_or(
+                    EvalError::MalformedConfig("expected one native eye position entity operand"),
+                )?;
+                self.charge()?;
+                let Value::Entity(entity) = self.config(operand, context, nested)? else {
+                    return Err(EvalError::MalformedConfig("expected a bound entity"));
+                };
+                if !valid_entity(entity) {
+                    return Err(EvalError::MalformedConfig("expected a bound entity"));
+                }
+                Value::Vector(
+                    context
+                        .body_eye_position(entity)
+                        .filter(|parts| parts.iter().all(|part| part.is_finite()))
+                        .ok_or(EvalError::UnavailableBodyEyePosition(entity))?,
+                )
+            }
+            "STU_719E45B8" => {
+                let Some((entity, hardpoint)) = fields
+                    .get("m_entity")
+                    .zip(fields.get("m_hardPoint"))
+                    .filter(|_| native_fields(config, &["m_entity", "m_hardPoint"]))
+                else {
+                    return Err(EvalError::MalformedConfig(
+                        "expected hardpoint entity and resource operands",
+                    ));
+                };
+                let Some(Value::Asset(hardpoint)) =
+                    literal_asset(hardpoint, "STUConfigVarHardPoint", "m_hardPoint", 0x0dc0)
+                else {
+                    return Err(EvalError::MalformedConfig(
+                        "expected a literal model hardpoint",
+                    ));
+                };
+                self.charge()?;
+                let entity = match self.config(entity, context, nested)? {
+                    Value::Entity(entity) if valid_entity(entity) => entity,
+                    _ => return Err(EvalError::MalformedConfig("expected a bound entity")),
+                };
+                Value::Bool(
+                    context
+                        .body_has_hardpoint(entity, hardpoint)
+                        .ok_or(EvalError::UnavailableBodyHardpoint { entity, hardpoint })?,
+                )
+            }
+            "BodyActive" => {
+                if fields.len() != 1 {
+                    return Err(EvalError::MalformedConfig("BodyActive takes no operands"));
+                }
+                self.charge()?;
+                Value::Bool(
+                    context
+                        .body_active()
+                        .ok_or(EvalError::UnavailableBodyActivity)?,
+                )
+            }
+            "EntityMatches" => self.entity_matches(fields, context, nested)?,
+            "EntitiesInRadius" => self.entities_in_radius(fields, context, nested)?,
+            "SegmentClear" => self.segment_clear(fields, context, nested)?,
+            "RayCast" => self.ray_cast(fields, context, nested)?,
+            "EntityRayCast" => self.entity_ray_cast(fields, context, nested)?,
+            "StackAllows" => {
+                let (variable, priority) = fields
+                    .get("variable")
+                    .zip(fields.get("priority"))
+                    .filter(|_| fields.len() == 3)
+                    .ok_or(EvalError::MalformedConfig(
+                        "expected StackAllows variable and priority",
+                    ))?;
+                let variable = authored_stack_variable(variable)?;
+                let priority = authored_stack_priority(priority)?;
+                self.charge()?;
+                let admitted = context
+                    .would_stack_to_top(variable, priority)
+                    .ok_or(EvalError::UnavailableStackAdmission)?;
+                Value::Bool(admitted)
+            }
             "STU_71A87E92" if native_shape(config, class, Some("m_entity")) => {
                 if let Some(value) = context.native(config) {
                     return Ok(value);
@@ -745,11 +1013,8 @@ impl Evaluator {
             "STU_B5A0CAF0" => context.owner(),
             "STU_25ECB55F" => {
                 let unsupported = || EvalError::UnsupportedConfig(class.into());
-                if !native_fields(config, &["m_entity", "m_88B0050A"]) {
-                    return Err(unsupported());
-                }
-                let tag = target_tag_guid(child(config, "m_88B0050A")).ok_or_else(unsupported)?;
-                match self.config(child(config, "m_entity"), context, nested)? {
+                let (tag, entity) = native_target_tag_operand(config).ok_or_else(unsupported)?;
+                match self.config(entity, context, nested)? {
                     Value::Entity(entity) if valid_entity(entity) => Value::Bool(
                         context
                             .has_target_tag(entity, tag)
@@ -854,6 +1119,30 @@ impl Evaluator {
                     .related_entity(relation, entity)
                     .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?;
                 Value::Entity(related)
+            }
+            "STU_967463AB" => {
+                let unsupported = || EvalError::UnsupportedConfig(class.into());
+                if !native_fields(config, &["m_92D12BE6", "m_C8655030"]) {
+                    return Err(unsupported());
+                }
+                let owner = config.get("m_92D12BE6").ok_or_else(unsupported)?;
+                let definition = config.get("m_C8655030").ok_or_else(unsupported)?;
+                let Value::Asset(definition) =
+                    self.scalar_config(definition, context, nested, Value::Asset(0))?
+                else {
+                    return Err(unsupported());
+                };
+                if definition >> 48 != 0x0400 {
+                    return Err(unsupported());
+                }
+                match self.scalar_config(owner, context, nested, Value::Entity(0))? {
+                    Value::Entity(0) | Value::Null => initial,
+                    Value::Entity(owner) if valid_entity(owner) => context
+                        .native(config)
+                        .filter(|value| matches!(value, Value::Integer(count) if *count >= 0))
+                        .ok_or_else(unsupported)?,
+                    _ => return Err(unsupported()),
+                }
             }
             "STU_E72F6348" if native_shape(config, class, Some("m_entity")) => {
                 if let Some(value @ Value::Bool(_)) = context.native(config) {
@@ -997,13 +1286,10 @@ impl Evaluator {
             "STU_32E6E4D8" | "STU_7D7D2470" => {
                 let target = child(config, "m_entity");
                 let value = self.config(target, context, nested)?;
-                let entity = match first_scalar(&value) {
-                    Some(Value::Entity(entity)) if valid_entity(*entity) => *entity,
-                    Some(Value::Entity(entity)) => *entity,
-                    _ => return Err(EvalError::UnsupportedConfig(class.into())),
-                };
-                let health = context
-                    .body_health(entity, None, class == "STU_7D7D2470")
+                let health = first_scalar(&value)
+                    .and_then(|value| {
+                        health_amount(target, value, None, class == "STU_7D7D2470", context)
+                    })
                     .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?;
                 Value::Float(health)
             }
@@ -1024,6 +1310,25 @@ impl Evaluator {
                         .entity_hero(entity)
                         .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
                 )
+            }
+            "STU_783B4CF0"
+                if !child(config, "m_7BE02F89").is_null()
+                    && native_fields(config, &["m_entity", "m_7E8B666C", "m_7BE02F89"])
+                    && native_shape(child(config, "m_entity"), "STU_B5A0CAF0", None) =>
+            {
+                let unsupported = || EvalError::UnsupportedConfig(class.into());
+                let selector = child(config, "m_7E8B666C");
+                if !native_shape(selector, "STU_297E1A30", Some("m_7E8B666C"))
+                    || child(selector, "m_7E8B666C").as_u64() != Some(2)
+                {
+                    return Err(unsupported());
+                }
+                let identifier =
+                    named_shield_identifier(child(config, "m_7BE02F89")).ok_or_else(unsupported)?;
+                let amount = context
+                    .temporary_shield_current(identifier)
+                    .ok_or_else(unsupported)?;
+                Value::Float(rounded(amount))
             }
             "STU_783B4CF0" | "STU_68883EAC" => {
                 let unsupported = || EvalError::UnsupportedConfig(class.into());
@@ -1046,14 +1351,11 @@ impl Evaluator {
                         _ => return Err(unsupported()),
                     }
                 };
-                let Value::Entity(entity) =
-                    self.config(child(config, "m_entity"), context, nested)?
-                else {
-                    return Err(unsupported());
-                };
-                let health = context
-                    .body_health(entity, Some(kind), class == "STU_68883EAC")
-                    .ok_or_else(unsupported)?;
+                let target = child(config, "m_entity");
+                let value = self.config(target, context, nested)?;
+                let health =
+                    health_amount(target, &value, Some(kind), class == "STU_68883EAC", context)
+                        .ok_or_else(unsupported)?;
                 Value::Float(rounded(health))
             }
             "STU_FDBB0B67" => {
@@ -1269,6 +1571,676 @@ impl Evaluator {
         Ok(Value::Bool(true))
     }
 
+    fn entity_matches(
+        &mut self,
+        fields: &serde_json::Map<String, Json>,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<Value, EvalError> {
+        let filter = fields.get("filter");
+        let entity = fields
+            .get("entity")
+            .filter(|_| fields.len() == 2 + usize::from(filter.is_some()))
+            .ok_or(EvalError::MalformedConfig(
+                "expected an entity and optional filter",
+            ))?;
+        self.charge()?;
+        let entity = self.room_filter_entity(entity, context, depth, "expected a bound entity")?;
+        let filter = self.room_entity_filter(filter, context, depth)?;
+        let sampled_target = context.settled_health_target(entity);
+        let settled_status = sampled_target.and_then(|facts| facts.room_status);
+        let settled_tags = sampled_target
+            .filter(|_| filter.tags.is_some())
+            .map(|facts| facts.tags.clone());
+        let entities = context
+            .room_entities()
+            .ok_or(EvalError::UnavailableRoomEntityFacts)?;
+        let source = filter
+            .relation
+            .map(|(source, relation)| {
+                let facts = entities
+                    .get(&source)
+                    .ok_or(EvalError::UnavailableRoomEntityFacts)?;
+                Ok::<_, EvalError>((source, facts.team, relation))
+            })
+            .transpose()?;
+        let live_target = entities.get(&entity);
+        let Some((target_team, target_alive)) = settled_status
+            .map(|status| (status.team, status.alive))
+            .or_else(|| live_target.map(|facts| (facts.team, facts.alive)))
+        else {
+            return Ok(Value::Bool(false));
+        };
+        if source.is_some_and(|(source, team, relation)| {
+            source == entity || !relation.matches(team, target_team)
+        }) {
+            return Ok(Value::Bool(false));
+        }
+        let tags = settled_tags
+            .as_ref()
+            .or_else(|| live_target.map(|facts| &facts.tags));
+        self.room_facts_match(&filter, target_alive, tags)
+            .map(Value::Bool)
+    }
+
+    fn room_filter_entity(
+        &mut self,
+        expression: &Json,
+        context: &mut impl Context,
+        depth: usize,
+        error: &'static str,
+    ) -> Result<u32, EvalError> {
+        match self.config(expression, context, depth)? {
+            Value::Entity(entity) if valid_entity(entity) => Ok(entity),
+            _ => Err(EvalError::MalformedConfig(error)),
+        }
+    }
+
+    fn room_entity_filter(
+        &mut self,
+        filter: Option<&Json>,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<RoomEntityFilter, EvalError> {
+        let Some(filter) = filter else {
+            return Ok(RoomEntityFilter::default());
+        };
+        let malformed = EvalError::MalformedConfig("expected a relation and source filter");
+        let fields = filter.as_object().ok_or_else(|| malformed.clone())?;
+        if fields
+            .keys()
+            .any(|key| !matches!(key.as_str(), "relation" | "source" | "alive" | "tags"))
+        {
+            return Err(malformed);
+        }
+        let relation = match (fields.get("relation"), fields.get("source")) {
+            (None, None) => None,
+            (Some(relation), Some(source)) => {
+                let relation = match relation.as_str() {
+                    Some("ally") => TeamRelation::Ally,
+                    Some("opponent") => TeamRelation::Opponent,
+                    _ => return Err(malformed),
+                };
+                let source = self.room_filter_entity(
+                    source,
+                    context,
+                    depth,
+                    "expected a bound filter source",
+                )?;
+                Some((source, relation))
+            }
+            _ => return Err(malformed),
+        };
+        let alive = fields
+            .get("alive")
+            .map(|alive| {
+                alive.as_bool().ok_or(EvalError::MalformedConfig(
+                    "expected a boolean alive filter",
+                ))
+            })
+            .transpose()?;
+        let tags = fields
+            .get("tags")
+            .map(|tags| self.room_tag_filter(tags))
+            .transpose()?;
+        Ok(RoomEntityFilter {
+            relation,
+            alive,
+            tags,
+        })
+    }
+
+    fn room_tag_filter(&mut self, tags: &Json) -> Result<RoomTagFilter, EvalError> {
+        let mut result = RoomTagFilter::default();
+        let tags = tags.as_object().ok_or(EvalError::MalformedConfig(
+            "expected a room tag filter object",
+        ))?;
+        for (key, values) in tags {
+            let clause = match key.as_str() {
+                "all" => &mut result.all,
+                "any" => &mut result.any,
+                "none" => &mut result.none,
+                _ => {
+                    return Err(EvalError::MalformedConfig(
+                        "expected all, any or none tag lists",
+                    ));
+                }
+            };
+            let values = values.as_array().ok_or(EvalError::MalformedConfig(
+                "expected an array of room tag GUIDs",
+            ))?;
+            for tag in values {
+                self.charge()?;
+                let tag =
+                    asset_guid(tag)
+                        .filter(|&tag| tag != 0)
+                        .ok_or(EvalError::MalformedConfig(
+                            "expected a nonzero room tag GUID",
+                        ))?;
+                clause.push(tag);
+            }
+        }
+        Ok(result)
+    }
+
+    fn room_facts_match(
+        &mut self,
+        filter: &RoomEntityFilter,
+        entity_alive: bool,
+        entity_tags: Option<&crate::script_init::TargetTagSnapshot>,
+    ) -> Result<bool, EvalError> {
+        if filter.alive.is_some_and(|alive| alive != entity_alive) {
+            return Ok(false);
+        }
+        let Some(tags) = &filter.tags else {
+            return Ok(true);
+        };
+        let entity_tags = entity_tags.ok_or(EvalError::UnavailableRoomEntityFacts)?;
+        let mut unresolved = false;
+        for (clause, tags) in [
+            (RoomTagClause::All, &tags.all),
+            (RoomTagClause::Any, &tags.any),
+            (RoomTagClause::None, &tags.none),
+        ] {
+            match self.room_tag_clause(clause, tags, entity_tags)? {
+                Some(false) => return Ok(false),
+                None => unresolved = true,
+                Some(true) => (),
+            }
+        }
+        if unresolved {
+            Err(EvalError::UnavailableRoomEntityFacts)
+        } else {
+            Ok(true)
+        }
+    }
+
+    fn room_tag_clause(
+        &mut self,
+        clause: RoomTagClause,
+        tags: &[u64],
+        facts: &crate::script_init::TargetTagSnapshot,
+    ) -> Result<Option<bool>, EvalError> {
+        if tags.is_empty() {
+            return Ok(Some(true));
+        }
+        let mut unresolved = false;
+        for &tag in tags {
+            self.charge()?;
+            match (clause, facts.presence(tag)) {
+                (RoomTagClause::All, Some(false)) | (RoomTagClause::None, Some(true)) => {
+                    return Ok(Some(false));
+                }
+                (RoomTagClause::Any, Some(true)) => return Ok(Some(true)),
+                (_, None) => unresolved = true,
+                _ => (),
+            }
+        }
+        Ok((!unresolved).then_some(!matches!(clause, RoomTagClause::Any)))
+    }
+
+    fn entities_in_radius(
+        &mut self,
+        fields: &serde_json::Map<String, Json>,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<Value, EvalError> {
+        self.select_in_radius(fields, context, depth, false, |entity, _, _| {
+            Value::Entity(entity)
+        })
+        .map(Value::Array)
+    }
+
+    fn segment_clear(
+        &mut self,
+        fields: &serde_json::Map<String, Json>,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<Value, EvalError> {
+        let Some((origin, target)) = fields
+            .get("origin")
+            .zip(fields.get("target"))
+            .filter(|_| fields.len() == 3)
+        else {
+            return Err(EvalError::MalformedConfig(
+                "expected SegmentClear origin and target",
+            ));
+        };
+        let origin = self.segment_endpoint(origin, context, depth)?;
+        let target = self.segment_endpoint(target, context, depth)?;
+        self.spatial_line_clear(context, origin, target)
+            .map(Value::Bool)
+    }
+
+    fn ray_cast(
+        &mut self,
+        fields: &serde_json::Map<String, Json>,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<Value, EvalError> {
+        let Some(((origin, direction), max_distance)) = fields
+            .get("origin")
+            .zip(fields.get("direction"))
+            .zip(fields.get("max_distance"))
+            .filter(|_| fields.len() == 4)
+        else {
+            return Err(EvalError::MalformedConfig(
+                "expected RayCast origin, direction, and max_distance",
+            ));
+        };
+        let SpatialRay {
+            origin,
+            direction,
+            max_distance,
+        } = self.ray_parameters(origin, direction, max_distance, context, depth)?;
+        self.charge()?;
+        let hit = context
+            .spatial_ray_cast(origin, direction, max_distance)
+            .ok_or(EvalError::UnavailableSpatialRayCast)?;
+        let Some(hit) = hit else {
+            return Ok(Value::Array(Vec::new()));
+        };
+        if !hit.distance.is_finite()
+            || hit.distance <= 0.0
+            || hit.distance > max_distance
+            || !hit.point.iter().all(|axis| axis.is_finite())
+            || SpatialCone::scale_direction(hit.normal).is_none()
+        {
+            return Err(EvalError::UnavailableSpatialRayCast);
+        }
+        Ok(Value::Array(vec![
+            Value::Float(hit.distance),
+            Value::Vector(hit.point),
+            Value::Vector(hit.normal),
+        ]))
+    }
+
+    fn ray_parameters(
+        &mut self,
+        origin: &Json,
+        direction: &Json,
+        max_distance: &Json,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<SpatialRay, EvalError> {
+        let origin = self.segment_endpoint(origin, context, depth)?;
+        let direction_error = EvalError::MalformedConfig("expected a finite nonzero ray direction");
+        let Value::Vector(direction) = self.config(direction, context, depth)? else {
+            return Err(direction_error);
+        };
+        let scaled = SpatialCone::scale_direction(direction).ok_or(direction_error)?;
+        let magnitude = scaled.iter().map(|axis| axis * axis).sum::<f64>().sqrt();
+        let direction = scaled.map(|axis| axis / magnitude);
+        let max_distance = match self.config(max_distance, context, depth)? {
+            Value::Float(value) => value,
+            Value::Integer(value) => value as f64,
+            _ => {
+                return Err(EvalError::MalformedConfig(
+                    "expected a finite positive ray distance",
+                ));
+            }
+        };
+        if !max_distance.is_finite() || max_distance <= 0.0 {
+            return Err(EvalError::MalformedConfig(
+                "expected a finite positive ray distance",
+            ));
+        }
+        Ok(SpatialRay {
+            origin,
+            direction,
+            max_distance,
+        })
+    }
+
+    fn entity_ray_cast(
+        &mut self,
+        fields: &serde_json::Map<String, Json>,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<Value, EvalError> {
+        let filter = fields.get("filter");
+        let Some(((origin, direction), max_distance)) = fields
+            .get("origin")
+            .zip(fields.get("direction"))
+            .zip(fields.get("max_distance"))
+            .filter(|_| fields.len() == 4 + usize::from(filter.is_some()))
+        else {
+            return Err(EvalError::MalformedConfig(
+                "expected EntityRayCast origin, direction, max_distance, and optional filter",
+            ));
+        };
+        let SpatialRay {
+            origin,
+            direction,
+            max_distance,
+        } = self.ray_parameters(origin, direction, max_distance, context, depth)?;
+        let filter = self.room_entity_filter(filter, context, depth)?;
+        let mut candidates = self.select_room_candidates(&filter, context, |_| Some(()))?;
+        candidates.sort_unstable_by_key(|(candidate, _)| candidate.entity);
+        for group in candidates.chunk_by(|a, b| a.0.entity == b.0.entity) {
+            let candidate = group[0].0;
+            if group
+                .iter()
+                .any(|(row, _)| row.position != candidate.position || row.team != candidate.team)
+            {
+                return Err(EvalError::UnavailableSpatialCandidates);
+            }
+        }
+        candidates.dedup_by_key(|(candidate, _)| candidate.entity);
+        let targets = candidates
+            .into_iter()
+            .map(|(candidate, _)| candidate.entity)
+            .collect::<Vec<_>>();
+        for _ in &targets {
+            self.charge()?;
+        }
+        self.charge()?;
+        let hit = context
+            .spatial_actor_ray_cast(origin, direction, max_distance, &targets)
+            .ok_or(EvalError::UnavailableSpatialRayCast)?;
+        let Some(hit) = hit else {
+            return Ok(Value::Array(Vec::new()));
+        };
+        if !hit.distance.is_finite()
+            || hit.distance < 0.0
+            || hit.distance > max_distance
+            || targets.binary_search(&hit.entity).is_err()
+        {
+            return Err(EvalError::UnavailableSpatialRayCast);
+        }
+        let point = std::array::from_fn(|axis| origin[axis] + direction[axis] * hit.distance);
+        if !point.iter().all(|part| part.is_finite()) {
+            return Err(EvalError::UnavailableSpatialRayCast);
+        }
+        Ok(Value::Array(vec![
+            Value::Entity(hit.entity),
+            Value::Float(hit.distance),
+            Value::Vector(point),
+        ]))
+    }
+
+    fn segment_endpoint(
+        &mut self,
+        operand: &Json,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<[f64; 3], EvalError> {
+        match self.config(operand, context, depth)? {
+            Value::Vector(endpoint) if endpoint.iter().all(|axis| axis.is_finite()) => Ok(endpoint),
+            _ => Err(EvalError::MalformedConfig(
+                "expected a finite segment endpoint",
+            )),
+        }
+    }
+
+    fn spatial_line_clear(
+        &mut self,
+        context: &mut impl Context,
+        origin: [f64; 3],
+        target: [f64; 3],
+    ) -> Result<bool, EvalError> {
+        self.charge()?;
+        context
+            .spatial_line_clear(origin, target)
+            .ok_or(EvalError::UnavailableSpatialVisibility)
+    }
+
+    pub(super) fn radial_health_changes(
+        &mut self,
+        area: &Json,
+        delta: &Json,
+        edge_scale: Option<&Json>,
+        context: &mut impl Context,
+    ) -> Result<Vec<(u32, f64)>, EvalError> {
+        let area = area
+            .as_object()
+            .filter(|fields| fields.get("$").and_then(Json::as_str) == Some("EntitiesInRadius"))
+            .ok_or(EvalError::MalformedConfig(
+                "expected an EntitiesInRadius area",
+            ))?;
+        let delta = self
+            .finite_operand(delta, context)?
+            .filter(|delta| *delta != 0.0)
+            .ok_or(EvalError::MalformedConfig(
+                "expected a finite nonzero radial health delta",
+            ))?;
+        let edge_scale = match edge_scale {
+            Some(operand) => self
+                .finite_operand(operand, context)?
+                .filter(|edge| (0.0..=1.0).contains(edge))
+                .ok_or(EvalError::MalformedConfig(
+                    "expected a radial health edge scale from zero to one",
+                ))?,
+            None => 1.0,
+        };
+        let mut changes =
+            self.select_in_radius(area, context, 1, true, |entity, distance, radius| {
+                let scale = if radius == 0.0 {
+                    1.0
+                } else {
+                    let fraction = distance / radius;
+                    (1.0 - fraction) + fraction * edge_scale
+                };
+                (entity, delta * scale)
+            })?;
+        changes.retain(|&(_, change)| change != 0.0);
+        Ok(changes)
+    }
+
+    fn finite_operand(
+        &mut self,
+        operand: &Json,
+        context: &mut impl Context,
+    ) -> Result<Option<f64>, EvalError> {
+        Ok(match self.config(operand, context, 0)? {
+            Value::Integer(value) => Some(value as f64),
+            Value::Float(value) if value.is_finite() => Some(value),
+            _ => None,
+        })
+    }
+
+    fn select_in_radius<T>(
+        &mut self,
+        fields: &serde_json::Map<String, Json>,
+        context: &mut impl Context,
+        depth: usize,
+        require_consistent_distance: bool,
+        mut project: impl FnMut(u32, f64, f64) -> T,
+    ) -> Result<Vec<T>, EvalError> {
+        let filter = fields.get("filter");
+        let cone = fields.get("cone");
+        let visibility = fields.get("line_of_sight");
+        let expected_fields = 3
+            + usize::from(filter.is_some())
+            + usize::from(cone.is_some())
+            + usize::from(visibility.is_some());
+        let Some((center, radius)) = fields
+            .get("center")
+            .zip(fields.get("radius"))
+            .filter(|_| fields.len() == expected_fields)
+        else {
+            return Err(EvalError::MalformedConfig("expected a center and radius"));
+        };
+        let line_of_sight = match visibility {
+            None => false,
+            Some(Json::Bool(required)) => *required,
+            _ => {
+                return Err(EvalError::MalformedConfig(
+                    "expected a boolean line_of_sight",
+                ));
+            }
+        };
+        self.charge()?;
+        let center = match self.config(center, context, depth)? {
+            Value::Vector(center) if center.iter().all(|axis| axis.is_finite()) => center,
+            _ => {
+                return Err(EvalError::MalformedConfig(
+                    "expected a finite center vector",
+                ));
+            }
+        };
+        let radius = match self.config(radius, context, depth)? {
+            Value::Integer(value) if value >= 0 => value as f64,
+            Value::Float(value) if value.is_finite() && value >= 0.0 => value,
+            _ => {
+                return Err(EvalError::MalformedConfig(
+                    "expected a finite nonnegative radius",
+                ));
+            }
+        };
+        let filter = self.room_entity_filter(filter, context, depth)?;
+
+        let cone = cone
+            .map(|cone| self.spatial_cone(cone, context, depth))
+            .transpose()?;
+        let mut matches = self.select_room_candidates(&filter, context, |candidate| {
+            let offset = std::array::from_fn(|axis| candidate.position[axis] - center[axis]);
+            let [dx, dy, dz] = offset;
+            let distance = dx.hypot(dy).hypot(dz);
+            (distance <= radius && cone.as_ref().is_none_or(|cone| cone.contains(offset)))
+                .then_some(distance)
+        })?;
+        matches.sort_unstable_by_key(|(candidate, _)| candidate.entity);
+        if !line_of_sight {
+            if require_consistent_distance {
+                for group in matches.chunk_by(|a, b| a.0.entity == b.0.entity) {
+                    let distance = group[0].1;
+                    if group.iter().any(|(_, other)| *other != distance) {
+                        return Err(EvalError::UnavailableSpatialCandidates);
+                    }
+                }
+            }
+            matches.dedup_by_key(|(candidate, _)| candidate.entity);
+            return Ok(matches
+                .into_iter()
+                .map(|(candidate, distance)| project(candidate.entity, distance, radius))
+                .collect());
+        }
+
+        // Own only the surviving segments before calling into the host again.
+        let mut segments = Vec::new();
+        for group in matches.chunk_by(|a, b| a.0.entity == b.0.entity) {
+            let (candidate, distance) = group[0];
+            if group
+                .iter()
+                .any(|(row, _)| row.position != candidate.position)
+            {
+                return Err(EvalError::UnavailableSpatialVisibility);
+            }
+            segments.push((candidate.entity, candidate.position, distance));
+        }
+        let mut hits = Vec::new();
+        for (entity, position, distance) in segments {
+            if self.spatial_line_clear(context, center, position)? {
+                hits.push(project(entity, distance, radius));
+            }
+        }
+        Ok(hits)
+    }
+
+    fn select_room_candidates<T>(
+        &mut self,
+        filter: &RoomEntityFilter,
+        context: &mut impl Context,
+        mut select: impl FnMut(SpatialCandidate) -> Option<T>,
+    ) -> Result<Vec<(SpatialCandidate, T)>, EvalError> {
+        let candidates = context
+            .spatial_candidates()
+            .ok_or(EvalError::UnavailableSpatialCandidates)?;
+        let mut source_team: Option<Option<u8>> = None;
+        let mut matches = Vec::new();
+        for &candidate in candidates {
+            let SpatialCandidate {
+                entity,
+                position,
+                team,
+            } = candidate;
+            self.charge()?;
+            if !valid_entity(entity) || !position.iter().all(|axis| axis.is_finite()) {
+                return Err(EvalError::UnavailableSpatialCandidates);
+            }
+            if filter.relation.is_some_and(|(source, _)| entity == source) {
+                if source_team
+                    .replace(team)
+                    .is_some_and(|previous| previous != team)
+                {
+                    return Err(EvalError::UnavailableSpatialCandidates);
+                }
+                continue;
+            }
+            if let Some(sample) = select(candidate) {
+                matches.push((candidate, sample));
+            }
+        }
+        if let Some((_, relation)) = filter.relation {
+            let source_team = source_team.ok_or(EvalError::UnavailableSpatialCandidates)?;
+            matches.retain(|(candidate, _)| relation.matches(source_team, candidate.team));
+        }
+        if filter.needs_facts() {
+            let entities = context
+                .room_entities()
+                .ok_or(EvalError::UnavailableRoomEntityFacts)?;
+            if filter
+                .relation
+                .is_some_and(|(source, _)| !entities.get(&source).is_some_and(|facts| facts.alive))
+            {
+                return Err(EvalError::UnavailableRoomEntityFacts);
+            }
+            let mut filtered = Vec::with_capacity(matches.len());
+            for (candidate, sample) in matches {
+                let facts = entities
+                    .get(&candidate.entity)
+                    .ok_or(EvalError::UnavailableRoomEntityFacts)?;
+                if facts.alive && self.room_facts_match(filter, facts.alive, Some(&facts.tags))? {
+                    filtered.push((candidate, sample));
+                }
+            }
+            matches = filtered;
+        }
+        Ok(matches)
+    }
+
+    fn spatial_cone(
+        &mut self,
+        cone: &Json,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<SpatialCone, EvalError> {
+        let Some((direction, half_angle)) = cone
+            .as_object()
+            .filter(|cone| cone.len() == 2)
+            .and_then(|cone| cone.get("direction").zip(cone.get("half_angle_degrees")))
+        else {
+            return Err(EvalError::MalformedConfig(
+                "expected a cone direction and half angle",
+            ));
+        };
+        let direction = match self.config(direction, context, depth)? {
+            Value::Vector(vector) => SpatialCone::scale_direction(vector),
+            _ => None,
+        }
+        .ok_or(EvalError::MalformedConfig(
+            "expected a finite nonzero cone direction",
+        ))?;
+        let invalid_angle =
+            EvalError::MalformedConfig("expected a cone half angle from 0 to 180 degrees");
+        let degrees = match self.config(half_angle, context, depth)? {
+            Value::Integer(value) => value as f64,
+            Value::Float(value) => value,
+            _ => return Err(invalid_angle),
+        };
+        if !(0.0..=180.0).contains(&degrees) {
+            return Err(invalid_angle);
+        }
+        let angle = degrees.to_radians();
+        // Allow a relative rounding margin at an inclusive boundary.
+        let angle_limit = angle + angle * (4.0 * f64::EPSILON);
+        Ok(SpatialCone {
+            direction,
+            angle_limit,
+        })
+    }
+
     fn expression(
         &mut self,
         config: &Json,
@@ -1423,6 +2395,21 @@ impl Evaluator {
                     } else {
                         0.0
                     })
+                }
+                46..=48 => {
+                    // The degree operators round the result after applying trig.
+                    let degrees = to_float(&pop(&mut stack, pc)?);
+                    if degrees.is_infinite() {
+                        return Err(malformed(pc, "infinite degree operand"));
+                    }
+                    let radians = degrees.to_radians();
+                    let value = match opcode {
+                        46 => radians.sin(),
+                        47 => radians.cos(),
+                        48 => radians.tan(),
+                        _ => unreachable!(),
+                    };
+                    Value::Float(rounded(value))
                 }
                 50 | 51 => {
                     let value = pop(&mut stack, pc)?;

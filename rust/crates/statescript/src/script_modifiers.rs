@@ -1,5 +1,7 @@
 //! Core movement modifier operations and slot keys shared between StateScript and movement.
 
+pub const SPEED_SLOT: u8 = 0;
+
 pub fn narrow(value: f64) -> f64 {
     f64::from(value as f32)
 }

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "case_id": "owner-fault-temporary-shields-v1",
+  "source": {"basis": "Synthetic ordinary and named pools on a single active body."},
+  "evidence": "rust-synthetic",
+  "input": {
+    "base_health": [200.0, 137.0],
+    "ordinary_shields": [30.0, 12.0],
+    "stacked_grants": [30.0, 15.0],
+    "depleted_grant": 17.0
+  },
+  "expected": {
+    "current": 149.0,
+    "maximum": 230.0,
+    "cleared_slots": [33, 34]
+  }
+}

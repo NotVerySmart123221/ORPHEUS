@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "case_id": "statescript-ray-cast.synthetic.v1",
+  "source": {"basis": "Original query, geometry coordinates, and synthetic host replies."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "query": {
+      "$": "RayCast",
+      "origin": {"$": "STUConfigVarDynamic", "m_identifier": 40, "m_60DB8F99": false},
+      "direction": {"$": "STUConfigVarDynamic", "m_identifier": 41, "m_60DB8F99": true},
+      "max_distance": {"$": "STUConfigVarDynamic", "m_identifier": 42, "m_60DB8F99": false}
+    },
+    "origin": [3, 2, -1],
+    "direction": [0, 0, 4e300],
+    "max_distance": 6,
+    "hit": {"distance": 2.5, "point": [3, 2, 1.5], "normal": [0, 0, -1]}
+  },
+  "expected": {
+    "normalized_direction": [0, 0, 1],
+    "hit": [2.5, [3, 2, 1.5], [0, 0, -1]],
+    "miss": [],
+    "query_steps": 1
+  }
+}
