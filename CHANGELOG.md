@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added an opt-in headless startup matrix that records prepared input digests, room admission, and body factory results for each catalog actor. The report retains typed startup diagnostics and available observation sites for local investigation.
+
 - Added the authored SegmentClear expression for finite endpoints and shared room geometry. It uses the same visibility query and work accounting as radius filtering. Spatial service detection now follows only the server fallback of client-only operands. The StateScript suite passed with 187 tests and 13 private-runtime tests skipped.
 
 - Used the same NPC liveness result for spatial candidates and script request admission. The next room frame excludes a body whose vitals already record death, and the entity facts still retain its dead status. The original synthetic regression reproduced the mismatch and passed after the fix along with two existing spatial tests.

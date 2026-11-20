@@ -145,6 +145,24 @@ An observed target passed the VM scope check. Missing rows in a capped
 observation have unknown coverage. The scripted inputs exercise one hero
 and one path. Use scenario-specific captures to prioritize other paths.
 
+### Inspect actor startup readiness
+
+Use the same local prepared pack to check startup across the actor catalog.
+The report records available prerequisites, ordinary room admission, and
+an independent attempt through the production body factory. Each row
+describes setup and initial diagnostics. Ability inputs, subsequent ticks,
+and client presentation require their own scenarios.
+
+```powershell
+$env:ORPHEUS_RUNTIME_DIR = 'C:\private\runtime'
+$env:ORPHEUS_ACTOR_STARTUP_REPORT = 'C:\private\actor-startup.json'
+$env:ORPHEUS_ACTOR_STARTUP_REVISION = git rev-parse HEAD
+cargo test --locked -p orpheus --features script-coverage --lib prepared_practice_actor_startup_matrix -- --ignored
+```
+
+Use a new private output path for each run. The report records input
+digests and the source revision, and leaves existing output files intact.
+
 ### Generate a synthetic test scaffold
 
 ```text

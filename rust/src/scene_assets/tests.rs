@@ -1,5 +1,6 @@
 use super::*;
 
+mod actor_startup;
 mod junkenstein;
 #[cfg(feature = "inspector")]
 mod script_coverage;
