@@ -415,6 +415,7 @@ quick melee, reload, ultimate input, and release phases.
 $env:ORPHEUS_RUNTIME_DIR = 'C:\private\runtime'
 $env:ORPHEUS_ACTOR_INPUT_REPORT = 'C:\private\actor-input.json'
 $env:ORPHEUS_ACTOR_INPUT_REVISION = git rev-parse HEAD # Optional
+$env:ORPHEUS_ACTOR_INPUT_NODE_SHAPES = '1' # Optional
 cargo test --locked -p orpheus --lib game_replication::tests::practice_observation::prepared_practice_actor_input_matrix -- --ignored --exact
 ```
 
@@ -422,6 +423,13 @@ Use a new private output file for each run. The JSON records the schedule,
 completed input phases, owner acknowledgements, combat requests, and the
 first failed stage and frame for each actor. When a script fault is captured,
 its record includes the delivery step and available graph diagnostics.
+With the optional node-shape setting, diagnostics also include the authored
+action or state markers, scope, slot presence, registration rejection and
+a bounded operand structure. Constructor and field labels identify the
+schema. Literal values and wire references are summarized by type. Missing
+sites have a null shape. Direct variable bindings report entity or instance
+scope. Runtime operand values require separate evidence. The complete report
+still includes the existing textual diagnostics and belongs in private storage.
 The matrix measures headless input processing and owner delivery. Weapon and
 ability mechanics, ultimate charge, and original-client presentation require
 separate verification.
