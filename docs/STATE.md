@@ -131,6 +131,20 @@ produced 339 ticks. Both implementations repeated their observations,
 passed individual trace validation, and matched their previous traces
 tick for tick. Strict comparison retained the four RNG setup differences.
 
+At `8d1d33a6`, native eye-position operands gained a player anchor from
+the simulation mover. Potential foreign eye and direction selectors now
+request a frozen room pose. The startup scene captured 15 living
+candidates. Both same-pack reports matched byte for byte. All 32 actor
+rows remained unchanged, with 11 independent passes, one ordinary
+attachment, and 47 blocking sites. The prepared firing-placement
+regression passed, and the #72 trace retained all 476 observations.
+Simulation stance heights have no new original-client verification.
+
+The Windows #131 idle and single-shot reload schedules each produced
+339 ticks. Each implementation validated and repeated both traces.
+Every tick matched its own preceding Windows capture. Strict comparison
+still reports the four RNG model and seed differences.
+
 Seven actor probes have one blocking site each. Mercy's tag query needs
 the tagged placement inventory and live actor tags. Orisa and Sigma
 still hit persistent message registration. Baptiste cannot read a
