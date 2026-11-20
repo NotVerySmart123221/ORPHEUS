@@ -361,7 +361,7 @@ fn settled_health_facts_stay_with_the_original_target_generation() {
 }
 
 #[test]
-fn lethal_impact_notifies_source_with_settled_room_status_after_target_retirement() {
+fn lethal_health_change_notifies_source_with_settled_status_after_target_retirement() {
     use std::{io, sync::Mutex};
 
     use crate::{
@@ -423,10 +423,11 @@ fn lethal_impact_notifies_source_with_settled_room_status_after_target_retiremen
     let Contract { input, expected } = contract();
     let ground = Arc::new(fixture_ground());
     let movers = MoverCatalog::default();
-    for (room_mode, expected_status) in [
-        (Some(false), Some((Some(1), false))),
-        (Some(true), Some((None, false))),
-        (None, None),
+    for (room_mode, expected_status, weapon_impact) in [
+        (Some(false), Some((Some(1), false)), true),
+        (Some(true), Some((None, false)), true),
+        (None, None, true),
+        (Some(false), Some((Some(1), false)), false),
     ] {
         let bots = fixture_bots();
         let target = bots[0].entity;
@@ -450,15 +451,31 @@ fn lethal_impact_notifies_source_with_settled_room_status_after_target_retiremen
         room.enable_host_health_events();
         room.prepare_spatial_frame(FIXTURE_CONTEXT.tick).unwrap();
 
-        let impact = fixture_impact(target, input.bot_lethal_impact);
-        room.apply_bot_impact(
-            source.entity,
-            FIXTURE_CONTEXT.tick,
-            FIXTURE_CONTEXT,
-            &impact,
-        )
-        .unwrap()
-        .unwrap();
+        if weapon_impact {
+            let impact = fixture_impact(target, input.bot_lethal_impact);
+            room.apply_bot_impact(
+                source.entity,
+                FIXTURE_CONTEXT.tick,
+                FIXTURE_CONTEXT,
+                &impact,
+            )
+            .unwrap()
+            .unwrap();
+        } else {
+            assert!(
+                room.settle_health(
+                    target,
+                    HealthEffect::Damage(input.bot_lethal_impact),
+                    Death {
+                        killer: source.entity,
+                        frame: FIXTURE_CONTEXT.tick,
+                        time: FIXTURE_CONTEXT.now.as_secs_f64(),
+                    },
+                    FIXTURE_CONTEXT.now,
+                )
+                .unwrap()
+            );
+        }
         assert!(notification.lock().unwrap().is_none());
 
         let queries = BotQueries::new(room_mode.unwrap_or(false), &movers, &ground, None);
@@ -492,7 +509,7 @@ fn lethal_impact_notifies_source_with_settled_room_status_after_target_retiremen
                 target,
                 delta: expected.replacement.lethal_delta,
                 killed: true,
-                hit_tags: Some(HitTags::EMPTY),
+                hit_tags: weapon_impact.then_some(HitTags::EMPTY),
             }
         );
         let facts = facts.unwrap();

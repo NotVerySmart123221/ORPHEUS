@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "case_id": "script-directed-charge-sender.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "input": {
+    "source": 437,
+    "recipient": 531,
+    "cases": [
+      {
+        "possession": false,
+        "fraction": 0.25
+      },
+      {
+        "possession": true,
+        "fraction": 0.75
+      }
+    ]
+  }
+}

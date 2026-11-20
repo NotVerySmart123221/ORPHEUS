@@ -6,6 +6,10 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Extended directed numeric charge messages to support terminal server-only senders with an authored entity variable or possessed-body target. Both use the existing room route. Added synthetic sender coverage and two opt-in prepared probes for `14F2` fraction binding, cap, gates and next-frame receipt. Integration validation pending.
+
+- Preserve settled target facts for damage without a weapon impact, including lethal scripted damage. Credit listeners can still inspect the original target after retirement. Hit tags remain unavailable. Room regression covers the capped loss and deferred delivery. Integration validation pending.
+
 - Replaced fixed PhysicsExplosion placements with authored state checks and an explicit map physics capability. Static rooms retain the ordinary state lifecycle and transitions. Unknown and dynamic map physics still produce a diagnostic. Added a synthetic regression for scope, lifecycle, and unsupported fields. Integration validation pending.
 
 - Added field-driven decay for named temporary shields. The state samples the authored rate on the VM clock and finishes at zero. Decay uses the shared grant-draining routine independently from attributed weapon hits. Synthetic lifecycle and native settlement regressions are pending integration validation.

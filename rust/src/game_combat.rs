@@ -1569,7 +1569,7 @@ impl RoomSimulation {
                 target,
                 healed,
                 false,
-                HealthEventContext::Healing(&self.world),
+                HealthEventContext::Settled(&self.world),
                 room_status,
             );
         }

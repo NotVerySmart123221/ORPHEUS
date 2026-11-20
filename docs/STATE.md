@@ -270,6 +270,15 @@ attachment, and **46 blocking sites**. The #72 trace retained its
 476 observations. Both #131 schedules reproduced the previous 339
 ticks per implementation and the same four RNG setup differences.
 
+The server-only form of the directed numeric route accepts a terminal
+send of one instance value. Its target is either an entity-scope variable
+or the owner's possessed body. One prepared `14F2` probe supplies
+explicit inputs to check the receiver's absolute charge fraction, cap,
+and both authored gates. A second probe connects the unmodified terminal
+send to the receiver through the deferred queue. Its trigger and input
+values are synthetic. The probes await integration runs. Live trigger
+timing remains open.
+
 The opt-in directed numeric route preserves ordinary local delivery
 and uses the room queue for a validated foreign target. The prepared
 probe passed for the original `00EB` sender actions and receiver with

@@ -22,6 +22,8 @@ use crate::{
     world::GAME_MODE_ENTITY,
 };
 
+mod charge_receiver;
+
 #[test]
 #[ignore = "requires separately prepared 104319 Junkenstein runtime"]
 fn castle_summoner_deadeye_sightlines_follow_real_collision() {

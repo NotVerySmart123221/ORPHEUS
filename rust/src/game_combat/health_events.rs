@@ -62,9 +62,8 @@ impl SampledBody {
 }
 
 pub(super) enum HealthEventContext<'a> {
-    Unattributed,
     Impact(HitTags, &'a HealthTargetFacts),
-    Healing(&'a World),
+    Settled(&'a World),
 }
 
 struct HealthApplied {
@@ -125,11 +124,9 @@ impl RoomHealthEvents {
             HealthEventContext::Impact(tags, facts) if facts.target == target.wire => {
                 (Some(tags), Some(facts.clone()))
             }
-            // A self-heal or an unavailable source has no foreign observer
-            // of the target in this notification.
-            HealthEventContext::Healing(world)
-                if delta > 0.0 && source.is_some_and(|source| source != target) =>
-            {
+            // A settled change without weapon tags can still authenticate the
+            // target facts seen by a distinct source.
+            HealthEventContext::Settled(world) if source.is_some_and(|source| source != target) => {
                 (None, target.health_target_facts(world))
             }
             _ => (None, None),
@@ -170,12 +167,12 @@ impl RoomSimulation {
         let source = self.sample_health_body(source);
         let context = match impact {
             Some((tags, facts)) => HealthEventContext::Impact(tags, facts),
-            None if delta > 0.0 => HealthEventContext::Healing(&self.world),
-            None => HealthEventContext::Unattributed,
+            None => HealthEventContext::Settled(&self.world),
         };
-        let room_status = match context {
-            HealthEventContext::Unattributed => None,
-            _ => self.sample_health_target_room_status(target),
+        let room_status = if impact.is_some() || source.is_some_and(|source| source != target) {
+            self.sample_health_target_room_status(target)
+        } else {
+            None
         };
         self.health_events
             .stage(source, target, delta, killed, context, room_status);
@@ -228,24 +225,16 @@ impl RoomSimulation {
             for change in changes {
                 let source =
                     SampledBody::lookup(change.source, &self.by_wire, &self.players_by_wire);
-                // The VM has finished its local mutation. Use this committed body
-                // snapshot when publishing the heal to a distinct room source.
-                let context = if change.delta > 0.0 {
-                    HealthEventContext::Healing(&self.world)
-                } else {
-                    HealthEventContext::Unattributed
-                };
-                let room_status = if change.delta > 0.0 {
-                    self.sample_health_target_room_status(target)
-                } else {
-                    None
-                };
+                // The VM has finished its local mutation. Read the committed body.
+                let room_status = source
+                    .filter(|&source| source != target)
+                    .and_then(|_| self.sample_health_target_room_status(target));
                 self.health_events.stage(
                     source,
                     target,
                     change.delta,
                     change.killed,
-                    context,
+                    HealthEventContext::Settled(&self.world),
                     room_status,
                 );
             }
