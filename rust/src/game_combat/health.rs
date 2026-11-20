@@ -34,14 +34,13 @@ impl RoomSimulation {
         now: Duration,
     ) -> Result<bool, CombatError> {
         if let Some(state) = self.state_mut(wire)? {
-            let changed = match effect {
-                HealthEffect::Damage(amount) => {
-                    Self::damage_bot(state, amount, source, now).is_some()
-                }
-                HealthEffect::Heal(amount) if !state.bot.dead => state.vitals.heal(amount) > 0.0,
-                HealthEffect::Heal(_) => false,
+            let (delta, killed) = match effect {
+                HealthEffect::Damage(amount) => Self::damage_bot(state, amount, source, now)
+                    .map_or((0.0, false), |outcome| (-outcome.dealt, outcome.killed)),
+                HealthEffect::Heal(amount) if !state.bot.dead => (state.vitals.heal(amount), false),
+                HealthEffect::Heal(_) => (0.0, false),
             };
-            if changed {
+            if delta != 0.0 {
                 let health = state.vitals.component();
                 state.vitals.clear_changed();
                 self.scripted_health.push(EntityUpdate {
@@ -49,6 +48,7 @@ impl RoomSimulation {
                     operation: Some(Operation::Update(vec![health])),
                     ..Default::default()
                 });
+                self.record_health_applied(source.killer, wire, delta, killed);
             }
             return Ok(true);
         }
@@ -73,7 +73,7 @@ impl RoomSimulation {
             HealthEffect::Heal(amount) => {
                 if let Some(state) = self.player_body_mut(id).filter(|state| state.alive()) {
                     if let Some(runtime) = &mut state.runtime {
-                        runtime.heal(amount);
+                        let healed = runtime.heal(amount);
                         if let Some(health) = runtime.take_health_update() {
                             self.scripted_health.push(EntityUpdate {
                                 entity: wire,
@@ -81,6 +81,7 @@ impl RoomSimulation {
                                 ..Default::default()
                             });
                         }
+                        self.record_health_applied(source.killer, wire, healed, false);
                     }
                 }
             }

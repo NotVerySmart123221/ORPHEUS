@@ -32,12 +32,12 @@ use crate::{
     mover_modifiers::{Modifier, ModifierKey},
     projectile_flight::ProjectileFlight,
     scene_assets::PreparedScene,
-    script_init::{InitFault, RoomMessage, Snapshot},
+    script_init::{HostEvent, InitFault, RoomMessage, Snapshot},
     script_player::OwnerBodySpawn,
     script_snapshot_wire::CountdownFrame,
     script_snapshot_wire::{ProjectedSnapshot, SnapshotEncoder, View},
     script_stream::{BodyStream, ChangeKey, DeltaKind, ScriptChunk, Stream},
-    vitals::{Death, Vitals},
+    vitals::{Damage, Death, Vitals},
     world::{
         Component as WorldComponent, Create, EntityUpdate, GAME_MODE_ENTITY, MAX_PAYLOAD, Movement,
         Operation, SkinTheme, frame,
@@ -98,6 +98,9 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
     ) -> Result<usize, InitFault> {
         Ok(0)
     }
+    fn receive_host_event(&mut self, _event: HostEvent) -> Result<usize, InitFault> {
+        Ok(0)
+    }
     fn set_spatial_frame(&mut self, _frame: Arc<crate::game_combat::RoomSpatialFrame>) {}
     fn set_defenders(&mut self, _defenders: Arc<[u32]>) {}
     fn take_sightings(&mut self) -> Vec<crate::junkenstein_messages::DefenderSighting> {
@@ -153,10 +156,12 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
         None
     }
 
-    fn heal(&mut self, _amount: f64) {}
+    fn heal(&mut self, _amount: f64) -> f64 {
+        0.0
+    }
 
-    fn receive_damage(&mut self, _amount: f64, _source: Death) -> bool {
-        false
+    fn receive_damage(&mut self, _amount: f64, _source: Death) -> Damage {
+        Damage::default()
     }
 
     /// New health revisions supersede older ones, including any slot clears.

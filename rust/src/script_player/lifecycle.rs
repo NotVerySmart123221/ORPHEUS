@@ -24,11 +24,11 @@ use crate::{
     script_codecs::CodecTable,
     script_expr::to_float,
     script_graph::GraphStore,
-    script_init::{Component, InitFault, RoomMessage, Snapshot},
+    script_init::{Component, HostEvent, InitFault, RoomMessage, Snapshot},
     script_runtime::FRAME_MS,
     script_snapshot_wire::SnapshotEncoder,
     script_wire::{Value, Variables},
-    vitals::{Death, Vitals},
+    vitals::{Damage, Death, Vitals},
     world::Component as EntityComponent,
 };
 
@@ -236,11 +236,15 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         Some(&self.world.vitals)
     }
 
-    fn heal(&mut self, amount: f64) {
-        self.world.vitals.heal(amount);
+    fn receive_host_event(&mut self, event: HostEvent) -> Result<usize, InitFault> {
+        self.component.queue_host_event(event)
     }
 
-    fn receive_damage(&mut self, amount: f64, source: Death) -> bool {
+    fn heal(&mut self, amount: f64) -> f64 {
+        self.world.vitals.heal(amount)
+    }
+
+    fn receive_damage(&mut self, amount: f64, source: Death) -> Damage {
         let result = self.world.vitals.damage(amount, source);
         if result.killed {
             self.component.set_owner_dead(true);
@@ -248,7 +252,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                 eprintln!("Owner death charge cleanup failed: {error}");
             }
         }
-        result.killed
+        result
     }
 
     fn take_health_update(&mut self) -> Option<EntityComponent> {

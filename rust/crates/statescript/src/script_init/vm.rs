@@ -1776,6 +1776,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         {
             self.spend("PlayScript retirement entry")?;
             if !node.is_message_entry()
+                && node.host_event_kind().is_none()
                 && !matches!(node.class.as_str(), "STU_BB4AC733" | "STU_8A7E9DA8")
             {
                 return Ok(());
@@ -2228,7 +2229,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 taken = true;
                 continue;
             };
-            if !self.observed_server_path(id, target) {
+            if target.host_event_kind().is_some() || !self.observed_server_path(id, target) {
                 continue;
             }
             if target.is_state() {

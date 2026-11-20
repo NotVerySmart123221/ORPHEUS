@@ -175,8 +175,8 @@ pub use types::{
 };
 pub use world::{
     AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, CreationKind,
-    EmptyWorld, EntityCreation, LandingSelection, PlayScript, RoomMessage, Site, TargetTagEffect,
-    TargetTagEffects, TargetTagSnapshot, World,
+    EmptyWorld, EntityCreation, HostEvent, LandingSelection, PlayScript, RoomMessage, Site,
+    TargetTagEffect, TargetTagEffects, TargetTagSnapshot, World,
 };
 
 use machine::{Event, Machine, Startup, StateKey, VarKey};
@@ -613,11 +613,32 @@ impl Component {
         {
             return Ok(0);
         }
-        let Ok(frame) = u32::try_from(self.machine.now_ms / FRAME_MS + 1) else {
+        let Some(due_ms) = self.next_vm_frame_ms() else {
             return Ok(0);
         };
         self.machine
-            .queue_room_entries_from(&self.graphs, sender, message, frame_start(frame))
+            .queue_room_entries_from(&self.graphs, sender, message, due_ms)
+    }
+
+    /// Notify explicitly subscribed server graphs at the next receiver VM frame.
+    pub fn queue_host_event(&mut self, event: HostEvent) -> Result<usize, InitFault> {
+        if self.halted {
+            return Err(InitFault::Halted);
+        }
+        let Some(due_ms) = self.next_vm_frame_ms() else {
+            return Ok(0);
+        };
+        let Some((kind, parameters)) = event.bindings_for(self.machine.snapshot.entity) else {
+            return Ok(0);
+        };
+        self.machine
+            .queue_host_entries(&self.graphs, kind, parameters, due_ms)
+    }
+
+    fn next_vm_frame_ms(&self) -> Option<u64> {
+        u32::try_from(self.machine.now_ms / FRAME_MS + 1)
+            .ok()
+            .map(frame_start)
     }
 
     fn queue_message_at(

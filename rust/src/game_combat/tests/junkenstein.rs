@@ -1180,14 +1180,18 @@ fn normal_street_wave_keeps_the_zomnic_body_running_after_setup() {
             if Some(hit.source) == first_body {
                 assert!(hit.amount > 0.0);
                 if hit.target == DEFENDERS[0] {
-                    assert!(!owner.receive_damage(
-                        hit.amount,
-                        Death {
-                            time: f64::from(tick) * 0.016,
-                            frame: tick,
-                            killer: hit.source,
-                        }
-                    ));
+                    assert!(
+                        !owner
+                            .receive_damage(
+                                hit.amount,
+                                Death {
+                                    time: f64::from(tick) * 0.016,
+                                    frame: tick,
+                                    killer: hit.source,
+                                }
+                            )
+                            .killed
+                    );
                 }
                 victims.push(hit.target);
             }

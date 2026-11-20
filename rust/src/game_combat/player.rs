@@ -17,7 +17,7 @@ use crate::{
     mover::Mover,
     script_enemy::EnemyTarget,
     script_snapshot_wire::SceneProjection,
-    vitals::Death,
+    vitals::{Damage, Death},
     world::{EntityUpdate, Operation},
 };
 
@@ -201,10 +201,12 @@ impl PlayerBodyState {
         (pulses, expired_tokens)
     }
 
-    fn receive_damage(&mut self, amount: f64, source: Death) -> bool {
+    fn receive_damage(&mut self, amount: f64, source: Death) -> Damage {
         self.runtime
             .as_mut()
-            .is_some_and(|runtime| runtime.receive_damage(amount, source))
+            .map_or_else(Damage::default, |runtime| {
+                runtime.receive_damage(amount, source)
+            })
     }
 
     pub(crate) fn projection(&self) -> Option<SceneProjection<'_>> {
@@ -675,7 +677,7 @@ impl RoomSimulation {
         }
         let owner = state.owner;
         let entity = state.id.entity;
-        let killed = state.receive_damage(amount, source);
+        let outcome = state.receive_damage(amount, source);
         let health = state
             .runtime
             .as_mut()
@@ -685,7 +687,8 @@ impl RoomSimulation {
                 operation: Some(Operation::Update(vec![component])),
                 ..EntityUpdate::default()
             });
-        Some((owner, killed, health))
+        self.record_health_applied(source.killer, entity, -outcome.dealt, outcome.killed);
+        Some((owner, outcome.killed, health))
     }
 
     pub(crate) fn observer_player_creates(

@@ -166,6 +166,36 @@ without the optional section retain the existing host rules.
 
 See the [synthetic mode ruleset contract](../fixtures/behavior/script-mode-rulesets-v1.json).
 
+## Receive a settled health event
+
+A graph can subscribe to room-authoritative health changes with an
+`EntryHostEvent` node declared as `"host_event_entry": "health_applied"`
+and `"server_only": true`. Bind the known parameter slots in `m_params`
+and continue from `m_outPlug`.
+
+| Slot | Value |
+| --- | --- |
+| 1 | Source entity, or null if unavailable |
+| 2 | Target entity at settlement |
+| 3 | Actual signed pool delta, positive for healing and negative for damage |
+| 4 | Whether damage killed the target |
+
+The enabled room records successful weapon damage and room-settled
+script and AI health requests. Pool mitigation and caps are already
+reflected in the delta. Changes that apply zero produce no event.
+The room checks each recipient's body identity after settlement and
+schedules delivery at the start of that component's next VM frame.
+Living source and target actors can subscribe. A self-effect is delivered
+once. A killed target can still be reported to the living source.
+
+Host entries use the bounded VM event queue and parameter binding. Their
+subscription is distinct from local and directed room messages. Queue
+rejection discards the notification and leaves the settled pool result
+in place. Legacy health mutations that occur directly inside a VM or
+inside the field-pulse handling path are outside this event feed.
+
+See the [synthetic host health contract](../fixtures/behavior/script-host-health-events-v1.json).
+
 ## Apply a radial health change
 
 Set `action_behavior` to `"radial_health"` on a server-only action, or

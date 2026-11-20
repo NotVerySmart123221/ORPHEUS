@@ -12,7 +12,7 @@ use indexmap::IndexMap;
 
 use crate::{
     script_expr::StackPriority,
-    script_graph::GraphStore,
+    script_graph::{EntryTopic, GraphStore, HostEventKind},
     script_modifiers::{Modifier, ModifierKey},
     script_runtime::{ButtonEdge, Timeline, frame_start},
     script_wire::{Value, Variables},
@@ -29,8 +29,18 @@ use super::{
 
 #[derive(Clone, Copy)]
 enum MessageDestination {
-    Ordinary(Option<u16>),
-    Room,
+    Ordinary(Option<u16>, u64),
+    Room(u64),
+    Host(HostEventKind),
+}
+
+impl MessageDestination {
+    fn topic(self) -> EntryTopic {
+        match self {
+            Self::Ordinary(_, message) | Self::Room(message) => EntryTopic::Message(message),
+            Self::Host(kind) => EntryTopic::Host(kind),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -407,9 +417,8 @@ impl Machine {
     ) -> Result<usize, InitFault> {
         self.queue_message_entries(
             graphs,
-            MessageDestination::Ordinary(recipient),
+            MessageDestination::Ordinary(recipient, message),
             sender,
-            message,
             parameters,
             due_ms,
         )
@@ -424,10 +433,25 @@ impl Machine {
     ) -> Result<usize, InitFault> {
         self.queue_message_entries(
             graphs,
-            MessageDestination::Room,
+            MessageDestination::Room(message.id),
             Some(sender),
-            message.id,
             message.parameters,
+            due_ms,
+        )
+    }
+
+    pub(super) fn queue_host_entries(
+        &mut self,
+        graphs: &GraphStore,
+        kind: HostEventKind,
+        parameters: Variables,
+        due_ms: u64,
+    ) -> Result<usize, InitFault> {
+        self.queue_message_entries(
+            graphs,
+            MessageDestination::Host(kind),
+            None,
+            parameters,
             due_ms,
         )
     }
@@ -437,22 +461,23 @@ impl Machine {
         graphs: &GraphStore,
         destination: MessageDestination,
         sender: Option<u32>,
-        message: u64,
         parameters: Variables,
         due_ms: u64,
     ) -> Result<usize, InitFault> {
+        let topic = destination.topic();
         let mut entries = Vec::new();
         for (&id, item) in &self.snapshot.instances {
-            if matches!(destination, MessageDestination::Ordinary(Some(recipient)) if recipient != id)
+            if matches!(destination, MessageDestination::Ordinary(Some(recipient), _) if recipient != id)
             {
                 continue;
             }
             let graph = graphs.graph(item.graph).expect("registered graph");
             for node in graph
-                .message_handlers(message)
+                .entry_handlers(topic)
                 .filter(|node| match destination {
-                    MessageDestination::Room => node.declares_room_message_entry(),
-                    MessageDestination::Ordinary(_) => {
+                    MessageDestination::Host(_) => true,
+                    MessageDestination::Room(_) => node.declares_room_message_entry(),
+                    MessageDestination::Ordinary(_, _) => {
                         !node.declares_room_message_entry()
                             && (node.is_message_entry()
                                 || node.state.is_some_and(|raw| {

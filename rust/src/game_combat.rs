@@ -244,6 +244,7 @@ pub(crate) struct BotReplacement {
 mod encounter;
 mod enemy;
 mod health;
+mod health_events;
 mod player;
 mod script_requests;
 pub(crate) use encounter::{
@@ -316,6 +317,7 @@ pub(crate) struct RoomSimulation {
     players_by_owner: IndexMap<u32, PlayerBodyHandle>,
     spatial_queries: Option<RoomSpatialQueries>,
     spatial_frame: Option<(u32, Arc<RoomSpatialFrame>)>,
+    health_events: health_events::RoomHealthEvents,
     // Generation maps live for the room's lifetime so reconnects cannot reset history.
     player_generations: HashMap<u32, u64>,
     spawned_player_generations: HashMap<u32, u64>,
@@ -632,6 +634,7 @@ impl RoomSimulation {
             players_by_owner: IndexMap::new(),
             spatial_queries: None,
             spatial_frame: None,
+            health_events: health_events::RoomHealthEvents::default(),
             player_generations: HashMap::new(),
             spawned_player_generations: HashMap::new(),
             latest_wire_generations: HashMap::new(),
@@ -1704,7 +1707,7 @@ impl RoomSimulation {
             ..EntityUpdate::default()
         };
         state.vitals.clear_changed();
-        Ok(Some(BotHit {
+        let hit = BotHit {
             damage: AppliedDamage {
                 source,
                 target: entity,
@@ -1732,7 +1735,9 @@ impl RoomSimulation {
                 }),
             ],
             health,
-        }))
+        };
+        self.record_health_applied(source, entity, -result.dealt, result.killed);
+        Ok(Some(hit))
     }
 
     fn damage_bot(
@@ -1806,6 +1811,7 @@ impl RoomSimulation {
         }
         if !self.combat_active {
             self.settle_authored_requests(tick, now)?;
+            self.flush_health_events();
             return Ok(Vec::new());
         }
         let external_and_players = self.collect_player_enemy_targets();
@@ -2195,7 +2201,9 @@ impl RoomSimulation {
         }
         let replacements = self.respawn_due(tick, now);
         self.record_poses(queries, tick)?;
-        replacements
+        let replacements = replacements?;
+        self.flush_health_events();
+        Ok(replacements)
     }
 
     fn sync_witch_staff_links(&mut self) -> Result<(), CombatError> {

@@ -166,7 +166,7 @@ fn spatial_visibility_blocks_only_hits_before_the_target() {
 }
 
 #[test]
-fn authored_room_message_reaches_only_the_npc_body_on_its_next_frame() {
+fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() {
     use crate::{
         game_clock::TICK_PERIOD,
         game_pools::HealthPools,
@@ -186,12 +186,13 @@ fn authored_room_message_reaches_only_the_npc_body_on_its_next_frame() {
     const SENDER_SLOT: u32 = 7;
     const PAYLOAD_SLOT: u32 = 8;
     const PARAMETER: u32 = 9;
+    const HOST_DELTA_SLOT: u32 = 18;
 
     let entity_var = |id| json!({"$":"STUConfigVarDynamic","m_identifier":id,"m_60DB8F99":true});
     let bundle = json!({
         "version":1,"bodies":{},"missing":[],
         "graphs":[{
-            "index":123,"items":1,"states":[],"entries":[0],"remote":[],"sync_vars":[],
+            "index":123,"items":2,"states":[],"entries":[0,1],"remote":[],"sync_vars":[],
             "fields":{},"containers":{},"unknown_nodes":[],
             "header":{"m_nodesBitCount":4,"m_statesBitCount":4,
                 "m_remoteSyncNodesBitCount":4,"m_syncVarsBitCount":4},
@@ -203,6 +204,14 @@ fn authored_room_message_reaches_only_the_npc_body_on_its_next_frame() {
                     "m_B60ABDA4":entity_var(SENDER_SLOT),
                     "m_params":[{"m_B5051BCE":format!("0x{PARAMETER:016X}"),
                         "m_out_Var":entity_var(PAYLOAD_SLOT)}],
+                    "m_outPlug":{"$":"Plug","links":[]}
+                }
+            },{
+                "pos":1,"uid":1,"rid":1,"remote":-1,"state":null,
+                "class":"EntryHostEvent","server_only":true,"client_only":false,
+                "host_event_entry":"health_applied","fields":{
+                    "m_params":[{"m_B5051BCE":"0x0000000000000003",
+                        "m_out_Var":entity_var(HOST_DELTA_SLOT)}],
                     "m_outPlug":{"$":"Plug","links":[]}
                 }
             }]
@@ -307,6 +316,43 @@ fn authored_room_message_reaches_only_the_npc_body_on_its_next_frame() {
     );
     assert_eq!(observed(&room, receiver, true), (None, None));
     assert_eq!(observed(&room, sender, false), (None, None));
+
+    let host_delta = |room: &RoomSimulation, wire| {
+        let enemy = state(room, wire).unwrap().enemy.as_ref().unwrap();
+        let delta = |component: &crate::script_init::Component| {
+            component
+                .snapshot()
+                .unwrap()
+                .variables
+                .get(&HOST_DELTA_SLOT)
+                .cloned()
+        };
+        (delta(&enemy.scripts.body), delta(&enemy.scripts.controller))
+    };
+    room.enable_host_health_events();
+    let tick = context.tick + 2;
+    let now = context.now + 2 * TICK_PERIOD;
+    room.settle_health(
+        receiver,
+        HealthEffect::Damage(25.0),
+        crate::vitals::Death {
+            time: now.as_secs_f64(),
+            frame: tick,
+            killer: sender,
+        },
+        now,
+    )
+    .unwrap();
+    room.finish_tick(&queries, tick, now).unwrap();
+    assert_eq!(host_delta(&room, receiver), (None, None));
+    assert_eq!(host_delta(&room, sender), (None, None));
+    room.finish_tick(&queries, tick + 1, now + TICK_PERIOD)
+        .unwrap();
+    assert_eq!(
+        host_delta(&room, receiver),
+        (Some(Value::Float(-25.0)), None)
+    );
+    assert_eq!(host_delta(&room, sender), (Some(Value::Float(-25.0)), None));
 }
 
 #[test]

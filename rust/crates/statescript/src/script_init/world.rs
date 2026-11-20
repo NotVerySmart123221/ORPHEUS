@@ -6,7 +6,7 @@ use serde_json::Value as Json;
 
 use crate::{
     script_expr::{self, EntityRelation, OnFire, RoomEntityFacts, SpatialCandidate, StackPriority},
-    script_graph::{MAX_ROOM_MESSAGE_PARAMETERS, Node},
+    script_graph::{HostEventKind, MAX_ROOM_MESSAGE_PARAMETERS, Node},
     script_runtime::PoolKind,
     script_voice::IntroCue,
     script_wire::{Value, Variables},
@@ -42,6 +42,47 @@ impl RoomMessage {
                         _ => false,
                     }
             })
+    }
+}
+
+/// Authoritative notification emitted by the simulation after a health change.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HostEvent {
+    HealthApplied {
+        source: Option<u32>,
+        target: u32,
+        delta: f64,
+        killed: bool,
+    },
+}
+
+impl HostEvent {
+    pub(super) fn bindings_for(self, receiver: u32) -> Option<(HostEventKind, Variables)> {
+        match self {
+            Self::HealthApplied {
+                source,
+                target,
+                delta,
+                killed,
+            } => {
+                if !script_expr::valid_entity(target)
+                    || source.is_some_and(|source| !script_expr::valid_entity(source))
+                    || (receiver != target && source != Some(receiver))
+                    || !delta.is_finite()
+                    || delta == 0.0
+                    || (killed && delta > 0.0)
+                {
+                    return None;
+                }
+                let parameters = Variables::from([
+                    (1, source.map_or(Value::Null, Value::Entity)),
+                    (2, Value::Entity(target)),
+                    (3, Value::Float(delta)),
+                    (4, Value::Bool(killed)),
+                ]);
+                Some((HostEventKind::HealthApplied, parameters))
+            }
+        }
     }
 }
 

@@ -50,7 +50,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         caller: Option<StateKey>,
         depth: usize,
     ) -> Result<bool, InitFault> {
-        if !self.observed_server_path(id, node) {
+        if node.host_event_kind().is_some() || !self.observed_server_path(id, node) {
             return Ok(false);
         }
         self.spend("node execution")?;

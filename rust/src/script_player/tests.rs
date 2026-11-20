@@ -502,14 +502,20 @@ fn health_queries_read_the_authoritative_vitals() {
     let maximum = json!({"$": "STU_7D7D2470", "m_entity": owner});
     assert_eq!(evaluate(&mut runtime, &current), Ok(Value::Float(200.0)));
     assert_eq!(evaluate(&mut runtime, &maximum), Ok(Value::Float(200.0)));
-    assert!(!runtime.receive_damage(
-        75.0,
-        crate::vitals::Death {
-            time: 0.0,
-            frame: spawn.frame,
-            killer: spawn.entity + 1,
-        },
-    ));
+    assert_eq!(
+        runtime.receive_damage(
+            75.0,
+            crate::vitals::Death {
+                time: 0.0,
+                frame: spawn.frame,
+                killer: spawn.entity + 1,
+            },
+        ),
+        crate::vitals::Damage {
+            dealt: 75.0,
+            killed: false
+        }
+    );
     assert_eq!(evaluate(&mut runtime, &current), Ok(Value::Float(125.0)));
     assert_eq!(evaluate(&mut runtime, &maximum), Ok(Value::Float(200.0)));
 

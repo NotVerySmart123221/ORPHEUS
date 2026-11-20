@@ -884,16 +884,22 @@ impl OwnerBodyRuntime for SyntheticOwner {
         self.vitals.as_ref()
     }
 
-    fn heal(&mut self, amount: f64) {
-        if let Some(vitals) = &mut self.vitals {
-            vitals.heal(amount);
-        }
-    }
-
-    fn receive_damage(&mut self, amount: f64, source: crate::vitals::Death) -> bool {
+    fn heal(&mut self, amount: f64) -> f64 {
         self.vitals
             .as_mut()
-            .is_some_and(|vitals| vitals.damage(amount, source).killed)
+            .map_or(0.0, |vitals| vitals.heal(amount))
+    }
+
+    fn receive_damage(
+        &mut self,
+        amount: f64,
+        source: crate::vitals::Death,
+    ) -> crate::vitals::Damage {
+        self.vitals
+            .as_mut()
+            .map_or_else(crate::vitals::Damage::default, |vitals| {
+                vitals.damage(amount, source)
+            })
     }
 
     fn take_health_update(&mut self) -> Option<WorldComponent> {

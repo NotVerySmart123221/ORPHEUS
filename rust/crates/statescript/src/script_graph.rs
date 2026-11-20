@@ -52,6 +52,18 @@ enum ActionBehavior {
     RadialHealth,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum HostEventKind {
+    HealthApplied,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum EntryTopic {
+    Message(u64),
+    Host(HostEventKind),
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Node {
     pub pos: u16,
@@ -64,6 +76,7 @@ pub struct Node {
     action_behavior: Option<ActionBehavior>,
     #[serde(default)]
     room_message_entry: bool,
+    host_event_entry: Option<HostEventKind>,
     #[serde(deserialize_with = "node_flag")]
     pub client_only: bool,
     #[serde(deserialize_with = "node_flag")]
@@ -129,6 +142,34 @@ impl Node {
 
     pub(crate) fn declares_room_message_entry(&self) -> bool {
         self.room_message_entry
+    }
+
+    pub(crate) fn host_event_kind(&self) -> Option<HostEventKind> {
+        self.host_event_entry
+    }
+
+    fn valid_host_event_parameters(&self, kind: HostEventKind) -> bool {
+        let slots = match kind {
+            HostEventKind::HealthApplied => 1..=4,
+        };
+        let Some(parameters) = self.fields.get("m_params").filter(|value| !value.is_null()) else {
+            return true;
+        };
+        let mut bound = BTreeSet::new();
+        parameters.as_array().is_some_and(|parameters| {
+            parameters.len() <= 4
+                && parameters.iter().all(|parameter| {
+                    let slot = message_parameter_id(parameter);
+                    slots.contains(&slot)
+                        && bound.insert(slot)
+                        && parameter.get("m_out_Var").is_some_and(|output| {
+                            crate::script_expr::lvalue(output)
+                                .ok()
+                                .flatten()
+                                .is_some_and(|variable| variable.id != 0)
+                        })
+                })
+        })
     }
 
     pub(crate) fn declares_health_change_action(&self) -> bool {
@@ -292,7 +333,7 @@ pub struct Graph {
     #[serde(skip)]
     by_rid: Vec<Option<usize>>,
     #[serde(skip)]
-    message_handlers: BTreeMap<u64, Vec<usize>>,
+    entry_handlers: BTreeMap<EntryTopic, Vec<usize>>,
     #[serde(skip)]
     owner: WireSlots,
     #[serde(skip)]
@@ -312,6 +353,7 @@ impl Graph {
             node.state_behavior.is_some()
                 || node.action_behavior.is_some()
                 || node.declares_room_message_entry()
+                || node.host_event_kind().is_some()
         }) {
             for &position in self.states.iter().flatten() {
                 *authored_state_slots.entry(position).or_insert(0_usize) += 1;
@@ -513,6 +555,26 @@ impl Graph {
                     self.index, node.pos
                 )));
             }
+            if (node.host_event_kind().is_some() || node.class == "EntryHostEvent")
+                && (node.class != "EntryHostEvent"
+                    || !node.server_only
+                    || !node.runs_on_server()
+                    || node.is_action()
+                    || node.is_state()
+                    || node.state.is_some()
+                    || authored_state_slots.contains_key(&node.pos)
+                    || node.declares_room_message_entry()
+                    || node.fields.get("m_gameMessage").is_some()
+                    || !node.field("m_outPlug").is_some_and(valid_output_plug)
+                    || !node
+                        .host_event_kind()
+                        .is_some_and(|kind| node.valid_host_event_parameters(kind)))
+            {
+                return Err(invalid(format!(
+                    "host event entry in graph {} at node {} must be a standalone server-only EntryHostEvent with a valid host event kind, m_outPlug and parameter bindings",
+                    self.index, node.pos
+                )));
+            }
             let position = self
                 .by_pos
                 .get_mut(usize::from(node.pos))
@@ -524,14 +586,17 @@ impl Graph {
                 )));
             }
             self.by_rid[usize::from(node.rid)] = Some(index);
-            if let Some(message) = node.game_message_id().filter(|_| {
-                node.runs_on_server()
-                    && (node.is_message_entry() || (node.is_state() && node.state.is_some()))
-            }) {
-                self.message_handlers
-                    .entry(message)
-                    .or_default()
-                    .push(index);
+            let topic = node.host_event_kind().map(EntryTopic::Host).or_else(|| {
+                node.game_message_id()
+                    .filter(|_| {
+                        node.runs_on_server()
+                            && (node.is_message_entry()
+                                || (node.is_state() && node.state.is_some()))
+                    })
+                    .map(EntryTopic::Message)
+            });
+            if let Some(topic) = topic {
+                self.entry_handlers.entry(topic).or_default().push(index);
             }
         }
         self.owner = WireSlots::build(&self.states, self, false);
@@ -545,9 +610,9 @@ impl Graph {
         Ok(())
     }
 
-    pub(crate) fn message_handlers(&self, message: u64) -> impl Iterator<Item = &Node> {
-        self.message_handlers
-            .get(&message)
+    pub(crate) fn entry_handlers(&self, topic: EntryTopic) -> impl Iterator<Item = &Node> {
+        self.entry_handlers
+            .get(&topic)
             .into_iter()
             .flatten()
             .map(|&index| &self.nodes[index])
@@ -900,6 +965,7 @@ fn room_spatial_needs(value: &Value) -> RoomSpatialNeeds {
 pub struct GraphStore {
     graphs: BTreeMap<u32, Graph>,
     room_spatial_needs: RoomSpatialNeeds,
+    uses_host_health_events: bool,
     bodies: BTreeMap<u64, Body>,
     entities: BTreeMap<u64, Body>,
     mode_variables: BTreeMap<u64, BTreeMap<u32, ModeValue>>,
@@ -992,9 +1058,14 @@ impl GraphStore {
             })
             .max()
             .unwrap_or(RoomSpatialNeeds::None);
+        let health_topic = EntryTopic::Host(HostEventKind::HealthApplied);
+        let uses_host_health_events = graphs
+            .values()
+            .any(|graph| graph.entry_handlers.contains_key(&health_topic));
         Ok(Self {
             graphs,
             room_spatial_needs,
+            uses_host_health_events,
             bodies: keyed_by_guid(bundle.bodies)?,
             entities: keyed_by_guid(bundle.entities)?,
             mode_variables: keyed_by_guid(bundle.mode_variables)?
@@ -1022,6 +1093,11 @@ impl GraphStore {
     /// The most detailed room data requested by any server graph.
     pub fn room_spatial_needs(&self) -> RoomSpatialNeeds {
         self.room_spatial_needs
+    }
+
+    /// Whether this bundle explicitly subscribes to a host health event.
+    pub fn uses_host_health_events(&self) -> bool {
+        self.uses_host_health_events
     }
 
     pub fn graph(&self, index: u32) -> Option<&Graph> {
