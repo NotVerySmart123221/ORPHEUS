@@ -491,6 +491,11 @@ impl<W: World> Context for InstanceContext<'_, W> {
         self.world.authored_forward(entity)
     }
 
+    fn body_active(&mut self) -> Option<bool> {
+        self.read_native = true;
+        self.world.body_active(self.site)
+    }
+
     fn spatial_candidates(&mut self) -> Option<&[script_expr::SpatialCandidate]> {
         self.read_native = true;
         self.world.spatial_candidates()

@@ -705,6 +705,17 @@ impl Evaluator {
                         .ok_or(EvalError::UnavailableEntityDirection(entity))?,
                 )
             }
+            "BodyActive" => {
+                if fields.len() != 1 {
+                    return Err(EvalError::MalformedConfig("BodyActive takes no operands"));
+                }
+                self.charge()?;
+                Value::Bool(
+                    context
+                        .body_active()
+                        .ok_or(EvalError::UnavailableBodyActivity)?,
+                )
+            }
             "EntityMatches" => self.entity_matches(fields, context, nested)?,
             "EntitiesInRadius" => self.entities_in_radius(fields, context, nested)?,
             "SegmentClear" => self.segment_clear(fields, context, nested)?,

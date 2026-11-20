@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added the `BodyActive` host query for authored owner graphs. The room supplies its activity level before graph startup and updates the current body by generation. Meter contracts exercise paused and resumed gains, deferred health awards, death, and replacement. Locked workspace check, formatting, Clippy, and workspace tests with script coverage passed, including 367 native and 212 portable StateScript library tests.
+
 - Preserved the explicit no-target reply from the native direction host before evaluating the entity selector. The prepared bot firing-placement and timer regression reproduced the failure in the generic evaluator and passed after the fix. The workspace suite and the prepared #72 session also passed.
 
 - Removed placement checks from scene target collection and from timed graph states with no configured finish operands or alternate graph. Scene collection reads the authored tag and the host placement inventory. The existing timed placement with a duration keeps its compatibility path. Added native pitched direction evaluation through the shared entity pose provider, preserving the existing host override. Workspace tests with script coverage passed, including 366 native and 211 StateScript library tests. Formatting, Clippy, and the prepared #72 owner session passed.

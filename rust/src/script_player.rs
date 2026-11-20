@@ -25,7 +25,7 @@ use crate::{
     game_instance::{RETAIL_QUANTA, TeamMemberCounts},
     game_pools::{BODY_GRAPH, FALLBACK_POOLS, HealthPools},
     game_projectiles::ProjectileLeases,
-    game_replication::OwnerBodyRuntime,
+    game_replication::{OwnerBodyRuntime, OwnerRoomActivity},
     script_codecs::CodecTable,
     script_graph::GraphStore,
     script_init::{Component, InitFault, MAX_INIT_WORK, Root, TargetTagEffects},
@@ -52,6 +52,7 @@ pub(crate) struct OwnerBodySpawn {
 pub(crate) struct OwnerBodySetup {
     pub team_member_counts: Option<TeamMemberCounts>,
     pub spatial_frame: Option<Arc<RoomSpatialFrame>>,
+    pub room_activity: Option<OwnerRoomActivity>,
 }
 
 pub(crate) struct PlayerBodyFactory {
@@ -194,6 +195,7 @@ impl PlayerBodyFactory {
         let mut world = BodyWorld {
             spatial_frame: setup.spatial_frame,
             team_member_counts: setup.team_member_counts,
+            room_activity: setup.room_activity,
             script_requests: Default::default(),
             graphs: Arc::clone(&self.graphs),
             controller: spawn.controller,

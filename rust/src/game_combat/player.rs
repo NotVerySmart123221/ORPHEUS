@@ -13,7 +13,7 @@ use crate::{
     game_hitscan::{Impact, TargetHistory, TargetPose, ViewFrame},
     game_instance::TeamMemberCounts,
     game_projectiles::ProjectileToken,
-    game_replication::{BodyId, OwnerBodyRuntime},
+    game_replication::{BodyId, OwnerBodyRuntime, OwnerRoomActivity},
     junkenstein_messages::{DefenderMessage, DefenderSighting},
     mover::Mover,
     script_enemy::EnemyTarget,
@@ -478,18 +478,19 @@ impl RoomSimulation {
         }
     }
 
-    pub(crate) fn set_player_encounter_active(&mut self, id: BodyId, active: bool) {
+    pub(crate) fn set_player_activity(&mut self, id: BodyId, activity: OwnerRoomActivity) {
         let Some(runtime) = self
             .player_body_mut(id)
             .and_then(|state| state.runtime.as_mut())
         else {
             return;
         };
+        runtime.set_room_activity(activity);
         if runtime
             .snapshot()
             .is_some_and(crate::script_init::Snapshot::initialization_complete)
         {
-            if let Err(error) = runtime.set_encounter_active(active) {
+            if let Err(error) = runtime.set_encounter_active(activity.encounter_active()) {
                 eprintln!(
                     "Owner encounter admission failed for {:08x}: {error}",
                     id.entity
@@ -526,14 +527,14 @@ impl RoomSimulation {
             .map_or_else(Vec::new, |state| std::mem::take(&mut state.hitscan))
     }
 
-    pub(crate) fn sync_player_encounter(&mut self, active: bool) {
+    pub(crate) fn sync_player_activity(&mut self, activity: OwnerRoomActivity) {
         let ids: Vec<_> = self
             .players_by_owner
             .values()
             .map(|handle| handle.id)
             .collect();
         for id in ids {
-            self.set_player_encounter_active(id, active);
+            self.set_player_activity(id, activity);
         }
     }
 

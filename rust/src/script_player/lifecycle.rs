@@ -17,7 +17,7 @@ use crate::{
     game_hitscan::{HitDefinition, aim_direction},
     game_instance::TeamMemberCounts,
     game_projectiles::{ProjectileLeases, authored_number, local_prediction, predicted_sync},
-    game_replication::{BodyStep, OwnerBodyRuntime},
+    game_replication::{BodyStep, OwnerBodyRuntime, OwnerRoomActivity},
     junkenstein_messages::{DefenderMessage, DefenderSighting, SIGHTING},
     mover::Mover,
     mover_modifiers::{Modifier, ModifierKey},
@@ -47,6 +47,10 @@ pub(super) const DEADEYE_GRAPH: u32 = 0x022f;
 pub(super) const DEADEYE_TARGET_EFFECT: u32 = 0x01ee;
 
 impl OwnerBodyRuntime for PlayerBodyRuntime {
+    fn set_room_activity(&mut self, activity: OwnerRoomActivity) {
+        self.world.room_activity = Some(activity);
+    }
+
     fn set_encounter_active(&mut self, active: bool) -> io::Result<()> {
         self.sync_charge_admission(active)
     }

@@ -344,6 +344,7 @@ pub(super) fn reference_native_class(config: &Json) -> Option<&str> {
         | "STUConfigVarVec3"
         | "EntityPosition"
         | "EntityDirection"
+        | "BodyActive"
         | "EntityMatches"
         | "StackAllows"
         | "EntitiesInRadius"

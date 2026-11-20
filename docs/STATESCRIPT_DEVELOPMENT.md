@@ -108,12 +108,15 @@ ability support.
   parent-owned lifecycle at any placement. The prior configured-duration
   path remains a compatibility case. Configured predicates and alternate
   subgraphs need separate contracts.
+- Owner graphs can read `BodyActive` as an activity gate with no hero or
+  graph-specific bindings. The prepared scene provides the initial level.
+  The room updates the current body by generation.
 
 Native target tracking still needs the lifecycle of its embedded
 per-target subgraph and both output bindings. The authored
 `track_entities` node owns separate child graph instances. The other
-pending paths include shared charge admission, health effects, spatial
-queries, control effects, and voice recipients.
+pending paths include migration of the legacy charge bindings, health
+effects, spatial queries, control effects, and voice recipients.
 
 ### Generate the static reports
 
@@ -612,10 +615,22 @@ affiliation data to route damage and healing. An interval state can update
 the same balance independently. Ordinary assignment and numeric clamp
 operations apply the limit.
 
+Use `{"$":"BodyActive"}` in the gain branches when the meter depends on
+room and body activity. A live owner in a regular room is active. An
+encounter supplies its existing pre-result activity level after its
+runtime is installed. Death closes the gate through authoritative vitals.
+A detached body with no supplied room
+activity reports an unavailable host read. A deferred health event reads
+the level when its graph handler executes. Gating interval gain keeps
+the interval schedule anchored to startup. The debug scheduler can
+freeze the VM clock independently.
+
 The [synthetic meter contract](../fixtures/behavior/script-authored-meter-v1.json)
 runs this graph for two differently configured body definitions and checks
 an actor without the binding. Its rates, limits and test actors are
 original examples. The fixture verifies execution and scoped balances.
+The [activity contract](../fixtures/behavior/script-meter-body-activity-v1.json)
+checks when gains stop, resume, or belong to a replacement actor.
 Adding a root to a client-facing body also requires an owner and observer
 projection regression, since body graph bindings participate in instance
 ordering. The existing charge bridge uses synchronous damage delivery.

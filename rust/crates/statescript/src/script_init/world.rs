@@ -572,6 +572,11 @@ pub trait World {
         self.forward(entity)
     }
 
+    /// Activity of the component's own body at this site. None means unavailable.
+    fn body_active(&self, _site: Site) -> Option<bool> {
+        None
+    }
+
     /// None means the current candidate snapshot is unavailable.
     fn spatial_candidates(&self) -> Option<&[SpatialCandidate]> {
         None

@@ -2130,6 +2130,60 @@ fn native_pitched_direction_reads_known_entity_pose_without_a_placement_gate() {
 }
 
 #[test]
+fn body_activity_reads_a_known_boolean_and_rejects_unavailable_or_malformed_inputs() {
+    struct Host {
+        active: Option<bool>,
+        reads: usize,
+    }
+
+    impl Context for Host {
+        fn body_active(&mut self) -> Option<bool> {
+            self.reads += 1;
+            self.active
+        }
+
+        fn watches_natives(&self) -> bool {
+            true
+        }
+
+        fn reference_native(&mut self, class: &str) {
+            panic!("authored body activity was treated as reference-native: {class}");
+        }
+    }
+
+    let config = json!({"$": "BodyActive"});
+    let mut host = Host {
+        active: Some(true),
+        reads: 0,
+    };
+    assert_eq!(
+        evaluate_with_budget(&config, &mut host, 1),
+        Ok(Value::Bool(true))
+    );
+    host.active = Some(false);
+    assert_eq!(evaluate(&config, &mut host), Ok(Value::Bool(false)));
+    host.active = None;
+    assert_eq!(
+        evaluate(&config, &mut host),
+        Err(EvalError::UnavailableBodyActivity)
+    );
+    assert_eq!(host.reads, 3);
+    assert_eq!(
+        evaluate(&json!({"$": "BodyActive", "entity": null}), &mut host),
+        Err(EvalError::MalformedConfig("BodyActive takes no operands"))
+    );
+    let wrapped = json!({"$":"ClientOnly", "value":null, "server_fallback":config});
+    assert_eq!(
+        evaluate_with_budget(&wrapped, &mut host, 1),
+        Err(EvalError::BudgetExceeded {
+            offset: 0,
+            limit: 1
+        })
+    );
+    assert_eq!(host.reads, 3);
+}
+
+#[test]
 fn authored_stack_admission_passes_strict_scoped_inputs_to_the_context() {
     #[derive(Default)]
     struct StackContext {

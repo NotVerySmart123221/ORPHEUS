@@ -302,6 +302,11 @@ pub trait Context {
         self.forward(entity)
     }
 
+    /// A known activity state for the current body. None means unavailable.
+    fn body_active(&mut self) -> Option<bool> {
+        None
+    }
+
     /// None means the current candidate snapshot is unavailable.
     fn spatial_candidates(&mut self) -> Option<&[SpatialCandidate]> {
         None
@@ -451,6 +456,7 @@ pub enum EvalError {
     UnavailableEntityVariable { entity: u32, id: u32 },
     UnavailableEntityPosition(u32),
     UnavailableEntityDirection(u32),
+    UnavailableBodyActivity,
     UnavailableSpatialCandidates,
     UnavailableSpatialVisibility,
     UnavailableRoomEntityFacts,
@@ -490,6 +496,7 @@ impl fmt::Display for EvalError {
             Self::UnavailableEntityDirection(entity) => {
                 write!(f, "unavailable entity direction {entity:08X}")
             }
+            Self::UnavailableBodyActivity => f.write_str("unavailable body activity"),
             Self::UnavailableSpatialCandidates => f.write_str("unavailable spatial candidates"),
             Self::UnavailableSpatialVisibility => f.write_str("unavailable spatial visibility"),
             Self::UnavailableRoomEntityFacts => f.write_str("unavailable room entity facts"),

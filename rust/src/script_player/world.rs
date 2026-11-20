@@ -14,6 +14,7 @@ use crate::{
     game_heroes::CASSIDY,
     game_hitscan::{TargetPose, aim_direction, direction_for_angles},
     game_instance::TeamMemberCounts,
+    game_replication::OwnerRoomActivity,
     junkenstein_messages::{self, DefenderSighting, SIGHTING, SIGHTING_TAGS, SightingSource},
     mover::sample_movement_flags,
     scene_assets::MOVER_CATEGORY,
@@ -137,6 +138,7 @@ pub(super) struct BodyWorld {
     pub(super) graphs: Arc<GraphStore>,
     pub(super) spatial_frame: Option<Arc<crate::game_combat::RoomSpatialFrame>>,
     pub(super) team_member_counts: Option<TeamMemberCounts>,
+    pub(super) room_activity: Option<OwnerRoomActivity>,
     pub(super) script_requests: RoomScriptRequests,
     pub(super) controller: u32,
     pub(super) entity: u32,
@@ -383,6 +385,12 @@ impl World for BodyWorld {
 
     fn room_entities(&self) -> Option<&BTreeMap<u32, RoomEntityFacts>> {
         self.spatial_frame.as_deref()?.entity_facts()
+    }
+
+    fn body_active(&self, site: Site) -> Option<bool> {
+        self.is_player_site(site).then_some(())?;
+        self.room_activity
+            .map(|activity| activity.allows_body_activity() && self.vitals.death().is_none())
     }
 
     fn spatial_line_clear(&self, origin: [f64; 3], target: [f64; 3]) -> Option<bool> {

@@ -32,7 +32,7 @@ use crate::{
     game_heroes::{CASSIDY, Hero, HeroCatalog, SOLDIER},
     game_instance::RETAIL_QUANTA,
     game_pools::PoolCatalog,
-    game_replication::OwnerBodyRuntime,
+    game_replication::{OwnerBodyRuntime, OwnerRoomActivity},
     game_stats::{PlayerStats, StatsCatalog, initial_on_fire},
     match_scene::{
         PlayerAppearance, initial_world, junkenstein_presentation, mode_presentation, team_bit,
@@ -571,6 +571,7 @@ impl SceneAssets {
                     hero,
                     OwnerBodySetup {
                         spatial_frame,
+                        room_activity: Some(scene.owner_room_activity()),
                         ..OwnerBodySetup::default()
                     },
                 )

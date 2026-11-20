@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "case_id": "script-owner-room-activity.synthetic.v1",
+  "source": {"basis": "Original body graph, encounter activity changes, death, and replacement."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "graph": 823,
+    "variable": 59,
+    "lethal_damage": 900.0
+  },
+  "expected": {
+    "inactive_at_startup": false,
+    "regular_at_startup": true,
+    "during_encounter": [false, true],
+    "after_death": false,
+    "after_replacement": true
+  }
+}
