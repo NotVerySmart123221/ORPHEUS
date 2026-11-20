@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "case_id": "script-degree-trigonometry-v1",
+  "source": {"basis": "Synthetic degree-angle expressions checked against the ORPHEUS Python scalar operators."},
+  "evidence": "rust-synthetic",
+  "input": {
+    "scalars": [
+      {"opcode": 46, "angle": 179.0},
+      {"opcode": 47, "angle": -120.0},
+      {"opcode": 48, "angle": -45.0},
+      {"opcode": 46, "angle": null},
+      {"opcode": 47, "angle": null},
+      {"opcode": 48, "angle": null}
+    ],
+    "vector": {"angle": 30.0, "vertical": 5.5}
+  },
+  "expected": {
+    "scalars": [0.017452405765652657, -0.5, -1.0, 0.0, 1.0, 0.0],
+    "vector": [0.5, 5.5, 0.8660253882408142]
+  }
+}

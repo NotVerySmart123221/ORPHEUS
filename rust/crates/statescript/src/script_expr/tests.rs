@@ -5,6 +5,7 @@ use serde_json::json;
 
 use crate::script_graph::GraphStore;
 
+mod degree_trigonometry;
 mod entity_ray_cast;
 
 #[derive(Default)]
