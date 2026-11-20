@@ -2,6 +2,7 @@ use super::*;
 
 const DELTA: u32 = 1;
 const CONTINUED: u32 = 2;
+const SWEEP_CLASS: &str = "authored.sweep";
 const INVALID_DELTA: &str =
     "expected a finite nonzero swept displacement of at most 32 world units";
 
@@ -36,7 +37,7 @@ fn model(input: &Json) -> Json {
     let message = input["message"].as_u64().unwrap();
     let mut action = node(
         1,
-        "AuthoredSweepAction",
+        SWEEP_CLASS,
         None,
         json!({"delta":var(DELTA,true),"m_outPlug":plug(&[(2,"m_inPlug")],&[])}),
     );
@@ -116,7 +117,7 @@ fn swept_displacement_loader_requires_server_only_action_and_delta() {
         let mut data = source.clone();
         if alias {
             data["authored_classes"] = json!([{
-                "class":"AuthoredSweepAction","behavior":"swept_displacement_action"}]);
+                "class":SWEEP_CLASS,"behavior":"swept_displacement_action"}]);
             data["graphs"][0]["nodes"][1]
                 .as_object_mut()
                 .unwrap()
@@ -129,6 +130,11 @@ fn swept_displacement_loader_requires_server_only_action_and_delta() {
         assert!(action.declares_swept_displacement_action());
         assert!(action.server_only && action.is_action() && !action.is_networked());
         assert_eq!(action.class, "ActionSweptDisplacement");
+        if alias {
+            data["authored_classes"][0]["class"] = json!("unprefixed_sweep");
+            let error = GraphStore::from_json(&serde_json::to_vec(&data).unwrap()).unwrap_err();
+            assert!(error.to_string().contains("must use an authored."));
+        }
     }
     for failure in [
         "delta",
