@@ -48,6 +48,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Added an authored velocity action that resets vertical speed and then adds a world-space impulse. Player bodies use their current heading for operand evaluation and apply the edit on the next movement frame. Added synthetic coverage for the action and ground takeoff. Prepared and original-client acceptance are pending.
 
+- Added degree-based sine, cosine and tangent to the shared expression evaluator. This covers the first unsupported operand reported in the prepared velocity input trace. Added synthetic scalar, vector and malformed-input checks. Prepared input acceptance is pending.
+
 - Fixed NPC script direction sampling when navigation turns a body with an active authored facing claim. The room can publish the navigation pose on the frame the claim ends. Validated in shared candidate `6027a713`.
 
 - Preserve observation inputs through a committed StateScript logical-button branch. Its child states use current values if the source expires, so finishing a sample does not interrupt the listener's held or idle lifecycle. Validated in shared candidate `55c6f6fb`.
