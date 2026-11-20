@@ -65,6 +65,8 @@ The Rust-only [owner startup spatial fixture](../fixtures/behavior/script-owner-
 
 The Rust-only [player host facts fixture](../fixtures/behavior/script-player-host-facts-v1.json) checks known body and controller presence, unknown entities, the team slot assigned at spawn, and membership counts from the admitted player roster.
 
+The Rust-only [owned entity count fixture](../fixtures/behavior/statescript-owned-entity-count-v1.json) distinguishes an explicitly unbound owner, an unavailable ownership registry, and a known count. The native startup regression uses the production human owner selector and verifies the assignment completes without an AI controller.
+
 The Rust-only [radius query fixture](../fixtures/behavior/statescript-entities-in-radius-v1.json) checks the inclusive boundary, sorting, deduplication, and optional team, directional, and static visibility filtering. Room coverage checks shared per-frame samples in team and free-for-all modes.
 
 The Rust-only [local command fixture](../fixtures/behavior/statescript-local-command-v1.json) checks that a known missing process-local input remains absent across remote owner commands. Unknown host context and malformed operands still yield diagnostics.

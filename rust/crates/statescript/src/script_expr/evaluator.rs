@@ -1029,6 +1029,30 @@ impl Evaluator {
                     .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?;
                 Value::Entity(related)
             }
+            "STU_967463AB" => {
+                let unsupported = || EvalError::UnsupportedConfig(class.into());
+                if !native_fields(config, &["m_92D12BE6", "m_C8655030"]) {
+                    return Err(unsupported());
+                }
+                let owner = config.get("m_92D12BE6").ok_or_else(unsupported)?;
+                let definition = config.get("m_C8655030").ok_or_else(unsupported)?;
+                let Value::Asset(definition) =
+                    self.scalar_config(definition, context, nested, Value::Asset(0))?
+                else {
+                    return Err(unsupported());
+                };
+                if definition >> 48 != 0x0400 {
+                    return Err(unsupported());
+                }
+                match self.scalar_config(owner, context, nested, Value::Entity(0))? {
+                    Value::Entity(0) | Value::Null => initial,
+                    Value::Entity(owner) if valid_entity(owner) => context
+                        .native(config)
+                        .filter(|value| matches!(value, Value::Integer(count) if *count >= 0))
+                        .ok_or_else(unsupported)?,
+                    _ => return Err(unsupported()),
+                }
+            }
             "STU_E72F6348" if native_shape(config, class, Some("m_entity")) => {
                 if let Some(value @ Value::Bool(_)) = context.native(config) {
                     return Ok(value);

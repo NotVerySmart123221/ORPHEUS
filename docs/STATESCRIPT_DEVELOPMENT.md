@@ -201,6 +201,11 @@ the evaluator attributed the error, including shape and context failures.
 The independent factory probe retains these details when the ordinary
 room admission reports a generic unsupported error.
 
+An owned-entity count with a valid definition and an explicitly unbound
+owner leaves the caller's initial value intact. A bound owner requires a
+count supplied by its host. A known empty registry yields integer zero.
+An unavailable registry still requires a diagnostic.
+
 A state-managed recipient set reports `unsupported_message_registration`
 when its persistent registration path is unavailable. The probe keeps
 the failure blocking and records the sender node. The ordinary one-shot

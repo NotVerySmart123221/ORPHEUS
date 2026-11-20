@@ -968,6 +968,51 @@ fn player_host_team_counts_are_available_before_body_start_and_refresh_afterward
 }
 
 #[test]
+fn owner_startup_evaluates_owned_entity_count_without_an_ai_controller() {
+    use serde_json::json;
+
+    const DESTINATION: u32 = 812;
+    let (mut factory, spawn) = fixture_body_factory();
+    let bundle = json!({
+        "version": 1, "missing": [], "bodies": {}, "graphs": [{
+            "index": 87, "items": 2, "entries": [0], "states": [], "remote": [],
+            "sync_vars": [], "containers": {}, "unknown_nodes": [], "fields": {},
+            "header": {"m_nodesBitCount": 2, "m_statesBitCount": 2,
+                "m_remoteSyncNodesBitCount": 2, "m_syncVarsBitCount": 2},
+            "nodes": [
+                {"pos": 0, "rid": 0, "uid": 0, "remote": -1, "class": "STUStatescriptEntry",
+                    "state": null, "server_only": false, "client_only": false,
+                    "fields": {"m_outPlug": {"$": "Plug", "links": [[1, "m_inPlug"]]}}},
+                {"pos": 1, "rid": 1, "uid": 1, "remote": -1, "class": "STUStatescriptActionSetVar",
+                    "state": null, "server_only": false, "client_only": false,
+                    "fields": {"m_ADEB6E05": true,
+                        "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": DESTINATION,
+                            "m_60DB8F99": true},
+                        "m_value": {"$": "STU_967463AB",
+                            "m_92D12BE6": {"$": "STU_DB742151",
+                                "m_entity": {"$": "STU_B5A0CAF0"}},
+                            "m_C8655030": {"$": "STU_8556841E",
+                                "m_entityDef": "0x040000000000FA32"}}}}
+            ]
+        }]
+    });
+    factory.graphs =
+        Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    factory.roots = vec![Root::new(1, 87)];
+
+    let runtime = factory.start(spawn).unwrap();
+    let snapshot = runtime.snapshot().unwrap();
+    assert!(
+        snapshot.initialization_complete(),
+        "{:?}",
+        snapshot.diagnostics
+    );
+    // SetVar supplies integer zero as its initial accumulator. The unbound
+    // count leaves that value intact without looking up an ownership registry.
+    assert_eq!(snapshot.variables[&DESTINATION], Value::Integer(0));
+}
+
+#[test]
 fn owner_startup_reads_the_frozen_room_frame_before_body_attachment() {
     use crate::{
         collision_cache::CollisionCache,

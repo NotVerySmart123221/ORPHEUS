@@ -1037,6 +1037,79 @@ fn body_health_queries_return_zero_only_for_explicit_unbound_targets() {
 }
 
 #[test]
+fn owned_entity_count_distinguishes_absent_owner_and_unavailable_index() {
+    struct OwnershipProbe {
+        owner: Value,
+        native_count: Option<i64>,
+        native_reads: u64,
+    }
+
+    impl Context for OwnershipProbe {
+        fn owner(&mut self) -> Value {
+            Value::Entity(11)
+        }
+
+        fn variable(&mut self, _: Variable) -> Value {
+            self.owner.clone()
+        }
+
+        fn native(&mut self, config: &Json) -> Option<Value> {
+            assert_eq!(class(config), Some("STU_967463AB"));
+            self.native_reads += 1;
+            self.native_count.map(Value::Integer)
+        }
+    }
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../../../fixtures/behavior/statescript-owned-entity-count-v1.json"
+    ))
+    .unwrap();
+    let input = &fixture["input"];
+    let initial = Value::Integer(input["initial"].as_i64().unwrap());
+    let slot = u32::try_from(input["owner_variable"].as_u64().unwrap()).unwrap();
+    for case in fixture["cases"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let mut query = json!({
+            "$":"STU_967463AB",
+            "m_92D12BE6":variable(slot, Scope::Instance),
+            "m_C8655030":{"$":"STU_8556841E","m_entityDef":input["definition"]}
+        });
+        if let Some(operand) = case.get("definition_operand") {
+            query["m_C8655030"] = operand.clone();
+        }
+        if case["missing_owner"] == true {
+            query.as_object_mut().unwrap().remove("m_92D12BE6");
+        }
+        if case["related_owner"] == true {
+            query["m_92D12BE6"] = json!({"$":"STU_DB742151","m_entity":{"$":"STU_B5A0CAF0"}});
+        }
+        let mut host = OwnershipProbe {
+            owner: match &case["owner"] {
+                Json::Null => Value::Null,
+                Json::Bool(value) => Value::Bool(*value),
+                value => Value::Entity(u32::try_from(value.as_u64().unwrap()).unwrap()),
+            },
+            native_count: case["native_count"].as_i64(),
+            native_reads: 0,
+        };
+        let expected = match case["error"].as_str() {
+            Some(class) => Err(EvalError::UnsupportedConfig(class.into())),
+            None => Ok(Value::Integer(case["value"].as_i64().unwrap())),
+        };
+        assert_eq!(
+            evaluate_with_initial(&query, &mut host, initial.clone()),
+            expected,
+            "{name}"
+        );
+        assert_eq!(
+            host.native_reads,
+            case["native_reads"].as_u64().unwrap(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn authored_message_map_looks_up_the_first_matching_key() {
     use crate::script_wire::{ValueEncoding, WireError, write_value};
     use orpheus_wire::bits::BitWriter;
