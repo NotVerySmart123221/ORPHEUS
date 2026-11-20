@@ -33,6 +33,8 @@ The 2026-11-20 headless actor matrix passed independent startup for **10 of 32**
 
 The [prepared Python comparison](STATESCRIPT_DEVELOPMENT.md#compare-a-prepared-startup-matrix-with-python) ran Python `c73e5a49` against the same eight input digests. The ordinary Python path decoded the initial tree and first owner frame for **32 of 32** actors with its default compatibility policy. All 32 recorded a config fallback notice. Three recorded an unmodeled action and one recorded an omitted active state. A separate method-entry trace reached the same eight sender sites reported by Rust. All eight used Python's ordinary one-shot sender branch. The Rust count uses its own factory and projection requirements.
 
+The next independent matrix at `934f4fec` used the same pack and removed one movement-sampler diagnostic each for Doomfist and Baptiste with no new sites. The matrix has **53** blocking sites across the same 22 actors. The #72 900-frame result matched the preceding run across all 476 observed sites.
+
 | Workflow | Python reference | Rust implementation | Open client or parity gap |
 | --- | --- | --- | --- |
 | **Login, Profiles & Lobby** | Battle.net/JAM auth, profiles, settings (`22200`–`22204`), queues, Windows launcher + TLS relay. | Native BNet/JAM lobby, `profile-settings-v1` (CI verified), encrypted UDP seat handoff. | Standalone Rust launcher & public client connection flow open. |
