@@ -2,6 +2,7 @@
 
 use super::{CombatError, RoomSimulation, player::PlayerDeath};
 use crate::{
+    script_expr::valid_entity,
     vitals::Death,
     world::{EntityUpdate, Operation},
 };
@@ -66,7 +67,7 @@ impl RoomSimulation {
                             owner,
                             body: id,
                             source: source.killer,
-                            killed_by: source.killer != wire,
+                            killed_by: valid_entity(source.killer) && source.killer != wire,
                         });
                     }
                 }

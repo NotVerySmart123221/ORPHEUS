@@ -66,6 +66,7 @@ fn practice_only_omits_owner_runtime_when_all_owner_content_is_absent() {
         let bundle = json!({"version": 1, "graphs": [], "bodies": bodies, "missing": []});
         let assets = SceneAssets {
             junkenstein_validation: None,
+            environment: EnvironmentCatalog::default(),
             collision: PathBuf::new(),
             junkenstein_map_world: PathBuf::new(),
             last_collision: Mutex::default(),

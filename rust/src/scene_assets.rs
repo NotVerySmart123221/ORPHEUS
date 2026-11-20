@@ -34,6 +34,7 @@ use crate::{
     game_pools::PoolCatalog,
     game_replication::{OwnerBodyRuntime, OwnerRoomActivity},
     game_stats::{PlayerStats, StatsCatalog, initial_on_fire},
+    map_environment::EnvironmentCatalog,
     match_scene::{
         PlayerAppearance, initial_world, junkenstein_presentation, mode_presentation, team_bit,
     },
@@ -147,6 +148,7 @@ pub struct SceneAssets {
     last_collision: Mutex<Option<(CollisionKey, MapCollision)>>,
     trace_contacts: bool,
     mode_props: BTreeMap<u64, BTreeSet<u64>>,
+    environment: EnvironmentCatalog,
     graphs: Arc<GraphStore>,
     codecs: Option<Arc<CodecTable>>,
     practice_owner_body: OnceLock<Option<Arc<OwnerBodyFactory>>>,
@@ -194,6 +196,7 @@ impl SceneAssets {
             trace_contacts: false,
             junkenstein_validation: None,
             mode_props: read_mode_props(&data.join("collision_props_174.json"))?,
+            environment: EnvironmentCatalog::load(data.join("map_environment_174.json"))?,
             graphs,
             codecs,
             practice_owner_body: OnceLock::new(),
@@ -469,6 +472,7 @@ impl SceneAssets {
                 .component(&PlayerStats::default(), map.mode_guid, None, None);
         let junkenstein_anchors = Arc::new(junkenstein_anchors);
         let mut simulation = RoomSimulation::new(bots).map_err(io::Error::other)?;
+        simulation.set_environment(self.environment.for_map(map.map_guid));
         if self.graphs.uses_host_health_events() {
             simulation.enable_host_health_events();
         }
