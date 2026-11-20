@@ -317,6 +317,21 @@ pub trait Context {
         self.forward(entity)
     }
 
+    /// The host's eye anchor for this body, when available.
+    fn body_eye_position(&mut self, _entity: u32) -> Option<[f64; 3]> {
+        None
+    }
+
+    /// Hardpoint membership of the body's current model, if that model is known.
+    fn body_has_hardpoint(&mut self, _entity: u32, _hardpoint: u64) -> Option<bool> {
+        None
+    }
+
+    /// A known activity state for the current body. None means unavailable.
+    fn body_active(&mut self) -> Option<bool> {
+        None
+    }
+
     /// None means the current candidate snapshot is unavailable.
     fn spatial_candidates(&mut self) -> Option<&[SpatialCandidate]> {
         None
@@ -487,6 +502,9 @@ pub enum EvalError {
     UnavailableEntityVariable { entity: u32, id: u32 },
     UnavailableEntityPosition(u32),
     UnavailableEntityDirection(u32),
+    UnavailableBodyEyePosition(u32),
+    UnavailableBodyHardpoint { entity: u32, hardpoint: u64 },
+    UnavailableBodyActivity,
     UnavailableSpatialCandidates,
     UnavailableSpatialVisibility,
     UnavailableSpatialRayCast,
@@ -527,6 +545,16 @@ impl fmt::Display for EvalError {
             Self::UnavailableEntityDirection(entity) => {
                 write!(f, "unavailable entity direction {entity:08X}")
             }
+            Self::UnavailableBodyEyePosition(entity) => {
+                write!(f, "unavailable body eye position {entity:08X}")
+            }
+            Self::UnavailableBodyHardpoint { entity, hardpoint } => {
+                write!(
+                    f,
+                    "unavailable hardpoint {hardpoint:016X} for body {entity:08X}"
+                )
+            }
+            Self::UnavailableBodyActivity => f.write_str("unavailable body activity"),
             Self::UnavailableSpatialCandidates => f.write_str("unavailable spatial candidates"),
             Self::UnavailableSpatialVisibility => f.write_str("unavailable spatial visibility"),
             Self::UnavailableSpatialRayCast => f.write_str("unavailable spatial ray cast"),
@@ -846,6 +874,7 @@ mod helpers;
 
 use evaluator::Evaluator;
 use helpers::*;
+pub(crate) use helpers::{client_only_fallback, native_entity_operand};
 pub use helpers::{excluded_tags_admit, native_fields, native_shape, target_tag_config};
 
 /// Locate a config group reached directly or through explicit server fallbacks.

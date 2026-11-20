@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "case_id": "script-local-combat-accumulator.synthetic.v1",
+  "source": {"basis": "Original graphs and authored operands exercising a synthetic site and two former fixed sites."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "placements": [[60210, 5], [67, 24], [559, 85]],
+    "dormant_fields": {
+      "m_position": {"$": "STU_21A13145", "m_entity": {"$": "STU_B5A0CAF0"}},
+      "m_direction": {"$": "STU_2200A66D", "m_entity": {"$": "STU_B5A0CAF0"}},
+      "m_radius": {"$": "SyntheticDormantRadius"}
+    },
+    "contexts": [
+      {"available": false, "admitted": true},
+      {"available": null, "admitted": false},
+      {"available": true, "admitted": false}
+    ]
+  }
+}

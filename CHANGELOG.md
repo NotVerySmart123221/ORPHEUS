@@ -9,8 +9,58 @@ This log records tested changes and their acceptance status. Entries are grouped
 - Added authored held-input states with automatic listener registration and explicit state ownership for held and idle branches. The loader uses the existing logical-button lifecycle for button edges, locks, death admission, and teardown. An early buffered press follows its originating button binding.
 - Cancelled pending starts for a departing subgraph after all its child teardown callbacks run. An end callback can no longer reactivate an earlier sibling during the same release.
 
+- Added `prepare_server_runtime --mode-rulesets` to compose local mode profiles with the selected graph bundle. The packer and server share rule validation, and the destination manifest hashes the composed bundle. The runtime and StateScript tests, Clippy, and native server library check passed.
+
+- Recorded a controlled weapon readiness comparison using the existing graph-bundle rules. Three more actors emitted server weapon requests, and two primary input paths exposed unsupported states. Both runs admitted the same 12 actors. The alternate rule pack stays in local verification.
+
+- Integrated checked Phase 2 and Phase 3A commits with the native Practice Range admission branch. The combined 104319 matrix passed independent startup and room attachment for 12 of 32 actors, adding Moira in both. The locked workspace tests, Clippy, and transactional admission check passed.
+
 - Applied logical button death admission consistently on presses, state entry, and lock changes. Held scopes that require a living owner release before the next VM update samples their observations.
-- Added an optional StateScript `on_unavailable` observation plug for clearing derived target state when a host sample is temporarily unavailable.
+
+- Added an optional StateScript `on_unavailable` observation plug for clearing derived target state when a host sample is temporarily unavailable. The standalone Phase 3A revision `055adca3` passed the default and Inspector workspace tests and Clippy.
+
+- Added clock dependencies to watched reads of linked cooldown and ammunition values. A BooleanSwitch now reevaluates a countdown as its effective value changes. The synthetic fixture reproduced a ready branch that remained inactive after a cooldown expired on the previous VM. The script-coverage workspace suite, prepared input probes, encrypted selection loopback, and Clippy passed.
+
+- Routed buffered presses through the ordinary logical button continuation queue. The down branch runs after the press callback's queued readiness changes. A queued lock can still cancel it. The new synthetic fixture reproduced the missed press on the previous VM. The script-coverage workspace suite, prepared input probes, encrypted selection loopback, and Clippy passed.
+
+- Kept the Practice Range owner factory optional when the pack omits both owner body declarations and the codec table. Partial or malformed owner content retains typed startup errors. The synthetic cases, prepared room input tests, encrypted selection loopback, script-coverage workspace suite, and Clippy passed.
+
+- Fixed logical button transitions that continued into a stale branch after a callback changed the state. A press that acquires its own lock now preserves the nested release and skips the down branch. The synthetic regression reproduced the stale branch on the previous VM and verifies that a same-frame pulse still runs both edges. The script-coverage workspace suite, the prepared input tests, and Clippy passed.
+
+- Verified rejected and accepted catalog selections in the tagged 104319 encrypted loopback. A rejected scripted body preserves the previous generation. The next valid selection and its reskin both complete. A separate longer input probe reproduced the same volley counts and showed that Zarya's runtime stop also occurs before attack input.
+
+- Exercised primary and secondary input after queued selection and owner acknowledgements for the prepared actor catalog. Eleven bodies attached, ten completed the 100-frame schedule, and Zarya's runtime stopped during held secondary input at an unsupported dispatch site. Only Soldier: 76 emitted weapon volley events. Both prepared input tests, the locked all-targets workspace tests with script coverage, and Clippy passed.
+
+- Selected Practice Range body scripts from the prepared actor catalog. The scene caches static graph layouts. A selected candidate starts with the actual room context and must pass both baseline checks before its body is committed. On the same 104319 inputs, ordinary attachments rose from one to 11, and queued selection installed 11 of 32 bodies. The input-gap replacement and all 476 #72 observations passed. The locked workspace check, workspace tests with script coverage, Clippy, and Python script tests passed.
+
+- Validated both views of a candidate body's initial script snapshot before publishing the replacement. The owner and observer startup checks use the existing full-frame encoder and datagram budget. The synthetic input regression reproduced the old replacement after an observer-only link failure and verified rejection followed by a successful retry. Workspace tests with script coverage, Python script tests, and the prepared input-gap replacement passed. Both prepared 104319 reports matched the preceding startup results, and the #72 capture matched all 476 observations.
+
+- Kept the current player body active when a candidate script fails to initialize or encode its first owner snapshot. The room records a new body generation and commits the controller stream only after successful replacement. A synthetic input regression reproduced the old failure and exercised three rejections followed by a successful retry. Workspace tests with script coverage, Clippy, and the Python script tests passed. Prepared input-gap replacement passed, both 104319 startup reports matched the preceding results, and the #72 capture matched all 476 observations.
+
+- Preserved the native voice-state lifecycle when the player host reports no voice context. Verified empty owner and observer state codecs can project the state. Matched paired target tags by validated operands and added a shared three-way model hardpoint query. Missing tag inventories and model membership still produce startup diagnostics. The locked workspace suite with script coverage passed, including 378 native and 222 portable StateScript library tests.
+
+- Added an explicit authored charge root selection for player bodies with a private health-event graph. The loader and room factory reject duplicate mounts. Opted-in bodies use the settled health event path. The compatibility bridge reads live room activity and keeps its existing startup projection. Formatting, locked Clippy, and workspace tests with script coverage passed, including 376 native and 221 portable StateScript library tests.
+
+- Rechecked the authored cue listener's live owner and body generation before reliable admission. Queued cues expire when the listener dies or is replaced. The synthetic regression covers late death and legacy notice matching.
+
+- Made local auxiliary view bindings and outlines depend on explicit host context. Dynamic elapsed waits now resample numeric durations, rearm when configured and cancel on exit. Literal-delay cinematic states select the shared owner and observer boundary projection from validated fields and slots. Formatting, locked Clippy, and workspace tests with script coverage passed, including 374 native and 220 portable StateScript library tests.
+
+- Added optional mode-scoped engine settings to prepared StateScript graph bundles. Player, NPC, mode and gate scripts use one typed lookup. Missing keys retain the initial value, explicit null remains a value, and omitted tables retain the captured compatibility path. Formatting, locked Clippy, and workspace tests with script coverage passed, including 372 native and 218 portable StateScript library tests.
+
+- Kept authored spatial observations alive when a body eye anchor is temporarily unavailable. The observer retains its last valid result and resumes sampling when the anchor returns. The synthetic regression covers recovery, a confirmed empty result, and a malformed eye expression. The locked portable StateScript tests with extended observations passed.
+
+- Replaced two fixed local combat accumulator placements with an explicit host fact. A known absent context keeps the state lifecycle without evaluating its spatial operands. Present and unknown contexts still report an unsupported state. Formatting, locked Clippy, and workspace tests with script coverage passed, including 369 native and 215 portable StateScript library tests.
+
+- Added native player eye-position queries from the shared mover and per-frame room pose. The pose provider uses the current simulation stance and spring offset. Potential foreign eye and direction selectors request a frozen pose, with unavailable anchors reported explicitly. Synthetic cases cover owner startup, crouching, death, and replacement. Formatting, locked workspace check, Clippy, and workspace tests with script coverage passed, including 368 native and 214 portable StateScript library tests.
+
+- Added the `BodyActive` host query for authored owner graphs. The room supplies its activity level before graph startup and updates the current body by generation. Meter contracts exercise paused and resumed gains, deferred health awards, death, and replacement. Locked workspace check, formatting, Clippy, and workspace tests with script coverage passed, including 367 native and 212 portable StateScript library tests.
+
+- Preserved the explicit no-target reply from the native direction host before evaluating the entity selector. The prepared bot firing-placement and timer regression reproduced the failure in the generic evaluator and passed after the fix. The workspace suite and the prepared #72 session also passed.
+
+- Removed placement checks from scene target collection and from timed graph states with no configured finish operands or alternate graph. Scene collection reads the authored tag and the host placement inventory. The existing timed placement with a duration keeps its compatibility path. Added native pitched direction evaluation through the shared entity pose provider, preserving the existing host override. Workspace tests with script coverage passed, including 366 native and 211 StateScript library tests. Formatting, Clippy, and the prepared #72 owner session passed.
+
+- Corrected timing evidence for malformed multi-argument waits. Coverage reports now follow declared target-tracking child graphs transitively and identify missing child bundles. Runtime reach remains tied to observations. Python checks ran 36 tests with five skips, and the coverage tool joined the pinned 104319 owner trace against the matching graph bundle.
+
 - Isolated queued StateScript observation callbacks from intervening output writes. A callback receives its own successful sample and stays inactive while a higher-priority binding hides that sample.
 - Added opt-in owner-only StateScript instance variables. The existing snapshot encoder carries their resolved values to the owner and excludes them from observer full snapshots and deltas.
 - Added the optional StateScript observation `on_sample` plug. It follows each successful current sample and stays inactive when the host cannot supply a fresh value. This lets aimed effects use the current ray result while display variables retain their last successful value on a transient query failure.

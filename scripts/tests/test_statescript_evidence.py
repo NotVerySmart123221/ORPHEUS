@@ -132,6 +132,51 @@ def run_summary(source, bundle, families, output):
 
 
 class StateScriptEvidenceTest(unittest.TestCase):
+    def test_wait_contract_requires_exactly_one_operand(self):
+        listing = f"""# graph {GRAPH_A}
+state Pause_10:  # STUStatescriptStateWait, state 0
+    after(0.25, 0.75):
+        pass
+state Pause_11:  # STUStatescriptStateWait, state 1
+    after():
+        pass
+state Pause_12:  # STUStatescriptStateWait, state 2
+    after(0.25, extra=var[7]):
+        pass
+state Pause_13:  # STUStatescriptStateWait, state 3
+    after(0.25,):
+        pass
+state Pause_14:  # STUStatescriptStateWait, state 4
+    after(random_float(0.25, 0.75)):
+        pass
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence = root / "listings"
+            evidence.mkdir()
+            (evidence / f"{GRAPH_A}.txt").write_text(listing, encoding="utf-8")
+            output = root / "reports"
+            result = subprocess.run(
+                [sys.executable, "-B", str(SCRIPT), "--evidence", str(evidence),
+                 "--output-dir", str(output)],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads((output / "timing-contracts.json").read_bytes())
+        self.assertEqual(
+            report["resolutions"], {"unsupported": 3, "literal": 1, "literal_range": 1},
+        )
+        rows = {row["rid"]: row for row in report["observations"]}
+        for rid in (10, 11, 12):
+            with self.subTest(rid=rid):
+                self.assertEqual(rows[rid]["resolution"], "unsupported")
+                self.assertIsNone(rows[rid]["duration"])
+                self.assertIsNone(rows[rid]["range"])
+        self.assertEqual(rows[13]["duration"], 0.25)
+        self.assertEqual(rows[14]["range"], {
+            "operator": "random_float", "min": 0.25, "max": 0.75,
+        })
+
     def test_local_inputs_produce_identical_bounded_evidence_without_overwrite(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -471,6 +471,7 @@ impl Component {
             parameters: None,
             watcher: None,
             read_native: false,
+            read_clock: false,
             untrusted_native: false,
         };
         script_expr::evaluate(config, &mut context)

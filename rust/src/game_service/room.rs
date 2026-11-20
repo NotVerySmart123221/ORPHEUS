@@ -625,12 +625,12 @@ impl Room {
             world.scene.simulation_mut().prepare_spatial_frame(tick)?;
             // Movement/input failure previously closes this member. Keep that
             // scope and report the cause; body-script failures are handled locally.
-            let active = world.scene.simulation().encounter_active();
+            let activity = world.scene.owner_room_activity();
             if let Some(id) = peer.world.active_body_id() {
                 world
                     .scene
                     .simulation_mut()
-                    .set_player_encounter_active(id, active);
+                    .set_player_activity(id, activity);
             }
             let (used, leave) = match peer.world.advance_input(
                 &mut world.scene,
@@ -693,8 +693,8 @@ impl Room {
         };
         world.scene.simulation_mut().prepare_spatial_frame(tick)?;
         let junkenstein = world.scene.map().is_junkenstein();
-        let active = world.scene.simulation().encounter_active();
-        world.scene.simulation_mut().sync_player_encounter(active);
+        let activity = world.scene.owner_room_activity();
+        world.scene.simulation_mut().sync_player_activity(activity);
 
         let (
             replacements,

@@ -585,6 +585,7 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             | StateKind::WaitFrames { .. }
             | StateKind::AiCandidate { .. }
             | StateKind::MovementMod
+            | StateKind::VoiceStimulus
             | StateKind::BossIntroVoice(_)
             | StateKind::GateVoice(_)
             | StateKind::VictoryVoice

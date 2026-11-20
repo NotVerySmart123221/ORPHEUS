@@ -19,6 +19,41 @@ The [pinned Python → Rust parity matrix](https://github.com/leafall903/ORPHEUS
 
 ---
 
+## Shared StateScript integration
+
+The local `work/statescript-integration` checkpoint `79e8a5b9` combines
+Phase 2 `90702e42`, Phase 3A `055adca3`, and native Practice Range
+admission. The prepared 104319 matrix completed independent startup and
+ordinary room attachment for **12 of 32** actors. Moira was the only
+addition in each column and no previously passing actor was lost. The
+transactional room admission test passed. The locked workspace tests and
+Clippy passed with script coverage, including 390 server tests and
+242 StateScript tests.
+
+The preceding combined checkpoint `699791e8` matched all 476 #72
+observations across 900 frames. Phase 3A also matched that replay on its
+standalone `055adca3` checkpoint. Original-client skill, aiming, and
+audio acceptance remain open.
+
+### Weapon readiness comparison
+
+Checkpoint `79e8a5b9` ran the same prepared owner-input schedule twice
+with the same executable. The second pack supplied the existing neutral
+rule `0x2819` through `mode_rulesets` for the known actor profiles.
+Both runs admitted 12 of 32 actors. The number with weapon output rose
+from one to four. Reaper and Cassidy each emitted one hitscan request
+and Sombra emitted eight. Soldier retained four hitscan requests and
+one launch request. These observations cover server output.
+
+The authored rule also exposed unsupported states on the first primary
+input at frame 1017. Winston reached target tracking and physics
+explosion states, and Zarya reached a ray tracking state. Winston
+completed the original schedule. Zarya's original run first halted on
+secondary input at frame 1064. Completed schedules fell from 11 to 10
+of the 12 admitted actors with the rule. The alternate rule pack remains
+a local experiment. The state blockers belong to the shared combat
+states and Phase 3A ray tracking work.
+
 ## Implementation and prepared-runtime observations
 
 Local integration check (2026-11-16): rifle/reload and controller/training-bot startup prepared tests passed with the target-tagged base pack, as did runtime preflight and headless startup. The longer `scene_assets::tests::stock_soldier_owner_session_idles_fires_reloads_and_sprints` test failed its fixed-instance assertion: instance `24` contained graph `0x0F82`, not `0x05AD`. The message table was present elsewhere; diagnostic inspection also found switch instance `19` versus expected `18`. At that revision the fixed instance assertion prevented the later frame checks from running.
@@ -91,11 +126,128 @@ for byte, with **47 blocking sites** and **11 of 32** independent passes.
 Zarya passed independent startup, and Symmetra cleared her count
 diagnostic. The #72 capture matched across all 476 sites.
 
-Ordinary Practice Range attachment remains **1 of 32**. Scene
-preparation installs a Soldier-only factory there, and the factory
-returns no runtime for a different hero. The independent probe calls
-the per-hero factory builder directly. Ability coverage and original
-client acceptance require separate verification.
+At `39932467`, ordinary Practice Range attachment remained **1 of 32**.
+Scene preparation still installed a Soldier-only factory there, while
+the independent probe called the per-hero factory builder directly.
+Ability coverage and original-client acceptance require separate
+verification.
+
+At `9f6114ae` and `763b8e56`, two reports per revision from the same
+prepared 104319 runtime matched byte for byte. All 32 actor rows matched
+the preceding reports, with 11 independent passes, one ordinary room
+attachment, and 47 blocking sites. The Phase 2 changes cover the shared
+direction evaluator, scene placement collection, and parent-owned states
+without completion operands. The #72 capture matched the earlier
+900-frame run at all 476 observation sites on both revisions.
+
+The prepared bot firing-placement regression passed on the earlier
+binary and failed at selector evaluation after the first direction
+change. The follow-up preserved the host's explicit no-target reply.
+The same bot regression then passed. The legacy roll scenario stopped
+during map preparation on both tested bundles because its map record
+lacked spawn points.
+
+The Windows #131 check at `763b8e56` used the same effective runtime
+profile and schedules as the previous baseline. Idle and single-shot
+reload each produced 339 ticks. Rust and Python traces both validated and
+repeated, and every tick matched the preceding capture for its
+implementation. The strict comparison retained the same four RNG model
+and seed differences.
+
+At `15a10d4e`, authored owner graphs gained a `BodyActive` query.
+Synthetic tests covered initialization with and without room activity,
+paused and resumed gains, health awards at dispatch, death, and stale
+updates after same-wire replacement. Two same-pack startup reports
+matched byte for byte. The 32 rows matched the preceding revision,
+with 11 independent passes, one ordinary attachment, and 47 blocking
+sites. The #72 trace matched all 476 observations across 900 frames.
+On the same Windows #131 inputs, idle and single-shot reload each
+produced 339 ticks. Both implementations repeated their observations,
+passed individual trace validation, and matched their previous traces
+tick for tick. Strict comparison retained the four RNG setup differences.
+
+At `8d1d33a6`, native eye-position operands gained a player anchor from
+the simulation mover. Potential foreign eye and direction selectors now
+request a frozen room pose. The startup scene captured 15 living
+candidates. Both same-pack reports matched byte for byte. All 32 actor
+rows remained unchanged, with 11 independent passes, one ordinary
+attachment, and 47 blocking sites. The prepared firing-placement
+regression passed, and the #72 trace retained all 476 observations.
+Simulation stance heights have no new original-client verification.
+
+The Windows #131 idle and single-shot reload schedules each produced
+339 ticks. Each implementation validated and repeated both traces.
+Every tick matched its own preceding Windows capture. Strict comparison
+still reports the four RNG model and seed differences.
+
+At `e540fdc0`, the native local combat accumulator stopped using two
+fixed placements to choose its no-tick state. The current owner body
+reports the local accumulator absent to the VM. Hosts with available or
+unknown context still report an unsupported state. Two same-pack startup
+reports matched byte for byte. The 32 actor results remained unchanged,
+with 11 independent passes, one ordinary attachment, and 47 blocking
+sites. The #72 900-frame trace matched all 476 prior observations. The
+Windows #131 idle and single-shot reload traces each matched their
+preceding 339-tick captures for both implementations. Strict comparison
+retained the same four RNG setup differences.
+
+At `e6cfc337`, player, NPC, gate and mode scripts began reading one
+mode-scoped engine settings table. The portable and native synthetic
+suites distinguish missing keys, explicit null, empty tables and mode
+isolation. The prepared Practice Range pack exercised the compatibility
+lookup with its existing settings. The two same-pack startup results
+matched byte for byte. The 32 actor rows remained at 11 independent
+passes, one ordinary attachment and 47 blocking sites. The #72 trace
+retained all 476 observations. This revision also includes the authored
+eye observation recovery contract at `9b957ce7`.
+
+At `9caac758`, the auxiliary view binding states began using host
+context at any placement. The owned headless body also reports outline
+absence through the existing outline branch. The same batch added
+elapsed waits for direct numeric variable bindings and moved the
+literal-delay cinematic boundary states to field and slot validation.
+Synthetic tests covered dormant operands, cleanup, timer changes and
+reentry, and the owner and observer boundary payloads.
+
+Two reports from the same prepared Practice Range pack matched byte
+for byte. All 32 actor rows and the #72 trace matched the preceding
+revision, with 11 independent passes, one ordinary attachment, 47
+blocking sites and all 476 observations. Both Windows #131 schedules
+repeated and matched their previous 339-tick captures for each
+implementation. Strict comparison retained the four RNG setup
+differences. The cinematic payload tests used a synthetic graph.
+
+At `0d3716e4`, a player body gained an explicit private charge-root
+selection. Synthetic tests cover mount validation after the room adds
+its roots, settled health delivery, and owner and observer projection.
+The existing bridge takes damage eligibility from the room phase and
+retains its startup projection. The local 104319 catalog gives each of
+32 player bodies an authored cost binding read by the shared startup
+graph. The selected charge route was exercised by the synthetic
+fixture.
+
+At `5b269875`, authored cues began rechecking listener liveness at
+reliable admission. The synthetic case kills the listener with its
+generation unchanged and verifies that the queued cue is discarded.
+
+Two same-pack startup reports at `0d3716e4` matched byte for byte.
+All 32 rows remained at 11 independent passes, one ordinary attachment
+and 47 blocking sites. The #72 trace retained 476 observations. Both
+Windows #131 schedules repeated and matched their preceding 339-tick
+captures for each implementation. Strict comparison retained the four
+RNG setup differences.
+
+At `3dbfd5e4`, the native voice state keeps its lifecycle when the local
+host explicitly has no voice context. Its verified empty state codec
+preserves owner and observer projection. Two same-pack 104319 reports
+matched byte for byte. Moira raised independent actor startup to
+**12 of 32** and the blocking-site count fell to **46**. Ordinary Practice
+Range admission still attached one actor. The #72 Soldier owner trace
+retained all 476 observations. The two #131 schedules each reproduced
+339 ticks per implementation and kept the same four RNG setup differences
+in strict comparison.
+
+The following Phase 3A results were measured on its standalone revisions.
 
 At `339b05d8`, the Phase 3A authored static ray query passed synthetic
 expression, observer lifecycle, and native room collision tests. Two
@@ -190,9 +342,10 @@ Practice Range attachment, and **47** blocking sites. The #72 replay
 matched all 476 observation sites across 900 frames. Original ability
 mappings and client zoom acceptance remain open.
 
-At `3c87fd49`, the held-input contract passed automatic registration,
-held and idle ownership, cancellation of sibling starts queued during
-release, and rejection of buffered presses from a previous button binding.
+At standalone Phase 3A revision `3c87fd49`, the held-input contract passed
+automatic registration, held and idle ownership, cancellation of sibling
+starts queued during release, and rejection of buffered presses from a
+previous button binding.
 Both listener forms passed the same native held-aim scenario, including
 owner-only status, observer bytes, movement cleanup, and body replacement.
 
@@ -205,18 +358,130 @@ at **11 of 32** independent starts, **one** ordinary attachment, and **47**
 blocking sites. The #72 replay matched all 476 sites across 900 frames.
 The original ability mappings and client zoom still require acceptance.
 
-Seven actor probes have one blocking site each. Mercy's tag query needs
-the tagged placement inventory and live actor tags. Orisa and Sigma
-still hit persistent message registration. Baptiste cannot read a
-controller variable. Torbjörn's hardpoint query and Moira's voice
-stimulus each lack their supporting host service or context. Symmetra
-still reports an unsupported state.
+At that standalone checkpoint, seven actor probes had one blocking site
+each. Mercy's tag query needed the tagged placement inventory and live
+actor tags. Orisa and Sigma still hit persistent message registration.
+Baptiste could not read a controller variable. Torbjörn's hardpoint query
+and Moira's voice stimulus each lacked their supporting host service or
+context. Symmetra still reported an unsupported state.
+
+These standalone measurements do not validate the additional held-input
+changes together with the shared checkpoint above. That combination still
+needs its own startup, room-admission, and input measurements.
+
+Two of the three remaining native target-tracking startup sites in the
+Phase 2 run have empty embedded plugs. One configures a second filter
+and an entity list output. The other configures a count output. Both read
+a dynamic radius. The remaining site links embedded states. Each
+configuration still needs its native query and output semantics verified.
+
+The Phase 2 run left six actor probes with one blocking site each.
+Mercy's paired tag query selects its shared VM path by authored fields.
+Its host still needs the tagged placement inventory and live actor
+tags. Orisa and Sigma still hit persistent message registration.
+Baptiste cannot read a controller variable. Torbjörn's hardpoint query
+now reaches the shared host interface and reports unavailable
+active-model membership.
+Symmetra still reports an unsupported state.
 
 The prepared 104319 bundle supplies voice stimulus references and gallery
 unlock metadata. It lacks an authored stimulus-to-line mapping and playback
 durations for the player voice service. The room already routes resolved
 cues to listeners by body generation. A player voice provider still needs
-the catalog and timing inputs before this startup site can be verified.
+the catalog and timing inputs before active-context playback can be verified.
+
+At `36818197`, a synthetic input test reproduced the former replacement
+after a factory error at `3e778d08`. The fix preserved the current body,
+controller counters, and room events when the factory failed, when the
+runtime had the wrong entity, and when its owner snapshot could not
+be encoded. Input continued and the retry committed one generation.
+The prepared input-gap and replacement test passed. Two 104319 reports
+matched each other byte for byte and matched the preceding 32 actor
+results after removing the revision field. The #72 capture matched
+all 476 observations.
+
+At `0d1d6ef4`, the same input regression added a candidate whose owner
+baseline fits the wire budget and whose observer projection has an
+invalid remote state link. The preceding revision replaced the body.
+The fixed revision rejected the candidate, preserved the current body
+and its delivery state, and accepted the retry. Both startup views use
+the existing full-frame encoder and datagram check. The prepared
+input-gap replacement passed. Two 104319 startup reports matched each
+other byte for byte and retained the preceding 11 independent passes,
+one ordinary Practice Range attachment, and 47 blocking sites. The #72
+capture matched all 476 observations.
+
+At `9d5b9644`, ordinary Practice Range admission uses the prepared actor
+catalog. Static graph layouts are shared across rooms. The selected
+body starts with the current spawn, admitted roster, and spatial
+snapshot. The scene validates both full baselines before room insertion.
+On the same 104319 inputs, the ordinary startup matrix rose from
+**1 of 32** to **11 of 32**. An independent test through queued selection
+and room insertion also admitted **11 of 32**. The ten new passes in the
+ordinary matrix were Reaper, Hanzo, Pharah, Winston, Roadhog, Cassidy,
+Junkrat, Zarya, Mei, and Sombra. The queued test confirmed that rejected
+candidates preserve the existing body and delivery state. The input-gap
+test mounted Zarya's script while preserving movement and command
+acknowledgements. Independent startup still has 47 blocking sites
+across the other 21 actors. The two startup reports were byte-identical,
+and all 476 #72 observations matched. Ability coverage and client
+playability still require separate validation.
+
+The prepared 104319 input probe starts a fresh room for each of the 32
+catalog actors. All 11 admitted bodies acknowledged possession, an initial
+owner script frame, and a subsequent update. Ten retained their runtime
+through 100 frames of idle, forward movement, primary, and secondary input.
+Zarya stopped after 59 completed frames at `0242:21` (`STU_CEBDAF17`),
+an action whose dispatch is limited to specific graphs and nodes. A second
+run with 80 idle frames before movement stopped at the same frame and
+site, before either attack input.
+
+Only Soldier: 76 produced combat requests in this schedule, with four
+hitscan requests and one projectile launch. A temporary trace at the VM shot
+drain saw exactly those five events. The other bodies emitted no weapon
+volley events during this sample. Before the host filter, the 176-frame
+sample reproduced the same five events. Only Soldier: 76 and Hanzo
+reached an active logical-button callback for the observed attack
+inputs, and only Soldier: 76 reached volley scheduling. Ability-edge
+callbacks remain unmeasured. The probe counts requests
+and owner acknowledgements. Hit results, ability coverage, and playability
+still need their own acceptance. Run the ignored
+`prepared_practice_catalog_observes_input_survival_and_owner_egress` test
+with the prepared runtime to reproduce the matrix.
+
+The 11 admitted actors in the startup matrix all declared a weapon
+manager and one populated weapon slot. The direct graph references
+resolved and the startup snapshot recorded activity in both roots.
+The manager had 29 visited sites for each actor. The weapon had 55
+for Soldier: 76 and 20–54 for the other actors. These measurements
+cover startup. The conditions that enable weapon actions after startup
+need separate verification.
+
+A separate 100-frame probe at `140e6a6e` enabled room combat and ran
+per-frame settlement. It reproduced the 11 admissions, 10 completed schedules,
+and five Soldier combat requests. Only Soldier: 76 and Hanzo showed a
+pressed logical state. All 11 admitted weapon roots had a declared
+primary-button subscription with a fixed input ID. Among the 11
+unvisited primary subscriptions in the other weapons, ten had a
+visited BooleanSwitch immediately upstream and one was two links
+from a visited BooleanSwitch. At `5a311df7`, all ten directly connected
+routes had active switches with a false condition throughout the command
+sample. Their listeners are on the true branches and remained inactive.
+The condition definitions use local VM variable reads. A second sample
+after adding clock dependencies found the same branch results. The ten
+routes had no linked condition inputs and at least one declared input
+absent from the variable store. Those inputs did not change in the sample.
+Soldier's open branch also had an absent input. Eight inactive routes
+share the same declared entity and instance inputs as Soldier. Each of
+their weapon graphs visited a matching assignment during startup.
+The remaining two routes use separate entity inputs. Runtime assignment
+results and their effective values are the next comparison.
+
+The tagged 104319 encrypted loopback also covered an attempted Tracer
+selection followed by a Reaper selection. The rejected selection retained
+the current body and generation. The next selection published the controller
+update, replacement body, and old body retirement, and the ensuing reskin
+published a third generation.
 
 | Workflow | Python reference | Rust implementation | Open client or parity gap |
 | --- | --- | --- | --- |

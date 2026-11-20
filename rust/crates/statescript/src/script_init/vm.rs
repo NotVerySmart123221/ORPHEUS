@@ -496,9 +496,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         depth: usize,
     ) -> Result<(), InitFault> {
         let state = self.state(key).expect("active logical button");
+        let activation = state.activation;
         let buffer = state
             .buffered_press
-            .filter(|press| press.activation == state.activation);
+            .filter(|press| press.activation == activation);
         let button = self.logical_button_id(key.instance, node);
         let buffer = buffer.filter(|press| button == Some(press.button));
         let blocked = button.is_some_and(|button| self.logical_button_blocked(key, node, button))
@@ -514,17 +515,25 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         if early {
             self.follow(key.instance, node, "m_onGoingDownPlug", Some(key), depth)?;
         }
-        if !self.state(key).is_some_and(|state| state.active) {
+        if !self.logical_button_is_current(key, activation, false) {
             return Ok(());
         }
-        let held =
-            !blocked && button.is_some_and(|button| self.machine.held_buttons.contains(&button));
-        let down = held || early;
+        let blocked = blocked
+            || (early
+                && (button.is_some_and(|button| self.logical_button_blocked(key, node, button))
+                    || !self.logical_button_allows_press(key.instance, node)));
+        let held = !blocked && self.button_held(key, node);
+        let buffered = early && !blocked;
+        let down = held || buffered;
         self.state_mut(key).expect("active logical button").kind =
             StateKind::LogicalButton { down };
-        let path = if down { "m_80AF45FB" } else { "m_1C9EF058" };
-        self.follow(key.instance, node, path, Some(key), depth)?;
-        if early && !held {
+        if early {
+            self.queue_logical_button_branch(key, activation, down)?;
+        } else {
+            let path = if down { "m_80AF45FB" } else { "m_1C9EF058" };
+            self.follow(key.instance, node, path, Some(key), depth)?;
+        }
+        if buffered && !held {
             self.post_after(key.instance, 1, Event::Timer(key.raw, 1))?;
         }
         Ok(())
@@ -537,17 +546,61 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         down: bool,
         depth: usize,
     ) -> Result<(), InitFault> {
-        self.state_mut(key).expect("active logical button").kind =
-            StateKind::LogicalButton { down };
-        let (previous, edge, next) = if down {
-            ("m_1C9EF058", "m_onGoingDownPlug", "m_80AF45FB")
+        let state = self.state_mut(key).expect("active logical button");
+        state.kind = StateKind::LogicalButton { down };
+        let activation = state.activation;
+        let (previous, edge) = if down {
+            ("m_1C9EF058", "m_onGoingDownPlug")
         } else {
-            ("m_80AF45FB", "m_onComingUpPlug", "m_1C9EF058")
+            ("m_80AF45FB", "m_onComingUpPlug")
         };
         self.exit_subgraph(key.instance, node, previous, depth + 1)?;
+        if !self.logical_button_is_current(key, activation, down) {
+            return Ok(());
+        }
         self.follow(key.instance, node, edge, Some(key), depth)?;
-        if self.state(key).is_some_and(|state| state.active) {
-            self.follow(key.instance, node, next, Some(key), depth)?;
+        self.queue_logical_button_branch(key, activation, down)
+    }
+
+    fn queue_logical_button_branch(
+        &mut self,
+        key: StateKey,
+        activation: u16,
+        down: bool,
+    ) -> Result<(), InitFault> {
+        // Edge callbacks can schedule state changes for this same instant.
+        self.post(
+            key.instance,
+            Event::LogicalButtonBranch {
+                state: key.raw,
+                activation,
+                down,
+            },
+        )
+    }
+
+    fn logical_button_is_current(&self, key: StateKey, activation: u16, down: bool) -> bool {
+        self.state(key).is_some_and(|state| {
+            state.active
+                && !state.ending
+                && state.activation == activation
+                && matches!(state.kind, StateKind::LogicalButton { down: current } if current == down)
+        })
+    }
+
+    fn follow_logical_button_branch(
+        &mut self,
+        key: StateKey,
+        activation: u16,
+        down: bool,
+    ) -> Result<(), InitFault> {
+        if self.logical_button_is_current(key, activation, down) {
+            let node = self
+                .graph(key.instance)
+                .state(usize::from(key.raw))
+                .expect("logical button state");
+            let path = if down { "m_80AF45FB" } else { "m_1C9EF058" };
+            self.follow(key.instance, node, path, Some(key), 0)?;
         }
         Ok(())
     }
@@ -1029,7 +1082,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 if !self.machine.snapshot.instances.contains_key(&id) {
                     break;
                 }
-                while let Some(event) = self.machine.queues.pop_due(id, self.machine.now_ms) {
+                // Settle script work before the next input edge at this instant.
+                // A press and release can share a timestamp.
+                while let Some(event) =
+                    self.machine
+                        .queues
+                        .pop_due(id, self.machine.now_ms, |event| {
+                            !matches!(event, Event::Button(_))
+                        })
+                {
                     if events == MAX_EVENTS_PER_UPDATE {
                         return Err(InitFault::EventBudget { instance: id });
                     }
@@ -1051,6 +1112,18 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         Event::Reevaluate(raw) => self.reevaluate(key(raw), 0)?,
                         Event::Timer(raw, parameter) => self.timer(key(raw), parameter)?,
                         Event::Button(edge) => self.button_edge(id, edge)?,
+                        Event::LogicalButtonBranch {
+                            state,
+                            activation,
+                            down,
+                        } => self.follow_logical_button_branch(
+                            StateKey {
+                                instance: id,
+                                raw: state,
+                            },
+                            activation,
+                            down,
+                        )?,
                         Event::AbilityCheck(raw) => self.timer(key(raw), 1)?,
                         Event::CheckTransitions(raw) => {
                             if self.state(key(raw)).is_some_and(|state| state.active) {
@@ -2203,12 +2276,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             parameters: self.parameters.as_deref(),
             watcher,
             read_native: false,
+            read_clock: false,
             untrusted_native: false,
         };
         let result = evaluate(&mut context);
         let reads = context.reads;
         let foreign_reads = context.foreign_reads;
-        let read_native = context.read_native;
+        let needs_ticks = context.read_native || context.read_clock;
         if context.untrusted_native {
             // Like the reference, the record outlives the activation.
             if let Some(state) = watcher.and_then(|key| self.state_mut(key)) {
@@ -2231,7 +2305,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             if let Some(start) = self
                 .state(watcher)
                 .filter(|state| {
-                    read_native
+                    needs_ticks
                         && matches!(
                             state.kind,
                             StateKind::BooleanSwitch(_)

@@ -64,11 +64,7 @@ impl World for EnemyWorld<'_> {
     }
 
     fn engine_setting(&self, _site: Site, key: u32) -> crate::script_expr::EngineSetting {
-        if is_junkenstein_mode(self.binding.mode) {
-            crate::junkenstein_host::engine_setting(key)
-        } else {
-            crate::script_expr::EngineSetting::Unavailable
-        }
+        crate::body_ruleset::engine_setting(self.graphs, self.binding.mode, key)
     }
 
     fn summoner_beam_contact(&self, site: Site) -> Option<BeamContact> {
@@ -1128,6 +1124,13 @@ impl World for EnemyWorld<'_> {
         self.forward(entity)
     }
 
+    fn body_eye_position(&self, entity: u32) -> Option<[f64; 3]> {
+        self.binding
+            .spatial_frame
+            .as_deref()?
+            .actor_eye_position(entity)
+    }
+
     fn targets_with_tag(&self, site: Site, tag: u64, excluded: u64) -> Option<Vec<u32>> {
         if (site.entity, site.graph, site.node) != (self.binding.body, 0x00ca, Some(33))
             || !is_junkenstein_mode(self.binding.mode)
@@ -1155,9 +1158,7 @@ impl World for EnemyWorld<'_> {
     }
 
     fn tagged_placements(&self, site: Site, tag: u64) -> Option<&[u32]> {
-        if (site.entity, site.graph, site.node) != (self.binding.controller, 0x0c95, Some(9))
-            || !is_junkenstein_mode(self.binding.mode)
-        {
+        if site.entity != self.binding.controller {
             return None;
         }
         self.binding.spawn_anchors.as_ref()?.targets(tag)

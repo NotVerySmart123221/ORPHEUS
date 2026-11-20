@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "case_id": "owner-admission-transaction-v1",
+  "evidence": "rust-headless-synthetic",
+  "input": {
+    "active_hero": 207165582859063517,
+    "candidate_hero": 207165582859063518,
+    "active_wire_suffix": 4,
+    "active_generation": 1,
+    "factory_outcomes": [
+      "factory_error", "wrong_entity", "invalid_initial_encoding", "invalid_observer_projection", "ready"
+    ],
+    "observer_graph": {
+      "index": 713,
+      "items": 3,
+      "nodes": [
+        {"pos": 0, "rid": 0, "uid": 0, "class": "STUStatescriptEntry", "state": null, "remote": -1,
+         "server_only": false, "client_only": false,
+         "fields": {"m_outPlug": {"$": "Plug", "links": [[1, "m_beginPlug"]]}}},
+        {"pos": 1, "rid": 1, "uid": 1, "class": "STUStatescriptState", "state": 0, "remote": 0,
+         "server_only": false, "client_only": false,
+         "fields": {"m_2BBEEAB8": true, "m_ADEB6E05": false}},
+        {"pos": 2, "rid": 2, "uid": 2, "class": "STUStatescriptState", "state": 1, "remote": -1,
+         "server_only": false, "client_only": false,
+         "fields": {"m_2BBEEAB8": true, "m_ADEB6E05": false}}
+      ],
+      "states": [1, 2],
+      "entries": [0],
+      "remote": [1],
+      "sync_vars": [],
+      "containers": {},
+      "unknown_nodes": [],
+      "fields": {},
+      "header": {
+        "m_nodesBitCount": 4, "m_statesBitCount": 4,
+        "m_remoteSyncNodesBitCount": 4, "m_syncVarsBitCount": 4
+      }
+    }
+  },
+  "expected": {
+    "candidate_wire_suffix": 5,
+    "successful_generation": 2,
+    "successful_controller_increment": 1
+  }
+}

@@ -367,6 +367,7 @@ pub(super) struct InstanceContext<'a, W> {
     pub(super) parameters: Option<&'a Variables>,
     pub(super) watcher: Option<StateKey>,
     pub(super) read_native: bool,
+    pub(super) read_clock: bool,
     pub(super) untrusted_native: bool,
 }
 
@@ -401,7 +402,9 @@ impl<W: World> InstanceContext<'_, W> {
                         && state.linked_variable == Some(key)
                 })
         });
-        self.machine.value(key, below)
+        let (value, read_clock) = self.machine.value_with_clock_dependency(key, below);
+        self.read_clock |= read_clock;
+        value
     }
 }
 
@@ -489,6 +492,21 @@ impl<W: World> Context for InstanceContext<'_, W> {
     fn authored_forward(&mut self, entity: u32) -> Option<[f64; 3]> {
         self.read_native = true;
         self.world.authored_forward(entity)
+    }
+
+    fn body_eye_position(&mut self, entity: u32) -> Option<[f64; 3]> {
+        self.read_native = true;
+        self.world.body_eye_position(entity)
+    }
+
+    fn body_has_hardpoint(&mut self, entity: u32, hardpoint: u64) -> Option<bool> {
+        self.read_native = true;
+        self.world.body_has_hardpoint(self.site, entity, hardpoint)
+    }
+
+    fn body_active(&mut self) -> Option<bool> {
+        self.read_native = true;
+        self.world.body_active(self.site)
     }
 
     fn spatial_candidates(&mut self) -> Option<&[script_expr::SpatialCandidate]> {

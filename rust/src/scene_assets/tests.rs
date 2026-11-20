@@ -6,6 +6,238 @@ mod junkenstein;
 mod script_coverage;
 
 #[test]
+fn practice_only_omits_owner_runtime_when_all_owner_content_is_absent() {
+    use serde_json::json;
+
+    #[derive(Deserialize)]
+    struct Case {
+        name: String,
+        codecs: bool,
+        bodies: BTreeMap<String, Option<String>>,
+        expected: String,
+    }
+    #[derive(Deserialize)]
+    struct Contract {
+        schema_version: u32,
+        hero: String,
+        catalog_body: String,
+        cases: Vec<Case>,
+    }
+
+    let contract: Contract = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/practice-owner-content-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    let heroes = Arc::new(
+        HeroCatalog::from_json(
+            &json!({
+                (contract.hero.clone()): {
+                    "name": "Fixture owner", "class": "Damage", "body": contract.catalog_body,
+                },
+            })
+            .to_string(),
+        )
+        .unwrap(),
+    );
+    let hero = heroes.get(parse_guid(&contract.hero).unwrap()).unwrap();
+    let spawn = OwnerBodySpawn {
+        slot: 0,
+        controller: OWNER_PROBE_CONTROLLER,
+        entity: 0xa000_0101,
+        body_filter: team_bit(0).unwrap(),
+        frame: FIRST_TICK,
+        pose: Default::default(),
+        eye_position: None,
+        quanta: RETAIL_QUANTA,
+    };
+    for case in contract.cases {
+        let bodies: serde_json::Map<_, _> = case
+            .bodies
+            .into_iter()
+            .map(|(key, hero)| {
+                (
+                    key,
+                    json!({"hero": hero, "name": "Fixture", "graphs": [], "weapons": []}),
+                )
+            })
+            .collect();
+        let bundle = json!({"version": 1, "graphs": [], "bodies": bodies, "missing": []});
+        let assets = SceneAssets {
+            junkenstein_validation: None,
+            collision: PathBuf::new(),
+            junkenstein_map_world: PathBuf::new(),
+            last_collision: Mutex::default(),
+            trace_contacts: false,
+            mode_props: BTreeMap::new(),
+            graphs: Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap()),
+            codecs: case
+                .codecs
+                .then(|| Arc::new(CodecTable::from_json(r#"{"classes":{}}"#).unwrap())),
+            practice_owner_body: OnceLock::new(),
+            bots: BotCatalog::default(),
+            movers: Arc::new(MoverCatalog::default()),
+            stats: StatsCatalog::default(),
+            heroes: Arc::clone(&heroes),
+            pools: Arc::new(PoolCatalog::default()),
+        };
+        let mut scene = PreparedScene::fixture_for_bots(Vec::new());
+        scene.initial_board.index = crate::game_stats::GMP_STATS;
+        scene.owner_body_factory = assets.compile_practice_factories(&scene);
+        assert_eq!(
+            scene.owner_body_factory.is_none(),
+            case.expected == "scriptless",
+            "{}",
+            case.name
+        );
+        let runtime = scene.owner_body_runtime(hero, spawn);
+        if case.expected == "scriptless" {
+            assert!(matches!(runtime, Ok(None)), "{}", case.name);
+            continue;
+        }
+        let Err(error) = runtime else {
+            panic!(
+                "{} did not reject an incomplete owner configuration",
+                case.name
+            );
+        };
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported, "{}", case.name);
+        let source = error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<Arc<SceneOwnerPreparationError>>())
+            .map(Arc::as_ref);
+        match (case.expected.as_str(), source) {
+            ("missing_codecs", Some(SceneOwnerPreparationError::Codecs)) => {}
+            ("missing_body", Some(SceneOwnerPreparationError::Body(error)))
+                if matches!(error.as_ref(), OwnerBodyPreparationError::MissingBody) => {}
+            _ => panic!("{} produced unexpected rejection: {error}", case.name),
+        }
+    }
+}
+
+#[test]
+fn practice_owner_selector_starts_the_validated_actor_definition() {
+    use serde_json::{Map, json};
+
+    #[derive(Deserialize)]
+    struct Actor {
+        hero: String,
+        body: String,
+        root: u32,
+    }
+    #[derive(Deserialize)]
+    struct Contract {
+        schema_version: u32,
+        accepted: [Actor; 2],
+        rejected: Actor,
+        unlisted: Actor,
+    }
+
+    let contract: Contract = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/practice-owner-selector-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    let [first, second] = &contract.accepted;
+    let bodies: Map<_, _> = [
+        (first, &first.hero),
+        (second, &second.hero),
+        (&contract.rejected, &first.hero),
+        (&contract.unlisted, &contract.unlisted.hero),
+    ]
+    .into_iter()
+    .map(|(actor, declared_hero)| {
+        (
+            actor.body.clone(),
+            json!({
+                "name": "Fixture",
+                "hero": declared_hero,
+                "weapons": [],
+                "graphs": [{"graph": actor.root, "m_75408640": 0}],
+            }),
+        )
+    })
+    .collect();
+    let graphs = contract.accepted.each_ref().map(|actor| {
+        json!({
+            "index": actor.root, "items": 0, "nodes": [], "states": [], "entries": [],
+            "remote": [], "sync_vars": [], "containers": {}, "unknown_nodes": [], "fields": {},
+            "header": {"m_nodesBitCount": 4, "m_statesBitCount": 4,
+                       "m_remoteSyncNodesBitCount": 4, "m_syncVarsBitCount": 4}
+        })
+    });
+    let bundle = json!({"version": 1, "graphs": graphs, "bodies": bodies, "missing": []});
+    let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    let codecs = Arc::new(CodecTable::from_json(r#"{"classes":{}}"#).unwrap());
+    let make_hero = |actor: &Actor| Hero {
+        guid: parse_guid(&actor.hero).unwrap(),
+        name: format!("Fixture actor {}", actor.hero),
+        role: "Damage".into(),
+        body: parse_guid(&actor.body).unwrap(),
+    };
+    let mut scene = PreparedScene::fixture_for_bots(Vec::new());
+    let definitions = [first, second, &contract.rejected].map(|actor| {
+        let hero = make_hero(actor);
+        let prepared = PlayerBodyFactory::from_body(
+            Arc::clone(&graphs),
+            Arc::clone(&codecs),
+            scene.map().mode_guid,
+            &hero,
+            None,
+            false,
+        );
+        (
+            hero.guid,
+            prepared.map_err(|error| Arc::new(SceneOwnerPreparationError::Body(Box::new(error)))),
+        )
+    });
+    assert!(definitions[0].1.is_ok() && definitions[1].1.is_ok());
+    let invalid = definitions[2].1.as_ref().err().map(Arc::as_ref);
+    assert!(
+        matches!(invalid, Some(SceneOwnerPreparationError::Body(error))
+        if matches!(error.as_ref(), OwnerBodyPreparationError::MissingBody))
+    );
+    scene.owner_body_factory = Some(practice_owner_selector(definitions.into_iter().collect()));
+    let spawn = OwnerBodySpawn {
+        slot: 0,
+        controller: OWNER_PROBE_CONTROLLER,
+        entity: 0xa000_0101,
+        body_filter: team_bit(0).unwrap(),
+        frame: FIRST_TICK,
+        pose: Default::default(),
+        eye_position: None,
+        quanta: RETAIL_QUANTA,
+    };
+
+    for actor in &contract.accepted {
+        let runtime = scene
+            .owner_body_runtime(&make_hero(actor), spawn)
+            .unwrap()
+            .unwrap();
+        let snapshot = runtime.snapshot().unwrap();
+        assert_eq!(snapshot.entity, spawn.entity);
+        assert_eq!(
+            snapshot
+                .instances
+                .values()
+                .map(|instance| instance.graph)
+                .collect::<Vec<_>>(),
+            [actor.root]
+        );
+    }
+    assert!(matches!(
+        scene.owner_body_runtime(&make_hero(&contract.rejected), spawn),
+        Err(error) if error.kind() == io::ErrorKind::Unsupported
+    ));
+    assert!(
+        scene
+            .owner_body_runtime(&make_hero(&contract.unlisted), spawn)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 #[ignore = "requires separately prepared 104319 Junkenstein runtime"]
 fn normal_cassidy_primary_and_fan_damage_all_boss_bodies() {
     use crate::junkenstein_navigation::{JUNKRAT, REAPER, ROADHOG, SUMMONER, WITCH};
@@ -123,13 +355,15 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
     let scene = assets.prepare(GameMap::practice_range()).unwrap();
     assert!(scene.movement_ready());
     let hero = scene.heroes().get(SOLDIER).unwrap();
+    let mover = scene.player_spawn_mover(hero.body, 0).unwrap();
     let spawn = OwnerBodySpawn {
         slot: 0,
         controller: 0xa000_0100,
         entity: 0xa000_0101,
         body_filter: team_bit(0).unwrap(),
         frame: FIRST_TICK,
-        pose: scene.player_spawn_mover(hero.body, 0).unwrap().pose(),
+        pose: mover.pose(),
+        eye_position: script_eye_position(hero.guid, &mover),
         quanta: RETAIL_QUANTA,
     };
     if assets.graphs.bodies()[&hero.body].target_tags.is_some() {
@@ -412,8 +646,17 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
             "{blocked}"
         );
     }
-    let tracer = scene.heroes().find_hero("Tracer").unwrap();
-    assert!(scene.owner_body_runtime(tracer, spawn).unwrap().is_none());
+    let unknown_actor = Hero {
+        guid: u64::MAX,
+        ..hero.clone()
+    };
+    assert!(scene.heroes().get(unknown_actor.guid).is_none());
+    assert!(
+        scene
+            .owner_body_runtime(&unknown_actor, spawn)
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -433,6 +676,7 @@ fn stock_soldier_casts_biotic_field() {
         body_filter: team_bit(0).unwrap(),
         frame: FIRST_TICK,
         pose: mover.pose(),
+        eye_position: script_eye_position(hero.guid, &mover),
         quanta: RETAIL_QUANTA,
     };
     let mut owner = scene.owner_body_runtime(hero, spawn).unwrap().unwrap();
@@ -484,6 +728,7 @@ fn stock_soldier_quick_melee_runs_and_projects_on_owner_and_observer_streams() {
         body_filter: team_bit(0).unwrap(),
         frame: FIRST_TICK,
         pose: mover.pose(),
+        eye_position: script_eye_position(hero.guid, &mover),
         quanta: RETAIL_QUANTA,
     };
     let mut owner = scene.owner_body_runtime(hero, spawn).unwrap().unwrap();

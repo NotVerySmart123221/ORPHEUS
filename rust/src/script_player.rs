@@ -25,7 +25,7 @@ use crate::{
     game_instance::{RETAIL_QUANTA, TeamMemberCounts},
     game_pools::{BODY_GRAPH, FALLBACK_POOLS, HealthPools},
     game_projectiles::ProjectileLeases,
-    game_replication::OwnerBodyRuntime,
+    game_replication::{OwnerBodyRuntime, OwnerRoomActivity},
     script_codecs::CodecTable,
     script_graph::GraphStore,
     script_init::{Component, InitFault, MAX_INIT_WORK, Root, TargetTagEffects},
@@ -45,6 +45,7 @@ pub(crate) struct OwnerBodySpawn {
     pub slot: u8,
     pub frame: u32,
     pub pose: Movement,
+    pub eye_position: Option<[f64; 3]>,
     pub quanta: u32,
 }
 
@@ -52,6 +53,7 @@ pub(crate) struct OwnerBodySpawn {
 pub(crate) struct OwnerBodySetup {
     pub team_member_counts: Option<TeamMemberCounts>,
     pub spatial_frame: Option<Arc<RoomSpatialFrame>>,
+    pub room_activity: Option<OwnerRoomActivity>,
 }
 
 pub(crate) struct PlayerBodyFactory {
@@ -64,6 +66,7 @@ pub(crate) struct PlayerBodyFactory {
     pools: Option<HealthPools>,
     target_tags: Option<BTreeSet<u64>>,
     controller_on_fire: bool,
+    uses_authored_charge: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -76,6 +79,8 @@ pub(crate) enum OwnerBodyPreparationError {
     ModeRootId,
     #[error("Junkenstein defender body graph is absent")]
     MissingModeRoot,
+    #[error("authored charge graph {0:04X} must remain a single private root after room setup")]
+    AuthoredChargeRoot(u32),
     #[error(transparent)]
     Start(#[from] OwnerBodyStartupError),
     #[error(transparent)]
@@ -101,14 +106,13 @@ pub(crate) enum OwnerBodyStartupError {
 }
 
 impl PlayerBodyFactory {
-    pub(crate) fn prepare(
+    pub(crate) fn from_body(
         graphs: Arc<GraphStore>,
         codecs: Arc<CodecTable>,
         mode: u64,
         hero: &Hero,
         pools: Option<HealthPools>,
         controller_on_fire: bool,
-        probe: (OwnerBodySpawn, OwnerBodySetup),
     ) -> Result<Self, OwnerBodyPreparationError> {
         let body = graphs
             .bodies()
@@ -133,10 +137,17 @@ impl PlayerBodyFactory {
             }
             roots.insert(public_roots, Root::new(id, DEFENDER_BODY_GRAPH));
         }
+        if let Some(graph) = body.authored_charge_graph {
+            let mut mounted = roots.iter().filter(|root| root.graph == graph);
+            if !mounted.next().is_some_and(Root::is_server_only) || mounted.next().is_some() {
+                return Err(OwnerBodyPreparationError::AuthoredChargeRoot(graph));
+            }
+        }
         let health = pools.unwrap_or(FALLBACK_POOLS).total();
         let variables = crate::script_init::player_entity_variables(body, health, health);
         let target_tags = body.target_tags.clone();
-        let factory = Self {
+        let uses_authored_charge = body.authored_charge_graph.is_some();
+        Ok(Self {
             graphs,
             codecs,
             mode,
@@ -146,8 +157,16 @@ impl PlayerBodyFactory {
             pools,
             target_tags,
             controller_on_fire,
-        };
-        let runtime = factory.start_runtime(probe.0, probe.1)?;
+            uses_authored_charge,
+        })
+    }
+
+    pub(crate) fn probe_startup(
+        &self,
+        spawn: OwnerBodySpawn,
+        setup: OwnerBodySetup,
+    ) -> Result<(), OwnerBodyPreparationError> {
+        let runtime = self.start_runtime(spawn, setup)?;
         let encoder = runtime.encoder();
         let snapshot = runtime
             .snapshot()
@@ -158,6 +177,21 @@ impl PlayerBodyFactory {
         encoder
             .full(&projected)
             .map_err(OwnerBodyPreparationError::Encoding)?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prepare(
+        graphs: Arc<GraphStore>,
+        codecs: Arc<CodecTable>,
+        mode: u64,
+        hero: &Hero,
+        pools: Option<HealthPools>,
+        controller_on_fire: bool,
+        probe: (OwnerBodySpawn, OwnerBodySetup),
+    ) -> Result<Self, OwnerBodyPreparationError> {
+        let factory = Self::from_body(graphs, codecs, mode, hero, pools, controller_on_fire)?;
+        factory.probe_startup(probe.0, probe.1)?;
         Ok(factory)
     }
 
@@ -194,12 +228,14 @@ impl PlayerBodyFactory {
         let mut world = BodyWorld {
             spatial_frame: setup.spatial_frame,
             team_member_counts: setup.team_member_counts,
+            room_activity: setup.room_activity,
             script_requests: Default::default(),
             graphs: Arc::clone(&self.graphs),
             controller: spawn.controller,
             entity: spawn.entity,
             body_filter: spawn.body_filter,
             position: spawn.pose.position,
+            eye_position: spawn.eye_position,
             movement: spawn.pose,
             throttles: [0; 2],
             mode: self.mode,
@@ -221,6 +257,7 @@ impl PlayerBodyFactory {
             deadeye_scene: DeadeyeScene::default(),
             velocity_changes: Vec::new(),
             damage_credit: None,
+            uses_authored_charge: self.uses_authored_charge,
         };
         let mut component = Component::start(
             Arc::clone(&self.graphs),
@@ -256,7 +293,6 @@ impl PlayerBodyFactory {
             modifiers,
             leases,
             frame: spawn.frame,
-            encounter_active: false,
         };
         runtime
             .sync_charge_admission(true)
@@ -302,6 +338,7 @@ pub(crate) fn fixture_body_factory() -> (PlayerBodyFactory, OwnerBodySpawn) {
             position: [1.0, 2.0, 3.0],
             ..Movement::default()
         },
+        eye_position: None,
         quanta: RETAIL_QUANTA,
     };
     let factory = PlayerBodyFactory::prepare(

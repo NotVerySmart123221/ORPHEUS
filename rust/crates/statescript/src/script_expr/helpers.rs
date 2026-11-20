@@ -4,7 +4,7 @@ pub(super) fn class(config: &Json) -> Option<&str> {
     config.get("$")?.as_str()
 }
 
-pub(super) fn client_only_fallback(config: &Json) -> Result<Option<&Json>, EvalError> {
+pub(crate) fn client_only_fallback(config: &Json) -> Result<Option<&Json>, EvalError> {
     let fields = config
         .as_object()
         .filter(|fields| {
@@ -19,6 +19,12 @@ pub(super) fn client_only_fallback(config: &Json) -> Result<Option<&Json>, EvalE
 
 pub fn native_shape(config: &Json, expected: &str, operand: Option<&str>) -> bool {
     class(config) == Some(expected) && native_fields(config, operand.as_slice())
+}
+
+pub(crate) fn native_entity_operand<'a>(config: &'a Json, expected: &str) -> Option<&'a Json> {
+    config
+        .get("m_entity")
+        .filter(|_| native_shape(config, expected, Some("m_entity")))
 }
 
 pub fn native_fields(config: &Json, operands: &[&str]) -> bool {
@@ -344,6 +350,7 @@ pub(super) fn reference_native_class(config: &Json) -> Option<&str> {
         | "STUConfigVarVec3"
         | "EntityPosition"
         | "EntityDirection"
+        | "BodyActive"
         | "EntityMatches"
         | "StackAllows"
         | "EntitiesInRadius"

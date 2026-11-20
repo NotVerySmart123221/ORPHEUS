@@ -168,6 +168,8 @@ fn spatial_actor_poses_follow_room_frames_and_body_generations() {
         player_poses,
         damage,
     } = serde_json::from_value(fixture["input"].clone()).unwrap();
+    let player_eyes: [Vec3; 2] =
+        serde_json::from_value(fixture["expected"]["player_eye_positions"].clone()).unwrap();
 
     let bot = fixture_bots().remove(0);
     let bot_wire = bot.entity;
@@ -207,7 +209,12 @@ fn spatial_actor_poses_follow_room_frames_and_body_generations() {
     room.prepare_spatial_frame(frame).unwrap();
     let initial = Arc::clone(&room.spatial_frame.as_ref().unwrap().1);
     assert_eq!(initial.actor_pose(bot_wire), Some(bot_poses[0]));
+    assert_eq!(initial.actor_eye_position(bot_wire), None);
     assert_eq!(initial.actor_pose(body.entity), Some(player_poses[0]));
+    assert_eq!(
+        initial.actor_eye_position(body.entity),
+        Some(player_eyes[0])
+    );
     let old_player = initial.script_targets[&body.entity].entity;
 
     move_bot(&mut room, bot_poses[1], frame);
@@ -221,11 +228,16 @@ fn spatial_actor_poses_follow_room_frames_and_body_generations() {
     assert!(Arc::ptr_eq(&initial, same_frame));
     assert_eq!(same_frame.actor_pose(bot_wire), Some(bot_poses[0]));
     assert_eq!(same_frame.actor_pose(body.entity), Some(player_poses[0]));
+    assert_eq!(
+        same_frame.actor_eye_position(body.entity),
+        Some(player_eyes[0])
+    );
 
     room.prepare_spatial_frame(frame + 1).unwrap();
     let next = &room.spatial_frame.as_ref().unwrap().1;
     assert_eq!(next.actor_pose(bot_wire), Some(bot_poses[1]));
     assert_eq!(next.actor_pose(body.entity), Some(player_poses[1]));
+    assert_eq!(next.actor_eye_position(body.entity), Some(player_eyes[1]));
     let new_player = next.script_targets[&body.entity].entity;
     assert_ne!(new_player, old_player);
     assert_eq!(new_player, room.players_by_wire[&body.entity]);
@@ -242,6 +254,7 @@ fn spatial_actor_poses_follow_room_frames_and_body_generations() {
     let terminal = &room.spatial_frame.as_ref().unwrap().1;
     assert_eq!(terminal.actor_pose(bot_wire), None);
     assert_eq!(terminal.actor_pose(body.entity), None);
+    assert_eq!(terminal.actor_eye_position(body.entity), None);
     assert!(!terminal.entity_facts().unwrap()[&bot_wire].alive);
 }
 
@@ -305,6 +318,8 @@ fn owner_startup_spatial_frame_excludes_the_frozen_body_on_each_replacement() {
     let input = &fixture["input"];
     let owners: Owners = serde_json::from_value(input["owner_replacement"].clone()).unwrap();
     let poses: [Pose; 2] = serde_json::from_value(input["player_poses"].clone()).unwrap();
+    let eyes: [Vec3; 2] =
+        serde_json::from_value(fixture["expected"]["player_eye_positions"].clone()).unwrap();
     let frame = u32::try_from(input["frame"].as_u64().unwrap()).unwrap();
     let damage = input["damage"].as_f64().unwrap();
     let contact = Arc::new(ContactWorld::new(Vec::new()).unwrap());
@@ -360,12 +375,15 @@ fn owner_startup_spatial_frame_excludes_the_frozen_body_on_each_replacement() {
 
         let detached = room.capture_spatial_frame(frame).unwrap().unwrap();
         assert_eq!(detached.actor_pose(first.entity), Some(poses[0]));
+        assert_eq!(detached.actor_eye_position(first.entity), Some(eyes[0]));
+        assert_eq!(detached.actor_eye_position(dead.entity), None);
         assert!(room.owner_startup_spatial_frame(owners.owner).is_none());
         room.prepare_spatial_frame(frame).unwrap();
         let frozen = Arc::clone(&room.spatial_frame.as_ref().unwrap().1);
         room.player_body_mut(other).unwrap().mover = mover(poses[1]);
         let current = room.capture_spatial_frame(frame).unwrap().unwrap();
         assert_eq!(current.actor_pose(other.entity), Some(poses[1]));
+        assert_eq!(current.actor_eye_position(other.entity), Some(eyes[1]));
 
         for (generation, &wire) in (2..).zip(&owners.body_wires[1..]) {
             let startup = room.owner_startup_spatial_frame(owners.owner).unwrap();
@@ -385,8 +403,11 @@ fn owner_startup_spatial_frame_excludes_the_frozen_body_on_each_replacement() {
             for view in [&startup, installed.as_ref().unwrap()] {
                 assert_eq!(view.candidates(), &frozen.candidates()[1..]);
                 assert_eq!(view.actor_pose(other.entity), Some(poses[0]));
+                assert_eq!(view.actor_eye_position(other.entity), Some(eyes[0]));
                 assert!(!view.script_targets.contains_key(&first.entity));
+                assert_eq!(view.actor_eye_position(first.entity), None);
                 assert_eq!(view.actor_pose(wire), None);
+                assert_eq!(view.actor_eye_position(wire), None);
                 assert!(Arc::ptr_eq(&view.ground, &frozen.ground));
                 if needs == RoomSpatialNeeds::EntityFacts {
                     let facts = view.entity_facts().unwrap();
@@ -407,6 +428,7 @@ fn owner_startup_spatial_frame_excludes_the_frozen_body_on_each_replacement() {
             &frozen
         ));
         assert_eq!(frozen.actor_pose(first.entity), Some(poses[0]));
+        assert_eq!(frozen.actor_eye_position(first.entity), Some(eyes[0]));
     }
 }
 
@@ -1684,6 +1706,7 @@ fn authored_zomnic_attack_updates_gate_damage_and_retires_the_pair() {
                 body_filter: crate::match_scene::team_bit(0).unwrap(),
                 frame: 5900,
                 pose,
+                eye_position: None,
                 quanta: RETAIL_QUANTA,
             },
         )

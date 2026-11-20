@@ -127,6 +127,7 @@ pub(crate) struct GateState {
 #[derive(Clone)]
 pub(crate) struct GateRuntime {
     pub(crate) graphs: Arc<GraphStore>,
+    mode: u64,
     pub(crate) codecs: Option<Arc<CodecTable>>,
     pub(crate) script: script_init::Component,
     pub(crate) state: GateState,
@@ -230,6 +231,8 @@ pub(crate) struct EncounterRegistration {
 }
 
 pub(crate) struct EncounterWorld<'a> {
+    pub(crate) graphs: &'a GraphStore,
+    pub(crate) mode: u64,
     pub(crate) gate: &'a JunkensteinGate,
     pub(crate) anchors: &'a SpawnAnchors,
     pub(crate) gate_variables: &'a Variables,
@@ -254,7 +257,7 @@ pub(crate) struct EnemyCreator<'a> {
 
 impl World for EncounterWorld<'_> {
     fn engine_setting(&self, _site: Site, key: u32) -> crate::script_expr::EngineSetting {
-        crate::junkenstein_host::engine_setting(key)
+        crate::body_ruleset::engine_setting(self.graphs, self.mode, key)
     }
 
     fn is_victory_voice(&self, node: &crate::script_graph::Node) -> bool {
@@ -559,6 +562,8 @@ impl World for EncounterWorld<'_> {
 }
 
 pub(crate) struct GateWorld<'a> {
+    pub(crate) graphs: &'a GraphStore,
+    pub(crate) mode: u64,
     pub(crate) entity: u32,
     pub(crate) state: &'a mut GateState,
     pub(crate) bodies: &'a RoomSimulation,
@@ -567,7 +572,7 @@ pub(crate) struct GateWorld<'a> {
 
 impl World for GateWorld<'_> {
     fn engine_setting(&self, _site: Site, key: u32) -> crate::script_expr::EngineSetting {
-        crate::junkenstein_host::engine_setting(key)
+        crate::body_ruleset::engine_setting(self.graphs, self.mode, key)
     }
 
     fn native(&mut self, _site: Site, config: &serde_json::Value) -> Option<Value> {
@@ -736,6 +741,7 @@ impl RoomSimulation {
         let voice_set = registration.voice_set;
         let gate_runtime = GateRuntime {
             graphs: Arc::clone(&registration.graphs),
+            mode: registration.mode,
             codecs: registration.codecs.clone(),
             script: registration.gate_script,
             state: registration.gate_state,
@@ -899,6 +905,8 @@ impl RoomSimulation {
         let mut runtime = original_runtime.clone();
         let result = {
             let mut world = GateWorld {
+                graphs: &runtime.graphs,
+                mode: runtime.mode,
                 entity: handle.wire,
                 state: &mut runtime.state,
                 bodies: self,
@@ -1452,6 +1460,8 @@ impl RoomSimulation {
                 .ok_or(InitFault::Halted)?
                 .variables;
             let mut gate_world = GateWorld {
+                graphs: &gate_runtime.graphs,
+                mode: gate_runtime.mode,
                 entity: gate.entity,
                 state: &mut gate_runtime.state,
                 bodies: self,
@@ -1517,6 +1527,8 @@ impl RoomSimulation {
                 .clone(),
         );
         let mut world = EncounterWorld {
+            graphs: &encounter.graphs,
+            mode: encounter.mode,
             gate,
             anchors,
             gate_variables,
@@ -1607,6 +1619,8 @@ impl RoomSimulation {
         };
         let result = {
             let mut world = GateWorld {
+                graphs: &runtime.graphs,
+                mode: runtime.mode,
                 entity: handle.wire,
                 state: &mut runtime.state,
                 bodies: self,

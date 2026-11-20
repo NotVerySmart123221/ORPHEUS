@@ -111,12 +111,18 @@ def graph_index(bundle):
         row["class"] for row in bundle.get("authored_classes", [])
         if row["behavior"] == "client_only"
     }
+    authored_track_classes = {
+        row["class"] for row in bundle.get("authored_classes", [])
+        if row["behavior"] == "track_entities_state"
+    }
     graphs = {}
+    dependencies = {}
     for graph in bundle["graphs"]:
         index = graph["index"]
         if not uint(index, 32) or index in graphs:
             raise ValueError("invalid or duplicate prepared graph index")
         nodes = {}
+        graph_dependencies = []
         states = graph.get("states", [])
         if not isinstance(states, list) or any(
             position is not None and not uint(position, 16) for position in states
@@ -132,6 +138,8 @@ def graph_index(bundle):
             ):
                 raise ValueError("invalid or duplicate prepared graph node")
             client, server = bool(node["client_only"]), bool(node["server_only"])
+            if name in authored_track_classes:
+                server = True
             scope = {
                 (False, False): "networked", (False, True): "server_only",
                 (True, False): "client_only", (True, True): "conflicting",
@@ -148,6 +156,7 @@ def graph_index(bundle):
                     or node.get("action_behavior") is not None
                     or node.get("room_message_entry") is True
                     or node.get("host_event_entry") is not None
+                    or name in authored_track_classes
                 )
                 if state in annotations:
                     identity = annotations.pop(state)
@@ -165,15 +174,43 @@ def graph_index(bundle):
                 "server_scope": "client_only" if client_scope else "eligible",
                 "runtime_classification": runtime_classification,
             }
+            child = target_child_graph(node, states, name in authored_track_classes)
+            if child is not None:
+                graph_dependencies.append({
+                    "source_graph": index, "source_node": pos, "source_rid": rid,
+                    "graph": child, "relation": "track_entities_child",
+                })
         if annotations:
             raise ValueError(
                 f"runtime client state in graph {index} at slot {min(annotations)}"
                 " has no matching state"
             )
         graphs[index] = nodes
+        dependencies[index] = graph_dependencies
     if client_slots:
         raise ValueError(f"runtime client state references unknown graph {min(client_slots)}")
-    return graphs, guid_index(bundle["bodies"])
+    return graphs, guid_index(bundle["bodies"]), dependencies
+
+
+def target_child_graph(node, states, class_declared):
+    """Read only the explicit child binding validated by the Rust graph loader."""
+    behavior = node.get("state_behavior")
+    if behavior != "track_entities" and not class_declared:
+        return None
+    fields = node.get("fields")
+    slot = node["state"]
+    if (
+        class_declared and behavior not in (None, "track_entities")
+        or node.get("client_only") or not (class_declared or node.get("server_only"))
+        or node.get("action_behavior") is not None
+        or not uint(slot, 16) or slot >= len(states) or states[slot] != node["pos"]
+        or states.count(node["pos"]) != 1 or not isinstance(fields, dict)
+        or fields.get("m_ADEB6E05") or fields.get("targets") is None
+        or not uint(fields.get("child_graph"), 32)
+        or not uint(fields.get("target_variable"), 32) or fields["target_variable"] == 0
+    ):
+        raise ValueError("invalid declared track entities child binding")
+    return fields["child_graph"]
 
 
 def body_roots(body):
@@ -276,18 +313,20 @@ def site_evidence(observation, key):
     }
 
 
-def scenario_report(observation, roots, graphs, hero_known=True):
+def scenario_report(observation, roots, graphs, dependencies, hero_known=True):
     provenance = observation.provenance() if observation else {
         "scenario": None, "source_revision": None, "frames": None,
         "truncated": None, "observation_sha256": None,
     }
     selected = set(roots)
+    observed_graphs = set()
     unmatched = []
     if observation:
         for key in sorted(observation.reached.keys() | observation.diagnostics.keys()):
             graph, pos = key
             if hero_known and pos in graphs.get(graph, {}):
                 selected.add(graph)
+                observed_graphs.add(graph)
                 continue
             reason = "unknown_hero" if not hero_known else (
                 "unknown_graph" if graph not in graphs else "unknown_node"
@@ -295,6 +334,22 @@ def scenario_report(observation, roots, graphs, hero_known=True):
             unmatched.append({
                 "graph": graph, "node": pos, "reason": reason, **site_evidence(observation, key),
             })
+
+    # Static references inventory possible children. Only the sidecar proves dispatch.
+    pending = list(selected)
+    expanded = set()
+    edges = []
+    while pending:
+        graph = pending.pop()
+        if graph in expanded:
+            continue
+        expanded.add(graph)
+        for edge in dependencies.get(graph, ()):
+            child = edge["graph"]
+            edges.append({**edge, "present": child in graphs})
+            if child not in selected:
+                selected.add(child)
+                pending.append(child)
 
     counts = Counter()
     reported_graphs = []
@@ -307,17 +362,24 @@ def scenario_report(observation, roots, graphs, hero_known=True):
             rows.append({**node, **evidence, "coverage": status})
         reported_graphs.append({
             "graph": graph, "present": graph in graphs,
-            "origin": "body_root" if graph in roots else "observed_non_root", "nodes": rows,
+            "origin": "body_root" if graph in roots else (
+                "observed_non_root" if graph in observed_graphs else "referenced_child"
+            ),
+            "nodes": rows,
         })
     return {
         **provenance, "counts": {status: counts[status] for status in COVERAGE},
         "graphs": reported_graphs, "unmatched_sites": unmatched,
+        "static_dependencies": sorted(
+            edges, key=lambda edge: (edge["source_graph"], edge["source_node"], edge["graph"]),
+        ),
+        "missing_dependency_graphs": sorted({edge["graph"] for edge in edges if not edge["present"]}),
     }
 
 
 def build_report(graph_bundle, hero_catalog, observation_paths):
     bundle, bundle_sha256 = load_json(graph_bundle, compressed=True)
-    graphs, bodies = graph_index(bundle)
+    graphs, bodies, dependencies = graph_index(bundle)
     catalog, catalog_sha256 = load_json(hero_catalog)
     heroes = guid_index(catalog)
     observations = [read_observation(path, bundle_sha256) for path in observation_paths]
@@ -341,7 +403,7 @@ def build_report(graph_bundle, hero_catalog, observation_paths):
             "hero": hero, "body": body, "body_status": body_status,
             "root_graphs": roots, "missing_root_graphs": [g for g in roots if g not in graphs],
             "scenarios": [
-                scenario_report(observation, roots, graphs)
+                scenario_report(observation, roots, graphs, dependencies)
                 for observation in by_hero.get(hero, [None])
             ],
         })
@@ -350,7 +412,7 @@ def build_report(graph_bundle, hero_catalog, observation_paths):
         "hero_catalog_sha256": catalog_sha256, "observation_count": len(observations),
         "heroes": rows,
         "unmatched_hero_observations": [
-            {"hero": observation.hero, **scenario_report(observation, [], graphs, hero_known=False)}
+            {"hero": observation.hero, **scenario_report(observation, [], graphs, dependencies, hero_known=False)}
             for observation in observations if observation.hero not in heroes
         ],
     }

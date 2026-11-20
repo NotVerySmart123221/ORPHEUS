@@ -27,7 +27,11 @@ fn junkenstein_participant_queries_use_live_room_bodies_and_reject_unknown_filte
         position: [0.0; 3],
         graph: 0x0ca7,
     };
+    let graphs =
+        GraphStore::from_json(br#"{"version":1,"graphs":[],"bodies":{},"missing":[]}"#).unwrap();
     let world = EncounterWorld {
+        graphs: &graphs,
+        mode: crate::game_content::JUNKENSTEIN_REVENGE,
         gate: &gate,
         anchors: &SpawnAnchors::default(),
         gate_variables: &Variables::new(),
@@ -268,6 +272,7 @@ fn normal_cassidy_receives_victory_view_and_result() {
                 body_filter: team_bit(0).unwrap(),
                 frame: FIRST_TICK,
                 pose: mover.pose(),
+                eye_position: script_eye_position(hero.guid, &mover),
                 quanta: RETAIL_QUANTA,
             },
         )
@@ -525,6 +530,7 @@ pub(super) fn verify_normal_cassidy_damage_and_charge(heroes: &[u64], variants: 
                         body_filter: team_bit(0).unwrap(),
                         frame: FIRST_TICK,
                         pose: mover.pose(),
+                        eye_position: script_eye_position(cassidy.guid, &mover),
                         quanta: RETAIL_QUANTA,
                     },
                 )
@@ -984,6 +990,7 @@ fn normal_cassidy_flashbang_input_produces_authored_gravity_and_range_blast() {
                 body_filter: team_bit(0).unwrap(),
                 frame: FIRST_TICK,
                 pose: mover.pose(),
+                eye_position: script_eye_position(hero.guid, &mover),
                 quanta: RETAIL_QUANTA,
             },
         )
@@ -1188,6 +1195,7 @@ fn normal_cassidy_roll_moves_without_stopping_the_owner_vm() {
                     body_filter: team_bit(0).unwrap(),
                     frame: FIRST_TICK,
                     pose: mover.pose(),
+                    eye_position: script_eye_position(cassidy.guid, &mover),
                     quanta: RETAIL_QUANTA,
                 },
             )
@@ -1316,6 +1324,7 @@ fn normal_cassidy_charges_locks_and_fires_the_authored_deadeye() {
                 body_filter: team_bit(0).unwrap(),
                 frame: FIRST_TICK,
                 pose: mover.pose(),
+                eye_position: script_eye_position(cassidy.guid, &mover),
                 quanta: RETAIL_QUANTA,
             },
         )
@@ -1819,6 +1828,7 @@ fn junkenstein_room_clock_starts_countdown_once_after_cassidy_selection() {
     }
     let cassidy = scene.heroes().find_hero("Cassidy").unwrap();
     let hero = cassidy.guid;
+    let mover = scene.player_spawn_mover(cassidy.body, 0).unwrap();
     let mut owner = scene
         .owner_body_runtime(
             cassidy,
@@ -1828,7 +1838,8 @@ fn junkenstein_room_clock_starts_countdown_once_after_cassidy_selection() {
                 entity: 0xa000_0101,
                 body_filter: team_bit(0).unwrap(),
                 frame: FIRST_TICK,
-                pose: scene.player_spawn_mover(cassidy.body, 0).unwrap().pose(),
+                pose: mover.pose(),
+                eye_position: script_eye_position(cassidy.guid, &mover),
                 quanta: RETAIL_QUANTA,
             },
         )

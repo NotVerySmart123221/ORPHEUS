@@ -65,6 +65,22 @@ pub(crate) struct BodyId {
     pub generation: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OwnerRoomActivity {
+    Regular,
+    Encounter { active: bool },
+}
+
+impl OwnerRoomActivity {
+    pub(crate) fn allows_body_activity(self) -> bool {
+        !matches!(self, Self::Encounter { active: false })
+    }
+
+    pub(crate) fn encounter_active(self) -> bool {
+        matches!(self, Self::Encounter { active: true })
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Body {
     id: BodyId,
@@ -76,6 +92,7 @@ struct Body {
 /// A supported modifier projection is required before the mover can correct
 /// the owner's prediction, even if the current set of modifiers is empty.
 pub(crate) trait OwnerBodyRuntime: Send + Sync {
+    fn set_room_activity(&mut self, _activity: OwnerRoomActivity) {}
     fn set_encounter_active(&mut self, _active: bool) -> io::Result<()> {
         Ok(())
     }
@@ -275,6 +292,7 @@ pub(crate) struct WorldDelivery {
 mod body;
 mod delivery;
 
+pub(crate) use body::validate_body_baselines;
 use body::{BioticView, BodyScript, InputQueue};
 use delivery::{BotLifetime, Delivery, Lifetime};
 

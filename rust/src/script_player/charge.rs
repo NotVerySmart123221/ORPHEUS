@@ -6,6 +6,7 @@ use crate::{
     game_combat::AppliedDamage,
     game_content::is_junkenstein_mode,
     game_heroes::CASSIDY,
+    game_replication::OwnerRoomActivity,
     script_expr::{Scope, Variable},
     script_init::State,
     script_wire::{Value, Variables},
@@ -26,14 +27,15 @@ pub(super) struct ChargeBinding {
 
 impl BodyWorld {
     pub(super) fn charge_binding(&self) -> Option<ChargeBinding> {
-        // The common graph can be present on other bodies. Only this existing
-        // profile has a room-backed charge admission and damage credit path.
-        (self.hero == CASSIDY && is_junkenstein_mode(self.mode)).then_some(ChargeBinding {
-            graph: 0x0b8b,
-            admission: 2426,
-            damage_message: 0x0240_0000_0000_0012,
-            inhibited_by: (DEADEYE_GRAPH, 0),
-        })
+        // A declared authored charge root owns this body's meter. Otherwise the
+        // existing profile uses the native charge admission and credit path.
+        (!self.uses_authored_charge && self.hero == CASSIDY && is_junkenstein_mode(self.mode))
+            .then_some(ChargeBinding {
+                graph: 0x0b8b,
+                admission: 2426,
+                damage_message: 0x0240_0000_0000_0012,
+                inhibited_by: (DEADEYE_GRAPH, 0),
+            })
     }
 }
 
@@ -42,7 +44,6 @@ impl PlayerBodyRuntime {
         let Some(binding) = self.world.charge_binding() else {
             return Ok(());
         };
-        self.encounter_active = active;
         let enabled = Value::Bool(active && self.world.vitals.death().is_none());
         let variable = Variable {
             scope: Scope::Entity,
@@ -65,7 +66,12 @@ impl PlayerBodyRuntime {
         let Some(binding) = self.world.charge_binding() else {
             return Ok(());
         };
-        if !self.encounter_active
+        // Old detached callers bootstrap charge even without room activity.
+        // A known room phase takes precedence for live damage credit.
+        if !self
+            .world
+            .room_activity
+            .is_none_or(OwnerRoomActivity::encounter_active)
             || damage.source != self.world.entity
             || self.world.vitals.death().is_some()
             || !damage.amount.is_finite()

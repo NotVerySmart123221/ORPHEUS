@@ -1438,6 +1438,382 @@ fn buffered_action_press_uses_the_shared_clock_and_releases_after_one_millisecon
     }
 }
 
+#[test]
+fn boolean_switch_observes_clock_driven_readiness() {
+    #[derive(serde::Deserialize)]
+    struct Contract {
+        schema_version: u8,
+        graph: u32,
+        entity: u32,
+        start_frame: u32,
+        busy_frame: u32,
+        ready_frame: u32,
+        cooldown: u32,
+        initial_seconds: f64,
+        ready_marker: u32,
+    }
+    let fixture: Contract = serde_json::from_str(include_str!(
+        "../../../../../../fixtures/behavior/script-clock-driven-readiness-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(fixture.schema_version, 1);
+    let source = graph(
+        fixture.graph,
+        vec![
+            node(
+                0,
+                "STUStatescriptEntry",
+                None,
+                json!({"m_outPlug": plug(&[(1, "m_beginPlug"), (2, "m_beginPlug")], &[])}),
+            ),
+            node(
+                1,
+                "STUStatescriptStateAbility",
+                Some(0),
+                json!({"m_out_CooldownVar": var(fixture.cooldown, false), "m_A5F1A77B": 20}),
+            ),
+            node(
+                2,
+                "STUStatescriptStateBooleanSwitch",
+                Some(1),
+                json!({
+                    "m_condition": var(fixture.cooldown, false),
+                    "m_onFalsePlug": plug(&[(3, "m_inPlug")], &[]),
+                }),
+            ),
+            node(
+                3,
+                "STUStatescriptActionSetVar",
+                None,
+                json!({"m_out_Var": var(fixture.ready_marker, false), "m_value": true}),
+            ),
+        ],
+        json!([1, 2]),
+        json!([0]),
+    );
+    let mut root = Root::new(1, fixture.graph);
+    root.variables
+        .insert(fixture.cooldown, Value::Float(fixture.initial_seconds));
+    let mut component = Component::start(
+        Arc::new(store(vec![source])),
+        fixture.entity,
+        Variables::new(),
+        vec![root],
+        fixture.start_frame,
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+
+    let check = |component: &Component, busy| {
+        let snapshot = component.snapshot().unwrap();
+        assert!(
+            snapshot.diagnostics.is_empty(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        let instance = &snapshot.instances[&1];
+        let remaining = component
+            .machine
+            .value(VarKey::Instance(1, fixture.cooldown), None);
+        assert!(matches!(remaining, Value::Float(seconds) if (seconds > 0.0) == busy));
+        assert_eq!(instance.states[&1].kind, StateKind::BooleanSwitch(busy));
+        assert_eq!(
+            instance.variables.get(&fixture.ready_marker),
+            (!busy).then_some(&Value::Bool(true))
+        );
+    };
+    check(&component, true);
+    component
+        .advance_frame(fixture.busy_frame, &mut EmptyWorld)
+        .unwrap();
+    check(&component, true);
+    component
+        .advance_frame(fixture.ready_frame, &mut EmptyWorld)
+        .unwrap();
+    check(&component, false);
+}
+
+#[test]
+fn buffered_button_branch_waits_for_queued_readiness() {
+    #[derive(serde::Deserialize)]
+    struct Contract {
+        schema_version: u8,
+        graph: u32,
+        entity: u32,
+        press_frame: u32,
+        start_frame: u32,
+        button: u8,
+        press_mask: u32,
+        window_seconds: f64,
+        start_topic: String,
+        ready: u32,
+        marker: u32,
+    }
+    let fixture: Contract = serde_json::from_str(include_str!(
+        "../../../../../../fixtures/behavior/script-buffered-button-readiness-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(fixture.schema_version, 1);
+    let topic = u64::from_str_radix(fixture.start_topic.trim_start_matches("0x"), 16).unwrap();
+    let marker = |position, id| {
+        node(
+            position,
+            "STUStatescriptActionSetVar",
+            None,
+            json!({"m_out_Var": var(id, false), "m_value": true}),
+        )
+    };
+    let mut gate = node(
+        4,
+        "ActionReadyGate",
+        None,
+        json!({
+            "m_condition": var(fixture.ready, false),
+            "m_truePlug": plug(&[(5, "m_inPlug")], &[]),
+            "m_falsePlug": plug(&[], &[]),
+        }),
+    );
+    gate["action_behavior"] = json!("branch");
+    gate["server_only"] = json!(true);
+    for lock_on_entry in [false, true] {
+        let readiness = if lock_on_entry {
+            let mut lock = node(
+                2,
+                "authored.buffered_lock",
+                Some(1),
+                json!({"button": fixture.button}),
+            );
+            lock["server_only"] = json!(true);
+            lock["state_behavior"] = json!("button_lock");
+            lock
+        } else {
+            node(
+                2,
+                "STUStatescriptState",
+                Some(1),
+                json!({"m_onBeginPlug": plug(&[(3, "m_inPlug")], &[])}),
+            )
+        };
+        let mut main = graph(
+            fixture.graph,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntryGameMessage",
+                    None,
+                    json!({
+                        "m_gameMessage": {"m_gameMessage": fixture.start_topic},
+                        "m_outPlug": plug(&[(1, "m_beginPlug")], &[]),
+                    }),
+                ),
+                node(
+                    1,
+                    "STUStatescriptStateLogicalButton",
+                    Some(0),
+                    json!({
+                        "m_logicalButton": {"$": "STUConfigVarLogicalButton", "m_logicalButton": fixture.button},
+                        "m_246438AD": {"$": "STUConfigVarFloat", "m_value": fixture.window_seconds},
+                        "m_onGoingDownPlug": plug(&[(2, "m_beginPlug")], &[]),
+                        "m_80AF45FB": plug(&[(4, "m_inPlug")], &[]),
+                    }),
+                ),
+                readiness,
+                marker(3, fixture.ready),
+                gate.clone(),
+                marker(5, fixture.marker),
+            ],
+            json!([1, 2]),
+            json!([0]),
+        );
+        main["fields"]["m_680A2CB2"] = json!([0]);
+        let mut root = Root::new(1, fixture.graph);
+        root.variables
+            .insert(fixture.ready, Value::Bool(lock_on_entry));
+        let mut component = Component::start(
+            Arc::new(store(vec![main])),
+            fixture.entity,
+            Variables::new(),
+            vec![root],
+            fixture.press_frame - 1,
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        component
+            .advance_command(
+                Command {
+                    frame: fixture.press_frame,
+                    buttons: fixture.press_mask,
+                    ..Command::default()
+                },
+                &mut EmptyWorld,
+            )
+            .unwrap();
+        component
+            .advance_frame(fixture.start_frame, &mut EmptyWorld)
+            .unwrap();
+        let dormant = &component.snapshot().unwrap().instances[&1];
+        assert!(!dormant.states[&0].active);
+        assert!(!dormant.variables.contains_key(&fixture.marker));
+        assert_eq!(
+            component.queue_message(1, topic, Variables::new()).unwrap(),
+            1
+        );
+        component.run_now(&mut EmptyWorld).unwrap();
+
+        let snapshot = component.snapshot().unwrap();
+        assert!(
+            snapshot.initialization_complete(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        let instance = &snapshot.instances[&1];
+        assert_eq!(instance.variables[&fixture.ready], Value::Bool(true));
+        assert_eq!(
+            instance.states[&0].kind,
+            StateKind::LogicalButton {
+                down: !lock_on_entry
+            }
+        );
+        assert_eq!(
+            instance.variables.get(&fixture.marker),
+            (!lock_on_entry).then_some(&Value::Bool(true)),
+            "lock_on_entry={lock_on_entry}"
+        );
+    }
+}
+
+#[test]
+fn button_press_lock_does_not_enter_a_stale_down_branch() {
+    #[derive(serde::Deserialize)]
+    struct Case {
+        button: u8,
+        press_mask: u32,
+        action: u8,
+        lock_on_press: bool,
+        expect_down_marker: bool,
+    }
+    #[derive(serde::Deserialize)]
+    struct Contract {
+        schema_version: u8,
+        graph: u32,
+        entity: u32,
+        frame: u32,
+        up_marker: u32,
+        down_marker: u32,
+        cases: [Case; 2],
+    }
+    let fixture: Contract = serde_json::from_str(include_str!(
+        "../../../../../../fixtures/behavior/script-reentrant-button-lock-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(fixture.schema_version, 1);
+    let marker = |position, id| {
+        node(
+            position,
+            "STUStatescriptActionSetVar",
+            None,
+            json!({"m_out_Var": var(id, false), "m_value": true}),
+        )
+    };
+    for case in &fixture.cases {
+        let mut lock = node(
+            1,
+            "authored.reentrant_lock",
+            Some(1),
+            json!({"button": case.button}),
+        );
+        lock["server_only"] = json!(true);
+        lock["state_behavior"] = json!("button_lock");
+        let press_plug = if case.lock_on_press {
+            plug(&[(1, "m_beginPlug")], &[])
+        } else {
+            plug(&[], &[])
+        };
+        let mut main = graph(
+            fixture.graph,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptStateLogicalButton",
+                    Some(0),
+                    json!({
+                        "m_logicalButton": {"$": "STUConfigVarLogicalButton", "m_logicalButton": case.button},
+                        "m_onGoingDownPlug": press_plug,
+                        "m_onComingUpPlug": plug(&[(2, "m_inPlug")], &[]),
+                        "m_80AF45FB": plug(&[(3, "m_inPlug")], &[]),
+                    }),
+                ),
+                lock,
+                marker(2, fixture.up_marker),
+                marker(3, fixture.down_marker),
+                node(
+                    4,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({"m_outPlug": plug(&[(0, "m_beginPlug")], &[])}),
+                ),
+            ],
+            json!([0, 1]),
+            json!([4]),
+        );
+        main["fields"]["m_680A2CB2"] = json!([0]);
+        let mut component = Component::start(
+            Arc::new(store(vec![main])),
+            fixture.entity,
+            Variables::new(),
+            vec![Root::new(1, fixture.graph)],
+            fixture.frame - 1,
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        component
+            .advance_command(
+                Command {
+                    frame: fixture.frame,
+                    buttons: case.press_mask,
+                    action: case.action,
+                    ..Command::default()
+                },
+                &mut EmptyWorld,
+            )
+            .unwrap();
+
+        let snapshot = component.snapshot().unwrap();
+        assert!(
+            snapshot.initialization_complete(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        let instance = &snapshot.instances[&1];
+        assert_eq!(
+            instance.states[&0].kind,
+            StateKind::LogicalButton { down: false }
+        );
+        assert_eq!(
+            instance
+                .states
+                .get(&1)
+                .filter(|state| state.active)
+                .map(|state| state.kind),
+            case.lock_on_press
+                .then_some(StateKind::ButtonBlock(Some(case.button)))
+        );
+        assert_eq!(
+            instance.variables.get(&fixture.up_marker),
+            Some(&Value::Bool(true))
+        );
+        assert_eq!(
+            instance.variables.get(&fixture.down_marker),
+            case.expect_down_marker.then_some(&Value::Bool(true)),
+            "button {}",
+            case.button
+        );
+    }
+}
+
 pub(super) fn soldier_sprint_graph_reads_primary_crouch_and_melee_edges_as_in_python() {
     let runtime =
         PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").expect("set ORPHEUS_RUNTIME_DIR"));

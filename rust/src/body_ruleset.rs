@@ -1,9 +1,10 @@
-//! Body rules resolved from the mode profile before compatibility defaults.
+//! Authored rules and engine settings with captured compatibility defaults.
 
 use crate::{
     game_content::{PRACTICE_RANGE_MODE, is_junkenstein_mode},
     game_heroes::{CASSIDY, SOLDIER},
     junkenstein_navigation::{REAPER, ROADHOG, SUMMONER, WITCH},
+    script_expr::EngineSetting,
     script_graph::GraphStore,
     script_wire::Value,
 };
@@ -90,6 +91,16 @@ pub(crate) fn get(
     })
 }
 
+pub(crate) fn engine_setting(graphs: &GraphStore, mode: u64, key: u32) -> EngineSetting {
+    graphs.mode_engine_setting(mode, key).unwrap_or_else(|| {
+        if is_junkenstein_mode(mode) {
+            crate::junkenstein_host::engine_setting(key)
+        } else {
+            EngineSetting::Unavailable
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ActorKind::*, *};
@@ -124,6 +135,31 @@ mod tests {
         assert_eq!(
             get(&graphs, mode, ROADHOG, Npc, 0x2819),
             Some(Value::Float(0.75))
+        );
+    }
+
+    #[test]
+    fn authored_engine_table_replaces_the_captured_table_for_its_mode() {
+        let mode = JUNKENSTEIN_REVENGE;
+        let bundle = serde_json::json!({
+            "version": 1, "graphs": [], "bodies": {}, "missing": [],
+            "mode_rulesets": [{
+                "mode": format!("0x{mode:016X}"),
+                "engine_settings": [{"id": 0xe1c1_e402u32, "value": null}],
+            }],
+        });
+        let graphs = GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap();
+        assert_eq!(
+            engine_setting(&graphs, mode, 0xe1c1_e402),
+            EngineSetting::Present(Value::Null)
+        );
+        assert_eq!(
+            engine_setting(&graphs, mode, 0x6ce2_9bab),
+            EngineSetting::Missing
+        );
+        assert_eq!(
+            engine_setting(&graphs, JUNKENSTEIN_ENDLESS, 0xe1c1_e402),
+            EngineSetting::Present(Value::Integer(128))
         );
     }
 

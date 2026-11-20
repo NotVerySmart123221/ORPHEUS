@@ -182,6 +182,7 @@ fn fresh_actor_aim_samples_gate_room_effects_through_occlusion_and_generation_ch
             yaw: 16_384,
             ..Movement::default()
         },
+        eye_position: None,
         quanta: RETAIL_QUANTA,
     };
     let source_runtime = sampled_aim_factory(source_spawn)
@@ -499,6 +500,7 @@ fn assert_held_aim_lifecycle(authored_listener: bool) {
             yaw: 16_384,
             ..Movement::default()
         },
+        eye_position: None,
         quanta: RETAIL_QUANTA,
     };
     let factory = held_aim_factory(spawn, authored_listener);

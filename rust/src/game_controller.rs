@@ -69,6 +69,32 @@ pub struct ControllerFrame<'a> {
 
 impl Controller {
     #[cfg(test)]
+    pub(crate) fn fixture_for_owner_admission() -> Self {
+        let layout = |graph, owner_slots| Layout {
+            graph,
+            owner_slots,
+            remote_slots: 0,
+            presence_slots: 1,
+        };
+        let first = StateSlot { index: 0, wire: 0 };
+        let second = StateSlot { index: 1, wire: 1 };
+        Self {
+            root: layout(720, 2),
+            host: layout(721, 2),
+            screen: layout(722, 0),
+            entry: layout(723, 0),
+            hud: None,
+            parent: None,
+            allow: 0,
+            hero_select: first.wire,
+            start_host: second,
+            start_screen: first,
+            start_entry: second,
+            assembling: 0,
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn fixture_for_test() -> Self {
         let empty_layout = Layout {
             graph: 0,

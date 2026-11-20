@@ -2,7 +2,7 @@
   "schema_version": 1,
   "case_id": "script-room-cue.synthetic.v1",
   "source": {
-    "basis": "Original graph, actor snapshot and invented cue identifiers for scoped presentation output."
+    "basis": "Original graph, actor snapshot, delivery timing and invented cue identifiers for scoped presentation output."
   },
   "evidence": "synthetic-rust",
   "input": {
@@ -112,7 +112,8 @@
       {"name": "malformed member invalidates the whole input", "audience": [714, "not-an-entity"]},
       {"name": "zero does not identify any actor", "audience": [714, 0]},
       {"name": "oversized input never stages a partial cue", "audience_count": 65}
-    ]
+    ],
+    "reliable_admission": {"listener_generation": 4, "late_damage": 1000}
   },
   "expected": {
     "stimulus": "0x01000000000000AB",
@@ -126,6 +127,10 @@
       {"continued": false},
       {"continued": false},
       {"continued": false}
-    ]
+    ],
+    "reliable_admission": {
+      "before_listener_death": {"authored": true, "legacy": true},
+      "after_listener_death": {"authored": false, "legacy": true}
+    }
   }
 }

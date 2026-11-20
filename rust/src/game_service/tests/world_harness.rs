@@ -1000,7 +1000,16 @@ pub fn exercise_hero_selection(
     assert!(reopen_cmfd > first_cmfd);
 
     let tracer = assets.heroes().find_hero("Tracer").unwrap().guid;
-    send(client, 3, PICK_HERO, tracer.to_le_bytes().to_vec());
+    let (ordinal, next_hero) = if attached {
+        // This prepared catalog rejects Tracer's startup. The following
+        // selection must still use the second body generation and replace
+        // the original body in one acknowledged batch.
+        send(client, 3, PICK_HERO, tracer.to_le_bytes().to_vec());
+        (4, assets.heroes().find_hero("Reaper").unwrap().guid)
+    } else {
+        (3, tracer)
+    };
+    send(client, ordinal, PICK_HERO, next_hero.to_le_bytes().to_vec());
     let (swap, records) = next_body_frame(client, SECOND);
     assert_eq!(
         describe(&records),
@@ -1011,7 +1020,7 @@ pub fn exercise_hero_selection(
             (OWNER, None, Some(4))
         ],
     );
-    assert!(verify_controller(&records, tracer, false) > reopen_cmfd);
+    assert!(verify_controller(&records, next_hero, false) > reopen_cmfd);
     assert!(client.window.accept(swap.seq));
     client.send(ACK, Vec::new());
 
@@ -1019,7 +1028,7 @@ pub fn exercise_hero_selection(
         guid: 0x0a50_0000_0000_1234,
         golden: true,
     };
-    server.update_skin(ticket, tracer, skin).unwrap();
+    server.update_skin(ticket, next_hero, skin).unwrap();
     let third = OWNER | 3;
     let (reskin, records) = next_body_frame(client, third);
     assert_eq!(

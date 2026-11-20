@@ -12,6 +12,7 @@ use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 pub mod format;
+mod graph_bundle;
 mod npc_movers;
 mod target_tags;
 
@@ -365,6 +366,33 @@ pub fn prepare_with_target_tags(
     game_graphs: Option<&Path>,
     target_tags_xml: Option<&Path>,
 ) -> Result<PathBuf, RuntimeError> {
+    prepare_with_graph_metadata(
+        source,
+        destination,
+        maps,
+        game_graphs,
+        GraphMetadata {
+            target_tags_xml,
+            ..GraphMetadata::default()
+        },
+    )
+}
+
+/// Optional local inputs to compose with the selected graph bundle.
+#[derive(Default)]
+pub struct GraphMetadata<'a> {
+    pub target_tags_xml: Option<&'a Path>,
+    pub mode_rulesets: Option<&'a Path>,
+}
+
+/// Prepare a pack and hash the final graph bundle after composing local metadata.
+pub fn prepare_with_graph_metadata(
+    source: &Path,
+    destination: &Path,
+    maps: &[String],
+    game_graphs: Option<&Path>,
+    metadata: GraphMetadata<'_>,
+) -> Result<PathBuf, RuntimeError> {
     if !source.is_dir() {
         return Err(RuntimeError::Input(
             "The prepared checkout does not exist".into(),
@@ -384,10 +412,13 @@ pub fn prepare_with_target_tags(
     }
 
     let inputs = inputs(&source, maps, game_graphs)?;
-    let tagged_graphs = target_tags_xml
-        .map(|xml| target_tags::enrich(&inputs[GRAPH_BUNDLE], xml))
-        .transpose()?;
-    let npc_movers = target_tags_xml
+    let prepared_graphs = graph_bundle::rewrite(
+        &inputs[GRAPH_BUNDLE],
+        metadata.target_tags_xml,
+        metadata.mode_rulesets,
+    )?;
+    let npc_movers = metadata
+        .target_tags_xml
         .zip(inputs.get(JUNKENSTEIN_NPCS))
         .map(|(xml, catalog)| {
             npc_movers::enrich(&inputs["data/game_movers_174.json"], catalog, xml)
@@ -403,7 +434,7 @@ pub fn prepare_with_target_tags(
     let mut hashes = BTreeMap::new();
     for (name, input) in inputs {
         let (path, mut file) = output.file(&name)?;
-        let generated = tagged_graphs
+        let generated = prepared_graphs
             .as_ref()
             .filter(|_| name == GRAPH_BUNDLE)
             .or_else(|| {
@@ -481,6 +512,117 @@ mod tests {
         fn drop(&mut self) {
             assert_eq!(self.root.parent(), Some(self.temp.as_path()));
             let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn composes_scoped_rules_into_the_selected_bundle_and_hashes_final_bytes() {
+        use flate2::{Compression, read::GzDecoder, write::GzEncoder};
+        use serde_json::{Value, value::RawValue};
+
+        use crate::format::{ModeRulesets, RuleValue};
+
+        let fixture = Fixture::new();
+        let source = fixture.source();
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder
+            .write_all(
+                br#"{
+            "version":1,"graphs":[],"missing":[],
+            "bodies":{"0x0400000000000001":{}},
+            "mode_rulesets":[{"mode":"0x00000000000000A1","rules":[{"id":7,"value":-0}]}]
+        }"#,
+            )
+            .unwrap();
+        let original = encoder.finish().unwrap();
+        fixture.write("selected.json.gz", &original);
+        fixture.write(
+            "rules.json",
+            br#"[{"mode":"0x00000000000000A2","rules":[
+                {"id":7,"value":1.0},
+                {"id":7,"body":"0x00000000000000B1","value":null}
+            ],"engine_settings":[]}]"#,
+        );
+        fixture.write("xml/000000000001.003.xml", b"<STUEntityDefinition/>");
+
+        let selected = fixture.root.join("selected.json.gz");
+        let rules = fixture.root.join("rules.json");
+        let xml = fixture.root.join("xml");
+        let output = prepare_with_graph_metadata(
+            &source,
+            &fixture.root.join("pack"),
+            &[],
+            Some(&selected),
+            GraphMetadata {
+                target_tags_xml: Some(&xml),
+                mode_rulesets: Some(&rules),
+            },
+        )
+        .unwrap();
+        let gzip = fs::read(output.join(GRAPH_BUNDLE)).unwrap();
+        let composed: BTreeMap<String, Box<RawValue>> =
+            serde_json::from_reader(GzDecoder::new(gzip.as_slice())).unwrap();
+        let rules: ModeRulesets = serde_json::from_str(composed["mode_rulesets"].get()).unwrap();
+        assert_eq!(rules.value(0xA1, 0, 7), Some(RuleValue::Integer(0)));
+        assert_eq!(rules.value(0xA2, 0, 7), Some(RuleValue::Float(1.0)));
+        assert_eq!(rules.value(0xA2, 0xB1, 7), Some(RuleValue::Null));
+        assert_eq!(rules.engine_settings(0xA1), None);
+        assert!(rules.engine_settings(0xA2).unwrap().is_empty());
+        let bodies: Value = serde_json::from_str(composed["bodies"].get()).unwrap();
+        assert_eq!(
+            bodies["0x0400000000000001"]["target_tags"],
+            serde_json::json!([])
+        );
+
+        let manifest: Value =
+            serde_json::from_slice(&fs::read(output.join("manifest.json")).unwrap()).unwrap();
+        assert_eq!(
+            manifest["sha256"][GRAPH_BUNDLE],
+            format!("{:x}", Sha256::digest(&gzip))
+        );
+        assert_eq!(fs::read(&selected).unwrap(), original);
+
+        let repacked = prepare_with_target_tags(
+            &output,
+            &fixture.root.join("repacked"),
+            &[],
+            None,
+            Some(&xml),
+        )
+        .unwrap();
+        let encoded = File::open(repacked.join(GRAPH_BUNDLE)).unwrap();
+        let repacked: BTreeMap<String, Box<RawValue>> =
+            serde_json::from_reader(GzDecoder::new(encoded)).unwrap();
+        assert_eq!(
+            repacked["mode_rulesets"].get(),
+            composed["mode_rulesets"].get()
+        );
+
+        for (index, (local, expected)) in [
+            (r#"[{"mode":"0x00000000000000A1"}]"#, "duplicate mode ruleset"),
+            (
+                r#"[{"mode":"0x00000000000000A2","rules":[{"id":7,"value":18446744073709551616}]}]"#,
+                "requires null, a Boolean, a signed integer or a finite float",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            fixture.write("invalid-rules.json", local.as_bytes());
+            let destination = fixture.root.join(format!("failed-{index}"));
+            let error = prepare_with_graph_metadata(
+                &source,
+                &destination,
+                &[],
+                Some(&selected),
+                GraphMetadata {
+                    mode_rulesets: Some(&fixture.root.join("invalid-rules.json")),
+                    ..GraphMetadata::default()
+                },
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+            assert!(!destination.exists());
         }
     }
 

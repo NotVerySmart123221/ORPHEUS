@@ -18,11 +18,26 @@
             {"id": 103, "body": "0x00000000000000B1", "value": 1.25},
             {"id": 104, "value": -9007199254740993},
             {"id": 105, "value": null}
+          ],
+          "engine_settings": [
+            {"id": 101, "value": false},
+            {"id": 102, "value": -9007199254740993},
+            {"id": 103, "value": 1.0},
+            {"id": 104, "value": null},
+            {"id": 4294967295, "value": 0}
           ]
         },
         {
           "mode": "0x00000000000000A2",
           "rules": [{"id": 102, "value": -0.5}]
+        },
+        {
+          "mode": "0x00000000000000A3",
+          "engine_settings": []
+        },
+        {
+          "mode": "0x00000000000000A4",
+          "engine_settings": [{"id": 101, "value": true}]
         }
       ],
       "graphs": [
