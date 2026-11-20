@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Exercised primary and secondary input after queued selection and owner acknowledgements for the prepared actor catalog. Eleven bodies attached, ten completed the 100-frame schedule, and Zarya's runtime stopped during held secondary input at an unsupported dispatch site. Only Soldier: 76 emitted weapon volley events. Both prepared input tests, the locked all-targets workspace tests with script coverage, and Clippy passed.
+
 - Selected Practice Range body scripts from the prepared actor catalog. The scene caches static graph layouts. A selected candidate starts with the actual room context and must pass both baseline checks before its body is committed. On the same 104319 inputs, ordinary attachments rose from one to 11, and queued selection installed 11 of 32 bodies. The input-gap replacement and all 476 #72 observations passed. The locked workspace check, workspace tests with script coverage, Clippy, and Python script tests passed.
 
 - Validated both views of a candidate body's initial script snapshot before publishing the replacement. The owner and observer startup checks use the existing full-frame encoder and datagram budget. The synthetic input regression reproduced the old replacement after an observer-only link failure and verified rejection followed by a successful retry. Workspace tests with script coverage, Python script tests, and the prepared input-gap replacement passed. Both prepared 104319 reports matched the preceding startup results, and the #72 capture matched all 476 observations.

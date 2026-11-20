@@ -147,6 +147,24 @@ across the other 21 actors. The two startup reports were byte-identical,
 and all 476 #72 observations matched. Ability coverage and client
 playability still require separate validation.
 
+The prepared 104319 input probe starts a fresh room for each of the 32
+catalog actors. All 11 admitted bodies acknowledged possession, an initial
+owner script frame, and a subsequent update. Ten retained their runtime
+through 100 frames of idle, forward movement, primary, and secondary input.
+Zarya stopped after 59 completed frames when held secondary reached
+`0242:21` (`STU_CEBDAF17`), an action whose current dispatch is limited
+to specific graphs and nodes.
+
+Only Soldier: 76 produced combat requests in this schedule, with four
+hitscan requests and one projectile launch. A temporary trace at the VM shot
+drain saw exactly those five events. The other bodies emitted no weapon
+volley events during this sample. This narrows the firing investigation to
+the script side of the combat handoff. The probe counts requests and
+owner acknowledgements. Hit results, ability coverage, and playability
+still need their own acceptance. Run the ignored
+`prepared_practice_catalog_observes_input_survival_and_owner_egress` test
+with the prepared runtime to reproduce the matrix.
+
 | Workflow | Python reference | Rust implementation | Open client or parity gap |
 | --- | --- | --- | --- |
 | **Login, Profiles & Lobby** | Battle.net/JAM auth, profiles, settings (`22200`–`22204`), queues, Windows launcher + TLS relay. | Native BNet/JAM lobby, `profile-settings-v1` (CI verified), encrypted UDP seat handoff. | Standalone Rust launcher & public client connection flow open. |
