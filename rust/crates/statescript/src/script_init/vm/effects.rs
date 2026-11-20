@@ -383,37 +383,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         node: &Node,
     ) -> Result<(), InitFault> {
         let site = self.site(key.instance, node);
-        let config = field(&node.fields, "m_modifyHealth");
-        if field(&node.fields, "m_DD792FF0").as_u64() != Some(3)
-            || field(&node.fields, "m_7B2B3F5C").as_u64() != Some(1)
-            || field(config, "m_93CDFD2F").as_u64() != Some(0)
-        {
-            self.report(
-                site,
-                Issue::UnsupportedField("shield recharge configuration"),
-            );
-            return Ok(());
-        }
-        for target in [
-            field(&node.fields, "m_FA3ECC43"),
-            field(config, "m_724CBA57"),
-        ] {
-            if self.creation_scalar(key.instance, node, target, Value::Null)?
-                != Some(Value::Entity(site.entity))
-            {
-                self.report(site, Issue::UnsupportedField("shield recharge target"));
-                return Ok(());
-            }
-        }
-        let interval = self
-            .creation_scalar(
-                key.instance,
-                node,
-                field(&node.fields, "m_95F1FB0B"),
-                Value::Null,
-            )?
-            .and_then(pool_number);
-        if interval != Some(1.0) || !self.world.recharge_shields(site, 0.0) {
+        if !script_expr::valid_entity(site.entity) || !self.world.recharge_shields(site, 0.0) {
             self.report(site, Issue::UnsupportedField("shield recharge service"));
             return Ok(());
         }
@@ -426,7 +396,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         key: StateKey,
         elapsed_ms: u64,
     ) -> Result<(), InitFault> {
-        if self.machine.owner_dead {
+        if self.machine.owner_dead || elapsed_ms == 0 {
             return Ok(());
         }
         let node = self

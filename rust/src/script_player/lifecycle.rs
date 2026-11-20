@@ -25,7 +25,7 @@ use crate::{
     script_codecs::CodecTable,
     script_control::LEGACY_PROJECTILE_CONTROL,
     script_expr::to_float,
-    script_init::{Component, HostEvent, InitFault, RoomMessage, Snapshot},
+    script_init::{Component, HealthTargetFacts, HostEvent, InitFault, RoomMessage, Snapshot},
     script_runtime::FRAME_MS,
     script_snapshot_wire::SnapshotEncoder,
     script_wire::Value,
@@ -164,8 +164,13 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         Some(&self.world.vitals)
     }
 
-    fn receive_host_event(&mut self, event: HostEvent) -> Result<usize, InitFault> {
-        self.component.queue_host_event(event)
+    fn receive_host_event(
+        &mut self,
+        event: HostEvent,
+        target_facts: Option<Arc<HealthTargetFacts>>,
+    ) -> Result<usize, InitFault> {
+        self.component
+            .queue_host_event_with_target_facts(event, target_facts)
     }
 
     fn heal(&mut self, amount: f64) -> f64 {

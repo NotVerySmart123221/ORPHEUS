@@ -466,6 +466,7 @@ mod tests {
                     frame: spawn.frame + 1,
                     time: 0.016,
                 },
+                None,
             )
             .unwrap();
         assert!(killed);

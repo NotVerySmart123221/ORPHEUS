@@ -241,18 +241,18 @@ impl Node {
     }
 
     fn valid_host_event_parameters(&self, kind: HostEventKind) -> bool {
-        let slots = match kind {
-            HostEventKind::HealthApplied => 1..=4,
+        let max_slot = match kind {
+            HostEventKind::HealthApplied => 5,
         };
         let Some(parameters) = self.fields.get("m_params").filter(|value| !value.is_null()) else {
             return true;
         };
         let mut bound = BTreeSet::new();
         parameters.as_array().is_some_and(|parameters| {
-            parameters.len() <= 4
+            parameters.len() <= max_slot as usize
                 && parameters.iter().all(|parameter| {
                     let slot = message_parameter_id(parameter);
-                    slots.contains(&slot)
+                    (1..=max_slot).contains(&slot)
                         && bound.insert(slot)
                         && parameter.get("m_out_Var").is_some_and(|output| {
                             crate::script_expr::lvalue(output)

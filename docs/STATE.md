@@ -264,6 +264,44 @@ retained all 476 observations. The two #131 schedules each reproduced
 339 ticks per implementation and kept the same four RNG setup differences
 in strict comparison.
 
+At `f031b4c1`, the linked state, periodic self shield recharge and
+mode script entity query use the shared VM and host paths. The locked
+workspace tests and Clippy passed with script coverage. Two same-pack
+104319 startup reports matched byte for byte, with all 32 rows
+unchanged from `3dbfd5e4`. They retained **12 independent starts**,
+one ordinary room attachment, and **46 blocking sites**. The #72 Soldier
+owner trace kept all 476 observations. The local pack lacks the
+Junkenstein NPC and map inputs, so the encounter shield lifecycle
+has synthetic coverage in this batch.
+
+At `6c54b054`, settled player and bot impacts gained optional hit tags
+on the shared health event. Native tests check the actual applied
+delta, tag availability, and source replacement. The private authored
+charge test binds these tags on the next VM frame. The stock synchronous
+charge route still has its own target snapshot and damage message.
+The locked workspace suite and Clippy passed with script coverage.
+
+Two same-pack 104319 startup reports matched with all 32 rows
+unchanged from `f031b4c1`. They retained **12 independent starts**,
+one ordinary room attachment, and **46 blocking sites**. The #72 trace
+retained 476 observations. Both #131 schedules reproduced their earlier
+339 ticks per implementation. Strict comparison retained the same four
+RNG setup differences.
+
+At `b9df99a1`, the horizontal cap uses a validated row shape and
+applies on the next movement frame. The local 373-graph pack has
+two matching selector-1 actions with integer bounds. Synthetic player
+and NPC tests exercise queueing and rejection. Settled weapon damage
+also carries the target's original flags, tags, and script state
+through the host event. Tests verify event scope and generation checks.
+The locked workspace suite and Clippy passed with script coverage.
+
+Two same-pack 104319 startup reports matched and retained **12
+independent starts**, one ordinary room attachment, and **46 blocking
+sites**. All actor rows and the 476 observations in the #72 capture
+matched the previous run. Both #131 schedules reproduced 339 ticks
+per implementation, with the same four RNG setup differences.
+
 The following Phase 3A results were measured on its standalone revisions.
 
 At `339b05d8`, the Phase 3A authored static ray query passed synthetic
@@ -334,8 +372,9 @@ Range attachment, and **47** blocking sites. The #72 replay matched all
 476 observation sites across 900 frames. Original ability mappings
 and client zoom acceptance remain open.
 
-The integrated build still needs its own startup, room admission, and
-input measurements.
+The combined checkpoint measurements are recorded above. The newer
+integration with the Phase 2 follow-up still needs startup, room
+admission, and input measurements.
 
 Two of the three remaining native target-tracking startup sites in the
 Phase 2 run have empty embedded plugs. One configures a second filter

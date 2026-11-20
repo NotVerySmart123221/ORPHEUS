@@ -16,11 +16,12 @@ use super::super::{
         array_field, array_insertion_index, case_path, configured, encounter_base_state_shape,
         excluded_target_tags, field, is_bare_header_action, is_base_health_pool,
         is_cinematic_time_scale_envelope, is_client_subgraph_controller, is_elapsed_wait, is_entry,
-        is_literal_frame_wait, is_message_recipient_set, is_networked_for_code_synced,
-        is_owner_movement_sampler, is_parent_owned_timed_graph, is_projected_self_message,
-        is_self_stat_timer, is_self_target, is_wave_health_pool, living_body_array_shape,
-        participant_filter, persistent_message, placement_collection_tag, pool_number, raw_indices,
-        registered_state, source_key, static_target_operand, stored,
+        is_horizontal_velocity_clamp, is_literal_frame_wait, is_message_recipient_set,
+        is_networked_for_code_synced, is_owner_movement_sampler, is_parent_owned_timed_graph,
+        is_projected_self_message, is_self_shield_recharge, is_self_stat_timer, is_self_target,
+        is_wave_health_pool, living_body_array_shape, participant_filter, persistent_message,
+        placement_collection_tag, pool_number, raw_indices, registered_state, source_key,
+        static_target_operand, stored,
     },
     types::{InitFault, Issue, SpawnSearch, SpawnSearchKey, State, StateKind},
     world::{CreationKind, EntityCreation, Site, World},
@@ -561,33 +562,29 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 // This class uses the base Action continuation.
                 self.follow(id, node, "m_outPlug", caller, depth)
             }
-            "STU_FF3471E9" if registration.permits((self.graph(id).index, node.pos) == (0x224e, 31)) => {
-                let [row] = array_field(&node.fields, "m_BC5E91CF") else {
-                    return Ok(false);
-                };
-                if row.get("$").and_then(Json::as_str) != Some("STU_20E18047")
-                    || row.get("m_A9561CA0").and_then(Json::as_u64) != Some(1)
-                    || !field(row, "m_priority").is_null()
-                {
-                    return Ok(false);
-                }
-                let Some(Value::Float(low)) =
-                    self.evaluate(id, node, field(row, "m_8AD739CE"), None)
+            "STU_FF3471E9" if registration.shape(is_horizontal_velocity_clamp(node)) => {
+                let row = &array_field(&node.fields, "m_BC5E91CF")[0];
+                let Some(low) = self
+                    .evaluate(id, node, field(row, "m_8AD739CE"), None)
+                    .and_then(pool_number)
                 else {
                     return Ok(false);
                 };
-                let Some(Value::Float(high)) =
-                    self.evaluate(id, node, field(row, "m_8213EB22"), None)
+                let Some(high) = self
+                    .evaluate(id, node, field(row, "m_8213EB22"), None)
+                    .and_then(pool_number)
                 else {
                     return Ok(false);
                 };
-                // Slot1 changes horizontal magnitude; a zero lower bound is a cap.
+                // Selector 1 clamps horizontal magnitude. A zero lower bound cannot
+                // add velocity, so the host only needs to apply the upper cap.
                 if low != 0.0
-                    || !self.world.edit_velocity(
+                    || !(high as f32).is_finite()
+                    || high < 0.0
+                    || !self.world.cap_horizontal_velocity(
                         self.site(id, node),
                         self.machine.frame,
-                        Value::Float(high),
-                        true,
+                        high,
                     )
                 {
                     return Ok(false);
@@ -1118,8 +1115,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 // when 978A30 cannot resolve the auxiliary client owner.
                 StateKind::Plain
             }
-            "STU_33A46033" | "STU_9028E035" | "STU_43994F1B" | "STU_93B8758C" | "STU_9935FBC8"
-                if registration.permits(registered_state(self.graph(id).index, node).is_some()) =>
+            "STU_9028E035"
+                if registration.shape(registered_state(self.graph(id), node).is_some()) =>
+            {
+                StateKind::Registered { next: None }
+            }
+            "STU_33A46033" | "STU_43994F1B" | "STU_93B8758C" | "STU_9935FBC8"
+                if registration.permits(registered_state(self.graph(id), node).is_some()) =>
             {
                 StateKind::Registered { next: None }
             }
@@ -1426,7 +1428,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::Plain
             }
             "STUStatescriptStateModifyHealth"
-                if registration.permits((self.graph(id).index, node.pos) == (0x0033, 5)) =>
+                if registration.shape(is_self_shield_recharge(node, key.raw)) =>
             {
                 StateKind::ShieldRecharge
             }

@@ -32,7 +32,7 @@ use crate::{
     mover_modifiers::{Modifier, ModifierKey},
     projectile_flight::ProjectileFlight,
     scene_assets::PreparedScene,
-    script_init::{HostEvent, InitFault, RoomMessage, Snapshot},
+    script_init::{HealthTargetFacts, HostEvent, InitFault, RoomMessage, Snapshot},
     script_player::OwnerBodySpawn,
     script_snapshot_wire::CountdownFrame,
     script_snapshot_wire::{ProjectedSnapshot, SnapshotEncoder, View},
@@ -115,7 +115,11 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
     ) -> Result<usize, InitFault> {
         Ok(0)
     }
-    fn receive_host_event(&mut self, _event: HostEvent) -> Result<usize, InitFault> {
+    fn receive_host_event(
+        &mut self,
+        _event: HostEvent,
+        _target_facts: Option<Arc<HealthTargetFacts>>,
+    ) -> Result<usize, InitFault> {
         Ok(0)
     }
     fn set_spatial_frame(&mut self, _frame: Arc<crate::game_combat::RoomSpatialFrame>) {}

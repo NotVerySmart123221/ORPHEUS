@@ -714,14 +714,16 @@ pub(super) fn verify_normal_cassidy_damage_and_charge(heroes: &[u64], variants: 
                     // ordered 59/97 target-tag branches, before 23's cap.
                     let factor = if hit
                         .damage
-                        .target_tags
+                        .target_facts
+                        .tags
                         .presence(0x0d60_0000_0000_03c3)
                         .unwrap()
                     {
                         0.5_f32
                     } else if hit
                         .damage
-                        .target_tags
+                        .target_facts
+                        .tags
                         .presence(0x0d60_0000_0000_011e)
                         .unwrap()
                     {

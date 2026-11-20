@@ -40,20 +40,15 @@ impl World for EnemyWorld<'_> {
             .then_some(false)
     }
 
-    fn edit_velocity(&mut self, site: Site, frame: u32, value: Value, cap: bool) -> bool {
+    fn cap_horizontal_velocity(&mut self, site: Site, frame: u32, cap: f64) -> bool {
         if site.entity != self.binding.body
-            || (site.graph, site.node) != (0x224e, Some(31))
             || !is_junkenstein_mode(self.binding.mode)
             || self.vitals.death().is_some()
-            || !cap
             || self.control_records.velocity_changes.len() >= MAX_INIT_WORK
         {
             return false;
         }
-        let Value::Float(high) = value else {
-            return false;
-        };
-        let change = crate::mover::VelocityChange::HorizontalCap(high);
+        let change = crate::mover::VelocityChange::HorizontalCap(cap);
         if !change.valid() {
             return false;
         }
@@ -240,9 +235,11 @@ impl World for EnemyWorld<'_> {
         true
     }
     fn recharge_shields(&mut self, site: Site, amount: f64) -> bool {
-        if (site.entity, site.graph, site.node) != (self.binding.body, 0x0033, Some(5))
+        if site.entity != self.binding.body
             || !is_junkenstein_mode(self.binding.mode)
             || !crate::npc_catalog::is_junkenstein_boss(self.binding.hero)
+            || !amount.is_finite()
+            || amount < 0.0
         {
             return false;
         }

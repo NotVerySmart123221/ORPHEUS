@@ -163,6 +163,24 @@ ability support.
   literal hardpoint asset. A known model can report presence or absence.
   Unavailable model facts produce a runtime diagnostic.
 
+- The native `STU_9028E035` linked state uses its reciprocal state
+  slot and known authored types to enter and leave the shared registry.
+  Links cross instances in entry order and skip server-only destinations.
+  The linked codec remains the source of wire layout.
+- A server-owned `ModifyHealth` state can declare periodic self shield
+  recovery through its validated operands. The encounter host restores
+  attached shield pools from the live rate on the VM clock. A host without
+  this service keeps the admission diagnostic.
+- An owner graph can check the active mode script entity through the
+  shared query. An available mode table supplies the entity. The verified
+  encounter scope can report it absent. The existing voice recipient
+  audience and team selectors still need their own routing contracts.
+- The native horizontal clamp action accepts one unprioritized selector-1
+  row with a zero lower bound. Integer and floating bounds use the same
+  schema. A supported host queues the cap for its next movement frame.
+  This action preserves vertical velocity and uses the existing mover
+  and NPC motion primitives.
+
 Native target tracking still needs ordered samples, optional typed
 output bindings, and the lifecycle of its embedded state slots. The
 authored `track_entities` node owns separate child graph instances.
@@ -171,6 +189,20 @@ Preserve the difference between unavailable queries and empty results,
 then verify the output lifetime and owner and observer projections.
 The other pending paths include migration of the legacy charge bindings,
 health effects, spatial queries, control effects, and voice recipients.
+
+Phase 2 still tracks three groups. The common charge route needs prepared
+coverage for the stock damage, healing, passive and bonus messages and
+migration of the legacy admission bridge. The core graph states still
+need the remaining `TrackTargets`, `ModifyHealth`, and
+`PhysicsExplosion` shapes and the other linked and timed states. The
+handoff's `SpatialQuery` ID, `STU_B5C87F3D`, uses the native local
+combat accumulator lifecycle. Its spatial operands stay dormant with
+explicitly absent context. Present-context behavior still needs native
+evidence. The shared `EntitiesInRadius` expression already queries the
+room. Mode settings use the shared mode table. Flashbang control
+priority and voice audience routing still have compatibility selectors.
+Independent hero startup is a regression for these changes. The
+per-hero input and client results have separate acceptance.
 
 The prepared Python ordinary sender trace takes its compatibility branch.
 That branch leaves the persistent recipient wrapper unresolved, so it
@@ -707,6 +739,20 @@ and continue from `m_outPlug`.
 | 2 | Target entity at settlement |
 | 3 | Actual signed pool delta, positive for healing and negative for damage |
 | 4 | Whether damage killed the target |
+| 5 | Ordered hit tag assets, or null at a declared binding when unavailable |
+
+The hit tag slot uses the list carried by the applied impact. A known
+empty list stays empty. Other settled effects that lack hit attribution
+omit the slot, so delivery clears any previous value in a declared
+binding. Tags preserve authored order and duplicates.
+
+Weapon notifications also carry the target's captured filter flags,
+target tags, and script variables. An immediate foreign query about
+that target reads the captured values. Own-body queries, watched
+expressions, and other entities continue through their usual host.
+Unavailable captured facts stay unavailable. The room checks body
+generation when dispatching the event, and the VM clears the snapshot
+at the end of each delivery.
 
 The enabled room records successful weapon damage, room-settled script
 and AI requests, field healing, and VM-local AI damage and healing.
@@ -799,6 +845,10 @@ settled events on its next VM frame. The host skips its compatibility
 charge admission and synchronous damage credit for that body. An
 omitted selection retains the existing bridge for its supported profile.
 Graph bindings remain the source for authored starting values and costs.
+A configured private root can inspect hit tags after weapon settlement.
+The stock charge graph still reads its synchronous native damage message
+and target snapshot. Its timing, target flags, and mitigation records
+need separate validation before switching routes.
 
 See the [synthetic charge route contract](../fixtures/behavior/script-authored-charge-route-v1.json).
 

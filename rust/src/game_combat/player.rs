@@ -18,6 +18,7 @@ use crate::{
     junkenstein_messages::{DefenderMessage, DefenderSighting},
     mover::Mover,
     script_enemy::EnemyTarget,
+    script_init::HealthTargetFacts,
     script_snapshot_wire::SceneProjection,
     vitals::{Damage, Death},
     world::{EntityUpdate, Operation},
@@ -224,7 +225,7 @@ impl RoomSimulation {
         tick: u32,
     ) -> Option<(Vec<HealingPulse>, Vec<ProjectileToken>)> {
         let (pulses, expired_tokens, healed) = self.player_body_mut(owner)?.advance_fields(tick);
-        self.record_health_applied(owner.entity, owner.entity, healed, false);
+        self.record_health_applied(owner.entity, owner.entity, healed, false, None);
         Some((pulses, expired_tokens))
     }
 
@@ -681,6 +682,7 @@ impl RoomSimulation {
         id: BodyId,
         amount: f64,
         source: Death,
+        impact: Option<&AppliedDamage>,
     ) -> Option<(u32, bool, Option<EntityUpdate>)> {
         let cassidy_protected = self.cassidy_protected;
         let state = self.player_body_mut(id)?;
@@ -699,7 +701,13 @@ impl RoomSimulation {
                 operation: Some(Operation::Update(vec![component])),
                 ..EntityUpdate::default()
             });
-        self.record_health_applied(source.killer, entity, -outcome.dealt, outcome.killed);
+        self.record_health_applied(
+            source.killer,
+            entity,
+            -outcome.dealt,
+            outcome.killed,
+            impact,
+        );
         Some((owner, outcome.killed, health))
     }
 
@@ -898,6 +906,17 @@ impl RoomSimulation {
             .as_ref()
             .and_then(|runtime| runtime.vitals())
             .map(|vitals| vitals.cumulative_component());
+        let damage = AppliedDamage {
+            source,
+            amount: impact.damage,
+            tags: impact.tags,
+            target_facts: HealthTargetFacts {
+                target: id.entity,
+                filter_flags: target_flags,
+                tags: target_tags,
+                script_state: target_state,
+            },
+        };
         let Some((owner, killed, health)) = self.damage_player_body_by_wire(
             id,
             impact.damage,
@@ -906,6 +925,7 @@ impl RoomSimulation {
                 frame: context.tick,
                 killer: source,
             },
+            Some(&damage),
         ) else {
             return Ok(None);
         };
@@ -927,15 +947,7 @@ impl RoomSimulation {
             });
         }
         Ok(Some(BotHit {
-            damage: AppliedDamage {
-                source,
-                target: id.entity,
-                amount: impact.damage,
-                tags: impact.tags,
-                target_flags,
-                target_tags,
-                target_state,
-            },
+            damage,
             notices: [
                 Some(CombatNotice::Hit {
                     target: id.entity,
@@ -986,7 +998,7 @@ impl RoomSimulation {
                     });
                 }
                 self.health_events
-                    .stage(source, SampledBody { wire, entity }, healed, false);
+                    .stage(source, SampledBody { wire, entity }, healed, false, None);
             }
         }
     }

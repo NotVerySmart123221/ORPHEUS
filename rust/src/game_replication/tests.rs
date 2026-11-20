@@ -2720,7 +2720,7 @@ fn owner_and_observer_share_one_authoritative_room_body() {
         )
         .unwrap()
         .expect("authoritative player hit");
-    assert_eq!(hit.damage.target, id.entity);
+    assert_eq!(hit.damage.target_facts.target, id.entity);
     assert_eq!(
         simulation
             .player_body_by_owner(owner)
@@ -2972,7 +2972,7 @@ fn death_and_respawn_preserve_friendly_passthrough_and_hostile_blocking() {
 
     // Shot 1: friendly at x=4 passes through; front hostile at x=8 blocks & dies; back at x=12 untouched.
     let first_hit = fire_hitscan(&mut simulation, context).expect("front hostile hit");
-    assert_eq!(first_hit.damage.target, front_foe_id.entity);
+    assert_eq!(first_hit.damage.target_facts.target, front_foe_id.entity);
     assert!(!simulation.player_body(front_foe_id).unwrap().alive());
     assert_eq!(
         simulation
@@ -3001,7 +3001,7 @@ fn death_and_respawn_preserve_friendly_passthrough_and_hostile_blocking() {
 
     // Shot 2: dead front hostile passes through, hitting back hostile at x=12.
     let second_hit = fire_hitscan(&mut simulation, context).expect("back hostile hit");
-    assert_eq!(second_hit.damage.target, back_foe_id.entity);
+    assert_eq!(second_hit.damage.target_facts.target, back_foe_id.entity);
     assert_eq!(
         simulation
             .player_body(back_foe_id)
@@ -3022,7 +3022,7 @@ fn death_and_respawn_preserve_friendly_passthrough_and_hostile_blocking() {
         .unwrap();
     assert_eq!(outcomes.len(), 1);
     assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].damage.target, back_foe_id.entity);
+    assert_eq!(hits[0].damage.target_facts.target, back_foe_id.entity);
     assert!(!simulation.player_body(back_foe_id).unwrap().alive());
 
     // Respawn front and back hostiles with fresh generations -> front hostile blocks again.
@@ -3063,7 +3063,7 @@ fn death_and_respawn_preserve_friendly_passthrough_and_hostile_blocking() {
     context.tick += 5;
     simulation.record_player_poses(context.tick);
     let respawn_hit = fire_hitscan(&mut simulation, context).expect("respawned hostile blocks");
-    assert_eq!(respawn_hit.damage.target, front_respawn.entity);
+    assert_eq!(respawn_hit.damage.target_facts.target, front_respawn.entity);
     assert_eq!(
         simulation
             .player_body(front_respawn)
@@ -3384,6 +3384,7 @@ fn body_replacement_rejects_stale_generation_mutations() {
                     frame: 100,
                     killer: 9,
                 },
+                None,
             )
             .is_none()
     );

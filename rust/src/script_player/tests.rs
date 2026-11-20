@@ -341,12 +341,14 @@ fn charge_admission_preserves_profile_scope_and_requires_a_live_instance_for_cre
     let (mut factory, spawn) = fixture_body_factory();
     let damage = AppliedDamage {
         source: spawn.entity,
-        target: spawn.entity + 1,
         amount: 1.0,
         tags: DamageTags::EMPTY,
-        target_flags: None,
-        target_tags: Default::default(),
-        target_state: EntityScriptState::Unavailable,
+        target_facts: crate::script_init::HealthTargetFacts {
+            target: spawn.entity + 1,
+            filter_flags: None,
+            tags: Default::default(),
+            script_state: EntityScriptState::Unavailable,
+        },
     };
     let admission =
         |runtime: &PlayerBodyRuntime| runtime.snapshot().unwrap().variables.get(&2426).cloned();
@@ -423,7 +425,7 @@ fn charge_admission_preserves_profile_scope_and_requires_a_live_instance_for_cre
                 Death {
                     time: 0.0,
                     frame: spawn.frame,
-                    killer: damage.target,
+                    killer: damage.target_facts.target,
                 },
             );
             assert!(outcome.killed);
@@ -440,24 +442,39 @@ fn charge_admission_preserves_profile_scope_and_requires_a_live_instance_for_cre
 #[test]
 fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
     use crate::{
-        game_combat::AppliedDamage, game_content::JUNKENSTEIN_REVENGE, game_hitscan::DamageTags,
-        script_entity_state::EntityScriptState, script_init::HostEvent,
+        game_combat::AppliedDamage,
+        game_content::JUNKENSTEIN_REVENGE,
+        game_hitscan::DamageTags,
+        script_entity_state::EntityScriptState,
+        script_init::{HealthTargetFacts, HostEvent},
     };
     use serde_json::json;
 
     const BODY: &str = "0x040000000000B013";
     const METER: u32 = 612;
     const DELTA_SLOT: u32 = 607;
+    const HIT_TAG_SLOT: u32 = 608;
     let contract: Json = serde_json::from_str(include_str!(
         "../../../fixtures/behavior/script-authored-charge-route-v1.json"
     ))
     .unwrap();
     let mut bundle = contract["input"]["bundle"].clone();
+    let hits: Vec<u64> = serde_json::from_value(contract["input"]["hit_tags"].clone()).unwrap();
+    let mut hit_tags = DamageTags::EMPTY;
+    for &tag in &hits {
+        assert!(hit_tags.push(tag));
+    }
     let probe = &mut bundle["graphs"][0];
-    probe["nodes"][0]["fields"]["m_params"] = json!([{
-        "m_B5051BCE": "0x0000000000000003",
-        "m_out_Var": {"$":"STUConfigVarDynamic","m_identifier":DELTA_SLOT,"m_60DB8F99":false}
-    }]);
+    probe["nodes"][0]["fields"]["m_params"] = json!([
+        {
+            "m_B5051BCE": "0x0000000000000003",
+            "m_out_Var": {"$":"STUConfigVarDynamic","m_identifier":DELTA_SLOT,"m_60DB8F99":false}
+        },
+        {
+            "m_B5051BCE": "0x0000000000000005",
+            "m_out_Var": {"$":"STUConfigVarDynamic","m_identifier":HIT_TAG_SLOT,"m_60DB8F99":false}
+        }
+    ]);
     bundle["graphs"].as_array_mut().unwrap().push(json!({
         "index": 0x0ca5, "items": 0, "nodes": [], "states": [], "entries": [], "remote": [],
         "sync_vars": [], "containers": {}, "unknown_nodes": [], "fields": {},
@@ -523,12 +540,14 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
     let mut compatibility = build(&bundle);
     let damage = AppliedDamage {
         source: spawn.entity,
-        target: spawn.entity + 1,
         amount: 3.0,
         tags: DamageTags::EMPTY,
-        target_flags: None,
-        target_tags: Default::default(),
-        target_state: EntityScriptState::Unavailable,
+        target_facts: crate::script_init::HealthTargetFacts {
+            target: spawn.entity + 1,
+            filter_flags: None,
+            tags: Default::default(),
+            script_state: EntityScriptState::Unavailable,
+        },
     };
     assert!(!authored.snapshot().unwrap().variables.contains_key(&2426));
     assert_eq!(
@@ -545,12 +564,21 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
     );
     assert_eq!(
         authored
-            .receive_host_event(HostEvent::HealthApplied {
-                source: Some(spawn.entity),
-                target: spawn.entity + 1,
-                delta: -3.0,
-                killed: false,
-            })
+            .receive_host_event(
+                HostEvent::HealthApplied {
+                    source: Some(spawn.entity),
+                    target: spawn.entity + 1,
+                    delta: -3.0,
+                    killed: false,
+                    hit_tags: Some(hit_tags),
+                },
+                Some(Arc::new(HealthTargetFacts {
+                    target: spawn.entity + 1,
+                    filter_flags: None,
+                    tags: Default::default(),
+                    script_state: EntityScriptState::Unavailable,
+                })),
+            )
             .unwrap(),
         1
     );
@@ -571,6 +599,10 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
         .unwrap();
     assert!(meter.is_server_only());
     assert_eq!(meter.variables[&DELTA_SLOT], Value::Float(-3.0));
+    assert_eq!(
+        meter.variables[&HIT_TAG_SLOT],
+        Value::Array(hits.into_iter().map(Value::Asset).collect())
+    );
     let encoder = authored.encoder();
     for view in [View::Owner, View::Observer] {
         let projected = encoder.project(snapshot, view).unwrap();
@@ -677,6 +709,42 @@ fn roll_velocity_bridge_preserves_sampled_delta_and_rejects_foreign_owners() {
         runtime.take_velocity_changes(),
         vec![(12, VelocityChange::HorizontalCap(5.5))]
     );
+}
+
+#[test]
+fn shared_horizontal_cap_queues_on_a_live_player_without_a_roll_profile() {
+    use crate::mover::VelocityChange;
+
+    let spawn = fixture_body_factory().1;
+    let mut body = fixture_hitscan_factory(20.0).start(spawn).unwrap();
+    let site = Site {
+        entity: spawn.entity,
+        instance: 2,
+        graph: 61061,
+        node: Some(8),
+    };
+    let foreign_site = Site {
+        entity: spawn.entity + 1,
+        ..site
+    };
+    assert!(!body.world.cap_horizontal_velocity(foreign_site, 12, 4.0));
+    assert!(!body.world.cap_horizontal_velocity(site, 12, f64::INFINITY));
+    assert!(!body.world.cap_horizontal_velocity(site, 12, -1.0));
+    assert!(body.world.cap_horizontal_velocity(site, 12, 4.0));
+    assert_eq!(
+        body.take_velocity_changes(),
+        [(13, VelocityChange::HorizontalCap(4.0))]
+    );
+    assert!(body.take_velocity_changes().is_empty());
+    body.world.vitals.damage(
+        10_000.0,
+        crate::vitals::Death {
+            time: 1.0,
+            frame: 13,
+            killer: foreign_site.entity,
+        },
+    );
+    assert!(!body.world.cap_horizontal_velocity(site, 13, 4.0));
 }
 
 #[test]
@@ -1496,6 +1564,7 @@ fn authored_body_activity_reads_room_bootstrap_and_current_generation() {
                 frame,
                 killer: 42,
             },
+            None,
         )
         .unwrap();
     assert!(killed);
@@ -2318,6 +2387,87 @@ fn body_world_queries_only_expose_its_body_and_available_mode_variable_table() {
     }
     world.mode += 1;
     assert_eq!(world.entity_variable(GAME_MODE_ENTITY, 1), None);
+}
+
+#[test]
+fn owner_mode_entity_query_reads_the_active_mode_at_any_script_site() {
+    use crate::{game_content::JUNKENSTEIN_REVENGE, script_expr::EvalError};
+    use serde_json::json;
+
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-mode-entity-query-v1.json"
+    ))
+    .unwrap();
+    let input = &contract["input"];
+    let expected = &contract["expected"];
+    let present = Ok(Value::Bool(expected["present"].as_bool().unwrap()));
+    let known_absent = Ok(Value::Bool(expected["known_absent"].as_bool().unwrap()));
+    assert_eq!(expected["unknown"], "unsupported");
+    let variable = u32::try_from(input["entity_variable"].as_u64().unwrap()).unwrap();
+
+    let spawn = fixture_body_factory().1;
+    let mut runtime = fixture_hitscan_factory(20.0).start(spawn).unwrap();
+    runtime.world.graphs = Arc::new(
+        GraphStore::from_json(
+            &serde_json::to_vec(&json!({
+                "version":1,"graphs":[],"bodies":{},"missing":[],
+                "mode_variables":input["mode_variables"]
+            }))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    let evaluate = |body: &mut PlayerBodyRuntime, config: &Json| {
+        body.component
+            .evaluate_state_config(1, 0, config, &mut body.world)
+    };
+    let mode = json!({"$":"STU_A3DEF368","m_EE729DCB":0});
+    let exists = json!({"$":"STU_E72F6348","m_entity":mode.clone()});
+    let unsupported = Err(EvalError::UnsupportedConfig("STU_A3DEF368".into()));
+    let foreign_site = Site {
+        entity: spawn.controller,
+        instance: 1,
+        graph: 42,
+        node: Some(0),
+    };
+
+    runtime.world.mode = input["present_mode"].as_u64().unwrap();
+    assert_eq!(
+        evaluate(&mut runtime, &mode),
+        Ok(Value::Entity(GAME_MODE_ENTITY))
+    );
+    assert_eq!(evaluate(&mut runtime, &exists), present);
+    assert_eq!(runtime.world.native(foreign_site, &mode), None);
+
+    let slot = json!({"$":"STUConfigVarDynamic","m_identifier":variable,"m_60DB8F99":true});
+    let stored = json!({"$":"STU_E72F6348","m_entity":slot});
+    runtime
+        .component
+        .set_entity_variable(
+            variable,
+            Value::Entity(GAME_MODE_ENTITY),
+            &mut runtime.world,
+        )
+        .unwrap();
+    assert_eq!(evaluate(&mut runtime, &stored), present);
+
+    let mut malformed = exists.clone();
+    malformed["m_entity"]["m_extra"] = Json::Null;
+    assert_eq!(evaluate(&mut runtime, &malformed), unsupported);
+
+    runtime.world.mode = JUNKENSTEIN_REVENGE;
+    assert_eq!(evaluate(&mut runtime, &exists), known_absent);
+    assert_eq!(evaluate(&mut runtime, &stored), known_absent);
+    assert_eq!(runtime.world.native(foreign_site, &exists), None);
+    assert_eq!(evaluate(&mut runtime, &mode), unsupported);
+    assert_eq!(evaluate(&mut runtime, &malformed), unsupported);
+
+    runtime.world.mode = input["unknown_mode"].as_u64().unwrap();
+    assert_eq!(evaluate(&mut runtime, &exists), unsupported);
+    assert_eq!(
+        evaluate(&mut runtime, &stored),
+        Err(EvalError::UnsupportedConfig("STU_E72F6348".into()))
+    );
 }
 
 #[test]

@@ -3,6 +3,7 @@
   "case_id": "script-authored-charge-route.synthetic.v1",
   "evidence": "synthetic-rust",
   "input": {
+    "hit_tags": [731, 819],
     "bundle": {
       "version": 1,
       "graphs": [

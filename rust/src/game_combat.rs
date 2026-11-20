@@ -34,7 +34,7 @@ use crate::{
     scene_assets::{BotQueries, MOVER_CATEGORY},
     script_expr::{RoomEntityFacts, SpatialCandidate},
     script_graph::RoomSpatialNeeds,
-    script_init::ShotEvent,
+    script_init::{HealthTargetFacts, ShotEvent},
     static_ray::{Vec3, capsule_entry_distance, norm, segment_separation},
     vitals::Death,
     world::{EntityUpdate, Operation},
@@ -242,12 +242,9 @@ pub(crate) struct BotHit {
 #[derive(Clone)]
 pub(crate) struct AppliedDamage {
     pub source: u32,
-    pub target: u32,
     pub amount: f64,
     pub tags: crate::game_hitscan::DamageTags,
-    pub target_flags: Option<u64>,
-    pub target_tags: crate::script_init::TargetTagSnapshot,
-    pub target_state: crate::script_entity_state::EntityScriptState,
+    pub target_facts: HealthTargetFacts,
 }
 
 #[derive(Clone)]
@@ -1655,7 +1652,7 @@ impl RoomSimulation {
                 ..EntityUpdate::default()
             });
             self.health_events
-                .stage(source, SampledBody { wire, entity }, healed, false);
+                .stage(source, SampledBody { wire, entity }, healed, false, None);
         }
         self.heal_player_bodies(team, skip_player_wire, source, pulses, &mut updates);
         Ok(updates)
@@ -1875,16 +1872,18 @@ impl RoomSimulation {
         let hit = BotHit {
             damage: AppliedDamage {
                 source,
-                target: entity,
                 amount: result.dealt,
                 tags: impact.tags,
-                target_flags: crate::match_scene::team_bit(state.bot.spawn.team)
-                    .ok()
-                    .map(|team| 1 | team | if state.bot.dead { 0x10 } else { 0 }),
-                target_tags: state.enemy.as_ref().map_or_else(Default::default, |enemy| {
-                    enemy.scripts.target_tags(&enemy.graphs, &enemy.binding)
-                }),
-                target_state: state.script_state(),
+                target_facts: HealthTargetFacts {
+                    target: entity,
+                    filter_flags: crate::match_scene::team_bit(state.bot.spawn.team)
+                        .ok()
+                        .map(|team| 1 | team | if state.bot.dead { 0x10 } else { 0 }),
+                    tags: state.enemy.as_ref().map_or_else(Default::default, |enemy| {
+                        enemy.scripts.target_tags(&enemy.graphs, &enemy.binding)
+                    }),
+                    script_state: state.script_state(),
+                },
             },
             notices: [
                 Some(CombatNotice::Hit {
@@ -1901,7 +1900,13 @@ impl RoomSimulation {
             ],
             health,
         };
-        self.record_health_applied(source, entity, -result.dealt, result.killed);
+        self.record_health_applied(
+            source,
+            entity,
+            -result.dealt,
+            result.killed,
+            Some(&hit.damage),
+        );
         Ok(Some(hit))
     }
 

@@ -16,7 +16,7 @@ use crate::{
     game_instance::TeamMemberCounts,
     game_replication::OwnerRoomActivity,
     junkenstein_messages::{self, DefenderSighting, SIGHTING, SIGHTING_TAGS, SightingSource},
-    mover::sample_movement_flags,
+    mover::{VelocityChange, sample_movement_flags},
     scene_assets::MOVER_CATEGORY,
     script_expr::{EntityRelation, OnFire, RoomEntityFacts, native_shape, valid_entity},
     script_graph::GraphStore,
@@ -189,12 +189,10 @@ impl World for BodyWorld {
     }
 
     fn edit_velocity(&mut self, site: Site, frame: u32, value: Value, cap: bool) -> bool {
-        use crate::mover::VelocityChange;
         if self.hero != CASSIDY
             || !self.is_player_site(site)
             || site.graph != 0x01f0
             || !matches!((site.node, cap), (Some(8 | 11), false) | (Some(17), true))
-            || self.vitals.death().is_some()
         {
             return false;
         }
@@ -205,12 +203,12 @@ impl World for BodyWorld {
             (Value::Float(cap), true) => VelocityChange::HorizontalCap(cap),
             _ => return false,
         };
-        if !change.valid() {
-            return false;
-        }
-        self.velocity_changes
-            .push((frame.saturating_add(1), change));
-        true
+        self.queue_velocity_change(frame, change)
+    }
+
+    fn cap_horizontal_velocity(&mut self, site: Site, frame: u32, cap: f64) -> bool {
+        self.is_player_site(site)
+            && self.queue_velocity_change(frame, VelocityChange::HorizontalCap(cap))
     }
 
     fn deadeye_target_alive(&self, site: Site, entity: u32) -> bool {
@@ -309,7 +307,7 @@ impl World for BodyWorld {
 
     fn entity_variable(&mut self, entity: u32, id: u32) -> Option<Value> {
         if let Some(damage) = self.damage_credit_for(entity) {
-            return damage.target_state.read(id);
+            return damage.target_facts.script_state.read(id);
         }
         if entity != GAME_MODE_ENTITY {
             return self
@@ -360,6 +358,13 @@ impl World for BodyWorld {
     }
 
     fn entity_exists(&self, entity: u32) -> Option<bool> {
+        if entity == GAME_MODE_ENTITY {
+            return match self.graphs.mode_variables(self.mode) {
+                Some(_) => Some(true),
+                None if is_junkenstein_mode(self.mode) => Some(false),
+                None => None,
+            };
+        }
         (valid_entity(entity) && (entity == self.entity || entity == self.controller))
             .then_some(true)
     }
@@ -658,7 +663,7 @@ impl World for BodyWorld {
         }
         if entity != self.entity {
             if let Some(damage) = self.damage_credit_for(entity) {
-                return damage.target_tags.presence(tag);
+                return damage.target_facts.tags.presence(tag);
             }
             return self
                 .sighting_source
@@ -695,7 +700,7 @@ impl World for BodyWorld {
             Some(self.own_filter_flags())
         } else {
             if let Some(damage) = self.damage_credit_for(entity) {
-                return damage.target_flags;
+                return damage.target_facts.filter_flags;
             }
             self.sighting_source
                 .filter(|source| source.entity == entity)?
@@ -728,7 +733,7 @@ impl World for BodyWorld {
         }
         let damage = self.damage_credit_for(target)?;
         let left = self.own_filter_flags();
-        let right = damage.target_flags?;
+        let right = damage.target_facts.filter_flags?;
         crate::junkenstein_host::ordinary_hostility(left, right)
     }
 
@@ -816,14 +821,6 @@ impl World for BodyWorld {
             }
         }
         if self.is_player_site(site) && is_junkenstein_mode(self.mode) {
-            if (site.graph, site.node) == (0x01ca, Some(179))
-                && native_shape(config, "STU_E72F6348", Some("m_entity"))
-                && config
-                    .get("m_entity")
-                    .is_some_and(|mode| native_shape(mode, "STU_A3DEF368", None))
-            {
-                return Some(Value::Bool(self.graphs.mode_variables(self.mode).is_some()));
-            }
             if (site.graph, site.node) == (0x01ca, Some(126))
                 && junkenstein_messages::sighting_selector(config)
             {
@@ -852,8 +849,24 @@ impl World for BodyWorld {
                 Some(Value::Vector([right, forward, 0.0]))
             }
             "STU_37F20D24" => Some(Value::Asset(self.mode)),
-            "STU_A3DEF368" if self.graphs.mode_variables(self.mode).is_some() => {
+            "STU_A3DEF368"
+                if self.is_player_site(site)
+                    && native_shape(config, "STU_A3DEF368", None)
+                    && self.entity_exists(GAME_MODE_ENTITY) == Some(true) =>
+            {
                 Some(Value::Entity(GAME_MODE_ENTITY))
+            }
+            "STU_E72F6348"
+                if self.is_player_site(site)
+                    && self.entity_exists(GAME_MODE_ENTITY) == Some(false)
+                    && native_shape(config, "STU_E72F6348", Some("m_entity"))
+                    && config
+                        .get("m_entity")
+                        .is_some_and(|mode| native_shape(mode, "STU_A3DEF368", None)) =>
+            {
+                // An existence check still has an answer when the mode
+                // supplies no script entity for the bare selector to return.
+                Some(Value::Bool(false))
             }
             "STU_4A101787" => Some(Value::Bool(false)),
             "STU_ED45C5E8"
@@ -936,6 +949,18 @@ fn is_owner_selector(config: &Json) -> bool {
 }
 
 impl BodyWorld {
+    fn queue_velocity_change(&mut self, frame: u32, change: VelocityChange) -> bool {
+        if !change.valid()
+            || self.vitals.death().is_some()
+            || self.velocity_changes.len() >= MAX_INIT_WORK
+        {
+            return false;
+        }
+        self.velocity_changes
+            .push((frame.saturating_add(1), change));
+        true
+    }
+
     fn charge_site(&self, site: Site) -> bool {
         self.is_player_site(site)
             && self
@@ -946,7 +971,7 @@ impl BodyWorld {
     fn damage_credit_for(&self, entity: u32) -> Option<&AppliedDamage> {
         self.damage_credit
             .as_ref()
-            .filter(|damage| damage.target == entity)
+            .filter(|damage| damage.target_facts.target == entity)
     }
 
     pub(super) fn has_deadeye(&self) -> bool {

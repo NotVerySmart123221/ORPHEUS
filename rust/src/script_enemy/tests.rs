@@ -281,19 +281,28 @@ fn shared_captured_aim_lifecycle_contract() {
 
 #[test]
 fn shared_flashbang_velocity_action_contract() {
+    use crate::mover::VelocityChange;
+
     let fixture: Json = serde_json::from_str(include_str!(
         "../../../fixtures/behavior/flashbang-horizontal-cap-v1.json"
     ))
     .unwrap();
-    for (low, high, selector, encounter, accepted) in [
-        (0.0, 3.0, 1, true, true),
-        (0.0, 1.5, 1, true, true),
-        (1.0, 3.0, 1, true, false),
-        (0.0, -1.0, 1, true, false),
-        (0.0, 3.0, 0, true, false),
-        (0.0, 3.0, 1, false, false),
+    let source_frame = u32::try_from(fixture["source_frame"].as_u64().unwrap()).unwrap();
+    let active_frame = u32::try_from(fixture["active_frame"].as_u64().unwrap()).unwrap();
+    let original = (0x224e, 31);
+    let relocated = (0xf402, 12);
+    for ((index, position), low, high, selector, encounter, accepted) in [
+        (original, 0.0, 3.0, 1, true, true),
+        (relocated, 0.0, 1.5, 1, true, true),
+        (relocated, 1.0, 3.0, 1, true, false),
+        (relocated, 0.0, -1.0, 1, true, false),
+        (relocated, 0.0, 3.0, 0, true, false),
+        (relocated, 0.0, 3.0, 1, false, false),
     ] {
         let mut graph = fixture["graph"].clone();
+        graph["index"] = Json::from(index);
+        graph["nodes"][0]["fields"]["m_outPlug"]["links"][0][0] = Json::from(position);
+        graph["nodes"][1]["pos"] = Json::from(position);
         let row = &mut graph["nodes"][1]["fields"]["m_BC5E91CF"][0];
         row["m_8AD739CE"]["m_value"] = serde_json::json!(low);
         row["m_8213EB22"]["m_value"] = serde_json::json!(high);
@@ -317,7 +326,7 @@ fn shared_flashbang_velocity_action_contract() {
             spatial_frame: None,
             roster: None,
             retired_entities: Arc::default(),
-            frame: 100,
+            frame: source_frame,
             now_secs: 1.6,
             spawn_anchors: None,
             mode_voice_set: None,
@@ -344,8 +353,8 @@ fn shared_flashbang_velocity_action_contract() {
         let site = Site {
             entity: binding.body,
             instance: 1,
-            graph: 0x224e,
-            node: Some(31),
+            graph: index,
+            node: Some(position),
         };
         assert_eq!(
             world.player_stats_available(site),
@@ -358,18 +367,28 @@ fn shared_flashbang_velocity_action_contract() {
             Arc::clone(&graphs),
             binding.body,
             Variables::new(),
-            vec![script_init::Root::new(1, 0x224e)],
-            100,
+            vec![script_init::Root::new(1, index)],
+            source_frame,
             &mut world,
             MAX_INIT_WORK,
         )
         .unwrap();
         let snapshot = component.snapshot().unwrap();
-        assert!(
-            snapshot.initialization_complete(),
-            "{:?}",
-            snapshot.diagnostics
-        );
+        if selector == 0 {
+            assert!(matches!(
+                snapshot.diagnostics.as_slice(),
+                [diagnostic]
+                    if diagnostic.site == site
+                        && diagnostic.issue
+                            == script_init::Issue::UnsupportedAction("STU_FF3471E9".into())
+            ));
+        } else {
+            assert!(
+                snapshot.initialization_complete(),
+                "{:?}",
+                snapshot.diagnostics
+            );
+        }
         assert_eq!(
             snapshot.variables.get(&900),
             accepted.then_some(&Value::Bool(true))
@@ -377,23 +396,45 @@ fn shared_flashbang_velocity_action_contract() {
         assert_eq!(
             world.control_records.velocity_changes,
             if accepted {
-                vec![(101, crate::mover::VelocityChange::HorizontalCap(high))]
+                vec![(active_frame, VelocityChange::HorizontalCap(high))]
             } else {
                 vec![]
             }
         );
-        if accepted {
-            assert!(!world.edit_velocity(
-                Site {
-                    node: Some(30),
-                    ..site
-                },
-                100,
-                Value::Float(3.0),
-                true
-            ));
-            assert!(!world.edit_velocity(site, 100, Value::Float(3.0), false));
-            assert!(!world.edit_velocity(site, 100, Value::Float(f64::INFINITY), true));
+        if accepted && (index, position) == relocated {
+            for entity in [binding.controller, 999] {
+                assert!(!world.cap_horizontal_velocity(
+                    Site { entity, ..site },
+                    source_frame,
+                    high
+                ));
+            }
+            for invalid in [-1.0, f64::INFINITY, f64::NAN, f64::MAX] {
+                assert!(!world.cap_horizontal_velocity(site, source_frame, invalid));
+            }
+            assert!(!world.edit_velocity(site, source_frame, Value::Float(high), true));
+            world.control_records.velocity_changes.resize(
+                MAX_INIT_WORK,
+                (active_frame, VelocityChange::HorizontalCap(high)),
+            );
+            assert!(!world.cap_horizontal_velocity(site, source_frame, high));
+            assert_eq!(world.control_records.velocity_changes.len(), MAX_INIT_WORK);
+            world.control_records.velocity_changes.clear();
+            assert!(
+                world
+                    .vitals
+                    .damage(
+                        f64::MAX,
+                        crate::vitals::Death {
+                            time: binding.now_secs,
+                            frame: source_frame,
+                            killer: 999,
+                        },
+                    )
+                    .killed
+            );
+            assert!(!world.cap_horizontal_velocity(site, source_frame, high));
+            assert!(world.control_records.velocity_changes.is_empty());
         }
     }
 }

@@ -175,6 +175,7 @@ fn authored_meter_applies_host_events_and_passive_gain_per_body_binding() {
                             target: event.target,
                             delta: event.delta,
                             killed: event.killed,
+                            hit_tags: None,
                         })
                         .unwrap(),
                     usize::from(settings.is_some() && participates && event.delta != 0.0),
@@ -310,6 +311,7 @@ fn assert_meter_timeline(
                         target: event.target,
                         delta: event.delta,
                         killed: event.killed,
+                        hit_tags: None,
                     })
                     .unwrap(),
                 usize::from(participates)

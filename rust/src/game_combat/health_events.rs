@@ -1,13 +1,16 @@
 //! Deferred notifications for room-authoritative health changes.
 
-use std::collections::VecDeque;
+use std::{collections::VecDeque, sync::Arc};
 
 use bevy_ecs::entity::Entity;
 use indexmap::IndexMap;
 
-use crate::{script_expr::valid_entity, script_init::HostEvent};
+use crate::{
+    script_expr::valid_entity,
+    script_init::{HealthTargetFacts, HitTags, HostEvent},
+};
 
-use super::{BotState, PlayerBodyState, RoomSimulation};
+use super::{AppliedDamage, BotState, PlayerBodyState, RoomSimulation};
 
 const MAX_ROOM_HEALTH_EVENTS: usize = 512;
 
@@ -36,10 +39,12 @@ struct HealthApplied {
     target: SampledBody,
     delta: f64,
     killed: bool,
+    hit_tags: Option<HitTags>,
+    target_facts: Option<Arc<HealthTargetFacts>>,
 }
 
 impl HealthApplied {
-    fn resolve(self, room: &RoomSimulation) -> Option<(HostEvent, [Option<SampledBody>; 2])> {
+    fn resolve(&self, room: &RoomSimulation) -> Option<(HostEvent, [Option<SampledBody>; 2])> {
         let target = room.sample_health_body(self.target.wire);
         if target.is_some_and(|body| body != self.target) {
             // A replacement must not inherit a stale notification or its target ID.
@@ -53,6 +58,7 @@ impl HealthApplied {
             target: self.target.wire,
             delta: self.delta,
             killed: self.killed,
+            hit_tags: self.hit_tags,
         };
         Some((event, [source.filter(|&body| body != self.target), target]))
     }
@@ -71,6 +77,7 @@ impl RoomHealthEvents {
         target: SampledBody,
         delta: f64,
         killed: bool,
+        impact: Option<&AppliedDamage>,
     ) {
         if !self.enabled
             || self.pending.len() >= MAX_ROOM_HEALTH_EVENTS
@@ -80,11 +87,14 @@ impl RoomHealthEvents {
         {
             return;
         }
+        let impact = impact.filter(|impact| impact.target_facts.target == target.wire);
         self.pending.push_back(HealthApplied {
             source,
             target,
             delta,
             killed,
+            hit_tags: impact.map(|impact| impact.tags),
+            target_facts: impact.map(|impact| Arc::new(impact.target_facts.clone())),
         });
     }
 }
@@ -100,6 +110,7 @@ impl RoomSimulation {
         target: u32,
         delta: f64,
         killed: bool,
+        impact: Option<&AppliedDamage>,
     ) {
         if !self.health_events.enabled {
             return;
@@ -108,7 +119,8 @@ impl RoomSimulation {
             return;
         };
         let source = self.sample_health_body(source);
-        self.health_events.stage(source, target, delta, killed);
+        self.health_events
+            .stage(source, target, delta, killed, impact);
     }
 
     /// Queue each event for the recipients' next VM frames, in settlement order.
@@ -116,7 +128,7 @@ impl RoomSimulation {
         while let Some(change) = self.health_events.pending.pop_front() {
             if let Some((event, receivers)) = change.resolve(self) {
                 for body in receivers.into_iter().flatten() {
-                    self.queue_health_event(body.entity, event);
+                    self.queue_health_event(body.entity, event, change.target_facts.clone());
                 }
             }
         }
@@ -143,17 +155,22 @@ impl RoomSimulation {
                 let source =
                     SampledBody::lookup(change.source, &self.by_wire, &self.players_by_wire);
                 self.health_events
-                    .stage(source, target, change.delta, change.killed);
+                    .stage(source, target, change.delta, change.killed, None);
             }
         }
     }
 
-    fn queue_health_event(&mut self, entity: Entity, event: HostEvent) {
+    fn queue_health_event(
+        &mut self,
+        entity: Entity,
+        event: HostEvent,
+        target_facts: Option<Arc<HealthTargetFacts>>,
+    ) {
         // A full or halted VM only drops its own notification.
         if let Some(mut state) = self.world.get_mut::<PlayerBodyState>(entity) {
             if state.alive() {
                 if let Some(runtime) = &mut state.runtime {
-                    let _ = runtime.receive_host_event(event);
+                    let _ = runtime.receive_host_event(event, target_facts);
                 }
             }
         } else if let Some(mut state) = self.world.get_mut::<BotState>(entity) {
@@ -163,12 +180,19 @@ impl RoomSimulation {
                     .as_mut()
                     .filter(|enemy| enemy.fault.is_none() && !enemy.scripts.retirement_requested)
                 {
-                    let _ = enemy.scripts.body.queue_host_event(event);
+                    let _ = enemy
+                        .scripts
+                        .body
+                        .queue_host_event_with_target_facts(event, target_facts);
                 }
             }
         }
     }
 }
+
+#[cfg(test)]
+#[path = "health_events/tests.rs"]
+mod settled_hit_tests;
 
 #[cfg(test)]
 mod tests {
@@ -209,6 +233,8 @@ mod tests {
             let actual = room.health_events.pending.pop_front().map(|entry| {
                 assert_eq!(entry.source.map(|body| body.wire), Some(source));
                 assert_eq!(entry.target.wire, target);
+                assert_eq!(entry.hit_tags, None);
+                assert!(entry.target_facts.is_none());
                 (entry.delta, entry.killed)
             });
             assert_eq!(actual, expected);
@@ -343,18 +369,18 @@ mod tests {
             (-0.0, false),
             (1.0, true),
         ] {
-            room.record_health_applied(source, target, delta, killed);
+            room.record_health_applied(source, target, delta, killed, None);
         }
-        room.record_health_applied(source, 0, -1.0, false);
+        room.record_health_applied(source, 0, -1.0, false, None);
         assert!(room.health_events.pending.is_empty());
 
-        room.record_health_applied(source, source, -1.0, false);
+        room.record_health_applied(source, source, -1.0, false, None);
         let self_damage = room.health_events.pending.pop_front().unwrap();
         let (_, receivers) = self_damage.resolve(&room).unwrap();
         assert_eq!(receivers.into_iter().flatten().count(), 1);
 
         for amount in 1..=MAX_ROOM_HEALTH_EVENTS + 1 {
-            room.record_health_applied(source, target, -(amount as f64), false);
+            room.record_health_applied(source, target, -(amount as f64), false, None);
         }
         assert_eq!(room.health_events.pending.len(), MAX_ROOM_HEALTH_EVENTS);
         let retired = room.by_wire.shift_remove(&target).unwrap();
@@ -367,7 +393,8 @@ mod tests {
                 source: Some(source),
                 target,
                 delta: -1.0,
-                killed: false
+                killed: false,
+                hit_tags: None,
             }
         );
         assert_eq!(
