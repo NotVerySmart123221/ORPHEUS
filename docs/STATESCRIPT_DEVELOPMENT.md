@@ -199,6 +199,27 @@ corresponding simulation phase.
 
 See the [synthetic host health contract](../fixtures/behavior/script-host-health-events-v1.json).
 
+## Compose a graph-owned resource meter
+
+Bind the same meter graph to the actors that use it. Each body's
+graph-binding sync list can seed its instance variables for the starting
+balance, limit and gain rates. Instance variables keep the configured
+balance local to that graph instance.
+
+A `health_applied` entry can award credit after checking that the actor is
+the source. Use the signed delta and `EntityMatches` with the room's
+affiliation data to route damage and healing. An interval state can update
+the same balance independently. Ordinary assignment and numeric clamp
+operations apply the limit.
+
+The [synthetic meter contract](../fixtures/behavior/script-authored-meter-v1.json)
+runs this graph for two differently configured body definitions and checks
+an actor without the binding. Its rates, limits and test actors are
+original examples. The fixture verifies execution and scoped balances.
+Adding a root to a client-facing body also requires an owner and observer
+projection regression, since body graph bindings participate in instance
+ordering. The existing charge bridge uses synchronous damage delivery.
+
 ## Apply a radial health change
 
 Set `action_behavior` to `"radial_health"` on a server-only action, or

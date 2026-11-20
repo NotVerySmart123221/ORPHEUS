@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Isolated the existing charge bridge from the ability host's admission check. Its graph, damage message and active-state suppression are defined together in a compatibility binding. Added a synthetic resource meter that uses shared health events, affiliation filters and passive intervals with distinct body-bound rates and limits. Passed 641 default and 648 Inspector workspace tests, both locked Clippy lanes, Rust 1.85, 12 pinned Python public contracts, and the prepared 900-frame headless regression. Prepared Junkenstein charge coverage requires its separate mode pack.
+
 - Added field-pulse and AI-local health outcomes to the authoritative script event feed. Overlapping pulses report the actual aggregate heal for each actor, and field owner attribution uses the producing body generation. Added synthetic coverage for clamping, event opt-in, and source replacement. Passed 639 default and 646 Inspector workspace tests, both locked Clippy lanes, Rust 1.85, 12 pinned Python public contracts, and the prepared 900-frame, field activation, and ally healing regressions.
 
 - Added authored subscriptions for settled room health changes. Player and AI scripts can receive the actual signed pool delta after damage or healing through their next-frame event queue. Room staging checks entity identity and bounds pending events. Added synthetic coverage for delivery, message isolation, and settlement. Passed 637 default and 644 Inspector workspace tests, both locked Clippy lanes, Rust 1.85, 12 pinned Python public contracts, and the prepared 900-frame headless regression.

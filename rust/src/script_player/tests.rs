@@ -209,6 +209,52 @@ fn cassidy_junkenstein_rules_enable_fan_without_changing_other_hero_defaults() {
 }
 
 #[test]
+fn charge_admission_preserves_profile_scope_and_requires_a_live_instance_for_credit() {
+    use crate::{
+        game_combat::AppliedDamage,
+        game_content::{JUNKENSTEIN_ENDLESS, JUNKENSTEIN_REVENGE},
+        game_hitscan::DamageTags,
+        script_entity_state::EntityScriptState,
+    };
+
+    let (factory, spawn) = fixture_body_factory();
+    let damage = AppliedDamage {
+        source: spawn.entity,
+        target: spawn.entity + 1,
+        amount: 1.0,
+        tags: DamageTags::EMPTY,
+        target_flags: None,
+        target_tags: Default::default(),
+        target_state: EntityScriptState::Unavailable,
+    };
+    for (mode, hero, admitted) in [
+        (JUNKENSTEIN_REVENGE, CASSIDY, true),
+        (JUNKENSTEIN_ENDLESS, CASSIDY, true),
+        (JUNKENSTEIN_REVENGE, SOLDIER, false),
+        (PRACTICE_RANGE_MODE, CASSIDY, false),
+    ] {
+        let mut runtime = factory.start(spawn).unwrap();
+        runtime.world.mode = mode;
+        runtime.world.hero = hero;
+        runtime.set_encounter_active(true).unwrap();
+        assert_eq!(runtime.encounter_active, admitted);
+        let credit = runtime.receive_applied_damage(damage.clone());
+        if admitted {
+            assert!(
+                credit
+                    .unwrap_err()
+                    .to_string()
+                    .contains("authored common charge graph")
+            );
+        } else {
+            credit.unwrap();
+        }
+        runtime.set_encounter_active(false).unwrap();
+        runtime.receive_applied_damage(damage.clone()).unwrap();
+    }
+}
+
+#[test]
 fn encounter_body_angles_follow_the_live_owner_pose() {
     use crate::script_expr::{AngleQuery, BodyAngle};
     let (factory, spawn) = fixture_body_factory();

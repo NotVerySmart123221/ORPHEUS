@@ -1,5 +1,6 @@
 //! Prepared owner statescript for a live body in build 104319.
 
+mod charge;
 mod lifecycle;
 mod world;
 

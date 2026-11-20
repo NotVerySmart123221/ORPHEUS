@@ -27,7 +27,7 @@ use crate::{
     script_init::{Component, HostEvent, InitFault, RoomMessage, Snapshot},
     script_runtime::FRAME_MS,
     script_snapshot_wire::SnapshotEncoder,
-    script_wire::{Value, Variables},
+    script_wire::Value,
     vitals::{Damage, Death, Vitals},
     world::Component as EntityComponent,
 };
@@ -60,32 +60,6 @@ pub(super) fn flashbang_duration(graphs: &GraphStore) -> Option<&Json> {
 pub(super) const DEADEYE_GRAPH: u32 = 0x022f;
 pub(super) const DEADEYE_TARGET_EFFECT: u32 = 0x01ee;
 
-impl PlayerBodyRuntime {
-    pub(super) fn sync_charge_admission(&mut self, active: bool) -> io::Result<()> {
-        if !self.world.has_deadeye() {
-            return Ok(());
-        }
-        self.encounter_active = active;
-        let enabled = active && self.world.vitals.death().is_none();
-        let variable = crate::script_expr::Variable {
-            scope: crate::script_expr::Scope::Entity,
-            id: 2426,
-        };
-        if self.component.resolved_variable(0, variable) != Some(Value::Bool(enabled)) {
-            // The room owns this live defender capability. The authored 0B8B
-            // graph owns the passive wait, amount, multipliers, damage gates
-            // and cap; the former 60-second host fill is intentionally removed.
-            self.component
-                .set_entity_variable(2426, Value::Bool(enabled), &mut self.world)
-                .map_err(unsupported)?;
-            self.component
-                .run_now(&mut self.world)
-                .map_err(unsupported)?;
-        }
-        Ok(())
-    }
-}
-
 impl OwnerBodyRuntime for PlayerBodyRuntime {
     fn set_encounter_active(&mut self, active: bool) -> io::Result<()> {
         self.sync_charge_admission(active)
@@ -95,65 +69,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         &mut self,
         damage: crate::game_combat::AppliedDamage,
     ) -> io::Result<()> {
-        if !self.world.has_deadeye()
-            || !self.encounter_active
-            || damage.source != self.world.entity
-            || self.world.vitals.death().is_some()
-            || !damage.amount.is_finite()
-            || damage.amount <= 0.0
-        {
-            return Ok(());
-        }
-        if self.component.snapshot().is_some_and(|snapshot| {
-            snapshot.instances.values().any(|instance| {
-                instance.graph == DEADEYE_GRAPH
-                    && instance
-                        .states
-                        .get(&0)
-                        .is_some_and(crate::script_init::State::ability_running)
-            })
-        }) {
-            return Ok(());
-        }
-        let instance = self
-            .component
-            .snapshot()
-            .and_then(|snapshot| {
-                snapshot
-                    .instances
-                    .iter()
-                    .find(|(_, instance)| instance.graph == 0x0b8b)
-                    .map(|(&id, _)| id)
-            })
-            .ok_or_else(|| {
-                unsupported("damage credit requires the authored common charge graph")
-            })?;
-        let parameters = Variables::from([
-            (0x13, Value::Float(f64::from(damage.amount as f32))),
-            (0x15, Value::Entity(damage.target)),
-            (
-                0x3d,
-                Value::Array(
-                    damage
-                        .tags
-                        .as_slice()
-                        .iter()
-                        .copied()
-                        .map(Value::Asset)
-                        .collect(),
-                ),
-            ),
-            // AppliedDamage is net pool loss; no gross mitigation contributions
-            // remain to subtract in the authored detail fold.
-            (0x624, Value::Array(Vec::new())),
-        ]);
-        self.component
-            .queue_message(instance, 0x0240_0000_0000_0012, parameters)
-            .map_err(unsupported)?;
-        self.world.damage_credit = Some(damage);
-        let result = self.component.run_now(&mut self.world).map_err(unsupported);
-        self.world.damage_credit = None;
-        result
+        self.credit_applied_damage(damage)
     }
 
     fn target_tags(&self) -> crate::script_init::TargetTagSnapshot {
