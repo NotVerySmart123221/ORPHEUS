@@ -19,6 +19,22 @@ The [pinned Python → Rust parity matrix](https://github.com/leafall903/ORPHEUS
 
 ---
 
+## Shared StateScript integration
+
+The local `work/statescript-integration` checkpoint `79e8a5b9` combines
+Phase 2 `90702e42`, Phase 3A `055adca3`, and native Practice Range
+admission. The prepared 104319 matrix completed independent startup and
+ordinary room attachment for **12 of 32** actors. Moira was the only
+addition in each column and no previously passing actor was lost. The
+transactional room admission test passed. The locked workspace tests and
+Clippy passed with script coverage, including 390 server tests and
+242 StateScript tests.
+
+The preceding combined checkpoint `699791e8` matched all 476 #72
+observations across 900 frames. Phase 3A also matched that replay on its
+standalone `055adca3` checkpoint. Original-client skill, aiming, and
+audio acceptance remain open.
+
 ## Implementation and prepared-runtime observations
 
 Local integration check (2026-11-16): rifle/reload and controller/training-bot startup prepared tests passed with the target-tagged base pack, as did runtime preflight and headless startup. The longer `scene_assets::tests::stock_soldier_owner_session_idles_fires_reloads_and_sprints` test failed its fixed-instance assertion: instance `24` contained graph `0x0F82`, not `0x05AD`. The message table was present elsewhere; diagnostic inspection also found switch instance `19` versus expected `18`. At that revision the fixed instance assertion prevented the later frame checks from running.
