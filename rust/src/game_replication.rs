@@ -105,6 +105,9 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
     fn take_velocity_changes(&mut self) -> Vec<(u32, crate::mover::VelocityChange)> {
         Vec::new()
     }
+    fn take_swept_displacement(&mut self) -> Option<(u32, crate::script_init::SweptDisplacement)> {
+        None
+    }
     fn take_script_requests(&mut self) -> Vec<crate::game_combat::RoomScriptRequest> {
         Vec::new()
     }

@@ -65,6 +65,24 @@ impl EnemyScripts {
         std::mem::take(&mut self.control_records.velocity_changes)
     }
 
+    pub(crate) fn take_swept_displacement(
+        &mut self,
+        tick: u32,
+    ) -> Option<script_init::SweptDisplacement> {
+        if self
+            .control_records
+            .swept_displacement
+            .is_some_and(|(frame, _)| frame <= tick)
+        {
+            return self
+                .control_records
+                .swept_displacement
+                .take()
+                .map(|(_, displacement)| displacement);
+        }
+        None
+    }
+
     pub(crate) fn movement_speed_scale(&self, frame: u32) -> f64 {
         self.movement_modifiers
             .at(frame)
@@ -857,6 +875,7 @@ impl EnemyScripts {
         critical: bool,
         loadout: Option<u64>,
     ) -> Result<(), String> {
+        self.control_records.swept_displacement = None;
         self.body.set_owner_dead(true);
         let parameters = Variables::from([
             (0x12, Value::Entity(source.killer)),

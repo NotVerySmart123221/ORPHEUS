@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added a server-only StateScript action for bounded self displacement through player and NPC capsule collision. Requests use movement frame deadlines and clear when the owning body dies or retires. Added synthetic VM, mover, and room regressions. Shared-branch verification is pending.
+
 - Fixed outdated held-input branches that could start after a lock was acquired, released, and acquired again in the same VM update. Shared-branch verification is pending.
 
 - Preserve observation inputs through a committed StateScript logical-button branch. Its child states use current values if the source expires, so finishing a sample does not interrupt the listener's held or idle lifecycle. Shared-branch verification is pending.

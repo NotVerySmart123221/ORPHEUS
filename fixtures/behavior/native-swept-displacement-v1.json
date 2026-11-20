@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "case_id": "native-swept-displacement.synthetic.v1",
+  "evidence": "synthetic-native",
+  "source": {
+    "basis": "Original command frames, capsule dimensions, and a planar wall. No client assets or ability parameters."
+  },
+  "input": {
+    "due_frame": 3,
+    "displacement": [2, 0, 0],
+    "rejected_second_displacement": [7, 0, 0],
+    "velocity": [1, 2, 3],
+    "wall_displacement": [0, 0, 4],
+    "stand_height": 1,
+    "stand_radius": 0.25,
+    "category": 24,
+    "wall_vertices": [[-10, 0, 2], [-10, 4, 2], [10, 0, 2], [10, 4, 2]],
+    "wall_triangles": [[0, 1, 2], [2, 1, 3]]
+  },
+  "expected": {
+    "wall_min_z": 0,
+    "wall_max_z": 2,
+    "repeated_block_tolerance": 0.002
+  }
+}

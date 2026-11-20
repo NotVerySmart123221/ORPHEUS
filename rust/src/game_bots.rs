@@ -25,6 +25,7 @@ use crate::mover_ground::{pogo, standing_body, standing_origin};
 use crate::mover_settings::MoverSettings;
 use crate::navigation::{PathOptions, PathQuery, find_path};
 use crate::patrol_script::{PatrolScript, WaitEvent};
+use crate::script_init::SweptDisplacement;
 use crate::world::{Movement, NO_INPUT};
 
 pub const BOT_ENTITY: u32 = 0xc000_1000;
@@ -296,6 +297,16 @@ impl PatrolCollision {
     }
 
     fn advance(&mut self, tick: u32, from: [f64; 3], to: [f64; 3], dt: f64) -> [f64; 3] {
+        self.try_advance(tick, from, to, dt).unwrap_or(from)
+    }
+
+    fn try_advance(
+        &mut self,
+        tick: u32,
+        from: [f64; 3],
+        to: [f64; 3],
+        dt: f64,
+    ) -> Result<[f64; 3], crate::contact_hull::HullContactError> {
         let start = standing_origin(from, self.lift);
         self.body.teleport(start);
         let delta = sub(standing_origin(to, self.lift), start);
@@ -331,12 +342,13 @@ impl PatrolCollision {
                 }
                 after
             }
-            Err(_) => {
+            Err(error) => {
+                self.body.teleport(start);
                 #[cfg(any(test, feature = "inspector"))]
                 if let Some(trace) = &mut self.trace {
                     trace.last_normals.clear();
                 }
-                return from;
+                return Err(error);
             }
         };
         if let (Some(trace), Some(clip)) = (&mut self.trace, clip) {
@@ -350,7 +362,7 @@ impl PatrolCollision {
                 after,
             });
         }
-        after
+        Ok(after)
     }
 }
 
@@ -1019,6 +1031,38 @@ impl Bot {
         self.velocity_changes.extend(changes);
     }
 
+    /// Attempt one bounded capsule move without changing steering or velocity.
+    pub(crate) fn apply_swept_displacement(
+        &mut self,
+        tick: u32,
+        displacement: SweptDisplacement,
+    ) -> bool {
+        if self.dead {
+            return false;
+        }
+        let Some(collision) = self.collision.as_mut() else {
+            return false;
+        };
+        let from = self.position;
+        let delta = displacement.delta();
+        let to = std::array::from_fn(|axis| from[axis] + f64::from(delta[axis]));
+        if !from
+            .into_iter()
+            .chain(to)
+            .all(|axis| (axis as f32).is_finite())
+        {
+            return false;
+        }
+        let Ok(after) = collision.try_advance(tick, from, to, TICK_PERIOD.as_secs_f64()) else {
+            return false;
+        };
+        self.position = after;
+        if after != from {
+            self.moved_tick = Some(tick);
+        }
+        true
+    }
+
     pub(crate) fn move_to_objective(&mut self, tick: u32, target: [f64; 3], speed: f64) {
         let start = self.position;
         let [x, y, z] = std::array::from_fn(|axis| target[axis] - start[axis]);
@@ -1159,6 +1203,113 @@ mod tests {
             }),
             BotWalk::from_mover(4.5, 1.0, 15.0),
         )
+    }
+
+    #[test]
+    fn swept_bot_displacement_requires_a_live_capsule_and_preserves_motion() {
+        use crate::{
+            collision_cache::{Mesh, Triangle},
+            contact_mesh::ContactMesh,
+            contact_world::{StaticGeometry, StaticShape},
+        };
+
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/native-swept-displacement-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(fixture["schema_version"], 1);
+        assert_eq!(fixture["case_id"], "native-swept-displacement.synthetic.v1");
+        assert_eq!(fixture["evidence"], "synthetic-native");
+        let input = &fixture["input"];
+        let category: u16 = input["category"].as_u64().unwrap().try_into().unwrap();
+        let settings = MoverSettings {
+            stand_height: input["stand_height"].as_f64().unwrap(),
+            stand_radius: input["stand_radius"].as_f64().unwrap(),
+            ..MoverSettings::default()
+        };
+        let displacement =
+            SweptDisplacement::new(serde_json::from_value(input["displacement"].clone()).unwrap())
+                .unwrap();
+        let mut free = walker([0.0, 0.0, 10.0]);
+        assert!(!free.apply_swept_displacement(1, displacement));
+        assert_eq!(free.position, [0.0; 3]);
+        free.attach_collision(
+            &settings,
+            Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+            category,
+            |_, _, _, _| Some(0.0),
+        );
+        free.velocity = serde_json::from_value(input["velocity"].clone()).unwrap();
+        free.yaw = 8192.0;
+        free.pitch = -2048;
+        free.held = [21, -32];
+        let before = free.movement(1);
+        let input_tick = free.input_tick;
+        assert!(free.apply_swept_displacement(2, displacement));
+        assert_eq!(free.position, displacement.delta().map(f64::from));
+        let after = free.movement(2);
+        assert_eq!(after.velocity, before.velocity);
+        assert_eq!(
+            (after.yaw, after.pitch, after.throttles),
+            (before.yaw, before.pitch, before.throttles)
+        );
+        assert_eq!(free.input_tick, input_tick);
+        assert_eq!(free.moved_tick, Some(2));
+        free.dead = true;
+        let stopped = free.position;
+        assert!(!free.apply_swept_displacement(3, displacement));
+        assert_eq!(free.position, stopped);
+
+        let wall = Mesh {
+            vertices: serde_json::from_value(input["wall_vertices"].clone()).unwrap(),
+            triangles: input["wall_triangles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|corners| Triangle {
+                    corners: serde_json::from_value(corners.clone()).unwrap(),
+                    wings: [-1; 3],
+                    mask: category,
+                    surface: 0,
+                })
+                .collect(),
+        };
+        let mesh = ContactMesh::new(wall, [1.0; 3], u16::MAX).unwrap();
+        let shape = StaticShape::new(StaticGeometry::Mesh(Arc::new(mesh)), None).unwrap();
+        let mut blocked = walker([0.0, 0.0, 10.0]);
+        blocked.attach_collision(
+            &settings,
+            Arc::new(ContactWorld::new(vec![shape]).unwrap()),
+            category,
+            |_, _, _, _| Some(0.0),
+        );
+        blocked.enable_contact_trace();
+        blocked.velocity = before.velocity;
+        blocked.yaw = f64::from(before.yaw);
+        blocked.pitch = before.pitch;
+        let displacement = SweptDisplacement::new(
+            serde_json::from_value(input["wall_displacement"].clone()).unwrap(),
+        )
+        .unwrap();
+        assert!(blocked.apply_swept_displacement(10, displacement));
+        assert!(blocked.position[2] > fixture["expected"]["wall_min_z"].as_f64().unwrap());
+        assert!(blocked.position[2] < fixture["expected"]["wall_max_z"].as_f64().unwrap());
+        assert_eq!(blocked.velocity, before.velocity);
+        assert_eq!(
+            (blocked.movement(10).yaw, blocked.pitch),
+            (before.yaw, before.pitch)
+        );
+        assert_eq!(blocked.moved_tick, Some(10));
+        let clip = blocked.last_contact_clip().unwrap();
+        assert_eq!(clip.tick, 10);
+        assert_eq!(clip.after, blocked.position);
+        let stopped = blocked.position;
+        assert!(blocked.apply_swept_displacement(11, displacement));
+        let tolerance = fixture["expected"]["repeated_block_tolerance"]
+            .as_f64()
+            .unwrap();
+        assert!((blocked.position[2] - stopped[2]).abs() <= tolerance);
+        assert_eq!(blocked.velocity, before.velocity);
     }
 
     fn route_vector(bots: &mut [Bot], ticks: impl IntoIterator<Item = u32>) -> String {

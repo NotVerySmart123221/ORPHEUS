@@ -60,6 +60,7 @@ enum ActionBehavior {
     RoomCue,
     HealthChange,
     RadialHealth,
+    SweptDisplacement,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
@@ -272,6 +273,10 @@ impl Node {
 
     pub(crate) fn declares_health_change_action(&self) -> bool {
         matches!(self.action_behavior, Some(ActionBehavior::HealthChange))
+    }
+
+    pub(crate) fn declares_swept_displacement_action(&self) -> bool {
+        self.action_behavior == Some(ActionBehavior::SweptDisplacement)
     }
 
     pub(crate) fn declares_radial_health_action(&self) -> bool {
@@ -708,6 +713,9 @@ impl Graph {
                     ActionBehavior::RoomCue => ("room cue action", &["m_outPlug"]),
                     ActionBehavior::HealthChange => ("health change action", &["m_outPlug"]),
                     ActionBehavior::RadialHealth => ("radial health action", &["m_outPlug"]),
+                    ActionBehavior::SweptDisplacement => {
+                        ("swept displacement action", &["m_outPlug"])
+                    }
                 };
                 let state_slot = authored_state_slots.contains_key(&node.pos);
                 if !node.server_only
@@ -774,6 +782,15 @@ impl Graph {
                             )));
                         }
                         "ActionRoomCue".into()
+                    }
+                    ActionBehavior::SweptDisplacement => {
+                        if node.field("delta").is_none_or(Value::is_null) {
+                            return Err(invalid(format!(
+                                "{action} in graph {} at node {} requires delta",
+                                self.index, node.pos
+                            )));
+                        }
+                        "ActionSweptDisplacement".into()
                     }
                     ActionBehavior::HealthChange => {
                         for operand in ["target", "delta"] {
@@ -1292,6 +1309,7 @@ enum AuthoredClassBehavior {
     RoomCueAction,
     HealthChangeAction,
     RadialHealthAction,
+    SweptDisplacementAction,
     ClientOnly,
 }
 
@@ -1314,6 +1332,7 @@ impl AuthoredClassBehavior {
             Self::RoomCueAction => (false, None, Some(ActionBehavior::RoomCue)),
             Self::HealthChangeAction => (false, None, Some(ActionBehavior::HealthChange)),
             Self::RadialHealthAction => (false, None, Some(ActionBehavior::RadialHealth)),
+            Self::SweptDisplacementAction => (false, None, Some(ActionBehavior::SweptDisplacement)),
             Self::ClientOnly => (true, None, None),
         };
         if (node.client_only && !client_only)

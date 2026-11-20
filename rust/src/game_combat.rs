@@ -2177,6 +2177,18 @@ impl RoomSimulation {
                 bot, vitals, enemy, ..
             } = &mut *state;
             if let Some(enemy) = enemy.as_mut().filter(|enemy| enemy.fault.is_none()) {
+                if let Some(displacement) = enemy
+                    .scripts
+                    .take_swept_displacement(tick)
+                    .filter(|_| !bot.dead && vitals.death().is_none())
+                {
+                    if !enemy.objective_mover_attached {
+                        enemy.objective_mover_attached = queries.attach_objective_mover(bot);
+                    }
+                    if enemy.objective_mover_attached {
+                        bot.apply_swept_displacement(tick, displacement);
+                    }
+                }
                 enemy.binding.frame = tick;
                 enemy.binding.now_secs = now.as_secs_f64();
                 enemy.binding.retired_entities = Arc::clone(&self.retired_entity_ids);

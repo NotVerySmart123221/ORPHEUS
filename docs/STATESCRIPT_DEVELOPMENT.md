@@ -550,6 +550,29 @@ vertical directions. An active cinematic aim has precedence.
 
 See the [synthetic facing claim contract](../fixtures/behavior/statescript-facing-claim-v1.json).
 
+## Schedule collision-checked displacement
+
+Set `action_behavior` to `"swept_displacement"` on a server-only action or
+declare `swept_displacement_action` for an authored class. Supply a
+`delta` expression that returns a finite, nonzero world-space vector
+with length at most 32 world units. The action requests movement for
+the script's own living body on the next VM frame. Its output plug runs
+when the host accepts the request.
+
+The player mover consumes the request once on the first actual posed
+frame at or after its due frame. Script-only timer updates can queue the
+request. NPCs consume it once when due on the room tick before their
+steering update. Both move through the existing capsule solver and static
+collision category. The sweep preserves velocity for the ordinary
+movement step. Death and runtime retirement clear pending displacement.
+
+Static mesh and scheduling behavior have synthetic contracts. Dynamic
+actor contact during displacement and original-client prediction and
+correction still require acceptance.
+
+See the [script dispatch contract](../fixtures/behavior/script-swept-displacement-v1.json)
+and the [native capsule contract](../fixtures/behavior/native-swept-displacement-v1.json).
+
 ## Use priorities for control effects
 
 A server-only state can declare `"state_behavior": "stack_claim"`, or use

@@ -17,6 +17,7 @@ use crate::{
         CROUCHED, IN_AIR, JUMPED, NOT_GROUND_UNDER, Posture, PostureStep, TOUCHING, snap,
     },
     mover_settings::MoverSettings,
+    script_init::SweptDisplacement,
     world::{Movement, NO_INPUT},
 };
 
@@ -94,6 +95,7 @@ pub struct Mover {
     cinematic_aim: Option<[i32; 2]>,
     authored_facing: Option<[i32; 2]>,
     velocity_changes: Vec<(u32, VelocityChange)>,
+    swept_displacement: Option<(u32, SweptDisplacement)>,
     last_command: Option<Command>,
     last_input: Option<u32>,
     pose: Movement,
@@ -122,6 +124,7 @@ impl Mover {
             cinematic_aim: None,
             authored_facing: None,
             velocity_changes: Vec::new(),
+            swept_displacement: None,
             last_command: None,
             last_input: None,
             pose: Movement {
@@ -200,6 +203,27 @@ impl Mover {
         }
     }
 
+    /// Keep the first request until its first actual pose at or after `frame`.
+    pub(crate) fn queue_swept_displacement(
+        &mut self,
+        frame: u32,
+        displacement: SweptDisplacement,
+    ) -> bool {
+        if self.swept_displacement.is_some() {
+            return false;
+        }
+        self.swept_displacement = Some((frame, displacement));
+        true
+    }
+
+    pub(crate) fn clear_swept_displacement(&mut self) {
+        self.swept_displacement = None;
+    }
+
+    pub(crate) fn has_swept_displacement(&self) -> bool {
+        self.swept_displacement.is_some()
+    }
+
     /// Simulate the newest command and any reconstructible poses before it.
     /// The callback can advance the body's statescript at each posed frame.
     pub fn step(
@@ -247,6 +271,16 @@ impl Mover {
         command: Command,
         dt: f64,
     ) -> Result<(), HullContactError> {
+        if self
+            .swept_displacement
+            .is_some_and(|(frame, _)| frame <= command.frame)
+        {
+            // Consume once even if the solver rejects the attempt. Stage on a
+            // fresh capsule so an error cannot separate the body from its feet.
+            if let Some((_, displacement)) = self.swept_displacement.take() {
+                self.apply_swept_displacement(displacement, dt)?;
+            }
+        }
         self.velocity_changes.retain(|&(frame, change)| {
             if frame <= command.frame {
                 change.apply(&mut self.pose.velocity);
@@ -352,6 +386,31 @@ impl Mover {
         self.pose.spring = self.posture.spring_steps().map(i32::from);
         self.pose.spring_speed = f64::from(self.posture.spring_speed());
         self.pose.fall = self.posture.fall;
+        Ok(())
+    }
+
+    fn apply_swept_displacement(
+        &mut self,
+        displacement: SweptDisplacement,
+        dt: f64,
+    ) -> Result<(), HullContactError> {
+        let start = self.body.position();
+        let mut staged = self.body.fresh_at(start);
+        let end = staged
+            .move_capsule(displacement.delta(), dt as f32)?
+            .position;
+        let feet = std::array::from_fn(|axis| {
+            self.pose.position[axis] + f64::from(end[axis]) - f64::from(start[axis])
+        })
+        .map(snap);
+        let lift = pogo(&self.base, self.posture.crouched()) as f32 + self.posture.spring_offset();
+        staged.teleport([
+            feet[0] as f32,
+            (feet[1] + f64::from(lift)) as f32,
+            feet[2] as f32,
+        ]);
+        self.body = staged;
+        self.pose.position = feet;
         Ok(())
     }
 
@@ -466,6 +525,158 @@ mod tests {
         mover_settings::MoverCatalog,
         world::movement_record,
     };
+
+    fn swept_fixture() -> serde_json::Value {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/native-swept-displacement-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(fixture["schema_version"], 1);
+        assert_eq!(fixture["case_id"], "native-swept-displacement.synthetic.v1");
+        assert_eq!(fixture["evidence"], "synthetic-native");
+        fixture
+    }
+
+    #[test]
+    fn swept_displacement_waits_for_one_actual_pose_and_first_pending_request_wins() {
+        let fixture = swept_fixture();
+        let input = &fixture["input"];
+        let due: u32 = input["due_frame"].as_u64().unwrap().try_into().unwrap();
+        let delta: [f64; 3] = serde_json::from_value(input["displacement"].clone()).unwrap();
+        let displacement = SweptDisplacement::new(delta).unwrap();
+        let second = SweptDisplacement::new(
+            serde_json::from_value(input["rejected_second_displacement"].clone()).unwrap(),
+        )
+        .unwrap();
+        let rays = TriangleIndex::new([]).unwrap();
+        let world = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+        let make = || {
+            Mover::new(
+                MoverSettings {
+                    gravity_scale: 0.0,
+                    ..MoverSettings::default()
+                },
+                Arc::clone(&world),
+                [0.0; 3],
+                0,
+                0x18,
+            )
+            .unwrap()
+        };
+        let mut moved = make();
+        let mut reference = make();
+        let velocity = serde_json::from_value(input["velocity"].clone()).unwrap();
+        moved.pose.velocity = velocity;
+        reference.pose.velocity = velocity;
+        assert!(moved.queue_swept_displacement(due, displacement));
+        assert!(!moved.queue_swept_displacement(due, second));
+        assert!(moved.has_swept_displacement());
+        for frame in 1..=due + 2 {
+            let command = Command {
+                frame,
+                ..Command::default()
+            };
+            if frame == due {
+                let mut pending = moved.pending_poses(command);
+                assert_eq!(
+                    moved
+                        .step_pending(&rays, &mut pending, 0.016, 0, |_, _| {})
+                        .unwrap(),
+                    0
+                );
+                assert!(moved.has_swept_displacement());
+            }
+            if frame == due + 1 {
+                assert!(moved.queue_swept_displacement(frame, second));
+                moved.clear_swept_displacement();
+                assert!(!moved.has_swept_displacement());
+            }
+            moved.step(&rays, command, 0.016, |_, _| {}).unwrap();
+            reference.step(&rays, command, 0.016, |_, _| {}).unwrap();
+            let expected = if frame >= due { delta } else { [0.0; 3] };
+            assert_eq!(
+                moved.pose.position,
+                std::array::from_fn(|axis| reference.pose.position[axis] + expected[axis])
+            );
+            assert_eq!(moved.pose.velocity, reference.pose.velocity);
+            assert_eq!(moved.pose.flags, reference.pose.flags);
+            assert_eq!(moved.pose.frame, reference.pose.frame);
+            assert_eq!(moved.has_swept_displacement(), frame < due);
+        }
+    }
+
+    #[test]
+    fn swept_displacement_uses_the_existing_capsule_without_clipping_velocity() {
+        use crate::{
+            collision_cache::{Mesh, Triangle},
+            contact_mesh::ContactMesh,
+            contact_world::{StaticGeometry, StaticShape},
+        };
+
+        let fixture = swept_fixture();
+        let input = &fixture["input"];
+        let category: u16 = input["category"].as_u64().unwrap().try_into().unwrap();
+        let wall = Mesh {
+            vertices: serde_json::from_value(input["wall_vertices"].clone()).unwrap(),
+            triangles: input["wall_triangles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|corners| Triangle {
+                    corners: serde_json::from_value(corners.clone()).unwrap(),
+                    wings: [-1; 3],
+                    mask: category,
+                    surface: 0,
+                })
+                .collect(),
+        };
+        let mesh = ContactMesh::new(wall, [1.0; 3], u16::MAX).unwrap();
+        let shape = StaticShape::new(StaticGeometry::Mesh(Arc::new(mesh)), None).unwrap();
+        let mut mover = Mover::new(
+            MoverSettings {
+                stand_height: input["stand_height"].as_f64().unwrap(),
+                stand_radius: input["stand_radius"].as_f64().unwrap(),
+                ..MoverSettings::default()
+            },
+            Arc::new(ContactWorld::new(vec![shape]).unwrap()),
+            [0.0; 3],
+            8192,
+            category,
+        )
+        .unwrap();
+        mover.pose.velocity = serde_json::from_value(input["velocity"].clone()).unwrap();
+        mover.pose.pitch = -2048;
+        let before = mover.pose();
+        let displacement = SweptDisplacement::new(
+            serde_json::from_value(input["wall_displacement"].clone()).unwrap(),
+        )
+        .unwrap();
+        mover.apply_swept_displacement(displacement, 0.016).unwrap();
+        let after = mover.pose();
+        assert!(after.position[2] > fixture["expected"]["wall_min_z"].as_f64().unwrap());
+        assert!(after.position[2] < fixture["expected"]["wall_max_z"].as_f64().unwrap());
+        assert_eq!(after.velocity, before.velocity);
+        assert_eq!(
+            (after.yaw, after.pitch, after.flags),
+            (before.yaw, before.pitch, before.flags)
+        );
+        let lift =
+            pogo(&mover.base, mover.posture.crouched()) as f32 + mover.posture.spring_offset();
+        assert_eq!(
+            mover.body.position(),
+            [
+                after.position[0] as f32,
+                (after.position[1] + f64::from(lift)) as f32,
+                after.position[2] as f32,
+            ]
+        );
+        mover.apply_swept_displacement(displacement, 0.016).unwrap();
+        let tolerance = fixture["expected"]["repeated_block_tolerance"]
+            .as_f64()
+            .unwrap();
+        assert!((mover.pose.position[2] - after.position[2]).abs() <= tolerance);
+        assert_eq!(mover.pose.velocity, before.velocity);
+    }
 
     #[test]
     fn velocity_changes_are_ordered_once_and_wait_for_their_pose() {

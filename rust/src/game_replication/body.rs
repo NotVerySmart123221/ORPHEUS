@@ -8,6 +8,15 @@ pub(super) struct StepBuffers<'a> {
     pub(super) hitscan: &'a mut Vec<PosedHitscan>,
 }
 
+pub(super) fn stage_swept_displacement(runtime: &mut dyn OwnerBodyRuntime, mover: &mut Mover) {
+    if mover.has_swept_displacement() {
+        return;
+    }
+    if let Some((frame, displacement)) = runtime.take_swept_displacement() {
+        mover.queue_swept_displacement(frame, displacement);
+    }
+}
+
 pub(super) struct BodyScript {
     pub(super) id: BodyId,
     pub(super) stream: BodyStream<ProjectedSnapshot>,
@@ -143,6 +152,9 @@ impl BodyScript {
                 PosedShot::Projectile(shot) => self.launch_projectile(*shot, buffers.launches),
                 PosedShot::BioticField(shot) => self.launch_biotic_field(shot, buffers.fields),
             }
+        }
+        if step == BodyStep::Posed {
+            stage_swept_displacement(runtime, mover);
         }
         Ok(())
     }

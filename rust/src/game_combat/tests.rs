@@ -1275,6 +1275,7 @@ fn normal_deadeye_clears_natural_bosses_and_reaches_allied_victory() {
 mod aim_samples;
 mod encounter_ecs;
 mod junkenstein;
+mod swept_displacement;
 
 #[test]
 fn scene_enemy_creation_is_atomic_and_retains_late_join_health_and_skin() {

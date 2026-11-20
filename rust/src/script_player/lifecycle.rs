@@ -25,7 +25,10 @@ use crate::{
     script_codecs::CodecTable,
     script_control::LEGACY_PROJECTILE_CONTROL,
     script_expr::to_float,
-    script_init::{Component, HealthTargetFacts, HostEvent, InitFault, RoomMessage, Snapshot},
+    script_init::{
+        Component, HealthTargetFacts, HostEvent, InitFault, RoomMessage, Snapshot,
+        SweptDisplacement,
+    },
     script_runtime::FRAME_MS,
     script_snapshot_wire::SnapshotEncoder,
     script_wire::Value,
@@ -180,6 +183,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
     fn receive_damage(&mut self, amount: f64, source: Death) -> Damage {
         let result = self.world.vitals.damage(amount, source);
         if result.killed {
+            self.world.swept_displacement = None;
             self.component.set_owner_dead(true);
             if let Err(error) = self.sync_charge_admission(false) {
                 eprintln!("Owner death charge cleanup failed: {error}");
@@ -254,6 +258,13 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
             self.world.velocity_changes.clear();
         }
         std::mem::take(&mut self.world.velocity_changes)
+    }
+
+    fn take_swept_displacement(&mut self) -> Option<(u32, SweptDisplacement)> {
+        self.world
+            .swept_displacement
+            .take()
+            .filter(|_| self.world.vitals.death().is_none())
     }
 
     fn movement_modifiers(&self) -> Option<&BTreeMap<ModifierKey, Modifier>> {
