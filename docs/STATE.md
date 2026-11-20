@@ -166,6 +166,22 @@ passes, one ordinary attachment and 47 blocking sites. The #72 trace
 retained all 476 observations. This revision also includes the authored
 eye observation recovery contract at `9b957ce7`.
 
+At `9caac758`, the auxiliary view binding states began using host
+context at any placement. The owned headless body also reports outline
+absence through the existing outline branch. The same batch added
+elapsed waits for direct numeric variable bindings and moved the
+literal-delay cinematic boundary states to field and slot validation.
+Synthetic tests covered dormant operands, cleanup, timer changes and
+reentry, and the owner and observer boundary payloads.
+
+Two reports from the same prepared Practice Range pack matched byte
+for byte. All 32 actor rows and the #72 trace matched the preceding
+revision, with 11 independent passes, one ordinary attachment, 47
+blocking sites and all 476 observations. Both Windows #131 schedules
+repeated and matched their previous 339-tick captures for each
+implementation. Strict comparison retained the four RNG setup
+differences. The cinematic payload tests used a synthetic graph.
+
 Two of the three remaining native target-tracking startup sites have
 empty embedded plugs. One configures a second filter and an entity list
 output. The other configures a count output. Both read a dynamic radius.
