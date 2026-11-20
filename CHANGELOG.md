@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added an authored actor ray query to StateScript. It finds the first eligible room actor using frozen collision capsules and static occlusion. Player and NPC scripts share the query and existing room filters. Replacement views exclude the previous actor capsule. Formatting, default workspace tests, and Clippy passed, including 362 native-server tests and 207 StateScript tests. The prepared #72 900-frame test passed.
+
 - Added an authored static ray query to StateScript. Player and NPC scripts use the room's existing collision scene to get the nearest hit's distance, point, and normal. A clear ray returns an empty result, and an observation retains its last successful result while geometry is unavailable. The default workspace tests and Clippy passed, including 361 native-server tests and 206 StateScript tests. The prepared #72 900-frame test passed.
 
 - Recognized explicitly unbound owners in the shared StateScript entity count expression. The expression keeps its caller's initial value in that case. Valid bound queries still use the existing host provider, and unavailable or malformed inputs remain diagnostic. The locked workspace suite with script coverage passed, including 366 native tests and 205 StateScript tests. Two same-pack reports at `39932467` cleared two diagnostics and raised independent startup from 10 of 32 to 11 of 32. Zarya is the new independent pass. The ordinary Practice Range factory still attaches Soldier only. The #72 capture matched all 476 sites.

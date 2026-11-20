@@ -458,6 +458,9 @@ impl SceneAssets {
                 Arc::clone(&ground),
                 self.graphs.room_spatial_needs(),
             );
+            if self.graphs.uses_spatial_actor_rays() {
+                simulation.enable_spatial_actor_rays(Arc::clone(&self.movers));
+            }
         }
         if let Some(gate) = junkenstein_gate {
             simulation

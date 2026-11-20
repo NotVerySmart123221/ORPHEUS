@@ -1044,6 +1044,21 @@ impl World for EnemyWorld<'_> {
             .ray_cast(origin, direction, max_distance)
     }
 
+    fn spatial_actor_ray_cast(
+        &self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+        targets: &[u32],
+    ) -> Option<Option<crate::script_expr::SpatialActorRayHit>> {
+        self.binding.spatial_frame.as_deref()?.actor_ray_cast(
+            origin,
+            direction,
+            max_distance,
+            targets,
+        )
+    }
+
     fn position(&mut self, entity: u32) -> Option<[f64; 3]> {
         self.known_position(entity)
     }

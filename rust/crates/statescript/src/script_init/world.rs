@@ -597,6 +597,17 @@ pub trait World {
         None
     }
 
+    /// None is unavailable, Some(None) is an available miss.
+    fn spatial_actor_ray_cast(
+        &self,
+        _origin: [f64; 3],
+        _direction: [f64; 3],
+        _max_distance: f64,
+        _targets: &[u32],
+    ) -> Option<Option<script_expr::SpatialActorRayHit>> {
+        None
+    }
+
     /// The implicit owner's pose flags and air duration, if the host can read them.
     fn movement_sample(&self, _site: Site) -> Option<MovementSample> {
         None

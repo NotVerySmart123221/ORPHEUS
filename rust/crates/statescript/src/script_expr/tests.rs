@@ -5,6 +5,8 @@ use serde_json::json;
 
 use crate::script_graph::GraphStore;
 
+mod entity_ray_cast;
+
 #[derive(Default)]
 struct Vars {
     instance: BTreeMap<u32, Value>,

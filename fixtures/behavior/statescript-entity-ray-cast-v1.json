@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "case_id": "statescript-entity-ray-cast.synthetic.v1",
+  "source": {"basis": "Original actor IDs, positions, team affiliations, and query outputs."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "query": {
+      "$": "EntityRayCast",
+      "origin": {"$": "STUConfigVarDynamic", "m_identifier": 1, "m_60DB8F99": false},
+      "direction": {"$": "STUConfigVarDynamic", "m_identifier": 2, "m_60DB8F99": false},
+      "max_distance": 6,
+      "filter": {
+        "relation": "opponent",
+        "source": {"$": "STUConfigVarDynamic", "m_identifier": 3, "m_60DB8F99": false},
+        "alive": true,
+        "tags": {"none": ["0xF100000000000041"]}
+      }
+    },
+    "origin": [2, 1, 0],
+    "direction": [0, 0, 4],
+    "source": 44,
+    "candidates": [
+      [44, [30, 0, 0], 0],
+      [27, [2, -20, 0], 2],
+      [12, [2, 0, 1], 0],
+      [76, [2, 0, 2], 1],
+      [9, [2, 0, 5], null],
+      [17, [2, 0, 3], 1],
+      [9, [2, 0, 5], null]
+    ],
+    "dead": 17,
+    "excluded_by_tag": 76,
+    "excluded_tag": "0xF100000000000041"
+  },
+  "expected": {
+    "eligible": [9, 27],
+    "hit": [9, 4.25, [2, 1, 4.25]],
+    "inside_hit": [27, 0, [2, 1, 0]]
+  }
+}

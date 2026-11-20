@@ -773,6 +773,31 @@ bodies and gameplay effects.
 
 See the [synthetic ray contract](../fixtures/behavior/statescript-ray-cast-v1.json).
 
+## Find the first actor along a ray
+
+Use `EntityRayCast` with the same `origin`, `direction`, and
+`max_distance` expressions. An optional `filter` uses the existing room
+team, liveness, and tag rules. The team filter resolves its source from
+the full room snapshot and excludes that source from the eligible IDs.
+Without a filter the caller's captured capsule is eligible. A team
+filter whose source is absent from the sampled frame is unavailable,
+including when a replacement body has not joined the frame yet.
+The VM spends work for each scanned candidate and each eligible capsule
+before calling the room. Actor geometry uses the room's frozen player
+capsules and existing NPC collision proxies.
+
+A hit produces `[entity, distance, point]`. A ray starting inside an
+eligible capsule can return distance zero. At equal distances, the
+lowest entity ID wins. A static surface strictly ahead of the actor
+occludes it. An available ray with no visible eligible hit returns
+`[]`. Unavailable ray data preserves an observation's last successful
+value until the query recovers.
+
+The result identifies an actor in the sampled frame. If a script queues
+a health or message operation in that frame, the room captures the
+target's identity and checks its generation at settlement. See the
+[synthetic actor ray contract](../fixtures/behavior/statescript-entity-ray-cast-v1.json).
+
 ## Match a room entity against authored conditions
 
 Use `EntityMatches` as the `$` tag and supply an `entity` expression

@@ -1208,54 +1208,70 @@ struct Bundle {
     missing: Vec<u32>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub enum RoomSpatialNeeds {
+    #[default]
     None,
     Queries,
     EntityFacts,
     EntityTags,
 }
 
-fn room_spatial_needs(value: &Value) -> RoomSpatialNeeds {
+#[derive(Clone, Copy, Default)]
+struct RoomSpatialRequirements {
+    needs: RoomSpatialNeeds,
+    actor_rays: bool,
+}
+
+impl RoomSpatialRequirements {
+    fn merge(self, other: Self) -> Self {
+        Self {
+            needs: self.needs.max(other.needs),
+            actor_rays: self.actor_rays || other.actor_rays,
+        }
+    }
+}
+
+fn room_spatial_requirements(value: &Value) -> RoomSpatialRequirements {
     use RoomSpatialNeeds::{EntityFacts, EntityTags, None as NoQueries, Queries};
 
     if value.get("$").and_then(Value::as_str) == Some("ClientOnly") {
         return value
             .get("server_fallback")
-            .map_or(NoQueries, room_spatial_needs);
+            .map_or_else(RoomSpatialRequirements::default, room_spatial_requirements);
     }
-    let requirements = |fields: &Map<String, Value>| {
-        let filter = fields.get("filter").and_then(Value::as_object);
-        let tags = filter.is_some_and(|filter| filter.contains_key("tags"));
-        match fields.get("$").and_then(Value::as_str) {
-            Some("EntityMatches" | "EntitiesInRadius") if tags => EntityTags,
-            Some("EntityMatches") => EntityFacts,
-            Some("EntitiesInRadius")
-                if filter.is_some_and(|filter| filter.contains_key("alive")) =>
-            {
-                EntityFacts
-            }
-            Some(
-                "EntitiesInRadius" | "SegmentClear" | "RayCast" | "EntityPosition"
-                | "EntityDirection",
-            ) => Queries,
-            _ => NoQueries,
-        }
-    };
     match value {
-        Value::Object(fields) => requirements(fields).max(
-            fields
-                .values()
-                .map(room_spatial_needs)
-                .max()
-                .unwrap_or(NoQueries),
+        Value::Object(fields) => {
+            let filter = fields.get("filter").and_then(Value::as_object);
+            let tags = filter.is_some_and(|filter| filter.contains_key("tags"));
+            let class = fields.get("$").and_then(Value::as_str);
+            let needs = match class {
+                Some("EntityMatches" | "EntitiesInRadius" | "EntityRayCast") if tags => EntityTags,
+                Some("EntityMatches") => EntityFacts,
+                Some("EntitiesInRadius" | "EntityRayCast")
+                    if filter.is_some_and(|filter| filter.contains_key("alive")) =>
+                {
+                    EntityFacts
+                }
+                Some(
+                    "EntitiesInRadius" | "SegmentClear" | "RayCast" | "EntityRayCast"
+                    | "EntityPosition" | "EntityDirection",
+                ) => Queries,
+                _ => NoQueries,
+            };
+            fields.values().map(room_spatial_requirements).fold(
+                RoomSpatialRequirements {
+                    needs,
+                    actor_rays: class == Some("EntityRayCast"),
+                },
+                RoomSpatialRequirements::merge,
+            )
+        }
+        Value::Array(values) => values.iter().map(room_spatial_requirements).fold(
+            RoomSpatialRequirements::default(),
+            RoomSpatialRequirements::merge,
         ),
-        Value::Array(values) => values
-            .iter()
-            .map(room_spatial_needs)
-            .max()
-            .unwrap_or(NoQueries),
-        _ => NoQueries,
+        _ => RoomSpatialRequirements::default(),
     }
 }
 
@@ -1264,6 +1280,7 @@ pub struct GraphStore {
     graphs: BTreeMap<u32, Graph>,
     projected_message_topics: BTreeSet<u64>,
     room_spatial_needs: RoomSpatialNeeds,
+    uses_spatial_actor_rays: bool,
     uses_host_health_events: bool,
     bodies: BTreeMap<u64, Body>,
     entities: BTreeMap<u64, Body>,
@@ -1406,23 +1423,24 @@ impl GraphStore {
             bundle.runtime_state_metadata.projected_message_topics,
             &graphs,
         )?;
-        let room_spatial_needs = graphs
+        let room_spatial_requirements = graphs
             .values()
             .flat_map(|graph| &graph.nodes)
             .filter(|node| node.runs_on_server())
             .map(|node| {
-                let needs = room_spatial_needs(&node.fields);
+                let mut requirements = room_spatial_requirements(&node.fields);
                 if node.declares_health_change_action()
                     || node.declares_room_message_action()
                     || node.declares_room_cue_action()
                 {
-                    needs.max(RoomSpatialNeeds::Queries)
-                } else {
-                    needs
+                    requirements.needs = requirements.needs.max(RoomSpatialNeeds::Queries);
                 }
+                requirements
             })
-            .max()
-            .unwrap_or(RoomSpatialNeeds::None);
+            .fold(
+                RoomSpatialRequirements::default(),
+                RoomSpatialRequirements::merge,
+            );
         let health_topic = EntryTopic::Host(HostEventKind::HealthApplied);
         let uses_host_health_events = graphs
             .values()
@@ -1430,7 +1448,8 @@ impl GraphStore {
         Ok(Self {
             graphs,
             projected_message_topics,
-            room_spatial_needs,
+            room_spatial_needs: room_spatial_requirements.needs,
+            uses_spatial_actor_rays: room_spatial_requirements.actor_rays,
             uses_host_health_events,
             bodies: keyed_by_guid(bundle.bodies)?,
             entities: keyed_by_guid(bundle.entities)?,
@@ -1459,6 +1478,11 @@ impl GraphStore {
     /// The most detailed room data requested by any server graph.
     pub fn room_spatial_needs(&self) -> RoomSpatialNeeds {
         self.room_spatial_needs
+    }
+
+    /// Whether a server operand needs frozen actor collision shapes.
+    pub fn uses_spatial_actor_rays(&self) -> bool {
+        self.uses_spatial_actor_rays
     }
 
     /// Whether this bundle explicitly subscribes to a host health event.
@@ -2241,6 +2265,18 @@ mod tests {
                 RoomSpatialNeeds::Queries,
             ),
             (
+                json!({"$":"EntityRayCast","origin":null,"direction":null,"max_distance":1}),
+                RoomSpatialNeeds::Queries,
+            ),
+            (
+                json!({"$":"EntityRayCast","origin":null,"direction":null,"max_distance":1,"filter":{"alive":true}}),
+                RoomSpatialNeeds::EntityFacts,
+            ),
+            (
+                json!({"$":"EntityRayCast","origin":null,"direction":null,"max_distance":1,"filter":{"tags":{}}}),
+                RoomSpatialNeeds::EntityTags,
+            ),
+            (
                 json!({"$":"EntitiesInRadius","center":null,"radius":1,"filter":{"alive":true}}),
                 RoomSpatialNeeds::EntityFacts,
             ),
@@ -2257,10 +2293,12 @@ mod tests {
                 RoomSpatialNeeds::EntityTags,
             ),
         ] {
+            let actor_rays = predicate.get("$").and_then(Value::as_str) == Some("EntityRayCast");
             data["graphs"][0]["nodes"][0]["fields"]["nested"][0]["value"] = predicate;
             let parsed = load(&data);
             assert!(parsed.uses_room_spatial_frame());
             assert_eq!(parsed.room_spatial_needs(), needs);
+            assert_eq!(parsed.uses_spatial_actor_rays(), actor_rays);
         }
 
         let wrapper = json!({
@@ -2277,7 +2315,19 @@ mod tests {
             json!({"$":"RayCast","origin":null,"direction":null,"max_distance":1});
         assert_eq!(load(&data).room_spatial_needs(), RoomSpatialNeeds::Queries);
 
+        data["graphs"][0]["nodes"][0]["fields"]["nested"][0]["value"] = json!({
+            "$":"ClientOnly",
+            "value":{"$":"EntityRayCast","origin":null,"direction":null,"max_distance":1}
+        });
+        assert!(!load(&data).uses_spatial_actor_rays());
+        assert_eq!(load(&data).room_spatial_needs(), RoomSpatialNeeds::None);
+        data["graphs"][0]["nodes"][0]["fields"]["nested"][0]["value"]["server_fallback"] =
+            json!({"$":"EntityRayCast","origin":null,"direction":null,"max_distance":1});
+        assert!(load(&data).uses_spatial_actor_rays());
+        assert_eq!(load(&data).room_spatial_needs(), RoomSpatialNeeds::Queries);
+
         data["graphs"][0]["nodes"][0]["client_only"] = json!(true);
+        assert!(!load(&data).uses_spatial_actor_rays());
         assert!(!load(&data).uses_room_spatial_frame());
         assert!(load(&data).room_spatial_needs() < RoomSpatialNeeds::EntityFacts);
     }

@@ -127,6 +127,13 @@ pub struct SpatialRayHit {
     pub normal: [f64; 3],
 }
 
+/// The first eligible actor reached by a bounded spatial ray.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpatialActorRayHit {
+    pub entity: u32,
+    pub distance: f64,
+}
+
 /// Authored query facts for a body in the current room snapshot.
 #[derive(Clone, Debug)]
 pub struct RoomEntityFacts {
@@ -332,6 +339,17 @@ pub trait Context {
         _direction: [f64; 3],
         _max_distance: f64,
     ) -> Option<Option<SpatialRayHit>> {
+        None
+    }
+
+    /// None is unavailable, Some(None) is an available miss.
+    fn spatial_actor_ray_cast(
+        &mut self,
+        _origin: [f64; 3],
+        _direction: [f64; 3],
+        _max_distance: f64,
+        _targets: &[u32],
+    ) -> Option<Option<SpatialActorRayHit>> {
         None
     }
 
