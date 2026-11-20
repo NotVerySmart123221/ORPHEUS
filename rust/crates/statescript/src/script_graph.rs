@@ -16,7 +16,7 @@ use serde_json::{Map, Value};
 use rulesets::{ModeRulesetDefinition, ModeRulesets};
 
 use crate::script_expr::{
-    StackPriority, Variable, authored_stack_priority, authored_stack_variable,
+    EngineSetting, StackPriority, Variable, authored_stack_priority, authored_stack_variable,
     client_only_fallback, native_entity_operand, native_fields, native_shape,
 };
 
@@ -1539,6 +1539,11 @@ impl GraphStore {
         self.mode_rulesets.value(mode, body, id)
     }
 
+    /// Returns `None` when this mode has no authored engine setting table.
+    pub fn mode_engine_setting(&self, mode: u64, key: u32) -> Option<EngineSetting> {
+        self.mode_rulesets.engine_setting(mode, key)
+    }
+
     pub fn mode_scripts(&self, mode: u64) -> Option<&ModeScripts> {
         self.mode_scripts.get(&mode)
     }
@@ -1889,6 +1894,76 @@ mod tests {
             data["mode_rulesets"] = invalid_table;
             assert_eq!(
                 load(&data).unwrap_err().kind(),
+                io::ErrorKind::InvalidData,
+                "{}",
+                data["mode_rulesets"]
+            );
+        }
+    }
+
+    #[test]
+    fn mode_engine_settings_keep_types_and_table_availability() {
+        use crate::script_wire::Value as ScriptValue;
+
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../fixtures/behavior/script-mode-rulesets-v1.json"
+        ))
+        .unwrap();
+        let bundle = serde_json::to_vec(&contract["input"]["bundle"]).unwrap();
+        let graphs = GraphStore::from_json(&bundle).unwrap();
+        for (key, value) in [
+            (101, ScriptValue::Bool(false)),
+            (102, ScriptValue::Integer(-9007199254740993)),
+            (103, ScriptValue::Float(1.0)),
+            (104, ScriptValue::Null),
+            (u32::MAX, ScriptValue::Integer(0)),
+        ] {
+            assert_eq!(
+                graphs.mode_engine_setting(0xa1, key),
+                Some(EngineSetting::Present(value))
+            );
+        }
+        assert_eq!(
+            graphs.mode_engine_setting(0xa1, 105),
+            Some(EngineSetting::Missing)
+        );
+        assert_eq!(graphs.mode_engine_setting(0xa2, 102), None);
+        assert_eq!(
+            graphs.mode_engine_setting(0xa3, 101),
+            Some(EngineSetting::Missing)
+        );
+        assert_eq!(
+            graphs.mode_engine_setting(0xa4, 101),
+            Some(EngineSetting::Present(ScriptValue::Bool(true)))
+        );
+        assert_eq!(graphs.mode_engine_setting(0xa5, 101), None);
+        assert_eq!(
+            graphs.mode_ruleset_value(0xa1, 0xb2, 101),
+            Some(ScriptValue::Bool(true))
+        );
+        assert_eq!(graphs.mode_ruleset_value(0xa4, 0xb2, 101), None);
+    }
+
+    #[test]
+    fn invalid_or_duplicate_mode_engine_settings_fail_loading() {
+        let mut data = fixture();
+        let mode = "0x00000000000000AA";
+        for table in [
+            json!(null),
+            json!({"id": 7, "value": true}),
+            json!([{"id": 7, "value": true, "body": "0x00000000000000BA"}]),
+            json!([{"id": -1, "value": true}]),
+            json!([{"id": u64::from(u32::MAX) + 1, "value": true}]),
+            json!([{"id": 7.0, "value": true}]),
+            json!([{"id": 7, "value": [true]}]),
+            json!([{"id": 7, "value": u64::MAX}]),
+            json!([{"id": 7}]),
+            json!([{"id": 7, "value": true}, {"id": 7, "value": null}]),
+        ] {
+            data["mode_rulesets"] = json!([{"mode": mode, "engine_settings": table}]);
+            let result = GraphStore::from_json(&serde_json::to_vec(&data).unwrap());
+            assert_eq!(
+                result.unwrap_err().kind(),
                 io::ErrorKind::InvalidData,
                 "{}",
                 data["mode_rulesets"]

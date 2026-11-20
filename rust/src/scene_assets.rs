@@ -273,6 +273,8 @@ impl SceneAssets {
             vec![Root::new(1, gate.graph)],
             0,
             &mut GateWorld {
+                graphs: &self.graphs,
+                mode: card.mode,
                 entity: gate.entity,
                 state: &mut gate_state,
                 bodies: scene.simulation(),
@@ -295,6 +297,8 @@ impl SceneAssets {
         let mut screens_complete = false;
         let encounter = {
             let mut startup = EncounterWorld {
+                graphs: &self.graphs,
+                mode: card.mode,
                 gate: &gate,
                 anchors: &anchors,
                 gate_variables: &gate_variables,

@@ -64,11 +64,7 @@ impl World for EnemyWorld<'_> {
     }
 
     fn engine_setting(&self, _site: Site, key: u32) -> crate::script_expr::EngineSetting {
-        if is_junkenstein_mode(self.binding.mode) {
-            crate::junkenstein_host::engine_setting(key)
-        } else {
-            crate::script_expr::EngineSetting::Unavailable
-        }
+        crate::body_ruleset::engine_setting(self.graphs, self.binding.mode, key)
     }
 
     fn summoner_beam_contact(&self, site: Site) -> Option<BeamContact> {

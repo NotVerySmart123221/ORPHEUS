@@ -27,7 +27,11 @@ fn junkenstein_participant_queries_use_live_room_bodies_and_reject_unknown_filte
         position: [0.0; 3],
         graph: 0x0ca7,
     };
+    let graphs =
+        GraphStore::from_json(br#"{"version":1,"graphs":[],"bodies":{},"missing":[]}"#).unwrap();
     let world = EncounterWorld {
+        graphs: &graphs,
+        mode: crate::game_content::JUNKENSTEIN_REVENGE,
         gate: &gate,
         anchors: &SpawnAnchors::default(),
         gate_variables: &Variables::new(),

@@ -118,6 +118,9 @@ ability support.
   Hosts that report the service present or return an unknown result still
   produce an unsupported-state diagnostic.
 
+- Player, NPC, mode and gate scripts read native engine settings through
+  the mode's authored table or its captured compatibility table.
+
 Native target tracking still needs ordered samples, optional typed
 output bindings, and the lifecycle of its embedded state slots. The
 authored `track_entities` node owns separate child graph instances.
@@ -543,6 +546,9 @@ immutable rules for the running mode. This example uses synthetic IDs.
         {"id": 7, "value": false},
         {"id": 7, "body": "0x00000000000000B1", "value": true},
         {"id": 8, "value": 1.0}
+      ],
+      "engine_settings": [
+        {"id": 7, "value": 4}
       ]
     }
   ]
@@ -561,6 +567,18 @@ existing compatibility value in that order. An explicit `null` is an
 authored result and prevents compatibility fallback. A fully missing
 rule retains the VM's existing integer-zero fallback. Graph bundles
 without the optional section retain the existing host rules.
+
+A mode row can also declare `engine_settings`. This is the separate table
+used by native engine-setting expressions and watchers. Keys are unsigned
+32-bit hashes. Values use the same scalar types as rules. The table is
+mode-wide, with unique keys. Player, NPC, mode and
+scene-object scripts read the table for their current mode.
+
+An omitted table keeps the existing mode-specific compatibility lookup.
+An authored table, including an empty list, supplies the whole mode table.
+A missing key in that table keeps the expression's initial value, while
+an explicit `null` supplies a null result. A row may declare engine settings
+without declaring body rules.
 
 See the [synthetic mode ruleset contract](../fixtures/behavior/script-mode-rulesets-v1.json).
 

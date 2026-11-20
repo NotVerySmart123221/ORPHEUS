@@ -156,7 +156,7 @@ use crate::{
 };
 
 #[test]
-fn engine_table_is_available_only_on_the_encounter_owner_host() {
+fn legacy_engine_table_is_available_only_in_encounter_modes() {
     use crate::script_expr::EngineSetting;
     let (factory, spawn) = fixture_body_factory();
     let mut runtime = factory.start(spawn).unwrap();
@@ -189,6 +189,53 @@ fn engine_table_is_available_only_on_the_encounter_owner_host() {
         runtime.world.engine_setting(site, 0xe1c1_e402),
         EngineSetting::Unavailable
     );
+}
+
+#[test]
+fn owner_engine_settings_follow_the_authored_mode_table() {
+    use crate::script_expr::EngineSetting;
+
+    let (factory, spawn) = fixture_body_factory();
+    let mut runtime = factory.start(spawn).unwrap();
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-mode-rulesets-v1.json"
+    ))
+    .unwrap();
+    runtime.world.graphs = Arc::new(
+        GraphStore::from_json(&serde_json::to_vec(&contract["input"]["bundle"]).unwrap()).unwrap(),
+    );
+    let site = Site {
+        entity: spawn.entity,
+        instance: 1,
+        graph: 42,
+        node: Some(0),
+    };
+
+    runtime.world.mode = 0xa1;
+    for hero in [SOLDIER, CASSIDY] {
+        runtime.world.hero = hero;
+        assert_eq!(
+            runtime.world.engine_setting(site, 101),
+            EngineSetting::Present(Value::Bool(false))
+        );
+        assert_eq!(
+            runtime.world.engine_setting(site, 104),
+            EngineSetting::Present(Value::Null)
+        );
+    }
+    assert_eq!(
+        runtime.world.engine_setting(site, 105),
+        EngineSetting::Missing
+    );
+
+    for (mode, expected) in [
+        (0xa2, EngineSetting::Unavailable),
+        (0xa3, EngineSetting::Missing),
+        (0xa4, EngineSetting::Present(Value::Bool(true))),
+    ] {
+        runtime.world.mode = mode;
+        assert_eq!(runtime.world.engine_setting(site, 101), expected);
+    }
 }
 
 #[test]

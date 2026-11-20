@@ -177,11 +177,7 @@ impl World for BodyWorld {
     }
 
     fn engine_setting(&self, _site: Site, key: u32) -> crate::script_expr::EngineSetting {
-        if is_junkenstein_mode(self.mode) {
-            crate::junkenstein_host::engine_setting(key)
-        } else {
-            crate::script_expr::EngineSetting::Unavailable
-        }
+        crate::body_ruleset::engine_setting(&self.graphs, self.mode, key)
     }
 
     fn edit_velocity(&mut self, site: Site, frame: u32, value: Value, cap: bool) -> bool {
