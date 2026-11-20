@@ -1146,6 +1146,11 @@ pub enum RoomSpatialNeeds {
 fn room_spatial_needs(value: &Value) -> RoomSpatialNeeds {
     use RoomSpatialNeeds::{EntityFacts, EntityTags, None as NoQueries, Queries};
 
+    if value.get("$").and_then(Value::as_str) == Some("ClientOnly") {
+        return value
+            .get("server_fallback")
+            .map_or(NoQueries, room_spatial_needs);
+    }
     let requirements = |fields: &Map<String, Value>| {
         let filter = fields.get("filter").and_then(Value::as_object);
         let tags = filter.is_some_and(|filter| filter.contains_key("tags"));
@@ -1157,7 +1162,7 @@ fn room_spatial_needs(value: &Value) -> RoomSpatialNeeds {
             {
                 EntityFacts
             }
-            Some("EntitiesInRadius") => Queries,
+            Some("EntitiesInRadius" | "SegmentClear") => Queries,
             _ => NoQueries,
         }
     };
@@ -2131,6 +2136,10 @@ mod tests {
 
         for (predicate, needs) in [
             (
+                json!({"$":"SegmentClear","origin":null,"target":null}),
+                RoomSpatialNeeds::Queries,
+            ),
+            (
                 json!({"$":"EntitiesInRadius","center":null,"radius":1,"filter":{"alive":true}}),
                 RoomSpatialNeeds::EntityFacts,
             ),
@@ -2152,6 +2161,16 @@ mod tests {
             assert!(parsed.uses_room_spatial_frame());
             assert_eq!(parsed.room_spatial_needs(), needs);
         }
+
+        let wrapper = json!({
+            "$":"ClientOnly",
+            "value":{"$":"EntityMatches","entity":null,"filter":{"tags":{}}}
+        });
+        data["graphs"][0]["nodes"][0]["fields"]["nested"][0]["value"] = wrapper;
+        assert_eq!(load(&data).room_spatial_needs(), RoomSpatialNeeds::None);
+        data["graphs"][0]["nodes"][0]["fields"]["nested"][0]["value"]["server_fallback"] =
+            json!({"$":"SegmentClear","origin":null,"target":null});
+        assert_eq!(load(&data).room_spatial_needs(), RoomSpatialNeeds::Queries);
 
         data["graphs"][0]["nodes"][0]["client_only"] = json!(true);
         assert!(!load(&data).uses_room_spatial_frame());

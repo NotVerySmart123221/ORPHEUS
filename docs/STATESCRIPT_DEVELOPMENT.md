@@ -611,6 +611,25 @@ visibility error and leaves the observation's previous value in place.
 
 See the [synthetic radius contract](../fixtures/behavior/statescript-entities-in-radius-v1.json).
 
+## Check whether a segment is clear
+
+Use `SegmentClear` as the `$` tag with `origin` and `target` expressions.
+Each expression must return a finite three-component vector. The VM
+evaluates the origin first, evaluates the target second, and spends one
+work unit on the geometry request. The result is a Boolean for the
+prepared room's static collision scene. The target endpoint can touch
+the scene. An obstruction strictly before it returns false.
+
+Player and AI scripts use the same geometry as
+`EntitiesInRadius.line_of_sight`. A room with no available collision
+sample produces an unavailable visibility error. An `observe` state
+can retry on the next frame and keep its previous successful value.
+The loader enables spatial queries for this expression in server
+fields and in a `ClientOnly` server fallback. Client-only values do
+not require the service.
+
+See the [synthetic segment contract](../fixtures/behavior/statescript-segment-clear-v1.json).
+
 ## Match a room entity against authored conditions
 
 Use `EntityMatches` as the `$` tag and supply an `entity` expression

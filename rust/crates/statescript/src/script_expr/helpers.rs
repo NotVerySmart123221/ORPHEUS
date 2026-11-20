@@ -333,7 +333,8 @@ pub(super) fn reference_native_class(config: &Json) -> Option<&str> {
         | "EntityDirection"
         | "EntityMatches"
         | "StackAllows"
-        | "EntitiesInRadius" => false,
+        | "EntitiesInRadius"
+        | "SegmentClear" => false,
         "STU_B40ACFBA" | "STU_4BD39CFD" => false,
         "STU_45EDF12D" if child(config, "m_key").is_null() => false,
         "STUConfigVarTexture" | "STU_08305297" if child(config, "m_resourceKey").is_null() => false,

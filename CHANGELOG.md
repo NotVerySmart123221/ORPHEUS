@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added the authored SegmentClear expression for finite endpoints and shared room geometry. It uses the same visibility query and work accounting as radius filtering. Spatial service detection now follows only the server fallback of client-only operands. The StateScript suite passed with 187 tests and 13 private-runtime tests skipped.
+
 - Used the same NPC liveness result for spatial candidates and script request admission. The next room frame excludes a body whose vitals already record death, and the entity facts still retain its dead status. The original synthetic regression reproduced the mismatch and passed after the fix along with two existing spatial tests.
 
 - Kept temporary authored observation diagnostics visible while continuing owner and observer snapshot projection. An original synthetic graph reproduced the projection failure and now verifies recovery. The projection suite passed with 28 tests and three private-runtime tests skipped.

@@ -660,6 +660,7 @@ impl Evaluator {
             }
             "EntityMatches" => self.entity_matches(fields, context, nested)?,
             "EntitiesInRadius" => self.entities_in_radius(fields, context, nested)?,
+            "SegmentClear" => self.segment_clear(fields, context, nested)?,
             "StackAllows" => {
                 let (variable, priority) = fields
                     .get("variable")
@@ -1635,6 +1636,53 @@ impl Evaluator {
         .map(Value::Array)
     }
 
+    fn segment_clear(
+        &mut self,
+        fields: &serde_json::Map<String, Json>,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<Value, EvalError> {
+        let Some((origin, target)) = fields
+            .get("origin")
+            .zip(fields.get("target"))
+            .filter(|_| fields.len() == 3)
+        else {
+            return Err(EvalError::MalformedConfig(
+                "expected SegmentClear origin and target",
+            ));
+        };
+        let origin = self.segment_endpoint(origin, context, depth)?;
+        let target = self.segment_endpoint(target, context, depth)?;
+        self.spatial_line_clear(context, origin, target)
+            .map(Value::Bool)
+    }
+
+    fn segment_endpoint(
+        &mut self,
+        operand: &Json,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<[f64; 3], EvalError> {
+        match self.config(operand, context, depth)? {
+            Value::Vector(endpoint) if endpoint.iter().all(|axis| axis.is_finite()) => Ok(endpoint),
+            _ => Err(EvalError::MalformedConfig(
+                "expected a finite segment endpoint",
+            )),
+        }
+    }
+
+    fn spatial_line_clear(
+        &mut self,
+        context: &mut impl Context,
+        origin: [f64; 3],
+        target: [f64; 3],
+    ) -> Result<bool, EvalError> {
+        self.charge()?;
+        context
+            .spatial_line_clear(origin, target)
+            .ok_or(EvalError::UnavailableSpatialVisibility)
+    }
+
     pub(super) fn radial_health_changes(
         &mut self,
         area: &Json,
@@ -1835,11 +1883,7 @@ impl Evaluator {
         }
         let mut hits = Vec::new();
         for (entity, position, distance) in segments {
-            self.charge()?;
-            if context
-                .spatial_line_clear(center, position)
-                .ok_or(EvalError::UnavailableSpatialVisibility)?
-            {
+            if self.spatial_line_clear(context, center, position)? {
                 hits.push(project(entity, distance, radius));
             }
         }

@@ -3015,3 +3015,174 @@ fn shared_body_field_contract() {
             .unwrap()
     );
 }
+
+#[test]
+fn segment_clear_queries_finite_endpoints_in_order_and_costs_one_step() {
+    const ORIGIN: Variable = Variable {
+        scope: Scope::Instance,
+        id: 71,
+    };
+    const TARGET: Variable = Variable {
+        scope: Scope::Entity,
+        id: 26,
+    };
+
+    #[derive(serde::Deserialize)]
+    struct Contract {
+        schema_version: u8,
+        case_id: String,
+        evidence: String,
+        input: Input,
+        expected: Expected,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        query: Json,
+        world: Vec<Sample>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Sample {
+        origin: [f64; 3],
+        target: [f64; 3],
+        visibility: Option<bool>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Expected {
+        outputs: Vec<Option<bool>>,
+        query_steps: usize,
+        shape_error: String,
+        endpoint_error: String,
+    }
+
+    #[derive(Debug, PartialEq)]
+    enum Call {
+        Read(Variable),
+        Segment([f64; 3], [f64; 3]),
+    }
+
+    struct Host {
+        origin: Value,
+        target: Value,
+        reply: Option<bool>,
+        calls: Vec<Call>,
+    }
+
+    impl Context for Host {
+        fn variable(&mut self, variable: Variable) -> Value {
+            self.calls.push(Call::Read(variable));
+            match variable {
+                ORIGIN => self.origin.clone(),
+                TARGET => self.target.clone(),
+                _ => panic!("unexpected fixture operand {variable:?}"),
+            }
+        }
+
+        fn spatial_line_clear(&mut self, origin: [f64; 3], target: [f64; 3]) -> Option<bool> {
+            self.calls.push(Call::Segment(origin, target));
+            self.reply
+        }
+    }
+
+    let contract: Contract = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/statescript-segment-clear-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    assert_eq!(contract.case_id, "statescript-segment-clear.synthetic.v1");
+    assert_eq!(contract.evidence, "synthetic-rust");
+    let Input { query, world } = contract.input;
+    let Expected {
+        outputs,
+        query_steps,
+        shape_error,
+        endpoint_error,
+    } = contract.expected;
+    assert_eq!(world.len(), outputs.len());
+    assert_eq!(query_steps, 1);
+    let wrapped = json!({"$":"ClientOnly","value":null,"server_fallback":query});
+
+    for (sample, expected) in world.into_iter().zip(outputs) {
+        let mut host = Host {
+            origin: Value::Vector(sample.origin),
+            target: Value::Vector(sample.target),
+            reply: sample.visibility,
+            calls: Vec::new(),
+        };
+        assert_eq!(
+            evaluate_with_budget(&query, &mut host, query_steps),
+            expected
+                .map(Value::Bool)
+                .ok_or(EvalError::UnavailableSpatialVisibility)
+        );
+        assert_eq!(
+            std::mem::take(&mut host.calls),
+            [
+                Call::Read(ORIGIN),
+                Call::Read(TARGET),
+                Call::Segment(sample.origin, sample.target),
+            ]
+        );
+        // The wrapper consumes a unit before the segment reaches the host.
+        let limit = query_steps;
+        assert_eq!(
+            evaluate_with_budget(&wrapped, &mut host, limit),
+            Err(EvalError::BudgetExceeded { offset: 0, limit })
+        );
+        assert_eq!(host.calls, [Call::Read(ORIGIN), Call::Read(TARGET)]);
+    }
+
+    let mut host = Host {
+        origin: Value::Vector([1.0, 2.0, 3.0]),
+        target: Value::Vector([-3.0, -2.0, -1.0]),
+        reply: Some(true),
+        calls: Vec::new(),
+    };
+    for missing in ["origin", "target"] {
+        let mut malformed = query.clone();
+        malformed.as_object_mut().unwrap().remove(missing);
+        assert!(matches!(
+            evaluate(&malformed, &mut host),
+            Err(EvalError::MalformedConfig(reason)) if reason == shape_error
+        ));
+        assert!(host.calls.is_empty());
+    }
+    let mut extra = query.clone();
+    extra["unexpected"] = Json::Null;
+    assert!(matches!(
+        evaluate(&extra, &mut host),
+        Err(EvalError::MalformedConfig(reason)) if reason == shape_error
+    ));
+    assert!(host.calls.is_empty());
+
+    let origin = host.origin.clone();
+    let target = host.target.clone();
+    for malformed in [
+        Value::Null,
+        Value::Integer(1),
+        Value::Vector([1.0, f64::NAN, 3.0]),
+        Value::Vector([1.0, 2.0, f64::INFINITY]),
+    ] {
+        host.origin = malformed.clone();
+        host.target = target.clone();
+        assert!(matches!(
+            evaluate(&query, &mut host),
+            Err(EvalError::MalformedConfig(reason)) if reason == endpoint_error
+        ));
+        assert_eq!(std::mem::take(&mut host.calls), [Call::Read(ORIGIN)]);
+
+        host.origin = origin.clone();
+        host.target = malformed;
+        assert!(matches!(
+            evaluate(&query, &mut host),
+            Err(EvalError::MalformedConfig(reason)) if reason == endpoint_error
+        ));
+        assert_eq!(
+            std::mem::take(&mut host.calls),
+            [Call::Read(ORIGIN), Call::Read(TARGET)]
+        );
+    }
+}

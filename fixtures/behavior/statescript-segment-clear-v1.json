@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "case_id": "statescript-segment-clear.synthetic.v1",
+  "source": {"basis": "Original points and synthetic visibility replies."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "query": {
+      "$": "SegmentClear",
+      "origin": {"$": "STUConfigVarDynamic", "m_identifier": 71, "m_60DB8F99": false},
+      "target": {"$": "STUConfigVarDynamic", "m_identifier": 26, "m_60DB8F99": true}
+    },
+    "world": [
+      {"origin": [1.25, -3, 0], "target": [-8, 4.5, 2], "visibility": true},
+      {"origin": [-8, 4.5, 2], "target": [1.25, -3, 0], "visibility": false},
+      {"origin": [0, 0, 0], "target": [0, 0, 0], "visibility": null}
+    ]
+  },
+  "expected": {
+    "outputs": [true, false, null],
+    "query_steps": 1,
+    "shape_error": "expected SegmentClear origin and target",
+    "endpoint_error": "expected a finite segment endpoint"
+  }
+}
