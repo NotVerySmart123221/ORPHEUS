@@ -1530,7 +1530,7 @@ impl WorldDelivery {
             || {
                 motion_frame
                     .as_ref()
-                    .map_or_else(Vec::new, |frame| frame.movement_blockers(id.entity, team))
+                    .map_or_else(Vec::new, |frame| frame.blockers(id.entity, team))
             },
             |mover, command| {
                 if let Some(history) = detached_motion.as_deref_mut() {

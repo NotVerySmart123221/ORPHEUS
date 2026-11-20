@@ -481,9 +481,9 @@ impl SceneAssets {
             if self.graphs.uses_spatial_actor_rays() {
                 simulation.enable_spatial_actor_rays(Arc::clone(&self.movers));
             }
-            if self.graphs.uses_movement_contacts() {
-                simulation.enable_movement_contacts(Arc::clone(&self.movers));
-            }
+        }
+        if contacts.is_some() {
+            simulation.enable_movement_contacts(map.free_for_all, Arc::clone(&self.movers));
         }
         if let Some(gate) = junkenstein_gate {
             simulation

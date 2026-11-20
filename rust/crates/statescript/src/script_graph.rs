@@ -1485,7 +1485,6 @@ fn native_pose_needs_queries(value: &Value, class: &str) -> bool {
 struct RoomSpatialRequirements {
     needs: RoomSpatialNeeds,
     actor_rays: bool,
-    movement_contacts: bool,
 }
 
 impl RoomSpatialRequirements {
@@ -1493,7 +1492,6 @@ impl RoomSpatialRequirements {
         Self {
             needs: self.needs.max(other.needs),
             actor_rays: self.actor_rays || other.actor_rays,
-            movement_contacts: self.movement_contacts || other.movement_contacts,
         }
     }
 }
@@ -1535,7 +1533,6 @@ fn room_spatial_requirements(value: &Value) -> RoomSpatialRequirements {
                 RoomSpatialRequirements {
                     needs,
                     actor_rays: class == Some("EntityRayCast"),
-                    movement_contacts: false,
                 },
                 RoomSpatialRequirements::merge,
             )
@@ -1554,7 +1551,6 @@ pub struct GraphStore {
     projected_message_topics: BTreeSet<u64>,
     room_spatial_needs: RoomSpatialNeeds,
     uses_spatial_actor_rays: bool,
-    uses_movement_contacts: bool,
     uses_host_health_events: bool,
     bodies: BTreeMap<u64, Body>,
     entities: BTreeMap<u64, Body>,
@@ -1745,12 +1741,10 @@ impl GraphStore {
             .filter(|node| node.runs_on_server())
             .map(|node| {
                 let mut requirements = room_spatial_requirements(&node.fields);
-                requirements.movement_contacts = node.declares_swept_displacement_action();
                 if node.declares_health_change_action()
                     || node.declares_room_message_action()
                     || node.declares_room_cue_action()
                     || node.tracks_room_actor_identity()
-                    || requirements.movement_contacts
                 {
                     requirements.needs = requirements.needs.max(RoomSpatialNeeds::Queries);
                 }
@@ -1768,7 +1762,6 @@ impl GraphStore {
             projected_message_topics,
             room_spatial_needs: room_spatial_requirements.needs,
             uses_spatial_actor_rays: room_spatial_requirements.actor_rays,
-            uses_movement_contacts: room_spatial_requirements.movement_contacts,
             uses_host_health_events,
             bodies: keyed_by_guid(bundle.bodies)?,
             entities: keyed_by_guid(bundle.entities)?,
@@ -1802,11 +1795,6 @@ impl GraphStore {
     /// Whether a server operand needs frozen actor collision shapes.
     pub fn uses_spatial_actor_rays(&self) -> bool {
         self.uses_spatial_actor_rays
-    }
-
-    /// Whether an authored movement action needs living body contact shapes.
-    pub fn uses_movement_contacts(&self) -> bool {
-        self.uses_movement_contacts
     }
 
     /// Whether this bundle explicitly subscribes to a host health event.

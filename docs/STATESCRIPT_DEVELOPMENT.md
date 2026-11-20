@@ -562,23 +562,27 @@ when the host accepts the request.
 The player mover consumes the request once on the first actual posed
 frame at or after its due frame. Script-only timer updates can queue the
 request. NPCs consume it once when due on the room tick before their
-steering update. The same capsule solver checks static geometry and
-living bodies from the frozen room frame. Teammates pass through one
-another in team modes. In free-for-all every other living actor can
-block the sweep. The player mover also uses the same actor sample when
-integrating velocity on that pose. Death and runtime retirement clear
-pending displacement.
+steering update. Rooms with physical collision geometry freeze living
+body capsules before the first movement of each room tick. Regular
+player poses, recovered inputs, NPC patrol and objective movement, and
+scripted sweeps use this snapshot with the same capsule solver. Teammates
+pass through one another in team modes. In free-for-all every other
+living actor can block movement. Each mover checks the other actors'
+sampled positions for the duration of that tick. Death and runtime
+retirement clear pending displacement.
 
 An actual player displacement opens a bounded owner correction window at
 the moved pose. Delivery uses the existing create acknowledgement,
 packet budget, and input replay rules, including the input acknowledged
 before this motion. A correction for an already moved
 pose stays eligible if its body script stops. Body retirement discards
-the old generation's correction. Regular movement between scripted
-displacements and original-client acceptance still have separate checks.
+the old generation's correction. Shared regression and original-client
+movement acceptance remain open.
 
 See the [script dispatch contract](../fixtures/behavior/script-swept-displacement-v1.json)
 and the [native capsule contract](../fixtures/behavior/native-swept-displacement-v1.json).
+The [regular movement contract](../fixtures/behavior/native-regular-actor-contact-v1.json)
+covers player input recovery and NPC patrol and objective movement.
 The [owner motion contract](../fixtures/behavior/owner-swept-motion-v1.json)
 covers correction scheduling and a same-frame script failure.
 

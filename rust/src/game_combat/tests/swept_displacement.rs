@@ -81,8 +81,7 @@ fn authored_npc_displacement_is_consumed_once_with_room_team_contacts() {
     let contacts = Arc::new(ContactWorld::new(Vec::new()).unwrap());
     let ground = Arc::new(fixture_ground());
     let movers = Arc::new(MoverCatalog::default());
-    assert_eq!(graphs.room_spatial_needs(), RoomSpatialNeeds::Queries);
-    assert!(graphs.uses_movement_contacts());
+    assert_eq!(graphs.room_spatial_needs(), RoomSpatialNeeds::None);
     assert!(!graphs.uses_spatial_actor_rays());
     let obstacle_position = [3.6875, 0.0, 2.625];
     for (geometry_available, blocker_team, free_for_all, blocker_dead) in [
@@ -109,12 +108,7 @@ fn authored_npc_displacement_is_consumed_once_with_room_team_contacts() {
             blocker
         });
         let mut room = RoomSimulation::new(obstacle.into_iter().collect()).unwrap();
-        room.enable_spatial_queries(
-            free_for_all,
-            Arc::clone(&ground),
-            graphs.room_spatial_needs(),
-        );
-        room.enable_movement_contacts(Arc::clone(&movers));
+        room.enable_movement_contacts(free_for_all, Arc::clone(&movers));
         let wire = room
             .create_enemy(EnemySpawn {
                 graphs: Arc::clone(&graphs),
@@ -134,17 +128,24 @@ fn authored_npc_displacement_is_consumed_once_with_room_team_contacts() {
             &unavailable
         };
         room.finish_tick(first_queries, 0, Duration::ZERO).unwrap();
+        let initial_contacts = room.movement_contact_frame().unwrap();
+        room.prepare_movement_frame(0).unwrap();
+        assert!(Arc::ptr_eq(
+            &initial_contacts,
+            &room.movement_contact_frame().unwrap()
+        ));
         let blocking = !blocker_dead && blocker_team.is_some_and(|team| team != 1 || free_for_all);
         assert_eq!(
-            room.movement_contact_frame()
-                .unwrap()
-                .movement_blockers(wire, 1)
-                .len(),
+            initial_contacts.blockers(wire, 1).len(),
             usize::from(blocking)
         );
         assert_eq!(state(&room, wire).unwrap().bot.position, start);
         room.finish_tick(first_queries, 1, Duration::from_millis(16))
             .unwrap();
+        assert!(!Arc::ptr_eq(
+            &initial_contacts,
+            &room.movement_contact_frame().unwrap()
+        ));
         let moved = state(&room, wire).unwrap().bot.position;
         if blocking {
             assert!(

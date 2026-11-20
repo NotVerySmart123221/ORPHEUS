@@ -246,8 +246,20 @@ impl Mover {
         dt: f64,
         after_pose: impl FnMut(&mut Self, Command),
     ) -> Result<(), HullContactError> {
+        self.step_against(rays, newest, dt, &[], after_pose)
+    }
+
+    /// Use one frozen actor-contact slice for this command's recovered poses.
+    pub fn step_against(
+        &mut self,
+        rays: &TriangleIndex,
+        newest: Command,
+        dt: f64,
+        blockers: &[CapsulePose],
+        after_pose: impl FnMut(&mut Self, Command),
+    ) -> Result<(), HullContactError> {
         let mut pending = self.pending_poses(newest);
-        self.step_pending(rays, &mut pending, dt, usize::MAX, Vec::new, after_pose)?;
+        self.step_pending(rays, &mut pending, dt, usize::MAX, || blockers, after_pose)?;
         Ok(())
     }
 
@@ -255,21 +267,27 @@ impl Mover {
         poses(self.last_command, newest)
     }
 
-    pub(crate) fn step_pending(
+    pub(crate) fn step_pending<B: AsRef<[CapsulePose]>>(
         &mut self,
         rays: &TriangleIndex,
         pending: &mut Poses,
         dt: f64,
         limit: usize,
-        mut actor_capsules: impl FnMut() -> Vec<CapsulePose>,
+        mut actor_capsules: impl FnMut() -> B,
         mut after_pose: impl FnMut(&mut Self, Command),
     ) -> Result<usize, HullContactError> {
+        let blockers = if limit != 0 && pending.len() != 0 {
+            Some(actor_capsules())
+        } else {
+            None
+        };
+        let blockers = blockers.as_ref().map_or(&[][..], AsRef::as_ref);
         let mut stepped = 0;
         for mut command in pending.by_ref().take(limit) {
             if let Some(aim) = self.cinematic_aim.or(self.authored_facing) {
                 [command.yaw, command.pitch] = aim;
             }
-            self.step_pose(rays, command, dt, &mut actor_capsules)?;
+            self.step_pose(rays, command, dt, blockers)?;
             after_pose(self, command);
             stepped += 1;
         }
@@ -284,11 +302,10 @@ impl Mover {
         rays: &TriangleIndex,
         command: Command,
         dt: f64,
-        actor_capsules: &mut impl FnMut() -> Vec<CapsulePose>,
+        blockers: &[CapsulePose],
     ) -> Result<(), HullContactError> {
         self.swept_displacement_frame = None;
         let mut swept_changed = false;
-        let mut blockers = Vec::new();
         if self
             .swept_displacement
             .is_some_and(|(frame, _)| frame <= command.frame)
@@ -297,8 +314,7 @@ impl Mover {
             // fresh capsule so an error cannot separate the body from its feet.
             if let Some((_, displacement)) = self.swept_displacement.take() {
                 let before = self.pose.position;
-                blockers = actor_capsules();
-                self.apply_swept_displacement(displacement, dt, &blockers)?;
+                self.apply_swept_displacement(displacement, dt, blockers)?;
                 swept_changed = self.pose.position != before;
             }
         }
@@ -378,7 +394,7 @@ impl Mover {
             self.posture.apply_fall(settings.gravity_scale, dt);
         }
         let normal = probe.ground.map_or([0.0, 1.0, 0.0], |hit| hit.normal);
-        let vertical = self.move_body(rays, velocity, normal, dt, command.frame, &blockers)?;
+        let vertical = self.move_body(rays, velocity, normal, dt, command.frame, blockers)?;
         self.posture.finish_fall(settings.gravity_scale, vertical);
 
         if input.throttles != [0; 2] {
@@ -676,7 +692,7 @@ mod tests {
     }
 
     #[test]
-    fn swept_displacement_samples_actor_capsules_only_for_its_due_pose() {
+    fn posed_batches_sample_actor_capsules_without_empty_or_zero_budget_work() {
         let fixture = swept_fixture();
         let input = &fixture["input"];
         let due: u32 = input["due_frame"].as_u64().unwrap().try_into().unwrap();
@@ -725,7 +741,7 @@ mod tests {
                         |_, _| {},
                     )
                     .unwrap();
-                assert_eq!(samples, 0);
+                assert_eq!(samples, frame - 1);
             }
             mover
                 .step_pending(
@@ -740,7 +756,7 @@ mod tests {
                     |_, _| {},
                 )
                 .unwrap();
-            assert_eq!(samples, usize::from(frame >= due));
+            assert_eq!(samples, frame);
             assert_eq!(mover.swept_displacement_at(frame), frame == due);
         }
         assert!(mover.pose.position[2] > fixture["expected"]["wall_min_z"].as_f64().unwrap());
@@ -760,11 +776,122 @@ mod tests {
                 &mut pending,
                 0.016,
                 usize::MAX,
-                || panic!("canceled displacement must not sample actor capsules"),
+                || {
+                    samples += 1;
+                    vec![blocker]
+                },
                 |_, _| {},
             )
             .unwrap();
         assert_eq!(mover.pose.position, before);
+        assert_eq!(samples, due + 2);
+        mover
+            .step_pending(
+                &rays,
+                &mut pending,
+                0.016,
+                usize::MAX,
+                || -> Vec<CapsulePose> { panic!("exhausted poses must not sample actor capsules") },
+                |_, _| {},
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn regular_momentum_uses_one_actor_snapshot_for_all_recovered_poses() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/native-regular-actor-contact-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(fixture["schema_version"], 1);
+        assert_eq!(
+            fixture["case_id"],
+            "native-regular-actor-contact.synthetic.v1"
+        );
+        assert_eq!(fixture["evidence"], "synthetic-native");
+        let input = &fixture["input"];
+        let warmup_frame: u32 = input["warmup_frame"].as_u64().unwrap().try_into().unwrap();
+        let final_frame: u32 = input["final_frame"].as_u64().unwrap().try_into().unwrap();
+        let dt = input["dt"].as_f64().unwrap();
+        let settings = MoverSettings {
+            gravity_scale: 0.0,
+            decel_air_per_speed: 0.0,
+            stand_height: input["stand_height"].as_f64().unwrap(),
+            stand_radius: input["stand_radius"].as_f64().unwrap(),
+            ..MoverSettings::default()
+        };
+        let blocker = crate::mover_ground::standing_capsule(
+            &settings,
+            serde_json::from_value(input["actor_feet"].clone()).unwrap(),
+        );
+        let rays = TriangleIndex::new([]).unwrap();
+        let world = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+        let make = || Mover::new(settings, Arc::clone(&world), [0.0; 3], 0, 0x18).unwrap();
+        let mut blocked = make();
+        let mut free = make();
+        for mover in [&mut blocked, &mut free] {
+            mover
+                .step(
+                    &rays,
+                    Command {
+                        frame: warmup_frame,
+                        ..Command::default()
+                    },
+                    dt,
+                    |_, _| {},
+                )
+                .unwrap();
+            mover.pose.velocity = serde_json::from_value(input["velocity"].clone()).unwrap();
+        }
+        let command = Command {
+            frame: final_frame,
+            ..Command::default()
+        };
+        let mut pending = blocked.pending_poses(command);
+        assert_eq!(
+            pending.len(),
+            fixture["expected"]["posed_frames"].as_u64().unwrap() as usize
+        );
+        blocked
+            .step_pending(
+                &rays,
+                &mut pending,
+                dt,
+                0,
+                || -> Vec<CapsulePose> { panic!("zero pose budget must not sample actors") },
+                |_, _| {},
+            )
+            .unwrap();
+        let mut samples = 0;
+        let mut posed = 0;
+        blocked
+            .step_pending(
+                &rays,
+                &mut pending,
+                dt,
+                usize::MAX,
+                || {
+                    samples += 1;
+                    vec![blocker]
+                },
+                |mover, command| {
+                    posed += 1;
+                    assert!(
+                        mover.pose.position[2] < fixture["expected"]["maximum_z"].as_f64().unwrap()
+                    );
+                    assert!(!mover.swept_displacement_at(command.frame));
+                },
+            )
+            .unwrap();
+        free.step(&rays, command, dt, |_, _| {}).unwrap();
+        assert_eq!(
+            samples,
+            fixture["expected"]["sample_count"].as_u64().unwrap()
+        );
+        assert_eq!(posed, fixture["expected"]["posed_frames"].as_u64().unwrap());
+        assert!(blocked.pose.position[2] > fixture["expected"]["minimum_z"].as_f64().unwrap());
+        assert!(free.pose.position[2] > fixture["expected"]["maximum_z"].as_f64().unwrap());
+        assert!(!blocked.has_swept_displacement());
     }
 
     #[test]

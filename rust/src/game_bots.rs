@@ -297,8 +297,16 @@ impl PatrolCollision {
         })
     }
 
-    fn advance(&mut self, tick: u32, from: [f64; 3], to: [f64; 3], dt: f64) -> [f64; 3] {
-        self.try_advance(tick, from, to, dt, &[]).unwrap_or(from)
+    fn advance(
+        &mut self,
+        tick: u32,
+        from: [f64; 3],
+        to: [f64; 3],
+        dt: f64,
+        blockers: &[CapsulePose],
+    ) -> [f64; 3] {
+        self.try_advance(tick, from, to, dt, blockers)
+            .unwrap_or(from)
     }
 
     fn try_advance(
@@ -388,6 +396,7 @@ pub struct Bot {
     target: Option<[f64; 3]>,
     waypoints: VecDeque<[f64; 3]>,
     collision: Option<PatrolCollision>,
+    movement_blockers: Option<(u32, Arc<[CapsulePose]>)>,
     plans: Option<Arc<PatrolPlans>>,
     start: [f64; 3],
     keys: bool,
@@ -454,6 +463,7 @@ impl Bot {
             target: None,
             waypoints: VecDeque::new(),
             collision: None,
+            movement_blockers: None,
             plans: None,
             start: spawn.position,
             keys: false,
@@ -758,12 +768,14 @@ impl Bot {
         script: &PatrolScript,
         ground: &mut impl FnMut(f64, f64, f64, f64) -> Option<f64>,
     ) -> io::Result<()> {
+        let blockers = self.movement_blocker_snapshot(tick);
+        let blockers = blockers.as_deref().unwrap_or(&[]);
         if first_step {
             self.wait = script.wait(self.ai_actor_snapshot(tick), WaitEvent::Spawn, tick)?;
         }
         let dt = TICK_PERIOD.as_secs_f64();
         for at in tick - (ticks - 1)..=tick {
-            self.tick(at, dt, script, ground)?;
+            self.tick(at, dt, script, ground, blockers)?;
         }
         Ok(())
     }
@@ -774,6 +786,7 @@ impl Bot {
         dt: f64,
         script: &PatrolScript,
         ground: &mut impl FnMut(f64, f64, f64, f64) -> Option<f64>,
+        blockers: &[CapsulePose],
     ) -> io::Result<()> {
         let before = (self.position, self.yaw.round_ties_even());
         self.held = [0; 2];
@@ -795,10 +808,10 @@ impl Bot {
             }
         }
         if self.keys {
-            self.walk(tick, dt, script, ground)?;
+            self.walk(tick, dt, script, ground, blockers)?;
         } else {
             if self.target.is_some() {
-                self.slide(tick, dt, ground);
+                self.slide(tick, dt, ground, blockers);
             }
             if self.turning > EPSILON {
                 self.turning -= dt;
@@ -817,6 +830,7 @@ impl Bot {
         dt: f64,
         script: &PatrolScript,
         ground: &mut impl FnMut(f64, f64, f64, f64) -> Option<f64>,
+        blockers: &[CapsulePose],
     ) -> io::Result<()> {
         let mut offset = self.to_target();
         let mut distance = offset[0].hypot(offset[1]);
@@ -854,7 +868,7 @@ impl Bot {
         self.held = throttles(self.yaw, self.direction);
         self.last_held = self.held;
         self.input_tick = Some(tick);
-        self.advance(tick, stride, distance, dt, ground);
+        self.advance(tick, stride, distance, ground, blockers);
         Ok(())
     }
 
@@ -863,13 +877,14 @@ impl Bot {
         tick: u32,
         dt: f64,
         ground: &mut impl FnMut(f64, f64, f64, f64) -> Option<f64>,
+        blockers: &[CapsulePose],
     ) {
         self.pace = (self.pace - self.walk.brake * dt).max(0.0);
         let [dx, dz] = self.to_target();
         let distance = dx.hypot(dz);
         if self.pace > 0.0
             && distance > EPSILON
-            && self.advance(tick, self.pace * dt, distance, dt, ground) < distance - EPSILON
+            && self.advance(tick, self.pace * dt, distance, ground, blockers) < distance - EPSILON
         {
             return;
         }
@@ -917,9 +932,10 @@ impl Bot {
         tick: u32,
         mut stride: f64,
         distance: f64,
-        dt: f64,
         ground: &mut impl FnMut(f64, f64, f64, f64) -> Option<f64>,
+        blockers: &[CapsulePose],
     ) -> f64 {
+        let dt = TICK_PERIOD.as_secs_f64();
         let [x, y, z] = self.position;
         let [dx, dz] = self.direction;
         let probe = stride.min(distance);
@@ -943,7 +959,7 @@ impl Bot {
         };
         let intended = [nx, ny, nz];
         let [nx, ny, nz] = self.collision.as_mut().map_or(intended, |collision| {
-            collision.advance(tick, self.position, intended, dt)
+            collision.advance(tick, self.position, intended, dt, blockers)
         });
         self.position = [nx, ny, nz];
         self.velocity = [(nx - x) / dt, (ny - y) / dt, (nz - z) / dt];
@@ -981,6 +997,7 @@ impl Bot {
 
     pub fn died(&mut self, tick: u32) {
         self.dead = true;
+        self.movement_blockers = None;
         self.keys = false;
         self.held = [0; 2];
         self.stand();
@@ -1035,6 +1052,31 @@ impl Bot {
         self.velocity_changes.extend(changes);
     }
 
+    /// Freeze the room's actor-contact admission for this update tick.
+    pub(crate) fn set_movement_blockers(&mut self, tick: u32, blockers: Vec<CapsulePose>) {
+        self.movement_blockers = Some((tick, blockers.into()));
+    }
+
+    pub(crate) fn has_movement_blockers(&self, tick: u32) -> bool {
+        self.movement_blockers
+            .as_ref()
+            .is_some_and(|(at, _)| *at == tick)
+    }
+
+    pub(crate) fn movement_blockers(&self, tick: u32) -> &[CapsulePose] {
+        self.movement_blockers
+            .as_ref()
+            .filter(|(at, _)| *at == tick)
+            .map_or(&[], |(_, blockers)| blockers.as_ref())
+    }
+
+    fn movement_blocker_snapshot(&self, tick: u32) -> Option<Arc<[CapsulePose]>> {
+        self.movement_blockers
+            .as_ref()
+            .filter(|(at, _)| *at == tick)
+            .map(|(_, blockers)| Arc::clone(blockers))
+    }
+
     /// Use the bound physical capsule, or the same standing geometry before binding.
     pub(crate) fn contact_capsule(&self, settings: &MoverSettings) -> CapsulePose {
         self.collision.as_ref().map_or_else(
@@ -1051,11 +1093,11 @@ impl Bot {
         &mut self,
         tick: u32,
         displacement: SweptDisplacement,
-        actor_capsules: &[CapsulePose],
     ) -> bool {
         if self.dead {
             return false;
         }
+        let blockers = self.movement_blocker_snapshot(tick);
         let Some(collision) = self.collision.as_mut() else {
             return false;
         };
@@ -1069,9 +1111,13 @@ impl Bot {
         {
             return false;
         }
-        let Ok(after) =
-            collision.try_advance(tick, from, to, TICK_PERIOD.as_secs_f64(), actor_capsules)
-        else {
+        let Ok(after) = collision.try_advance(
+            tick,
+            from,
+            to,
+            TICK_PERIOD.as_secs_f64(),
+            blockers.as_deref().unwrap_or(&[]),
+        ) else {
             return false;
         };
         self.position = after;
@@ -1112,8 +1158,15 @@ impl Bot {
             intended = std::array::from_fn(|axis| start[axis] + velocity[axis] * dt);
         }
         self.velocity_changes.retain(|&(frame, _)| frame > tick);
+        let blockers = self.movement_blocker_snapshot(tick);
         let collision = self.collision.as_mut().expect("bound objective capsule");
-        self.position = collision.advance(tick, start, intended, dt);
+        self.position = collision.advance(
+            tick,
+            start,
+            intended,
+            dt,
+            blockers.as_deref().unwrap_or(&[]),
+        );
         if self.position == start {
             self.stop_objective(tick);
             return;
@@ -1249,7 +1302,7 @@ mod tests {
             SweptDisplacement::new(serde_json::from_value(input["displacement"].clone()).unwrap())
                 .unwrap();
         let mut free = walker([0.0, 0.0, 10.0]);
-        assert!(!free.apply_swept_displacement(1, displacement, &[]));
+        assert!(!free.apply_swept_displacement(1, displacement));
         assert_eq!(free.position, [0.0; 3]);
         free.attach_collision(
             &settings,
@@ -1263,7 +1316,7 @@ mod tests {
         free.held = [21, -32];
         let before = free.movement(1);
         let input_tick = free.input_tick;
-        assert!(free.apply_swept_displacement(2, displacement, &[]));
+        assert!(free.apply_swept_displacement(2, displacement));
         assert_eq!(free.position, displacement.delta().map(f64::from));
         let after = free.movement(2);
         assert_eq!(after.velocity, before.velocity);
@@ -1275,7 +1328,7 @@ mod tests {
         assert_eq!(free.moved_tick, Some(2));
         free.dead = true;
         let stopped = free.position;
-        assert!(!free.apply_swept_displacement(3, displacement, &[]));
+        assert!(!free.apply_swept_displacement(3, displacement));
         assert_eq!(free.position, stopped);
 
         let wall = Mesh {
@@ -1309,7 +1362,7 @@ mod tests {
             serde_json::from_value(input["wall_displacement"].clone()).unwrap(),
         )
         .unwrap();
-        assert!(blocked.apply_swept_displacement(10, displacement, &[]));
+        assert!(blocked.apply_swept_displacement(10, displacement));
         assert!(blocked.position[2] > fixture["expected"]["wall_min_z"].as_f64().unwrap());
         assert!(blocked.position[2] < fixture["expected"]["wall_max_z"].as_f64().unwrap());
         assert_eq!(blocked.velocity, before.velocity);
@@ -1322,7 +1375,7 @@ mod tests {
         assert_eq!(clip.tick, 10);
         assert_eq!(clip.after, blocked.position);
         let stopped = blocked.position;
-        assert!(blocked.apply_swept_displacement(11, displacement, &[]));
+        assert!(blocked.apply_swept_displacement(11, displacement));
         let tolerance = fixture["expected"]["repeated_block_tolerance"]
             .as_f64()
             .unwrap();
@@ -1344,7 +1397,8 @@ mod tests {
             &settings,
             serde_json::from_value(input["actor_feet"].clone()).unwrap(),
         );
-        assert!(actor_blocked.apply_swept_displacement(20, displacement, &[actor]));
+        actor_blocked.set_movement_blockers(20, vec![actor]);
+        assert!(actor_blocked.apply_swept_displacement(20, displacement));
         assert!(actor_blocked.position[2] > fixture["expected"]["wall_min_z"].as_f64().unwrap());
         assert!(actor_blocked.position[2] < fixture["expected"]["wall_max_z"].as_f64().unwrap());
         assert_eq!(actor_blocked.velocity, before.velocity);
@@ -1354,6 +1408,61 @@ mod tests {
             actor_blocked.contact_capsule(&settings),
             standing_capsule(&settings, actor_blocked.position)
         );
+    }
+
+    #[test]
+    fn patrol_catch_up_and_objective_movement_share_tick_scoped_actor_contacts() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/native-regular-actor-contact-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(fixture["evidence"], "synthetic-native");
+        let input = &fixture["input"];
+        let settings = MoverSettings {
+            stand_height: input["stand_height"].as_f64().unwrap(),
+            stand_radius: input["stand_radius"].as_f64().unwrap(),
+            ..MoverSettings::default()
+        };
+        let actor = standing_capsule(
+            &settings,
+            serde_json::from_value(input["actor_feet"].clone()).unwrap(),
+        );
+        let world = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+        let patrol = PatrolScript::load().unwrap();
+        let mut blocked = walker([0.0, 0.0, 10.0]);
+        let mut free = walker([0.0, 0.0, 10.0]);
+        for bot in [&mut blocked, &mut free] {
+            bot.attach_collision(&settings, Arc::clone(&world), 0x18, |_, _, _, _| Some(0.0));
+            bot.keys = true;
+            bot.target = Some([0.0, 0.0, 10.0]);
+            bot.pace = bot.walk.speed;
+            bot.last_tick = Some(0);
+        }
+        blocked.set_movement_blockers(100, vec![actor]);
+        assert!(blocked.has_movement_blockers(100));
+        assert_eq!(blocked.movement_blockers(100), &[actor]);
+        assert!(!blocked.has_movement_blockers(99));
+        assert!(blocked.movement_blockers(99).is_empty());
+        blocked.step(100, &patrol, |_, _, _, _| Some(0.0)).unwrap();
+        free.step(100, &patrol, |_, _, _, _| Some(0.0)).unwrap();
+        let maximum_z = fixture["expected"]["maximum_z"].as_f64().unwrap();
+        assert!(blocked.position[2] > fixture["expected"]["minimum_z"].as_f64().unwrap());
+        assert!(blocked.position[2] < maximum_z);
+        assert!(free.position[2] > maximum_z);
+        let fresh = blocked.respawned(BOT_ENTITY + 1, 101);
+        assert!(!fresh.has_movement_blockers(100));
+        assert!(fresh.movement_blockers(100).is_empty());
+
+        blocked.set_movement_blockers(101, vec![actor]);
+        blocked.move_to_objective(101, [0.0, 0.0, 10.0], 1000.0);
+        assert!(blocked.position[2] < maximum_z);
+        assert!(blocked.movement_blockers(102).is_empty());
+        blocked.move_to_objective(102, [0.0, 0.0, 10.0], 1000.0);
+        assert!(blocked.position[2] > maximum_z);
+        blocked.set_movement_blockers(103, vec![actor]);
+        blocked.died(103);
+        assert!(!blocked.has_movement_blockers(103));
+        assert!(blocked.movement_blockers(103).is_empty());
     }
 
     fn route_vector(bots: &mut [Bot], ticks: impl IntoIterator<Item = u32>) -> String {

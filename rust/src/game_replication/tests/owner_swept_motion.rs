@@ -2,9 +2,7 @@ use super::*;
 
 #[test]
 fn player_displacement_uses_room_actor_contacts_for_the_authoritative_pose() {
-    use crate::{
-        mover::VelocityChange, script_graph::RoomSpatialNeeds, script_init::SweptDisplacement,
-    };
+    use crate::{mover::VelocityChange, script_init::SweptDisplacement};
 
     let card = PlayerCard::default();
     let viewer = PlayerAppearance {
@@ -36,9 +34,11 @@ fn player_displacement_uses_room_actor_contacts_for_the_authoritative_pose() {
             None,
         ))
         .unwrap();
-        room.enable_spatial_queries(false, Arc::new(fixture_ground()), RoomSpatialNeeds::Queries);
-        room.enable_movement_contacts(Arc::new(crate::mover_settings::MoverCatalog::default()));
-        room.prepare_spatial_frame(101).unwrap();
+        room.enable_movement_contacts(
+            false,
+            Arc::new(crate::mover_settings::MoverCatalog::default()),
+        );
+        room.prepare_movement_frame(101).unwrap();
         let mover = &mut room.player_body_mut(id).unwrap().mover;
         assert!(mover.queue_swept_displacement(101, displacement));
         mover.queue_velocity_change(101, VelocityChange::Delta([velocity_x, 0.0, 0.0]));

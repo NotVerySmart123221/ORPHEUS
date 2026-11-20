@@ -18,7 +18,6 @@ use crate::{
     collision_index::IndexError,
     collision_scene::CollisionScene,
     commands::Command,
-    contact_cache::CapsulePose,
     game_bots::{BOT_ENTITY, BOT_RECORD_DELAY, BOT_RESPAWN_TIME, Bot},
     game_combat_messages::CombatNotice,
     game_heroes::SOLDIER,
@@ -258,6 +257,7 @@ mod encounter;
 mod enemy;
 mod health;
 mod health_events;
+mod movement;
 mod player;
 mod script_requests;
 pub(crate) use encounter::{
@@ -299,7 +299,6 @@ struct FlightBatch {
 pub(crate) struct RoomSpatialFrame {
     candidates: Vec<SpatialCandidate>,
     actor_capsules: Option<BTreeMap<u32, TargetPose>>,
-    movement_contacts: Option<BTreeMap<u32, (Option<u8>, CapsulePose)>>,
     entity_facts: Option<BTreeMap<u32, RoomEntityFacts>>,
     script_targets: HashMap<u32, RoomScriptTarget>,
     player_wires: HashMap<u32, u32>,
@@ -313,16 +312,6 @@ pub(crate) struct RoomSpatialFrame {
 impl RoomSpatialFrame {
     pub(crate) fn candidates(&self) -> &[SpatialCandidate] {
         &self.candidates
-    }
-
-    pub(crate) fn movement_blockers(&self, source: u32, team: u8) -> Vec<CapsulePose> {
-        self.movement_contacts
-            .iter()
-            .flatten()
-            .filter_map(|(&entity, &(other_team, pose))| {
-                (entity != source && other_team != Some(team)).then_some(pose)
-            })
-            .collect()
     }
 
     pub(crate) fn actor_pose(&self, entity: u32) -> Option<(Vec3, [i32; 2])> {
@@ -518,7 +507,6 @@ struct RoomSpatialQueries {
     ground: Arc<CollisionScene>,
     needs: RoomSpatialNeeds,
     actor_movers: Option<Arc<crate::mover_settings::MoverCatalog>>,
-    movement_movers: Option<Arc<crate::mover_settings::MoverCatalog>>,
 }
 
 /// Room-authoritative bot bodies, player bodies, and in-flight projectiles.
@@ -531,6 +519,7 @@ pub(crate) struct RoomSimulation {
     team_member_counts: Option<crate::game_instance::TeamMemberCounts>,
     spatial_queries: Option<RoomSpatialQueries>,
     spatial_frame: Option<(u32, Arc<RoomSpatialFrame>)>,
+    movement_contacts: Option<movement::MovementContacts>,
     health_events: health_events::RoomHealthEvents,
     // Generation maps live for the room's lifetime so reconnects cannot reset history.
     player_generations: HashMap<u32, u64>,
@@ -847,6 +836,7 @@ impl RoomSimulation {
             team_member_counts: None,
             spatial_queries: None,
             spatial_frame: None,
+            movement_contacts: None,
             health_events: health_events::RoomHealthEvents::default(),
             player_generations: HashMap::new(),
             latest_wire_generations: HashMap::new(),
@@ -900,7 +890,6 @@ impl RoomSimulation {
             ground,
             needs,
             actor_movers: None,
-            movement_movers: None,
         });
     }
 
@@ -911,21 +900,6 @@ impl RoomSimulation {
         if let Some(queries) = &mut self.spatial_queries {
             queries.actor_movers = Some(movers);
         }
-    }
-
-    pub(crate) fn enable_movement_contacts(
-        &mut self,
-        movers: Arc<crate::mover_settings::MoverCatalog>,
-    ) {
-        if let Some(queries) = &mut self.spatial_queries {
-            queries.movement_movers = Some(movers);
-        }
-    }
-
-    pub(crate) fn movement_contact_frame(&self) -> Option<Arc<RoomSpatialFrame>> {
-        let (_, frame) = self.spatial_frame.as_ref()?;
-        frame.movement_contacts.as_ref()?;
-        Some(Arc::clone(frame))
     }
 
     /// Capture room state without changing the room's published frame.
@@ -943,7 +917,6 @@ impl RoomSimulation {
             .as_ref()
             .map(|movers| BotQueries::new(queries.free_for_all, movers, &queries.ground, None));
         let mut actor_capsules = actor_queries.as_ref().map(|_| BTreeMap::new());
-        let mut movement_contacts = queries.movement_movers.as_ref().map(|_| BTreeMap::new());
         let mut entity_facts = (queries.needs >= RoomSpatialNeeds::EntityFacts).then(BTreeMap::new);
         let include_tags = queries.needs == RoomSpatialNeeds::EntityTags;
         let mut script_targets = HashMap::with_capacity(capacity);
@@ -965,13 +938,6 @@ impl RoomSimulation {
             }
             if alive {
                 let pose = bot.movement(frame);
-                if let Some((contacts, movers)) = movement_contacts
-                    .as_mut()
-                    .zip(queries.movement_movers.as_deref())
-                {
-                    let settings = movers.for_body(Some(bot.spawn.body));
-                    contacts.insert(bot.entity, (team, bot.contact_capsule(settings)));
-                }
                 if let Some((capsules, actor_queries)) =
                     actor_capsules.as_mut().zip(actor_queries.as_ref())
                 {
@@ -1029,9 +995,6 @@ impl RoomSimulation {
             }
             if alive {
                 let pose = state.mover.pose();
-                if let Some(contacts) = &mut movement_contacts {
-                    contacts.insert(wire, (team, state.mover.contact_capsule()));
-                }
                 if let Some(capsules) = &mut actor_capsules {
                     capsules.insert(wire, state.target_pose());
                 }
@@ -1061,7 +1024,6 @@ impl RoomSimulation {
         Ok(Some(Arc::new(RoomSpatialFrame {
             candidates,
             actor_capsules,
-            movement_contacts,
             entity_facts,
             script_targets,
             player_wires,
@@ -1083,9 +1045,6 @@ impl RoomSimulation {
         view.player_wires.remove(&owner);
         if let Some(capsules) = &mut view.actor_capsules {
             capsules.remove(&wire);
-        }
-        if let Some(contacts) = &mut view.movement_contacts {
-            contacts.remove(&wire);
         }
         if let Some(facts) = &mut view.entity_facts {
             facts.remove(&wire);
@@ -2117,7 +2076,9 @@ impl RoomSimulation {
         tick: u32,
         now: Duration,
     ) -> Result<Vec<BotReplacement>, CombatError> {
+        self.prepare_movement_frame(tick)?;
         self.prepare_spatial_frame(tick)?;
+        let motion_frame = self.movement_contact_frame();
         self.states().try_for_each(|state| state.map(|_| ()))?;
         self.validate_gate_and_encounter_handles()?;
         if !self.players_by_wire.is_empty() {
@@ -2221,6 +2182,9 @@ impl RoomSimulation {
                 bot, vitals, enemy, ..
             } = &mut *state;
             if let Some(enemy) = enemy.as_mut().filter(|enemy| enemy.fault.is_none()) {
+                if let Some(frame) = &motion_frame {
+                    frame.stage_bot(bot, tick);
+                }
                 if let Some(displacement) = enemy
                     .scripts
                     .take_swept_displacement(tick)
@@ -2230,14 +2194,7 @@ impl RoomSimulation {
                         enemy.objective_mover_attached = queries.attach_objective_mover(bot);
                     }
                     if enemy.objective_mover_attached {
-                        let blockers = enemy
-                            .binding
-                            .spatial_frame
-                            .as_ref()
-                            .map_or_else(Vec::new, |frame| {
-                                frame.movement_blockers(bot.entity, bot.spawn.team)
-                            });
-                        bot.apply_swept_displacement(tick, displacement, &blockers);
+                        bot.apply_swept_displacement(tick, displacement);
                     }
                 }
                 enemy.binding.frame = tick;
