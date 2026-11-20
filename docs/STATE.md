@@ -151,19 +151,29 @@ The prepared 104319 input probe starts a fresh room for each of the 32
 catalog actors. All 11 admitted bodies acknowledged possession, an initial
 owner script frame, and a subsequent update. Ten retained their runtime
 through 100 frames of idle, forward movement, primary, and secondary input.
-Zarya stopped after 59 completed frames when held secondary reached
-`0242:21` (`STU_CEBDAF17`), an action whose current dispatch is limited
-to specific graphs and nodes.
+Zarya stopped after 59 completed frames at `0242:21` (`STU_CEBDAF17`),
+an action whose dispatch is limited to specific graphs and nodes. A second
+run with 80 idle frames before movement stopped at the same frame and
+site, before either attack input.
 
 Only Soldier: 76 produced combat requests in this schedule, with four
 hitscan requests and one projectile launch. A temporary trace at the VM shot
 drain saw exactly those five events. The other bodies emitted no weapon
-volley events during this sample. This narrows the firing investigation to
-the script side of the combat handoff. The probe counts requests and
-owner acknowledgements. Hit results, ability coverage, and playability
+volley events during this sample. Before the host filter, the 176-frame
+sample reproduced the same five events. Only Soldier: 76 and Hanzo
+reached an active logical-button callback for the observed attack
+inputs, and only Soldier: 76 reached volley scheduling. Ability-edge
+callbacks remain unmeasured. The probe counts requests
+and owner acknowledgements. Hit results, ability coverage, and playability
 still need their own acceptance. Run the ignored
 `prepared_practice_catalog_observes_input_survival_and_owner_egress` test
 with the prepared runtime to reproduce the matrix.
+
+The tagged 104319 encrypted loopback also covered an attempted Tracer
+selection followed by a Reaper selection. The rejected selection retained
+the current body and generation. The next selection published the controller
+update, replacement body, and old body retirement, and the ensuing reskin
+published a third generation.
 
 | Workflow | Python reference | Rust implementation | Open client or parity gap |
 | --- | --- | --- | --- |

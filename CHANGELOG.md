@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Verified rejected and accepted catalog selections in the tagged 104319 encrypted loopback. A rejected scripted body preserves the previous generation. The next valid selection and its reskin both complete. A separate longer input probe reproduced the same volley counts and showed that Zarya's runtime stop also occurs before attack input.
+
 - Exercised primary and secondary input after queued selection and owner acknowledgements for the prepared actor catalog. Eleven bodies attached, ten completed the 100-frame schedule, and Zarya's runtime stopped during held secondary input at an unsupported dispatch site. Only Soldier: 76 emitted weapon volley events. Both prepared input tests, the locked all-targets workspace tests with script coverage, and Clippy passed.
 
 - Selected Practice Range body scripts from the prepared actor catalog. The scene caches static graph layouts. A selected candidate starts with the actual room context and must pass both baseline checks before its body is committed. On the same 104319 inputs, ordinary attachments rose from one to 11, and queued selection installed 11 of 32 bodies. The input-gap replacement and all 476 #72 observations passed. The locked workspace check, workspace tests with script coverage, Clippy, and Python script tests passed.
