@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Preserve a StateScript observation's output through queued state initialization. Starts from a stale activation or frame are discarded, and higher-priority bindings continue to control visibility. Shared-branch verification is pending.
+
 - Added room-actor identity tracking for authored target scopes. The opted-in tracker retires an old body's child scripts and timers before dispatch when the room reuses its entity ID. Shared-branch verification is pending.
 
 - Fixed NPC script direction sampling when navigation turns a body with an active authored facing claim. The room can publish the navigation pose on the frame the claim ends. Shared-branch verification is pending.

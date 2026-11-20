@@ -119,6 +119,11 @@ unavailable geometry, known misses, failure callbacks, and retirement before
 callback dispatch.
 [Synthetic observation sample fixture](../fixtures/behavior/statescript-observation-sample-v1.json)
 
+The deferred facing cases check that two rays can share one output while
+each queued claim initializes from its own sample. They cover direct and
+forwarded action links, ordinary reads after the callback, and
+cancellation of starts by the source activation or destination state.
+
 The Rust-only held input lifecycle contract verifies automatic listener
 registration, branch ownership, and cancellation of sibling restarts
 queued during release. It also covers late entry, lock release, owner death

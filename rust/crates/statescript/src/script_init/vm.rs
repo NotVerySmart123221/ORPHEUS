@@ -20,7 +20,10 @@ use crate::{
 use super::{
     ABILITY_HELD, ABILITY_PUSHED, ABILITY_RUNNING, ABORT_PLUG, MAX_EVENTS_PER_UPDATE,
     MAX_PLAY_INSTANCES, MAX_PLUG_DEPTH, Root, SCRIPT_SOURCE,
-    machine::{AbilityPress, Event, LinkValue, Machine, Startup, StateKey, VarKey, VariableLink},
+    machine::{
+        AbilityPress, Event, LinkValue, Machine, ObservedSample, Startup, StateKey, VarKey,
+        VariableLink,
+    },
     shapes::{
         ability_is_stacked, array_field, configured, field, is_entry, is_self_target, same,
         source_key, stored,
@@ -44,6 +47,7 @@ pub(super) struct Vm<'graph, 'world, 'machine, W> {
     pub(super) machine: &'machine mut Machine,
     pub(super) parameters: Option<Arc<Variables>>,
     health_target_facts: Option<Arc<HealthTargetFacts>>,
+    observed_sample: Option<Arc<ObservedSample>>,
     pub(super) output_write_depth: usize,
 }
 
@@ -59,6 +63,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             machine,
             parameters: None,
             health_target_facts: None,
+            observed_sample: None,
             output_write_depth: 0,
         }
     }
@@ -1109,6 +1114,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         Event::Assign(target, value) => self.write(target, value)?,
                         Event::ExitInstance => self.exit_instance(id)?,
                         Event::Begin(raw) => self.begin(key(raw), 0)?,
+                        Event::BeginObserved { state, sample } => {
+                            self.begin_from_sample(key(state), sample)?;
+                        }
                         Event::Finish(raw) => self.end(key(raw), true, 0)?,
                         Event::Abort(raw) => self.end(key(raw), false, 0)?,
                         Event::Changed(raw) => self.changed(key(raw))?,
@@ -2282,6 +2290,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             foreign_reads: Vec::new(),
             parameters: self.parameters.as_deref(),
             health_target_facts: self.health_target_facts.as_deref(),
+            observed_sample: self.observed_sample.as_deref(),
             watcher,
             read_native: false,
             read_clock: false,
@@ -2385,6 +2394,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
     }
 
     pub(in crate::script_init) fn set_base(&mut self, key: VarKey, value: Value) {
+        if let Some(sample) = self.observed_sample.as_mut().filter(|sample| {
+            sample
+                .input
+                .as_ref()
+                .is_some_and(|(output, _)| *output == key)
+        }) {
+            Arc::make_mut(sample).input = Some((key, value.clone()));
+        }
         match key {
             VarKey::Entity(id) => self.machine.snapshot.variables.insert(id, value),
             VarKey::Instance(instance, id) => self.machine.snapshot.instances[&instance]
@@ -2509,6 +2526,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     }
                     let event = if input == ABORT_PLUG {
                         Event::Abort(raw)
+                    } else if let Some(sample) = &self.observed_sample {
+                        Event::BeginObserved {
+                            state: raw,
+                            sample: Arc::clone(sample),
+                        }
                     } else {
                         Event::Begin(raw)
                     };

@@ -62,6 +62,14 @@ pub(super) struct ActorTargetGuard {
     pub(super) identity: u64,
 }
 
+#[derive(Clone)]
+pub(super) struct ObservedSample {
+    pub(super) source: StateKey,
+    pub(super) activation: u16,
+    pub(super) frame: u32,
+    pub(super) input: Option<(VarKey, Value)>,
+}
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum RegisteredClass {
     CinematicAim,
@@ -149,6 +157,10 @@ pub(super) enum Event {
     Assign(VarKey, Value),
     ExitInstance,
     Begin(u16),
+    BeginObserved {
+        state: u16,
+        sample: Arc<ObservedSample>,
+    },
     Finish(u16),
     Abort(u16),
     Changed(u16),
@@ -188,6 +200,13 @@ pub(super) enum Startup {
 }
 
 impl Event {
+    pub(super) fn begin_state(&self) -> Option<u16> {
+        match *self {
+            Self::Begin(state) | Self::BeginObserved { state, .. } => Some(state),
+            _ => None,
+        }
+    }
+
     pub(super) fn state(&self) -> Option<u16> {
         match *self {
             Self::SpawnResult { key, .. } => Some(key.raw),
@@ -199,6 +218,7 @@ impl Event {
             | Self::Message { .. }
             | Self::Button(_) => None,
             Self::Begin(state)
+            | Self::BeginObserved { state, .. }
             | Self::Finish(state)
             | Self::Abort(state)
             | Self::Changed(state)
@@ -580,13 +600,14 @@ impl Machine {
     }
 
     pub(super) fn value(&self, key: VarKey, below: Option<StateKey>) -> Value {
-        self.value_with_clock_dependency(key, below).0
+        self.value_with_clock_dependency(key, below, None).0
     }
 
     pub(super) fn value_with_clock_dependency(
         &self,
         key: VarKey,
         below: Option<StateKey>,
+        sampled_base: Option<&Value>,
     ) -> (Value, bool) {
         let link = self.links.get(&key).and_then(|entries| {
             entries
@@ -599,7 +620,12 @@ impl Machine {
                 self.link_value(entry),
                 matches!(entry.output, LinkValue::Cooldown | LinkValue::Volley(0)),
             ),
-            None => (stored(&self.snapshot, key), false),
+            None => (
+                sampled_base
+                    .cloned()
+                    .unwrap_or_else(|| stored(&self.snapshot, key)),
+                false,
+            ),
         }
     }
 

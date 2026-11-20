@@ -1,6 +1,6 @@
 //! StateScript state ticking, timers, watches, switches, registration, and teardown.
 
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, sync::Arc};
 
 use serde_json::Value as Json;
 
@@ -13,7 +13,7 @@ use crate::{
 
 use super::super::{
     ABILITY_HELD, MAX_PLUG_DEPTH, SUBGRAPH_STATES, SWITCH_TO_FALSE, SWITCH_TO_TRUE,
-    machine::{Event, RegisteredClass, Startup, StateKey, VarKey},
+    machine::{Event, ObservedSample, RegisteredClass, Startup, StateKey, VarKey},
     shapes::{
         array_field, branch_path, case_path, configured, field, is_unlinked_plug, pool_number,
         raw_indices, registered_state, same, source_key, stored,
@@ -793,9 +793,19 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
         };
         state.watch_seen = Some(value.clone());
-        self.write(source_key(id, target), value)?;
-        if changed {
-            self.follow(id, node, "on_change", Some(key), 0)?;
+        let output = source_key(id, target);
+        self.write(output, value)?;
+        if changed
+            && configured(node, "on_change")
+            && self.is_current_observation(key, activation, frame)
+        {
+            let sample = Arc::new(ObservedSample {
+                source: key,
+                activation,
+                frame,
+                input: Some((output, self.machine.value(output, None))),
+            });
+            self.with_observed_sample(sample, |vm| vm.follow(id, node, "on_change", Some(key), 0))?;
         }
         if !self
             .state(key)
@@ -826,17 +836,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         frame: u32,
         available: bool,
     ) -> Result<(), InitFault> {
-        if frame != self.machine.frame
-            || !self.state(key).is_some_and(|state| {
-                state.active
-                    && !state.ending
-                    && state.activation == activation
-                    && state.kind
-                        == StateKind::Observe {
-                            sampled_frame: frame,
-                        }
-            })
-        {
+        if !self.is_current_observation(key, activation, frame) {
             return Ok(());
         }
         let activation_is_live = |vm: &Self| {
@@ -867,17 +867,84 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 visible = same(&self.machine.value(output, None), &sample);
             }
             if visible {
-                self.follow(key.instance, node, "on_sample", Some(key), 0)?;
+                let sample = Arc::new(ObservedSample {
+                    source: key,
+                    activation,
+                    frame,
+                    input: Some((output, sample)),
+                });
+                self.with_observed_sample(sample, |vm| {
+                    vm.follow(key.instance, node, "on_sample", Some(key), 0)
+                })?;
             } else {
                 self.report(self.site(key.instance, node), Issue::ObservationUnavailable);
             }
         } else {
-            self.follow(key.instance, node, "on_unavailable", Some(key), 0)?;
+            let sample = Arc::new(ObservedSample {
+                source: key,
+                activation,
+                frame,
+                input: None,
+            });
+            self.with_observed_sample(sample, |vm| {
+                vm.follow(key.instance, node, "on_unavailable", Some(key), 0)
+            })?;
         }
         if activation_is_live(self) {
             self.try_complete(key, node, 0)?;
         }
         Ok(())
+    }
+
+    fn is_current_observation(&self, source: StateKey, activation: u16, frame: u32) -> bool {
+        frame == self.machine.frame
+            && self.state(source).is_some_and(|state| {
+                state.active
+                    && !state.ending
+                    && state.activation == activation
+                    && state.kind
+                        == StateKind::Observe {
+                            sampled_frame: frame,
+                        }
+            })
+    }
+
+    fn with_observed_sample<T>(
+        &mut self,
+        sample: Arc<ObservedSample>,
+        run: impl FnOnce(&mut Self) -> Result<T, InitFault>,
+    ) -> Result<T, InitFault> {
+        let previous = self.observed_sample.replace(sample);
+        let result = run(self);
+        self.observed_sample = previous;
+        result
+    }
+
+    pub(super) fn begin_from_sample(
+        &mut self,
+        key: StateKey,
+        sample: Arc<ObservedSample>,
+    ) -> Result<(), InitFault> {
+        if !self.is_current_observation(sample.source, sample.activation, sample.frame) {
+            return Ok(());
+        }
+        if sample.input.as_ref().is_some_and(|(output, value)| {
+            self.machine
+                .links
+                .get(output)
+                .is_some_and(|entries| !entries.is_empty())
+                && !same(&self.machine.value(*output, None), value)
+        }) {
+            let source = sample.source;
+            if let Some(node) = self.graph(source.instance).state(usize::from(source.raw)) {
+                self.report(
+                    self.site(source.instance, node),
+                    Issue::ObservationUnavailable,
+                );
+            }
+            return Ok(());
+        }
+        self.with_observed_sample(sample, |vm| vm.begin(key, 0))
     }
 
     pub(super) fn observation_value(&mut self, site: Site, value: &Json) -> Option<Value> {
@@ -1614,7 +1681,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let now = self.machine.now_ms;
         self.machine.queues.retain(id, |due, event| {
             due != now
-                || !matches!(event, Event::Begin(state) if raw_indices(slots).any(|raw| raw == *state))
+                || event
+                    .begin_state()
+                    .is_none_or(|state| raw_indices(slots).all(|raw| raw != state))
         });
         Ok(())
     }
@@ -1622,7 +1691,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
     pub(in crate::script_init) fn drop_begin(&mut self, id: u16, raw: u16) {
         let now = self.machine.now_ms;
         self.machine.queues.retain(id, |due, event| {
-            due != now || !matches!(event, Event::Begin(state) if *state == raw)
+            due != now || event.begin_state() != Some(raw)
         });
     }
 

@@ -1170,6 +1170,15 @@ activation's sample at callback entry. The normal variable binding
 priority still applies. If a binding hides the sample, the VM reports
 the output as unavailable and suppresses that callback.
 
+State starts queued directly by `on_sample` or `on_change`, or through
+their synchronous actions, carry the callback's view of the output into
+initialization. Another observer can write the shared variable before
+the queued state starts. The queued state's own read still uses its
+captured input, subject to ordinary binding priority. An explicit write
+in the callback affects starts queued after that write. A start is
+discarded when its source activation ends or the sample frame advances.
+The capture lasts for initialization and its synchronous actions.
+
 Sampling starts in the VM frame after activation and runs at most once
 per VM frame. That lets a body initialize before the room publishes its
 candidate snapshot. Unavailable scene data records an observation diagnostic
@@ -1178,7 +1187,10 @@ The state retries on the next frame. An optional `on_unavailable` plug
 runs after a transient host failure on that frame. It follows the same
 activation and frame guards as `on_sample`. Use it to clear derived
 target or presentation state while retaining the last successful raw
-sample. Invalid expressions still report regular evaluation errors. Finish and abort stop polling and leave the last written value
+sample. Queued starts also check those guards and read the ordinary
+variables when this callback has no fresh value. Invalid expressions
+still report regular evaluation errors. Finish and abort stop polling
+and leave the last written value
 available. The ordinary lifecycle plugs can clear it when needed.
 
 Use `on_sample` for effects that depend on a current ray result. When
