@@ -658,7 +658,8 @@ mod tests {
                 assert!(moved.queue_swept_displacement(frame, second));
                 moved.clear_pending_script_motion();
                 assert!(!moved.has_swept_displacement());
-                assert!(!moved.swept_displacement_at(due));
+                assert!(moved.swept_displacement_at(due));
+                assert!(!moved.swept_displacement_at(frame));
             }
             moved.step(&rays, command, 0.016, |_, _| {}).unwrap();
             reference.step(&rays, command, 0.016, |_, _| {}).unwrap();
