@@ -4,6 +4,27 @@ use crate::world::{ComponentValue, Operation, POOLS};
 use serde_json::{Value as Json, json};
 use std::collections::BTreeMap;
 
+pub(crate) fn body_script_receipts(
+    receipt: &DeliveryReport<Arc<Record>>,
+    body: BodyId,
+) -> Vec<(u32, bool, u32)> {
+    receipt
+        .packets
+        .iter()
+        .flat_map(|packet| {
+            packet
+                .records
+                .iter()
+                .filter_map(move |record| match record.delivery {
+                    Delivery::BodyScript { id, last, .. } if id == body => {
+                        Some((packet.sequence, packet.arrived, last))
+                    }
+                    _ => None,
+                })
+        })
+        .collect()
+}
+
 /// Count body-script packets actually received before the schedule. Possession
 /// and script baselines have separate acknowledgements.
 pub(crate) fn script_receipts(receipt: &DeliveryReport<Arc<Record>>, owner_body: u32) -> [u32; 2] {

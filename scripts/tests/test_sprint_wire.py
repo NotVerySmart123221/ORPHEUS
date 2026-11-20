@@ -73,6 +73,17 @@ class SprintWireTests(unittest.TestCase):
         with self.assertRaisesRegex(self.decode.DecodeError, "^the payload runs past the chunk$"):
             self.read_frame(1, True, truncated=True)
 
+    def test_foreign_graph_ammo_write_is_observed_and_rejected(self):
+        raw, width = chunk(2, False)
+        graph = SimpleNamespace(presence_vars=lambda: [SimpleNamespace(var=53)], remote_states=list)
+        extra = []
+        with patch.object(self.decode, "graph_of", return_value=graph):
+            frame, _ = apply_chunk(self.decode, self.decode.ClientBody(), raw, width, extra)
+        self.assertEqual(frame.instances[2].vars[53], (1, ()))
+        self.assertEqual([item[:4] for item in extra], [(53, 2, 37, (1, ()))])
+        with self.assertRaisesRegex(ValueError, "^unexpected 53 owner in scenario$"):
+            validate_writes([item[1:] for item in extra], 1, 0x254, [], 53, int)
+
 
 class ValidateWritesTests(unittest.TestCase):
     def test_boolean_value_is_rejected(self):
@@ -84,6 +95,19 @@ class ValidateWritesTests(unittest.TestCase):
         observed = [(1, 37, (1, (1,)), 0)]
         with self.assertRaisesRegex(ValueError, "^699 type or bindings$"):
             validate_writes(observed, 1, 37, [(1, (1,))])
+
+    def test_rifle_reload_requires_boolean_not_integer(self):
+        with self.assertRaisesRegex(ValueError, "^51 type or bindings$"):
+            validate_writes([(1, 0x254, (1, ()), 0)], 1, 0x254, [(True, ())], 51, bool)
+
+    def test_rifle_missing_ammo_write_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "^53 writes$"):
+            validate_writes([], 1, 0x254, [(29, ())], 53, int)
+
+    def test_rifle_duplicate_reload_write_is_rejected(self):
+        observed = [(1, 0x254, (True, ()), 0), (1, 0x254, (False, ()), 7)]
+        with self.assertRaisesRegex(ValueError, "^duplicate 51 write$"):
+            validate_writes(observed, 1, 0x254, [(True, ())], 51, bool)
 
 
 if __name__ == "__main__":

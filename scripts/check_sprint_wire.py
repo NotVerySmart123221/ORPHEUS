@@ -31,16 +31,16 @@ def require(condition, message):
         raise ValueError(message)
 
 
-def validate_writes(observed, owner, graph, expected):
-    require(all((own, index) == (owner, graph) for own, index, _, _ in observed), "unexpected 699 owner in scenario")
-    require(len(observed) <= 1, "duplicate 699 write")
+def validate_writes(observed, owner, graph, expected, variable=699, value_type=int):
+    require(all((own, index) == (owner, graph) for own, index, _, _ in observed), f"unexpected {variable} owner in scenario")
+    require(len(observed) <= 1, f"duplicate {variable} write")
     values = [value for _, _, value, _ in observed]
     for value, bindings in values:
-        require(type(value) is int and bindings == (), "699 type or bindings")
-    require(values == expected, "699 writes")
+        require(type(value) is value_type and bindings == (), f"{variable} type or bindings")
+    require(values == expected, f"{variable} writes")
 
 
-def apply_chunk(decode, body, raw, width):
+def apply_chunk(decode, body, raw, width, extra=None):
     """Bound the pinned reader and observe each variable before dict insertion."""
     original_reader, original_var = decode.BitReader, decode.read_var
     observed = []
@@ -57,6 +57,8 @@ def apply_chunk(decode, body, raw, width):
         result = original_var(reader, own, graphs, var)
         if var == 699:
             variables.append((own, graphs.get(own), result, offset))
+        if extra is not None and var in (51, 53):
+            extra.append((var, own, graphs.get(own), result, offset))
         return result
 
     update = SimpleNamespace(chunk=SimpleNamespace(count=width, getvalue=lambda: bytes(raw)))
@@ -66,17 +68,24 @@ def apply_chunk(decode, body, raw, width):
     return frame, variables
 
 
-def check(rows, decode, mutate=False):
+def check(rows, decode, mutate: bool | str = False):
     """Consume exact chunks, including their declared bit limits, in delivery order."""
     require([row["t"] for row in rows] == [0, 1, *range(17, 901)], "chunk schedule")
     body = decode.ClientBody.for_hero(0x02E000000000006E)
     original_reader = decode.BitReader
     previous_last = 0
     sprint = None
+    rifle = None
     known = {}
     removed = set()
     writes = []
     changed = False
+    ammo = {0: 30, 188: 30, 189: 29, 195: 28, 201: 27, 208: 26, 215: 25, 222: 24,
+            229: 23, 236: 22, 243: 21, 250: 20, 257: 19, 264: 18, 271: 17, 278: 16,
+            347: 30, 520: 30, 521: 29, 527: 28, 533: 27, 540: 26, 600: 26,
+            601: 25, 607: 24, 613: 23, 620: 22, 627: 21, 634: 20}
+    reloads = {300: True, 393: False}
+    ammo_state = reload_state = None
 
     for row in rows:
         t, width = row["t"], row["bits"]
@@ -91,19 +100,23 @@ def check(rows, decode, mutate=False):
         require(header.pos + declared == width, "declared chunk length")
         # Locate the target value with the independent reader, then replay the
         # chunk from the previous client state with one payload bit flipped.
-        if mutate and t == 700:
+        if (mutate is True and t == 700) or (mutate == "ammo" and t == 189):
             before = copy.deepcopy(body)
-            _, target = apply_chunk(decode, body, raw, width)
-            offsets = [offset for own, graph, _, offset in target if own == sprint and graph == 0x0255]
+            extra = []
+            _, target = apply_chunk(decode, body, raw, width, extra)
+            offsets = ([offset for own, graph, _, offset in target if own == sprint and graph == 0x0255]
+                       if mutate is True else [offset for var, own, graph, _, offset in extra
+                                               if var == 53 and own == rifle and graph == 0x0254])
             require(len(offsets) == 1, "missing mutation target")
             offset = offsets[0]
             tag = sum(((raw[(offset + i) // 8] >> ((offset + i) % 8)) & 1) << i for i in range(4))
-            require(tag == 1 and offset + 4 < width, "unexpected mutation encoding")
+            require(tag == (1 if mutate is True else 2) and offset + 4 < width, "unexpected mutation encoding")
             raw[(offset + 4) // 8] ^= 1 << ((offset + 4) % 8)
             body = before
             changed = True
 
-        frame, variables = apply_chunk(decode, body, raw, width)
+        extra = []
+        frame, variables = apply_chunk(decode, body, raw, width, extra)
         if t == 0:
             require(frame.first == 0 and frame.last == 1 and not frame.owner, "baseline header")
         else:
@@ -130,6 +143,23 @@ def check(rows, decode, mutate=False):
         if sprint is None:
             sprint = roots[0]
         require(roots == [sprint], "sprint root changed")
+        rifles = [number for number, (index, _) in known.items() if index == 0x0254]
+        require(len(rifles) == 1 and known[rifles[0]] == (0x0254, None), "unique rifle root")
+        if rifle is None:
+            rifle = rifles[0]
+        require(rifles == [rifle], "rifle root changed")
+        for variable, schedule, value_type in ((53, ammo, int), (51, reloads, bool)):
+            observed = [(own, index, value, offset) for var, own, index, value, offset in extra if var == variable]
+            expected = [(schedule[t], ())] if t in schedule else []
+            validate_writes(observed, rifle, 0x0254, expected, variable, value_type)
+        ammo_state = ammo.get(t, ammo_state)
+        reload_state = reloads.get(t, reload_state)
+        for variable, value, value_type in ((53, ammo_state, int), (51, reload_state, bool)):
+            key = (rifle, variable)
+            if value is None:
+                require(key not in body.vars, f"early {variable} value")
+            else:
+                require(type(body.vars.get(key)) is value_type and body.vars[key] == value, f"{variable} cumulative value")
         expected = [(1, ())] if t == 700 else [(0, ())] if t == 761 else []
         validate_writes(variables, sprint, 0x0255, expected)
         for _, _, (value, _), _ in variables:
@@ -210,6 +240,7 @@ def main():
         for name, candidate, mutation, expected in (
             ("missing final chunk", rows[:-1], False, "chunk schedule"),
             ("mutated 699", rows, True, "699 writes"),
+            ("mutated ammo", rows, "ammo", "53 writes"),
             ("malformed length", [*rows[:-1], {**rows[-1], "bits": rows[-1]["bits"] - 1}], False, "declared chunk length"),
         ):
             try:
@@ -219,7 +250,7 @@ def main():
                 print(f"PASS negative control: {name}")
                 continue
             raise AssertionError(f"negative control passed: {name}")
-    print("PASS: prepared Sprint variable 699 and three prepared negative controls")
+    print("PASS: prepared Sprint 699 and rifle 53/51, four prepared negative controls")
 
 
 if __name__ == "__main__":

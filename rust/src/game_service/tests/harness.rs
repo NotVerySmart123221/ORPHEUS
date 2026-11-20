@@ -212,12 +212,52 @@ pub struct WorldRecord {
     pub base_health: Option<f32>,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Eq, PartialEq)]
 pub struct ReceivedChunk {
     pub first: u32,
     pub span: u32,
     pub width: usize,
     pub data: Vec<u8>,
+    pub wire_width: usize,
+    pub wire: Vec<u8>,
+}
+
+impl std::fmt::Debug for ReceivedChunk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReceivedChunk")
+            .field("first", &self.first)
+            .field("span", &self.span)
+            .field("width", &self.width)
+            .field("wire_width", &self.wire_width)
+            .finish_non_exhaustive()
+    }
+}
+
+#[test]
+fn received_chunk_debug_redacts_bytes_without_changing_equality() {
+    let chunk = ReceivedChunk {
+        first: 2,
+        span: 3,
+        width: 8,
+        data: vec![222],
+        wire_width: 16,
+        wire: vec![173, 239],
+    };
+    assert_eq!(
+        format!("{chunk:?}"),
+        "ReceivedChunk { first: 2, span: 3, width: 8, wire_width: 16, .. }"
+    );
+    let make = |data, wire| ReceivedChunk {
+        first: 2,
+        span: 3,
+        width: 8,
+        data: vec![data],
+        wire_width: 16,
+        wire: vec![wire, 239],
+    };
+    assert_eq!(chunk, make(222, 173));
+    assert_ne!(chunk, make(221, 173));
+    assert_ne!(chunk, make(222, 172));
 }
 
 impl ReceivedChunk {
@@ -257,15 +297,20 @@ pub fn world_records(schemas: &Schemas, packet: &Packet) -> Vec<WorldRecord> {
             }
             if reader.bit().unwrap() {
                 assert!(!reader.bit().unwrap());
+                let mut wire = reader;
+                let start = reader.position();
                 let first = reader.w_u32().unwrap();
                 let span = reader.w_var().unwrap();
                 assert!(!reader.bit().unwrap());
                 let width = reader.w_var().unwrap() as usize;
+                let wire_width = reader.position() - start + width;
                 record.script = Some(ReceivedChunk {
                     first,
                     span,
                     width,
                     data: reader.raw_bits(width).unwrap(),
+                    wire_width,
+                    wire: wire.raw_bits(wire_width).unwrap(),
                 });
             }
             if !reader.bit().unwrap() {

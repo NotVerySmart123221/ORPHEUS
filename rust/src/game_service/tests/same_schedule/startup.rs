@@ -57,6 +57,18 @@ pub(super) fn join(
     bot: u32,
     names: &mut BTreeMap<u32, String>,
 ) -> Startup {
+    join_observed(state, server, client, schemas, bot, names, |_, _, _| {})
+}
+
+pub(super) fn join_observed(
+    state: &mut State,
+    server: &UdpSocket,
+    client: &mut Client,
+    schemas: &Schemas,
+    bot: u32,
+    names: &mut BTreeMap<u32, String>,
+    mut observe: impl FnMut(&Packet, crate::game_replication::BodyId, &DeliveryReport<Arc<Record>>),
+) -> Startup {
     client.send(SYN, Vec::new());
     receive_request(state, server, Duration::ZERO);
     let hello = client.receive();
@@ -94,6 +106,9 @@ pub(super) fn join(
             acks.entry("bot_create").or_insert(tick);
         }
         if let Some(id) = peer.world.spawned_body() {
+            if let Some(body) = peer.world.active_body_id() {
+                observe(&sent, body, &receipt);
+            }
             names.insert(id, "player/0/body/1".to_string());
             if peer.world.identity_ready(id) {
                 acks.entry("owner_create").or_insert(tick);

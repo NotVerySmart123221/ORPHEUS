@@ -63,7 +63,9 @@ pub(crate) const CODECS: &str = r#"{"classes":{
     "41E3C7A7":{"name":"STUStatescriptStateTrackTargets","codec":"targets","stec":false,"status":"VERIFIED",
         "layout":[{"op":"bits","n":1,"f":"has_list"},{"op":"if","c":"has_list",
                    "then":[{"op":"w_u16","f":"n"},{"op":"repeat","count":"n","f":"targets","body":[]}],
-                   "else":[]}]}
+                   "else":[]}]},
+    "9028E035":{"name":"STU_9028E035","codec":"link","stec":false,"status":"VERIFIED",
+        "layout":[{"op":"link","f":"link"}]}
 }}"#;
 
 fn node(position: u16, class: &str, state: Option<u16>, mut fields: Json) -> Json {
@@ -2910,5 +2912,135 @@ fn actual_shared_ui_graph_baselines_match_python() {
             format!("{:x}", Sha256::digest(frame.as_bytes())),
             expected_delta
         );
+    }
+}
+
+#[test]
+fn synthetic_two_instance_registered_state_link_encodes_for_owner_and_observer() {
+    let registered_graph = |index, items, state_pos, state_idx, remote_idx, remote_bits| {
+        let mut state_node = node(state_pos, "STU_9028E035", Some(state_idx), json!({}));
+        state_node["remote"] = json!(remote_idx);
+        let entry_node = node(
+            0,
+            "STUStatescriptEntry",
+            None,
+            json!({
+                "m_outPlug": {"$": "Plug", "links": [[state_pos, "m_beginPlug"]], "m_FF3DAF1E": []}
+            }),
+        );
+        let mut states = vec![Json::Null; usize::from(state_idx) + 1];
+        states[usize::from(state_idx)] = json!(state_pos);
+        let mut remote = vec![Json::Null; remote_idx + 1];
+        remote[remote_idx] = json!(state_pos);
+        let mut built = graph(
+            index,
+            vec![entry_node, state_node],
+            Json::Array(states),
+            json!([0]),
+            Json::Array(remote),
+            json!([]),
+        );
+        built["items"] = json!(items);
+        built["header"]["m_statesBitCount"] = json!(4);
+        built["header"]["m_remoteSyncNodesBitCount"] = json!(remote_bits);
+        built
+    };
+
+    let graphs = GraphStore::from_json(
+        &serde_json::to_vec(&json!({
+            "version": 1,
+            "graphs": [
+                registered_graph(0x0ce0, 39, 38, 10, 0, 1),
+                registered_graph(0x0d03, 2, 1, 1, 2, 3),
+            ],
+            "bodies": {},
+            "missing": []
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let snapshot = initialize(
+        &graphs,
+        ENTITY,
+        Variables::new(),
+        vec![Root::new(1, 0x0ce0), Root::new(2, 0x0d03)],
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    assert!(
+        snapshot.initialization_complete(),
+        "{:?}",
+        snapshot.diagnostics
+    );
+    assert!(
+        snapshot.diagnostics.is_empty(),
+        "{:?}",
+        snapshot.diagnostics
+    );
+    assert!(snapshot.instances[&1].states[&10].active);
+    assert_eq!(
+        snapshot.instances[&1].states[&10].kind,
+        StateKind::Registered { next: Some((2, 1)) }
+    );
+    assert!(snapshot.instances[&2].states[&1].active);
+    assert_eq!(
+        snapshot.instances[&2].states[&1].kind,
+        StateKind::Registered { next: None }
+    );
+
+    let codecs = CodecTable::from_json(CODECS).unwrap();
+    let encoder = SnapshotEncoder::new(&graphs, &codecs);
+    let observer = encoder.project(&snapshot, View::Observer).unwrap();
+    let owner = encoder.project(&snapshot, View::Owner).unwrap();
+    assert_eq!(
+        observer.instances[&1].states[&10].link,
+        Some(ProjectedStateLink {
+            instance: 2,
+            index: 2,
+            width: 3,
+        })
+    );
+    assert_eq!(observer.instances[&2].states[&1].link, None);
+    assert_eq!(
+        owner.instances[&1].states[&10].link,
+        Some(ProjectedStateLink {
+            instance: 2,
+            index: 1,
+            width: 4,
+        })
+    );
+    assert_eq!(owner.instances[&2].states[&1].link, None);
+
+    let mut obs_stream = BodyStream::new(ENTITY);
+    let obs_full = encoder.queue_full(&mut obs_stream, &observer).unwrap();
+    let obs_bits = obs_full.update.chunk.as_ref().unwrap();
+    assert!(obs_bits.bit_len() > 0 && !obs_bits.as_bytes().is_empty());
+
+    let mut own_stream = BodyStream::new(ENTITY);
+    let own_full = encoder.queue_full(&mut own_stream, &owner).unwrap();
+    own_stream.create_arrived();
+    own_stream.arrived(own_full.last);
+    let own_delta = encoder
+        .queue_delta(&mut own_stream, &owner, DeltaKind::InitialOwner(1), 16)
+        .unwrap()
+        .unwrap();
+    let own_full_bits = own_full.update.chunk.as_ref().unwrap();
+    let own_delta_bits = own_delta.update.chunk.as_ref().unwrap();
+    assert!(own_full_bits.bit_len() > 0 && !own_full_bits.as_bytes().is_empty());
+    assert!(own_delta_bits.bit_len() > 0 && !own_delta_bits.as_bytes().is_empty());
+
+    if let Some(path) = std::env::var_os("ORPHEUS_STATE_LINK_WIRE_PROBE") {
+        let chunk = |bits: &BitWriter| json!({"data": bits.as_bytes(), "bits": bits.bit_len()});
+        std::fs::write(
+            path,
+            serde_json::to_vec(&json!({
+                "observer_full": chunk(obs_bits),
+                "owner_full": chunk(own_full_bits),
+                "owner_delta": chunk(own_delta_bits),
+            }))
+            .unwrap(),
+        )
+        .unwrap();
     }
 }
