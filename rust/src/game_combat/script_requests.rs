@@ -14,6 +14,7 @@ use std::{collections::HashSet, time::Duration};
 
 pub(super) const MAX_BODY_SCRIPT_REQUESTS: usize = 64;
 
+#[derive(Clone)]
 pub(super) struct RoomScriptTarget {
     pub(super) entity: Entity,
     pub(super) candidate_index: usize,
@@ -438,19 +439,21 @@ mod tests {
             cue_listener: health,
         };
         let frame = RoomSpatialFrame {
-            candidates: Box::new(
-                [1, 2, 3].map(|entity| crate::script_expr::SpatialCandidate {
+            candidates: [1, 2, 3]
+                .into_iter()
+                .map(|entity| crate::script_expr::SpatialCandidate {
                     entity,
                     position: [0.0; 3],
                     team: None,
-                }),
-            ),
+                })
+                .collect(),
             entity_facts: None,
             script_targets: HashMap::from([
                 (1, target(0, true, false)),
                 (2, target(1, true, false)),
                 (3, target(2, false, true)),
             ]),
+            player_wires: HashMap::new(),
             ground: Arc::new(fixture_ground()),
         };
         let mut outbox = RoomScriptRequests::default();

@@ -290,10 +290,12 @@ struct FlightBatch {
 }
 
 /// One room frame's living candidates, optional body facts and static collision view.
+#[derive(Clone)]
 pub(crate) struct RoomSpatialFrame {
-    candidates: Box<[SpatialCandidate]>,
+    candidates: Vec<SpatialCandidate>,
     entity_facts: Option<BTreeMap<u32, RoomEntityFacts>>,
     script_targets: HashMap<u32, RoomScriptTarget>,
+    player_wires: HashMap<u32, u32>,
     ground: Arc<CollisionScene>,
 }
 
@@ -710,24 +712,20 @@ impl RoomSimulation {
         });
     }
 
-    /// Freeze room queries at the first use of this room frame.
-    pub(crate) fn prepare_spatial_frame(&mut self, frame: u32) -> Result<(), CombatError> {
+    /// Capture room state without changing the room's published frame.
+    pub(crate) fn capture_spatial_frame(
+        &self,
+        frame: u32,
+    ) -> Result<Option<Arc<RoomSpatialFrame>>, CombatError> {
         let Some(queries) = &self.spatial_queries else {
-            return Ok(());
+            return Ok(None);
         };
-        if self
-            .spatial_frame
-            .as_ref()
-            .is_some_and(|(previous, _)| *previous == frame)
-        {
-            return Ok(());
-        }
-
         let capacity = self.players_by_wire.len() + self.by_wire.len();
         let mut candidates = Vec::with_capacity(capacity);
         let mut entity_facts = (queries.needs >= RoomSpatialNeeds::EntityFacts).then(BTreeMap::new);
         let include_tags = queries.needs == RoomSpatialNeeds::EntityTags;
         let mut script_targets = HashMap::with_capacity(capacity);
+        let mut player_wires = HashMap::with_capacity(self.players_by_wire.len());
         for (state, &entity) in self.states().zip(self.by_wire.values()) {
             let state = state?;
             let bot = &state.bot;
@@ -776,6 +774,7 @@ impl RoomSimulation {
                     actual: state.id.entity,
                 });
             }
+            player_wires.insert(state.owner, wire);
             let alive = state.alive();
             let team = (!queries.free_for_all).then_some(state.team);
             if let Some(facts) = &mut entity_facts {
@@ -813,12 +812,50 @@ impl RoomSimulation {
             }
         }
 
-        let spatial = Arc::new(RoomSpatialFrame {
-            candidates: candidates.into_boxed_slice(),
+        Ok(Some(Arc::new(RoomSpatialFrame {
+            candidates,
             entity_facts,
             script_targets,
+            player_wires,
             ground: Arc::clone(&queries.ground),
-        });
+        })))
+    }
+
+    /// Read the frozen room frame without the owner's captured body generation.
+    pub(crate) fn owner_startup_spatial_frame(&self, owner: u32) -> Option<Arc<RoomSpatialFrame>> {
+        let mut frame = Arc::clone(&self.spatial_frame.as_ref()?.1);
+        let Some(&wire) = frame.player_wires.get(&owner) else {
+            return Some(frame);
+        };
+        let view = Arc::make_mut(&mut frame);
+        view.player_wires.remove(&owner);
+        if let Some(facts) = &mut view.entity_facts {
+            facts.remove(&wire);
+        }
+        if let Some(removed) = view.script_targets.remove(&wire) {
+            let index = removed.candidate_index;
+            view.candidates.remove(index);
+            for target in view.script_targets.values_mut() {
+                if target.candidate_index > index {
+                    target.candidate_index -= 1;
+                }
+            }
+        }
+        Some(frame)
+    }
+
+    /// Freeze room queries at the first use of this room frame.
+    pub(crate) fn prepare_spatial_frame(&mut self, frame: u32) -> Result<(), CombatError> {
+        if self
+            .spatial_frame
+            .as_ref()
+            .is_some_and(|(previous, _)| *previous == frame)
+        {
+            return Ok(());
+        }
+        let Some(spatial) = self.capture_spatial_frame(frame)? else {
+            return Ok(());
+        };
         for &entity in self.players_by_wire.values() {
             if let Some(mut state) = self.world.get_mut::<PlayerBodyState>(entity) {
                 if let Some(runtime) = state.runtime.as_mut() {

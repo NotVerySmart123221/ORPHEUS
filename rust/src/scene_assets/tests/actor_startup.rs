@@ -215,6 +215,7 @@ fn preparation_failure(graphs: &GraphStore, error: &SceneOwnerPreparationError) 
         Scene::ControllerFlag => simple_failure("scene_preparation", "controller_flag"),
         Scene::SpawnMover(error) => io_failure("scene_preparation", "spawn_mover", error),
         Scene::TeamFilter(error) => io_failure("scene_preparation", "team_filter", error),
+        Scene::SpatialFrame(_) => simple_failure("scene_preparation", "spatial_frame"),
         Scene::Body(error) => match error.as_ref() {
             Body::MissingBody => simple_failure("body_preparation", "missing_body"),
             Body::RootLayout(fault) => vm_failure("root_layout", fault),
@@ -248,12 +249,7 @@ fn runtime_result(graphs: &GraphStore, runtime: &dyn OwnerBodyRuntime) -> Json {
     })
 }
 
-fn actor_row(
-    assets: &SceneAssets,
-    scene: &PreparedScene,
-    hero: &Hero,
-    bootstrap_counts: TeamMemberCounts,
-) -> Json {
+fn actor_row(assets: &SceneAssets, scene: &PreparedScene, hero: &Hero) -> Json {
     let body = assets.graphs.bodies().get(&hero.body);
     let mover = scene.player_spawn_mover(hero.body, PROBE_TEAM);
     let body_status = match body {
@@ -288,7 +284,7 @@ fn actor_row(
     });
     let spawn = mover.ok().map(|mover| OwnerBodySpawn {
         slot: 0,
-        controller: 0xa000_0100,
+        controller: OWNER_PROBE_CONTROLLER,
         entity: 0xa000_0101,
         body_filter: team_bit(PROBE_TEAM).unwrap(),
         frame: FIRST_TICK,
@@ -304,14 +300,13 @@ fn actor_row(
         }
     };
     // Exercise the same preparation gate without admitting the actor to the scene.
-    let bootstrap = match assets.prepare_owner_factory(scene, hero, Some(bootstrap_counts)) {
+    let setup = scene.owner_body_setup(OWNER_PROBE_CONTROLLER);
+    let bootstrap = match assets.prepare_owner_factory(scene, hero, setup.clone()) {
         Err(error) => json!({
             "status": "factory_error", "error_kind": "Unsupported",
             "failure": preparation_failure(&assets.graphs, &error),
         }),
-        Ok(factory) => match spawn
-            .map(|spawn| factory.start_with_team_member_counts(spawn, Some(bootstrap_counts)))
-        {
+        Ok(factory) => match spawn.map(|spawn| factory.start_with_setup(spawn, setup)) {
             None => json!({"status": "not_probed"}),
             Some(Ok(runtime)) => runtime_result(&assets.graphs, &runtime),
             Some(Err(error)) => json!({
@@ -338,12 +333,25 @@ fn measure_scene(runtime: &Path) -> Result<(Json, Vec<Json>), (&'static str, io:
     scene
         .simulation_mut()
         .set_team_member_counts(bootstrap_counts);
+    scene
+        .simulation_mut()
+        .prepare_spatial_frame(FIRST_TICK)
+        .map_err(|error| ("spatial_frame", io::Error::other(error)))?;
     let mut heroes: Vec<_> = assets.heroes().heroes().collect();
     heroes.sort_unstable_by_key(|hero| hero.guid);
     let rows = heroes
         .into_iter()
-        .map(|hero| actor_row(&assets, &scene, hero, bootstrap_counts))
+        .map(|hero| actor_row(&assets, &scene, hero))
         .collect();
+    let owner_startup_spatial = scene
+        .owner_body_setup(OWNER_PROBE_CONTROLLER)
+        .spatial_frame
+        .map(|frame| {
+            json!({
+                "living_candidates": frame.candidates().len(),
+                "entity_facts": frame.entity_facts().is_some(),
+            })
+        });
     Ok((
         json!({
             "status": "prepared",
@@ -351,6 +359,7 @@ fn measure_scene(runtime: &Path) -> Result<(Json, Vec<Json>), (&'static str, io:
             "range_bots": scene.bots().unwrap().len(),
             "scripted_range_bots": scene.scripted_bots(),
             "owner_factory_present": scene.owner_body_factory.is_some(),
+            "owner_startup_spatial": owner_startup_spatial,
         }),
         rows,
     ))

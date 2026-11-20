@@ -676,6 +676,13 @@ the host derives forward vectors on demand. A server operand requests
 this frame without requiring tag data. Static anchors remain separate
 from living body observations.
 
+Player startup reads the room's frozen snapshot when available.
+Replacement views exclude the previous body by its owner at capture time.
+An owner can replace the body repeatedly in one room frame while other
+actors keep their frozen poses and facts. The new body joins the room
+sample after admission. The factory probe captures the prepared scene
+before starting its temporary runtime.
+
 The [synthetic spatial contract](../fixtures/behavior/statescript-entity-spatial-v1.json)
 shows both operands applied to the same entity at two points in time.
 The [room pose contract](../fixtures/behavior/script-room-actor-pose-v1.json)

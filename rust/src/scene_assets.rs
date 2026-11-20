@@ -30,7 +30,7 @@ use crate::{
     },
     game_controller::Controller,
     game_heroes::{CASSIDY, Hero, HeroCatalog, SOLDIER},
-    game_instance::{RETAIL_QUANTA, TeamMemberCounts},
+    game_instance::RETAIL_QUANTA,
     game_pools::PoolCatalog,
     game_replication::OwnerBodyRuntime,
     game_stats::{PlayerStats, StatsCatalog, initial_on_fire},
@@ -46,7 +46,7 @@ use crate::{
     script_expr::native_shape,
     script_graph::{GraphStore, ModeValue, asset_guid},
     script_init::{self, Root},
-    script_player::{OwnerBodyPreparationError, OwnerBodySpawn, PlayerBodyFactory},
+    script_player::{OwnerBodyPreparationError, OwnerBodySetup, OwnerBodySpawn, PlayerBodyFactory},
     script_wire::{Value, Variables},
     world::{Component, EntityUpdate},
 };
@@ -64,6 +64,7 @@ use crate::{
 use crate::{debug_geometry::DebugGeometry, game_debug::Actor};
 
 pub(crate) const MOVER_CATEGORY: u16 = 0x18;
+const OWNER_PROBE_CONTROLLER: u32 = 0xa000_0100;
 
 fn mover_category(map: &GameMap, team: u8) -> u16 {
     match (map.free_for_all, team) {
@@ -89,11 +90,7 @@ fn ground_height(
     }
 }
 
-type OwnerBodyFactory = dyn Fn(
-        &Hero,
-        OwnerBodySpawn,
-        Option<TeamMemberCounts>,
-    ) -> io::Result<Option<Box<dyn OwnerBodyRuntime>>>
+type OwnerBodyFactory = dyn Fn(&Hero, OwnerBodySpawn, OwnerBodySetup) -> io::Result<Option<Box<dyn OwnerBodyRuntime>>>
     + Send
     + Sync;
 
@@ -107,6 +104,8 @@ enum SceneOwnerPreparationError {
     SpawnMover(io::Error),
     #[error(transparent)]
     TeamFilter(io::Error),
+    #[error(transparent)]
+    SpatialFrame(CombatError),
     #[error(transparent)]
     Body(Box<OwnerBodyPreparationError>),
 }
@@ -562,8 +561,20 @@ impl SceneAssets {
         hero_guid: u64,
     ) -> Option<Arc<OwnerBodyFactory>> {
         let hero = self.heroes.get(hero_guid)?;
-        let prepared = self
-            .prepare_owner_factory(scene, hero, None)
+        let prepared = scene
+            .simulation()
+            .capture_spatial_frame(FIRST_TICK)
+            .map_err(SceneOwnerPreparationError::SpatialFrame)
+            .and_then(|spatial_frame| {
+                self.prepare_owner_factory(
+                    scene,
+                    hero,
+                    OwnerBodySetup {
+                        spatial_frame,
+                        ..OwnerBodySetup::default()
+                    },
+                )
+            })
             .map_err(Arc::new);
         if let Err(reason) = &prepared {
             eprintln!(
@@ -571,7 +582,7 @@ impl SceneAssets {
                 hero.name, scene.map.name
             );
         }
-        Some(Arc::new(move |hero, spawn, counts| {
+        Some(Arc::new(move |hero, spawn, setup| {
             if hero.guid != hero_guid {
                 return Ok(None);
             }
@@ -579,7 +590,7 @@ impl SceneAssets {
                 .as_ref()
                 .map_err(|reason| io::Error::new(io::ErrorKind::Unsupported, Arc::clone(reason)))?;
             let runtime: Box<dyn OwnerBodyRuntime> =
-                Box::new(factory.start_with_team_member_counts(spawn, counts)?);
+                Box::new(factory.start_with_setup(spawn, setup)?);
             Ok(Some(runtime))
         }))
     }
@@ -588,7 +599,7 @@ impl SceneAssets {
         &self,
         scene: &PreparedScene,
         hero: &Hero,
-        counts: Option<TeamMemberCounts>,
+        setup: OwnerBodySetup,
     ) -> Result<PlayerBodyFactory, SceneOwnerPreparationError> {
         let codecs = self
             .codecs
@@ -609,14 +620,14 @@ impl SceneAssets {
             (
                 OwnerBodySpawn {
                     slot: 0,
-                    controller: 0xa000_0100,
+                    controller: OWNER_PROBE_CONTROLLER,
                     entity: 0xa000_0101,
                     body_filter: team_bit(0).map_err(SceneOwnerPreparationError::TeamFilter)?,
                     frame: FIRST_TICK,
                     pose: mover.pose(),
                     quanta: RETAIL_QUANTA,
                 },
-                counts,
+                setup,
             ),
         )
         .map_err(|source| SceneOwnerPreparationError::Body(Box::new(source)))

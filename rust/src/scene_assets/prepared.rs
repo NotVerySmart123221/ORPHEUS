@@ -159,8 +159,15 @@ impl PreparedScene {
         self.owner_body_factory
             .as_ref()
             .map_or(Ok(None), |factory| {
-                factory(hero, spawn, self.simulation.team_member_counts())
+                factory(hero, spawn, self.owner_body_setup(spawn.controller))
             })
+    }
+
+    pub(super) fn owner_body_setup(&self, owner: u32) -> OwnerBodySetup {
+        OwnerBodySetup {
+            team_member_counts: self.simulation.team_member_counts(),
+            spatial_frame: self.simulation.owner_startup_spatial_frame(owner),
+        }
     }
 
     pub fn heroes(&self) -> &HeroCatalog {

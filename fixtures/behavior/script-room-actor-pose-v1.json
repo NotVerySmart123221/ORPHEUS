@@ -12,6 +12,14 @@
       [[2.0, 0.0, 1.0], [4096, 0]],
       [[5.0, 0.0, 2.0], [8192, 0]]
     ],
-    "damage": 100.0
+    "damage": 100.0,
+    "owner_replacement": {
+      "owner": 70,
+      "body_wires": [71, 72, 73],
+      "other_owner": 80,
+      "other_body": 81,
+      "dead_owner": 90,
+      "dead_body": 91
+    }
   }
 }

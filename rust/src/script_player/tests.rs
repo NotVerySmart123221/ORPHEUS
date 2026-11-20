@@ -823,7 +823,7 @@ fn body_factory_preparation_retains_distinct_startup_failures() {
             &hero,
             None,
             false,
-            (probe, None),
+            (probe, OwnerBodySetup::default()),
         )
     };
 
@@ -923,9 +923,12 @@ fn player_host_team_counts_are_available_before_body_start_and_refresh_afterward
     factory.roots = vec![Root::new(1, GRAPH)];
 
     let mut runtime = factory
-        .start_with_team_member_counts(
+        .start_with_setup(
             spawn,
-            Some(TeamMemberCounts::from_teams(false, input.initial_teams)),
+            OwnerBodySetup {
+                team_member_counts: Some(TeamMemberCounts::from_teams(false, input.initial_teams)),
+                ..Default::default()
+            },
         )
         .unwrap();
     let snapshot = runtime.snapshot().unwrap();
@@ -961,6 +964,175 @@ fn player_host_team_counts_are_available_before_body_start_and_refresh_afterward
     assert_eq!(
         without_snapshot.world.team_members(input.query_team),
         expected.without_snapshot
+    );
+}
+
+#[test]
+fn owner_startup_reads_the_frozen_room_frame_before_body_attachment() {
+    use crate::{
+        collision_cache::CollisionCache,
+        contact_world::ContactWorld,
+        game_combat::PlayerBodyState,
+        game_replication::BodyId,
+        mover_settings::MoverSettings,
+        scene_assets::PreparedScene,
+        script_expr::EvalError,
+        script_init::{Diagnostic, Issue},
+    };
+    use serde_json::json;
+
+    #[derive(serde::Deserialize)]
+    struct Input {
+        graph: u32,
+        variable: u32,
+        owner_frame: u32,
+        room_frame: u32,
+        owner_position: Vec3,
+        other_entity: u32,
+        other_position: Vec3,
+        moved_position: Vec3,
+        radius: f64,
+    }
+
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-owner-startup-spatial-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(contract["schema_version"], 1);
+    assert_eq!(contract["evidence"], "synthetic-rust");
+    let input: Input = serde_json::from_value(contract["input"].clone()).unwrap();
+    let bundle = json!({
+        "version": 1, "missing": [], "bodies": {},
+        "graphs": [{
+            "index": input.graph, "items": 2, "entries": [0], "states": [], "remote": [],
+            "sync_vars": [], "containers": {}, "unknown_nodes": [], "fields": {},
+            "header": {"m_nodesBitCount": 2, "m_statesBitCount": 2,
+                "m_remoteSyncNodesBitCount": 2, "m_syncVarsBitCount": 2},
+            "nodes": [
+                {"pos": 0, "rid": 0, "uid": 0, "remote": -1, "class": "STUStatescriptEntry",
+                    "state": null, "server_only": false, "client_only": false,
+                    "fields": {"m_outPlug": {"$": "Plug", "links": [[1, "m_inPlug"]]}}},
+                {"pos": 1, "rid": 1, "uid": 1, "remote": -1, "class": "STUStatescriptActionSetVar",
+                    "state": null, "server_only": false, "client_only": false,
+                    "fields": {"m_ADEB6E05": true,
+                        "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": input.variable,
+                            "m_60DB8F99": true},
+                        "m_value": {"$": "EntitiesInRadius", "radius": input.radius,
+                            "center": {"$": "EntityPosition", "entity": {"$": "STU_B5A0CAF0"}}}}}
+            ]
+        }]
+    });
+    let (mut factory, mut spawn) = fixture_body_factory();
+    factory.graphs =
+        Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    factory.roots = vec![Root::new(1, input.graph)];
+    spawn.frame = input.owner_frame;
+    spawn.pose.position = input.owner_position;
+
+    let detached = factory.start(spawn).unwrap();
+    let snapshot = detached.snapshot().unwrap();
+    assert!(matches!(
+        snapshot.diagnostics.as_slice(),
+        [Diagnostic {
+            issue: Issue::Expression(EvalError::UnavailableSpatialCandidates),
+            ..
+        }]
+    ));
+    assert!(!snapshot.variables.contains_key(&input.variable));
+
+    let scene_cache = CollisionCache {
+        header: serde_json::from_value(json!({
+            "meshes": [], "hulls": 0, "models": 0, "placements": 0, "identifiers": []
+        }))
+        .unwrap(),
+        meshes: vec![],
+        hulls: vec![],
+        models: vec![],
+        placements: vec![],
+    };
+    let ground = Arc::new(CollisionScene::movement_probe(&scene_cache, &BTreeSet::new()).unwrap());
+    let hero = Hero {
+        guid: factory.hero,
+        name: "Startup fixture".into(),
+        role: "Damage".into(),
+        body: 0x0400_0000_0000_F872,
+    };
+    let mut scene = PreparedScene::fixture_for_bots(vec![]);
+    scene.simulation_mut().enable_spatial_queries(
+        false,
+        ground,
+        factory.graphs.room_spatial_needs(),
+    );
+    scene.owner_body_factory = Some(Arc::new(move |_, spawn, setup| {
+        let runtime: Box<dyn OwnerBodyRuntime> = Box::new(factory.start_with_setup(spawn, setup)?);
+        Ok(Some(runtime))
+    }));
+
+    scene
+        .simulation_mut()
+        .prepare_spatial_frame(input.room_frame)
+        .unwrap();
+    let empty = scene.owner_body_runtime(&hero, spawn).unwrap().unwrap();
+    let snapshot = empty.snapshot().unwrap();
+    assert!(
+        snapshot.initialization_complete(),
+        "{:?}",
+        snapshot.diagnostics
+    );
+    assert_eq!(
+        snapshot.variables[&input.variable],
+        Value::Array(Vec::new())
+    );
+
+    let contacts = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+    let mover = |position| {
+        Mover::new(
+            MoverSettings::default(),
+            Arc::clone(&contacts),
+            position,
+            0,
+            MOVER_CATEGORY,
+        )
+        .unwrap()
+    };
+    let other = BodyId {
+        entity: input.other_entity,
+        generation: 1,
+    };
+    let room = scene.simulation_mut();
+    room.spawn_player_body(PlayerBodyState::new(
+        other,
+        input.other_entity - 1,
+        1,
+        1,
+        hero.guid,
+        mover(input.other_position),
+        None,
+        input.room_frame + 1,
+        None,
+    ))
+    .unwrap();
+    room.prepare_spatial_frame(input.room_frame + 1).unwrap();
+    room.player_body_mut(other).unwrap().mover = mover(input.moved_position);
+
+    let ready = scene.owner_body_runtime(&hero, spawn).unwrap().unwrap();
+    let snapshot = ready.snapshot().unwrap();
+    assert!(
+        snapshot.initialization_complete(),
+        "{:?}",
+        snapshot.diagnostics
+    );
+    let expected: Vec<u32> =
+        serde_json::from_value(contract["expected"]["selected"].clone()).unwrap();
+    assert_eq!(
+        snapshot.variables[&input.variable],
+        Value::Array(expected.into_iter().map(Value::Entity).collect())
+    );
+    assert!(
+        scene
+            .simulation()
+            .player_handle_for_wire(spawn.entity)
+            .is_none()
     );
 }
 

@@ -246,6 +246,171 @@ fn spatial_actor_poses_follow_room_frames_and_body_generations() {
 }
 
 #[test]
+fn owner_startup_spatial_frame_excludes_the_frozen_body_on_each_replacement() {
+    use crate::{
+        contact_world::ContactWorld,
+        game_replication::{BodyStep, OwnerBodyRuntime},
+        mover::Mover,
+        mover_settings::MoverSettings,
+        script_init::Snapshot,
+        script_snapshot_wire::SnapshotEncoder,
+        vitals::Vitals,
+    };
+    use std::{io, sync::Mutex};
+
+    struct FrameProbe {
+        view: Arc<Mutex<Option<Arc<RoomSpatialFrame>>>>,
+        vitals: Option<Vitals>,
+    }
+    impl OwnerBodyRuntime for FrameProbe {
+        fn set_spatial_frame(&mut self, frame: Arc<RoomSpatialFrame>) {
+            *self.view.lock().unwrap() = Some(frame);
+        }
+        fn vitals(&self) -> Option<&Vitals> {
+            self.vitals.as_ref()
+        }
+        fn snapshot(&self) -> Option<&Snapshot> {
+            None
+        }
+        fn encoder(&self) -> SnapshotEncoder<'_> {
+            panic!("spatial frame probe has no encoder")
+        }
+        fn advance(
+            &mut self,
+            _: crate::commands::Command,
+            _: &Mover,
+            _: BodyStep,
+        ) -> io::Result<()> {
+            Ok(())
+        }
+        fn frame_ms(&self) -> u32 {
+            16
+        }
+    }
+
+    type Pose = (Vec3, [i32; 2]);
+    #[derive(serde::Deserialize)]
+    struct Owners {
+        owner: u32,
+        body_wires: [u32; 3],
+        other_owner: u32,
+        other_body: u32,
+        dead_owner: u32,
+        dead_body: u32,
+    }
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-room-actor-pose-v1.json"
+    ))
+    .unwrap();
+    let input = &fixture["input"];
+    let owners: Owners = serde_json::from_value(input["owner_replacement"].clone()).unwrap();
+    let poses: [Pose; 2] = serde_json::from_value(input["player_poses"].clone()).unwrap();
+    let frame = u32::try_from(input["frame"].as_u64().unwrap()).unwrap();
+    let damage = input["damage"].as_f64().unwrap();
+    let contact = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+    let mover = |(position, [yaw, _]): Pose| {
+        Mover::new(
+            MoverSettings::default(),
+            Arc::clone(&contact),
+            position,
+            yaw,
+            0x08,
+        )
+        .unwrap()
+    };
+    let state = |id, owner, pose, runtime| {
+        PlayerBodyState::new(id, owner, 0, 0, 1, mover(pose), runtime, frame, None)
+    };
+    let body = |entity, generation| BodyId { entity, generation };
+    let first = body(owners.body_wires[0], 1);
+    let other = body(owners.other_body, 1);
+    let dead = body(owners.dead_body, 1);
+
+    for needs in [RoomSpatialNeeds::Queries, RoomSpatialNeeds::EntityFacts] {
+        let mut room = RoomSimulation::new(Vec::new()).unwrap();
+        room.enable_spatial_queries(false, Arc::new(fixture_ground()), needs);
+        room.spawn_player_body(state(first, owners.owner, poses[0], None))
+            .unwrap();
+        room.spawn_player_body(state(other, owners.other_owner, poses[0], None))
+            .unwrap();
+        let mut vitals = Vitals::new(damage, 0.0, 0.0);
+        assert!(
+            vitals
+                .damage(
+                    damage,
+                    Death {
+                        time: 0.0,
+                        frame,
+                        killer: 0
+                    }
+                )
+                .killed
+        );
+        let dead_probe = FrameProbe {
+            view: Arc::default(),
+            vitals: Some(vitals),
+        };
+        room.spawn_player_body(state(
+            dead,
+            owners.dead_owner,
+            poses[0],
+            Some(Box::new(dead_probe)),
+        ))
+        .unwrap();
+
+        let detached = room.capture_spatial_frame(frame).unwrap().unwrap();
+        assert_eq!(detached.actor_pose(first.entity), Some(poses[0]));
+        assert!(room.owner_startup_spatial_frame(owners.owner).is_none());
+        room.prepare_spatial_frame(frame).unwrap();
+        let frozen = Arc::clone(&room.spatial_frame.as_ref().unwrap().1);
+        room.player_body_mut(other).unwrap().mover = mover(poses[1]);
+        let current = room.capture_spatial_frame(frame).unwrap().unwrap();
+        assert_eq!(current.actor_pose(other.entity), Some(poses[1]));
+
+        for (generation, &wire) in (2..).zip(&owners.body_wires[1..]) {
+            let startup = room.owner_startup_spatial_frame(owners.owner).unwrap();
+            let received = Arc::new(Mutex::new(None));
+            let probe = FrameProbe {
+                view: Arc::clone(&received),
+                vitals: None,
+            };
+            room.spawn_player_body(state(
+                body(wire, generation),
+                owners.owner,
+                poses[1],
+                Some(Box::new(probe)),
+            ))
+            .unwrap();
+            let installed = received.lock().unwrap();
+            for view in [&startup, installed.as_ref().unwrap()] {
+                assert_eq!(view.candidates(), &frozen.candidates()[1..]);
+                assert_eq!(view.actor_pose(other.entity), Some(poses[0]));
+                assert!(!view.script_targets.contains_key(&first.entity));
+                assert_eq!(view.actor_pose(wire), None);
+                assert!(Arc::ptr_eq(&view.ground, &frozen.ground));
+                if needs == RoomSpatialNeeds::EntityFacts {
+                    let facts = view.entity_facts().unwrap();
+                    assert!(!facts.contains_key(&first.entity));
+                    assert!(!facts[&dead.entity].alive);
+                } else {
+                    assert!(view.entity_facts().is_none());
+                }
+            }
+        }
+        let dead_startup = room.owner_startup_spatial_frame(owners.dead_owner).unwrap();
+        assert_eq!(dead_startup.candidates(), frozen.candidates());
+        if let Some(facts) = dead_startup.entity_facts() {
+            assert!(!facts.contains_key(&dead.entity));
+        }
+        assert!(Arc::ptr_eq(
+            &room.spatial_frame.as_ref().unwrap().1,
+            &frozen
+        ));
+        assert_eq!(frozen.actor_pose(first.entity), Some(poses[0]));
+    }
+}
+
+#[test]
 fn spatial_candidates_exclude_vitals_death_before_bot_reconciliation() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
         "../../../fixtures/behavior/room-spatial-liveness-v1.json"
