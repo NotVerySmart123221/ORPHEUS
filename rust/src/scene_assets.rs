@@ -29,7 +29,7 @@ use crate::{
         GameMap, JUNKENSTEIN_GATE, JunkensteinCard, PRACTICE_RANGE_MAP, PRACTICE_RANGE_MODE,
     },
     game_controller::Controller,
-    game_heroes::{CASSIDY, Hero, HeroCatalog, SOLDIER},
+    game_heroes::{CASSIDY, Hero, HeroCatalog},
     game_instance::RETAIL_QUANTA,
     game_pools::PoolCatalog,
     game_replication::OwnerBodyRuntime,
@@ -53,6 +53,7 @@ use crate::{
 
 #[cfg(test)]
 use crate::{
+    game_heroes::SOLDIER,
     game_service::player_entity,
     junkenstein_messages::DefenderMessage,
     script_init::{Site, World},
@@ -93,6 +94,21 @@ fn ground_height(
 type OwnerBodyFactory = dyn Fn(&Hero, OwnerBodySpawn, OwnerBodySetup) -> io::Result<Option<Box<dyn OwnerBodyRuntime>>>
     + Send
     + Sync;
+
+fn practice_owner_selector(
+    factories: BTreeMap<u64, Result<PlayerBodyFactory, Arc<SceneOwnerPreparationError>>>,
+) -> Arc<OwnerBodyFactory> {
+    Arc::new(move |hero, spawn, setup| {
+        let Some(factory) = factories.get(&hero.guid) else {
+            return Ok(None);
+        };
+        let factory = factory
+            .as_ref()
+            .map_err(|error| io::Error::new(io::ErrorKind::Unsupported, Arc::clone(error)))?;
+        let runtime: Box<dyn OwnerBodyRuntime> = Box::new(factory.start_with_setup(spawn, setup)?);
+        Ok(Some(runtime))
+    })
+}
 
 #[derive(Debug, thiserror::Error)]
 enum SceneOwnerPreparationError {
@@ -484,7 +500,7 @@ impl SceneAssets {
         if is_practice_range(scene.map()) && scripted_bots == 0 {
             scene.owner_body_factory = self
                 .practice_owner_body
-                .get_or_init(|| self.prepare_owner_body(&scene, SOLDIER))
+                .get_or_init(|| self.compile_practice_factories(&scene))
                 .clone();
         }
         Ok(scene)
@@ -595,11 +611,25 @@ impl SceneAssets {
         }))
     }
 
-    fn prepare_owner_factory(
+    fn compile_practice_factories(&self, scene: &PreparedScene) -> Option<Arc<OwnerBodyFactory>> {
+        // Cache graph layouts only. Each selected body starts with the current room context.
+        let factories: BTreeMap<_, _> = self
+            .heroes
+            .heroes()
+            .map(|hero| {
+                (
+                    hero.guid,
+                    self.compile_owner_factory(scene, hero).map_err(Arc::new),
+                )
+            })
+            .collect();
+        (!factories.is_empty()).then(|| practice_owner_selector(factories))
+    }
+
+    fn compile_owner_factory(
         &self,
         scene: &PreparedScene,
         hero: &Hero,
-        setup: OwnerBodySetup,
     ) -> Result<PlayerBodyFactory, SceneOwnerPreparationError> {
         let codecs = self
             .codecs
@@ -607,17 +637,29 @@ impl SceneAssets {
             .ok_or(SceneOwnerPreparationError::Codecs)?;
         let controller_on_fire = initial_on_fire(&scene.initial_board)
             .ok_or(SceneOwnerPreparationError::ControllerFlag)?;
-        let mover = scene
-            .player_spawn_mover(hero.body, 0)
-            .map_err(SceneOwnerPreparationError::SpawnMover)?;
-        PlayerBodyFactory::prepare(
+        PlayerBodyFactory::from_body(
             Arc::clone(&self.graphs),
             Arc::clone(codecs),
             scene.map.mode_guid,
             hero,
             self.pools.hero_pools(hero.guid),
             controller_on_fire,
-            (
+        )
+        .map_err(|source| SceneOwnerPreparationError::Body(Box::new(source)))
+    }
+
+    fn prepare_owner_factory(
+        &self,
+        scene: &PreparedScene,
+        hero: &Hero,
+        setup: OwnerBodySetup,
+    ) -> Result<PlayerBodyFactory, SceneOwnerPreparationError> {
+        let factory = self.compile_owner_factory(scene, hero)?;
+        let mover = scene
+            .player_spawn_mover(hero.body, 0)
+            .map_err(SceneOwnerPreparationError::SpawnMover)?;
+        factory
+            .probe_startup(
                 OwnerBodySpawn {
                     slot: 0,
                     controller: OWNER_PROBE_CONTROLLER,
@@ -628,9 +670,9 @@ impl SceneAssets {
                     quanta: RETAIL_QUANTA,
                 },
                 setup,
-            ),
-        )
-        .map_err(|source| SceneOwnerPreparationError::Body(Box::new(source)))
+            )
+            .map_err(|source| SceneOwnerPreparationError::Body(Box::new(source)))?;
+        Ok(factory)
     }
 }
 

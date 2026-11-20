@@ -101,14 +101,13 @@ pub(crate) enum OwnerBodyStartupError {
 }
 
 impl PlayerBodyFactory {
-    pub(crate) fn prepare(
+    pub(crate) fn from_body(
         graphs: Arc<GraphStore>,
         codecs: Arc<CodecTable>,
         mode: u64,
         hero: &Hero,
         pools: Option<HealthPools>,
         controller_on_fire: bool,
-        probe: (OwnerBodySpawn, OwnerBodySetup),
     ) -> Result<Self, OwnerBodyPreparationError> {
         let body = graphs
             .bodies()
@@ -136,7 +135,7 @@ impl PlayerBodyFactory {
         let health = pools.unwrap_or(FALLBACK_POOLS).total();
         let variables = crate::script_init::player_entity_variables(body, health, health);
         let target_tags = body.target_tags.clone();
-        let factory = Self {
+        Ok(Self {
             graphs,
             codecs,
             mode,
@@ -146,8 +145,15 @@ impl PlayerBodyFactory {
             pools,
             target_tags,
             controller_on_fire,
-        };
-        let runtime = factory.start_runtime(probe.0, probe.1)?;
+        })
+    }
+
+    pub(crate) fn probe_startup(
+        &self,
+        spawn: OwnerBodySpawn,
+        setup: OwnerBodySetup,
+    ) -> Result<(), OwnerBodyPreparationError> {
+        let runtime = self.start_runtime(spawn, setup)?;
         let encoder = runtime.encoder();
         let snapshot = runtime
             .snapshot()
@@ -158,6 +164,21 @@ impl PlayerBodyFactory {
         encoder
             .full(&projected)
             .map_err(OwnerBodyPreparationError::Encoding)?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prepare(
+        graphs: Arc<GraphStore>,
+        codecs: Arc<CodecTable>,
+        mode: u64,
+        hero: &Hero,
+        pools: Option<HealthPools>,
+        controller_on_fire: bool,
+        probe: (OwnerBodySpawn, OwnerBodySetup),
+    ) -> Result<Self, OwnerBodyPreparationError> {
+        let factory = Self::from_body(graphs, codecs, mode, hero, pools, controller_on_fire)?;
+        factory.probe_startup(probe.0, probe.1)?;
         Ok(factory)
     }
 

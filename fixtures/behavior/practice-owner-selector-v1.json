@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "case_id": "practice-owner-selector-v1",
+  "evidence": "rust-headless-synthetic",
+  "accepted": [
+    {"hero": "0x02E0000000002F01", "body": "0x0400000000002F01", "root": 711},
+    {"hero": "0x02E0000000002F02", "body": "0x0400000000002F02", "root": 712}
+  ],
+  "rejected": {"hero": "0x02E0000000002F03", "body": "0x0400000000002F03", "root": 711},
+  "unlisted": {"hero": "0x02E0000000002F04", "body": "0x0400000000002F04", "root": 712}
+}

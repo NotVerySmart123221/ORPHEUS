@@ -271,6 +271,7 @@ pub(crate) struct WorldDelivery {
 mod body;
 mod delivery;
 
+pub(crate) use body::validate_body_baselines;
 use body::{BioticView, BodyScript, InputQueue};
 use delivery::{BotLifetime, Delivery, Lifetime};
 

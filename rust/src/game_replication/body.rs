@@ -17,6 +17,42 @@ pub(super) struct BodyScript {
     pub(super) projectiles: Option<OwnerProjectiles>,
 }
 
+fn startup_snapshot(runtime: &dyn OwnerBodyRuntime, entity: u32) -> io::Result<&Snapshot> {
+    let snapshot = runtime
+        .snapshot()
+        .ok_or_else(|| invalid("body VM is unavailable"))?;
+    if snapshot.entity != entity {
+        return Err(invalid("body VM has the wrong entity"));
+    }
+    Ok(snapshot)
+}
+
+pub(crate) fn validate_body_baselines(
+    runtime: &dyn OwnerBodyRuntime,
+    entity: u32,
+) -> io::Result<()> {
+    let snapshot = startup_snapshot(runtime, entity)?;
+    let encoder = runtime.encoder();
+    for (view, budget_error) in [
+        (
+            View::Owner,
+            "owner script baseline exceeds the datagram budget",
+        ),
+        (
+            View::Observer,
+            "observer script baseline exceeds the datagram budget",
+        ),
+    ] {
+        let baseline_error = |error| invalid(format!("{view:?} script baseline: {error}"));
+        let projected = encoder.project(snapshot, view).map_err(baseline_error)?;
+        let chunk = encoder
+            .queue_full(&mut BodyStream::new(entity), &projected)
+            .map_err(baseline_error)?;
+        ensure_script_chunk_fits(&chunk.update, budget_error)?;
+    }
+    Ok(())
+}
+
 impl BodyScript {
     pub(super) fn new(
         body: Body,
@@ -24,30 +60,7 @@ impl BodyScript {
         processed_at_spawn: Option<u32>,
         runtime: &dyn OwnerBodyRuntime,
     ) -> io::Result<Self> {
-        let snapshot = runtime
-            .snapshot()
-            .ok_or_else(|| invalid("body VM is unavailable"))?;
-        if snapshot.entity != body.id.entity {
-            return Err(invalid("body VM has the wrong entity"));
-        }
-        let encoder = runtime.encoder();
-        for (view, budget_error) in [
-            (
-                View::Owner,
-                "owner script baseline exceeds the datagram budget",
-            ),
-            (
-                View::Observer,
-                "observer script baseline exceeds the datagram budget",
-            ),
-        ] {
-            let baseline_error = |error| invalid(format!("{view:?} script baseline: {error}"));
-            let projected = encoder.project(snapshot, view).map_err(baseline_error)?;
-            let chunk = encoder
-                .queue_full(&mut BodyStream::new(body.id.entity), &projected)
-                .map_err(baseline_error)?;
-            ensure_script_chunk_fits(&chunk.update, budget_error)?;
-        }
+        startup_snapshot(runtime, body.id.entity)?;
         let corrections = (matches!(body.hero, SOLDIER | CASSIDY)
             && runtime.movement_modifiers().is_some())
         .then(|| {

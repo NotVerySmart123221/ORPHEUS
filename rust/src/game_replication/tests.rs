@@ -631,6 +631,8 @@ fn queued_player_requests_ignore_invalid_input_but_propagate_replacement_failure
 #[test]
 #[ignore = "requires a prepared 104319 Practice Range pack without bot VM graphs"]
 fn native_world_resumes_a_gap_before_switching_the_body_and_acknowledging_input() {
+    use crate::game_instance::TeamMemberCounts;
+
     let runtime = std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap();
     let assets = SceneAssets::load(runtime).unwrap();
     let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
@@ -641,6 +643,12 @@ fn native_world_resumes_a_gap_before_switching_the_body_and_acknowledging_input(
         team: 0,
         card: &PlayerCard::default(),
     };
+    let roster = TeamMemberCounts::from_teams(scene.map().free_for_all, [viewer.team]);
+    scene.simulation_mut().set_team_member_counts(roster);
+    scene
+        .simulation_mut()
+        .prepare_spatial_frame(FIRST_TICK)
+        .unwrap();
     let mut world = WorldDelivery::new(owner);
     let first = FIRST_TICK + 1;
     world.queue_commands(FIRST_TICK, &[forward(first)]);
@@ -696,8 +704,12 @@ fn native_world_resumes_a_gap_before_switching_the_body_and_acknowledging_input(
     );
     world.queue_commands(FIRST_TICK + 2, &[actual, gap]);
 
-    let tracer = scene.heroes().find_hero("Tracer").unwrap().clone();
-    let switch = pick_hero(owner, tracer.guid);
+    let next_hero = scene.heroes().find_hero("Zarya").unwrap().clone();
+    let switch = pick_hero(owner, next_hero.guid);
+    scene
+        .simulation_mut()
+        .prepare_spatial_frame(FIRST_TICK + 3)
+        .unwrap();
     world.queue_game_message(FIRST_TICK + 3, Duration::ZERO, switch);
     world.queue_commands(FIRST_TICK + 3, &[gap, later]);
 
@@ -747,9 +759,22 @@ fn native_world_resumes_a_gap_before_switching_the_body_and_acknowledging_input(
             .unwrap(),
         (2, false)
     );
-    assert_eq!(world.body.unwrap().id.entity, owner | 2);
+    let replacement = world.body.unwrap();
+    assert_eq!(replacement.id.entity, owner | 2);
+    assert_eq!(replacement.hero, next_hero.guid);
+    assert_eq!(world.body_script.as_ref().unwrap().id, replacement.id);
+    assert!(
+        scene
+            .simulation()
+            .player_body(replacement.id)
+            .unwrap()
+            .runtime
+            .is_some()
+    );
     assert_eq!(world.command_ack(FIRST_TICK + 90), later.frame);
-    let mut synchronous = scene.player_spawn_mover(tracer.body, viewer.team).unwrap();
+    let mut synchronous = scene
+        .player_spawn_mover(next_hero.body, viewer.team)
+        .unwrap();
     synchronous
         .step(scene.movement_index(), later, 0.016, |_, _| {})
         .unwrap();
@@ -768,6 +793,106 @@ fn native_world_resumes_a_gap_before_switching_the_body_and_acknowledging_input(
     assert!(!world.has_input_work());
     assert_eq!(world.command_ack(FIRST_TICK + 90), later.frame);
 }
+
+#[test]
+#[ignore = "requires a prepared, tagged 104319 Practice Range runtime"]
+fn prepared_practice_catalog_exercises_transactional_owner_admission() {
+    use crate::{game_combat::PlayerBodyEvent, game_instance::TeamMemberCounts};
+
+    let runtime = std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap();
+    let assets = SceneAssets::load(runtime).unwrap();
+    let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
+    let viewer = PlayerAppearance {
+        entity: OWNER,
+        slot: 0,
+        team: 0,
+        card: &PlayerCard::default(),
+    };
+    let roster = TeamMemberCounts::from_teams(scene.map().free_for_all, [viewer.team]);
+    scene.simulation_mut().set_team_member_counts(roster);
+    let mut world = WorldDelivery::new(OWNER);
+    world.start(&scene, &viewer, FIRST_TICK).unwrap();
+    world.created.insert(OWNER);
+    world.present(&scene, FIRST_TICK).unwrap();
+
+    let mut heroes: Vec<_> = scene.heroes().heroes().cloned().collect();
+    heroes.sort_unstable_by_key(|hero| (hero.guid != SOLDIER, hero.guid));
+    let mut admitted = 0;
+    for (index, hero) in heroes.iter().enumerate() {
+        let tick = FIRST_TICK + 1 + u32::try_from(index).unwrap();
+        scene.simulation_mut().prepare_spatial_frame(tick).unwrap();
+        let prior = world.body.map(|body| body.id);
+        let generation = world.generation;
+        let controller = (
+            world.controller.latest_data(),
+            world.controller.command_frame(),
+        );
+        let queued = world.queued.len();
+        world.queue_game_message(tick, Duration::ZERO, pick_hero(OWNER, hero.guid));
+        assert_eq!(
+            world
+                .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
+                .unwrap(),
+            (1, false)
+        );
+        let current = world.body.map(|body| body.id);
+        assert_eq!(
+            scene
+                .simulation()
+                .player_body_by_owner(OWNER)
+                .map(|state| state.id),
+            current
+        );
+        assert_eq!(world.body_script.as_ref().map(|script| script.id), current);
+        let events = scene.simulation_mut().take_player_events();
+        if current == prior {
+            assert_eq!(world.generation, generation);
+            assert_eq!(
+                (
+                    world.controller.latest_data(),
+                    world.controller.command_frame()
+                ),
+                controller
+            );
+            assert_eq!(world.queued.len(), queued);
+            assert!(events.is_empty());
+        } else {
+            admitted += 1;
+            let id = current.unwrap();
+            assert_eq!(world.generation, generation + 1);
+            assert_eq!(world.controller.latest_data(), controller.0 + 1);
+            let actor = scene.simulation().player_body(id).unwrap();
+            assert_eq!(actor.hero, hero.guid);
+            assert!(
+                actor
+                    .runtime
+                    .as_ref()
+                    .unwrap()
+                    .snapshot()
+                    .unwrap()
+                    .initialization_complete()
+            );
+            assert!(
+                matches!(events.last(), Some(PlayerBodyEvent::Created { id: created, .. }) if *created == id)
+            );
+            if let Some(prior) = prior {
+                assert!(
+                    matches!(events.first(), Some(PlayerBodyEvent::Retired { id: retired, .. }) if *retired == prior)
+                );
+                assert!(scene.simulation().player_body(prior).is_none());
+            }
+        }
+    }
+    eprintln!(
+        "prepared Practice Range room admission: {admitted}/{}",
+        heroes.len()
+    );
+    assert!(
+        admitted > 1,
+        "expected at least two catalog bodies to attach"
+    );
+}
+
 use crate::game_egress::PacketDelivery;
 
 const OWNER: u32 = 0xa000_0100;

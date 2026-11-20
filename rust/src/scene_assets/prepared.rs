@@ -165,11 +165,15 @@ impl PreparedScene {
         hero: &Hero,
         spawn: OwnerBodySpawn,
     ) -> io::Result<Option<Box<dyn OwnerBodyRuntime>>> {
-        self.owner_body_factory
-            .as_ref()
-            .map_or(Ok(None), |factory| {
-                factory(hero, spawn, self.owner_body_setup(spawn.controller))
-            })
+        let Some(factory) = &self.owner_body_factory else {
+            return Ok(None);
+        };
+        let runtime = factory(hero, spawn, self.owner_body_setup(spawn.controller))?;
+        if let Some(runtime) = &runtime {
+            crate::game_replication::validate_body_baselines(runtime.as_ref(), spawn.entity)
+                .map_err(|error| io::Error::new(io::ErrorKind::Unsupported, error))?;
+        }
+        Ok(runtime)
     }
 
     pub(super) fn owner_body_setup(&self, owner: u32) -> OwnerBodySetup {

@@ -6,6 +6,127 @@ mod junkenstein;
 mod script_coverage;
 
 #[test]
+fn practice_owner_selector_starts_the_validated_actor_definition() {
+    use serde_json::{Map, json};
+
+    #[derive(Deserialize)]
+    struct Actor {
+        hero: String,
+        body: String,
+        root: u32,
+    }
+    #[derive(Deserialize)]
+    struct Contract {
+        schema_version: u32,
+        accepted: [Actor; 2],
+        rejected: Actor,
+        unlisted: Actor,
+    }
+
+    let contract: Contract = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/practice-owner-selector-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    let [first, second] = &contract.accepted;
+    let bodies: Map<_, _> = [
+        (first, &first.hero),
+        (second, &second.hero),
+        (&contract.rejected, &first.hero),
+        (&contract.unlisted, &contract.unlisted.hero),
+    ]
+    .into_iter()
+    .map(|(actor, declared_hero)| {
+        (
+            actor.body.clone(),
+            json!({
+                "name": "Fixture",
+                "hero": declared_hero,
+                "weapons": [],
+                "graphs": [{"graph": actor.root, "m_75408640": 0}],
+            }),
+        )
+    })
+    .collect();
+    let graphs = contract.accepted.each_ref().map(|actor| {
+        json!({
+            "index": actor.root, "items": 0, "nodes": [], "states": [], "entries": [],
+            "remote": [], "sync_vars": [], "containers": {}, "unknown_nodes": [], "fields": {},
+            "header": {"m_nodesBitCount": 4, "m_statesBitCount": 4,
+                       "m_remoteSyncNodesBitCount": 4, "m_syncVarsBitCount": 4}
+        })
+    });
+    let bundle = json!({"version": 1, "graphs": graphs, "bodies": bodies, "missing": []});
+    let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    let codecs = Arc::new(CodecTable::from_json(r#"{"classes":{}}"#).unwrap());
+    let make_hero = |actor: &Actor| Hero {
+        guid: parse_guid(&actor.hero).unwrap(),
+        name: format!("Fixture actor {}", actor.hero),
+        role: "Damage".into(),
+        body: parse_guid(&actor.body).unwrap(),
+    };
+    let mut scene = PreparedScene::fixture_for_bots(Vec::new());
+    let definitions = [first, second, &contract.rejected].map(|actor| {
+        let hero = make_hero(actor);
+        let prepared = PlayerBodyFactory::from_body(
+            Arc::clone(&graphs),
+            Arc::clone(&codecs),
+            scene.map().mode_guid,
+            &hero,
+            None,
+            false,
+        );
+        (
+            hero.guid,
+            prepared.map_err(|error| Arc::new(SceneOwnerPreparationError::Body(Box::new(error)))),
+        )
+    });
+    assert!(definitions[0].1.is_ok() && definitions[1].1.is_ok());
+    let invalid = definitions[2].1.as_ref().err().map(Arc::as_ref);
+    assert!(
+        matches!(invalid, Some(SceneOwnerPreparationError::Body(error))
+        if matches!(error.as_ref(), OwnerBodyPreparationError::MissingBody))
+    );
+    scene.owner_body_factory = Some(practice_owner_selector(definitions.into_iter().collect()));
+    let spawn = OwnerBodySpawn {
+        slot: 0,
+        controller: OWNER_PROBE_CONTROLLER,
+        entity: 0xa000_0101,
+        body_filter: team_bit(0).unwrap(),
+        frame: FIRST_TICK,
+        pose: Default::default(),
+        quanta: RETAIL_QUANTA,
+    };
+
+    for actor in &contract.accepted {
+        let runtime = scene
+            .owner_body_runtime(&make_hero(actor), spawn)
+            .unwrap()
+            .unwrap();
+        let snapshot = runtime.snapshot().unwrap();
+        assert_eq!(snapshot.entity, spawn.entity);
+        assert_eq!(
+            snapshot
+                .instances
+                .values()
+                .map(|instance| instance.graph)
+                .collect::<Vec<_>>(),
+            [actor.root]
+        );
+    }
+    assert!(matches!(
+        scene.owner_body_runtime(&make_hero(&contract.rejected), spawn),
+        Err(error) if error.kind() == io::ErrorKind::Unsupported
+    ));
+    assert!(
+        scene
+            .owner_body_runtime(&make_hero(&contract.unlisted), spawn)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 #[ignore = "requires separately prepared 104319 Junkenstein runtime"]
 fn normal_cassidy_primary_and_fan_damage_all_boss_bodies() {
     use crate::junkenstein_navigation::{JUNKRAT, REAPER, ROADHOG, SUMMONER, WITCH};
@@ -412,8 +533,17 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
             "{blocked}"
         );
     }
-    let tracer = scene.heroes().find_hero("Tracer").unwrap();
-    assert!(scene.owner_body_runtime(tracer, spawn).unwrap().is_none());
+    let unknown_actor = Hero {
+        guid: u64::MAX,
+        ..hero.clone()
+    };
+    assert!(scene.heroes().get(unknown_actor.guid).is_none());
+    assert!(
+        scene
+            .owner_body_runtime(&unknown_actor, spawn)
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
