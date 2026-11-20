@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Rechecked the authored cue listener's live owner and body generation before reliable admission. Queued cues expire when the listener dies or is replaced. The synthetic regression covers late death and legacy notice matching.
+
 - Made local auxiliary view bindings and outlines depend on explicit host context. Dynamic elapsed waits now resample numeric durations, rearm when configured and cancel on exit. Literal-delay cinematic states select the shared owner and observer boundary projection from validated fields and slots. Formatting, locked Clippy, and workspace tests with script coverage passed, including 374 native and 220 portable StateScript library tests.
 
 - Added optional mode-scoped engine settings to prepared StateScript graph bundles. Player, NPC, mode and gate scripts use one typed lookup. Missing keys retain the initial value, explicit null remains a value, and omitted tables retain the captured compatibility path. Formatting, locked Clippy, and workspace tests with script coverage passed, including 372 native and 218 portable StateScript library tests.

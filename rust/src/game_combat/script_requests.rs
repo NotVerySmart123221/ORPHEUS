@@ -272,15 +272,18 @@ impl RoomSimulation {
             .is_some_and(|entity| *entity == source)
     }
 
+    pub(crate) fn room_cue_listener_current(&self, owner: u32, listener: BodyId) -> bool {
+        self.player_body(listener)
+            .is_some_and(|player| player.owner == owner && player.alive())
+    }
+
     pub(crate) fn take_player_cues(&mut self) -> Vec<PlayerRoomCue> {
         let mut cues = std::mem::take(&mut self.player_cues);
         cues.retain(|cue| {
             cue.notice
                 .required_identity()
                 .is_some_and(|wire| self.room_cue_source_current(wire, cue.source))
-                && self
-                    .player_body(cue.listener)
-                    .is_some_and(|player| player.owner == cue.owner && player.alive())
+                && self.room_cue_listener_current(cue.owner, cue.listener)
         });
         cues
     }

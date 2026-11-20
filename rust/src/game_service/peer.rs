@@ -37,20 +37,32 @@ struct PendingCombatNotice {
 }
 
 impl PendingCombatNotice {
-    fn matches_body(&self, body: Option<BodyId>) -> bool {
-        if self
-            .authored
-            .as_ref()
-            .is_some_and(|cue| body != Some(cue.listener))
-        {
+    fn matches_audience(
+        &self,
+        body: Option<BodyId>,
+        owner: u32,
+        simulation: Option<&RoomSimulation>,
+    ) -> bool {
+        let Some(cue) = &self.authored else {
+            return match self.notice {
+                CombatNotice::Voice { listener, .. } => {
+                    body.is_some_and(|body| body.entity == listener)
+                }
+                _ => true,
+            };
+        };
+        let CombatNotice::Voice {
+            anchor, listener, ..
+        } = self.notice
+        else {
             return false;
-        }
-        match self.notice {
-            CombatNotice::Voice { listener, .. } => {
-                body.is_some_and(|body| body.entity == listener)
-            }
-            _ => true,
-        }
+        };
+        body == Some(cue.listener)
+            && cue.listener.entity == listener
+            && simulation.is_some_and(|room| {
+                room.room_cue_source_current(anchor, cue.source)
+                    && room.room_cue_listener_current(owner, cue.listener)
+            })
     }
 }
 
@@ -165,26 +177,22 @@ impl Peer {
                 .notices
                 .pop_front()
                 .ok_or(RoomError::Invariant("pending combat notice disappeared"))?;
-            if !pending.matches_body(self.world.active_body_id()) {
+            if !pending.matches_audience(
+                self.world.active_body_id(),
+                self.world.owner(),
+                simulation,
+            ) {
                 continue;
             }
             let notice = pending.notice;
-            if let Some(cue) = &pending.authored {
-                let CombatNotice::Voice { anchor, .. } = notice else {
-                    continue;
-                };
-                if !simulation.is_some_and(|room| room.room_cue_source_current(anchor, cue.source))
-                {
-                    continue;
-                }
-                if !self.world.identity_ready(cue.listener.entity)
+            if pending.authored.as_ref().is_some_and(|cue| {
+                !self.world.identity_ready(cue.listener.entity)
                     || self.authored_cue_ordinal.is_some_and(|ordinal| {
                         self.egress.oldest_pending_reliable() <= u64::from(ordinal)
                     })
-                {
-                    self.combat_ui.notices.push_back(pending);
-                    continue;
-                }
+            }) {
+                self.combat_ui.notices.push_back(pending);
+                continue;
             }
             if notice
                 .required_identity()
@@ -306,7 +314,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn queued_player_cue_requires_the_original_body_generation() {
+    fn authored_cues_preserve_legacy_notice_matching_and_capacity() {
         let listener = BodyId {
             entity: 0xa001_0100,
             generation: 4,
@@ -327,11 +335,8 @@ mod tests {
         peer.queue_player_cue(listener, source, notice);
         peer.queue_combat_notice(notice);
 
-        let authored = &peer.combat_ui.notices[0];
-        assert!(authored.matches_body(Some(listener)));
-        assert!(!authored.matches_body(Some(replacement)));
         let legacy = &peer.combat_ui.notices[1];
-        assert!(legacy.matches_body(Some(replacement)));
+        assert!(legacy.matches_audience(Some(replacement), peer.world.owner(), None));
 
         // With no current body, flushing discards both before reliable admission.
         let schemas = Schemas::from_json("{}").unwrap();
@@ -351,5 +356,123 @@ mod tests {
             peer.pending_combat_notices()
                 .all(|notice| *notice == legacy)
         );
+    }
+
+    #[test]
+    fn queued_cue_requires_a_living_listener_at_reliable_admission() {
+        use crate::{
+            contact_world::ContactWorld, game_combat::PlayerBodyState, game_heroes::SOLDIER,
+            game_replication::OwnerBodyRuntime, mover::Mover, mover_settings::MoverSettings,
+            script_player::fixture_body_factory, vitals::Death,
+        };
+        use serde_json::{Value as Json, json};
+
+        let fixture: Json = serde_json::from_str(include_str!(
+            "../../../fixtures/behavior/script-room-cue-v1.json"
+        ))
+        .unwrap();
+        let input = &fixture["input"]["reliable_admission"];
+        let expected = &fixture["expected"]["reliable_admission"];
+        let speaker = u32::try_from(fixture["input"]["speaker"].as_u64().unwrap()).unwrap();
+        let (factory, spawn) = fixture_body_factory();
+        let listener = BodyId {
+            entity: spawn.entity,
+            generation: input["listener_generation"].as_u64().unwrap(),
+        };
+        let mut simulation = RoomSimulation::new(Vec::new()).unwrap();
+        let movement_world = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+        let body = |id, owner, slot, runtime: Option<Box<dyn OwnerBodyRuntime>>| {
+            let mover = Mover::new(
+                MoverSettings::default(),
+                Arc::clone(&movement_world),
+                spawn.pose.position,
+                0,
+                0x08,
+            )
+            .unwrap();
+            PlayerBodyState::new(
+                id,
+                owner,
+                slot,
+                1,
+                SOLDIER,
+                mover,
+                runtime,
+                spawn.frame,
+                None,
+            )
+        };
+        let source = simulation
+            .spawn_player_body(body(
+                BodyId {
+                    entity: speaker,
+                    generation: 1,
+                },
+                speaker - 1,
+                1,
+                None,
+            ))
+            .unwrap();
+        simulation
+            .spawn_player_body(body(
+                listener,
+                spawn.controller,
+                0,
+                Some(Box::new(factory.start(spawn).unwrap())),
+            ))
+            .unwrap();
+
+        let notice = CombatNotice::Voice {
+            anchor: speaker,
+            speaker,
+            listener: listener.entity,
+            stimulus: 1,
+            line: 2,
+        };
+        let mut peer = Peer::new(spawn.controller);
+        peer.queue_player_cue(listener, source.entity, notice);
+        peer.queue_combat_notice(notice);
+        let eligibility = |room: &RoomSimulation| {
+            let matches = |index: usize| {
+                peer.combat_ui.notices[index].matches_audience(
+                    Some(listener),
+                    peer.world.owner(),
+                    Some(room),
+                )
+            };
+            json!({"authored": matches(0), "legacy": matches(1)})
+        };
+        assert_eq!(eligibility(&simulation), expected["before_listener_death"]);
+        assert!(!peer.combat_ui.notices[0].matches_audience(
+            Some(BodyId {
+                generation: listener.generation + 1,
+                ..listener
+            }),
+            peer.world.owner(),
+            Some(&simulation),
+        ));
+        assert!(!peer.combat_ui.notices[0].matches_audience(
+            Some(listener),
+            speaker - 1,
+            Some(&simulation),
+        ));
+
+        let (_, killed, _) = simulation
+            .damage_player_body_by_wire(
+                listener,
+                input["late_damage"].as_f64().unwrap(),
+                Death {
+                    killer: speaker,
+                    frame: spawn.frame + 1,
+                    time: 0.016,
+                },
+            )
+            .unwrap();
+        assert!(killed);
+        assert_eq!(
+            simulation.player_handle_for_wire(listener.entity),
+            Some(listener)
+        );
+        assert_eq!(eligibility(&simulation), expected["after_listener_death"]);
     }
 }
