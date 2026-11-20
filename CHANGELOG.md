@@ -8,6 +8,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Applied the settled target's tags, affiliation and liveness to direct `EntityMatches` filters in a health event. A lethal impact retains its original target's qualification after the body retires. Source membership and spatial searches still use the current room frame. Validated in shared candidate `29df13cb`.
 
+- Kept a settled health event bound to its original target generation through the next VM frame. Direct awards and health requests skip an expired target. Added a room regression for same-wire replacement before the source VM handles the event and a fresh award after replacement. Integration validation pending.
+
 - Carried target facts with positive NPC-local health events at VM publication. Added room coverage for a capped heal issuing one configured bonus on the recipient's next VM frame and for dropping the award when that recipient is replaced. A prepared probe exercises original local admission, award, and revocation through the graph. Validated in shared candidate `29df13cb`.
 
 - Settle pending hitscan before replacing the owner's hero or skin, including when both inputs arrive in one worker turn. Scope queued player death notices to the victim body's generation so they cannot follow a replacement.
@@ -1212,7 +1214,6 @@ hosted-CI result is added.
   gameplay/presentation checklist still require static work before client
   verification. No client was launched and no push occurred.
 
-
 #### Restore strict shared voice-state callbacks
 
 - Add the 40E05F6B begin/poll/timer lifecycle with explicit context, manager,
@@ -1720,7 +1721,6 @@ hosted-CI result is added.
   full hit-effect execution. Deferred execution, immunity and native
   control/reaction projection remain static gaps. No client is started.
 
-
 #### Bridge Flashbang hit control into NPC combat
 
 - Read Flashbang effect 0079's duration override from authored 0228/7 rather
@@ -1751,7 +1751,6 @@ hosted-CI result is added.
   remain open static work. Flashbang and broader boss acceptance stay open;
   no original client is started while the static checklist is incomplete.
 
-
 #### Admit Cassidy Flashbang flight and range-end blast
 
 - The owner projectile bridge now accepts Cassidy 01E9/7's known single
@@ -1776,7 +1775,6 @@ hosted-CI result is added.
   interruption, recovery, impact/control replication and broader Flashbang
   acceptance remain open. Per the user's updated instruction, all listed
   static gaps must be resolved before the next original-client session.
-
 
 #### Restore authored common-NPC movement inputs
 
@@ -1805,7 +1803,6 @@ hosted-CI result is added.
   defender. Common attackers are retired through normal damage in this
   isolated replay to keep the gate alive. This does not establish visible
   intro/camera playback, native speed presentation or full boss acceptance.
-
 
 #### Verify basic Roll in the original client
 
@@ -1923,7 +1920,6 @@ hosted-CI result is added.
   The recap still shows Victory / 0.0; outcome UI acceptance remains open.
   Both owned test processes have stopped (server exit 0).
 
-
 #### Preserve the post-match manager inputs
 
 - The authorized Normal/Cassidy failure replay reaches zero gate health and
@@ -1939,7 +1935,6 @@ hosted-CI result is added.
   This closes the missing manager input only. Outcome UI acceptance, the full
   boss run, voices, intros, win line and gallery remain open. Both owned test
   sessions stopped cleanly on the server; local captures stay outside Git.
-
 
 #### Keep mission updates running after the HUD announcement
 
@@ -2004,7 +1999,6 @@ hosted-CI result is added.
   Narration, Boss intro count and gallery acceptance remain open. The owned
   test client and server were stopped.
 
-
 #### Preserve notification inputs and countdown delivery
 
 - The authorized original-client probe at a68f5d6c enters Arcade > Junkenstein
@@ -2050,7 +2044,6 @@ hosted-CI result is added.
   dependency; live notification rendering, ongoing notification delivery,
   top timer/gate HUD and complete outcome acceptance remain open.
 
-
 #### Original-client checkpoint and local source delivery
 
 - Rebuilt clean integration revision 970c6162 with `cargo build --locked --bin
@@ -2072,7 +2065,6 @@ hosted-CI result is added.
 - No Python ORPHEUS/main or combined-server checkout was edited. No remote
   push was performed. Remote rust remains 13acf152; publication audit and
   complete acceptance remain outstanding.
-
 
 #### Run the Summoner's Junkenstein weapons
 
@@ -3189,7 +3181,6 @@ hosted-CI result is added.
 - Arcade, Gallery, Boss behavior, dialogue and result presentation remain
   unverified. The line stopped its own client and service and retained private
   logs outside Git. This combined worktree did not launch the original client.
-
 
 #### Normalize combined mover stances and pass the prepared merge check
 

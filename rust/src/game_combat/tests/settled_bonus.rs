@@ -43,6 +43,8 @@ struct Input {
 struct Expected {
     after_deliveries: [f64; 2],
     replacement_meter: f64,
+    replacement_before_delivery_meter: f64,
+    fresh_grant_after_replacement_meter: f64,
 }
 
 fn bonus_bundle(cap: f64) -> GraphStore {
@@ -390,4 +392,35 @@ fn settled_healing_binds_a_directed_bonus_through_the_live_room() {
         meter(&room, replacement),
         contract.expected.replacement_meter
     );
+
+    // The source already has the health event when the target changes bodies.
+    frame += 2;
+    wound_and_heal(&mut room, &contract.input, source, replacement, frame);
+    finish(&mut room, frame);
+    let next = attach(&mut room, &factory, template, 1, frame, 3);
+    assert_eq!(next.entity, replacement.entity);
+    assert!(room.player_body(replacement).is_none());
+    let actors = [source, next, bystander];
+    advance(&mut room, frame + 1, actors);
+    finish(&mut room, frame + 1);
+    advance(&mut room, frame + 2, actors);
+    assert_eq!(
+        meter(&room, next),
+        contract.expected.replacement_before_delivery_meter
+    );
+    assert_eq!(meter(&room, source), 0.0);
+    assert_eq!(meter(&room, bystander), 0.0);
+
+    frame += 2;
+    wound_and_heal(&mut room, &contract.input, source, next, frame);
+    finish(&mut room, frame);
+    advance(&mut room, frame + 1, actors);
+    finish(&mut room, frame + 1);
+    advance(&mut room, frame + 2, actors);
+    assert_eq!(
+        meter(&room, next),
+        contract.expected.fresh_grant_after_replacement_meter
+    );
+    assert_eq!(meter(&room, source), 0.0);
+    assert_eq!(meter(&room, bystander), 0.0);
 }

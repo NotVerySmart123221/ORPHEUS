@@ -160,6 +160,20 @@ pub struct RoomEntityStatus {
     pub alive: bool,
 }
 
+/// A room-resolved body identity. Generations are opaque to StateScript.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RoomBodyIdentity {
+    pub wire: u32,
+    pub generation: u64,
+}
+
+/// Host-only context scoped to the immediate health event delivery.
+#[derive(Clone, Default)]
+pub struct HostHealthContext {
+    pub target_body: Option<RoomBodyIdentity>,
+    pub target_facts: Option<Arc<HealthTargetFacts>>,
+}
+
 /// Room-sampled facts for the original target of a settled health event.
 #[derive(Clone, Debug)]
 pub struct HealthTargetFacts {
@@ -859,6 +873,11 @@ pub trait World {
     }
 
     fn selects_ai_behavior(&mut self, _site: Site) -> Option<bool> {
+        None
+    }
+
+    /// Resolve the generation in the room snapshot used to admit script effects.
+    fn room_body_generation(&self, _wire: u32) -> Option<u64> {
         None
     }
 

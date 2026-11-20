@@ -447,7 +447,7 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
         game_content::JUNKENSTEIN_REVENGE,
         game_hitscan::DamageTags,
         script_entity_state::EntityScriptState,
-        script_init::{HealthTargetFacts, HostEvent},
+        script_init::{HealthTargetFacts, HostEvent, HostHealthContext},
     };
     use serde_json::json;
 
@@ -574,13 +574,16 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
                     killed: false,
                     hit_tags: Some(hit_tags),
                 },
-                Some(Arc::new(HealthTargetFacts {
-                    target: spawn.entity + 1,
-                    room_status: None,
-                    filter_flags: None,
-                    tags: Default::default(),
-                    script_state: EntityScriptState::Unavailable,
-                })),
+                HostHealthContext {
+                    target_body: None,
+                    target_facts: Some(Arc::new(HealthTargetFacts {
+                        target: spawn.entity + 1,
+                        room_status: None,
+                        filter_flags: None,
+                        tags: Default::default(),
+                        script_state: EntityScriptState::Unavailable,
+                    })),
+                },
             )
             .unwrap(),
         1

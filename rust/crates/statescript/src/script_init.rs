@@ -211,9 +211,9 @@ pub use types::{
 };
 pub use world::{
     AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, CreationKind,
-    EmptyWorld, EntityCreation, HealthTargetFacts, HitTags, HostEvent, LandingSelection,
-    MovementSample, PlayScript, RoomCue, RoomEntityStatus, RoomMessage, Site, TargetTagEffect,
-    TargetTagEffects, TargetTagSnapshot, World,
+    EmptyWorld, EntityCreation, HealthTargetFacts, HitTags, HostEvent, HostHealthContext,
+    LandingSelection, MovementSample, PlayScript, RoomBodyIdentity, RoomCue, RoomEntityStatus,
+    RoomMessage, Site, TargetTagEffect, TargetTagEffects, TargetTagSnapshot, World,
 };
 
 use machine::{Event, Machine, Startup, StateKey, VarKey};
@@ -666,7 +666,7 @@ impl Component {
 
     /// Notify explicitly subscribed server graphs at the next receiver VM frame.
     pub fn queue_host_event(&mut self, event: HostEvent) -> Result<usize, InitFault> {
-        self.queue_host_event_with_target_facts(event, None)
+        self.queue_host_event_with_context(event, HostHealthContext::default())
     }
 
     /// Deliver facts for the event's original target with its server notification.
@@ -676,12 +676,31 @@ impl Component {
         event: HostEvent,
         target_facts: Option<Arc<HealthTargetFacts>>,
     ) -> Result<usize, InitFault> {
+        self.queue_host_event_with_context(
+            event,
+            HostHealthContext {
+                target_body: None,
+                target_facts,
+            },
+        )
+    }
+
+    /// Notify a receiver using the room-authenticated target generation and optional facts.
+    pub fn queue_host_event_with_context(
+        &mut self,
+        event: HostEvent,
+        context: HostHealthContext,
+    ) -> Result<usize, InitFault> {
         if self.halted {
             return Err(InitFault::Halted);
         }
-        if target_facts
+        if context
+            .target_facts
             .as_ref()
             .is_some_and(|facts| facts.target != event.target())
+            || context
+                .target_body
+                .is_some_and(|body| body.wire != event.target())
         {
             return Ok(0);
         }
@@ -692,7 +711,7 @@ impl Component {
             return Ok(0);
         };
         self.machine
-            .queue_host_entries(&self.graphs, kind, parameters, due_ms, target_facts)
+            .queue_host_entries(&self.graphs, kind, parameters, due_ms, context)
     }
 
     fn next_vm_frame_ms(&self) -> Option<u64> {

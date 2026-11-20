@@ -7,7 +7,10 @@ use indexmap::IndexMap;
 
 use crate::{
     script_expr::valid_entity,
-    script_init::{HealthTargetFacts, HitTags, HostEvent, RoomEntityStatus},
+    script_init::{
+        HealthTargetFacts, HitTags, HostEvent, HostHealthContext, RoomBodyIdentity,
+        RoomEntityStatus,
+    },
 };
 
 use super::{AppliedDamage, BotState, PlayerBodyState, RoomSimulation};
@@ -190,8 +193,15 @@ impl RoomSimulation {
     pub(super) fn flush_health_events(&mut self) {
         while let Some(change) = self.health_events.pending.pop_front() {
             if let Some((event, receivers)) = change.resolve(self) {
+                let context = HostHealthContext {
+                    target_body: Some(RoomBodyIdentity {
+                        wire: change.target.wire,
+                        generation: change.target.entity.to_bits(),
+                    }),
+                    target_facts: change.target_facts,
+                };
                 for body in receivers.into_iter().flatten() {
-                    self.queue_health_event(body.entity, event, change.target_facts.clone());
+                    self.queue_health_event(body.entity, event, context.clone());
                 }
             }
         }
@@ -242,17 +252,12 @@ impl RoomSimulation {
         }
     }
 
-    fn queue_health_event(
-        &mut self,
-        entity: Entity,
-        event: HostEvent,
-        target_facts: Option<Arc<HealthTargetFacts>>,
-    ) {
+    fn queue_health_event(&mut self, entity: Entity, event: HostEvent, context: HostHealthContext) {
         // A full or halted VM only drops its own notification.
         if let Some(mut state) = self.world.get_mut::<PlayerBodyState>(entity) {
             if state.alive() {
                 if let Some(runtime) = &mut state.runtime {
-                    let _ = runtime.receive_host_event(event, target_facts);
+                    let _ = runtime.receive_host_event(event, context);
                 }
             }
         } else if let Some(mut state) = self.world.get_mut::<BotState>(entity) {
@@ -265,7 +270,7 @@ impl RoomSimulation {
                     let _ = enemy
                         .scripts
                         .body
-                        .queue_host_event_with_target_facts(event, target_facts);
+                        .queue_host_event_with_context(event, context);
                 }
             }
         }

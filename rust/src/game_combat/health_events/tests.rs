@@ -361,7 +361,7 @@ fn lethal_impact_notifies_source_with_settled_room_status_after_target_retiremen
         mover_settings::MoverCatalog,
         scene_assets::BotQueries,
         script_graph::RoomSpatialNeeds,
-        script_init::{InitFault, Snapshot},
+        script_init::{HostHealthContext, InitFault, Snapshot},
         script_snapshot_wire::SnapshotEncoder,
     };
 
@@ -376,13 +376,13 @@ fn lethal_impact_notifies_source_with_settled_room_status_after_target_retiremen
         fn receive_host_event(
             &mut self,
             event: HostEvent,
-            facts: Option<Arc<HealthTargetFacts>>,
+            context: HostHealthContext,
         ) -> Result<usize, InitFault> {
             assert!(
                 self.notification
                     .lock()
                     .unwrap()
-                    .replace((event, facts))
+                    .replace((event, context.target_facts))
                     .is_none()
             );
             Ok(1)
