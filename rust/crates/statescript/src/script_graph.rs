@@ -553,6 +553,7 @@ impl Graph {
                 ]
                 .into_iter()
                 .chain(node.declares_observe_state().then_some("on_change"))
+                .chain(node.declares_observe_state().then_some("on_sample"))
                 .chain(stack_outputs.iter().copied())
                 {
                     if node
@@ -2663,6 +2664,15 @@ mod tests {
         node["server_only"] = json!(false);
         node["fields"]["on_change"] = Value::Null;
         assert!(load(&data).is_ok());
+
+        for plug in [Value::Null, json!({"$":"Plug","links":[]})] {
+            data["graphs"][0]["nodes"][0]["fields"]["on_sample"] = plug;
+            assert!(load(&data).is_ok());
+        }
+        data["graphs"][0]["nodes"][0]["fields"]["on_sample"] =
+            json!({"$":"Plug","links":[[0,false]]});
+        let error = load(&data).unwrap_err();
+        assert!(error.to_string().contains("invalid on_sample output plug"));
     }
 
     #[test]

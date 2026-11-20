@@ -77,6 +77,10 @@ The Rust-only [static ray fixture](../fixtures/behavior/statescript-ray-cast-v1.
 
 The Rust-only [actor ray fixture](../fixtures/behavior/statescript-entity-ray-cast-v1.json) checks team and tag selection, stable candidate IDs, budget exhaustion, a zero-distance hit, and unavailable geometry. Native room tests exercise frozen capsules and static occlusion.
 
+The Rust-only observation sample contract checks repeated successful values,
+unavailable geometry, known misses, and retirement before callback dispatch.
+[Synthetic observation sample fixture](../fixtures/behavior/statescript-observation-sample-v1.json)
+
 The Rust-only [facing claim fixture](../fixtures/behavior/statescript-facing-claim-v1.json) checks live direction updates, exact claim release on finish or abort, and teardown after a VM work-budget fault.
 
 The Rust-only [assignment fallback fixture](../fixtures/behavior/script-assignment-client-fallback-v1.json) checks config group selection and flattening through authored client-only wrappers, including opaque client values and scalar defaults.

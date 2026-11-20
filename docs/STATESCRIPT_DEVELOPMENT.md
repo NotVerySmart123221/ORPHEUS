@@ -854,7 +854,11 @@ Declare `"state_behavior": "observe"` on a server-only state or use
 `"observe_state"` in the bundle class catalog. Give it a `value`
 expression and a writable `output` variable. An optional `on_change`
 plug follows the first successful sample and each changed sample after it.
-The state writes the current value before following the plug.
+An optional `on_sample` plug follows every successful sample, including
+an unchanged result or a known empty result. The state writes the current
+value before either plug. On a changed sample, `on_change` runs first.
+If the observation has stopped or restarted by the time the sample
+callback runs, the old activation's callback is dropped.
 
 Sampling starts in the VM frame after activation and runs at most once
 per VM frame. That lets a body initialize before the room publishes its
@@ -863,6 +867,11 @@ and preserves the last successful result without failing the runtime.
 The state retries on the next frame. Invalid expressions still report
 regular evaluation errors. Finish and abort stop polling and leave the last written value
 available. The ordinary lifecycle plugs can clear it when needed.
+
+Use `on_sample` for effects that depend on a current ray result. When
+the geometry or room snapshot is unavailable, this plug stays inactive.
+A known empty ray result still reaches the plug so the graph can handle
+a miss. Keep target effects behind the graph's hit check.
 
 Use `EntitiesInRadius` as the value to follow membership of an area.
 The [synthetic observation contract](../fixtures/behavior/script-observe-radius-v1.json)

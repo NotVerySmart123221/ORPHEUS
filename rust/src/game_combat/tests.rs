@@ -1062,6 +1062,7 @@ fn normal_deadeye_clears_natural_bosses_and_reaches_allied_victory() {
     junkenstein::verify_natural_ending(junkenstein::NormalEnding::DeadeyeVictory);
 }
 
+mod aim_samples;
 mod encounter_ecs;
 mod junkenstein;
 

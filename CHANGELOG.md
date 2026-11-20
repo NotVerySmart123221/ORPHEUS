@@ -6,6 +6,7 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added the optional StateScript observation `on_sample` plug. It follows each successful current sample and stays inactive when the host cannot supply a fresh value. This lets aimed effects use the current ray result while display variables retain their last successful value on a transient query failure.
 - Added authored StateScript facing claims for player and NPC bodies. A claim supplies a normalized direction while active and follows the existing priority rules. Finishing, aborting or tearing down the state releases its claim. Formatting, default workspace tests, and Clippy passed, including 365 native-server tests and 209 StateScript tests. The prepared #72 900-frame test passed.
 
 - Added an authored actor ray query to StateScript. It finds the first eligible room actor using frozen collision capsules and static occlusion. Player and NPC scripts share the query and existing room filters. Replacement views exclude the previous actor capsule. Formatting, default workspace tests, and Clippy passed, including 362 native-server tests and 207 StateScript tests. The prepared #72 900-frame test passed.

@@ -151,6 +151,11 @@ pub(super) enum Event {
     AbilityCheck(u16),
     CheckTransitions(u16),
     WatchChanged(u16),
+    ObserveSample {
+        raw: u16,
+        activation: u16,
+        frame: u32,
+    },
     SpawnResult {
         key: SpawnSearchKey,
         positions: Vec<[f64; 3]>,
@@ -172,6 +177,7 @@ impl Event {
     pub(super) fn state(&self) -> Option<u16> {
         match *self {
             Self::SpawnResult { key, .. } => Some(key.raw),
+            Self::ObserveSample { raw, .. } => Some(raw),
             Self::Entry(_)
             | Self::Assign(..)
             | Self::ExitInstance

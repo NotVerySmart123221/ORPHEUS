@@ -1039,6 +1039,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             }
                         }
                         Event::WatchChanged(raw) => self.deliver_watch(key(raw))?,
+                        Event::ObserveSample {
+                            raw,
+                            activation,
+                            frame,
+                        } => {
+                            self.deliver_observed_sample(key(raw), activation, frame)?;
+                        }
+
                         Event::SpawnResult { key, positions } => {
                             self.finish_spawn_search(key, positions)?
                         }
@@ -1054,8 +1062,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 if !self.machine.snapshot.instances.contains_key(&id) {
                     break;
                 }
-                self.tick_states(id)?;
-                if !self.run_deferred(id)? {
+                let samples_queued = self.tick_states(id)?;
+                let deferred = self.run_deferred(id)?;
+                if !deferred && !samples_queued {
                     break;
                 }
             }
