@@ -890,7 +890,7 @@ mod helpers;
 use evaluator::Evaluator;
 pub(crate) use helpers::named_shield_identifier;
 use helpers::*;
-pub(crate) use helpers::{client_only_fallback, native_entity_operand};
+pub(crate) use helpers::{client_only_fallback, native_entity_operand, native_target_tag_operand};
 pub use helpers::{excluded_tags_admit, native_fields, native_shape, target_tag_config};
 
 /// Locate a config group reached directly or through explicit server fallbacks.

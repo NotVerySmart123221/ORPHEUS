@@ -993,6 +993,144 @@ fn target_tag_effects_restore_authored_tags_and_remaining_grants() {
 }
 
 #[test]
+fn foreign_target_tags_read_the_frozen_body_generation() {
+    use crate::{
+        collision_cache::CollisionCache,
+        contact_world::ContactWorld,
+        game_combat::{PlayerBodyState, RoomSimulation},
+        game_replication::BodyId,
+        mover_settings::MoverSettings,
+        script_graph::RoomSpatialNeeds,
+    };
+
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/actor-direct-target-tags-v1.json"
+    ))
+    .unwrap();
+    let tags = contract["input"]["tags"].as_object().unwrap();
+    let tag = |name: &str| parse_guid(tags[name].as_str().unwrap()).unwrap();
+
+    let (factory, spawn) = fixture_body_factory();
+    let other = OwnerBodySpawn {
+        controller: spawn.controller + 0x100,
+        entity: spawn.entity + 0x100,
+        slot: spawn.slot + 1,
+        ..spawn
+    };
+    let observer_site = Site {
+        entity: spawn.entity,
+        instance: 1,
+        graph: 42,
+        node: Some(1),
+    };
+    let target_site = Site {
+        entity: other.entity,
+        ..observer_site
+    };
+    let effect = |tag, present| TargetTagEffect {
+        entity: other.entity,
+        tag,
+        present,
+    };
+
+    let mut observer = factory.start(spawn).unwrap();
+    let mut target = factory.start(other).unwrap();
+    target.world.target_tags = Some(BTreeSet::from([tag("base"), tag("suppressed")]));
+    assert!(
+        target
+            .world
+            .set_target_tag_effect(target_site, effect(tag("grant"), true), true)
+    );
+    let suppression = effect(tag("suppressed"), false);
+    assert!(
+        target
+            .world
+            .set_target_tag_effect(target_site, suppression, true)
+    );
+
+    let cache = CollisionCache {
+        header: serde_json::from_value(serde_json::json!({
+            "meshes": [], "hulls": 0, "models": 0, "placements": 0, "identifiers": []
+        }))
+        .unwrap(),
+        meshes: vec![],
+        hulls: vec![],
+        models: vec![],
+        placements: vec![],
+    };
+    let ground = Arc::new(CollisionScene::movement_probe(&cache, &BTreeSet::new()).unwrap());
+    let contacts = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    room.enable_spatial_queries(false, ground, RoomSpatialNeeds::EntityTags);
+    let body = |generation, runtime: PlayerBodyRuntime| {
+        let mover = Mover::new(
+            MoverSettings::default(),
+            Arc::clone(&contacts),
+            other.pose.position,
+            0,
+            MOVER_CATEGORY,
+        )
+        .unwrap();
+        PlayerBodyState::new(
+            BodyId {
+                entity: other.entity,
+                generation,
+            },
+            other.controller,
+            other.slot,
+            1,
+            factory.hero,
+            mover,
+            Some(Box::new(runtime)),
+            other.frame,
+            None,
+        )
+    };
+    let assert_tags = |observer: &PlayerBodyRuntime, generation: &str| {
+        for name in tags.keys() {
+            assert_eq!(
+                observer
+                    .world
+                    .has_target_tag(observer_site, other.entity, tag(name)),
+                contract["expected"][generation][name.as_str()].as_bool(),
+                "{generation}: {name}"
+            );
+        }
+    };
+
+    room.spawn_player_body(body(1, target)).unwrap();
+    let first = room.capture_spatial_frame(other.frame).unwrap().unwrap();
+    observer.set_spatial_frame(Arc::clone(&first));
+    assert_tags(&observer, "first_generation");
+    assert_eq!(
+        observer
+            .world
+            .has_target_tag(observer_site, other.entity + 1, tag("base")),
+        None
+    );
+
+    let mut replacement = factory.start(other).unwrap();
+    replacement.world.target_tags = None;
+    assert!(
+        replacement
+            .world
+            .set_target_tag_effect(target_site, suppression, true)
+    );
+    room.spawn_player_body(body(2, replacement)).unwrap();
+    let next = room
+        .capture_spatial_frame(other.frame + 1)
+        .unwrap()
+        .unwrap();
+    assert_ne!(
+        first.actor_identity(other.entity),
+        next.actor_identity(other.entity)
+    );
+    assert_tags(&observer, "first_generation");
+    observer.set_spatial_frame(next);
+    assert_tags(&observer, "next_generation");
+}
+
+#[test]
 fn target_tag_effects_keep_unknown_tags_and_replacement_independent() {
     let (factory, spawn) = fixture_body_factory();
     let tag = 0x0d60_0000_0000_0422;

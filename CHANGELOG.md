@@ -10,6 +10,9 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Load optional per-map lethal volumes and settle deaths through room health without assigning a killer. Add synthetic checks for safe lower positions and the existing training bot replacement deadline. Verified map regions remain open.
 
+- Read foreign actor tags from the frozen room frame when a native target-tag predicate needs them. Preserve unknown tag data and scoped event facts. Added synthetic coverage for query demand and body generation changes. Shared-branch verification is pending.
+
+
 - Added an opt-in node-shape section to the prepared actor input report. It describes the schema and registration at a failing graph site while omitting raw operand values. The default report stays compatible with earlier comparisons.
 
 - Carry capsule contact normals through native actor ray queries. Added a synthetic surface contract for boundary contacts and contained starts, with room assertions for the selected contact. The authored ray action still needs a verified filter policy.

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "case_id": "actor-direct-target-tags.synthetic.v1",
+  "source": {
+    "basis": "Synthetic native tag predicates and two generations of a room actor."
+  },
+  "evidence": "synthetic-rust",
+  "input": {
+    "owner": {"$": "STU_B5A0CAF0"},
+    "foreign": {"$": "STUConfigVarDynamic", "m_identifier": 78, "m_60DB8F99": false},
+    "tags": {
+      "base": "0x0D60000000001101",
+      "grant": "0x0D60000000001102",
+      "suppressed": "0x0D60000000001103",
+      "absent": "0x0D60000000001104"
+    }
+  },
+  "expected": {
+    "requires_tags": {
+      "owner": false,
+      "foreign": true,
+      "owner_fallback": false,
+      "foreign_fallback": true,
+      "null_selector": false,
+      "invalid_tag": false,
+      "invalid_header": false,
+      "client_only_node": false
+    },
+    "first_generation": {"base": true, "grant": true, "suppressed": false, "absent": false},
+    "next_generation": {"base": null, "grant": null, "suppressed": false, "absent": null}
+  }
+}
