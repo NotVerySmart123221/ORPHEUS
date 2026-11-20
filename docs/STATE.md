@@ -97,6 +97,28 @@ returns no runtime for a different hero. The independent probe calls
 the per-hero factory builder directly. Ability coverage and original
 client acceptance require separate verification.
 
+At `9f6114ae` and `763b8e56`, two reports per revision from the same
+prepared 104319 runtime matched byte for byte. All 32 actor rows matched
+the preceding reports, with 11 independent passes, one ordinary room
+attachment, and 47 blocking sites. The Phase 2 changes cover the shared
+direction evaluator, scene placement collection, and parent-owned states
+without completion operands. The #72 capture matched the earlier
+900-frame run at all 476 observation sites on both revisions.
+
+The prepared bot firing-placement regression passed on the earlier
+binary and failed at selector evaluation after the first direction
+change. The follow-up preserved the host's explicit no-target reply.
+The same bot regression then passed. The legacy roll scenario stopped
+during map preparation on both tested bundles because its map record
+lacked spawn points.
+
+The Windows #131 check at `763b8e56` used the same effective runtime
+profile and schedules as the previous baseline. Idle and single-shot
+reload each produced 339 ticks. Rust and Python traces both validated and
+repeated, and every tick matched the preceding capture for its
+implementation. The strict comparison retained the same four RNG model
+and seed differences.
+
 Seven actor probes have one blocking site each. Mercy's tag query needs
 the tagged placement inventory and live actor tags. Orisa and Sigma
 still hit persistent message registration. Baptiste cannot read a
