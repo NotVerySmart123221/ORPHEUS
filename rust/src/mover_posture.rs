@@ -201,6 +201,12 @@ impl Posture {
         self.flags = flags;
     }
 
+    pub(crate) fn begin_velocity_launch(&mut self) {
+        self.flags |= FELL;
+        self.air_ticks = 0;
+        self.fall = 0.0;
+    }
+
     pub fn apply_fall(&mut self, gravity_scale: f64, dt: f64) {
         self.fall += (-WORLD_GRAVITY * gravity_scale) as f32 * dt as f32;
     }
