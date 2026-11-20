@@ -1535,7 +1535,7 @@ impl WorldDelivery {
         let movement = mover.pose();
         let pose = owner_pose(movement);
         let generation = scene
-            .simulation_mut()
+            .simulation()
             .next_player_generation(self.owner, self.generation)?;
         let id = BodyId { entity, generation };
         let body = Body {
@@ -1546,7 +1546,7 @@ impl WorldDelivery {
         let body_filter = team_bit(viewer.team)?;
         let start_frame = self.input.processed.unwrap_or(tick);
         let slot = u8::try_from(viewer.slot).map_err(invalid)?;
-        let mut runtime = scene
+        let candidate = scene
             .owner_body_runtime(
                 hero,
                 OwnerBodySpawn {
@@ -1559,14 +1559,25 @@ impl WorldDelivery {
                     quanta,
                 },
             )
-            .ok()
-            .flatten();
-        let script = runtime.as_deref().and_then(|runtime| {
-            BodyScript::new(body, start_frame, self.input.processed, runtime).ok()
-        });
-        if script.is_none() {
-            runtime = None;
-        }
+            .and_then(|runtime| {
+                let script = runtime
+                    .as_deref()
+                    .map(|runtime| {
+                        BodyScript::new(body, start_frame, self.input.processed, runtime)
+                    })
+                    .transpose()?;
+                Ok((runtime, script))
+            });
+        let (runtime, script) = match candidate {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                eprintln!(
+                    "body startup rejected for controller {:08X}: {error}",
+                    self.owner
+                );
+                return Ok(());
+            }
+        };
         let body_create_input = BodyCreate {
             entity,
             hero,
@@ -1601,7 +1612,14 @@ impl WorldDelivery {
             hero: hero.guid,
             skin: (skin.guid != 0).then_some(skin.guid),
         };
-        let close = self.controller_chunk(scene, tick, false, Some(hero.guid))?;
+        let mut controller = self.controller.clone();
+        let close = Self::controller_chunk(
+            &mut controller,
+            scene,
+            self.command_ack(tick),
+            false,
+            Some(hero.guid),
+        )?;
 
         let state = PlayerBodyState::new(
             id,
@@ -1615,6 +1633,7 @@ impl WorldDelivery {
             Some(observer_create),
         );
         scene.simulation_mut().spawn_player_body(state)?;
+        self.controller = controller;
         self.generation = generation;
         self.bodies.insert(entity, (generation, Lifetime::Live));
         self.created.remove(&entity);
@@ -1659,15 +1678,13 @@ impl WorldDelivery {
     }
 
     fn controller_chunk(
-        &mut self,
+        controller: &mut Stream,
         scene: &PreparedScene,
-        tick: u32,
+        command_frame: u32,
         open: bool,
         hero: Option<u64>,
     ) -> io::Result<Record> {
-        let command_frame = self.command_ack(tick);
-        let chunk = self
-            .controller
+        let chunk = controller
             .full_owner(command_frame, |cmfd| {
                 scene.controller().controller_frame(
                     cmfd,
@@ -1691,7 +1708,9 @@ impl WorldDelivery {
         open: bool,
         hero: Option<u64>,
     ) -> io::Result<()> {
-        let record = self.controller_chunk(scene, tick, open, hero)?;
+        let command_frame = self.command_ack(tick);
+        let record =
+            Self::controller_chunk(&mut self.controller, scene, command_frame, open, hero)?;
         self.select_open = open;
         self.push(record);
         self.remove_stale();

@@ -30,10 +30,9 @@ impl BodyScript {
         if snapshot.entity != body.id.entity {
             return Err(invalid("body VM has the wrong entity"));
         }
-        runtime
-            .encoder()
-            .project(snapshot, View::Owner)
-            .map_err(invalid)?;
+        let encoder = runtime.encoder();
+        let projected = encoder.project(snapshot, View::Owner).map_err(invalid)?;
+        encoder.full(&projected).map_err(invalid)?;
         let corrections = (matches!(body.hero, SOLDIER | CASSIDY)
             && runtime.movement_modifiers().is_some())
         .then(|| {

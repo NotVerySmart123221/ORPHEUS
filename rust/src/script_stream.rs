@@ -107,7 +107,7 @@ fn validate_frame(previous: u32, incoming: u32) -> Result<(), StreamError> {
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Stream {
     entity: u32,
     last: u32,

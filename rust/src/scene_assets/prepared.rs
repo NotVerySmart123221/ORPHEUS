@@ -22,6 +22,15 @@ pub struct PreparedScene {
 
 impl PreparedScene {
     #[cfg(test)]
+    pub(crate) fn fixture_for_owner_admission(heroes: HeroCatalog) -> Self {
+        let mut scene = Self::fixture_for_bots(Vec::new());
+        scene.contacts = Some(Arc::new(ContactWorld::new(Vec::new()).unwrap()));
+        scene.controller = Controller::fixture_for_owner_admission();
+        scene.heroes = Arc::new(heroes);
+        scene
+    }
+
+    #[cfg(test)]
     pub(crate) fn fixture_for_bots(bots: Vec<Bot>) -> Self {
         use crate::collision_cache::{CollisionCache, Mesh, Triangle};
 

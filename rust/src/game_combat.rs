@@ -338,7 +338,6 @@ pub(crate) struct RoomSimulation {
     health_events: health_events::RoomHealthEvents,
     // Generation maps live for the room's lifetime so reconnects cannot reset history.
     player_generations: HashMap<u32, u64>,
-    spawned_player_generations: HashMap<u32, u64>,
     latest_wire_generations: HashMap<u32, u64>,
     next_bot: u32,
     combat_active: bool,
@@ -656,7 +655,6 @@ impl RoomSimulation {
             spatial_frame: None,
             health_events: health_events::RoomHealthEvents::default(),
             player_generations: HashMap::new(),
-            spawned_player_generations: HashMap::new(),
             latest_wire_generations: HashMap::new(),
             next_bot,
             combat_active: false,
@@ -2487,7 +2485,6 @@ impl RoomSimulation {
             self.world.despawn(entity);
         }
         self.player_generations.clear();
-        self.spawned_player_generations.clear();
         self.latest_wire_generations.clear();
         self.next_bot = BOT_ENTITY;
         self.combat_active = false;

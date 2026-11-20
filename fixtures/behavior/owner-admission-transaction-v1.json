@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "case_id": "owner-admission-transaction-v1",
+  "evidence": "rust-headless-synthetic",
+  "input": {
+    "active_hero": 207165582859063517,
+    "candidate_hero": 207165582859063518,
+    "active_wire_suffix": 4,
+    "active_generation": 1,
+    "factory_outcomes": ["factory_error", "wrong_entity", "invalid_initial_encoding", "ready"]
+  },
+  "expected": {
+    "candidate_wire_suffix": 5,
+    "successful_generation": 2,
+    "successful_controller_increment": 1
+  }
+}

@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Kept the current player body active when a candidate script fails to initialize or encode its first owner snapshot. The room records a new body generation and commits the controller stream only after successful replacement. A synthetic input regression exercises three rejections followed by a successful retry.
+
 - Recognized explicitly unbound owners in the shared StateScript entity count expression. The expression keeps its caller's initial value in that case. Valid bound queries still use the existing host provider, and unavailable or malformed inputs remain diagnostic. The locked workspace suite with script coverage passed, including 366 native tests and 205 StateScript tests. Two same-pack reports at `39932467` cleared two diagnostics and raised independent startup from 10 of 32 to 11 of 32. Zarya is the new independent pass. The ordinary Practice Range factory still attaches Soldier only. The #72 capture matched all 476 sites.
 
 - Supplied the frozen room snapshot to player scripts before their startup graph runs. Same-frame replacements exclude the owner's captured body from the view while preserving other actors' poses and facts. Factory probes capture the prepared scene through the same room sampler. Synthetic coverage exercises a one-shot query and consecutive replacements. Locked workspace tests with script coverage, the default workspace check, Clippy, formatting, and the Python script suite passed. Two reports from the existing 104319 pack retained 49 blockers and 10 independent passes. The #72 capture matched all 476 observed sites.

@@ -222,24 +222,14 @@ impl RoomSimulation {
         Some((pulses, expired_tokens))
     }
 
-    pub(crate) fn next_player_generation(&mut self, owner: u32, floor: u64) -> io::Result<u64> {
-        let previous = self
-            .player_generations
+    pub(crate) fn next_player_generation(&self, owner: u32, floor: u64) -> io::Result<u64> {
+        self.player_generations
             .get(&owner)
             .copied()
             .unwrap_or(0)
-            .max(
-                self.spawned_player_generations
-                    .get(&owner)
-                    .copied()
-                    .unwrap_or(0),
-            )
-            .max(floor);
-        let generation = previous
+            .max(floor)
             .checked_add(1)
-            .ok_or_else(|| invalid("player body lifetime exhausted"))?;
-        self.player_generations.insert(owner, generation);
-        Ok(generation)
+            .ok_or_else(|| invalid("player body lifetime exhausted"))
     }
 
     pub(crate) fn set_cassidy_protected(&mut self, protected: bool) {
@@ -255,11 +245,7 @@ impl RoomSimulation {
         if id.generation == 0 {
             return Err(invalid("player body generation must be positive"));
         }
-        let spawned_current = self
-            .spawned_player_generations
-            .get(&owner)
-            .copied()
-            .unwrap_or(0);
+        let spawned_current = self.player_generations.get(&owner).copied().unwrap_or(0);
         if id.generation <= spawned_current {
             return Err(invalid(format!(
                 "stale player body generation {} for owner {:08X} (current {})",
@@ -290,11 +276,7 @@ impl RoomSimulation {
         if let Some(previous) = self.players_by_owner.shift_remove(&owner) {
             self.despawn_player_handle(previous);
         }
-        let current = self.player_generations.get(&owner).copied().unwrap_or(0);
-        if id.generation > current {
-            self.player_generations.insert(owner, id.generation);
-        }
-        self.spawned_player_generations.insert(owner, id.generation);
+        self.player_generations.insert(owner, id.generation);
         self.latest_wire_generations
             .insert(id.entity, id.generation);
         if let Some(runtime) = state.runtime.as_mut() {
