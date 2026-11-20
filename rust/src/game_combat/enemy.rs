@@ -312,6 +312,19 @@ impl EnemyState {
 }
 
 impl BotState {
+    pub(super) fn health_target_facts(&self) -> crate::script_init::HealthTargetFacts {
+        crate::script_init::HealthTargetFacts {
+            target: self.bot.entity,
+            filter_flags: crate::match_scene::team_bit(self.bot.spawn.team)
+                .ok()
+                .map(|team| 1 | team | if self.bot.dead { 0x10 } else { 0 }),
+            tags: self.enemy.as_ref().map_or_else(Default::default, |enemy| {
+                enemy.scripts.target_tags(&enemy.graphs, &enemy.binding)
+            }),
+            script_state: self.script_state(),
+        }
+    }
+
     pub(super) fn script_state(&self) -> crate::script_entity_state::EntityScriptState {
         use crate::script_entity_state::EntityScriptState;
         let Some(enemy) = &self.enemy else {

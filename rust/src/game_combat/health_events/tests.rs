@@ -61,6 +61,8 @@ struct TargetFacts {
 
 #[derive(Deserialize)]
 struct Replacement {
+    heal_delta: f64,
+    heal_target_facts: TargetFacts,
     lethal_delta: f64,
     target_facts: TargetFacts,
 }
@@ -145,6 +147,12 @@ fn native_room_health_events_keep_actual_deltas_and_hit_tag_availability_in_orde
     let mut room = RoomSimulation::new(bots).unwrap();
     let player = spawn_player(&mut room, 1);
     room.enable_host_health_events();
+    let now = FIXTURE_CONTEXT.now;
+    let dealer = Death {
+        killer: source,
+        frame: FIXTURE_CONTEXT.tick,
+        time: now.as_secs_f64(),
+    };
 
     let mut bot_impact = fixture_impact(bot, input.bot_impact);
     bot_impact.tags = hit_tags(&input.ordered_hit_tags);
@@ -152,6 +160,17 @@ fn native_room_health_events_keep_actual_deltas_and_hit_tag_availability_in_orde
         .apply_bot_impact(source, FIXTURE_CONTEXT.tick, FIXTURE_CONTEXT, &bot_impact)
         .unwrap()
         .unwrap();
+
+    for effect in [
+        HealthEffect::Damage(input.generic_damage),
+        HealthEffect::Heal(input.generic_healing),
+        HealthEffect::Heal(input.generic_healing),
+    ] {
+        assert!(
+            room.settle_health(player.entity, effect, dealer, now)
+                .unwrap()
+        );
+    }
 
     let player_impact = fixture_impact(player.entity, input.player_impact);
     let player_hit = room
@@ -165,13 +184,17 @@ fn native_room_health_events_keep_actual_deltas_and_hit_tag_availability_in_orde
         .unwrap();
     assert_eq!(player_hit.damage.amount, input.player_impact);
 
-    let now = FIXTURE_CONTEXT.now;
-    let dealer = Death {
-        killer: source,
-        frame: FIXTURE_CONTEXT.tick,
-        time: now.as_secs_f64(),
-    };
+    assert!(
+        room.settle_health(
+            player.entity,
+            HealthEffect::Heal(input.generic_healing),
+            dealer,
+            now
+        )
+        .unwrap()
+    );
     for effect in [
+        HealthEffect::Heal(input.generic_healing),
         HealthEffect::Heal(input.generic_healing),
         HealthEffect::Damage(input.generic_damage),
     ] {
@@ -186,12 +209,14 @@ fn native_room_health_events_keep_actual_deltas_and_hit_tag_availability_in_orde
             Target::Player => (player.entity, &player_hit.damage.target_facts),
         };
         if let Some(expected_facts) = &outcome.target_facts {
-            assert_target_facts(
-                impact_facts,
-                expected_facts,
-                target,
-                input.unavailable_target_tag,
-            );
+            if outcome.hit_tags.is_some() {
+                assert_target_facts(
+                    impact_facts,
+                    expected_facts,
+                    target,
+                    input.unavailable_target_tag,
+                );
+            }
             assert_target_facts(
                 change.target_facts.as_deref().unwrap(),
                 expected_facts,
@@ -226,14 +251,39 @@ fn native_room_health_events_keep_actual_deltas_and_hit_tag_availability_in_orde
 }
 
 #[test]
-fn settled_hit_facts_stay_with_the_original_target_generation() {
+fn settled_health_facts_stay_with_the_original_target_generation() {
     let Contract { input, expected } = contract();
     let expected = expected.replacement;
     let bots = fixture_bots();
     let target = bots[0].entity;
     let mut room = RoomSimulation::new(bots).unwrap();
     let source = spawn_player(&mut room, 1);
+    let now = FIXTURE_CONTEXT.now;
+    let dealer = Death {
+        killer: source.entity,
+        frame: FIXTURE_CONTEXT.tick,
+        time: now.as_secs_f64(),
+    };
+    assert!(
+        room.settle_health(
+            target,
+            HealthEffect::Damage(input.generic_damage),
+            dealer,
+            now
+        )
+        .unwrap()
+    );
+    assert!(room.health_events.pending.is_empty());
     room.enable_host_health_events();
+    assert!(
+        room.settle_health(
+            target,
+            HealthEffect::Heal(input.generic_healing),
+            dealer,
+            now
+        )
+        .unwrap()
+    );
 
     let mut impact = fixture_impact(target, input.bot_lethal_impact);
     let tags = hit_tags(&input.ordered_hit_tags);
@@ -246,29 +296,47 @@ fn settled_hit_facts_stay_with_the_original_target_generation() {
     )
     .unwrap()
     .unwrap();
-    let change = room.health_events.pending.pop_front().unwrap();
+    let heal = room.health_events.pending.pop_front().unwrap();
+    let hit = room.health_events.pending.pop_front().unwrap();
     assert_eq!(spawn_player(&mut room, 2).entity, source.entity);
-    let (event, receivers) = change.resolve(&room).unwrap();
-    assert_target_facts(
-        change.target_facts.as_deref().unwrap(),
-        &expected.target_facts,
-        target,
-        input.unavailable_target_tag,
-    );
-    assert_eq!(
-        event,
-        HostEvent::HealthApplied {
-            source: None,
+    for (change, delta, killed, hit_tags, facts) in [
+        (
+            &heal,
+            expected.heal_delta,
+            false,
+            None,
+            &expected.heal_target_facts,
+        ),
+        (
+            &hit,
+            expected.lethal_delta,
+            true,
+            Some(tags),
+            &expected.target_facts,
+        ),
+    ] {
+        let (event, receivers) = change.resolve(&room).unwrap();
+        assert_target_facts(
+            change.target_facts.as_deref().unwrap(),
+            facts,
             target,
-            delta: expected.lethal_delta,
-            killed: true,
-            hit_tags: Some(tags),
-        }
-    );
-    assert_eq!(
-        receivers.map(|body| body.map(|body| body.wire)),
-        [None, Some(target)]
-    );
+            input.unavailable_target_tag,
+        );
+        assert_eq!(
+            event,
+            HostEvent::HealthApplied {
+                source: None,
+                target,
+                delta,
+                killed,
+                hit_tags,
+            }
+        );
+        assert_eq!(
+            receivers.map(|body| body.map(|body| body.wire)),
+            [None, Some(target)]
+        );
+    }
 
     let previous = room.by_wire[&target];
     let body = room.world.entity_mut(previous).take::<BotState>().unwrap();
@@ -276,6 +344,7 @@ fn settled_hit_facts_stay_with_the_original_target_generation() {
     let replacement = room.world.spawn(body).id();
     assert_ne!(replacement, previous);
     assert_eq!(room.by_wire.insert(target, replacement), Some(previous));
-    assert!(change.resolve(&room).is_none());
+    assert!(heal.resolve(&room).is_none());
+    assert!(hit.resolve(&room).is_none());
     assert!(room.health_events.pending.is_empty());
 }

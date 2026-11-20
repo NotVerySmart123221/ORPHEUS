@@ -69,6 +69,15 @@ pub(super) fn registered_state(graph: &Graph, node: &Node) -> Option<RegisteredS
     }
     let suppresses_model = node.class == "STU_33A46033"
         && matches!(placement, (0x01cb, 20) | (0x0ce0, 17) | (0x0d03, 2));
+    let has_local_state_slot = || {
+        node.is_state()
+            && !node.is_action()
+            && node.remote == -1
+            && node
+                .state
+                .and_then(|slot| graph.state(usize::from(slot)))
+                .is_some_and(|linked| linked.pos == node.pos)
+    };
     let class = match node.class.as_str() {
         "STU_9935FBC8" if placement == (0x224e, 34) && captured_aim_lock_shape(node) => {
             RegisteredClass::CinematicAim
@@ -82,30 +91,13 @@ pub(super) fn registered_state(graph: &Graph, node: &Node) -> Option<RegisteredS
         // The native begin/end pair maintains one ordered list per class.
         // Both authored type values use the same registration and link codec.
         "STU_9028E035"
-            if node.is_state()
-                && !node.is_action()
-                && node.remote == -1
-                && matches!(field(&node.fields, "m_type").as_u64(), Some(0 | 1))
-                && node
-                    .state
-                    .and_then(|slot| graph.state(usize::from(slot)))
-                    .is_some_and(|linked| linked.pos == node.pos) =>
+            if has_local_state_slot()
+                && matches!(field(&node.fields, "m_type").as_u64(), Some(0 | 1)) =>
         {
             RegisteredClass::State9028E035
         }
-        "STU_43994F1B"
-            if matches!(placement, (0x0ce0, 29) | (0x0d03, 5))
-                && is_self_target(node, "m_4A5CA514")
-                && field(&node.fields, "m_contactSet").is_null() =>
-        {
-            RegisteredClass::State43994F1B
-        }
-        "STU_93B8758C"
-            if matches!(placement, (0x0ce0, 30) | (0x0d03, 4))
-                && is_self_target(node, "m_4A5CA514")
-                && field(&node.fields, "m_A5B7A147").is_null() =>
-        {
-            RegisteredClass::State93B8758C
+        "STU_43994F1B" | "STU_93B8758C" if has_local_state_slot() => {
+            resource_free_linked_class(node)?
         }
         "STU_33A46033" if suppresses_model || placement == (0x0ca5, 61) => {
             let fields = &node.fields;
@@ -145,6 +137,33 @@ pub(super) fn registered_state(graph: &Graph, node: &Node) -> Option<RegisteredS
         server_only: node.server_only,
         suppresses_model,
     })
+}
+
+fn resource_free_linked_class(node: &Node) -> Option<RegisteredClass> {
+    let (resource, class) = match node.class.as_str() {
+        "STU_43994F1B" => ("m_contactSet", RegisteredClass::State43994F1B),
+        "STU_93B8758C" => ("m_A5B7A147", RegisteredClass::State93B8758C),
+        _ => return None,
+    };
+    // Native records 1122/1121 share the registered-state lifecycle.
+    // A configured contact or material resource requires a separate host effect.
+    (is_self_target(node, "m_4A5CA514")
+        && field(&node.fields, resource).is_null()
+        && node.fields.as_object().is_some_and(|fields| {
+            fields.iter().all(|(name, value)| {
+                value.is_null()
+                    || match name.as_str() {
+                        "m_4A5CA514" | "m_beginPlug" | "m_F198FD3A" | "m_onBeginPlug"
+                        | "m_onEndPlug" | "m_subgraphPlug" => true,
+                        "m_A2287776" | "m_AED90719" | "m_ADEB6E05" => {
+                            value.as_bool() == Some(false) || value.as_u64() == Some(0)
+                        }
+                        "m_2BBEEAB8" => value.as_bool() == Some(true) || value.as_u64() == Some(1),
+                        _ => false,
+                    }
+            })
+        }))
+    .then_some(class)
 }
 
 pub(super) fn captured_aim_lock_shape(node: &Node) -> bool {

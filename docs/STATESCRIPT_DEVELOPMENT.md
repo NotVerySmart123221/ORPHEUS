@@ -149,6 +149,9 @@ ability support.
 - The native `STU_9028E035` linked state uses its reciprocal state
   slot and known authored types to enter and leave the shared registry.
   Links cross instances in entry order and skip server-only destinations.
+  The self-targeted `STU_43994F1B` and `STU_93B8758C` forms with no
+  resource operand use the same registry and keep their own class lists.
+  Authored subgraph links still follow the ordinary state lifecycle.
   The linked codec remains the source of wire layout.
 - A server-owned `ModifyHealth` state can declare periodic self shield
   recovery through its validated operands. The encounter host restores
@@ -659,8 +662,11 @@ empty list stays empty. Other settled effects that lack hit attribution
 omit the slot, so delivery clears any previous value in a declared
 binding. Tags preserve authored order and duplicates.
 
-Weapon notifications also carry the target's captured filter flags,
-target tags, and script variables. An immediate foreign query about
+Weapon notifications carry the target's captured filter flags, target
+tags, and script variables. A settled room heal from a distinct sampled
+source can carry the same facts from the healed body. The room captures
+those facts after applying the positive pool delta. Healing tag
+attribution stays unavailable. An immediate foreign query about
 that target reads the captured values. Own-body queries, watched
 expressions, and other entities continue through their usual host.
 Unavailable captured facts stay unavailable. The room checks body
@@ -764,6 +770,19 @@ and target snapshot. Its timing, target flags, and mitigation records
 need separate validation before switching routes.
 
 See the [synthetic charge route contract](../fixtures/behavior/script-authored-charge-route-v1.json).
+
+To check the stock timing and bonus receiver, point
+`ORPHEUS_RUNTIME_DIR` at the private 104319 graph bundle and run:
+
+```text
+cargo test --locked -p orpheus-statescript --test stock_charge -- --ignored --exact prepared_stock_charge_uses_authored_passive_clock_and_bonus_entry
+```
+
+The probe starts the stock passive subtree with a detached typed host
+and uses the original bonus receiver. It verifies the one-second
+deadline, cancellation and re-arm, and the configured cap. Room
+admission, stock hit and healing attribution, and original-client
+presentation have separate verification.
 
 ## Apply a radial health change
 

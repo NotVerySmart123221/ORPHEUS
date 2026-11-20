@@ -267,7 +267,7 @@ use encounter::{EncounterComponent, GateHandle};
 pub(crate) use encounter::{EncounterPhase, GateDamageStage, GateHealth};
 use enemy::{BotState, EnemyState};
 use health::HealthEffect;
-use health_events::SampledBody;
+use health_events::{HealthEventContext, SampledBody};
 pub(crate) use player::{PlayerBodyEvent, PlayerBodyHandle, PlayerBodyState};
 use script_requests::{PlayerRoomCue, RoomScriptTarget};
 pub(crate) use script_requests::{RoomScriptRequest, RoomScriptRequests};
@@ -1556,8 +1556,13 @@ impl RoomSimulation {
                 operation: Some(Operation::Update(vec![component])),
                 ..EntityUpdate::default()
             });
-            self.health_events
-                .stage(source, SampledBody { wire, entity }, healed, false, None);
+            self.health_events.stage(
+                source,
+                SampledBody { wire, entity },
+                healed,
+                false,
+                HealthEventContext::Healing(&self.world),
+            );
         }
         self.heal_player_bodies(team, skip_player_wire, source, pulses, &mut updates);
         Ok(updates)
@@ -1779,16 +1784,7 @@ impl RoomSimulation {
                 source,
                 amount: result.dealt,
                 tags: impact.tags,
-                target_facts: HealthTargetFacts {
-                    target: entity,
-                    filter_flags: crate::match_scene::team_bit(state.bot.spawn.team)
-                        .ok()
-                        .map(|team| 1 | team | if state.bot.dead { 0x10 } else { 0 }),
-                    tags: state.enemy.as_ref().map_or_else(Default::default, |enemy| {
-                        enemy.scripts.target_tags(&enemy.graphs, &enemy.binding)
-                    }),
-                    script_state: state.script_state(),
-                },
+                target_facts: state.health_target_facts(),
             },
             notices: [
                 Some(CombatNotice::Hit {

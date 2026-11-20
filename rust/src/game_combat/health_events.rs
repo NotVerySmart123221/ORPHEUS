@@ -2,7 +2,7 @@
 
 use std::{collections::VecDeque, sync::Arc};
 
-use bevy_ecs::entity::Entity;
+use bevy_ecs::{entity::Entity, world::World};
 use indexmap::IndexMap;
 
 use crate::{
@@ -32,6 +32,20 @@ impl SampledBody {
         let &entity = bots.get(&wire).or_else(|| players.get(&wire))?;
         Some(Self { wire, entity })
     }
+
+    fn health_target_facts(self, world: &World) -> Option<HealthTargetFacts> {
+        if let Some(state) = world.get::<BotState>(self.entity) {
+            return (state.bot.entity == self.wire).then(|| state.health_target_facts());
+        }
+        let state = world.get::<PlayerBodyState>(self.entity)?;
+        (state.id.entity == self.wire).then(|| state.health_target_facts())
+    }
+}
+
+pub(super) enum HealthEventContext<'a> {
+    Unattributed,
+    Impact(&'a AppliedDamage),
+    Healing(&'a World),
 }
 
 struct HealthApplied {
@@ -77,7 +91,7 @@ impl RoomHealthEvents {
         target: SampledBody,
         delta: f64,
         killed: bool,
-        impact: Option<&AppliedDamage>,
+        context: HealthEventContext<'_>,
     ) {
         if !self.enabled
             || self.pending.len() >= MAX_ROOM_HEALTH_EVENTS
@@ -87,14 +101,26 @@ impl RoomHealthEvents {
         {
             return;
         }
-        let impact = impact.filter(|impact| impact.target_facts.target == target.wire);
+        let (hit_tags, target_facts) = match context {
+            HealthEventContext::Impact(impact) if impact.target_facts.target == target.wire => {
+                (Some(impact.tags), Some(impact.target_facts.clone()))
+            }
+            // A self-heal or an unavailable source has no foreign observer
+            // of the target in this notification.
+            HealthEventContext::Healing(world)
+                if delta > 0.0 && source.is_some_and(|source| source != target) =>
+            {
+                (None, target.health_target_facts(world))
+            }
+            _ => (None, None),
+        };
         self.pending.push_back(HealthApplied {
             source,
             target,
             delta,
             killed,
-            hit_tags: impact.map(|impact| impact.tags),
-            target_facts: impact.map(|impact| Arc::new(impact.target_facts.clone())),
+            hit_tags,
+            target_facts: target_facts.map(Arc::new),
         });
     }
 }
@@ -119,8 +145,13 @@ impl RoomSimulation {
             return;
         };
         let source = self.sample_health_body(source);
+        let context = match impact {
+            Some(impact) => HealthEventContext::Impact(impact),
+            None if delta > 0.0 => HealthEventContext::Healing(&self.world),
+            None => HealthEventContext::Unattributed,
+        };
         self.health_events
-            .stage(source, target, delta, killed, impact);
+            .stage(source, target, delta, killed, context);
     }
 
     /// Queue each event for the recipients' next VM frames, in settlement order.
@@ -154,8 +185,13 @@ impl RoomSimulation {
             for change in enemy.scripts.take_local_health_changes() {
                 let source =
                     SampledBody::lookup(change.source, &self.by_wire, &self.players_by_wire);
-                self.health_events
-                    .stage(source, target, change.delta, change.killed, None);
+                self.health_events.stage(
+                    source,
+                    target,
+                    change.delta,
+                    change.killed,
+                    HealthEventContext::Unattributed,
+                );
             }
         }
     }
@@ -234,7 +270,7 @@ mod tests {
                 assert_eq!(entry.source.map(|body| body.wire), Some(source));
                 assert_eq!(entry.target.wire, target);
                 assert_eq!(entry.hit_tags, None);
-                assert!(entry.target_facts.is_none());
+                assert_eq!(entry.target_facts.is_some(), entry.delta > 0.0);
                 (entry.delta, entry.killed)
             });
             assert_eq!(actual, expected);
@@ -327,6 +363,13 @@ mod tests {
                 (event.target.wire, event.delta, event.killed),
                 (wire, delta, false)
             );
+            assert_eq!(event.hit_tags, None);
+            let facts = event.target_facts.as_ref().unwrap();
+            assert_eq!(facts.target, wire);
+            assert_eq!(
+                facts.filter_flags,
+                Some(1 | crate::match_scene::team_bit(1).unwrap())
+            );
         }
         assert!(room.health_events.pending.is_empty());
         assert!(
@@ -350,6 +393,7 @@ mod tests {
             .unwrap();
         let event = room.health_events.pending.pop_front().unwrap();
         assert!(event.source.is_none());
+        assert!(event.target_facts.is_none());
         assert_eq!((event.target.wire, event.delta), (targets[0], deltas[0]));
         assert!(room.health_events.pending.is_empty());
     }

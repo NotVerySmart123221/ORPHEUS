@@ -1115,12 +1115,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 // when 978A30 cannot resolve the auxiliary client owner.
                 StateKind::Plain
             }
-            "STU_9028E035"
+            "STU_9028E035" | "STU_43994F1B" | "STU_93B8758C"
                 if registration.shape(registered_state(self.graph(id), node).is_some()) =>
             {
                 StateKind::Registered { next: None }
             }
-            "STU_33A46033" | "STU_43994F1B" | "STU_93B8758C" | "STU_9935FBC8"
+            "STU_33A46033" | "STU_9935FBC8"
                 if registration.permits(registered_state(self.graph(id), node).is_some()) =>
             {
                 StateKind::Registered { next: None }

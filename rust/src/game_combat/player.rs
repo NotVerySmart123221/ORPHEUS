@@ -7,7 +7,7 @@ use bevy_ecs::component::Component;
 use crate::{
     game_combat::{
         AdmittedFlight, AppliedDamage, BioticField, BotHit, CombatError, HealingPulse,
-        PosedHitscan, RoomSimulation, SampledBody, eligible_target, eye_height,
+        HealthEventContext, PosedHitscan, RoomSimulation, SampledBody, eligible_target, eye_height,
         script_eye_position,
     },
     game_combat_messages::CombatNotice,
@@ -106,6 +106,31 @@ impl PlayerBodyState {
             .as_ref()
             .and_then(|runtime| runtime.vitals())
             .is_none_or(|vitals| vitals.death().is_none())
+    }
+
+    pub(super) fn health_target_facts(&self) -> HealthTargetFacts {
+        HealthTargetFacts {
+            target: self.id.entity,
+            filter_flags: crate::match_scene::team_bit(self.team)
+                .ok()
+                .map(|team| 1 | team | if self.alive() { 0 } else { 0x10 }),
+            tags: self
+                .runtime
+                .as_ref()
+                .map_or_else(Default::default, |runtime| runtime.target_tags()),
+            script_state: self
+                .runtime
+                .as_ref()
+                .and_then(|runtime| runtime.snapshot())
+                .map_or(
+                    crate::script_entity_state::EntityScriptState::Unavailable,
+                    |snapshot| {
+                        crate::script_entity_state::EntityScriptState::Running(Arc::new(
+                            snapshot.variables.clone(),
+                        ))
+                    },
+                ),
+        }
     }
 
     pub(crate) fn target_pose(&self) -> TargetPose {
@@ -893,26 +918,6 @@ impl RoomSimulation {
         if (self.cassidy_protected && state.hero == crate::game_heroes::CASSIDY) || !state.alive() {
             return Ok(None);
         }
-        let target_flags = crate::match_scene::team_bit(state.team)
-            .ok()
-            .map(|team| 1 | team | if !state.alive() { 0x10 } else { 0 });
-        let target_tags = state
-            .runtime
-            .as_ref()
-            .map(|runtime| runtime.target_tags())
-            .unwrap_or_default();
-        let target_state = state
-            .runtime
-            .as_ref()
-            .and_then(|runtime| runtime.snapshot())
-            .map_or(
-                crate::script_entity_state::EntityScriptState::Unavailable,
-                |snapshot| {
-                    crate::script_entity_state::EntityScriptState::Running(Arc::new(
-                        snapshot.variables.clone(),
-                    ))
-                },
-            );
         let fallback_health = state
             .runtime
             .as_ref()
@@ -922,12 +927,7 @@ impl RoomSimulation {
             source,
             amount: impact.damage,
             tags: impact.tags,
-            target_facts: HealthTargetFacts {
-                target: id.entity,
-                filter_flags: target_flags,
-                tags: target_tags,
-                script_state: target_state,
-            },
+            target_facts: state.health_target_facts(),
         };
         let Some((owner, killed, health)) = self.damage_player_body_by_wire(
             id,
@@ -1009,8 +1009,13 @@ impl RoomSimulation {
                         ..EntityUpdate::default()
                     });
                 }
-                self.health_events
-                    .stage(source, SampledBody { wire, entity }, healed, false, None);
+                self.health_events.stage(
+                    source,
+                    SampledBody { wire, entity },
+                    healed,
+                    false,
+                    HealthEventContext::Healing(&self.world),
+                );
             }
         }
     }
