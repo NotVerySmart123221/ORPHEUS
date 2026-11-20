@@ -12,6 +12,7 @@ mod frame_wait;
 mod local_combat_accumulator;
 mod local_command;
 mod local_message;
+mod logical_button_lifecycle;
 mod movement_edges;
 mod observation_sample;
 mod observer_eye_position;

@@ -7,6 +7,7 @@
     "body": 941,
     "graph": 607,
     "hit_distance": 2,
+    "unavailable_callback_delta": 4,
     "ownership": {
       "samples": [1, 2],
       "overwrite": 999

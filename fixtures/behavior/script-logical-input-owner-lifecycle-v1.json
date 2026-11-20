@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "case_id": "script-logical-input-owner-lifecycle.synthetic.v1",
+  "source": {
+    "basis": "Original held-input lifetimes with a state-owned speed scale."
+  },
+  "evidence": "synthetic-rust",
+  "input": {
+    "body": 941,
+    "graph": 608,
+    "button": 29,
+    "command_mask": 2,
+    "hold_scale": 0.6
+  },
+  "expected": {
+    "default_dead_listener": false,
+    "allow_dead_listener": true
+  }
+}

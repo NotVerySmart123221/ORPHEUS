@@ -6,6 +6,10 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Applied logical button death admission consistently on presses, state entry, and lock changes. Held scopes that require a living owner release before the next VM update samples their observations.
+
+- Added an optional StateScript `on_unavailable` observation plug for clearing derived target state when a host sample is temporarily unavailable. The standalone Phase 3A revision `055adca3` passed the default and Inspector workspace tests and Clippy.
+
 - Added clock dependencies to watched reads of linked cooldown and ammunition values. A BooleanSwitch now reevaluates a countdown as its effective value changes. The synthetic fixture reproduced a ready branch that remained inactive after a cooldown expired on the previous VM. The script-coverage workspace suite, prepared input probes, encrypted selection loopback, and Clippy passed.
 
 - Routed buffered presses through the ordinary logical button continuation queue. The down branch runs after the press callback's queued readiness changes. A queued lock can still cancel it. The new synthetic fixture reproduced the missed press on the previous VM. The script-coverage workspace suite, prepared input probes, encrypted selection loopback, and Clippy passed.

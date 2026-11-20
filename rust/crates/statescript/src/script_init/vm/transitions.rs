@@ -23,6 +23,12 @@ use super::super::{
 };
 use super::Vm;
 
+enum ObservationResult {
+    Value(Value),
+    Unavailable,
+    Invalid,
+}
+
 impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
     pub(in crate::script_init) fn tick_states(&mut self, id: u16) -> Result<bool, InitFault> {
         let now = self.machine.now_ms;
@@ -735,8 +741,31 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             sampled_frame: frame,
         };
         let site = self.site(id, node);
-        let Some(value) = self.observation_value(site, field(&node.fields, "value")) else {
-            return Ok(false);
+        let value = match self.observation_result(site, field(&node.fields, "value")) {
+            ObservationResult::Value(value) => value,
+            ObservationResult::Unavailable => {
+                let has_hook = node
+                    .field("on_unavailable")
+                    .is_some_and(|plug| !plug.is_null());
+                if has_hook
+                    && self.state(key).is_some_and(|state| {
+                        state.active && !state.ending && state.activation == activation
+                    })
+                {
+                    self.post(
+                        id,
+                        Event::ObserveSample {
+                            raw: key.raw,
+                            activation,
+                            frame,
+                            available: false,
+                        },
+                    )?;
+                    return Ok(true);
+                }
+                return Ok(false);
+            }
+            ObservationResult::Invalid => return Ok(false),
         };
         let Some(state) = self
             .state_mut(key)
@@ -781,6 +810,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     raw: key.raw,
                     activation,
                     frame,
+                    available: true,
                 },
             )?;
             return Ok(true);
@@ -794,6 +824,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         key: StateKey,
         activation: u16,
         frame: u32,
+        available: bool,
     ) -> Result<(), InitFault> {
         if frame != self.machine.frame
             || !self.state(key).is_some_and(|state| {
@@ -813,31 +844,35 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 state.active && !state.ending && state.activation == activation
             })
         };
-        let Some(sample) = self.state(key).and_then(|state| state.watch_seen.clone()) else {
-            return Ok(());
-        };
         let Some(node) = self.graph(key.instance).state(usize::from(key.raw)) else {
             return Ok(());
         };
-        let Ok(Some(output)) = script_expr::lvalue(field(&node.fields, "output")) else {
-            return Ok(());
-        };
-        let output = source_key(key.instance, output);
-        // Other ticks and earlier plugs may have reused the output before
-        // this callback reached the queue. Publish the sample through the
-        // ordinary write path so existing bindings keep their priority.
-        let mut visible = same(&self.machine.value(output, None), &sample);
-        if !visible && !same(&stored(&self.machine.snapshot, output), &sample) {
-            self.write(output, sample.clone())?;
-            if !activation_is_live(self) {
+        if available {
+            let Some(sample) = self.state(key).and_then(|state| state.watch_seen.clone()) else {
                 return Ok(());
+            };
+            let Ok(Some(output)) = script_expr::lvalue(field(&node.fields, "output")) else {
+                return Ok(());
+            };
+            let output = source_key(key.instance, output);
+            // Other ticks and earlier plugs may have reused the output before
+            // this callback reached the queue. Publish the sample through the
+            // ordinary write path so existing bindings keep their priority.
+            let mut visible = same(&self.machine.value(output, None), &sample);
+            if !visible && !same(&stored(&self.machine.snapshot, output), &sample) {
+                self.write(output, sample.clone())?;
+                if !activation_is_live(self) {
+                    return Ok(());
+                }
+                visible = same(&self.machine.value(output, None), &sample);
             }
-            visible = same(&self.machine.value(output, None), &sample);
-        }
-        if visible {
-            self.follow(key.instance, node, "on_sample", Some(key), 0)?;
+            if visible {
+                self.follow(key.instance, node, "on_sample", Some(key), 0)?;
+            } else {
+                self.report(self.site(key.instance, node), Issue::ObservationUnavailable);
+            }
         } else {
-            self.report(self.site(key.instance, node), Issue::ObservationUnavailable);
+            self.follow(key.instance, node, "on_unavailable", Some(key), 0)?;
         }
         if activation_is_live(self) {
             self.try_complete(key, node, 0)?;
@@ -846,8 +881,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
     }
 
     pub(super) fn observation_value(&mut self, site: Site, value: &Json) -> Option<Value> {
+        match self.observation_result(site, value) {
+            ObservationResult::Value(value) => Some(value),
+            ObservationResult::Unavailable | ObservationResult::Invalid => None,
+        }
+    }
+
+    fn observation_result(&mut self, site: Site, value: &Json) -> ObservationResult {
         match self.evaluate_with_context(site, value, None, Value::Null, false) {
-            Ok(value) => Some(value),
+            Ok(value) => ObservationResult::Value(value),
             Err(
                 script_expr::EvalError::UnavailableEntityPosition(_)
                 | script_expr::EvalError::UnavailableEntityDirection(_)
@@ -860,11 +902,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             ) => {
                 // A later sample can succeed as the scene updates.
                 self.report(site, Issue::ObservationUnavailable);
-                None
+                ObservationResult::Unavailable
             }
             Err(error) => {
                 self.report(site, Issue::Expression(error));
-                None
+                ObservationResult::Invalid
             }
         }
     }

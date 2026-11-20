@@ -580,6 +580,7 @@ impl Graph {
                 .into_iter()
                 .chain(node.declares_observe_state().then_some("on_change"))
                 .chain(node.declares_observe_state().then_some("on_sample"))
+                .chain(node.declares_observe_state().then_some("on_unavailable"))
                 .chain(stack_outputs.iter().copied())
                 {
                     if node
@@ -3074,6 +3075,20 @@ mod tests {
             json!({"$":"Plug","links":[[0,false]]});
         let error = load(&data).unwrap_err();
         assert!(error.to_string().contains("invalid on_sample output plug"));
+
+        data["graphs"][0]["nodes"][0]["fields"]["on_sample"] = Value::Null;
+        for plug in [Value::Null, json!({"$":"Plug","links":[]})] {
+            data["graphs"][0]["nodes"][0]["fields"]["on_unavailable"] = plug;
+            assert!(load(&data).is_ok());
+        }
+        data["graphs"][0]["nodes"][0]["fields"]["on_unavailable"] =
+            json!({"$":"Plug","links":[[0,false]]});
+        let error = load(&data).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("invalid on_unavailable output plug")
+        );
     }
 
     #[test]

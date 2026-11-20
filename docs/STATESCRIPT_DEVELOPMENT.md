@@ -405,6 +405,13 @@ A directed room-message entry can begin the lock in the recipient's VM.
 The lock takes effect when its begin runs. Commands and state transitions
 continue to follow the component's event order.
 
+Logical button states use the same death admission rule on a press,
+on entry while the physical button is held, and when a lock changes.
+The first VM update after owner death releases any held scope whose
+listener requires a living owner, even on a timer-only frame.
+A listener that explicitly accepts input while the owner is dead keeps
+its normal input and lock behavior.
+
 See the [synthetic button lock contract](../fixtures/behavior/script-button-lock-v1.json).
 
 ## Scale movement speed for a state
@@ -1037,14 +1044,19 @@ Sampling starts in the VM frame after activation and runs at most once
 per VM frame. That lets a body initialize before the room publishes its
 candidate snapshot. Unavailable scene data records an observation diagnostic
 and preserves the last successful result without failing the runtime.
-The state retries on the next frame. Invalid expressions still report
-regular evaluation errors. Finish and abort stop polling and leave the last written value
+The state retries on the next frame. An optional `on_unavailable` plug
+runs after a transient host failure on that frame. It follows the same
+activation and frame guards as `on_sample`. Use it to clear derived
+target or presentation state while retaining the last successful raw
+sample. Invalid expressions still report regular evaluation errors. Finish and abort stop polling and leave the last written value
 available. The ordinary lifecycle plugs can clear it when needed.
 
 Use `on_sample` for effects that depend on a current ray result. When
 the geometry or room snapshot is unavailable, this plug stays inactive.
 A known empty ray result still reaches the plug so the graph can handle
-a miss. Keep target effects behind the graph's hit check.
+a miss. Keep target effects behind the graph's hit check. A target
+indicator can use the hit check to select its ready or empty value and
+use `on_unavailable` to clear it when the host cannot sample the scene.
 
 Use `EntitiesInRadius` as the value to follow membership of an area.
 The [synthetic observation contract](../fixtures/behavior/script-observe-radius-v1.json)
