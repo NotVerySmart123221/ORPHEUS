@@ -242,6 +242,7 @@ pub(crate) struct BotHit {
 #[derive(Clone)]
 pub(crate) struct AppliedDamage {
     pub source: u32,
+    /// Actual pool loss, including armour reduction and remaining health limits.
     pub amount: f64,
     pub tags: crate::game_hitscan::DamageTags,
     pub target_facts: HealthTargetFacts,
@@ -2010,7 +2011,7 @@ impl RoomSimulation {
             entity,
             -result.dealt,
             result.killed,
-            Some(&hit.damage),
+            Some((hit.damage.tags, &hit.damage.target_facts)),
         );
         Ok(Some(hit))
     }

@@ -2038,6 +2038,22 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         })
     }
 
+    fn forwarded_health_context(&self, parameters: &Variables) -> HostHealthContext {
+        let context = &self.health_context;
+        let target = context
+            .target_body
+            .map(|body| body.wire)
+            .or(context.target_facts.as_ref().map(|facts| facts.target));
+        if target.is_some_and(|target| {
+            parameters
+                .values()
+                .any(|value| matches!(value, Value::Entity(entity) if *entity == target))
+        }) {
+            return context.clone();
+        }
+        HostHealthContext::default()
+    }
+
     pub(in crate::script_init) fn send_game_message(
         &mut self,
         id: u16,
@@ -2093,13 +2109,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         for entity in entities {
             self.spend("game message routing")?;
             if entity == site.entity {
-                self.machine.queue_entries_from(
+                // An immediate local relay can forward the same authenticated
+                // target. Stored vars and other messages do not carry it.
+                let health_context = self.forwarded_health_context(&parameters);
+                self.machine.queue_local_game_message(
                     self.graphs,
-                    None,
-                    Some(site.entity),
                     message,
                     parameters.clone(),
-                    self.machine.now_ms,
+                    health_context,
                 )?;
             } else {
                 let delivered = if let Some(slot) = directed_parameter {

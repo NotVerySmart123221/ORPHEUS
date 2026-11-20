@@ -62,7 +62,7 @@ fn pick_body(
 
 fn kill_body(scene: &mut PreparedScene, body: BodyId, damage: f64) -> PlayerDeath {
     let simulation = scene.simulation_mut();
-    let (owner, killed, _) = simulation
+    let (owner, outcome, _) = simulation
         .damage_player_body_by_wire(
             body,
             damage,
@@ -74,7 +74,7 @@ fn kill_body(scene: &mut PreparedScene, body: BodyId, damage: f64) -> PlayerDeat
             None,
         )
         .unwrap();
-    assert!(killed);
+    assert!(outcome.killed);
     assert!(!simulation.player_body(body).unwrap().alive());
     PlayerDeath {
         body,

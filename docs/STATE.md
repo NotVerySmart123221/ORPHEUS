@@ -387,7 +387,10 @@ room preserves these facts if a lethal target retires before delivery.
 The health event also carries the original body identity through VM
 delivery. A subsequent direct request to that same wire expires if the
 room now identifies a different body. The room regression includes a
-fresh award to the replacement to exercise the normal path.
+fresh award to the replacement to exercise the normal path. An
+immediate same-body message can relay the original target's context
+through a typed entity parameter. The portable regression exercises
+both direct and relayed awards across body replacement.
 A prepared probe uses the original admission claim and local sender
 with the stock cap. These additions are pending integration verification.
 
@@ -396,6 +399,12 @@ and no literal sender. The `0B9E` entry binds different slots from the
 three instance operands read by its outgoing grant. The original
 dispatcher, the origin of those three values, and the order relative
 to health settlement still need original-build evidence.
+
+Player hit notices, immediate damage credit and deferred notifications
+now use the same actual pool loss. The prepared `0012` probe supplies
+explicit pool records to the original charge receiver and checks how
+matching identifiers affect the award. Native production of those
+records and temporary named-pool admission still require evidence.
 
 Static model protection now uses the authored state slots and an
 explicit host capability. The prepared boss graph regression passed its

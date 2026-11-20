@@ -182,7 +182,18 @@ fn native_room_health_events_keep_actual_deltas_and_hit_tag_availability_in_orde
         )
         .unwrap()
         .unwrap();
-    assert_eq!(player_hit.damage.amount, input.player_impact);
+    let applied_player_damage = -expected
+        .ordered_outcomes
+        .iter()
+        .find(|outcome| matches!(outcome.target, Target::Player) && outcome.hit_tags.is_some())
+        .unwrap()
+        .delta;
+    assert_eq!(player_hit.damage.amount, applied_player_damage);
+    assert!(matches!(
+        &player_hit.notices[0],
+        Some(crate::game_combat_messages::CombatNotice::Hit { dealt, killed: true, .. })
+            if *dealt == applied_player_damage
+    ));
 
     assert!(
         room.settle_health(

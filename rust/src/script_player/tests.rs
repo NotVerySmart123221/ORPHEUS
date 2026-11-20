@@ -1561,7 +1561,7 @@ fn authored_body_activity_reads_room_bootstrap_and_current_generation() {
         frame += 1;
         sample_next_frame(room, first, frame, sample);
     }
-    let (_, killed, _) = room
+    let (_, outcome, _) = room
         .damage_player_body_by_wire(
             first,
             contract["input"]["lethal_damage"].as_f64().unwrap(),
@@ -1573,7 +1573,7 @@ fn authored_body_activity_reads_room_bootstrap_and_current_generation() {
             None,
         )
         .unwrap();
-    assert!(killed);
+    assert!(outcome.killed);
     sample_next_frame(room, first, frame + 1, &expected["after_death"]);
 
     let replacement = BodyId {

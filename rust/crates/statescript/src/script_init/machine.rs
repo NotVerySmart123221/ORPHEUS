@@ -519,6 +519,23 @@ impl Machine {
         )
     }
 
+    pub(super) fn queue_local_game_message(
+        &mut self,
+        graphs: &GraphStore,
+        message: u64,
+        parameters: Variables,
+        health_context: HostHealthContext,
+    ) -> Result<usize, InitFault> {
+        self.queue_message_entries(
+            graphs,
+            MessageDestination::Ordinary(None, message),
+            Some(self.snapshot.entity),
+            parameters,
+            self.now_ms,
+            health_context,
+        )
+    }
+
     pub(super) fn queue_room_entries_from(
         &mut self,
         graphs: &GraphStore,

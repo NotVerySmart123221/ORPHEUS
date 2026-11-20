@@ -57,11 +57,11 @@ impl RoomSimulation {
         };
         match effect {
             HealthEffect::Damage(amount) => {
-                if let Some((owner, killed, health)) =
+                if let Some((owner, outcome, health)) =
                     self.damage_player_body_by_wire(id, amount, source, None)
                 {
                     self.scripted_health.extend(health);
-                    if killed {
+                    if outcome.killed {
                         self.player_deaths.push(PlayerDeath {
                             owner,
                             body: id,

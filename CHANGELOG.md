@@ -10,6 +10,11 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Applied the settled target's tags, affiliation and liveness to direct `EntityMatches` filters in a health event. A lethal impact retains its original target's qualification after the body retires. Source membership and spatial searches still use the current room frame. Validated in shared candidate `29df13cb`.
 
+- Keep the settled target context when an immediate same-body GameMessage carries the target as a typed entity parameter. The synthetic contract checks relayed requests across replacement and independent messages on the same VM frame. Integration validation pending.
+
+- Use actual player damage for attacker credit and hit notices. The settled-hit contract compares an overkill impact against the same capped result in the deferred event. A prepared probe checks the stock damage receiver's typed pool deductions, floor and cap. Integration validation pending.
+
+
 - Kept a settled health event bound to its original target generation through the next VM frame. Direct awards and health requests skip an expired target. Added a room regression for same-wire replacement before the source VM handles the event and a fresh award after replacement. Validated in shared candidate `e2123b35`.
 
 - Carried target facts with positive NPC-local health events at VM publication. Added room coverage for a capped heal issuing one configured bonus on the recipient's next VM frame and for dropping the award when that recipient is replaced. A prepared probe exercises original local admission, award, and revocation through the graph. Validated in shared candidate `29df13cb`.

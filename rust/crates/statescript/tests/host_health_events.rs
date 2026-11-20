@@ -69,6 +69,7 @@ struct Expected {
     host_variables: [u32; 6],
     deliveries: Vec<Option<Delivery>>,
     target_tag_query: ExpectedTargetTagQuery,
+    target_generation_relay: ExpectedTargetGenerationRelay,
 }
 
 #[derive(Deserialize)]
@@ -79,6 +80,12 @@ struct ExpectedTargetTagQuery {
     retired_match: bool,
     retired_alive_match: bool,
     unavailable_fact_diagnostics: usize,
+}
+
+#[derive(Deserialize)]
+struct ExpectedTargetGenerationRelay {
+    stable: Vec<f64>,
+    replaced_with_ordinary_deliveries: Vec<f64>,
 }
 
 fn variables(body: &Component) -> Option<&Variables> {
@@ -455,13 +462,21 @@ fn settled_target_facts_are_scoped_to_immediate_host_delivery() {
 }
 
 #[test]
-fn health_delivery_checks_original_target_generation_for_direct_requests() {
+fn health_delivery_checks_original_target_generation_for_direct_and_relayed_requests() {
     const SOURCE: u32 = 741;
     const TARGET: u32 = 742;
     const OTHER: u32 = 743;
     const INCOMING: u64 = 198;
     const OUTGOING: u64 = 199;
+    const TYPED_RELAY: u64 = 200;
+    const NUMERIC_RELAY: u64 = 201;
     const GENERATION: u64 = 7;
+
+    let fixture: Contract = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/script-host-health-events-v1.json"
+    ))
+    .unwrap();
+    let expected = fixture.expected.target_generation_relay;
 
     struct Room {
         target_generation: u64,
@@ -499,11 +514,27 @@ fn health_delivery_checks_original_target_generation_for_direct_requests() {
         {"m_B5051BCE":"0x0000000000000003","m_out_Var":var(2)}
     ]);
     let requests = json!({"$":"Plug","links":[[2,"m_inPlug"],[3,"m_inPlug"]]});
+    let host_requests =
+        json!({"$":"Plug","links":[[2,"m_inPlug"],[3,"m_inPlug"],[4,"m_inPlug"],[5,"m_inPlug"]]});
     let empty = json!({"$":"Plug","links":[]});
+    let relay = |pos, topic, parameters: Json| {
+        json!({"pos":pos,"rid":pos,"uid":pos,"class":"STUStatescriptActionSendGameMessage",
+            "state":null,"remote":-1,"client_only":false,"server_only":true,
+            "fields":{"m_ADEB6E05":1,"m_gameMessage":{"m_gameMessage":format!("0x{topic:016X}")},
+                "m_params":parameters,"m_outPlug":empty}})
+    };
+    let relay_entry = |pos, topic, parameters: Json| {
+        json!({"pos":pos,"rid":pos,"uid":pos,"class":"STUStatescriptEntryGameMessage",
+            "state":null,"remote":-1,"client_only":false,"server_only":true,
+            "fields":{"m_gameMessage":{"m_gameMessage":format!("0x{topic:016X}")},
+                "m_params":parameters,"m_outPlug":requests}})
+    };
+    let outgoing_target = json!({"m_B5051BCE":"0x0000000000000002","m_value":var(1)});
+    let outgoing_delta = json!({"m_B5051BCE":"0x0000000000000003","m_value":var(2)});
     let nodes = json!([
         {"pos":0,"rid":0,"uid":0,"class":"EntryHostEvent","state":null,"remote":-1,
             "client_only":false,"server_only":true,"host_event_entry":"health_applied",
-            "fields":{"m_params":parameters,"m_outPlug":requests}},
+            "fields":{"m_params":parameters,"m_outPlug":host_requests}},
         {"pos":1,"rid":1,"uid":1,"class":"STUStatescriptEntryGameMessage","state":null,"remote":-1,
             "client_only":false,"server_only":true,"room_message_entry":true,
             "fields":{"m_gameMessage":{"m_gameMessage":format!("0x{INCOMING:016X}")},
@@ -515,10 +546,23 @@ fn health_delivery_checks_original_target_generation_for_direct_requests() {
                 "m_outPlug":empty}},
         {"pos":3,"rid":3,"uid":3,"class":"authored.health","state":null,"remote":-1,
             "client_only":false,"server_only":true,"action_behavior":"health_change",
-            "fields":{"target":var(1),"delta":var(2),"m_outPlug":empty}}
+            "fields":{"target":var(1),"delta":var(2),"m_outPlug":empty}},
+        relay(4, TYPED_RELAY, json!([outgoing_target, outgoing_delta])),
+        relay(5, NUMERIC_RELAY, json!([
+            {"m_B5051BCE":"0x0000000000000002",
+                "m_value":{"$":"STUConfigVarInt","m_value":TARGET}},
+            {"m_B5051BCE":"0x0000000000000003",
+                "m_value":{"$":"STUConfigVarFloat","m_value":-1.75}}
+        ])),
+        relay_entry(6, TYPED_RELAY, parameters.clone()),
+        // The numeric relay can still read the target from a stored variable.
+        // Without a typed target parameter it has no event-time provenance.
+        relay_entry(7, NUMERIC_RELAY, json!([
+            {"m_B5051BCE":"0x0000000000000003","m_out_Var":var(2)}
+        ]))
     ]);
     let bundle = json!({"version":1,"bodies":{},"missing":[],"graphs":[{
-        "index":GRAPH,"items":4,"nodes":nodes,"fields":{},"containers":{},"entries":[1],
+        "index":GRAPH,"items":8,"nodes":nodes,"fields":{},"containers":{},"entries":[1,6,7],
         "states":[],"remote":[],"sync_vars":[],"unknown_nodes":[],
         "header":{"m_nodesBitCount":3,"m_statesBitCount":3,"m_remoteSyncNodesBitCount":3,"m_syncVarsBitCount":3}
     }]});
@@ -556,6 +600,15 @@ fn health_delivery_checks_original_target_generation_for_direct_requests() {
         id,
         parameters: Variables::from([(3, Value::Float(amount))]),
     };
+    let assert_deliveries = |world: &mut Room, amounts: &[f64]| {
+        let messages: Vec<_> = amounts
+            .iter()
+            .map(|&amount| (TARGET, message(OUTGOING, amount)))
+            .collect();
+        let health: Vec<_> = amounts.iter().map(|&amount| (TARGET, amount)).collect();
+        assert_eq!(std::mem::take(&mut world.messages), messages);
+        assert_eq!(std::mem::take(&mut world.health), health);
+    };
 
     assert_eq!(
         body.queue_host_event_with_context(event, context())
@@ -563,11 +616,7 @@ fn health_delivery_checks_original_target_generation_for_direct_requests() {
         1
     );
     body.advance_frame(1, &mut world).unwrap();
-    assert_eq!(
-        std::mem::take(&mut world.messages),
-        [(TARGET, message(OUTGOING, -2.5))]
-    );
-    assert_eq!(std::mem::take(&mut world.health), [(TARGET, -2.5)]);
+    assert_deliveries(&mut world, &expected.stable);
 
     assert_eq!(
         body.queue_host_event_with_context(event, context())
@@ -575,13 +624,19 @@ fn health_delivery_checks_original_target_generation_for_direct_requests() {
         1
     );
     world.target_generation += 1;
-    let mut ordinary = message(INCOMING, 1.25);
+    let mut ordinary = message(TYPED_RELAY, 0.75);
     ordinary.parameters.insert(2, Value::Entity(TARGET));
-    assert_eq!(body.queue_room_message_from(OTHER, ordinary).unwrap(), 1);
+    assert_eq!(
+        body.queue_entity_frame_message(2, TYPED_RELAY, ordinary.parameters)
+            .unwrap(),
+        1
+    );
+    let mut external = message(INCOMING, 1.25);
+    external.parameters.insert(2, Value::Entity(TARGET));
+    assert_eq!(body.queue_room_message_from(OTHER, external).unwrap(), 1);
     body.advance_frame(2, &mut world).unwrap();
 
-    assert_eq!(world.messages, [(TARGET, message(OUTGOING, 1.25))]);
-    assert_eq!(world.health, [(TARGET, 1.25)]);
+    assert_deliveries(&mut world, &expected.replaced_with_ordinary_deliveries);
     assert!(body.snapshot().unwrap().diagnostics.is_empty());
 
     let wrong_target = HostHealthContext {

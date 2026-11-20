@@ -417,3 +417,105 @@ fn prepared_stock_admission_controls_local_bonus_credit() {
     let diagnostics = &body.snapshot().unwrap().diagnostics;
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
 }
+
+#[test]
+#[ignore = "requires an authorized 104319 graph pack in ORPHEUS_RUNTIME_DIR"]
+fn prepared_stock_damage_credit_consumes_typed_pool_records() {
+    const DAMAGE: u64 = 0x0240_0000_0000_0012;
+    const TARGET: u32 = 703;
+    const EXCLUDED_POOL: u64 = 0x0d80_0000_0000_3ebb;
+    const OTHER_POOL: u64 = 0x0d80_0000_0000_42c6;
+    const CAP: f64 = 10.0;
+
+    struct DamageHost;
+
+    impl World for DamageHost {
+        fn position(&mut self, _: u32) -> Option<[f64; 3]> {
+            None
+        }
+
+        fn entity_variable(&mut self, entity: u32, _: u32) -> Option<Value> {
+            (entity == TARGET).then_some(Value::Null)
+        }
+
+        fn entity_filter_flags(&self, site: Site, entity: u32) -> Option<u64> {
+            // Admit the known target by the receiver's ordinary mask branch.
+            (site.entity == OWNER && entity == TARGET).then_some(1)
+        }
+
+        fn entities_hostile(
+            &self,
+            site: Site,
+            source: u32,
+            target: u32,
+            option: bool,
+        ) -> Option<bool> {
+            (site.entity == OWNER && source == OWNER && target == TARGET && !option).then_some(true)
+        }
+
+        fn has_target_tag(&self, site: Site, entity: u32, _: u64) -> Option<bool> {
+            // The same target has neither damage-credit scaling tag in any case.
+            (site.entity == OWNER && entity == TARGET).then_some(false)
+        }
+    }
+
+    let runtime =
+        PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").expect("set ORPHEUS_RUNTIME_DIR"));
+    let graphs = Arc::new(GraphStore::load(runtime.join("data/game_graphs_174.json.gz")).unwrap());
+    let pool_record = |pool, drain| {
+        Value::Map(vec![
+            (Value::Integer(16056), Value::Asset(pool)),
+            (Value::Integer(499), Value::Float(drain)),
+        ])
+    };
+
+    for (case, records, expected) in [
+        ("empty", vec![], CAP),
+        ("unrelated", vec![pool_record(OTHER_POOL, 7.0)], CAP),
+        (
+            "matching and unrelated",
+            vec![
+                pool_record(EXCLUDED_POOL, 2.0),
+                pool_record(OTHER_POOL, 7.0),
+                pool_record(EXCLUDED_POOL, 3.0),
+            ],
+            7.0,
+        ),
+        (
+            "nonnegative floor",
+            vec![pool_record(EXCLUDED_POOL, 13.0)],
+            0.0,
+        ),
+    ] {
+        let mut world = DamageHost;
+        let mut body = Component::start(
+            Arc::clone(&graphs),
+            OWNER,
+            Variables::from([
+                (METER_CAP, Value::Float(CAP)),
+                (METER, Value::Float(0.0)),
+                (ADMITTED, Value::Bool(true)),
+                (INHIBITED, Value::Bool(false)),
+            ]),
+            vec![Root::listener(ROOT, GRAPH, None)],
+            0,
+            &mut world,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+
+        // Supply records directly to the stock consumer. This detached test
+        // does not model the original engine's damage event producer.
+        let parameters = Variables::from([
+            (0x13, Value::Float(12.0)),
+            (0x15, Value::Entity(TARGET)),
+            (0x3d, Value::Array(Vec::new())),
+            (0x624, Value::Array(records)),
+        ]);
+        assert_eq!(body.queue_message(ROOT, DAMAGE, parameters).unwrap(), 1);
+        body.run_now(&mut world).unwrap();
+        assert_eq!(meter(&body), expected, "{case}");
+        let diagnostics = &body.snapshot().unwrap().diagnostics;
+        assert!(diagnostics.is_empty(), "{case}: {diagnostics:?}");
+    }
+}
