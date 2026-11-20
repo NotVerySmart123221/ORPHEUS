@@ -6,6 +6,7 @@ mod ai_and_spawning;
 mod arrays_and_boss;
 mod authored_classes;
 mod destination_and_victory;
+mod frame_wait;
 mod local_command;
 mod local_message;
 mod movement_edges;

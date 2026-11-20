@@ -190,6 +190,17 @@ pub(super) fn is_self_stat_timer(node: &Node) -> bool {
     }
 }
 
+pub(super) fn is_literal_frame_wait(node: &Node) -> bool {
+    let duration = field(&node.fields, "m_3016B9A1");
+    let rearm = field(&node.fields, "m_0DBAFD7F");
+    node.remote == -1
+        && (matches!(rearm, Json::Null | Json::Bool(false)) || rearm.as_u64() == Some(0))
+        && script_expr::native_shape(duration, "STUConfigVarInt", Some("m_value"))
+        && field(duration, "m_value")
+            .as_u64()
+            .is_some_and(|count| i32::try_from(count).is_ok())
+}
+
 pub(super) fn is_message_recipient_set(target: &Json) -> bool {
     field(target, "$").as_str() == Some("STU_9B213168")
 }

@@ -10,6 +10,8 @@ The Rust-only [base action fixture](../fixtures/behavior/script-base-action-plac
 
 The Rust-only [stat state fixture](../fixtures/behavior/script-stat-state-facts-v1.json) checks the lifetime of both validated stat selectors when the bound actor has no player stats record. It covers the distinct stat and combat host queries and rejects unknown stats context and malformed selectors.
 
+The Rust-only [frame wait fixture](../fixtures/behavior/script-frame-wait-v1.json) checks the existing VM clock for literal waits at two original placements and in both server-running scopes. It covers zero duration and rejects malformed durations, rearm and remote bindings.
+
 The Rust-only [class declaration fixture](../fixtures/behavior/script-authored-classes-v1.json) uses two invented graphs to check shared class behavior through the production loader and VM. It runs in both workspace lanes and needs no prepared runtime.
 
 The Rust-only [local message fixture](../fixtures/behavior/script-local-message-v1.json) checks parameter capture, continuation, graph-order delivery and client-only scope through the production VM. It also checks that a malformed receiver binding leaves earlier outputs and the active receiver branch intact. It needs no prepared runtime.

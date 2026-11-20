@@ -15,7 +15,7 @@ use super::super::{
     shapes::{
         array_field, array_insertion_index, case_path, configured, encounter_base_state_shape,
         excluded_target_tags, field, is_bare_header_action, is_base_health_pool,
-        is_client_subgraph_controller, is_entry, is_message_recipient_set,
+        is_client_subgraph_controller, is_entry, is_literal_frame_wait, is_message_recipient_set,
         is_networked_for_code_synced, is_owner_movement_sampler, is_self_stat_timer,
         is_self_target, is_wave_health_pool, living_body_array_shape, participant_filter,
         persistent_message, pool_number, raw_indices, registered_state, source_key,
@@ -1500,9 +1500,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 // The headless owner has no local combat accumulator.
                 StateKind::Plain
             }
-            "STU_E3CEF6B9"
-                if registration.permits((self.graph(id).index, node.pos) == (0x022f, 116)) =>
-            {
+            "STU_E3CEF6B9" if registration.shape(is_literal_frame_wait(node)) => {
                 StateKind::WaitFrames { target: 0 }
             }
             "STU_38EE1100" => persistent_message(self.graph(id).index, node)

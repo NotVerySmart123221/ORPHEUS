@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Replaced the frame-wait placement guard with a validated literal duration and unbound remote slot. The state uses the existing VM frame clock. The synthetic regression covers both server-running scopes, completion timing, zero duration, and rejection of unsupported shapes. With script coverage, the StateScript and native library suites passed with 197 and 360 tests respectively.
+
 - Replaced three stat-timer placements with two verified selector shapes and a shared player-stat capability check. The encounter NPC host reports explicit absence for its bound body. Unknown or present stats context retains a diagnostic. The original fixture reproduced rejection at a new placement before the fix. With script coverage, the StateScript and native library suites passed with 196 and 360 tests respectively. Formatting, the locked workspace check, and all-targets Clippy with script coverage passed.
 
 - Distinguished unavailable entity-member reads in the private startup report. The diagnostic records the graph and node without carrying the entity ID or variable key. Two prepared reports at `d3da7e1a` matched and confirmed this category for Baptiste's remaining startup failure. Two stat-timer failures changed from placement rejection to unsupported state. Independent startup stayed at 10 of 32 with 53 blocking sites. The #72 capture still matched across 476 observation sites.
