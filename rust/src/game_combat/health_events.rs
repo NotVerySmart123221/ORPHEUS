@@ -170,13 +170,20 @@ impl RoomSimulation {
             None if delta > 0.0 => HealthEventContext::Healing(&self.world),
             None => HealthEventContext::Unattributed,
         };
-        let room_status = self
-            .spatial_queries
-            .as_ref()
-            .filter(|_| !matches!(context, HealthEventContext::Unattributed))
-            .and_then(|queries| target.room_status(&self.world, queries.free_for_all));
+        let room_status = match context {
+            HealthEventContext::Unattributed => None,
+            _ => self.sample_health_target_room_status(target),
+        };
         self.health_events
             .stage(source, target, delta, killed, context, room_status);
+    }
+
+    pub(super) fn sample_health_target_room_status(
+        &self,
+        target: SampledBody,
+    ) -> Option<RoomEntityStatus> {
+        let queries = self.spatial_queries.as_ref()?;
+        target.room_status(&self.world, queries.free_for_all)
     }
 
     /// Queue each event for the recipients' next VM frames, in settlement order.
@@ -218,11 +225,11 @@ impl RoomSimulation {
                 } else {
                     HealthEventContext::Unattributed
                 };
-                let room_status = self
-                    .spatial_queries
-                    .as_ref()
-                    .filter(|_| change.delta > 0.0)
-                    .and_then(|queries| target.room_status(&self.world, queries.free_for_all));
+                let room_status = if change.delta > 0.0 {
+                    self.sample_health_target_room_status(target)
+                } else {
+                    None
+                };
                 self.health_events.stage(
                     source,
                     target,
@@ -538,7 +545,12 @@ mod tests {
         let pulse = field.advance(100 + FIELD_DELAY + elapsed).0.unwrap();
         assert!(pulse.amount < wounds[1]);
         let pulses = [pulse, pulse];
-        let ground = fixture_ground();
+        let ground = Arc::new(fixture_ground());
+        room.enable_spatial_queries(
+            false,
+            Arc::clone(&ground),
+            crate::script_graph::RoomSpatialNeeds::EntityFacts,
+        );
         let movers = MoverCatalog::default();
         let queries = BotQueries::new(false, &movers, &ground, None);
 
@@ -575,6 +587,13 @@ mod tests {
             assert_eq!(event.hit_tags, None);
             let facts = event.target_facts.as_ref().unwrap();
             assert_eq!(facts.target, wire);
+            assert_eq!(
+                facts.room_status,
+                Some(RoomEntityStatus {
+                    team: Some(1),
+                    alive: true,
+                })
+            );
             assert_eq!(
                 facts.filter_flags,
                 Some(1 | crate::match_scene::team_bit(1).unwrap())
