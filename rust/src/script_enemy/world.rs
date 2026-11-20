@@ -63,6 +63,22 @@ impl World for EnemyWorld<'_> {
         true
     }
 
+    fn queue_swept_displacement(
+        &mut self,
+        site: Site,
+        frame: u32,
+        displacement: script_init::SweptDisplacement,
+    ) -> Option<bool> {
+        if site.entity != self.binding.body || !crate::script_expr::valid_entity(site.entity) {
+            return None;
+        }
+        if self.vitals.death().is_some() || self.control_records.swept_displacement.is_some() {
+            return Some(false);
+        }
+        self.control_records.swept_displacement = Some((frame, displacement));
+        Some(true)
+    }
+
     fn engine_setting(&self, _site: Site, key: u32) -> crate::script_expr::EngineSetting {
         crate::body_ruleset::engine_setting(self.graphs, self.binding.mode, key)
     }

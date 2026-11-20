@@ -259,6 +259,7 @@ mod encounter;
 mod enemy;
 mod health;
 mod health_events;
+mod movement;
 mod player;
 mod script_requests;
 pub(crate) use encounter::{
@@ -524,6 +525,7 @@ pub(crate) struct RoomSimulation {
     team_member_counts: Option<crate::game_instance::TeamMemberCounts>,
     spatial_queries: Option<RoomSpatialQueries>,
     spatial_frame: Option<(u32, Arc<RoomSpatialFrame>)>,
+    movement_contacts: Option<movement::MovementContacts>,
     health_events: health_events::RoomHealthEvents,
     // Generation maps live for the room's lifetime so reconnects cannot reset history.
     player_generations: HashMap<u32, u64>,
@@ -840,6 +842,7 @@ impl RoomSimulation {
             team_member_counts: None,
             spatial_queries: None,
             spatial_frame: None,
+            movement_contacts: None,
             health_events: health_events::RoomHealthEvents::default(),
             player_generations: HashMap::new(),
             latest_wire_generations: HashMap::new(),
@@ -2076,7 +2079,9 @@ impl RoomSimulation {
         tick: u32,
         now: Duration,
     ) -> Result<Vec<BotReplacement>, CombatError> {
+        self.prepare_movement_frame(tick)?;
         self.prepare_spatial_frame(tick)?;
+        let motion_frame = self.movement_contact_frame();
         self.states().try_for_each(|state| state.map(|_| ()))?;
         self.validate_gate_and_encounter_handles()?;
         if !self.players_by_wire.is_empty() {
@@ -2180,6 +2185,21 @@ impl RoomSimulation {
                 bot, vitals, enemy, ..
             } = &mut *state;
             if let Some(enemy) = enemy.as_mut().filter(|enemy| enemy.fault.is_none()) {
+                if let Some(frame) = &motion_frame {
+                    frame.stage_bot(bot, tick);
+                }
+                if let Some(displacement) = enemy
+                    .scripts
+                    .take_swept_displacement(tick)
+                    .filter(|_| !bot.dead && vitals.death().is_none())
+                {
+                    if !enemy.objective_mover_attached {
+                        enemy.objective_mover_attached = queries.attach_objective_mover(bot);
+                    }
+                    if enemy.objective_mover_attached {
+                        bot.apply_swept_displacement(tick, displacement);
+                    }
+                }
                 enemy.binding.frame = tick;
                 enemy.binding.now_secs = now.as_secs_f64();
                 enemy.binding.retired_entities = Arc::clone(&self.retired_entity_ids);

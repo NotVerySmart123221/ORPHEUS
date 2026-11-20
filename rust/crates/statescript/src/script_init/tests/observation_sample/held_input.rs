@@ -6,6 +6,7 @@ const LOCK: u16 = 9;
 const LISTENER: u16 = 10;
 const HELD: u16 = 11;
 const TERMINATOR: u16 = 12;
+const REPLACEMENT_LOCK: u16 = 13;
 const IDLE_STATE: u16 = 2;
 const LISTENER_STATE: u16 = 6;
 const HELD_STATE: u16 = 7;
@@ -22,21 +23,22 @@ pub(super) struct HeldBranch {
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum Retirement {
-    None,
-    BeforeBranch,
-    BeforeChild,
-    Listener,
+enum Scenario {
+    CurrentSample,
+    SourceEndsBeforeBranch,
+    SourceEndsBeforeChild,
+    ListenerEnds,
+    ReplaceLockInSameUpdate,
 }
 
 #[derive(Deserialize)]
 struct Case {
-    retirement: Retirement,
+    scenario: Scenario,
     idle_direction: Option<usize>,
     held_after_unlock: bool,
 }
 
-fn branch_graph(input: &Input, retirement: Retirement) -> Json {
+fn branch_graph(input: &Input, scenario: Scenario) -> Json {
     let mut model = deferred_facing_graph(input, "on_sample", false);
     let fields = &input.held_branch;
     let authored_state = |position, name, slot, behavior, fields| {
@@ -45,26 +47,42 @@ fn branch_graph(input: &Input, retirement: Retirement) -> Json {
         state["server_only"] = json!(true);
         state
     };
-    model["items"] = json!(13);
-    model["states"] = json!([1, 2, IDLE, 4, 7, LOCK, LISTENER, HELD, TERMINATOR]);
+    model["items"] = json!(14);
+    model["states"] = json!([
+        1,
+        2,
+        IDLE,
+        4,
+        7,
+        LOCK,
+        LISTENER,
+        HELD,
+        TERMINATOR,
+        REPLACEMENT_LOCK
+    ]);
     let nodes = model["nodes"].as_array_mut().unwrap();
     let mut sample_route = vec![(LOCK, "m_beginPlug")];
-    match retirement {
-        Retirement::None => (),
-        Retirement::BeforeBranch => sample_route.push((SOURCE, ABORT_PLUG)),
-        Retirement::BeforeChild => sample_route.push((TERMINATOR, "m_beginPlug")),
-        Retirement::Listener => sample_route.push((LISTENER, ABORT_PLUG)),
+    match scenario {
+        Scenario::CurrentSample => (),
+        Scenario::SourceEndsBeforeBranch => sample_route.push((SOURCE, ABORT_PLUG)),
+        Scenario::SourceEndsBeforeChild => sample_route.push((TERMINATOR, "m_beginPlug")),
+        Scenario::ListenerEnds => sample_route.push((LISTENER, ABORT_PLUG)),
+        Scenario::ReplaceLockInSameUpdate => {
+            sample_route.push((LOCK, ABORT_PLUG));
+            nodes[2]["fields"]["on_sample"] = plug(&[(REPLACEMENT_LOCK, "m_beginPlug")], &[]);
+        }
     }
     nodes[usize::from(SOURCE)]["fields"]["on_sample"] = plug(&sample_route, &[]);
     nodes[0]["fields"]["m_outPlug"] = plug(&[(LISTENER, "m_beginPlug")], &[]);
     nodes[5]["fields"]["m_outPlug"] = plug(&[(SOURCE, "m_beginPlug"), (2, "m_beginPlug")], &[]);
+    let lock_fields = json!({"button": fields.button, "duration_frames": fields.lock_frames});
     nodes.extend([
         authored_state(
             LOCK,
             "AuthoredSampleButtonLock",
             5,
             "button_lock",
-            json!({"button": fields.button, "duration_frames": fields.lock_frames}),
+            lock_fields.clone(),
         ),
         authored_state(
             LISTENER,
@@ -87,12 +105,19 @@ fn branch_graph(input: &Input, retirement: Retirement) -> Json {
             "plain",
             json!({"m_onBeginPlug": plug(&[(SOURCE, ABORT_PLUG)], &[])}),
         ),
+        authored_state(
+            REPLACEMENT_LOCK,
+            "AuthoredReplacementSampleButtonLock",
+            9,
+            "button_lock",
+            lock_fields,
+        ),
     ]);
     model
 }
 
 #[test]
-fn committed_held_input_branches_keep_live_samples_and_finish_after_sample_retirement() {
+fn committed_held_input_branches_follow_the_latest_transition_and_its_sample() {
     let input = fixture().input;
     let fields = &input.held_branch;
     let rays = &input.deferred_facing;
@@ -105,7 +130,7 @@ fn committed_held_input_branches_keep_live_samples_and_finish_after_sample_retir
     for case in &fields.cases {
         let (mut component, mut host) = start_deferred_model(
             &input,
-            branch_graph(&input, case.retirement),
+            branch_graph(&input, case.scenario),
             Variables::from([(
                 OUTPUT,
                 deferred_ray_value(rays.ordinary_direction, rays.distance),
@@ -150,8 +175,8 @@ fn committed_held_input_branches_keep_live_samples_and_finish_after_sample_retir
             idle_facing.map(|(_, claim)| claim.direction),
             case.idle_direction
                 .map(|direction| rays.directions[direction]),
-            "source retirement: {:?}",
-            case.retirement
+            "scenario: {:?}",
+            case.scenario
         );
         assert_eq!(
             component.snapshot().unwrap().variables[&OUTPUT],
@@ -177,7 +202,7 @@ fn starting_a_listener_keeps_its_idle_branch_after_the_sample_ends() {
     let input = fixture().input;
     let fields = &input.held_branch;
     let rays = &input.deferred_facing;
-    let mut model = branch_graph(&input, Retirement::None);
+    let mut model = branch_graph(&input, Scenario::CurrentSample);
     model["nodes"][0]["fields"]["m_outPlug"] = plug(&[], &[]);
     model["nodes"][usize::from(SOURCE)]["fields"]["on_sample"] =
         plug(&[(LISTENER, "m_beginPlug"), (SOURCE, ABORT_PLUG)], &[]);

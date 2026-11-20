@@ -26,6 +26,7 @@ use std::sync::{
 mod npc_chunk_delivery;
 pub(crate) mod owner_effects;
 mod owner_model;
+mod owner_swept_motion;
 pub(crate) mod practice_observation;
 
 fn pick_hero(entity: u32, hero: u64) -> Message {

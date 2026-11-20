@@ -26,7 +26,7 @@ use super::super::{
         source_key, static_target_operand, stored,
     },
     types::{InitFault, Issue, SpawnSearch, SpawnSearchKey, State, StateKind},
-    world::{CreationKind, EntityCreation, Site, World},
+    world::{CreationKind, EntityCreation, Site, SweptDisplacement, World},
 };
 use super::Vm;
 
@@ -106,6 +106,41 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 }
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
+            }
+            _ if node.declares_swept_displacement_action() => {
+                let site = self.site(id, node);
+                if !script_expr::valid_entity(site.entity) {
+                    self.report(site, Issue::UnsupportedField("swept displacement source"));
+                    return Ok(false);
+                }
+                let Some(delta) = self.evaluate(id, node, field(&node.fields, "delta"), caller) else {
+                    return Ok(false);
+                };
+                let displacement = match delta {
+                    Value::Vector(delta) => SweptDisplacement::new(delta),
+                    _ => None,
+                };
+                let Some(displacement) = displacement else {
+                    self.report(site, Issue::Expression(EvalError::MalformedConfig(
+                        "expected a finite nonzero swept displacement of at most 32 world units",
+                    )));
+                    return Ok(false);
+                };
+                let Some(frame) = self.machine.frame.checked_add(1) else {
+                    self.report(site, Issue::UnsupportedField("swept displacement frame"));
+                    return Ok(false);
+                };
+                match self.world.queue_swept_displacement(site, frame, displacement) {
+                    Some(true) => {
+                        self.follow(id, node, "m_outPlug", caller, depth)?;
+                        Ok(true)
+                    }
+                    Some(false) => Ok(false),
+                    None => {
+                        self.report(site, Issue::UnsupportedField("swept displacement service"));
+                        Ok(false)
+                    }
+                }
             }
             _ if node.declares_health_change_action() => {
                 let site = self.site(id, node);
