@@ -49,6 +49,7 @@ fn practice_only_omits_owner_runtime_when_all_owner_content_is_absent() {
         frame: FIRST_TICK,
         pose: Default::default(),
         eye_position: None,
+        skin: 0,
         quanta: RETAIL_QUANTA,
     };
     for case in contract.cases {
@@ -206,6 +207,7 @@ fn practice_owner_selector_starts_the_validated_actor_definition() {
         frame: FIRST_TICK,
         pose: Default::default(),
         eye_position: None,
+        skin: 0,
         quanta: RETAIL_QUANTA,
     };
 
@@ -364,6 +366,7 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
         frame: FIRST_TICK,
         pose: mover.pose(),
         eye_position: script_eye_position(hero.guid, &mover),
+        skin: 0,
         quanta: RETAIL_QUANTA,
     };
     if assets.graphs.bodies()[&hero.body].target_tags.is_some() {
@@ -677,6 +680,7 @@ fn stock_soldier_casts_biotic_field() {
         frame: FIRST_TICK,
         pose: mover.pose(),
         eye_position: script_eye_position(hero.guid, &mover),
+        skin: 0,
         quanta: RETAIL_QUANTA,
     };
     let mut owner = scene.owner_body_runtime(hero, spawn).unwrap().unwrap();
@@ -729,6 +733,7 @@ fn stock_soldier_quick_melee_runs_and_projects_on_owner_and_observer_streams() {
         frame: FIRST_TICK,
         pose: mover.pose(),
         eye_position: script_eye_position(hero.guid, &mover),
+        skin: 0,
         quanta: RETAIL_QUANTA,
     };
     let mut owner = scene.owner_body_runtime(hero, spawn).unwrap().unwrap();

@@ -24,6 +24,7 @@ use std::sync::{
 };
 
 pub(crate) mod owner_effects;
+mod owner_model;
 pub(crate) mod practice_observation;
 
 fn pick_hero(entity: u32, hero: u64) -> Message {

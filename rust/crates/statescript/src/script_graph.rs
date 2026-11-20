@@ -6,6 +6,7 @@ use std::{
     io::{self, BufReader, Read},
     num::NonZeroU32,
     path::Path,
+    sync::Arc,
 };
 
 use flate2::bufread::MultiGzDecoder;
@@ -1197,6 +1198,15 @@ pub struct Body {
     /// An omitted list means the source definition was unavailable.
     #[serde(default, deserialize_with = "body_target_tags")]
     pub target_tags: Option<BTreeSet<u64>>,
+    #[serde(default, deserialize_with = "body_model_hardpoints")]
+    model_hardpoints: ModelHardpointsBySkin,
+}
+
+impl Body {
+    /// Complete authored launch-model inventory for the exact skin. Skin zero is stock.
+    pub fn model_hardpoints(&self, skin: u64) -> Option<Arc<BTreeSet<u64>>> {
+        self.model_hardpoints.get(&skin).cloned()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2067,6 +2077,40 @@ fn body_target_tags<'de, D: serde::Deserializer<'de>>(
         .transpose()
 }
 
+type ModelHardpointsBySkin = BTreeMap<u64, Arc<BTreeSet<u64>>>;
+
+fn body_model_hardpoints<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> Result<ModelHardpointsBySkin, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ModelHardpoints {
+        skin: Value,
+        hardpoints: Vec<Value>,
+    }
+
+    let mut by_skin = BTreeMap::new();
+    for entry in Vec::<ModelHardpoints>::deserialize(decoder)? {
+        let skin = asset_guid(&entry.skin)
+            .ok_or_else(|| serde::de::Error::custom("model skin must be a canonical GUID"))?;
+        let hardpoints = entry
+            .hardpoints
+            .iter()
+            .map(|value| {
+                asset_guid(value)
+                    .filter(|guid| guid >> 48 == 0x0dc0 && (guid & 0x0000_ffff_ffff_ffff) != 0)
+                    .ok_or_else(|| {
+                        serde::de::Error::custom("model hardpoint must be a nonzero .0DC GUID")
+                    })
+            })
+            .collect::<Result<BTreeSet<_>, D::Error>>()?;
+        if by_skin.insert(skin, Arc::new(hardpoints)).is_some() {
+            return Err(serde::de::Error::custom("duplicate model skin"));
+        }
+    }
+    Ok(by_skin)
+}
+
 pub fn field_at<'a>(fields: &'a Value, path: &str) -> Option<&'a Value> {
     let mut value = fields;
     for part in path.split('.') {
@@ -2650,6 +2694,47 @@ mod tests {
         );
         data["bodies"][body]["target_tags"] = json!(["0x0400000000000109"]);
         assert_eq!(load(&data).unwrap_err().kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn body_model_hardpoints_keep_exact_skin_membership_and_validate_catalog() {
+        const BODY: u64 = 0x0400_0000_0000_0001;
+        const SKIN: u64 = 0x0a60_0000_0000_002a;
+        const HARDPOINT: u64 = 0x0dc0_0000_0000_0042;
+        let mut data = fixture();
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let body = format!("0x{BODY:016X}");
+        assert!(
+            load(&data).unwrap().bodies()[&BODY]
+                .model_hardpoints(0)
+                .is_none()
+        );
+
+        data["bodies"][&body]["model_hardpoints"] = json!([
+            {"skin": "0x0000000000000000", "hardpoints": []},
+            {"skin": "0x0A6000000000002A", "hardpoints": ["0x0DC0000000000042"]},
+        ]);
+        let parsed = load(&data).unwrap();
+        let definition = &parsed.bodies()[&BODY];
+        assert!(definition.model_hardpoints(0).unwrap().is_empty());
+        assert_eq!(
+            *definition.model_hardpoints(SKIN).unwrap(),
+            BTreeSet::from([HARDPOINT])
+        );
+        assert!(definition.model_hardpoints(SKIN + 1).is_none());
+
+        for invalid in [
+            json!([
+                {"skin": "0x0000000000000000", "hardpoints": []},
+                {"skin": "0x0000000000000000", "hardpoints": ["0x0DC0000000000042"]},
+            ]),
+            json!([{"skin": "0x0A6000000000002A", "hardpoints": ["0x0400000000000042"]}]),
+            json!([{"skin": "0x0A6000000000002A", "hardpoints": ["0x0DC0000000000000"]}]),
+            json!([{"skin": "0xINVALID", "hardpoints": []}]),
+        ] {
+            data["bodies"][&body]["model_hardpoints"] = invalid;
+            assert_eq!(load(&data).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        }
     }
 
     #[test]

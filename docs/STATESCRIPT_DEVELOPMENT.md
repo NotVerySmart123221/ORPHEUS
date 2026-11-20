@@ -81,6 +81,20 @@ workspace.
 python scripts/build_runtime_state_metadata.py --graph-bundle path/to/game_graphs_174.json.gz --evidence path/to/classification.zip --output path/to/new/game_graphs_174.json.gz
 ```
 
+## Supply model hardpoint membership
+
+An external graph bundle can include `model_hardpoints` in a body entry.
+Use one record per selected skin with `skin` and `hardpoints` fields.
+The zero skin GUID denotes the stock selection. Each list contains the
+complete hardpoint keys for that selected model. An empty list declares
+that the model has no hardpoints. An omitted record keeps the query
+unavailable for that skin, even if the stock model has a record. Use
+this data only when the model seen by the spawning body is known.
+The server reads membership for the current owner body and rebuilds the
+binding when the body is replaced. A synthetic example lives in the
+[owner model contract](../fixtures/behavior/owner-model-hardpoints-v1.json).
+Supply the enriched bundle through `prepare_server_runtime --game-graphs`.
+
 ## Build the private evidence reports
 
 Use the graph index, RID, state slot, and raw class as the verified
