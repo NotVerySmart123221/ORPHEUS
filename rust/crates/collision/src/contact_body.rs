@@ -6,6 +6,7 @@
 use std::{collections::HashSet, fmt, sync::Arc};
 
 use crate::{
+    collision_grid::ColumnRange,
     contact_cache::{CapsulePose, LOOSE, ProxyContact, cast_round, encloses},
     contact_gjk::{
         PointSetSize, SimplexCache, gjk,
@@ -14,7 +15,7 @@ use crate::{
     contact_hull::HullContactError,
     contact_math::{TINY, Vec3, add, dot, maxps, minps, scale, sub},
     contact_mesh::ContactBounds,
-    contact_round::{ContactPoint, RoundShape, capsule_capsule, splat_tiny},
+    contact_round::{Capsule, ContactPoint, RoundShape, capsule_capsule, splat_tiny},
     contact_solver::{Constraint, ContactPlane, project_target},
     contact_triangle::{SKIN, TOUCH, closest_parameters},
     contact_world::{ContactWorld, PROXY_MARGIN, StaticGeometry, StaticShape, WorldHit, overlaps},
@@ -101,6 +102,50 @@ impl CharacterBody {
             },
             self.category,
         )
+    }
+
+    /// Relocate to a clear capsule origin without sweeping the intervening path.
+    /// Tangency is admissible; invalid or overlapping destinations do not mutate
+    /// the body or its warm contact state. Actor admission belongs to the caller.
+    pub fn relocate_if_clear(
+        &mut self,
+        position: Vec3,
+        actors: &[CapsulePose],
+    ) -> Result<bool, HullContactError> {
+        if position == self.pose.position {
+            return Ok(false);
+        }
+        let candidate = CapsulePose {
+            position,
+            ..self.pose
+        };
+        if !valid_placement(candidate) || actors.iter().any(|&actor| !valid_placement(actor)) {
+            return Ok(false);
+        }
+        let capsule = candidate.world_capsule();
+        let bounds = candidate.bounds();
+        for id in self.world.query(bounds) {
+            let shape = &self.world.shapes()[id as usize];
+            if shape.geometry().mask() & self.category != 0
+                && penetrates_shape(shape, capsule, self.category)?
+            {
+                return Ok(false);
+            }
+        }
+        let low = bounds.low.map(f64::from);
+        let high = bounds.high.map(f64::from);
+        for actor in actors {
+            if overlaps(low, high, actor.bounds())
+                && capsule_capsule(capsule, actor.world_capsule())
+                    .points()
+                    .iter()
+                    .any(|point| point.separation < 0.0)
+            {
+                return Ok(false);
+            }
+        }
+        *self = self.fresh_at(position);
+        Ok(true)
     }
 
     /// Query the same upright capsule and mask without changing its contact state.
@@ -405,6 +450,56 @@ fn segment_bounds(a: Vec3, b: Vec3, reach: f32) -> ContactBounds {
     }
 }
 
+fn valid_placement(pose: CapsulePose) -> bool {
+    if !pose
+        .position
+        .into_iter()
+        .chain([pose.radius, pose.top])
+        .all(f32::is_finite)
+        || pose.radius <= 0.0
+        || pose.top < pose.radius
+    {
+        return false;
+    }
+    let ContactBounds { low, high } = pose.bounds();
+    low.into_iter().chain(high).all(f32::is_finite)
+        && ColumnRange::new(
+            [f64::from(low[0]), f64::from(low[2])],
+            [f64::from(high[0]), f64::from(high[2])],
+        )
+        .is_some()
+}
+
+fn penetrates_shape(
+    shape: &StaticShape,
+    capsule: Capsule,
+    category: u16,
+) -> Result<bool, HullContactError> {
+    if let StaticGeometry::Round {
+        shape: RoundShape::Capsule(other),
+        ..
+    } = shape.geometry()
+    {
+        let [a, b] = shape.frame().map_or([capsule.a, capsule.b], |frame| {
+            [capsule.a, capsule.b].map(|point| frame.local(point))
+        });
+        // The shared manifold also handles collapsed axes and exposes signed
+        // separation, so exact tangency does not become a rejected placement.
+        return Ok(capsule_capsule(
+            Capsule {
+                a,
+                b,
+                radius: capsule.radius,
+            },
+            *other,
+        )
+        .points()
+        .iter()
+        .any(|point| point.separation < 0.0));
+    }
+    overlaps_segment(shape, [capsule.a, capsule.b], capsule.radius, category)
+}
+
 fn overlaps_segment(
     shape: &StaticShape,
     segment: [Vec3; 2],
@@ -530,6 +625,161 @@ mod tests {
             radius: 0.5,
             top: 1.5,
         }
+    }
+
+    fn relocation_fixture() -> serde_json::Value {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../fixtures/behavior/native-capsule-relocation-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(fixture["schema_version"], 1);
+        assert_eq!(fixture["case_id"], "native-capsule-relocation.synthetic.v1");
+        assert_eq!(fixture["evidence"], "synthetic-native");
+        fixture
+    }
+
+    #[test]
+    fn relocation_checks_destination_and_preserves_rejected_warm_contacts() {
+        let fixture = relocation_fixture();
+        let input = &fixture["input"];
+        let start = serde_json::from_value(input["start"].clone()).unwrap();
+        let destination: Vec3 = serde_json::from_value(input["clear_destination"].clone()).unwrap();
+        let mut body = CharacterBody::new(room(), standing(start), 0x18);
+        let swept = body
+            .move_capsule(sub(destination, start), 0.016)
+            .unwrap()
+            .position;
+        assert!(f64::from(swept[2]) < fixture["expected"]["maximum_swept_z"].as_f64().unwrap());
+        assert!(!body.contacts.is_empty());
+        let pose = body.pose;
+        let fat = body.fat;
+        let proxy_moved = body.proxy_moved;
+        let pairs = body.pairs.clone();
+        let contact_ids: Vec<_> = body.contacts.iter().map(|(id, _)| *id).collect();
+        let counts = (body.constraints.len(), body.planes.len(), body.budget);
+        assert!(
+            !body
+                .relocate_if_clear(
+                    serde_json::from_value(input["ceiling_destination"].clone()).unwrap(),
+                    &[],
+                )
+                .unwrap()
+        );
+        assert_eq!(body.pose, pose);
+        assert_eq!(body.fat, fat);
+        assert_eq!(body.proxy_moved, proxy_moved);
+        assert_eq!(body.pairs, pairs);
+        assert_eq!(
+            body.contacts.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            contact_ids
+        );
+        assert_eq!(
+            (body.constraints.len(), body.planes.len(), body.budget),
+            counts
+        );
+        assert!(body.relocate_if_clear(destination, &[]).unwrap());
+        assert_eq!(body.position(), destination);
+        assert!(body.contacts.is_empty());
+        assert!(body.pairs.is_empty());
+        assert!(body.constraints.is_empty());
+        assert!(body.planes.is_empty());
+        assert!(body.proxy_moved);
+        assert_eq!(body.budget, MAX_ROUNDS);
+        assert!(!body.relocate_if_clear(destination, &[]).unwrap());
+        for invalid in [
+            [f32::NAN, 0.0, 0.0],
+            [0.0, f32::INFINITY, 0.0],
+            [1e20, 0.0, 0.0],
+        ] {
+            assert!(!body.relocate_if_clear(invalid, &[]).unwrap());
+            assert_eq!(body.position(), destination);
+        }
+    }
+
+    #[test]
+    fn relocation_allows_actor_tangency_but_rejects_penetration() {
+        let fixture = relocation_fixture();
+        let input = &fixture["input"];
+        let actor = standing(serde_json::from_value(input["actor_origin"].clone()).unwrap());
+        let mut body = CharacterBody::new(
+            Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+            standing([0.0; 3]),
+            0x18,
+        );
+        let tangent = serde_json::from_value(input["actor_tangent_destination"].clone()).unwrap();
+        assert!(body.relocate_if_clear(tangent, &[actor]).unwrap());
+        assert!(
+            !body
+                .relocate_if_clear(
+                    serde_json::from_value(input["actor_overlap_destination"].clone()).unwrap(),
+                    &[actor],
+                )
+                .unwrap()
+        );
+        assert_eq!(body.position(), tangent);
+        assert!(!body.relocate_if_clear(actor.position, &[actor]).unwrap());
+        let separate_floor =
+            serde_json::from_value(input["separate_floor_destination"].clone()).unwrap();
+        assert!(body.relocate_if_clear(separate_floor, &[actor]).unwrap());
+        let invalid_actor = CapsulePose {
+            radius: f32::NAN,
+            ..actor
+        };
+        assert!(!body.relocate_if_clear(tangent, &[invalid_actor]).unwrap());
+        assert_eq!(body.position(), separate_floor);
+    }
+
+    #[test]
+    fn relocation_uses_round_narrow_phase_for_placed_collapsed_capsules() {
+        use crate::contact_math::ContactFrame;
+
+        let fixture = relocation_fixture();
+        let input = &fixture["input"];
+        let radius = input["collapsed_radius"].as_f64().unwrap() as f32;
+        let offset = input["static_offset_x"].as_f64().unwrap() as f32;
+        let shape = StaticShape::new(
+            StaticGeometry::Round {
+                shape: RoundShape::Capsule(Capsule {
+                    a: [0.0, radius, 0.0],
+                    b: [0.0, radius, 0.0],
+                    radius,
+                }),
+                mask: 0x18,
+            },
+            Some(ContactFrame {
+                translation: [offset, 0.0, 0.0],
+                ..ContactFrame::IDENTITY
+            }),
+        )
+        .unwrap();
+        let mut body = CharacterBody::new(
+            Arc::new(ContactWorld::new(vec![shape]).unwrap()),
+            CapsulePose {
+                position: [offset + 2.0, 0.0, 0.0],
+                radius,
+                top: radius,
+            },
+            0x18,
+        );
+        for name in ["collapsed_clear_gap", "collapsed_tangent_gap"] {
+            let position = [offset + input[name].as_f64().unwrap() as f32, 0.0, 0.0];
+            assert!(body.relocate_if_clear(position, &[]).unwrap());
+            assert_eq!(body.position(), position);
+        }
+        let tangent = body.position();
+        assert!(
+            !body
+                .relocate_if_clear(
+                    [
+                        offset + input["collapsed_overlap_gap"].as_f64().unwrap() as f32,
+                        0.0,
+                        0.0
+                    ],
+                    &[],
+                )
+                .unwrap()
+        );
+        assert_eq!(body.position(), tangent);
     }
 
     #[test]

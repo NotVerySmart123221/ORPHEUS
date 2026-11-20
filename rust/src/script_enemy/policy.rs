@@ -67,23 +67,23 @@ impl EnemyScripts {
 
     pub(crate) fn clear_pending_script_motion(&mut self) {
         self.control_records.velocity_changes.clear();
-        self.control_records.swept_displacement = None;
+        self.control_records.scripted_motion = None;
     }
 
-    pub(crate) fn take_swept_displacement(
+    pub(crate) fn take_scripted_motion(
         &mut self,
         tick: u32,
-    ) -> Option<script_init::SweptDisplacement> {
+    ) -> Option<script_init::ScriptedMotion> {
         if self
             .control_records
-            .swept_displacement
+            .scripted_motion
             .is_some_and(|(frame, _)| frame <= tick)
         {
             return self
                 .control_records
-                .swept_displacement
+                .scripted_motion
                 .take()
-                .map(|(_, displacement)| displacement);
+                .map(|(_, motion)| motion);
         }
         None
     }

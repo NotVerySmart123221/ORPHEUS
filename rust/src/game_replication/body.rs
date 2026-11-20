@@ -8,12 +8,12 @@ pub(super) struct StepBuffers<'a> {
     pub(super) hitscan: &'a mut Vec<PosedHitscan>,
 }
 
-pub(super) fn stage_swept_displacement(runtime: &mut dyn OwnerBodyRuntime, mover: &mut Mover) {
-    if mover.has_swept_displacement() {
+pub(super) fn stage_scripted_motion(runtime: &mut dyn OwnerBodyRuntime, mover: &mut Mover) {
+    if mover.has_pending_script_motion() {
         return;
     }
-    if let Some((frame, displacement)) = runtime.take_swept_displacement() {
-        mover.queue_swept_displacement(frame, displacement);
+    if let Some((frame, motion)) = runtime.take_scripted_motion() {
+        mover.queue_scripted_motion(frame, motion);
     }
 }
 
@@ -94,14 +94,14 @@ impl BodyScript {
         })
     }
 
-    pub(super) fn record_swept_movement(
+    pub(super) fn record_scripted_movement(
         &mut self,
         mover: &Mover,
         frame: u32,
         frame_us: u32,
         previously_processed: Option<u32>,
     ) {
-        if frame_us == 0 || !mover.swept_displacement_at(frame) {
+        if frame_us == 0 || !mover.scripted_motion_at(frame) {
             return;
         }
         let history = self.corrections.get_or_insert_with(|| {
@@ -112,7 +112,7 @@ impl BodyScript {
         history.record(mover.pose());
     }
 
-    pub(super) fn swept_history(&mut self) -> Option<&mut CorrectionHistory> {
+    pub(super) fn scripted_motion_history(&mut self) -> Option<&mut CorrectionHistory> {
         self.corrections
             .as_mut()
             .filter(|history| history.impulse_correction().is_some())
@@ -201,7 +201,7 @@ impl BodyScript {
             }
         }
         if step == BodyStep::Posed {
-            stage_swept_displacement(runtime, mover);
+            stage_scripted_motion(runtime, mover);
         }
         Ok(())
     }

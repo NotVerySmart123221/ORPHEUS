@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "case_id": "native-capsule-relocation.synthetic.v1",
+  "evidence": "synthetic-native",
+  "source": {
+    "basis": "Original destination occupancy, tangency, and invalid-coordinate cases over synthetic static and actor capsules. No client assets or ability parameters."
+  },
+  "input": {
+    "start": [0, 0, 0],
+    "clear_destination": [0, 0, 4],
+    "ceiling_destination": [4, 0, 0],
+    "actor_origin": [2, 0, 0],
+    "actor_tangent_destination": [1, 0, 0],
+    "actor_overlap_destination": [1.0001, 0, 0],
+    "separate_floor_destination": [1, 2.5, 0],
+    "collapsed_radius": 0.25,
+    "static_offset_x": 3,
+    "collapsed_clear_gap": 0.6,
+    "collapsed_tangent_gap": 0.5,
+    "collapsed_overlap_gap": 0.499
+  },
+  "expected": {
+    "maximum_swept_z": 2,
+    "tangency_is_clear": true,
+    "rejection_preserves_contact_state": true,
+    "success_resets_contact_state": true
+  }
+}

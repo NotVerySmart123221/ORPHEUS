@@ -26,7 +26,7 @@ use crate::mover_ground::{pogo, standing_body, standing_capsule, standing_origin
 use crate::mover_settings::MoverSettings;
 use crate::navigation::{PathOptions, PathQuery, find_path};
 use crate::patrol_script::{PatrolScript, WaitEvent};
-use crate::script_init::SweptDisplacement;
+use crate::script_init::ScriptedMotion;
 use crate::world::{Movement, NO_INPUT};
 
 pub const BOT_ENTITY: u32 = 0xc000_1000;
@@ -1094,12 +1094,8 @@ impl Bot {
         )
     }
 
-    /// Attempt one bounded capsule move without changing steering or velocity.
-    pub(crate) fn apply_swept_displacement(
-        &mut self,
-        tick: u32,
-        displacement: SweptDisplacement,
-    ) -> bool {
+    /// Attempt one scheduled capsule move without changing steering or velocity.
+    pub(crate) fn apply_scripted_motion(&mut self, tick: u32, motion: ScriptedMotion) -> bool {
         if self.dead {
             return false;
         }
@@ -1108,23 +1104,43 @@ impl Bot {
             return false;
         };
         let from = self.position;
-        let delta = displacement.delta();
-        let to = std::array::from_fn(|axis| from[axis] + f64::from(delta[axis]));
-        if !from
-            .into_iter()
-            .chain(to)
-            .all(|axis| (axis as f32).is_finite())
-        {
-            return false;
-        }
-        let Ok(after) = collision.try_advance(
-            tick,
-            from,
-            to,
-            TICK_PERIOD.as_secs_f64(),
-            blockers.as_deref().unwrap_or(&[]),
-        ) else {
-            return false;
+        let blockers = blockers.as_deref().unwrap_or(&[]);
+        let after = match motion {
+            ScriptedMotion::Sweep(displacement) => {
+                let delta = displacement.delta();
+                let to = std::array::from_fn(|axis| from[axis] + f64::from(delta[axis]));
+                if !from
+                    .into_iter()
+                    .chain(to)
+                    .all(|axis| (axis as f32).is_finite())
+                {
+                    return false;
+                }
+                let Ok(after) =
+                    collision.try_advance(tick, from, to, TICK_PERIOD.as_secs_f64(), blockers)
+                else {
+                    return false;
+                };
+                after
+            }
+            ScriptedMotion::Relocate(relocation) => {
+                let Some(to) = relocation.destination_from(from) else {
+                    return false;
+                };
+                if !collision
+                    .body
+                    .relocate_if_clear(standing_origin(to, collision.lift), blockers)
+                    .unwrap_or(false)
+                {
+                    return false;
+                }
+                if let Some(trace) = &mut collision.trace {
+                    trace.last_clip = None;
+                    #[cfg(any(test, feature = "inspector"))]
+                    trace.last_normals.clear();
+                }
+                to
+            }
         };
         self.position = after;
         if after != from {
@@ -1288,6 +1304,7 @@ mod tests {
             collision_cache::{Mesh, Triangle},
             contact_mesh::ContactMesh,
             contact_world::{StaticGeometry, StaticShape},
+            script_init::{Relocation, SweptDisplacement},
         };
 
         let fixture: serde_json::Value = serde_json::from_str(include_str!(
@@ -1308,7 +1325,7 @@ mod tests {
             SweptDisplacement::new(serde_json::from_value(input["displacement"].clone()).unwrap())
                 .unwrap();
         let mut free = walker([0.0, 0.0, 10.0]);
-        assert!(!free.apply_swept_displacement(1, displacement));
+        assert!(!free.apply_scripted_motion(1, ScriptedMotion::Sweep(displacement)));
         assert_eq!(free.position, [0.0; 3]);
         free.attach_collision(
             &settings,
@@ -1322,7 +1339,7 @@ mod tests {
         free.held = [21, -32];
         let before = free.movement(1);
         let input_tick = free.input_tick;
-        assert!(free.apply_swept_displacement(2, displacement));
+        assert!(free.apply_scripted_motion(2, ScriptedMotion::Sweep(displacement)));
         assert_eq!(free.position, displacement.delta().map(f64::from));
         let after = free.movement(2);
         assert_eq!(after.velocity, before.velocity);
@@ -1334,7 +1351,7 @@ mod tests {
         assert_eq!(free.moved_tick, Some(2));
         free.dead = true;
         let stopped = free.position;
-        assert!(!free.apply_swept_displacement(3, displacement));
+        assert!(!free.apply_scripted_motion(3, ScriptedMotion::Sweep(displacement)));
         assert_eq!(free.position, stopped);
 
         let wall = Mesh {
@@ -1368,7 +1385,8 @@ mod tests {
             serde_json::from_value(input["wall_displacement"].clone()).unwrap(),
         )
         .unwrap();
-        assert!(blocked.apply_swept_displacement(10, displacement));
+        let sweep = ScriptedMotion::Sweep(displacement);
+        assert!(blocked.apply_scripted_motion(10, sweep));
         assert!(blocked.position[2] > fixture["expected"]["wall_min_z"].as_f64().unwrap());
         assert!(blocked.position[2] < fixture["expected"]["wall_max_z"].as_f64().unwrap());
         assert_eq!(blocked.velocity, before.velocity);
@@ -1381,12 +1399,20 @@ mod tests {
         assert_eq!(clip.tick, 10);
         assert_eq!(clip.after, blocked.position);
         let stopped = blocked.position;
-        assert!(blocked.apply_swept_displacement(11, displacement));
+        assert!(blocked.apply_scripted_motion(11, sweep));
         let tolerance = fixture["expected"]["repeated_block_tolerance"]
             .as_f64()
             .unwrap();
         assert!((blocked.position[2] - stopped[2]).abs() <= tolerance);
         assert_eq!(blocked.velocity, before.velocity);
+
+        let behind_wall = displacement.delta().map(f64::from);
+        let relocation = ScriptedMotion::Relocate(Relocation::new(behind_wall).unwrap());
+        assert!(blocked.apply_scripted_motion(12, relocation));
+        assert_eq!(blocked.position, behind_wall);
+        assert!(blocked.last_contact_clip().is_none());
+        assert_eq!(blocked.velocity, before.velocity);
+        assert_eq!(blocked.moved_tick, Some(12));
 
         let mut actor_blocked = walker([0.0, 0.0, 10.0]);
         let fallback = actor_blocked.contact_capsule(&settings);
@@ -1399,12 +1425,10 @@ mod tests {
         assert_eq!(actor_blocked.contact_capsule(&settings), fallback);
         actor_blocked.enable_contact_trace();
         actor_blocked.velocity = before.velocity;
-        let actor = standing_capsule(
-            &settings,
-            serde_json::from_value(input["actor_feet"].clone()).unwrap(),
-        );
+        let actor_feet = serde_json::from_value(input["actor_feet"].clone()).unwrap();
+        let actor = standing_capsule(&settings, actor_feet);
         actor_blocked.set_movement_blockers(20, vec![actor]);
-        assert!(actor_blocked.apply_swept_displacement(20, displacement));
+        assert!(actor_blocked.apply_scripted_motion(20, sweep));
         assert!(actor_blocked.position[2] > fixture["expected"]["wall_min_z"].as_f64().unwrap());
         assert!(actor_blocked.position[2] < fixture["expected"]["wall_max_z"].as_f64().unwrap());
         assert_eq!(actor_blocked.velocity, before.velocity);
@@ -1414,6 +1438,10 @@ mod tests {
             actor_blocked.contact_capsule(&settings),
             standing_capsule(&settings, actor_blocked.position)
         );
+        let before_relocation = actor_blocked.position;
+        let occupied = ScriptedMotion::Relocate(Relocation::new(actor_feet).unwrap());
+        assert!(!actor_blocked.apply_scripted_motion(20, occupied));
+        assert_eq!(actor_blocked.position, before_relocation);
     }
 
     #[test]

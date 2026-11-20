@@ -26,8 +26,7 @@ use crate::{
     script_control::LEGACY_PROJECTILE_CONTROL,
     script_expr::to_float,
     script_init::{
-        Component, HostEvent, HostHealthContext, InitFault, RoomMessage, Snapshot,
-        SweptDisplacement,
+        Component, HostEvent, HostHealthContext, InitFault, RoomMessage, ScriptedMotion, Snapshot,
     },
     script_runtime::FRAME_MS,
     script_snapshot_wire::SnapshotEncoder,
@@ -186,7 +185,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
     fn receive_damage(&mut self, amount: f64, source: Death) -> Damage {
         let result = self.world.vitals.damage(amount, source);
         if result.killed {
-            self.world.swept_displacement = None;
+            self.world.scripted_motion = None;
             self.world.velocity_changes.clear();
             self.component.set_owner_dead(true);
             if let Err(error) = self.sync_charge_admission(false) {
@@ -259,9 +258,9 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         std::mem::take(&mut self.world.velocity_changes)
     }
 
-    fn take_swept_displacement(&mut self) -> Option<(u32, SweptDisplacement)> {
+    fn take_scripted_motion(&mut self) -> Option<(u32, ScriptedMotion)> {
         self.world
-            .swept_displacement
+            .scripted_motion
             .take()
             .filter(|_| self.world.vitals.death().is_none())
     }

@@ -56,6 +56,36 @@ impl SweptDisplacement {
     }
 }
 
+/// A finite destination whose distance is checked against the consuming body's pose.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Relocation {
+    destination: [f64; 3],
+}
+
+impl Relocation {
+    pub fn new(destination: [f64; 3]) -> Option<Self> {
+        destination
+            .into_iter()
+            .all(|axis| axis.is_finite() && (axis as f32).is_finite())
+            .then_some(Self { destination })
+    }
+
+    /// Keep the requested feet coordinates; share the swept motion distance bound.
+    pub fn destination_from(self, origin: [f64; 3]) -> Option<[f64; 3]> {
+        SweptDisplacement::new(std::array::from_fn(|axis| {
+            self.destination[axis] - origin[axis]
+        }))?;
+        Some(self.destination)
+    }
+}
+
+/// One scheduled body motion, with distinct path and destination collision policies.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ScriptedMotion {
+    Sweep(SweptDisplacement),
+    Relocate(Relocation),
+}
+
 /// A bounded, typed message evaluated by the sending StateScript VM.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RoomMessage {
@@ -480,13 +510,22 @@ pub trait World {
     }
     /// Admit movement for the bound body at the supplied future simulation frame.
     /// None means unavailable; Some(false) is an ordinary supported refusal.
-    fn queue_swept_displacement(
+    fn queue_scripted_motion(
         &mut self,
         _site: Site,
         _frame: u32,
-        _displacement: SweptDisplacement,
+        _motion: ScriptedMotion,
     ) -> Option<bool> {
         None
+    }
+    /// Compatibility entry for hosts and graphs that only schedule swept motion.
+    fn queue_swept_displacement(
+        &mut self,
+        site: Site,
+        frame: u32,
+        displacement: SweptDisplacement,
+    ) -> Option<bool> {
+        self.queue_scripted_motion(site, frame, ScriptedMotion::Sweep(displacement))
     }
     /// Restore the owner's shield pools. A zero amount checks support without changing health.
     fn recharge_shields(&mut self, _site: Site, _amount: f64) -> bool {

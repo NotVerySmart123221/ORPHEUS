@@ -622,6 +622,24 @@ The [contact participation contract](../fixtures/behavior/movement-contact-parti
 covers body settings and modifier start and retirement.
 The [pending motion contract](../fixtures/behavior/owner-script-motion-cancellation-v1.json)
 covers a script fault during recovered player input.
+
+### Relocate a body to a checked destination
+
+Set `action_behavior` to `"relocation"` on a server-only action or declare
+`relocation_action` for an authored class. The `destination` expression
+returns absolute world-space feet coordinates. The next eligible pose
+checks a nonzero distance of at most 32 world units from the current
+feet, then tests the destination capsule against static geometry and
+eligible actors. The current capsule posture and movement settings
+determine clearance. The action checks the destination only and can
+place the body in the air.
+
+Relocation uses the same pending slot, lifecycle and owner correction
+as swept displacement. The output plug indicates queue acceptance.
+An occupied destination leaves the body in place and consumes the
+request. The owner correction starts only when a pose actually moves.
+See the [portable action contract](../fixtures/behavior/script-relocation-v1.json)
+and [physical destination contract](../fixtures/behavior/native-capsule-relocation-v1.json).
 The [owner motion contract](../fixtures/behavior/owner-swept-motion-v1.json)
 covers correction scheduling and a same-frame script failure.
 

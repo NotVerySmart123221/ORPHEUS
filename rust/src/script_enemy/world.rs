@@ -63,19 +63,19 @@ impl World for EnemyWorld<'_> {
         true
     }
 
-    fn queue_swept_displacement(
+    fn queue_scripted_motion(
         &mut self,
         site: Site,
         frame: u32,
-        displacement: script_init::SweptDisplacement,
+        motion: script_init::ScriptedMotion,
     ) -> Option<bool> {
         if site.entity != self.binding.body || !crate::script_expr::valid_entity(site.entity) {
             return None;
         }
-        if self.vitals.death().is_some() || self.control_records.swept_displacement.is_some() {
+        if self.vitals.death().is_some() || self.control_records.scripted_motion.is_some() {
             return Some(false);
         }
-        self.control_records.swept_displacement = Some((frame, displacement));
+        self.control_records.scripted_motion = Some((frame, motion));
         Some(true)
     }
 

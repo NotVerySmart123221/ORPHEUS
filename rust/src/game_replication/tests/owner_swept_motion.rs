@@ -165,7 +165,7 @@ fn player_displacement_uses_room_actor_contacts_for_the_authoritative_pose() {
 
 #[test]
 fn swept_owner_correction_uses_the_applied_pose_and_outlives_a_script_fault() {
-    use crate::script_init::SweptDisplacement;
+    use crate::script_init::{Relocation, ScriptedMotion, SweptDisplacement};
 
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../fixtures/behavior/owner-swept-motion-v1.json"
@@ -176,6 +176,9 @@ fn swept_owner_correction_uses_the_applied_pose_and_outlives_a_script_fault() {
     let requested =
         SweptDisplacement::new(serde_json::from_value(input["displacement"].clone()).unwrap())
             .unwrap();
+    let sweep = ScriptedMotion::Sweep(requested);
+    let relocation =
+        ScriptedMotion::Relocate(Relocation::new(requested.delta().map(f64::from)).unwrap());
     let spawn = frame("spawn_frame");
     let due = frame("due_frame");
     let tail_pose = frame("tail_pose");
@@ -189,7 +192,12 @@ fn swept_owner_correction_uses_the_applied_pose_and_outlives_a_script_fault() {
         card: &card,
     };
 
-    for fault_after_pose in [false, true] {
+    for (motion, fault_after_pose) in [
+        (sweep, false),
+        (sweep, true),
+        (relocation, false),
+        (relocation, true),
+    ] {
         let mut scene = PreparedScene::fixture_for_bots(Vec::new());
         let mut world = WorldDelivery::new(OWNER);
         let mut egress = GameEgress::default();
@@ -232,7 +240,7 @@ fn swept_owner_correction_uses_the_applied_pose_and_outlives_a_script_fault() {
                 .player_body_mut(id)
                 .unwrap()
                 .mover
-                .queue_swept_displacement(due, requested)
+                .queue_scripted_motion(due, motion)
         );
         world.queue_commands(
             due,

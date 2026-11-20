@@ -16,6 +16,15 @@ use crate::{
 
 #[test]
 fn authored_npc_displacement_is_consumed_once_with_room_team_contacts() {
+    authored_npc_motion_is_consumed_once(false);
+}
+
+#[test]
+fn authored_npc_relocation_checks_its_destination_with_room_team_contacts() {
+    authored_npc_motion_is_consumed_once(true);
+}
+
+fn authored_npc_motion_is_consumed_once(relocate: bool) {
     const HERO: u64 = 0x02e0_0000_0052_0401;
     const BODY: u64 = 0x0400_0000_0052_0402;
     const CONTROLLER: u64 = 0x0400_0000_0052_0403;
@@ -27,6 +36,12 @@ fn authored_npc_displacement_is_consumed_once_with_room_team_contacts() {
             "remote":[], "sync_vars":[], "containers":{}, "unknown_nodes":[], "fields":{},
             "header":header})
     };
+    let destination = [4.25, 0.0, 2.5];
+    let (behavior, operand, [x, y, z]) = if relocate {
+        ("relocation", "destination", destination)
+    } else {
+        ("swept_displacement", "delta", [2.25, 0.0, -0.5])
+    };
     let authored = graph(
         124,
         vec![
@@ -34,9 +49,9 @@ fn authored_npc_displacement_is_consumed_once_with_room_team_contacts() {
                 "class":"STUStatescriptEntry", "server_only":true, "client_only":false,
                 "fields":{"m_outPlug":{"$":"Plug", "links":[[1,"m_inPlug"]]}}}),
             json!({"pos":1, "rid":1, "uid":1, "remote":-1, "state":null,
-                "class":"AuthoredCapsuleMove", "server_only":true, "client_only":false,
-                "action_behavior":"swept_displacement",
-                "fields":{"delta":{"$":"STUConfigVarVec3", "m_value":{"X":2.25,"Y":0,"Z":-0.5}},
+                "class":"authored.npc_motion", "server_only":true, "client_only":false,
+                "action_behavior":behavior,
+                "fields":{(operand):{"$":"STUConfigVarVec3", "m_value":{"X":x,"Y":y,"Z":z}},
                     "m_outPlug":{"$":"Plug","links":[]}}}),
         ],
         vec![0],
@@ -147,15 +162,15 @@ fn authored_npc_displacement_is_consumed_once_with_room_team_contacts() {
             &room.movement_contact_frame().unwrap()
         ));
         let moved = state(&room, wire).unwrap().bot.position;
-        if blocking {
+        if !geometry_available || (blocking && relocate) {
+            assert_eq!(moved, start);
+        } else if blocking {
             assert!(
                 start[0] < moved[0] && moved[0] < obstacle_position[0],
                 "{moved:?}"
             );
-        } else if geometry_available {
-            assert_eq!(moved, [4.25, 0.0, 2.5]);
         } else {
-            assert_eq!(moved, start);
+            assert_eq!(moved, destination);
         }
         room.finish_tick(&supported, 2, Duration::from_millis(32))
             .unwrap();

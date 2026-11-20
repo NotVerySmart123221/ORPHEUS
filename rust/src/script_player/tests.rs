@@ -790,12 +790,12 @@ fn authored_impulse_queues_only_for_its_live_body() {
 
 #[test]
 fn swept_displacement_requests_belong_to_the_live_player_body() {
-    use crate::script_init::SweptDisplacement;
+    use crate::script_init::{Relocation, ScriptedMotion, SweptDisplacement};
 
     let (factory, spawn) = fixture_body_factory();
     let mut body = factory.start(spawn).unwrap();
     let displacement = SweptDisplacement::new([2.25, 0.0, 0.0]).unwrap();
-    let alternate = SweptDisplacement::new([0.0, 0.0, 1.0]).unwrap();
+    let alternate = ScriptedMotion::Relocate(Relocation::new([0.0, 0.0, 1.0]).unwrap());
     let site = Site {
         entity: spawn.entity,
         instance: 1,
@@ -816,13 +816,16 @@ fn swept_displacement_requests_belong_to_the_live_player_body() {
         Some(true)
     );
     assert_eq!(
-        body.world.queue_swept_displacement(site, 32, alternate),
+        body.world.queue_scripted_motion(site, 32, alternate),
         Some(false)
     );
-    assert_eq!(body.take_swept_displacement(), Some((31, displacement)));
-    assert_eq!(body.take_swept_displacement(), None);
     assert_eq!(
-        body.world.queue_swept_displacement(site, 32, alternate),
+        body.take_scripted_motion(),
+        Some((31, ScriptedMotion::Sweep(displacement)))
+    );
+    assert_eq!(body.take_scripted_motion(), None);
+    assert_eq!(
+        body.world.queue_scripted_motion(site, 32, alternate),
         Some(true)
     );
     assert!(
@@ -836,9 +839,9 @@ fn swept_displacement_requests_belong_to_the_live_player_body() {
         )
         .killed
     );
-    assert_eq!(body.take_swept_displacement(), None);
+    assert_eq!(body.take_scripted_motion(), None);
     assert_eq!(
-        body.world.queue_swept_displacement(site, 33, alternate),
+        body.world.queue_scripted_motion(site, 33, alternate),
         Some(false)
     );
 }
@@ -2795,7 +2798,7 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
         facing_claims: Default::default(),
         deadeye_scene: DeadeyeScene::default(),
         velocity_changes: Vec::new(),
-        swept_displacement: None,
+        scripted_motion: None,
         damage_credit: None,
         uses_authored_charge: false,
     };
@@ -3224,7 +3227,7 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             facing_claims: Default::default(),
             deadeye_scene: DeadeyeScene::default(),
             velocity_changes: Vec::new(),
-            swept_displacement: None,
+            scripted_motion: None,
             damage_credit: None,
             uses_authored_charge: false,
         };
