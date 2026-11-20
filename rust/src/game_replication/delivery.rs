@@ -178,9 +178,13 @@ impl WorldDelivery {
         self.health_updates.contains_key(&entity)
     }
 
+    pub(crate) fn tracks_current_bot(&self, entity: u32) -> bool {
+        self.bots.get(&entity) == Some(&BotLifetime::Live)
+    }
+
     pub(crate) fn queue_health(&mut self, update: EntityUpdate) {
         let entity = update.entity;
-        let live_bot = self.bots.get(&entity) == Some(&BotLifetime::Live);
+        let live_bot = self.tracks_current_bot(entity);
         let live_remote = self
             .remote_players
             .get(&entity)
@@ -256,7 +260,7 @@ impl WorldDelivery {
     pub(crate) fn replace_bot(&mut self, replacement: BotReplacement) {
         let old = replacement.retired;
         let new = replacement.created.entity;
-        if self.bots.get(&old) != Some(&BotLifetime::Live) || self.bots.contains_key(&new) {
+        if !self.tracks_current_bot(old) || self.bots.contains_key(&new) {
             return;
         }
         self.bots.insert(old, BotLifetime::Retiring);

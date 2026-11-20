@@ -23,7 +23,7 @@ pub(super) struct Peer {
 #[derive(Default)]
 pub(super) struct CombatUi {
     notices: VecDeque<PendingCombatNotice>,
-    pub(super) replacements: VecDeque<(Duration, BotReplacement)>,
+    replacements: VecDeque<(Duration, BotReplacement)>,
 }
 
 struct AuthoredCueIdentity {
@@ -135,6 +135,22 @@ impl Peer {
         }
     }
 
+    pub(super) fn queue_bot_replacement(&mut self, replacement: BotReplacement, expires: Duration) {
+        if let Some((_, pending)) = self
+            .combat_ui
+            .replacements
+            .iter_mut()
+            .find(|(_, pending)| pending.created.entity == replacement.retired)
+        {
+            // Intermediate generations held here were never published to this peer.
+            pending.created = replacement.created;
+        } else if self.world.tracks_current_bot(replacement.retired) {
+            self.combat_ui
+                .replacements
+                .push_back((expires, replacement));
+        }
+    }
+
     pub(super) fn queue_combat_notice(&mut self, notice: CombatNotice) {
         if self.combat_ui.notices.len() == MAX_PENDING_COMBAT_NOTICES {
             self.combat_ui.notices.pop_front();
@@ -218,14 +234,20 @@ impl Peer {
                 .pop_front()
                 .ok_or(RoomError::Invariant("pending bot replacement disappeared"))?;
             let entity = replacement.retired;
+            if !self.world.tracks_current_bot(entity) {
+                continue;
+            }
             let has_notice = self
                 .combat_ui
                 .notices
                 .iter()
                 .any(|pending| pending.notice.required_identity() == Some(entity));
             let waiting_for_reliable = self.world.pending_entity_notice(entity, &self.egress);
-            if now < expires
-                && (has_notice || waiting_for_reliable || self.world.health_pending(entity))
+            // A live replacement can itself have a pending create behind the
+            // earlier generation's destroy. Keep that ordering across respawns.
+            if !self.world.identity_ready(entity)
+                || (now < expires
+                    && (has_notice || waiting_for_reliable || self.world.health_pending(entity)))
             {
                 self.combat_ui
                     .replacements
