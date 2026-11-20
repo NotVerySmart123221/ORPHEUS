@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::script_codecs::{Codec, PayloadError, StatePayload};
 use crate::script_graph::{Graph, Node, asset_guid};
-use crate::script_init::{Snapshot, StackBinding, State, StateKind};
+use crate::script_init::{Issue, Snapshot, StackBinding, State, StateKind};
 use crate::script_wire::{Binding, Value, Variables};
 
 use super::{
@@ -48,7 +48,9 @@ impl<'a> SnapshotEncoder<'a> {
         only_instance: Option<u16>,
     ) -> Result<ProjectedSnapshot, SnapshotError> {
         let relevant = |diagnostic: &&crate::script_init::Diagnostic| {
-            !diagnostic.server_only && only_instance.is_none_or(|id| diagnostic.site.instance == id)
+            !diagnostic.server_only
+                && diagnostic.issue != Issue::ObservationUnavailable
+                && only_instance.is_none_or(|id| diagnostic.site.instance == id)
         };
         if snapshot
             .diagnostics

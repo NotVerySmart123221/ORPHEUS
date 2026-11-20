@@ -728,6 +728,106 @@ fn a_switch_withheld_once_stays_off_owner_frames_after_it_begins_again() {
 }
 
 #[test]
+fn unavailable_authored_observation_does_not_block_snapshot_projection() {
+    use crate::script_init::{Component, World};
+    use std::sync::Arc;
+
+    const GRAPH: u32 = 123;
+    const TARGET: u32 = 91;
+    const TARGET_VARIABLE: u32 = 17;
+    const OUTPUT: u32 = 18;
+    const POSITION: [f64; 3] = [3.0, 2.0, 1.0];
+
+    struct PositionWorld(Option<[f64; 3]>);
+
+    impl World for PositionWorld {
+        fn entity_variable(&mut self, _: u32, _: u32) -> Option<Value> {
+            None
+        }
+
+        fn position(&mut self, entity: u32) -> Option<[f64; 3]> {
+            assert_eq!(entity, TARGET);
+            self.0
+        }
+    }
+
+    let variable = |id| json!({"$":"STUConfigVarDynamic","m_identifier":id,"m_60DB8F99":true});
+    let mut observe = node(
+        1,
+        "SyntheticObservePosition",
+        Some(0),
+        json!({
+            "value":{"$":"EntityPosition","entity":variable(TARGET_VARIABLE)},
+            "output":variable(OUTPUT)
+        }),
+    );
+    observe["server_only"] = json!(true);
+    observe["state_behavior"] = json!("observe");
+    let body = graph(
+        GRAPH,
+        vec![
+            node(
+                0,
+                "STUStatescriptEntry",
+                None,
+                json!({"m_outPlug":{"$":"Plug","links":[[1,"m_beginPlug"],[2,"m_beginPlug"]]}}),
+            ),
+            observe,
+            node(2, "STUStatescriptState", Some(1), json!({})),
+        ],
+        json!([1, 2]),
+        json!([0]),
+        json!([2]),
+        json!([]),
+    );
+    let graphs = Arc::new(
+        GraphStore::from_json(
+            &serde_json::to_vec(&json!({
+                "version":1, "graphs":[body], "bodies":{}, "missing":[]
+            }))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    let mut world = PositionWorld(None);
+    let mut component = Component::start(
+        Arc::clone(&graphs),
+        ENTITY,
+        Variables::from([
+            (TARGET_VARIABLE, Value::Entity(TARGET)),
+            (OUTPUT, Value::Vector([0.0; 3])),
+        ]),
+        vec![Root::new(1, GRAPH)],
+        0,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let codecs = CodecTable::from_json(CODECS).unwrap();
+    let encoder = SnapshotEncoder::new(&graphs, &codecs);
+
+    for (frame, available, expected) in [(1, None, [0.0; 3]), (2, Some(POSITION), POSITION)] {
+        world.0 = available;
+        component.advance_frame(frame, &mut world).unwrap();
+        let snapshot = component.snapshot().unwrap();
+        assert_eq!(snapshot.diagnostics.len(), 1);
+        let diagnostic = &snapshot.diagnostics[0];
+        assert_eq!(diagnostic.site.node, Some(1));
+        assert_eq!(diagnostic.issue, Issue::ObservationUnavailable);
+        assert!(snapshot.initialization_complete());
+
+        for view in [View::Owner, View::Observer] {
+            let projected = encoder
+                .project(snapshot, view)
+                .expect("transient authored observation should not block projection");
+            assert_eq!(projected.variables.values[&OUTPUT], Value::Vector(expected));
+            assert!(projected.instances[&1].states.contains_key(&1));
+            assert!(!projected.instances[&1].states.contains_key(&0));
+        }
+    }
+}
+
+#[test]
 fn unsupported_active_states_and_initialization_diagnostics_are_explicit() {
     let (graphs, mut snapshot) = fixture();
     let mut raw: Json = serde_json::from_str(CODECS).unwrap();
