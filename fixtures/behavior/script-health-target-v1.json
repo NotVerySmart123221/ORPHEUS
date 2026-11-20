@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "case_id": "script-health-target.synthetic.v1",
+  "source": {"basis": "Invented target slot, entity ID, and provider observations."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "target_variable": 7,
+    "unbound_entity": 0,
+    "unavailable_entity": 31,
+    "invalid_pool_selector": false,
+    "queries": [
+      {"class": "STU_32E6E4D8", "pool": null, "maximum": false},
+      {"class": "STU_7D7D2470", "pool": null, "maximum": true},
+      {"class": "STU_783B4CF0", "pool": "armour", "maximum": false},
+      {"class": "STU_68883EAC", "pool": "armour", "maximum": true}
+    ]
+  },
+  "expected": {
+    "unbound_result": 0.0,
+    "unbound_provider_reads": 0,
+    "unavailable_provider_reads": 1
+  }
+}

@@ -940,6 +940,96 @@ fn enemy_hero_and_health_queries_preserve_known_and_unknown_entities() {
 }
 
 #[test]
+fn body_health_queries_return_zero_only_for_explicit_unbound_targets() {
+    struct HealthHost {
+        variable: u32,
+        target: Value,
+        reads: Vec<(u32, Option<PoolKind>, bool)>,
+    }
+
+    impl Context for HealthHost {
+        fn variable(&mut self, variable: Variable) -> Value {
+            assert_eq!(variable.id, self.variable);
+            self.target.clone()
+        }
+
+        fn body_health(
+            &mut self,
+            entity: u32,
+            kind: Option<PoolKind>,
+            maximum: bool,
+        ) -> Option<f64> {
+            self.reads.push((entity, kind, maximum));
+            None
+        }
+    }
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../../../fixtures/behavior/script-health-target-v1.json"
+    ))
+    .unwrap();
+    let input = &fixture["input"];
+    let expected = &fixture["expected"];
+    let target_variable = u32::try_from(input["target_variable"].as_u64().unwrap()).unwrap();
+    let unbound = u32::try_from(input["unbound_entity"].as_u64().unwrap()).unwrap();
+    let unavailable = u32::try_from(input["unavailable_entity"].as_u64().unwrap()).unwrap();
+    let unbound_value = Value::Float(expected["unbound_result"].as_f64().unwrap());
+    for query_case in input["queries"].as_array().unwrap() {
+        let class = query_case["class"].as_str().unwrap();
+        let kind = match &query_case["pool"] {
+            Json::Null => None,
+            Json::String(pool) if pool == "armour" => Some(PoolKind::Armour),
+            pool => panic!("unsupported fixture pool {pool}"),
+        };
+        let maximum = query_case["maximum"].as_bool().unwrap();
+        let mut query = json!({"$":class,"m_entity":variable(target_variable, Scope::Instance)});
+        if kind.is_some() {
+            query["m_7E8B666C"] = json!({"$":"STU_297E1A30","m_7E8B666C":1});
+        }
+        let mut host = HealthHost {
+            variable: target_variable,
+            target: Value::Null,
+            reads: Vec::new(),
+        };
+        for target in [Value::Null, Value::Entity(unbound)] {
+            host.target = target;
+            assert_eq!(
+                evaluate(&query, &mut host),
+                Ok(unbound_value.clone()),
+                "{class}"
+            );
+            assert_eq!(
+                json!(host.reads.len()),
+                expected["unbound_provider_reads"],
+                "{class}"
+            );
+        }
+
+        let unsupported = Err(EvalError::UnsupportedConfig(class.into()));
+        host.target = Value::Bool(false);
+        assert_eq!(evaluate(&query, &mut host), unsupported);
+        let mut missing_target = query.clone();
+        missing_target.as_object_mut().unwrap().remove("m_entity");
+        assert_eq!(evaluate(&missing_target, &mut host), unsupported);
+        if kind.is_some() {
+            host.target = Value::Entity(unbound);
+            let mut malformed_selector = query.clone();
+            malformed_selector["m_7E8B666C"]["m_7E8B666C"] = input["invalid_pool_selector"].clone();
+            assert_eq!(evaluate(&malformed_selector, &mut host), unsupported);
+        }
+        assert!(host.reads.is_empty(), "{class}");
+
+        host.target = Value::Entity(unavailable);
+        assert_eq!(evaluate(&query, &mut host), unsupported);
+        assert_eq!(
+            json!(host.reads.len()),
+            expected["unavailable_provider_reads"]
+        );
+        assert_eq!(host.reads, [(unavailable, kind, maximum)]);
+    }
+}
+
+#[test]
 fn authored_message_map_looks_up_the_first_matching_key() {
     use crate::script_wire::{ValueEncoding, WireError, write_value};
     use orpheus_wire::bits::BitWriter;

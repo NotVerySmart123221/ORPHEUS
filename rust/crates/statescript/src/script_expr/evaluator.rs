@@ -77,6 +77,25 @@ enum RoomTagClause {
     None,
 }
 
+fn health_amount(
+    target: &Json,
+    value: &Value,
+    kind: Option<PoolKind>,
+    maximum: bool,
+    context: &mut impl Context,
+) -> Option<f64> {
+    match value {
+        Value::Entity(0) => Some(0.0),
+        Value::Entity(entity) if valid_entity(*entity) => {
+            context.body_health(*entity, kind, maximum)
+        }
+        Value::Null if matches!(dynamic(target), Ok(Some(variable)) if variable.id != 0) => {
+            Some(0.0)
+        }
+        _ => None,
+    }
+}
+
 pub(super) struct Evaluator {
     pub(super) limit: usize,
     pub(super) steps: usize,
@@ -1151,13 +1170,10 @@ impl Evaluator {
             "STU_32E6E4D8" | "STU_7D7D2470" => {
                 let target = child(config, "m_entity");
                 let value = self.config(target, context, nested)?;
-                let entity = match first_scalar(&value) {
-                    Some(Value::Entity(entity)) if valid_entity(*entity) => *entity,
-                    Some(Value::Entity(entity)) => *entity,
-                    _ => return Err(EvalError::UnsupportedConfig(class.into())),
-                };
-                let health = context
-                    .body_health(entity, None, class == "STU_7D7D2470")
+                let health = first_scalar(&value)
+                    .and_then(|value| {
+                        health_amount(target, value, None, class == "STU_7D7D2470", context)
+                    })
                     .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?;
                 Value::Float(health)
             }
@@ -1200,14 +1216,11 @@ impl Evaluator {
                         _ => return Err(unsupported()),
                     }
                 };
-                let Value::Entity(entity) =
-                    self.config(child(config, "m_entity"), context, nested)?
-                else {
-                    return Err(unsupported());
-                };
-                let health = context
-                    .body_health(entity, Some(kind), class == "STU_68883EAC")
-                    .ok_or_else(unsupported)?;
+                let target = child(config, "m_entity");
+                let value = self.config(target, context, nested)?;
+                let health =
+                    health_amount(target, &value, Some(kind), class == "STU_68883EAC", context)
+                        .ok_or_else(unsupported)?;
                 Value::Float(rounded(health))
             }
             "STU_FDBB0B67" => {

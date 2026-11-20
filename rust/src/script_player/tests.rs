@@ -567,15 +567,18 @@ fn health_queries_read_the_authoritative_vitals() {
 
     let target = json!({"$": "STUConfigVarDynamic", "m_identifier": 400, "m_60DB8F99": true});
     let current = json!({"$": "STU_32E6E4D8", "m_entity": target});
-    for entity in [spawn.entity + 1, 0] {
+    for (entity, expected) in [
+        (
+            spawn.entity + 1,
+            Err(EvalError::UnsupportedConfig("STU_32E6E4D8".into())),
+        ),
+        (0, Ok(Value::Float(0.0))),
+    ] {
         runtime
             .component
             .set_entity_variable(400, Value::Entity(entity), &mut runtime.world)
             .unwrap();
-        assert_eq!(
-            evaluate(&mut runtime, &current),
-            Err(EvalError::UnsupportedConfig("STU_32E6E4D8".into()))
-        );
+        assert_eq!(evaluate(&mut runtime, &current), expected);
     }
 }
 
