@@ -45,6 +45,8 @@ fn body_chunk(schemas: &Schemas, packet: &Packet, body: u32) -> Option<ReceivedC
 #[test]
 #[ignore = "requires a target-tagged 104319 Practice Range pack without bot VM graphs"]
 fn prepared_owner_post_startup_loss_receipts() {
+    let probe = std::env::var_os("ORPHEUS_RECEIVER_PROBE");
+    let mut rows = Vec::new();
     let runtime = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").expect("prepared runtime"));
     let assets = SceneAssets::load(&runtime).unwrap();
     assert!(
@@ -87,6 +89,9 @@ fn prepared_owner_post_startup_loss_receipts() {
         &mut Default::default(),
         |packet, body, receipt| {
             if let Some(chunk) = body_chunk(&schemas, packet, body.entity) {
+                if probe.is_some() {
+                    rows.push(serde_json::json!({"seq": packet.seq, "elapsed": 0, "kind": "accepted", "bits": chunk.wire_width, "data": chunk.wire}));
+                }
                 if chunk.first == 0 && chunk.span == 1 {
                     baseline_acked =
                         body_script_receipts(receipt, body).contains(&(packet.seq, true, 1));
@@ -106,13 +111,26 @@ fn prepared_owner_post_startup_loss_receipts() {
     let mut post_startup_acked = None;
     let mut no_loss_window = None;
     let mut finished = false;
-    for elapsed in 1..=120_u32 {
+    let mut last_send = None;
+    for elapsed in 1..=if probe.is_some() { 180 } else { 120 } {
         let now = setup.now + Duration::from_micros(u64::from(elapsed) * u64::from(RETAIL_QUANTA));
         let frame = setup.tick + elapsed;
         let command = Command {
             frame,
-            forward: if elapsed >= 64 { 127 } else { 0 },
-            buttons: if elapsed == 64 { 8 } else { 0 },
+            forward: if if probe.is_some() {
+                (76..110).contains(&elapsed)
+            } else {
+                elapsed >= 64
+            } {
+                127
+            } else {
+                0
+            },
+            buttons: if elapsed == if probe.is_some() { 76 } else { 64 } {
+                8
+            } else {
+                0
+            },
             ..Command::default()
         };
         let peer = state.rooms.get_mut(&MATCH).unwrap().members[&ticket.conn]
@@ -138,9 +156,15 @@ fn prepared_owner_post_startup_loss_receipts() {
         }
         let packet = client.receive();
         let mut chunk = body_chunk(&schemas, &packet, body.entity);
-        if elapsed >= 75 && lost.is_none() {
+        if probe.is_some() && chunk.is_some() {
+            last_send = Some((elapsed, packet.seq));
+        }
+        if elapsed >= if probe.is_some() { 76 } else { 75 } && lost.is_none() {
             if let Some((prior_sequence, prior_end)) = post_startup_acked {
                 if let Some(missing) = chunk.take() {
+                    if probe.is_some() {
+                        rows.push(serde_json::json!({"seq": packet.seq, "elapsed": elapsed, "kind": "lost", "bits": missing.wire_width, "data": missing.wire}));
+                    }
                     assert!(prior_sequence < packet.seq);
                     assert!(
                         prior_end < missing.first,
@@ -156,7 +180,13 @@ fn prepared_owner_post_startup_loss_receipts() {
         }
         assert!(client.window.accept(packet.seq));
         let receipt = startup::acknowledge(&mut state, &server, &mut client, now);
-        if let Some((sequence, ref missing)) = lost {
+        if probe.is_some() {
+            if let Some(chunk) = &chunk {
+                rows.push(serde_json::json!({"seq": packet.seq, "elapsed": elapsed, "kind": "accepted", "bits": chunk.wire_width, "data": chunk.wire}));
+            }
+        }
+        if let Some((sequence, missing)) = lost.as_ref().filter(|_| !finished) {
+            let sequence = *sequence;
             let mut control = no_loss_window.unwrap();
             assert!(control.accept(packet.seq));
             assert_eq!(
@@ -196,7 +226,10 @@ fn prepared_owner_post_startup_loss_receipts() {
             assert!(!reports.contains(&(sequence, true, missing.first + missing.span)));
             captured.push((packet.seq, received));
             finished = true;
-            break;
+            if probe.is_none() {
+                break;
+            }
+            continue;
         }
         if let Some(chunk) = chunk {
             if chunk.first == 0 && chunk.span == 1 {
@@ -227,6 +260,18 @@ fn prepared_owner_post_startup_loss_receipts() {
         finished,
         "post-startup loss and ACK scenario was not completed"
     );
+    if let Some(path) = probe {
+        let (last_elapsed, last_seq) = last_send.expect("probe sent no packets");
+        assert!(last_elapsed > 110);
+        let peer = state.rooms[&MATCH].members[&ticket.conn]
+            .peer
+            .as_ref()
+            .unwrap();
+        let processed_frame = processed(&peer.world).expect("probe processed no commands");
+        assert_eq!(processed_frame, setup.tick + 180);
+        let capture = serde_json::json!({"rows": rows, "end": {"elapsed": last_elapsed, "seq": last_seq, "processed_frame": processed_frame, "processed_elapsed": 180, "release_elapsed": 110}});
+        std::fs::write(path, serde_json::to_vec(&capture).unwrap()).unwrap();
+    }
     println!(
         "completed: acknowledged H0 and post-startup delta, post-startup loss, cumulative following packet and authenticated receipts"
     );
