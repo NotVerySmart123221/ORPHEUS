@@ -623,6 +623,9 @@ See the [synthetic health contract](../fixtures/behavior/script-health-change-v1
 
 The optional `mode_rulesets` section of a version 1 graph bundle supplies
 immutable rules for the running mode. This example uses synthetic IDs.
+To add profiles while preparing a runtime, save the `mode_rulesets` array
+itself as a local JSON file and pass it with `--mode-rulesets`. See the
+[runtime packing guide](../data/README.md).
 
 ```json
 {

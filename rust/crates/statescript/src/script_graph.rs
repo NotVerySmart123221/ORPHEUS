@@ -9,18 +9,17 @@ use std::{
 };
 
 use flate2::bufread::MultiGzDecoder;
-use orpheus_runtime::format::{MAX_GRAPH_BYTES, TARGET_TAG_TYPE, parse_guid};
+pub use orpheus_runtime::format::asset_guid;
+use orpheus_runtime::format::{
+    MAX_GRAPH_BYTES, ModeRulesets, RuleValue, TARGET_TAG_TYPE, parse_guid,
+};
 use serde::Deserialize;
 use serde_json::{Map, Value};
-
-use rulesets::{ModeRulesetDefinition, ModeRulesets};
 
 use crate::script_expr::{
     EngineSetting, StackPriority, Variable, authored_stack_priority, authored_stack_variable,
     client_only_fallback, native_entity_operand, native_fields, native_shape,
 };
-
-mod rulesets;
 
 const GRAPH_TYPE: u64 = 0x0580;
 pub(crate) const MAX_ROOM_MESSAGE_PARAMETERS: usize = 16;
@@ -1265,7 +1264,7 @@ struct Bundle {
     #[serde(default)]
     mode_scripts: BTreeMap<String, ModeScripts>,
     #[serde(default)]
-    mode_rulesets: Vec<ModeRulesetDefinition>,
+    mode_rulesets: ModeRulesets,
     #[serde(default)]
     junkenstein: EnemyCatalog,
     missing: Vec<u32>,
@@ -1587,7 +1586,7 @@ impl GraphStore {
                 })
                 .collect::<io::Result<_>>()?,
             mode_scripts: keyed_by_guid(bundle.mode_scripts)?,
-            mode_rulesets: ModeRulesets::compile(bundle.mode_rulesets)?,
+            mode_rulesets: bundle.mode_rulesets,
             enemies: bundle.junkenstein.validate()?,
             missing: bundle.missing,
         })
@@ -1664,12 +1663,20 @@ impl GraphStore {
         body: u64,
         id: u32,
     ) -> Option<crate::script_wire::Value> {
-        self.mode_rulesets.value(mode, body, id)
+        self.mode_rulesets.value(mode, body, id).map(rule_value)
     }
 
     /// Returns `None` when this mode has no authored engine setting table.
     pub fn mode_engine_setting(&self, mode: u64, key: u32) -> Option<EngineSetting> {
-        self.mode_rulesets.engine_setting(mode, key)
+        Some(
+            self.mode_rulesets
+                .engine_settings(mode)?
+                .get(&key)
+                .copied()
+                .map_or(EngineSetting::Missing, |value| {
+                    EngineSetting::Present(rule_value(value))
+                }),
+        )
     }
 
     pub fn mode_scripts(&self, mode: u64) -> Option<&ModeScripts> {
@@ -1681,17 +1688,13 @@ impl GraphStore {
     }
 }
 
-pub fn asset_guid(value: &Value) -> Option<u64> {
-    let text = value.as_str()?;
-    let hex = text.strip_prefix("0x")?;
-    if hex.len() == 16
-        && hex
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'A'..=b'F'))
-    {
-        parse_guid(text)
-    } else {
-        None
+fn rule_value(value: RuleValue) -> crate::script_wire::Value {
+    use crate::script_wire::Value;
+    match value {
+        RuleValue::Null => Value::Null,
+        RuleValue::Bool(value) => Value::Bool(value),
+        RuleValue::Integer(value) => Value::Integer(value),
+        RuleValue::Float(value) => Value::Float(value),
     }
 }
 

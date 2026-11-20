@@ -35,6 +35,20 @@ cargo run --locked -p orpheus-runtime --bin prepare_server_runtime -- `
 - `--game-graphs`: supplies a graph bundle exported on `main` (e.g. with `--mode-xml` and `--entity` bot bodies) without polluting the source tree.
 - `--target-tags-xml`: enriches body/entity metadata and Junkenstein common-NPC mover tables from local `003` XML dumps.
 
+Use `--mode-rulesets` to add local mode rules when creating a fresh pack.
+
+```powershell
+cargo run --locked -p orpheus-runtime --bin prepare_server_runtime -- `
+    --source 'C:\path\to\prepared-source' --destination 'C:\path\to\rules-runtime' `
+    --map 0688 --mode-rulesets 'C:\path\to\mode-rulesets.json'
+```
+
+The rules file contains a JSON array of mode profiles. The packer adds profiles
+to the graph bundle and rejects repeated mode IDs, including modes already in the
+bundle. You can combine the flag with `--game-graphs` and `--target-tags-xml`.
+The destination manifest hashes the final graph bundle.
+See the [mode profile schema](../docs/STATESCRIPT_DEVELOPMENT.md#set-mode-and-actor-rules).
+
 ---
 
 ## Input Provenance (Three Categories)

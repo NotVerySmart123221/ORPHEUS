@@ -1,5 +1,11 @@
 //! Runtime catalog conventions shared by the packer and the server.
 
+use serde_json::Value;
+
+mod rulesets;
+
+pub use rulesets::{ModeRulesets, RuleValue};
+
 pub const MAX_GRAPH_BYTES: u64 = 128 * 1024 * 1024;
 pub const TARGET_TAG_TYPE: u64 = 0x0d60;
 
@@ -32,4 +38,19 @@ pub fn trim_python_whitespace(text: &str) -> &str {
     text.trim_matches(|character: char| {
         character.is_whitespace() || matches!(character, '\u{001c}'..='\u{001f}')
     })
+}
+
+/// Parse the canonical GUID spelling used by graph assets.
+pub fn asset_guid(value: &Value) -> Option<u64> {
+    let text = value.as_str()?;
+    let hex = text.strip_prefix("0x")?;
+    if hex.len() == 16
+        && hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'A'..=b'F'))
+    {
+        parse_guid(text)
+    } else {
+        None
+    }
 }

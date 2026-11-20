@@ -6,10 +6,19 @@ fn help_and_argument_errors_keep_the_packer_cli_contract() {
     let help = Command::new(packer).arg("--help").output().unwrap();
     assert!(help.status.success());
     assert!(help.stderr.is_empty());
+    let help = String::from_utf8(help.stdout).unwrap();
+    assert!(help.contains("prepare_server_runtime --source DIR --destination DIR"));
+    assert!(help.contains("--mode-rulesets FILE"));
+
+    let missing_input = Command::new(packer)
+        .arg("--mode-rulesets")
+        .output()
+        .unwrap();
+    assert_eq!(missing_input.status.code(), Some(2));
     assert!(
-        String::from_utf8(help.stdout)
+        String::from_utf8(missing_input.stderr)
             .unwrap()
-            .contains("prepare_server_runtime --source DIR --destination DIR")
+            .contains("--mode-rulesets needs a value")
     );
 
     let invalid = Command::new(packer).arg("--unknown").output().unwrap();

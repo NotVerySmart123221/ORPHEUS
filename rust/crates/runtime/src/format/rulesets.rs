@@ -5,23 +5,31 @@ use std::{collections::BTreeMap, io};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Value as Json, value::RawValue};
 
-use super::{asset_guid, invalid};
-use crate::{script_expr::EngineSetting, script_wire::Value};
+use super::asset_guid;
 
-type RuleValues = BTreeMap<(Option<u64>, u32), Value>;
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RuleValue {
+    Null,
+    Bool(bool),
+    Integer(i64),
+    Float(f64),
+}
 
-#[derive(Debug)]
-pub(super) struct ModeRulesets(BTreeMap<u64, ModeProfile>);
+type RuleValues = BTreeMap<(Option<u64>, u32), RuleValue>;
+
+/// Validated mode profiles from the bundle or a local rules file.
+#[derive(Debug, Default)]
+pub struct ModeRulesets(BTreeMap<u64, ModeProfile>);
 
 #[derive(Debug)]
 struct ModeProfile {
     rules: RuleValues,
-    engine_settings: Option<BTreeMap<u32, Value>>,
+    engine_settings: Option<BTreeMap<u32, RuleValue>>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ModeRulesetDefinition {
+struct ModeRulesetDefinition {
     mode: Json,
     #[serde(default)]
     rules: Vec<RuleDefinition>,
@@ -45,8 +53,14 @@ struct EngineSettingDefinition {
     value: Box<RawValue>,
 }
 
+impl<'de> Deserialize<'de> for ModeRulesets {
+    fn deserialize<D: Deserializer<'de>>(decoder: D) -> Result<Self, D::Error> {
+        Self::compile(Vec::deserialize(decoder)?).map_err(serde::de::Error::custom)
+    }
+}
+
 impl ModeRulesets {
-    pub(super) fn compile(definitions: Vec<ModeRulesetDefinition>) -> io::Result<Self> {
+    fn compile(definitions: Vec<ModeRulesetDefinition>) -> io::Result<Self> {
         let mut modes = BTreeMap::new();
         for ModeRulesetDefinition {
             mode,
@@ -87,29 +101,23 @@ impl ModeRulesets {
         Ok(Self(modes))
     }
 
-    pub(super) fn value(&self, mode: u64, body: u64, id: u32) -> Option<Value> {
+    pub fn value(&self, mode: u64, body: u64, id: u32) -> Option<RuleValue> {
         let values = &self.0.get(&mode)?.rules;
         values
             .get(&(Some(body), id))
             .or_else(|| values.get(&(None, id)))
-            .cloned()
+            .copied()
     }
 
-    pub(super) fn engine_setting(&self, mode: u64, key: u32) -> Option<EngineSetting> {
-        let table = self.0.get(&mode)?.engine_settings.as_ref()?;
-        Some(
-            table
-                .get(&key)
-                .cloned()
-                .map_or(EngineSetting::Missing, EngineSetting::Present),
-        )
+    pub fn engine_settings(&self, mode: u64) -> Option<&BTreeMap<u32, RuleValue>> {
+        self.0.get(&mode)?.engine_settings.as_ref()
     }
 }
 
 fn compile_engine_settings(
     mode: u64,
     settings: Vec<EngineSettingDefinition>,
-) -> io::Result<BTreeMap<u32, Value>> {
+) -> io::Result<BTreeMap<u32, RuleValue>> {
     let mut table = BTreeMap::new();
     for EngineSettingDefinition { id, value } in settings {
         let value = scalar(&value).ok_or_else(|| {
@@ -143,17 +151,21 @@ fn nonzero_guid(value: &Json) -> Option<u64> {
     asset_guid(value).filter(|&guid| guid != 0)
 }
 
-fn scalar(value: &RawValue) -> Option<Value> {
+fn scalar(value: &RawValue) -> Option<RuleValue> {
     let value = value.get();
     match value {
-        "null" => Some(Value::Null),
-        "true" => Some(Value::Bool(true)),
-        "false" => Some(Value::Bool(false)),
+        "null" => Some(RuleValue::Null),
+        "true" => Some(RuleValue::Bool(true)),
+        "false" => Some(RuleValue::Bool(false)),
         _ if value.contains(['.', 'e', 'E']) => value
             .parse::<f64>()
             .ok()
             .filter(|value| value.is_finite())
-            .map(Value::Float),
-        _ => value.parse::<i64>().ok().map(Value::Integer),
+            .map(RuleValue::Float),
+        _ => value.parse::<i64>().ok().map(RuleValue::Integer),
     }
+}
+
+fn invalid(error: impl std::fmt::Display) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, error.to_string())
 }
