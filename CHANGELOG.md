@@ -8,7 +8,7 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Applied the settled target's tags, affiliation and liveness to direct `EntityMatches` filters in a health event. A lethal impact retains its original target's qualification after the body retires. Source membership and spatial searches still use the current room frame. Validated in shared candidate `29df13cb`.
 
-- Kept a settled health event bound to its original target generation through the next VM frame. Direct awards and health requests skip an expired target. Added a room regression for same-wire replacement before the source VM handles the event and a fresh award after replacement. Integration validation pending.
+- Kept a settled health event bound to its original target generation through the next VM frame. Direct awards and health requests skip an expired target. Added a room regression for same-wire replacement before the source VM handles the event and a fresh award after replacement. Validated in shared candidate `e2123b35`.
 
 - Carried target facts with positive NPC-local health events at VM publication. Added room coverage for a capped heal issuing one configured bonus on the recipient's next VM frame and for dropping the award when that recipient is replaced. A prepared probe exercises original local admission, award, and revocation through the graph. Validated in shared candidate `29df13cb`.
 
@@ -18,13 +18,13 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Fixed NPC script direction sampling when navigation turns a body with an active authored facing claim. The room can publish the navigation pose on the frame the claim ends. Validated in shared candidate `6027a713`.
 
-- Preserve observation inputs through a committed StateScript logical-button branch. Its child states use current values if the source expires, so finishing a sample does not interrupt the listener's held or idle lifecycle. Shared-branch verification is pending.
+- Preserve observation inputs through a committed StateScript logical-button branch. Its child states use current values if the source expires, so finishing a sample does not interrupt the listener's held or idle lifecycle. Validated in shared candidate `55c6f6fb`.
 
-- Fixed StateScript logical-button listeners that retained a held effect after a live binding change. Listeners discard the previous button's buffer and reconcile against the new button's held and admission state. Shared-branch verification is pending.
+- Fixed StateScript logical-button listeners that retained a held effect after a live binding change. Listeners discard the previous button's buffer and reconcile against the new button's held and admission state. Validated in shared candidate `55c6f6fb`.
 
-- Preserve a StateScript observation's output through queued state initialization. Starts from a stale activation or frame are discarded, and higher-priority bindings continue to control visibility. Shared-branch verification is pending.
+- Preserve a StateScript observation's output through queued state initialization. Starts from a stale activation or frame are discarded, and higher-priority bindings continue to control visibility. Validated in shared candidate `55c6f6fb`.
 
-- Added room-actor identity tracking for authored target scopes. The opted-in tracker retires an old body's child scripts and timers before dispatch when the room reuses its entity ID. Shared-branch verification is pending.
+- Added room-actor identity tracking for authored target scopes. The opted-in tracker retires an old body's child scripts and timers before dispatch when the room reuses its entity ID. Validated in shared candidate `55c6f6fb`.
 
 - Added Inspector traces for StateScript ray queries. Player and NPC queries share the room's bounded ray history with weapon rays. Each script sample includes the graph, node, instance, VM frame and room capture tick. The overlay distinguishes actor hits, walls, misses and unavailable samples. The Phase 3A branch verified this on `05ab525e` against its synced `131dfdae` baseline.
 

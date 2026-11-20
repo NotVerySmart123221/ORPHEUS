@@ -22,6 +22,17 @@ The [pinned Python → Rust parity matrix](https://github.com/leafall903/ORPHEUS
 ## Shared StateScript integration
 
 
+At `55c6f6fb`, the shared branch validated actor-scoped child retirement, held
+button rebinding, and observation capture for queued state starts and committed
+input branches. The coverage-enabled server and StateScript libraries passed
+666 tests, strict Clippy passed, and both prepared 104319 reports matched
+`e2123b35` after excluding their source revision. The earlier `e2123b35`
+candidate passed 663 tests across the libraries and message/health integration
+tests, including the prepared owner trace and actor input matrix. That
+candidate validated hitscan settlement and death notice ordering at body
+replacement, plus the settled health target generation guard.
+
+
 The shared branch validated Phase 2 settled bonus credit and direct target filters
 at `29df13cb`. The coverage-enabled server and StateScript library tests passed
 (656 total), as did strict Clippy. The 900-frame owner trace and 32-actor input
