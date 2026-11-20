@@ -20,6 +20,8 @@ A prepared graph bundle may include `runtime_state_metadata`. The
 `plain_classes` list names ordinary runtime state classes. It applies to
 nodes with a reciprocal state slot and no explicit behavior override.
 VM handlers and their existing guards run before the plain fallback.
+For legacy bundles, the loader also records the 104319 inherited base
+factory classification for `STU_F08E1453` through the same path.
 
 The `client_states` list identifies instances by graph index, state
 slot, RID, and raw class. All four must match. A client classification

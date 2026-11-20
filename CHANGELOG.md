@@ -6,7 +6,9 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
-- Unified target resolution for ordinary and selected-pool health expressions. Explicitly unbound targets return zero without a host lookup. Malformed operands and bound entities with unavailable vitals still report an error. The synthetic contract reproduced the startup diagnostic before the fix.
+- Removed a three-placement guard for an inherited base state. The loader records the verified class through the same metadata path for tagged and legacy bundles. The synthetic lifecycle contract reproduced the rejection at a new placement and covers abort, exit, client-only exclusion, and an unrelated unsupported class.
+
+- Unified target resolution for ordinary and selected-pool health expressions. Explicitly unbound targets return zero without a host lookup. Malformed operands and bound entities with unavailable vitals still report an error. The synthetic contract reproduced the startup diagnostic before the fix. Two same-pack runs at `c2e75f7c` removed one Moira diagnostic and reported 51 blocking sites. Independent startup remained at 10 of 32 and Practice Range admission at 1 of 32. The #72 capture matched across 476 observed sites. The StateScript and native library suites with script coverage passed with 198 and 360 tests respectively.
 
 - Replaced the frame-wait placement guard with a validated literal duration and unbound remote slot. The state uses the existing VM frame clock. The synthetic regression covers both server-running scopes, completion timing, zero duration, and rejection of unsupported shapes. Two prepared runs at `9485d72e` matched. Wrecking Ball lost one registration diagnostic, taking the total from 53 to 52. Independent startup remained at 10 of 32. The #72 capture matched across all 476 observed sites. Formatting, the locked workspace check, and the StateScript and native library suites with script coverage passed. The suites reported 197 and 360 passes respectively.
 

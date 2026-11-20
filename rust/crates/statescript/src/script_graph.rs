@@ -1247,6 +1247,9 @@ impl GraphStore {
                 return Err(invalid("duplicate runtime plain state class"));
             }
         }
+        // The 104319 factory maps this class to the base state even in
+        // version 1 bundles prepared before runtime annotations were available.
+        plain_classes.insert("STU_F08E1453".into());
         let mut client_states = BTreeMap::<u32, BTreeMap<u16, RuntimeClientState>>::new();
         for row in bundle.runtime_state_metadata.client_states {
             let RuntimeClientState { graph, state, .. } = row;

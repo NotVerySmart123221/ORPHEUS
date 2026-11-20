@@ -1120,14 +1120,6 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             {
                 StateKind::Registered { next: None }
             }
-            "STU_F08E1453"
-                if registration.permits(matches!(
-                    (self.graph(id).index, node.pos),
-                    (0x01cb, 85) | (0x0ce0, 39) | (0x0d03, 3)
-                )) && is_self_target(node, "m_64C3E07E") =>
-            {
-                StateKind::Plain
-            }
             // The authored zero-valued form inherits the base state reader.
             "STU_D9843704"
                 if registration.shape(

@@ -314,3 +314,131 @@ fn runtime_class_metadata_keeps_existing_state_handlers_and_rejections() {
         }
     }
 }
+
+#[derive(Deserialize)]
+struct FactoryContract {
+    schema_version: u8,
+    evidence: String,
+    input: FactoryInput,
+}
+
+#[derive(Deserialize)]
+struct FactoryInput {
+    fixture_metadata: Json,
+    cases: Vec<FactoryCase>,
+}
+
+#[derive(Deserialize)]
+struct FactoryCase {
+    graph: u32,
+    class: String,
+    #[serde(default)]
+    selector: Json,
+    #[serde(default)]
+    client_only: bool,
+    expected: FactoryOutcome,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FactoryOutcome {
+    Plain,
+    ClientSkipped,
+    Unsupported,
+}
+
+#[test]
+fn inherited_base_factory_preserves_lifecycle_across_graph_placements() {
+    let fixture: FactoryContract = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/script-inherited-base-factory-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(fixture.schema_version, 1);
+    assert_eq!(fixture.evidence, "synthetic-rust");
+
+    let input = fixture.input;
+    let graphs: Vec<_> = input
+        .cases
+        .iter()
+        .map(|case| {
+            let mut graph = lifecycle_graph(
+                &case.class,
+                &Lifecycle {
+                    graph: case.graph,
+                    server_only: false,
+                    ending: Ending::Message,
+                },
+            );
+            graph["remote"] = json!([]);
+            let state = &mut graph["nodes"][usize::from(STATE_POS)];
+            state["remote"] = json!(-1);
+            state["client_only"] = json!(case.client_only);
+            state["fields"]["m_64C3E07E"] = case.selector.clone();
+            graph
+        })
+        .collect();
+
+    for with_metadata in [false, true] {
+        let mut bundle = json!({"version":1,"graphs":graphs,"bodies":{},"missing":[]});
+        if with_metadata {
+            bundle["runtime_state_metadata"] = input.fixture_metadata.clone();
+        }
+        let graphs =
+            Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+        for case in &input.cases {
+            let context = format!("graph {}, metadata {with_metadata}", case.graph);
+            let mut component = start(&graphs, case.graph, None);
+            send(&mut component, BEGIN_MESSAGE);
+            let snapshot = component.snapshot().unwrap();
+            let instance = &snapshot.instances[&ROOT];
+            match case.expected {
+                FactoryOutcome::Plain => {
+                    assert!(
+                        snapshot.diagnostics.is_empty(),
+                        "{context}: {:?}",
+                        snapshot.diagnostics
+                    );
+                    assert!(instance.states[&STATE].active, "{context}");
+                    assert_eq!(instance.states[&STATE].kind, StateKind::Plain, "{context}");
+                    assert_eq!(
+                        instance.variables.get(&BEGAN),
+                        Some(&Value::Bool(true)),
+                        "{context}"
+                    );
+                    assert!(!instance.variables.contains_key(&ENDED), "{context}");
+
+                    send(&mut component, ABORT_MESSAGE);
+                    let ended = component.snapshot().unwrap();
+                    let instance = &ended.instances[&ROOT];
+                    assert!(!instance.states[&STATE].active, "{context}");
+                    for marker in [ABORTED, ENDED] {
+                        assert_eq!(
+                            instance.variables.get(&marker),
+                            Some(&Value::Bool(true)),
+                            "{context}"
+                        );
+                    }
+                }
+                FactoryOutcome::ClientSkipped => {
+                    assert!(snapshot.diagnostics.is_empty(), "{context}");
+                    assert!(instance.states.is_empty(), "{context}");
+                    assert!(instance.variables.is_empty(), "{context}");
+                }
+                FactoryOutcome::Unsupported => {
+                    assert!(
+                        matches!(
+                            snapshot.diagnostics.as_slice(),
+                            [Diagnostic { issue: Issue::UnsupportedState(class), .. }]
+                            if class == &case.class
+                        ),
+                        "{context}: {:?}",
+                        snapshot.diagnostics
+                    );
+                    assert!(instance.states.is_empty(), "{context}");
+                    assert!(instance.variables.is_empty(), "{context}");
+                }
+            }
+        }
+    }
+}
