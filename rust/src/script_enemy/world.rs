@@ -1053,24 +1053,33 @@ impl World for EnemyWorld<'_> {
 
     fn spatial_ray_cast(
         &self,
+        site: Site,
+        vm_frame: u32,
         origin: [f64; 3],
         direction: [f64; 3],
         max_distance: f64,
     ) -> Option<Option<crate::script_expr::SpatialRayHit>> {
-        self.binding
-            .spatial_frame
-            .as_deref()?
-            .ray_cast(origin, direction, max_distance)
+        self.binding.spatial_frame.as_deref()?.ray_cast(
+            site,
+            vm_frame,
+            origin,
+            direction,
+            max_distance,
+        )
     }
 
     fn spatial_actor_ray_cast(
         &self,
+        site: Site,
+        vm_frame: u32,
         origin: [f64; 3],
         direction: [f64; 3],
         max_distance: f64,
         targets: &[u32],
     ) -> Option<Option<crate::script_expr::SpatialActorRayHit>> {
         self.binding.spatial_frame.as_deref()?.actor_ray_cast(
+            site,
+            vm_frame,
             origin,
             direction,
             max_distance,

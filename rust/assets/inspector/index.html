@@ -64,8 +64,11 @@
       <span><i class="sample player"></i> Player</span>
       <span><i class="sample bot"></i> Bot</span>
       <span><i class="sample dead"></i> Dead actor</span>
-      <span><i class="sample ray-hit"></i> Hitscan actor ray</span>
-      <span><i class="sample ray-world"></i> Hitscan wall ray</span>
+      <span><i class="sample ray-hit"></i> Actor ray hit</span>
+      <span><i class="sample ray-world"></i> World ray hit</span>
+      <span><i class="sample ray-miss"></i> Ray miss</span>
+      <span><i class="sample script-ray"></i> Script sample (long dash, hollow endpoint)</span>
+      <span><i class="sample ray-unavailable" aria-hidden="true">×</i> Unavailable sample</span>
       <span><i class="sample normal"></i> Contact normal</span>
       <span><i class="sample probe-hit"></i> Ground probe</span>
       <span><i class="sample route"></i> AI route</span>
@@ -76,6 +79,19 @@
     <p id="geometry-info" class="notes"></p>
     <p id="overlay-info" class="notes"></p>
     <p id="geometry-status" class="notes" role="status"></p>
+
+    <details id="script-ray-panel" class="entity-panel" hidden>
+      <summary>Script ray samples <span id="script-ray-count" class="code"></span></summary>
+      <p class="notes">Newest first in the shared ray history. Room tick and VM frame can differ.</p>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th scope="col">Room tick</th><th scope="col">VM frame</th><th scope="col">Source</th><th scope="col">Query</th><th scope="col">Result</th><th scope="col">Graph / instance / node</th></tr>
+          </thead>
+          <tbody id="script-ray-rows"></tbody>
+        </table>
+      </div>
+    </details>
 
     <section id="timing-panel" class="entity-panel" aria-labelledby="timing-heading" hidden>
       <h2 id="timing-heading">Server worker timing <span class="code">Since worker startup</span></h2>

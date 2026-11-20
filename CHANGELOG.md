@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added Inspector traces for StateScript ray queries. Player and NPC queries share the room's bounded ray history with weapon rays. Each script sample includes the graph, node, instance, VM frame and room capture tick. The overlay distinguishes actor hits, walls, misses and unavailable samples.
+
 - Added authored held-input states with automatic listener registration and explicit state ownership for held and idle branches. The loader uses the existing logical-button lifecycle for button edges, locks, death admission, and teardown. An early buffered press follows its originating button binding.
 - Cancelled pending starts for a departing subgraph after all its child teardown callbacks run. An end callback can no longer reactivate an earlier sibling during the same release.
 

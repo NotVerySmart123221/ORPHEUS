@@ -14,6 +14,7 @@
   --ray-hit: #ff6b8b;
   --ray-world: #f2b866;
   --ray-miss: #7c8ca3;
+  --ray-unavailable: #d7a7ff;
   --normal: #b89bff;
   --probe-hit: #6be39f;
   --probe-miss: #e06d75;
@@ -93,7 +94,7 @@ canvas { display: block; background: #0e141b; width: 100%; height: clamp(14rem, 
 .legend span { display: flex; align-items: center; gap: .4rem; }
 .legend, .notes { color: var(--muted); font-size: .85rem; }
 .sample { width: .65rem; height: .65rem; display: inline-block; background: currentColor; border-radius: 50%; }
-.sample.triangle, .sample.proxy, .sample.ray-hit, .sample.ray-world, .sample.normal, .sample.route, .sample.path { border-radius: 0; height: .15rem; }
+.sample.triangle, .sample.proxy, .sample.ray-hit, .sample.ray-world, .sample.ray-miss, .sample.script-ray, .sample.normal, .sample.route, .sample.path { border-radius: 0; height: .15rem; }
 .sample.triangle { color: var(--triangle); }
 .sample.proxy { color: var(--proxy); }
 .sample.player { color: var(--player); }
@@ -101,6 +102,10 @@ canvas { display: block; background: #0e141b; width: 100%; height: clamp(14rem, 
 .sample.dead { color: var(--dead); background: transparent; border: 1px solid currentColor; }
 .sample.ray-hit { color: var(--ray-hit); }
 .sample.ray-world { color: var(--ray-world); }
+.sample.ray-miss { color: var(--ray-miss); }
+.sample.script-ray { width: 1.1rem; background: transparent; border-top: 2px dashed var(--muted); }
+.sample.ray-unavailable { color: var(--ray-unavailable); background: transparent; font: 700 1rem/0.65rem monospace; }
+.ray-unavailable { color: var(--ray-unavailable); }
 .sample.normal { color: var(--normal); }
 .sample.probe-hit { color: var(--probe-hit); }
 .sample.route { color: var(--route); }
@@ -109,6 +114,8 @@ canvas { display: block; background: #0e141b; width: 100%; height: clamp(14rem, 
 .sample.spawn-no { color: var(--spawn-no); background: transparent; border: 1px solid currentColor; }
 
 .entity-panel { margin-top: 1rem; }
+.entity-panel summary { cursor: pointer; padding: .65rem .75rem; font-size: 1rem; font-weight: 650; }
+.entity-panel summary .code { margin-left: .35rem; }
 .entity-panel .notes { padding: 0 .75rem .65rem; }
 .vm-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; padding: 0 .75rem .65rem; }
 .vm-controls .code { margin-left: auto; }

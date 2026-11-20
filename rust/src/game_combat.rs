@@ -305,6 +305,10 @@ pub(crate) struct RoomSpatialFrame {
     script_targets: HashMap<u32, RoomScriptTarget>,
     player_wires: HashMap<u32, u32>,
     ground: Arc<CollisionScene>,
+    #[cfg(any(test, feature = "inspector"))]
+    captured_tick: u32,
+    #[cfg(any(test, feature = "inspector"))]
+    debug_rays: Arc<crate::game_debug::DebugRayHistory>,
 }
 
 impl RoomSpatialFrame {
@@ -337,11 +341,16 @@ impl RoomSpatialFrame {
 
     pub(crate) fn ray_cast(
         &self,
+        site: crate::script_init::Site,
+        vm_frame: u32,
         origin: Vec3,
         direction: Vec3,
         max_distance: f64,
     ) -> Option<Option<crate::script_expr::SpatialRayHit>> {
-        self.ground
+        #[cfg(not(any(test, feature = "inspector")))]
+        let _ = (site, vm_frame);
+        let result = self
+            .ground
             .checked_cast_ray(origin, direction, max_distance, MOVER_CATEGORY)
             .map(|hit| {
                 hit.map(|hit| crate::script_expr::SpatialRayHit {
@@ -349,54 +358,144 @@ impl RoomSpatialFrame {
                     point: hit.point,
                     normal: hit.normal,
                 })
-            })
+            });
+        #[cfg(any(test, feature = "inspector"))]
+        {
+            let (hit, end) = match result {
+                Some(Some(hit)) => ("world", hit.point),
+                Some(None) => (
+                    "none",
+                    crate::static_ray::along(origin, direction, max_distance),
+                ),
+                None => (
+                    "unavailable",
+                    crate::static_ray::along(origin, direction, max_distance),
+                ),
+            };
+            self.record_script_ray(site, vm_frame, "script_static", [origin, end], (hit, None));
+        }
+        result
     }
 
     pub(crate) fn actor_ray_cast(
         &self,
+        site: crate::script_init::Site,
+        vm_frame: u32,
         origin: Vec3,
         direction: Vec3,
         max_distance: f64,
         targets: &[u32],
     ) -> Option<Option<crate::script_expr::SpatialActorRayHit>> {
-        let capsules = self.actor_capsules.as_ref()?;
-        let wall = self
-            .ground
-            .checked_cast_ray(origin, direction, max_distance, MOVER_CATEGORY)?;
-        let mut nearest: Option<crate::script_expr::SpatialActorRayHit> = None;
-        for &entity in targets {
-            let target = self.script_targets.get(&entity)?;
-            let candidate = self.candidates.get(target.candidate_index)?;
-            let pose = capsules.get(&entity)?;
-            if candidate.entity != entity
-                || candidate.position != pose.feet
-                || !pose.feet.into_iter().all(f64::is_finite)
-                || !pose.height.is_finite()
-                || pose.height < 0.0
-                || !pose.radius.is_finite()
-                || pose.radius <= 0.0
-            {
-                return None;
+        #[cfg(not(any(test, feature = "inspector")))]
+        let _ = (site, vm_frame);
+        #[cfg(any(test, feature = "inspector"))]
+        let mut occluding_point = None;
+        // Keep availability and actor admission atomic: a partially checked
+        // candidate list still returns unavailable, including in diagnostics.
+        let result = (|| {
+            let capsules = self.actor_capsules.as_ref()?;
+            let wall =
+                self.ground
+                    .checked_cast_ray(origin, direction, max_distance, MOVER_CATEGORY)?;
+            let mut nearest: Option<crate::script_expr::SpatialActorRayHit> = None;
+            for &entity in targets {
+                let target = self.script_targets.get(&entity)?;
+                let candidate = self.candidates.get(target.candidate_index)?;
+                let pose = capsules.get(&entity)?;
+                if candidate.entity != entity
+                    || candidate.position != pose.feet
+                    || !pose.feet.into_iter().all(f64::is_finite)
+                    || !pose.height.is_finite()
+                    || pose.height < 0.0
+                    || !pose.radius.is_finite()
+                    || pose.radius <= 0.0
+                {
+                    return None;
+                }
+                let [bottom, top] = pose.segment();
+                if !bottom.into_iter().chain(top).all(f64::is_finite) {
+                    return None;
+                }
+                let Some(distance) = capsule_entry_distance(
+                    origin,
+                    direction,
+                    max_distance,
+                    bottom,
+                    top,
+                    pose.radius,
+                ) else {
+                    continue;
+                };
+                if wall.is_some_and(|wall| wall.distance < distance) {
+                    #[cfg(any(test, feature = "inspector"))]
+                    {
+                        occluding_point = wall.map(|wall| wall.point);
+                    }
+                    continue;
+                }
+                if nearest.as_ref().is_none_or(|hit| {
+                    distance < hit.distance || (distance == hit.distance && entity < hit.entity)
+                }) {
+                    nearest = Some(crate::script_expr::SpatialActorRayHit { entity, distance });
+                }
             }
-            let [bottom, top] = pose.segment();
-            if !bottom.into_iter().chain(top).all(f64::is_finite) {
-                return None;
-            }
-            let Some(distance) =
-                capsule_entry_distance(origin, direction, max_distance, bottom, top, pose.radius)
-            else {
-                continue;
+            Some(nearest)
+        })();
+        #[cfg(any(test, feature = "inspector"))]
+        {
+            let (hit, end, target) = match result {
+                Some(Some(hit)) => (
+                    "actor",
+                    crate::static_ray::along(origin, direction, hit.distance),
+                    Some(hit.entity),
+                ),
+                Some(None) => match occluding_point {
+                    Some(point) => ("world", point, None),
+                    None => (
+                        "none",
+                        crate::static_ray::along(origin, direction, max_distance),
+                        None,
+                    ),
+                },
+                None => (
+                    "unavailable",
+                    crate::static_ray::along(origin, direction, max_distance),
+                    None,
+                ),
             };
-            if wall.is_some_and(|wall| wall.distance < distance) {
-                continue;
-            }
-            if nearest.as_ref().is_none_or(|hit| {
-                distance < hit.distance || (distance == hit.distance && entity < hit.entity)
-            }) {
-                nearest = Some(crate::script_expr::SpatialActorRayHit { entity, distance });
-            }
+            self.record_script_ray(site, vm_frame, "script_actor", [origin, end], (hit, target));
         }
-        Some(nearest)
+        result
+    }
+
+    #[cfg(any(test, feature = "inspector"))]
+    fn record_script_ray(
+        &self,
+        site: crate::script_init::Site,
+        vm_frame: u32,
+        kind: &'static str,
+        [origin, end]: [Vec3; 2],
+        (hit, target): (&'static str, Option<u32>),
+    ) {
+        if !origin.into_iter().chain(end).all(f64::is_finite) {
+            return;
+        }
+        self.debug_rays.push(crate::game_debug::DebugRay {
+            tick: self.captured_tick,
+            source: site.entity,
+            kind,
+            origin,
+            end,
+            hit,
+            target,
+            critical: false,
+            script: Some(crate::game_debug::DebugScriptRay {
+                graph: site.graph,
+                instance: site.instance,
+                node: site.node,
+                vm_frame,
+            }),
+        });
     }
 }
 
@@ -448,9 +547,7 @@ pub(crate) struct RoomSimulation {
     enemy_projectiles: Vec<Entity>,
     witch_staff_links: IndexMap<u32, (u32, u16)>,
     #[cfg(any(test, feature = "inspector"))]
-    debug_rays: std::collections::VecDeque<crate::game_debug::DebugRay>,
-    #[cfg(any(test, feature = "inspector"))]
-    debug_rays_truncated: bool,
+    debug_rays: Arc<crate::game_debug::DebugRayHistory>,
 }
 
 impl RoomSimulation {
@@ -764,9 +861,7 @@ impl RoomSimulation {
             enemy_projectiles: Vec::new(),
             witch_staff_links: IndexMap::new(),
             #[cfg(any(test, feature = "inspector"))]
-            debug_rays: std::collections::VecDeque::new(),
-            #[cfg(any(test, feature = "inspector"))]
-            debug_rays_truncated: false,
+            debug_rays: Arc::default(),
         })
     }
 
@@ -928,6 +1023,10 @@ impl RoomSimulation {
             script_targets,
             player_wires,
             ground: Arc::clone(&queries.ground),
+            #[cfg(any(test, feature = "inspector"))]
+            captured_tick: frame,
+            #[cfg(any(test, feature = "inspector"))]
+            debug_rays: Arc::clone(&self.debug_rays),
         })))
     }
 
@@ -1187,12 +1286,8 @@ impl RoomSimulation {
     }
 
     #[cfg(any(test, feature = "inspector"))]
-    fn record_debug_ray(&mut self, ray: crate::game_debug::DebugRay) {
-        if self.debug_rays.len() == crate::game_debug::MAX_DEBUG_RAYS {
-            self.debug_rays.pop_front();
-            self.debug_rays_truncated = true;
-        }
-        self.debug_rays.push_back(ray);
+    fn record_debug_ray(&self, ray: crate::game_debug::DebugRay) {
+        self.debug_rays.push(ray);
     }
 
     #[cfg(any(test, feature = "inspector"))]
@@ -1203,11 +1298,11 @@ impl RoomSimulation {
             MAX_DEBUG_CONTACT_NORMALS, MAX_DEBUG_GROUND_PROBES, PhysicsOverlay, PhysicsTruncation,
         };
 
-        let rays: Vec<_> = self.debug_rays.iter().copied().collect();
+        let (rays, rays_truncated) = self.debug_rays.snapshot();
         let mut contact_normals = Vec::new();
         let mut ground_probes = Vec::new();
         let mut truncated = PhysicsTruncation {
-            rays: self.debug_rays_truncated,
+            rays: rays_truncated,
             contact_normals: false,
             ground_probes: false,
         };
@@ -1584,6 +1679,7 @@ impl RoomSimulation {
                     hit,
                     target: None,
                     critical: false,
+                    script: None,
                 });
             }
             return Ok(None);
@@ -1598,6 +1694,7 @@ impl RoomSimulation {
             hit: "actor",
             target: Some(impact.entity),
             critical: impact.critical,
+            script: None,
         });
         if self.players_by_wire.contains_key(&impact.entity) {
             return self.apply_player_impact(shot.source, shot.shot_frame, context, &impact);
@@ -2200,6 +2297,7 @@ impl RoomSimulation {
                                         hit: "actor",
                                         target: Some(impact.entity),
                                         critical: impact.critical,
+                                        script: None,
                                     });
                                     enemy_damage.push(crate::script_enemy::EnemyDamage {
                                         source: bot.entity,
@@ -2247,6 +2345,7 @@ impl RoomSimulation {
                                             hit,
                                             target: None,
                                             critical: false,
+                                            script: None,
                                         });
                                     }
                                 }
@@ -2624,7 +2723,6 @@ impl RoomSimulation {
         #[cfg(any(test, feature = "inspector"))]
         {
             self.debug_rays.clear();
-            self.debug_rays_truncated = false;
         }
         self.debug_assert_encounter_invariants();
     }

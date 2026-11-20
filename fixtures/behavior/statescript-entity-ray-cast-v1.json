@@ -35,6 +35,20 @@
   "expected": {
     "eligible": [9, 27],
     "hit": [9, 4.25, [2, 1, 4.25]],
-    "inside_hit": [27, 0, [2, 1, 0]]
+    "inside_hit": [27, 0, [2, 1, 0]],
+    "inspector_held_samples": {
+      "graph": 94,
+      "instance": 1,
+      "node": 5,
+      "frames": [
+        [2, "actor"],
+        [3, "actor"],
+        [4, "world"],
+        [5, "actor"],
+        [6, "unavailable"],
+        [7, "actor"]
+      ],
+      "retired_frame": 11
+    }
   }
 }

@@ -790,6 +790,7 @@ mod tests {
                             hit: "actor",
                             target: Some(0xc000_1000),
                             critical: true,
+                            script: None,
                         }],
                         contact_normals: vec![DebugContactNormal {
                             tick: 99,
@@ -924,6 +925,11 @@ mod tests {
         let (_, body) = state_res.split_once("\r\n\r\n").unwrap();
         let state_json: Value = serde_json::from_str(body).unwrap();
         assert_eq!(state_json["rooms"][0]["physics"]["rays"][0]["hit"], "actor");
+        assert!(
+            state_json["rooms"][0]["physics"]["rays"][0]
+                .get("script")
+                .is_none()
+        );
         assert_eq!(
             state_json["rooms"][0]["navigation"]["spawn_candidates"][0]["accepted"],
             true

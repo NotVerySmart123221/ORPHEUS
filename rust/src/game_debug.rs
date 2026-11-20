@@ -1,7 +1,10 @@
 //! Read-only simulation facts copied by the game worker for local diagnostics.
 
 #[cfg(any(test, feature = "inspector"))]
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, VecDeque},
+    sync::Mutex,
+};
 
 #[cfg(any(test, feature = "inspector"))]
 use indexmap::IndexMap;
@@ -154,6 +157,64 @@ pub(crate) struct DebugRay {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<u32>,
     pub critical: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script: Option<DebugScriptRay>,
+}
+
+#[cfg(any(test, feature = "inspector"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct DebugScriptRay {
+    pub graph: u32,
+    pub instance: u16,
+    pub node: Option<u16>,
+    pub vm_frame: u32,
+}
+
+/// One bounded history shared by combat and frozen-frame script queries.
+#[cfg(any(test, feature = "inspector"))]
+#[derive(Debug, Default)]
+pub(crate) struct DebugRayHistory {
+    state: Mutex<DebugRayBuffer>,
+}
+
+#[cfg(any(test, feature = "inspector"))]
+#[derive(Debug, Default)]
+struct DebugRayBuffer {
+    rays: VecDeque<DebugRay>,
+    truncated: bool,
+}
+
+#[cfg(any(test, feature = "inspector"))]
+impl DebugRayHistory {
+    pub(crate) fn push(&self, ray: DebugRay) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if state.rays.len() == MAX_DEBUG_RAYS {
+            state.rays.pop_front();
+            state.truncated = true;
+        }
+        state.rays.push_back(ray);
+    }
+
+    pub(crate) fn snapshot(&self) -> (Vec<DebugRay>, bool) {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        (state.rays.iter().copied().collect(), state.truncated)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn clear(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        state.rays.clear();
+        state.truncated = false;
+    }
 }
 
 #[cfg(any(test, feature = "inspector"))]
