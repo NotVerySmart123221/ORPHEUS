@@ -187,6 +187,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         let result = self.world.vitals.damage(amount, source);
         if result.killed {
             self.world.swept_displacement = None;
+            self.world.velocity_changes.clear();
             self.component.set_owner_dead(true);
             if let Err(error) = self.sync_charge_admission(false) {
                 eprintln!("Owner death charge cleanup failed: {error}");

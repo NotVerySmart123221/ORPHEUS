@@ -164,8 +164,16 @@ impl BodyScript {
         }
         mover.set_cinematic_aim(runtime.cinematic_aim());
         mover.set_authored_facing(runtime.authored_facing());
-        for (frame, change) in runtime.take_velocity_changes() {
-            mover.queue_velocity_change(frame, change);
+        let velocity_changes = runtime.take_velocity_changes();
+        if runtime
+            .vitals()
+            .is_some_and(|vitals| vitals.death().is_some())
+        {
+            mover.clear_pending_script_motion();
+        } else {
+            for (frame, change) in velocity_changes {
+                mover.queue_velocity_change(frame, change);
+            }
         }
         if step == BodyStep::UnposedTimer {
             // Combat discards the neutral interval's reports at its boundary.

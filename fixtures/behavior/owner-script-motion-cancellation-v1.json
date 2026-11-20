@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "case_id": "owner-script-motion-cancellation.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "source": {
+    "basis": "Original pending motion and posed-runtime failure during recovered input."
+  },
+  "input": {
+    "actor": 7,
+    "spawn_frame": 100,
+    "warm_pose_frame": 101,
+    "fault_pose_frame": 102,
+    "velocity_due_frame": 104,
+    "recovered_command_frame": 105,
+    "velocity_delta": [12, 0, 0]
+  },
+  "expected": {
+    "faulted_final_x": 0
+  }
+}

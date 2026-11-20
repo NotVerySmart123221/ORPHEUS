@@ -6,6 +6,9 @@ use crate::{contact_cache::CapsulePose, game_bots::Bot, mover_settings::MoverCat
 
 use super::{CombatError, PlayerBodyState, RoomSimulation};
 
+#[cfg(test)]
+mod tests;
+
 pub(super) struct MovementContacts {
     free_for_all: bool,
     movers: Arc<MoverCatalog>,
@@ -29,7 +32,12 @@ impl MovementContactFrame {
 
     pub(crate) fn stage_bot(&self, bot: &mut Bot, tick: u32) {
         if !bot.dead && !bot.has_movement_blockers(tick) {
-            bot.set_movement_blockers(tick, self.blockers(bot.entity, bot.spawn.team));
+            let blockers = if self.actors.contains_key(&bot.entity) {
+                self.blockers(bot.entity, bot.spawn.team)
+            } else {
+                Vec::new()
+            };
+            bot.set_movement_blockers(tick, blockers);
         }
     }
 }
@@ -69,8 +77,18 @@ impl RoomSimulation {
         for state in self.states() {
             let state = state?;
             let bot = &state.bot;
-            if !bot.dead && state.vitals.death().is_none() {
-                let settings = contacts.movers.for_body(Some(bot.spawn.body));
+            if bot.dead || state.vitals.death().is_some() {
+                continue;
+            }
+            let settings = contacts.movers.for_body(Some(bot.spawn.body));
+            let enabled = state
+                .enemy
+                .as_ref()
+                .filter(|enemy| enemy.fault.is_none())
+                .map_or(settings.character_collision != 0, |enemy| {
+                    enemy.scripts.character_collision(tick, settings)
+                });
+            if enabled {
                 actors.insert(
                     bot.entity,
                     (team(bot.spawn.team), bot.contact_capsule(settings)),
@@ -88,7 +106,7 @@ impl RoomSimulation {
                     actual: state.id.entity,
                 });
             }
-            if state.alive() {
+            if state.alive() && state.mover.character_collision_for_snapshot(state.frame) {
                 actors.insert(wire, (team(state.team), state.mover.contact_capsule()));
             }
         }

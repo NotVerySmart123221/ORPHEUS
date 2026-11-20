@@ -36,7 +36,7 @@ const TERMINAL: usize = 13;
 const TERMINAL_UP: usize = 14;
 const GROUND_ACCEL: usize = 15;
 const GROUND_DECEL: usize = 16;
-const COLLISION: usize = 22;
+pub(crate) const COLLISION: u8 = 22;
 const STEP_DOWN: usize = 38;
 
 pub use orpheus_statescript::script_modifiers::{Modifier, ModifierKey, Operation};
@@ -186,6 +186,10 @@ impl ActiveModifiers {
             .fold(base, |value, modifier| modifier.apply(value))
     }
 
+    pub(crate) fn character_collision(&self, base: &MoverSettings) -> bool {
+        self.intent(COLLISION, f64::from(base.character_collision)) > CAP_TINY
+    }
+
     pub(crate) fn throttles(&self, right: f64, forward: f64) -> (f64, f64) {
         if !self
             .0
@@ -219,7 +223,6 @@ impl ActiveModifiers {
             (TERMINAL_UP, base.terminal_velocity_up),
             (GROUND_ACCEL, base.ground_gravity_accel),
             (GROUND_DECEL, base.ground_gravity_decel),
-            (COLLISION, f64::from(base.character_collision)),
             (STEP_DOWN, 1.0),
         ] {
             slots[index] = Some(value);
@@ -264,7 +267,7 @@ impl ActiveModifiers {
             terminal_velocity_up: nonnegative(TERMINAL_UP),
             ground_gravity_accel: slot(GROUND_ACCEL),
             ground_gravity_decel: slot(GROUND_DECEL),
-            character_collision: u32::from(slot(COLLISION) > CAP_TINY),
+            character_collision: u32::from(self.character_collision(base)),
             step_down: narrow(base.step_down * nonnegative(STEP_DOWN)),
             ..*base
         }

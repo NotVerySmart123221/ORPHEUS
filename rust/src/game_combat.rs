@@ -1538,10 +1538,11 @@ impl RoomSimulation {
 
     pub(crate) fn queue_enemy_result(&mut self, parameters: &crate::script_wire::Variables) {
         for &handle in self.by_wire.values() {
-            let mut state = self
+            let state = self
                 .world
                 .get_mut::<BotState>(handle)
-                .expect("live bot handle");
+                .expect("live bot handle")
+                .into_inner();
             let Some(enemy) = state.enemy.as_mut().filter(|enemy| enemy.fault.is_none()) else {
                 continue;
             };
@@ -1561,7 +1562,7 @@ impl RoomSimulation {
                         "enemy {} result delivery failed: {error}",
                         enemy.binding.body
                     );
-                    enemy.fault = Some(error.to_string());
+                    enemy.halt(&mut state.bot, error.to_string());
                 }
             }
         }
@@ -1899,7 +1900,7 @@ impl RoomSimulation {
                                             Ok(allowed) => control_allowed = allowed,
                                             Err(error) => {
                                                 control_allowed = false;
-                                                enemy.fault = Some(error);
+                                                enemy.halt(&mut state.bot, error);
                                             }
                                         }
                                     }
@@ -2062,7 +2063,7 @@ impl RoomSimulation {
             state.bot.died(source.frame);
             if let Some(enemy) = &mut state.enemy {
                 if let Err(error) = enemy.scripts.queue_death(source, critical, loadout) {
-                    enemy.fault = Some(format!("enemy death input: {error}"));
+                    enemy.halt(&mut state.bot, format!("enemy death input: {error}"));
                 }
             }
             state.respawn_at = state
@@ -2188,6 +2189,9 @@ impl RoomSimulation {
                 if let Some(frame) = &motion_frame {
                     frame.stage_bot(bot, tick);
                 }
+                if bot.dead || vitals.death().is_some() {
+                    enemy.scripts.clear_pending_script_motion();
+                }
                 if let Some(displacement) = enemy
                     .scripts
                     .take_swept_displacement(tick)
@@ -2222,7 +2226,7 @@ impl RoomSimulation {
                         },
                         &witch_allies,
                     ) {
-                        enemy.fault = Some(error.to_string());
+                        enemy.halt(bot, error.to_string());
                         continue;
                     }
                 }
@@ -2238,7 +2242,7 @@ impl RoomSimulation {
                             targets
                         },
                     ) {
-                        enemy.fault = Some(error.to_string());
+                        enemy.halt(bot, error.to_string());
                         continue;
                     }
                 }
@@ -2259,7 +2263,7 @@ impl RoomSimulation {
                     bot.stop_objective(tick);
                 } else if let Err(error) = enemy.approach_gate(bot, tick, queries) {
                     bot.stop_objective(tick);
-                    enemy.fault = Some(error.to_string());
+                    enemy.halt(bot, error.to_string());
                     continue;
                 }
                 if let Err(error) = enemy.advance_boss_weapon(
@@ -2270,7 +2274,7 @@ impl RoomSimulation {
                     &external_and_players,
                 ) {
                     bot.stop_objective(tick);
-                    enemy.fault = Some(error.to_string());
+                    enemy.halt(bot, error.to_string());
                     continue;
                 }
                 let navigation_pose = bot.movement(tick);
@@ -2297,7 +2301,7 @@ impl RoomSimulation {
                 if let Err(error) = advanced {
                     eprintln!("enemy {} halted: {error}", enemy.binding.body);
                     bot.stop_objective(tick);
-                    enemy.fault = Some(error);
+                    enemy.halt(bot, error);
                 } else if let Some(aim) = enemy.scripts.cinematic_aim() {
                     bot.apply_encounter_aim(aim, tick);
                 } else if let Some(aim) = enemy.scripts.authored_facing(enemy.binding.body) {
@@ -2407,6 +2411,7 @@ impl RoomSimulation {
                 enemy_damage.extend(enemy.scripts.take_scripted_damage());
                 if vitals.death().is_some() && !bot.dead {
                     bot.died(tick);
+                    enemy.scripts.clear_pending_script_motion();
                 }
                 if let Some(health) = vitals.changed_component() {
                     self.scripted_health.push(EntityUpdate {
@@ -2422,7 +2427,7 @@ impl RoomSimulation {
                             .scripts
                             .queue_common_corpse_retirement(&enemy.binding, vitals, tick)
                     {
-                        enemy.fault = Some(error);
+                        enemy.halt(bot, error);
                     }
                 }
                 if enemy.fault.is_none() && enemy.scripts.retirement_requested {
@@ -2431,7 +2436,7 @@ impl RoomSimulation {
                             .scripts
                             .teardown(&enemy.graphs, &enemy.binding, vitals)
                     {
-                        enemy.fault = Some(error);
+                        enemy.halt(bot, error);
                     } else {
                         retired.push(bot.entity);
                         self.scene_messages
@@ -2468,7 +2473,7 @@ impl RoomSimulation {
                     .poll_voice(&enemy.graphs, &enemy.binding, vitals)
                 {
                     bot.stop_objective(tick);
-                    enemy.fault = Some(error);
+                    enemy.halt(bot, error);
                 }
             }
         }
@@ -2563,7 +2568,7 @@ impl RoomSimulation {
                         Some((source, instance)),
                         None,
                     ) {
-                        enemy.fault = Some(error);
+                        enemy.halt(&mut state.bot, error);
                     }
                 }
             }
@@ -2587,7 +2592,7 @@ impl RoomSimulation {
                         }
                         Ok(None) => (),
                         Err(error) => {
-                            enemy.fault = Some(error);
+                            enemy.halt(&mut state.bot, error);
                         }
                     }
                 }
