@@ -92,6 +92,121 @@ fn graph(
     })
 }
 
+#[test]
+fn runtime_class_metadata_preserves_owner_and_observer_wire_format() {
+    const PLAIN: &str = "SyntheticRuntimePlain";
+    const CLIENT: &str = "SyntheticClientState";
+
+    let bundle = |mapped| {
+        let mut starts = vec![json!([1, "m_beginPlug"])];
+        if mapped {
+            starts.push(json!([2, "m_beginPlug"]));
+        }
+        let mut root = graph(
+            42,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({
+                        "m_outPlug":{"$":"Plug","links":starts}
+                    }),
+                ),
+                node(
+                    1,
+                    if mapped { PLAIN } else { "STUStatescriptState" },
+                    Some(0),
+                    json!({}),
+                ),
+                node(2, CLIENT, Some(1), json!({})),
+            ],
+            json!([1, 2]),
+            json!([0]),
+            json!([1, 2]),
+            json!([]),
+        );
+        root["nodes"][1]["remote"] = json!(0);
+        root["nodes"][2]["remote"] = json!(1);
+        let mut data = json!({"version":1,"graphs":[root],"bodies":{},"missing":[]});
+        if mapped {
+            data["runtime_state_metadata"] = json!({
+                "plain_classes":[PLAIN],
+                "client_states":[{"graph":42,"state":1,"rid":2,"class":CLIENT}]
+            });
+        }
+        GraphStore::from_json(&serde_json::to_vec(&data).unwrap()).unwrap()
+    };
+    let builtin = bundle(false);
+    let mapped = bundle(true);
+    let start = |graphs| {
+        initialize(
+            graphs,
+            ENTITY,
+            Variables::new(),
+            vec![Root::new(1, 42)],
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap()
+    };
+    let builtin_snapshot = start(&builtin);
+    let mapped_snapshot = start(&mapped);
+    assert!(
+        mapped_snapshot.initialization_complete(),
+        "{:?}",
+        mapped_snapshot.diagnostics
+    );
+    assert!(mapped_snapshot.instances[&1].states[&0].active);
+    assert!(!mapped_snapshot.instances[&1].states.contains_key(&1));
+
+    let mapped_graph = mapped.graph(42).unwrap();
+    let builtin_graph = builtin.graph(42).unwrap();
+    assert_eq!(
+        mapped_graph.owner_positions(),
+        builtin_graph.owner_positions()
+    );
+    assert_eq!(
+        mapped_graph.remote_positions(),
+        builtin_graph.remote_positions()
+    );
+    assert_eq!(mapped_graph.owner_positions(), [1, 2]);
+    assert_eq!(mapped_graph.remote_positions(), [1, 2]);
+    assert_eq!(mapped_graph.state(0).unwrap().class, PLAIN);
+    assert_eq!(mapped_graph.state(1).unwrap().class, CLIENT);
+
+    let mut registry: Json = serde_json::from_str(CODECS).unwrap();
+    registry["classes"]["F3410001"] = json!({
+        "name":PLAIN,"codec":"none","stec":false,"status":"VERIFIED","layout":[]
+    });
+    let codecs = CodecTable::from_json(&registry.to_string()).unwrap();
+    let builtin_encoder = SnapshotEncoder::new(&builtin, &codecs);
+    let mapped_encoder = SnapshotEncoder::new(&mapped, &codecs);
+    let original_codecs = CodecTable::from_json(CODECS).unwrap();
+    let unmapped_encoder = SnapshotEncoder::new(&mapped, &original_codecs);
+    for view in [View::Owner, View::Observer] {
+        let baseline = builtin_encoder
+            .full(&builtin_encoder.project(&builtin_snapshot, view).unwrap())
+            .unwrap();
+        let projected = mapped_encoder.project(&mapped_snapshot, view).unwrap();
+        assert_eq!(
+            projected.instances[&1]
+                .states
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+            [0]
+        );
+        let encoded = mapped_encoder.full(&projected).unwrap();
+        assert_eq!(encoded.bit_len(), baseline.bit_len());
+        assert_eq!(encoded.as_bytes(), baseline.as_bytes());
+        assert!(matches!(
+            unmapped_encoder.project(&mapped_snapshot, view),
+            Err(SnapshotError::UnsupportedState { class, .. }) if class == PLAIN
+        ));
+    }
+}
+
 fn fixture() -> (GraphStore, Snapshot) {
     let root = graph(
         42,

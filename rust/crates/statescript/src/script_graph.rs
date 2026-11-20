@@ -89,13 +89,17 @@ pub struct Node {
     pub client_only: bool,
     #[serde(deserialize_with = "node_flag")]
     pub server_only: bool,
+    #[serde(skip)]
+    runtime_plain_state: bool,
+    #[serde(skip)]
+    runtime_client_state: bool,
     pub fields: Value,
 }
 
 impl Node {
-    /// Whether the node's declared execution scope includes the server.
+    /// Whether the node can run on the server.
     pub(crate) fn runs_on_server(&self) -> bool {
-        !self.client_only
+        !self.client_only && !self.runtime_client_state
     }
 
     pub fn is_networked(&self) -> bool {
@@ -109,6 +113,10 @@ impl Node {
     /// Whether authored metadata opts this node into the ordinary state lifecycle.
     pub fn declares_plain_state(&self) -> bool {
         matches!(self.state_behavior, Some(StateBehavior::Plain))
+    }
+
+    pub(crate) fn declares_runtime_plain_state(&self) -> bool {
+        self.runtime_plain_state
     }
 
     pub(crate) fn declares_observe_state(&self) -> bool {
@@ -414,6 +422,53 @@ pub struct Graph {
 }
 
 impl Graph {
+    fn apply_runtime_state_metadata(
+        &mut self,
+        plain_classes: &BTreeSet<String>,
+        mut client_states: BTreeMap<u16, RuntimeClientState>,
+    ) -> io::Result<()> {
+        if plain_classes.is_empty() && client_states.is_empty() {
+            return Ok(());
+        }
+        for node in &mut self.nodes {
+            let Some(slot) = node.state.filter(|&slot| {
+                self.states.get(usize::from(slot)).copied().flatten() == Some(node.pos)
+            }) else {
+                continue;
+            };
+            let authored = node.class.starts_with("authored.")
+                || node.state_behavior.is_some()
+                || node.action_behavior.is_some()
+                || node.declares_room_message_entry()
+                || node.host_event_kind().is_some();
+            if let Some(state) = client_states.remove(&slot) {
+                if node.rid != state.rid
+                    || node.class != state.class
+                    || !node.is_state()
+                    || node.server_only
+                    || authored
+                {
+                    return Err(invalid(format!(
+                        "runtime client state in graph {} at slot {slot} does not match an eligible state",
+                        self.index
+                    )));
+                }
+                node.runtime_client_state = true;
+            }
+            node.runtime_plain_state = !authored
+                && node.runs_on_server()
+                && node.is_state()
+                && plain_classes.contains(&node.class);
+        }
+        if let Some((slot, _)) = client_states.first_key_value() {
+            return Err(invalid(format!(
+                "runtime client state in graph {} at slot {slot} has no matching state",
+                self.index
+            )));
+        }
+        Ok(())
+    }
+
     fn compile(&mut self) -> io::Result<()> {
         self.by_pos = vec![None; usize::from(self.items)];
         if let Some(max) = self.nodes.iter().map(|node| node.rid).max() {
@@ -1032,11 +1087,39 @@ impl AuthoredClassBehavior {
     }
 }
 
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeStateMetadata {
+    #[serde(default)]
+    plain_classes: Vec<String>,
+    #[serde(default)]
+    client_states: Vec<RuntimeClientState>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeClientState {
+    graph: u32,
+    state: u16,
+    rid: u16,
+    class: String,
+}
+
+fn valid_runtime_class_name(class: &str) -> bool {
+    (1..=128).contains(&class.len())
+        && class.as_bytes()[0].is_ascii_alphabetic()
+        && class
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
 #[derive(Deserialize)]
 struct Bundle {
     version: u32,
     #[serde(default)]
     authored_classes: Vec<AuthoredClass>,
+    #[serde(default)]
+    runtime_state_metadata: RuntimeStateMetadata,
     graphs: Vec<Graph>,
     bodies: BTreeMap<String, Body>,
     #[serde(default)]
@@ -1148,6 +1231,34 @@ impl GraphStore {
                 return Err(invalid(format!("duplicate authored class {class}")));
             }
         }
+        let mut plain_classes = BTreeSet::new();
+        for class in bundle.runtime_state_metadata.plain_classes {
+            if !valid_runtime_class_name(&class) {
+                return Err(invalid("invalid runtime plain state class name"));
+            }
+            if !plain_classes.insert(class) {
+                return Err(invalid("duplicate runtime plain state class"));
+            }
+        }
+        let mut client_states = BTreeMap::<u32, BTreeMap<u16, RuntimeClientState>>::new();
+        for row in bundle.runtime_state_metadata.client_states {
+            let RuntimeClientState { graph, state, .. } = row;
+            if !valid_runtime_class_name(&row.class) {
+                return Err(invalid(format!(
+                    "invalid runtime client state class in graph {graph} at slot {state}"
+                )));
+            }
+            if client_states
+                .entry(graph)
+                .or_default()
+                .insert(state, row)
+                .is_some()
+            {
+                return Err(invalid(format!(
+                    "duplicate runtime client state in graph {graph} at slot {state}"
+                )));
+            }
+        }
         let mut graphs = BTreeMap::new();
         for mut graph in bundle.graphs {
             if !authored_classes.is_empty() {
@@ -1157,6 +1268,10 @@ impl GraphStore {
                     }
                 }
             }
+            graph.apply_runtime_state_metadata(
+                &plain_classes,
+                client_states.remove(&graph.index).unwrap_or_default(),
+            )?;
             graph.compile()?;
             let index = graph.index;
             if graphs.insert(index, graph).is_some() {
@@ -1164,6 +1279,11 @@ impl GraphStore {
                     "bundle defines graph {index} more than once"
                 )));
             }
+        }
+        if let Some((graph, _)) = client_states.first_key_value() {
+            return Err(invalid(format!(
+                "runtime client state references unknown graph {graph}"
+            )));
         }
         for graph in graphs.values() {
             for node in &graph.nodes {
@@ -1514,6 +1634,74 @@ mod tests {
             }},
             "missing": [43]
         })
+    }
+
+    #[test]
+    fn runtime_state_metadata_checks_node_identity_and_preserves_wire_scope() {
+        let mut data = fixture();
+        let graph = &mut data["graphs"][0];
+        graph["nodes"][0]["state"] = json!(0);
+        graph["nodes"][1]["state"] = json!(1);
+        graph["nodes"][1]["client_only"] = json!(false);
+        let load = |value: &Value| GraphStore::from_json(&serde_json::to_vec(value).unwrap());
+        let baseline = load(&data).unwrap();
+        let baseline = baseline.graph(42).unwrap();
+
+        let row = json!({"graph": 42, "state": 1, "rid": 5, "class": "Node"});
+        data["runtime_state_metadata"] = json!({
+            "plain_classes": ["Node"],
+            "client_states": [row.clone()],
+        });
+        let store = load(&data).unwrap();
+        let graph = store.graph(42).unwrap();
+        assert!(graph.node(0).unwrap().declares_runtime_plain_state());
+        let client = graph.node(1).unwrap();
+        assert!(!client.declares_runtime_plain_state() && !client.runs_on_server());
+        assert!(client.is_networked() && !client.client_only && !client.server_only);
+        assert_eq!(client.class, "Node");
+        assert!(!graph.node(2).unwrap().declares_runtime_plain_state());
+        assert_eq!(graph.owner_positions(), baseline.owner_positions());
+        assert_eq!(graph.remote_positions(), baseline.remote_positions());
+
+        for (field, value) in [
+            ("rid", json!(3)),
+            ("class", json!("OtherState")),
+            ("state", json!(2)),
+            ("graph", json!(43)),
+            ("unexpected", json!(true)),
+        ] {
+            let mut invalid = data.clone();
+            invalid["runtime_state_metadata"]["client_states"][0][field] = value;
+            assert_eq!(
+                load(&invalid).unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+        }
+        for (field, value) in [
+            ("client_states", json!([row.clone(), row.clone()])),
+            ("plain_classes", json!(["Node", "Node"])),
+            ("plain_classes", json!(["authored.state"])),
+            ("plain_classes", json!(["N".repeat(129)])),
+        ] {
+            let mut invalid = data.clone();
+            invalid["runtime_state_metadata"][field] = value;
+            assert_eq!(
+                load(&invalid).unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+        }
+        for (field, value) in [
+            ("server_only", json!(true)),
+            ("state_behavior", json!("plain")),
+            ("fields", json!({})),
+        ] {
+            let mut invalid = data.clone();
+            invalid["graphs"][0]["nodes"][1][field] = value;
+            assert_eq!(
+                load(&invalid).unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+        }
     }
 
     #[test]

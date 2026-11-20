@@ -8,6 +8,7 @@ mod authored_classes;
 mod destination_and_victory;
 mod local_message;
 mod room_cue;
+mod runtime_state_metadata;
 mod stack_controls;
 mod states_and_switches;
 

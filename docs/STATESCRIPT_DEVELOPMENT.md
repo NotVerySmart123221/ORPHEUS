@@ -14,6 +14,60 @@ Repeated references in legacy entry, state and synchronization tables
 keep their original order. Queued messages check the resolved node's
 execution scope before binding parameters or following its output.
 
+## Load runtime state classifications
+
+A prepared graph bundle may include `runtime_state_metadata`. The
+`plain_classes` list names ordinary runtime state classes. It applies to
+nodes with a reciprocal state slot and no explicit behavior override.
+VM handlers and their existing guards run before the plain fallback.
+
+The `client_states` list identifies instances by graph index, state
+slot, RID, and raw class. All four must match. A client classification
+skips execution while preserving the raw class, scope flags, and
+owner and observer slot tables. A class may have different scopes in
+different graphs.
+
+Verified wire codecs still come from the separate codec table. A plain
+classification alone supplies no codec or payload layout. The portable
+contract exercises ordinary lifecycle and scope. Native tests verify
+owner and observer bytes and missing-codec diagnostics.
+See the [synthetic runtime state contract](../fixtures/behavior/script-runtime-state-metadata-v1.json).
+
+Use the offline importer with a local graph bundle and evidence archive
+or extracted evidence directory. It writes a separate gzip bundle.
+Keep both source data and the generated bundle in your private runtime
+workspace.
+
+```text
+python scripts/build_runtime_state_metadata.py --graph-bundle path/to/game_graphs_174.json.gz --evidence path/to/classification.zip --output path/to/new/game_graphs_174.json.gz
+```
+
+## Build the private evidence reports
+
+Use the graph index, RID, state slot, and raw class as the verified
+identifiers for local evidence. Record the input digest and importer
+version so two runs can be compared. Keep extracted records private.
+Shared tests use original graphs and values.
+
+1. **Field contracts**. Group nodes by capability and class. Record
+   field paths, operand types, presence counts, and incompatible shapes.
+   Validate candidate contracts against the Rust loader and evaluator.
+2. **GameMessage catalog**. Index message IDs, send and receive
+   placements, and parameter-to-variable bindings. Record dynamic or
+   unresolved routes explicitly.
+3. **Timing contracts**. Separate literal values, evaluated ranges,
+   and unknown expressions. Compare observable timer order and frame
+   boundaries with a headless trace.
+4. **Variable access**. Track read, write, and initialization edges by
+   scope. Report missing initializers separately from queries whose
+   runtime inputs could supply the value.
+5. **Coverage baseline**. Join the graph inventory to a pinned trace.
+   Report reached, skipped by scope, unsupported, and unreached nodes
+   with enough trace provenance to reproduce the Phase 3 ordering.
+6. **Synthetic test scaffolds**. Generate only the verified operand
+   shape and lifecycle outline. Use invented values, graphs, IDs and
+   expected results derived from the server contract.
+
 ## Declare an ordinary server state
 
 An authored node can opt into the plain state lifecycle with

@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added optional runtime state classifications for prepared bundles. Plain classes use ordinary lifecycle fallback after native dispatch. Exact client instances skip execution with their raw scope and wire slots intact. An offline importer creates a separate annotated bundle from local evidence. Passed 662 default workspace tests, locked Clippy, script unittest discovery, and the #72 prepared 900-frame regression on both the base and annotated bundles.
+
 - Added authored room cues with a graph-selected audience and literal cue identifiers. Player and NPC hosts use the same bounded room outbox. Only selected players with current body generations receive a cue, through the existing reliable notice path. Both source and listener identities are checked before reliable delivery. Passed 658 default and 665 Inspector workspace tests, both locked Clippy lanes, 12 pinned Python behavior contracts, and the #72 prepared 900-frame headless regression.
 
 - Consolidated the existing timed projectile control binding across shot construction, flight handoff and NPC admission. Duration and entry validation share one wrapper override lookup. The receiver keeps native timer admission and ordered script reaction delivery as separate decisions. Passed nine targeted tests, 654 default and 661 Inspector workspace tests, both locked Clippy lanes, Rust 1.85, 12 pinned Python behavior contracts, and the prepared 900-frame headless regression. The dedicated legacy effect tests still require their wrapper graph and the full encounter test requires the separate mode pack.

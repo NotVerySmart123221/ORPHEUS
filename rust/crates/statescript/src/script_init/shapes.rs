@@ -298,67 +298,62 @@ pub(super) fn is_bare_header_action(node: &Node) -> bool {
 }
 
 // These authored placements resolve to the PC base State.
-pub(super) fn is_encounter_base_state(graph: u32, node: &Node) -> bool {
-    !node.server_only
-        && matches!(
-            (graph, node.pos, node.class.as_str()),
-            (0x0033, 30, "STU_87621906")
-                | (0x006b, 38, "STU_0DB9E66B")
-                | (0x0079, 42, "STU_0DB9E66B")
-                | (0x01c9, 65, "STU_0DB9E66B")
-                | (0x224e, 25, "STU_0DB9E66B")
-                | (0x0aaa, 2, "STU_200B27C5")
-                | (0x0aaa, 3, "STU_AF1A4047")
-                | (0x0aaa, 4, "STU_55F72184")
-                | (0x0aaa, 5, "STU_E834E718")
-                | (0x0aaa, 10, "STU_632B74B9")
-                | (0x0aaa, 17 | 24, "STU_D3CDCF04")
-                | (0x0aaa, 28, "STU_D52B9026")
-                | (0x0aaa, 30, "STU_724DFBC6")
-                | (0x0aaa, 33, "STU_93088159")
-                | (0x0bc6, 6, "STU_632B74B9")
-                | (0x0bc6, 7, "STU_E834E718")
-                | (0x0bc6, 8, "STU_55F72184")
-                | (0x0bc6, 9, "STU_200B27C5")
-                | (0x0bc6, 12, "STU_AF1A4047")
-                | (0x0bc6, 14 | 25, "STU_E0D2F3AA")
-                | (0x0bc6, 27, "STU_D52B9026")
-                | (0x0bc6, 28, "STU_724DFBC6")
-                | (0x0cb5, 2, "STU_200B27C5")
-                | (0x0cb5, 3, "STU_E834E718")
-                | (0x0cb5, 10, "STU_55F72184")
-                | (0x0cb5, 12, "STU_D52B9026")
-                | (0x0cb5, 15, "STU_B17E88C9")
-                | (0x0cb5, 16, "STU_632B74B9")
-                | (0x0cb5, 19 | 31, "STU_724DFBC6")
-                | (0x0cb5, 20, "STU_4531992F")
-                | (0x0cba, 28, "STU_93088159")
-                | (0x0cd2, 17 | 27 | 29 | 51, "STU_724DFBC6")
-                | (0x0cd2, 18 | 53, "STU_632B74B9")
-                | (0x0cd2, 19 | 26, "STU_B17E88C9")
-                | (0x0cd2, 21, "STU_D52B9026")
-                | (0x0cd2, 22 | 31, "STU_55F72184")
-                | (0x0cd2, 23 | 30, "STU_E834E718")
-                | (0x0cd2, 24 | 52, "STU_200B27C5")
-                | (0x0cd2, 37, "STU_AF1A4047")
-                | (0x0cd2, 38, "STU_E0D2F3AA")
-                | (0x0cd2, 44 | 49, "STU_D3CDCF04")
-                | (0x185d, 2 | 41 | 49, "STU_200B27C5")
-                | (0x185d, 3 | 40, "STU_E834E718")
-                | (0x185d, 8 | 39, "STU_55F72184")
-                | (0x185d, 15 | 38, "STU_D52B9026")
-                | (0x185d, 22 | 36, "STU_B17E88C9")
-                | (0x185d, 23 | 35, "STU_632B74B9")
-                | (0x185d, 24 | 34, "STU_724DFBC6")
-                | (0x185d, 31, "STU_E0D2F3AA")
-                | (0x185d, 46, "STU_AF1A4047")
-                | (0x185d, 47, "STU_F4BBA185")
-                | (0x185d, 53, "STU_93088159")
-                | (0x0ce0, 6 | 40, "STU_93088159")
-                | (0x0ce0, 42 | 43, "STU_14611C1B")
-                | (0x0d03, 8 | 10, "STU_93088159")
-                | (0x0d03, 15 | 16, "STU_14611C1B")
-        )
+pub(super) fn encounter_base_state_shape(graph: u32, node: &Node) -> Option<bool> {
+    let placement = (graph, node.pos);
+    let allowed = match node.class.as_str() {
+        "STU_87621906" => placement == (0x0033, 30),
+        "STU_0DB9E66B" => matches!(
+            placement,
+            (0x006b, 38) | (0x0079, 42) | (0x01c9, 65) | (0x224e, 25)
+        ),
+        "STU_200B27C5" => matches!(
+            placement,
+            (0x0aaa, 2) | (0x0bc6, 9) | (0x0cb5, 2) | (0x0cd2, 24 | 52) | (0x185d, 2 | 41 | 49)
+        ),
+        "STU_AF1A4047" => matches!(
+            placement,
+            (0x0aaa, 3) | (0x0bc6, 12) | (0x0cd2, 37) | (0x185d, 46)
+        ),
+        "STU_55F72184" => matches!(
+            placement,
+            (0x0aaa, 4) | (0x0bc6, 8) | (0x0cb5, 10) | (0x0cd2, 22 | 31) | (0x185d, 8 | 39)
+        ),
+        "STU_E834E718" => matches!(
+            placement,
+            (0x0aaa, 5) | (0x0bc6, 7) | (0x0cb5, 3) | (0x0cd2, 23 | 30) | (0x185d, 3 | 40)
+        ),
+        "STU_632B74B9" => matches!(
+            placement,
+            (0x0aaa, 10) | (0x0bc6, 6) | (0x0cb5, 16) | (0x0cd2, 18 | 53) | (0x185d, 23 | 35)
+        ),
+        "STU_D3CDCF04" => matches!(placement, (0x0aaa, 17 | 24) | (0x0cd2, 44 | 49)),
+        "STU_D52B9026" => matches!(
+            placement,
+            (0x0aaa, 28) | (0x0bc6, 27) | (0x0cb5, 12) | (0x0cd2, 21) | (0x185d, 15 | 38)
+        ),
+        "STU_724DFBC6" => matches!(
+            placement,
+            (0x0aaa, 30)
+                | (0x0bc6, 28)
+                | (0x0cb5, 19 | 31)
+                | (0x0cd2, 17 | 27 | 29 | 51)
+                | (0x185d, 24 | 34)
+        ),
+        "STU_93088159" => matches!(
+            placement,
+            (0x0aaa, 33) | (0x0cba, 28) | (0x185d, 53) | (0x0ce0, 6 | 40) | (0x0d03, 8 | 10)
+        ),
+        "STU_E0D2F3AA" => matches!(placement, (0x0bc6, 14 | 25) | (0x0cd2, 38) | (0x185d, 31)),
+        "STU_B17E88C9" => matches!(
+            placement,
+            (0x0cb5, 15) | (0x0cd2, 19 | 26) | (0x185d, 22 | 36)
+        ),
+        "STU_4531992F" => placement == (0x0cb5, 20),
+        "STU_F4BBA185" => placement == (0x185d, 47),
+        "STU_14611C1B" => matches!(placement, (0x0ce0, 42 | 43) | (0x0d03, 15 | 16)),
+        _ => return None,
+    };
+    Some(!node.server_only && allowed)
 }
 
 pub(super) fn is_client_subgraph_controller(graph: &Graph, node: &Node) -> bool {

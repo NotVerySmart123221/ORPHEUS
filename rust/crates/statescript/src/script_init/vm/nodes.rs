@@ -13,12 +13,12 @@ use super::super::{
     MAX_PLUG_DEPTH, MOVEMENT_BOOLEAN_OUTPUTS,
     machine::{ArrayInsertion, Event, StateKey},
     shapes::{
-        array_field, array_insertion_index, case_path, configured, excluded_target_tags, field,
-        is_bare_header_action, is_base_health_pool, is_client_subgraph_controller,
-        is_encounter_base_state, is_entry, is_networked_for_code_synced, is_owner_movement_sampler,
-        is_self_target, is_wave_health_pool, living_body_array_shape, participant_filter,
-        persistent_message, pool_number, raw_indices, registered_state, source_key,
-        static_target_operand, stored,
+        array_field, array_insertion_index, case_path, configured, encounter_base_state_shape,
+        excluded_target_tags, field, is_bare_header_action, is_base_health_pool,
+        is_client_subgraph_controller, is_entry, is_networked_for_code_synced,
+        is_owner_movement_sampler, is_self_target, is_wave_health_pool, living_body_array_shape,
+        participant_filter, persistent_message, pool_number, raw_indices, registered_state,
+        source_key, static_target_operand, stored,
     },
     types::{InitFault, Issue, SpawnSearch, SpawnSearchKey, State, StateKind},
     world::{CreationKind, EntityCreation, Site, World},
@@ -28,12 +28,22 @@ use super::Vm;
 #[derive(Default)]
 struct RegistrationChecks {
     admitted: Option<bool>,
+    shape_considered: bool,
 }
 
 impl RegistrationChecks {
     fn permits(&mut self, allowed: bool) -> bool {
         self.admitted = Some(self.admitted.unwrap_or(false) || allowed);
         allowed
+    }
+
+    fn shape(&mut self, compatible: bool) -> bool {
+        self.shape_considered = true;
+        compatible
+    }
+
+    fn allows_runtime_fallback(&self) -> bool {
+        self.admitted.is_none() && !self.shape_considered
     }
 
     fn rejected(&self) -> bool {
@@ -1101,37 +1111,45 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             // The authored zero-valued form inherits the base state reader.
             "STU_D9843704"
-                if node.is_networked() && node.remote == -1 && {
-                    let value = field(&node.fields, "m_0B528B1E");
-                    script_expr::native_shape(value, "STUConfigVarFloat", Some("m_value"))
-                        && field(value, "m_value").as_f64() == Some(0.0)
-                } =>
+                if registration.shape(
+                    node.is_networked() && node.remote == -1 && {
+                        let value = field(&node.fields, "m_0B528B1E");
+                        script_expr::native_shape(value, "STUConfigVarFloat", Some("m_value"))
+                            && field(value, "m_value").as_f64() == Some(0.0)
+                    },
+                ) =>
             {
                 StateKind::Plain
             }
-            "STU_BD02E168" if is_client_subgraph_controller(self.graph(id), node) => {
+            "STU_BD02E168"
+                if registration.shape(is_client_subgraph_controller(self.graph(id), node)) =>
+            {
                 StateKind::Plain
             }
             // ForCodeSynced publishes to native game-code registration outside
             // the graph. Its VM plugs and empty wire payload use the base state.
             "STU_CD46AF93" | "STU_6A926B21"
-                if is_networked_for_code_synced(node)
-                    || self.world.for_code_transport(self.site(id, node)) == Some(false) =>
+                if registration.shape(
+                    is_networked_for_code_synced(node)
+                        || self.world.for_code_transport(self.site(id, node)) == Some(false),
+                ) =>
             {
                 StateKind::ForCode
             }
             // Tips register their state key with native presentation code.
             // The graph still runs the base state's plugs and lifecycle.
             "STU_F5A99B2A"
-                if node.is_networked()
-                    && field(&node.fields, "m_tips")
-                        .as_array()
-                        .is_some_and(|tips| {
-                            !tips.is_empty()
-                                && tips
-                                    .iter()
-                                    .all(|tip| field(tip, "$").as_str() == Some("STUTip"))
-                        }) =>
+                if registration.shape(
+                    node.is_networked()
+                        && field(&node.fields, "m_tips")
+                            .as_array()
+                            .is_some_and(|tips| {
+                                !tips.is_empty()
+                                    && tips
+                                        .iter()
+                                        .all(|tip| field(tip, "$").as_str() == Some("STUTip"))
+                            }),
+                ) =>
             {
                 StateKind::Plain
             }
@@ -1147,7 +1165,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             {
                 StateKind::Plain
             }
-            _ if is_encounter_base_state(self.graph(id).index, node) => StateKind::Plain,
+            _ if encounter_base_state_shape(self.graph(id).index, node)
+                .is_some_and(|allowed| registration.shape(allowed)) =>
+            {
+                StateKind::Plain
+            }
             "STU_B5C87F3D"
                 if self
                     .world
@@ -1171,8 +1193,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::SameTeamContact { registered: false }
             }
             "STUStatescriptStateCombatModFilter"
-                if asset_guid(field(&node.fields, "m_60703B1E")) == Some(0x0d80_0000_0000_0317)
-                    && field(&node.fields, "m_41B10FF2").as_u64() == Some(0) =>
+                if registration.shape(
+                    asset_guid(field(&node.fields, "m_60703B1E")) == Some(0x0d80_0000_0000_0317)
+                        && field(&node.fields, "m_41B10FF2").as_u64() == Some(0),
+                ) =>
             {
                 StateKind::OutgoingDamageFilter { registered: false }
             }
@@ -1196,7 +1220,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             "STU_40E05F6B" => StateKind::VoiceStimulus,
             "STU_DC80F7E6"
-                if self.world.outline_context_available(self.site(id, node)) == Some(false) =>
+                if registration.shape(
+                    self.world.outline_context_available(self.site(id, node)) == Some(false),
+                ) =>
             {
                 StateKind::Plain
             }
@@ -1248,7 +1274,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             "STU_066B4605" if self.has_no_ai_control_target(id, node) => StateKind::Plain,
             "STU_066B4605" => StateKind::AiWeaponOverride { record: None },
-            "STUStatescriptStateHealthPool" if (self.graph(id).index, node.pos) == (0x0c89, 5) => {
+            "STUStatescriptStateHealthPool"
+                if registration.shape((self.graph(id).index, node.pos) == (0x0c89, 5)) =>
+            {
                 StateKind::HealthCapacity
             }
             "STUStatescriptStateHealthPool"
@@ -1262,13 +1290,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::HealthPool { pool: None }
             }
             "STU_B7D2C9C0" => StateKind::DisplayName { binding: None },
-            "STU_E56BA8D8" if node.is_networked() && node.remote == -1 => {
+            "STU_E56BA8D8" if registration.shape(node.is_networked() && node.remote == -1) => {
                 StateKind::TargetTag { effect: None }
             }
             "STU_160F2578"
-                if static_target_operand(node).is_some()
-                    || participant_filter(node).is_some()
-                    || excluded_target_tags(self.graph(id).index, node).is_some() =>
+                if registration.shape(
+                    static_target_operand(node).is_some()
+                        || participant_filter(node).is_some()
+                        || excluded_target_tags(self.graph(id).index, node).is_some(),
+                ) =>
             {
                 StateKind::Plain
             }
@@ -1287,7 +1317,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::BossPauseReceiver { receiving: false }
             }
             "STUStatescriptStateGameMessageEntry" => StateKind::MessageIdle,
-            "STUStatescriptStateWait" if !configured(node, "m_BF1A93B0") => StateKind::Wait,
+            "STUStatescriptStateWait" if registration.shape(!configured(node, "m_BF1A93B0")) => {
+                StateKind::Wait
+            }
             "STUStatescriptStateShockwave" => StateKind::Shockwave { managed: false },
             "STU_4C96470A" => StateKind::PlacementSelector {
                 confirmed: false,
@@ -1355,7 +1387,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 // not yet reconstructed; it must not be treated as damage.
                 StateKind::RollMovementParameter
             }
-            "STU_96F1DBCF" if is_owner_movement_sampler(node) => {
+            "STU_96F1DBCF" if registration.shape(is_owner_movement_sampler(node)) => {
                 match self.state(key).map(|state| state.kind) {
                     Some(kind @ StateKind::MovementSample(_)) => kind,
                     _ => StateKind::MovementSample(0),
@@ -1533,6 +1565,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 ammo0: 0,
                 ammo_var: None,
             },
+            _ if registration.allows_runtime_fallback() && node.declares_runtime_plain_state() => {
+                StateKind::Plain
+            }
             _ => {
                 self.report_diagnostic(
                     self.site(id, node),
