@@ -222,6 +222,20 @@ owner trace kept all 476 observations. The local pack lacks the
 Junkenstein NPC and map inputs, so the encounter shield lifecycle
 has synthetic coverage in this batch.
 
+At `6c54b054`, settled player and bot impacts gained optional hit tags
+on the shared health event. Native tests check the actual applied
+delta, tag availability, and source replacement. The private authored
+charge test binds these tags on the next VM frame. The stock synchronous
+charge route still has its own target snapshot and damage message.
+The locked workspace suite and Clippy passed with script coverage.
+
+Two same-pack 104319 startup reports matched with all 32 rows
+unchanged from `f031b4c1`. They retained **12 independent starts**,
+one ordinary room attachment, and **46 blocking sites**. The #72 trace
+retained 476 observations. Both #131 schedules reproduced their earlier
+339 ticks per implementation. Strict comparison retained the same four
+RNG setup differences.
+
 Two of the three remaining native target-tracking startup sites have
 empty embedded plugs. One configures a second filter and an entity list
 output. The other configures a count output. Both read a dynamic radius.
