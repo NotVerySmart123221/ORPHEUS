@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Shared ruleset resolution between player and AI script hosts. Graph bundles can define typed mode defaults and actor overrides. Existing runtime packs use the same compatibility values and scopes. Synthetic tests cover lookup precedence, duplicate rules, and exact numeric types. Passed 634 default and 641 Inspector workspace tests, both locked Clippy lanes, Rust 1.85, 12 pinned Python public contracts, and the prepared 900-frame headless regression. Prepared Junkenstein coverage requires its separate mode pack.
+
 - Added authored radial healing and damage with shared room filters and optional distance falloff. The VM admits the selected targets as a batch and the room settles each request through its existing identity-checked health path. Added synthetic coverage for filtering, duplicate targets, batch rejection, and replacement before settlement. Passed 629 default and 636 Inspector workspace tests, both locked Clippy lanes, the Rust 1.85 check, 12 pinned Python public contracts, and the prepared 900-frame headless regression.
 
 - Added authored entity predicates and shared room filters for liveness, affiliation, and target tags. Player and AI scripts read the same room frame. Tag snapshots are collected on demand, and incomplete facts preserve the last successful observation. Added synthetic expression, component, and room coverage. Passed both locked workspace lanes, Rust 1.85, pinned Python public contracts, and the prepared 900-frame regression.

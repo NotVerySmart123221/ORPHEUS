@@ -131,6 +131,41 @@ body snapshot in bundles that use no spatial expressions.
 
 See the [synthetic health contract](../fixtures/behavior/script-health-change-v1.json).
 
+## Set mode and actor rules
+
+The optional `mode_rulesets` section of a version 1 graph bundle supplies
+immutable rules for the running mode. This example uses synthetic IDs.
+
+```json
+{
+  "mode_rulesets": [
+    {
+      "mode": "0x00000000000000A1",
+      "rules": [
+        {"id": 7, "value": false},
+        {"id": 7, "body": "0x00000000000000B1", "value": true},
+        {"id": 8, "value": 1.0}
+      ]
+    }
+  ]
+}
+```
+
+Use a nonzero canonical GUID for the mode and any `body` override. The
+body key is the actor's profile GUID, shared by the player and AI host
+lookups. A rule ID is a 32-bit unsigned integer. Values accept Boolean,
+signed 64-bit integer, finite floating-point, or explicit `null`. A mode
+must appear once, and each rule ID must be unique within its scope.
+
+The VM checks its existing entity variable first when it has a value.
+The native host then looks for a body override, a mode default, and an
+existing compatibility value in that order. An explicit `null` is an
+authored result and prevents compatibility fallback. A fully missing
+rule retains the VM's existing integer-zero fallback. Graph bundles
+without the optional section retain the existing host rules.
+
+See the [synthetic mode ruleset contract](../fixtures/behavior/script-mode-rulesets-v1.json).
+
 ## Apply a radial health change
 
 Set `action_behavior` to `"radial_health"` on a server-only action, or

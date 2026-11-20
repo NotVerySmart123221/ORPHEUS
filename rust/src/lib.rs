@@ -20,6 +20,7 @@ pub mod bnet_protocol;
 pub mod bnet_rpc;
 pub mod bnet_service;
 pub mod bnet_session_key;
+mod body_ruleset;
 pub mod catalog;
 pub mod collection;
 #[cfg(any(test, feature = "inspector"))]

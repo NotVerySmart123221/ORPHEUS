@@ -13,6 +13,10 @@ use orpheus_runtime::format::{MAX_GRAPH_BYTES, TARGET_TAG_TYPE, parse_guid};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
+use rulesets::{ModeRulesetDefinition, ModeRulesets};
+
+mod rulesets;
+
 const GRAPH_TYPE: u64 = 0x0580;
 pub(crate) const MAX_ROOM_MESSAGE_PARAMETERS: usize = 16;
 
@@ -843,6 +847,8 @@ struct Bundle {
     #[serde(default)]
     mode_scripts: BTreeMap<String, ModeScripts>,
     #[serde(default)]
+    mode_rulesets: Vec<ModeRulesetDefinition>,
+    #[serde(default)]
     junkenstein: EnemyCatalog,
     missing: Vec<u32>,
 }
@@ -898,6 +904,7 @@ pub struct GraphStore {
     entities: BTreeMap<u64, Body>,
     mode_variables: BTreeMap<u64, BTreeMap<u32, ModeValue>>,
     mode_scripts: BTreeMap<u64, ModeScripts>,
+    mode_rulesets: ModeRulesets,
     enemies: EnemyCatalog,
     missing: Vec<u32>,
 }
@@ -1001,6 +1008,7 @@ impl GraphStore {
                 })
                 .collect::<io::Result<_>>()?,
             mode_scripts: keyed_by_guid(bundle.mode_scripts)?,
+            mode_rulesets: ModeRulesets::compile(bundle.mode_rulesets)?,
             enemies: bundle.junkenstein.validate()?,
             missing: bundle.missing,
         })
@@ -1054,6 +1062,16 @@ impl GraphStore {
 
     pub fn mode_variables(&self, mode: u64) -> Option<&BTreeMap<u32, ModeValue>> {
         self.mode_variables.get(&mode)
+    }
+
+    /// Authored per-body overrides take precedence over mode defaults.
+    pub fn mode_ruleset_value(
+        &self,
+        mode: u64,
+        body: u64,
+        id: u32,
+    ) -> Option<crate::script_wire::Value> {
+        self.mode_rulesets.value(mode, body, id)
     }
 
     pub fn mode_scripts(&self, mode: u64) -> Option<&ModeScripts> {
@@ -1264,6 +1282,70 @@ mod tests {
             }},
             "missing": [43]
         })
+    }
+
+    #[test]
+    fn invalid_or_duplicate_mode_rulesets_fail_loading() {
+        let mut data = fixture();
+        let mode = "0x00000000000000AA";
+        let body = "0x00000000000000BA";
+        let valid = json!({"mode": mode, "rules": [{"id": 7, "value": false}]});
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        assert_eq!(load(&data).unwrap().mode_ruleset_value(0xaa, 0xba, 7), None);
+        for invalid_table in [
+            json!([valid.clone(), valid.clone()]),
+            json!([{"mode": "0x0000000000000000", "rules": []}]),
+            json!([{"mode": "0x00000000000000aa", "rules": []}]),
+            json!([{"mode": mode, "rules": [{"id": 7, "body": null, "value": 12}]}]),
+            json!([{"mode": mode, "rules": [{"id": 7, "body": "BA", "value": 12}]}]),
+            json!([{"mode": mode, "rules": [{"id": 7, "body": "0x0000000000000000", "value": 12}]}]),
+            json!([{"mode": mode, "rules": [{"id": 7, "value": [1]}]}]),
+            json!([{"mode": mode, "rules": [{"id": 7, "value": u64::MAX}]}]),
+            json!([{"mode": mode, "rules": [{"id": 7}]}]),
+            json!([{"mode": mode, "rules": [{"id": 7, "value": 1, "boddy": body}]}]),
+            json!([{"mode": mode, "rules": [{"id": 7, "value": 1}, {"id": 7, "value": 2}]}]),
+            json!([{"mode": mode, "rules": [
+                {"id": 7, "body": body, "value": 1}, {"id": 7, "body": body, "value": 2}
+            ]}]),
+        ] {
+            data["mode_rulesets"] = invalid_table;
+            assert_eq!(
+                load(&data).unwrap_err().kind(),
+                io::ErrorKind::InvalidData,
+                "{}",
+                data["mode_rulesets"]
+            );
+        }
+    }
+
+    #[test]
+    fn rule_integer_tokens_do_not_round_into_floats() {
+        let mut data = fixture();
+        data["mode_rulesets"] = json!([
+            {"mode": "0x00000000000000AA", "rules": [{"id": 7, "value": "replace-numeric-token"}]}
+        ]);
+        let data = serde_json::to_string(&data).unwrap();
+        for token in ["-9223372036854775809", "18446744073709551616", "1e309"] {
+            let invalid = data.replace("\"replace-numeric-token\"", token);
+            let result = GraphStore::from_json(invalid.as_bytes());
+            assert_eq!(
+                result.unwrap_err().kind(),
+                io::ErrorKind::InvalidData,
+                "{token}"
+            );
+        }
+        let key = "\"replace-numeric-token\"";
+        let integer =
+            GraphStore::from_json(data.replace(key, "-9223372036854775808").as_bytes()).unwrap();
+        let float = GraphStore::from_json(data.replace(key, "7e0").as_bytes()).unwrap();
+        assert_eq!(
+            integer.mode_ruleset_value(0xaa, 0, 7),
+            Some(crate::script_wire::Value::Integer(i64::MIN))
+        );
+        assert_eq!(
+            float.mode_ruleset_value(0xaa, 0, 7),
+            Some(crate::script_wire::Value::Float(7.0))
+        );
     }
 
     #[test]

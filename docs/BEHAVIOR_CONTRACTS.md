@@ -1,6 +1,6 @@
 # Shared Behavior Contracts (`rust`)
 
-ORPHEUS stores language-neutral JSON contracts under `fixtures/behavior/` (`60` files total). Cross-language consumers compare Python (`main`) and Rust (`rust`) through production code paths; Rust-only regression contracts identify their narrower scope explicitly. Fixtures do not bundle game assets or captures.
+ORPHEUS stores language-neutral JSON contracts under `fixtures/behavior/` (`61` files total). Cross-language consumers compare Python (`main`) and Rust (`rust`) through production code paths; Rust-only regression contracts identify their narrower scope explicitly. Fixtures do not bundle game assets or captures.
 
 The Rust-only `script-actions-v1.json` adds 15 historical assignment/branch cases pinned to `f763beb`. Both `orpheus-statescript` public workspace lanes run `script_init::tests::actions_contract::actions_preserve_the_pinned_synthetic_reference_contract`; it is not registered in the Python/Rust differential job. See the [action development guide](STATESCRIPT_DEVELOPMENT.md) for provenance, current module boundaries and the synthetic benchmark.
 
@@ -11,6 +11,8 @@ The Rust-only [local message fixture](../fixtures/behavior/script-local-message-
 The Rust-only [room message fixture](../fixtures/behavior/script-room-message-v1.json) checks typed admission and payload capture, explicit listener scope, and delivery in the recipient's next VM frame. Native room tests cover generation checks and the shared request order.
 
 The Rust-only [health action fixture](../fixtures/behavior/script-health-change-v1.json) checks signed health request admission, continuation, and rejection diagnostics. Room tests cover player and bot settlement, stale body identity, and death and health updates.
+
+The Rust-only [mode ruleset fixture](../fixtures/behavior/script-mode-rulesets-v1.json) checks mode isolation, actor overrides, typed values, and explicit null results through the production StateScript loader.
 
 The Rust-only [radial health fixture](../fixtures/behavior/script-radial-health-v1.json) checks the shared spatial filters, distance falloff, and action continuation. Native room tests cover atomic batch admission and generation checks.
 

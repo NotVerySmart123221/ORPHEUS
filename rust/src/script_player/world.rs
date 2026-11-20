@@ -11,7 +11,7 @@ use crate::{
     commands::Command,
     game_combat::{RoomScriptRequests, eye_height},
     game_content::{PRACTICE_RANGE_MODE, TUTORIAL_MODE, is_junkenstein_mode},
-    game_heroes::{CASSIDY, SOLDIER},
+    game_heroes::CASSIDY,
     game_hitscan::{TargetPose, aim_direction},
     junkenstein_messages::{self, DefenderSighting, SIGHTING, SIGHTING_TAGS, SightingSource},
     mover::sample_movement_flags,
@@ -251,24 +251,13 @@ impl World for BodyWorld {
     }
 
     fn ruleset(&mut self, id: u32) -> Option<Value> {
-        if self.hero == CASSIDY && is_junkenstein_mode(self.mode) {
-            // 104319 Cassidy schemas 001B/0026, Python e1128509 rulesets.py.
-            match id {
-                0x2819 => return Some(Value::Float(1.0)),
-                0x290c => return Some(Value::Bool(true)),
-                _ => (),
-            }
-        }
-        if (self.mode, self.hero) != (PRACTICE_RANGE_MODE, SOLDIER) {
-            return None;
-        }
-        // Defaults read by the target startup, from ow174/game/script/rulesets.py.
-        match id {
-            0x2538 | 0x2819 | 0x32e8 => Some(Value::Float(1.0)),
-            0x260f => Some(Value::Bool(true)),
-            0x281a | 0x32e0 | 0x32e9 => Some(Value::Bool(false)),
-            _ => None,
-        }
+        crate::body_ruleset::get(
+            &self.graphs,
+            self.mode,
+            self.hero,
+            crate::body_ruleset::ActorKind::Player,
+            id,
+        )
     }
 
     fn entity_variable(&mut self, entity: u32, id: u32) -> Option<Value> {

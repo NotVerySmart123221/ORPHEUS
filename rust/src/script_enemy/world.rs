@@ -77,14 +77,13 @@ impl World for EnemyWorld<'_> {
         true
     }
     fn ruleset(&mut self, id: u32) -> Option<Value> {
-        if !is_junkenstein_mode(self.binding.mode) {
-            return None;
-        }
-        match (self.binding.hero, id) {
-            (REAPER | ROADHOG | WITCH | SUMMONER, 0x2819) => Some(Value::Float(1.0)),
-            (ROADHOG | SUMMONER, 0x290c) => Some(Value::Bool(true)),
-            _ => None,
-        }
+        crate::body_ruleset::get(
+            self.graphs,
+            self.binding.mode,
+            self.binding.hero,
+            crate::body_ruleset::ActorKind::Npc,
+            id,
+        )
     }
 
     fn objective_route_active(&self, site: Site) -> Option<bool> {
