@@ -693,8 +693,10 @@ tags, and script variables. A settled room heal from a distinct sampled
 source can carry the same facts from the healed body. The room captures
 those facts after applying the positive pool delta. Healing tag
 attribution stays unavailable. An immediate foreign query about
-that target reads the captured values. Own-body queries, watched
-expressions, and other entities continue through their usual host.
+that target reads the captured values. A direct `EntityMatches` tag
+filter also uses the captured tags for that target. Membership, teams,
+liveness, and spatial searches use the current room frame. Own-body
+queries, watched expressions, and other entities use their usual host.
 Unavailable captured facts stay unavailable. The room checks body
 generation when dispatching the event, and the VM clears the snapshot
 at the end of each delivery.

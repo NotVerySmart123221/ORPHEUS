@@ -526,6 +526,10 @@ impl<W: World> Context for InstanceContext<'_, W> {
         self.world.room_entities()
     }
 
+    fn settled_target_tags(&self, entity: u32) -> Option<&super::TargetTagSnapshot> {
+        self.settled_target(entity).map(|facts| &facts.tags)
+    }
+
     fn spatial_line_clear(&mut self, origin: [f64; 3], target: [f64; 3]) -> Option<bool> {
         self.read_native = true;
         self.world.spatial_line_clear(origin, target)

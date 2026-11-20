@@ -1563,6 +1563,11 @@ impl Evaluator {
         self.charge()?;
         let entity = self.room_filter_entity(entity, context, depth, "expected a bound entity")?;
         let filter = self.room_entity_filter(filter, context, depth)?;
+        let settled_tags = filter
+            .tags
+            .as_ref()
+            .and_then(|_| context.settled_target_tags(entity))
+            .cloned();
         let entities = context
             .room_entities()
             .ok_or(EvalError::UnavailableRoomEntityFacts)?;
@@ -1583,7 +1588,9 @@ impl Evaluator {
         }) {
             return Ok(Value::Bool(false));
         }
-        self.room_facts_match(&filter, facts).map(Value::Bool)
+        let tags = settled_tags.as_ref().unwrap_or(&facts.tags);
+        self.room_facts_match(&filter, facts.alive, tags)
+            .map(Value::Bool)
     }
 
     fn room_filter_entity(
@@ -1689,9 +1696,10 @@ impl Evaluator {
     fn room_facts_match(
         &mut self,
         filter: &RoomEntityFilter,
-        facts: &RoomEntityFacts,
+        entity_alive: bool,
+        entity_tags: &crate::script_init::TargetTagSnapshot,
     ) -> Result<bool, EvalError> {
-        if filter.alive.is_some_and(|alive| alive != facts.alive) {
+        if filter.alive.is_some_and(|alive| alive != entity_alive) {
             return Ok(false);
         }
         let Some(tags) = &filter.tags else {
@@ -1703,7 +1711,7 @@ impl Evaluator {
             (RoomTagClause::Any, &tags.any),
             (RoomTagClause::None, &tags.none),
         ] {
-            match self.room_tag_clause(clause, tags, &facts.tags)? {
+            match self.room_tag_clause(clause, tags, entity_tags)? {
                 Some(false) => return Ok(false),
                 None => unresolved = true,
                 Some(true) => (),
@@ -1963,7 +1971,7 @@ impl Evaluator {
                 let facts = entities
                     .get(&candidate.entity)
                     .ok_or(EvalError::UnavailableRoomEntityFacts)?;
-                if facts.alive && self.room_facts_match(&filter, facts)? {
+                if facts.alive && self.room_facts_match(&filter, facts.alive, &facts.tags)? {
                     matches.push((candidate, *distance));
                 }
             }
