@@ -371,6 +371,10 @@ impl World for BodyWorld {
             .is_some_and(|frame| self.script_requests.queue_health_changes(frame, changes))
     }
 
+    fn room_body_generation(&self, wire: u32) -> Option<u64> {
+        self.spatial_frame.as_deref()?.body_generation(wire)
+    }
+
     fn queue_room_message(&mut self, site: Site, target: u32, message: RoomMessage) -> bool {
         if !self.is_player_site(site) {
             return false;

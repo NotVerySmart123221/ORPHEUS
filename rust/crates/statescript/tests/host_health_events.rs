@@ -8,8 +8,9 @@ use orpheus_statescript::{
     script_expr::RoomEntityFacts,
     script_graph::GraphStore,
     script_init::{
-        Component, EmptyWorld, HealthTargetFacts, HitTags, HostEvent, MAX_INIT_WORK,
-        RoomEntityStatus, RoomMessage, Root, Site, TargetTagEffects, World,
+        Component, EmptyWorld, HealthTargetFacts, HitTags, HostEvent, HostHealthContext,
+        MAX_INIT_WORK, RoomBodyIdentity, RoomEntityStatus, RoomMessage, Root, Site,
+        TargetTagEffects, World,
     },
     script_wire::{Value, Variables},
 };
@@ -450,5 +451,149 @@ fn settled_target_facts_are_scoped_to_immediate_host_delivery() {
     assert_eq!(
         body.snapshot().unwrap().diagnostics.len(),
         expected.unavailable_fact_diagnostics
+    );
+}
+
+#[test]
+fn health_delivery_checks_original_target_generation_for_direct_requests() {
+    const SOURCE: u32 = 741;
+    const TARGET: u32 = 742;
+    const OTHER: u32 = 743;
+    const INCOMING: u64 = 198;
+    const OUTGOING: u64 = 199;
+    const GENERATION: u64 = 7;
+
+    struct Room {
+        target_generation: u64,
+        messages: Vec<(u32, RoomMessage)>,
+        health: Vec<(u32, f64)>,
+    }
+
+    impl World for Room {
+        fn entity_variable(&mut self, _: u32, _: u32) -> Option<Value> {
+            None
+        }
+
+        fn position(&mut self, _: u32) -> Option<[f64; 3]> {
+            None
+        }
+
+        fn room_body_generation(&self, wire: u32) -> Option<u64> {
+            (wire == TARGET).then_some(self.target_generation)
+        }
+
+        fn queue_room_message(&mut self, _: Site, target: u32, message: RoomMessage) -> bool {
+            self.messages.push((target, message));
+            true
+        }
+
+        fn queue_health_change(&mut self, _: Site, target: u32, delta: f64) -> bool {
+            self.health.push((target, delta));
+            true
+        }
+    }
+
+    let var = |id| json!({"$":"STUConfigVarDynamic","m_identifier":id,"m_60DB8F99":false});
+    let parameters = json!([
+        {"m_B5051BCE":"0x0000000000000002","m_out_Var":var(1)},
+        {"m_B5051BCE":"0x0000000000000003","m_out_Var":var(2)}
+    ]);
+    let requests = json!({"$":"Plug","links":[[2,"m_inPlug"],[3,"m_inPlug"]]});
+    let empty = json!({"$":"Plug","links":[]});
+    let nodes = json!([
+        {"pos":0,"rid":0,"uid":0,"class":"EntryHostEvent","state":null,"remote":-1,
+            "client_only":false,"server_only":true,"host_event_entry":"health_applied",
+            "fields":{"m_params":parameters,"m_outPlug":requests}},
+        {"pos":1,"rid":1,"uid":1,"class":"STUStatescriptEntryGameMessage","state":null,"remote":-1,
+            "client_only":false,"server_only":true,"room_message_entry":true,
+            "fields":{"m_gameMessage":{"m_gameMessage":format!("0x{INCOMING:016X}")},
+                "m_params":parameters,"m_outPlug":requests}},
+        {"pos":2,"rid":2,"uid":2,"class":"authored.send","state":null,"remote":-1,
+            "client_only":false,"server_only":true,"action_behavior":"room_message",
+            "fields":{"m_gameMessage":{"m_gameMessage":format!("0x{OUTGOING:016X}")},
+                "m_target":var(1),"m_params":[{"m_B5051BCE":"0x0000000000000003","m_value":var(2)}],
+                "m_outPlug":empty}},
+        {"pos":3,"rid":3,"uid":3,"class":"authored.health","state":null,"remote":-1,
+            "client_only":false,"server_only":true,"action_behavior":"health_change",
+            "fields":{"target":var(1),"delta":var(2),"m_outPlug":empty}}
+    ]);
+    let bundle = json!({"version":1,"bodies":{},"missing":[],"graphs":[{
+        "index":GRAPH,"items":4,"nodes":nodes,"fields":{},"containers":{},"entries":[1],
+        "states":[],"remote":[],"sync_vars":[],"unknown_nodes":[],
+        "header":{"m_nodesBitCount":3,"m_statesBitCount":3,"m_remoteSyncNodesBitCount":3,"m_syncVarsBitCount":3}
+    }]});
+    let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    let mut world = Room {
+        target_generation: GENERATION,
+        messages: Vec::new(),
+        health: Vec::new(),
+    };
+    let mut body = Component::start(
+        graphs,
+        SOURCE,
+        Variables::new(),
+        vec![Root::new(ROOT, GRAPH)],
+        0,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let event = HostEvent::HealthApplied {
+        source: Some(SOURCE),
+        target: TARGET,
+        delta: -2.5,
+        killed: false,
+        hit_tags: None,
+    };
+    let context = || HostHealthContext {
+        target_body: Some(RoomBodyIdentity {
+            wire: TARGET,
+            generation: GENERATION,
+        }),
+        target_facts: None,
+    };
+    let message = |id, amount| RoomMessage {
+        id,
+        parameters: Variables::from([(3, Value::Float(amount))]),
+    };
+
+    assert_eq!(
+        body.queue_host_event_with_context(event, context())
+            .unwrap(),
+        1
+    );
+    body.advance_frame(1, &mut world).unwrap();
+    assert_eq!(
+        std::mem::take(&mut world.messages),
+        [(TARGET, message(OUTGOING, -2.5))]
+    );
+    assert_eq!(std::mem::take(&mut world.health), [(TARGET, -2.5)]);
+
+    assert_eq!(
+        body.queue_host_event_with_context(event, context())
+            .unwrap(),
+        1
+    );
+    world.target_generation += 1;
+    let mut ordinary = message(INCOMING, 1.25);
+    ordinary.parameters.insert(2, Value::Entity(TARGET));
+    assert_eq!(body.queue_room_message_from(OTHER, ordinary).unwrap(), 1);
+    body.advance_frame(2, &mut world).unwrap();
+
+    assert_eq!(world.messages, [(TARGET, message(OUTGOING, 1.25))]);
+    assert_eq!(world.health, [(TARGET, 1.25)]);
+    assert!(body.snapshot().unwrap().diagnostics.is_empty());
+
+    let wrong_target = HostHealthContext {
+        target_body: Some(RoomBodyIdentity {
+            wire: OTHER,
+            generation: GENERATION,
+        }),
+        ..context()
+    };
+    assert_eq!(
+        body.queue_host_event_with_context(event, wrong_target)
+            .unwrap(),
+        0
     );
 }

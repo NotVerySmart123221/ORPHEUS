@@ -251,7 +251,7 @@ fn message_dispatch_rechecks_the_resolved_nodes_execution_scope() {
                     position,
                     sender: Some(sender),
                     parameters: Arc::new(Variables::new()),
-                    health_target_facts: None,
+                    health_context: Default::default(),
                 },
             )
             .unwrap();

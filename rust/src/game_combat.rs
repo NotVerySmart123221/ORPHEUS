@@ -304,6 +304,10 @@ pub(crate) struct RoomSpatialFrame {
 }
 
 impl RoomSpatialFrame {
+    pub(crate) fn body_generation(&self, wire: u32) -> Option<u64> {
+        Some(self.script_targets.get(&wire)?.entity.to_bits())
+    }
+
     pub(crate) fn candidates(&self) -> &[SpatialCandidate] {
         &self.candidates
     }

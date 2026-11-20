@@ -706,6 +706,14 @@ at the end of each delivery.
 For NPC-local heals, publication samples the committed target after the
 local VM step. The queued delta remains the actual amount for each heal.
 
+An immediate follow-up request to the event's foreign target uses the
+generation recorded by the room. The VM verifies it against the same room
+frame used for admission. An expired target is skipped for directed
+messages and direct health changes. This keeps historical target facts
+usable by the source after the original body retires. Radial effects
+still select present candidates through their normal spatial query.
+Ordinary messages and later graph work start with their own context.
+
 The enabled room records successful weapon damage, room-settled script
 and AI requests, field healing, and VM-local AI damage and healing.
 Pool mitigation and caps are already reflected in the delta. Changes

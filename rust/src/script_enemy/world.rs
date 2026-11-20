@@ -984,6 +984,10 @@ impl World for EnemyWorld<'_> {
         })
     }
 
+    fn room_body_generation(&self, wire: u32) -> Option<u64> {
+        self.binding.spatial_frame.as_deref()?.body_generation(wire)
+    }
+
     fn queue_room_message(&mut self, site: Site, target: u32, message: RoomMessage) -> bool {
         if site.entity != self.binding.body {
             return false;

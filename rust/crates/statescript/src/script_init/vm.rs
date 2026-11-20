@@ -32,7 +32,7 @@ use super::{
         State, StateKind,
     },
     voice::InstanceContext,
-    world::{HealthTargetFacts, PlayScript, RoomCue, RoomMessage, Site, World},
+    world::{HostHealthContext, PlayScript, RoomCue, RoomMessage, Site, World},
 };
 
 mod effects;
@@ -45,7 +45,7 @@ pub(super) struct Vm<'graph, 'world, 'machine, W> {
     pub(super) world: &'world mut W,
     pub(super) machine: &'machine mut Machine,
     pub(super) parameters: Option<Arc<Variables>>,
-    health_target_facts: Option<Arc<HealthTargetFacts>>,
+    health_context: HostHealthContext,
     pub(super) output_write_depth: usize,
 }
 
@@ -60,7 +60,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             world,
             machine,
             parameters: None,
-            health_target_facts: None,
+            health_context: HostHealthContext::default(),
             output_write_depth: 0,
         }
     }
@@ -1050,9 +1050,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             position,
                             sender,
                             parameters,
-                            health_target_facts,
+                            health_context,
                         } => {
-                            self.deliver(id, position, sender, parameters, health_target_facts)?;
+                            self.deliver(id, position, sender, parameters, health_context)?;
                         }
                     }
                 }
@@ -1184,7 +1184,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         position: u16,
         sender: Option<u32>,
         parameters: Arc<Variables>,
-        health_target_facts: Option<Arc<HealthTargetFacts>>,
+        health_context: HostHealthContext,
     ) -> Result<(), InitFault> {
         let Some(node) = self.graph(id).node(position) else {
             return Ok(());
@@ -1193,9 +1193,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             return Ok(());
         }
         self.parameters = Some(parameters);
-        self.health_target_facts = health_target_facts;
+        self.health_context = health_context;
         let result = self.deliver_entry(id, node, sender);
-        self.health_target_facts = None;
+        self.health_context = HostHealthContext::default();
         self.parameters = None;
         result
     }
@@ -1843,6 +1843,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         self.destroy(id)
     }
 
+    fn expired_health_target(&self, wire: u32) -> bool {
+        self.health_context.target_body.is_some_and(|target| {
+            target.wire == wire
+                && target.wire != self.machine.snapshot.entity
+                && self.world.room_body_generation(wire) != Some(target.generation)
+        })
+    }
+
     pub(in crate::script_init) fn send_game_message(
         &mut self,
         id: u16,
@@ -1910,14 +1918,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 let delivered = if let Some(slot) = directed_parameter {
                     script_expr::valid_entity(entity)
                         && directed_numeric_payload(slot, &parameters)
-                        && self.world.queue_room_message(
-                            site,
-                            entity,
-                            RoomMessage {
-                                id: message,
-                                parameters: parameters.clone(),
-                            },
-                        )
+                        && (self.expired_health_target(entity)
+                            || self.world.queue_room_message(
+                                site,
+                                entity,
+                                RoomMessage {
+                                    id: message,
+                                    parameters: parameters.clone(),
+                                },
+                            ))
                 } else {
                     self.world.send_message(site, entity, message, &parameters)
                 };
@@ -1981,7 +1990,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             return Ok(false);
         }
         self.spend("room message admission")?;
-        if !self.world.queue_room_message(site, target, message) {
+        if !self.expired_health_target(target)
+            && !self.world.queue_room_message(site, target, message)
+        {
             self.report(site, Issue::UnsupportedField("room message request"));
             return Ok(false);
         }
@@ -2202,7 +2213,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             reads: Vec::new(),
             foreign_reads: Vec::new(),
             parameters: self.parameters.as_deref(),
-            health_target_facts: self.health_target_facts.as_deref(),
+            health_target_facts: self.health_context.target_facts.as_deref(),
             watcher,
             read_native: false,
             untrusted_native: false,

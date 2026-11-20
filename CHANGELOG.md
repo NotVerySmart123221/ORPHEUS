@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Kept a settled health event bound to its original target generation through the next VM frame. Direct awards and health requests skip an expired target. Added a room regression for same-wire replacement before the source VM handles the event and a fresh award after replacement. Integration validation pending.
+
 - Applied the settled target's tags, affiliation and liveness to direct `EntityMatches` filters in a health event. A lethal impact retains its original target's qualification after the body retires. Source membership and spatial searches still use the current room frame. Shared-branch validation pending.
 
 - Carried target facts with positive NPC-local health events at VM publication. Added room coverage for a capped heal issuing one configured bonus on the recipient's next VM frame and for dropping the award when that recipient is replaced. A prepared probe exercises original local admission, award, and revocation through the graph. Shared-branch validation pending.
