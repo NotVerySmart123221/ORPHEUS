@@ -2245,12 +2245,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             parameters: self.parameters.as_deref(),
             watcher,
             read_native: false,
+            read_clock: false,
             untrusted_native: false,
         };
         let result = evaluate(&mut context);
         let reads = context.reads;
         let foreign_reads = context.foreign_reads;
-        let read_native = context.read_native;
+        let needs_ticks = context.read_native || context.read_clock;
         if context.untrusted_native {
             // Like the reference, the record outlives the activation.
             if let Some(state) = watcher.and_then(|key| self.state_mut(key)) {
@@ -2273,7 +2274,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             if let Some(start) = self
                 .state(watcher)
                 .filter(|state| {
-                    read_native
+                    needs_ticks
                         && matches!(
                             state.kind,
                             StateKind::BooleanSwitch(_)

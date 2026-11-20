@@ -1439,6 +1439,102 @@ fn buffered_action_press_uses_the_shared_clock_and_releases_after_one_millisecon
 }
 
 #[test]
+fn boolean_switch_observes_clock_driven_readiness() {
+    #[derive(serde::Deserialize)]
+    struct Contract {
+        schema_version: u8,
+        graph: u32,
+        entity: u32,
+        start_frame: u32,
+        busy_frame: u32,
+        ready_frame: u32,
+        cooldown: u32,
+        initial_seconds: f64,
+        ready_marker: u32,
+    }
+    let fixture: Contract = serde_json::from_str(include_str!(
+        "../../../../../../fixtures/behavior/script-clock-driven-readiness-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(fixture.schema_version, 1);
+    let source = graph(
+        fixture.graph,
+        vec![
+            node(
+                0,
+                "STUStatescriptEntry",
+                None,
+                json!({"m_outPlug": plug(&[(1, "m_beginPlug"), (2, "m_beginPlug")], &[])}),
+            ),
+            node(
+                1,
+                "STUStatescriptStateAbility",
+                Some(0),
+                json!({"m_out_CooldownVar": var(fixture.cooldown, false), "m_A5F1A77B": 20}),
+            ),
+            node(
+                2,
+                "STUStatescriptStateBooleanSwitch",
+                Some(1),
+                json!({
+                    "m_condition": var(fixture.cooldown, false),
+                    "m_onFalsePlug": plug(&[(3, "m_inPlug")], &[]),
+                }),
+            ),
+            node(
+                3,
+                "STUStatescriptActionSetVar",
+                None,
+                json!({"m_out_Var": var(fixture.ready_marker, false), "m_value": true}),
+            ),
+        ],
+        json!([1, 2]),
+        json!([0]),
+    );
+    let mut root = Root::new(1, fixture.graph);
+    root.variables
+        .insert(fixture.cooldown, Value::Float(fixture.initial_seconds));
+    let mut component = Component::start(
+        Arc::new(store(vec![source])),
+        fixture.entity,
+        Variables::new(),
+        vec![root],
+        fixture.start_frame,
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+
+    let check = |component: &Component, busy| {
+        let snapshot = component.snapshot().unwrap();
+        assert!(
+            snapshot.diagnostics.is_empty(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        let instance = &snapshot.instances[&1];
+        let remaining = component
+            .machine
+            .value(VarKey::Instance(1, fixture.cooldown), None);
+        assert!(matches!(remaining, Value::Float(seconds) if (seconds > 0.0) == busy));
+        assert_eq!(instance.states[&1].kind, StateKind::BooleanSwitch(busy));
+        assert_eq!(
+            instance.variables.get(&fixture.ready_marker),
+            (!busy).then_some(&Value::Bool(true))
+        );
+    };
+    check(&component, true);
+    component
+        .advance_frame(fixture.busy_frame, &mut EmptyWorld)
+        .unwrap();
+    check(&component, true);
+    component
+        .advance_frame(fixture.ready_frame, &mut EmptyWorld)
+        .unwrap();
+    check(&component, false);
+}
+
+#[test]
 fn buffered_button_branch_waits_for_queued_readiness() {
     #[derive(serde::Deserialize)]
     struct Contract {

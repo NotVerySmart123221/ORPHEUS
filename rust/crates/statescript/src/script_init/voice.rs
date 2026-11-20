@@ -367,6 +367,7 @@ pub(super) struct InstanceContext<'a, W> {
     pub(super) parameters: Option<&'a Variables>,
     pub(super) watcher: Option<StateKey>,
     pub(super) read_native: bool,
+    pub(super) read_clock: bool,
     pub(super) untrusted_native: bool,
 }
 
@@ -401,7 +402,9 @@ impl<W: World> InstanceContext<'_, W> {
                         && state.linked_variable == Some(key)
                 })
         });
-        self.machine.value(key, below)
+        let (value, read_clock) = self.machine.value_with_clock_dependency(key, below);
+        self.read_clock |= read_clock;
+        value
     }
 }
 

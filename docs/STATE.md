@@ -184,8 +184,18 @@ pressed logical state. All 11 admitted weapon roots had a declared
 primary-button subscription with a fixed input ID. Among the 11
 unvisited primary subscriptions in the other weapons, ten had a
 visited BooleanSwitch immediately upstream and one was two links
-from a visited BooleanSwitch. Condition values and selected branches
-require runtime measurements.
+from a visited BooleanSwitch. At `5a311df7`, all ten directly connected
+routes had active switches with a false condition throughout the command
+sample. Their listeners are on the true branches and remained inactive.
+The condition definitions use local VM variable reads. A second sample
+after adding clock dependencies found the same branch results. The ten
+routes had no linked condition inputs and at least one declared input
+absent from the variable store. Those inputs did not change in the sample.
+Soldier's open branch also had an absent input. Eight inactive routes
+share the same declared entity and instance inputs as Soldier. Each of
+their weapon graphs visited a matching assignment during startup.
+The remaining two routes use separate entity inputs. Runtime assignment
+results and their effective values are the next comparison.
 
 The tagged 104319 encrypted loopback also covered an attempted Tracer
 selection followed by a Reaper selection. The rejected selection retained

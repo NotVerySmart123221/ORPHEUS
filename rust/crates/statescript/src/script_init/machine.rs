@@ -553,18 +553,27 @@ impl Machine {
     }
 
     pub(super) fn value(&self, key: VarKey, below: Option<StateKey>) -> Value {
-        self.links
-            .get(&key)
-            .and_then(|entries| {
-                entries
-                    .iter()
-                    .take_while(|entry| Some(entry.state) != below)
-                    .last()
-            })
-            .map_or_else(
-                || stored(&self.snapshot, key),
-                |entry| self.link_value(entry),
-            )
+        self.value_with_clock_dependency(key, below).0
+    }
+
+    pub(super) fn value_with_clock_dependency(
+        &self,
+        key: VarKey,
+        below: Option<StateKey>,
+    ) -> (Value, bool) {
+        let link = self.links.get(&key).and_then(|entries| {
+            entries
+                .iter()
+                .take_while(|entry| Some(entry.state) != below)
+                .last()
+        });
+        match link {
+            Some(entry) => (
+                self.link_value(entry),
+                matches!(entry.output, LinkValue::Cooldown | LinkValue::Volley(0)),
+            ),
+            None => (stored(&self.snapshot, key), false),
+        }
     }
 
     pub(super) fn link_value(&self, entry: &VariableLink) -> Value {

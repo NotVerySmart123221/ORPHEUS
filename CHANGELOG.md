@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added clock dependencies to watched reads of linked cooldown and ammunition values. A BooleanSwitch now reevaluates a countdown as its effective value changes. The synthetic fixture reproduced a ready branch that remained inactive after a cooldown expired on the previous VM. The script-coverage workspace suite, prepared input probes, encrypted selection loopback, and Clippy passed.
+
 - Routed buffered presses through the ordinary logical button continuation queue. The down branch runs after the press callback's queued readiness changes. A queued lock can still cancel it. The new synthetic fixture reproduced the missed press on the previous VM. The script-coverage workspace suite, prepared input probes, encrypted selection loopback, and Clippy passed.
 
 - Kept the Practice Range owner factory optional when the pack omits both owner body declarations and the codec table. Partial or malformed owner content retains typed startup errors. The synthetic cases, prepared room input tests, encrypted selection loopback, script-coverage workspace suite, and Clippy passed.

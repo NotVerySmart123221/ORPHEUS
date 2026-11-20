@@ -73,6 +73,8 @@ The Rust-only [reentrant button lock fixture](../fixtures/behavior/script-reentr
 
 The Rust-only [buffered button readiness fixture](../fixtures/behavior/script-buffered-button-readiness-v1.json) starts a dormant input listener within its authored buffer. The press can queue a readiness change in time for the down branch to see it. The same queue lets an input lock invalidate that branch.
 
+The Rust-only [clock-driven readiness fixture](../fixtures/behavior/script-clock-driven-readiness-v1.json) checks a BooleanSwitch reading a linked countdown. The ready branch runs when the clock brings the value to zero, even in the absence of an authored variable write.
+
 The Rust-only [player host facts fixture](../fixtures/behavior/script-player-host-facts-v1.json) checks known body and controller presence, unknown entities, the team slot assigned at spawn, and membership counts from the admitted player roster.
 
 The Rust-only [owned entity count fixture](../fixtures/behavior/statescript-owned-entity-count-v1.json) distinguishes an explicitly unbound owner, an unavailable ownership registry, and a known count. The native startup regression uses the production human owner selector and verifies the assignment completes without an AI controller.
