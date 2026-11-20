@@ -49,6 +49,13 @@ The [tagged target pair fixture](../fixtures/behavior/script-tagged-target-pair-
 
 The [voice projection fixture](../fixtures/behavior/statescript-voice-empty-projection-v1.json) checks lifecycle, owner and observer projection, and rejection of missing host facts or an incompatible codec.
 
+The [linked state fixture](../fixtures/behavior/script-linked-state-lifecycle-v1.json)
+covers cross-instance link order, server-only entries, retirement, and invalid types.
+The [self shield recharge fixture](../fixtures/behavior/script-self-shield-recharge-v1.json)
+covers field-based admission, ticking, rate changes, and retirement.
+The [mode entity fixture](../fixtures/behavior/script-mode-entity-query-v1.json)
+covers available, absent, and unknown mode script context through the owner VM.
+
 The Rust-only [server root allocation fixture](../fixtures/behavior/script-server-root-ids-v1.json) checks root identity, installation order and exhaustion at the boundary of the public and private ranges. Native projection coverage compares owner and observer wire bytes with an active private meter and a public child.
 
 The Rust-only [authored resource meter fixture](../fixtures/behavior/script-authored-meter-v1.json) checks body-specific settings on one shared graph. It exercises settled health events, affiliation filtering, passive gains and saturation in the production loader and VM. The [authored charge route](../fixtures/behavior/script-authored-charge-route-v1.json) checks private mount validation, deferred health events, and owner and observer projection.

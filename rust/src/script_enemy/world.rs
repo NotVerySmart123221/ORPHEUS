@@ -240,9 +240,11 @@ impl World for EnemyWorld<'_> {
         true
     }
     fn recharge_shields(&mut self, site: Site, amount: f64) -> bool {
-        if (site.entity, site.graph, site.node) != (self.binding.body, 0x0033, Some(5))
+        if site.entity != self.binding.body
             || !is_junkenstein_mode(self.binding.mode)
             || !crate::npc_catalog::is_junkenstein_boss(self.binding.hero)
+            || !amount.is_finite()
+            || amount < 0.0
         {
             return false;
         }

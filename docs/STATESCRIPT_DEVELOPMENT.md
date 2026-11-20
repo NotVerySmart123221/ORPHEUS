@@ -146,6 +146,19 @@ ability support.
   literal hardpoint asset. A known model can report presence or absence.
   Unavailable model facts produce a runtime diagnostic.
 
+- The native `STU_9028E035` linked state uses its reciprocal state
+  slot and known authored types to enter and leave the shared registry.
+  Links cross instances in entry order and skip server-only destinations.
+  The linked codec remains the source of wire layout.
+- A server-owned `ModifyHealth` state can declare periodic self shield
+  recovery through its validated operands. The encounter host restores
+  attached shield pools from the live rate on the VM clock. A host without
+  this service keeps the admission diagnostic.
+- An owner graph can check the active mode script entity through the
+  shared query. An available mode table supplies the entity. The verified
+  encounter scope can report it absent. The existing voice recipient
+  audience and team selectors still need their own routing contracts.
+
 Native target tracking still needs ordered samples, optional typed
 output bindings, and the lifecycle of its embedded state slots. The
 authored `track_entities` node owns separate child graph instances.
@@ -154,6 +167,20 @@ Preserve the difference between unavailable queries and empty results,
 then verify the output lifetime and owner and observer projections.
 The other pending paths include migration of the legacy charge bindings,
 health effects, spatial queries, control effects, and voice recipients.
+
+Phase 2 still tracks three groups. The common charge route needs prepared
+coverage for the stock damage, healing, passive and bonus messages and
+migration of the legacy admission bridge. The core graph states still
+need the remaining `TrackTargets`, `ModifyHealth`, and
+`PhysicsExplosion` shapes and the other linked and timed states. The
+handoff's `SpatialQuery` ID, `STU_B5C87F3D`, uses the native local
+combat accumulator lifecycle. Its spatial operands stay dormant with
+explicitly absent context. Present-context behavior still needs native
+evidence. The shared `EntitiesInRadius` expression already queries the
+room. Mode settings use the shared mode table. Flashbang control
+priority and voice audience routing still have compatibility selectors.
+Independent hero startup is a regression for these changes. The
+per-hero input and client results have separate acceptance.
 
 The prepared Python ordinary sender trace takes its compatibility branch.
 That branch leaves the persistent recipient wrapper unresolved, so it

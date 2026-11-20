@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "case_id": "script-linked-state-lifecycle.synthetic.v1",
+  "source": {"basis": "Invented graph identities exercise registration order and removal across independent root instances."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "roots": [
+      {"graph": 61057, "position": 2, "type": 0, "server_only": false},
+      {"graph": 61058, "position": 3, "type": 0, "server_only": true},
+      {"graph": 61059, "position": 4, "type": 1, "server_only": false}
+    ],
+    "unsupported_types": [2, "1", null]
+  },
+  "expected": {
+    "links_after_enter": [[3, 0], [3, 0], null],
+    "links_after_final_root_ends": [null, null, null]
+  }
+}

@@ -1140,7 +1140,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         node: &Node,
     ) -> Result<(), InitFault> {
         let site = self.site(key.instance, node);
-        let entry = registered_state(site.graph, node).expect("validated linked state");
+        let entry =
+            registered_state(self.graph(key.instance), node).expect("validated linked state");
         if entry.suppresses_model && !self.world.set_encounter_model_enabled(site, false) {
             self.report(site, Issue::UnsupportedField("encounter model control"));
             return Ok(());

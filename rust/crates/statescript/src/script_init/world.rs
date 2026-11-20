@@ -350,6 +350,7 @@ pub trait World {
     fn queue_health_changes(&mut self, _site: Site, _changes: &[(u32, f64)]) -> bool {
         false
     }
+    /// Restore the owner's shield pools. A zero amount checks support without changing health.
     fn recharge_shields(&mut self, _site: Site, _amount: f64) -> bool {
         false
     }

@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "case_id": "script-self-shield-recharge.synthetic.v1",
+  "source": {"basis": "Invented graph placements, rates, and host capabilities."},
+  "evidence": "synthetic-rust",
+  "input": [
+    {
+      "name": "first unrelated private placement",
+      "graph": 61971, "pos": 2, "server_only": true,
+      "supports_shields": true, "outcome": "recharges"
+    },
+    {
+      "name": "second unrelated private placement",
+      "graph": 61972, "pos": 3, "server_only": true,
+      "supports_shields": true, "outcome": "recharges"
+    },
+    {
+      "name": "valid shape with no shield service",
+      "graph": 61973, "pos": 4, "server_only": true,
+      "supports_shields": false, "outcome": "unsupported_host"
+    },
+    {
+      "name": "general healing can use an instigator",
+      "graph": 61974, "pos": 5, "server_only": true,
+      "supports_shields": true, "outcome": "unsupported_shape",
+      "effect_fields": {"m_instigator": {"$": "STU_B5A0CAF0"}}
+    },
+    {
+      "name": "different cadence",
+      "graph": 61975, "pos": 6, "server_only": true,
+      "supports_shields": true, "outcome": "unsupported_shape",
+      "node_fields": {"m_95F1FB0B": {"$": "STUConfigVarInt", "m_value": 2}}
+    },
+    {
+      "name": "node may run on client",
+      "graph": 61976, "pos": 7, "server_only": false,
+      "supports_shields": true, "outcome": "unsupported_shape"
+    }
+  ],
+  "expected": [0, 1.9375, 2]
+}

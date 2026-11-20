@@ -2051,6 +2051,87 @@ fn body_world_queries_only_expose_its_body_and_available_mode_variable_table() {
 }
 
 #[test]
+fn owner_mode_entity_query_reads_the_active_mode_at_any_script_site() {
+    use crate::{game_content::JUNKENSTEIN_REVENGE, script_expr::EvalError};
+    use serde_json::json;
+
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-mode-entity-query-v1.json"
+    ))
+    .unwrap();
+    let input = &contract["input"];
+    let expected = &contract["expected"];
+    let present = Ok(Value::Bool(expected["present"].as_bool().unwrap()));
+    let known_absent = Ok(Value::Bool(expected["known_absent"].as_bool().unwrap()));
+    assert_eq!(expected["unknown"], "unsupported");
+    let variable = u32::try_from(input["entity_variable"].as_u64().unwrap()).unwrap();
+
+    let spawn = fixture_body_factory().1;
+    let mut runtime = fixture_hitscan_factory(20.0).start(spawn).unwrap();
+    runtime.world.graphs = Arc::new(
+        GraphStore::from_json(
+            &serde_json::to_vec(&json!({
+                "version":1,"graphs":[],"bodies":{},"missing":[],
+                "mode_variables":input["mode_variables"]
+            }))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    let evaluate = |body: &mut PlayerBodyRuntime, config: &Json| {
+        body.component
+            .evaluate_state_config(1, 0, config, &mut body.world)
+    };
+    let mode = json!({"$":"STU_A3DEF368","m_EE729DCB":0});
+    let exists = json!({"$":"STU_E72F6348","m_entity":mode.clone()});
+    let unsupported = Err(EvalError::UnsupportedConfig("STU_A3DEF368".into()));
+    let foreign_site = Site {
+        entity: spawn.controller,
+        instance: 1,
+        graph: 42,
+        node: Some(0),
+    };
+
+    runtime.world.mode = input["present_mode"].as_u64().unwrap();
+    assert_eq!(
+        evaluate(&mut runtime, &mode),
+        Ok(Value::Entity(GAME_MODE_ENTITY))
+    );
+    assert_eq!(evaluate(&mut runtime, &exists), present);
+    assert_eq!(runtime.world.native(foreign_site, &mode), None);
+
+    let slot = json!({"$":"STUConfigVarDynamic","m_identifier":variable,"m_60DB8F99":true});
+    let stored = json!({"$":"STU_E72F6348","m_entity":slot});
+    runtime
+        .component
+        .set_entity_variable(
+            variable,
+            Value::Entity(GAME_MODE_ENTITY),
+            &mut runtime.world,
+        )
+        .unwrap();
+    assert_eq!(evaluate(&mut runtime, &stored), present);
+
+    let mut malformed = exists.clone();
+    malformed["m_entity"]["m_extra"] = Json::Null;
+    assert_eq!(evaluate(&mut runtime, &malformed), unsupported);
+
+    runtime.world.mode = JUNKENSTEIN_REVENGE;
+    assert_eq!(evaluate(&mut runtime, &exists), known_absent);
+    assert_eq!(evaluate(&mut runtime, &stored), known_absent);
+    assert_eq!(runtime.world.native(foreign_site, &exists), None);
+    assert_eq!(evaluate(&mut runtime, &mode), unsupported);
+    assert_eq!(evaluate(&mut runtime, &malformed), unsupported);
+
+    runtime.world.mode = input["unknown_mode"].as_u64().unwrap();
+    assert_eq!(evaluate(&mut runtime, &exists), unsupported);
+    assert_eq!(
+        evaluate(&mut runtime, &stored),
+        Err(EvalError::UnsupportedConfig("STU_E72F6348".into()))
+    );
+}
+
+#[test]
 fn posed_volley_keeps_the_authored_shot_frame_and_drains_unposed_reports() {
     let factory = fixture_hitscan_factory(20.0);
     let (_, spawn) = fixture_body_factory();

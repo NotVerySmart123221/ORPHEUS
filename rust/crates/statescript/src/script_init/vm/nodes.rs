@@ -18,9 +18,9 @@ use super::super::{
         is_cinematic_time_scale_envelope, is_client_subgraph_controller, is_elapsed_wait, is_entry,
         is_literal_frame_wait, is_message_recipient_set, is_networked_for_code_synced,
         is_owner_movement_sampler, is_parent_owned_timed_graph, is_projected_self_message,
-        is_self_stat_timer, is_self_target, is_wave_health_pool, living_body_array_shape,
-        participant_filter, persistent_message, placement_collection_tag, pool_number, raw_indices,
-        registered_state, source_key, static_target_operand, stored,
+        is_self_shield_recharge, is_self_stat_timer, is_self_target, is_wave_health_pool,
+        living_body_array_shape, participant_filter, persistent_message, placement_collection_tag,
+        pool_number, raw_indices, registered_state, source_key, static_target_operand, stored,
     },
     types::{InitFault, Issue, SpawnSearch, SpawnSearchKey, State, StateKind},
     world::{CreationKind, EntityCreation, Site, World},
@@ -1118,8 +1118,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 // when 978A30 cannot resolve the auxiliary client owner.
                 StateKind::Plain
             }
-            "STU_33A46033" | "STU_9028E035" | "STU_43994F1B" | "STU_93B8758C" | "STU_9935FBC8"
-                if registration.permits(registered_state(self.graph(id).index, node).is_some()) =>
+            "STU_9028E035"
+                if registration.shape(registered_state(self.graph(id), node).is_some()) =>
+            {
+                StateKind::Registered { next: None }
+            }
+            "STU_33A46033" | "STU_43994F1B" | "STU_93B8758C" | "STU_9935FBC8"
+                if registration.permits(registered_state(self.graph(id), node).is_some()) =>
             {
                 StateKind::Registered { next: None }
             }
@@ -1425,7 +1430,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::Plain
             }
             "STUStatescriptStateModifyHealth"
-                if registration.permits((self.graph(id).index, node.pos) == (0x0033, 5)) =>
+                if registration.shape(is_self_shield_recharge(node, key.raw)) =>
             {
                 StateKind::ShieldRecharge
             }

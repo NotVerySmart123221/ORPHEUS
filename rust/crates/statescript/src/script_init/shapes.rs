@@ -61,12 +61,14 @@ pub(super) fn is_entry(node: &Node) -> bool {
     matches!(node.class.as_str(), "STUStatescriptEntry" | "STU_571CC72E")
 }
 
-pub(super) fn registered_state(graph: u32, node: &Node) -> Option<RegisteredState> {
-    let placement = (graph, node.pos);
-    if !node.is_networked() {
+pub(super) fn registered_state(graph: &Graph, node: &Node) -> Option<RegisteredState> {
+    let placement = (graph.index, node.pos);
+    let linked_state = node.class == "STU_9028E035";
+    if !node.runs_on_server() || (!node.is_networked() && !linked_state) {
         return None;
     }
-    let suppresses_model = matches!(placement, (0x01cb, 20) | (0x0ce0, 17) | (0x0d03, 2));
+    let suppresses_model = node.class == "STU_33A46033"
+        && matches!(placement, (0x01cb, 20) | (0x0ce0, 17) | (0x0d03, 2));
     let class = match node.class.as_str() {
         "STU_9935FBC8" if placement == (0x224e, 34) && captured_aim_lock_shape(node) => {
             RegisteredClass::CinematicAim
@@ -77,7 +79,18 @@ pub(super) fn registered_state(graph: u32, node: &Node) -> Option<RegisteredStat
         {
             RegisteredClass::CinematicAim
         }
-        "STU_9028E035" if matches!(placement, (0x0ca5, 46 | 73) | (0x0ce0, 38) | (0x0d03, 1)) => {
+        // The native begin/end pair maintains one ordered list per class.
+        // Both authored type values use the same registration and link codec.
+        "STU_9028E035"
+            if node.is_state()
+                && !node.is_action()
+                && node.remote == -1
+                && matches!(field(&node.fields, "m_type").as_u64(), Some(0 | 1))
+                && node
+                    .state
+                    .and_then(|slot| graph.state(usize::from(slot)))
+                    .is_some_and(|linked| linked.pos == node.pos) =>
+        {
             RegisteredClass::State9028E035
         }
         "STU_43994F1B"
@@ -175,6 +188,76 @@ pub(super) fn cinematic_aim_lock_shape(node: &Node) -> bool {
 
 pub(super) fn is_self_target(node: &Node, name: &str) -> bool {
     script_expr::native_shape(field(&node.fields, name), "STU_B5A0CAF0", None)
+}
+
+pub(super) fn is_self_shield_recharge(node: &Node, state: u16) -> bool {
+    let fields = &node.fields;
+    let effect = field(fields, "m_modifyHealth");
+    let interval = field(fields, "m_95F1FB0B");
+    let amount = field(effect, "m_amount");
+    let off =
+        |value: &Json| matches!(value, Json::Null | Json::Bool(false)) || value.as_u64() == Some(0);
+    let supported_rate = match field(amount, "$").as_str() {
+        Some(class @ ("STUConfigVarInt" | "STUConfigVarFloat")) => {
+            script_expr::native_shape(amount, class, Some("m_value"))
+                && field(amount, "m_value").is_number()
+        }
+        Some("STUConfigVarDynamic") => {
+            script_expr::native_fields(amount, &["m_identifier", "m_60DB8F99"])
+                && script_expr::dynamic(amount).is_ok_and(|operand| operand.is_some())
+        }
+        Some("STU_919FD47C" | "STUConfigVarExpression") => {
+            script_expr::native_fields(amount, &["m_expression", "m_configVars"])
+                && field(amount, "m_expression").is_object()
+        }
+        _ => false,
+    };
+
+    node.server_only
+        && !node.client_only
+        && node.state == Some(state)
+        && node.remote == -1
+        && node.is_state()
+        && !node.is_action()
+        && field(fields, "m_DD792FF0").as_u64() == Some(3)
+        && field(fields, "m_7B2B3F5C").as_u64() == Some(1)
+        && off(field(fields, "m_8B707686"))
+        && script_expr::native_shape(interval, "STUConfigVarInt", Some("m_value"))
+        && field(interval, "m_value").as_u64() == Some(1)
+        && is_self_target(node, "m_FA3ECC43")
+        && field(effect, "$").as_str() == Some("STUStatescriptModifyHealth")
+        && field(effect, "m_93CDFD2F").as_u64() == Some(0)
+        && script_expr::native_shape(field(effect, "m_724CBA57"), "STU_B5A0CAF0", None)
+        && supported_rate
+        && effect.as_object().is_some_and(|fields| {
+            fields.iter().all(|(name, value)| match name.as_str() {
+                "$" | "m_93CDFD2F" | "m_amount" | "m_724CBA57" => true,
+                "m_EE729DCB" | "m_430E83BE" => value.as_u64() == Some(0),
+                _ => value.is_null(),
+            })
+        })
+        && fields.as_object().is_some_and(|fields| {
+            fields.iter().all(|(name, value)| match name.as_str() {
+                "m_DD792FF0" | "m_7B2B3F5C" | "m_8B707686" | "m_95F1FB0B" | "m_modifyHealth"
+                | "m_FA3ECC43" | "m_2BBEEAB8" | "m_beginPlug" | "m_F198FD3A" | "m_onBeginPlug"
+                | "m_onEndPlug" | "m_subgraphPlug" | "m_onAbortPlug" | "m_onFinishedPlug" => true,
+                "m_A2287776" | "m_AED90719" | "m_ADEB6E05" => off(value),
+                "m_48BED081" => {
+                    value.is_null()
+                        || (script_expr::native_shape(value, "STUConfigVarBool", Some("m_value"))
+                            && !field(value, "m_value").is_null()
+                            && off(field(value, "m_value")))
+                }
+                // Container bookkeeping has no health effect.
+                "m_0B1AA8CA" => {
+                    value.is_null()
+                        || value.as_object().is_some_and(|item| {
+                            item.len() == 1 && field(value, "item").as_u64().is_some()
+                        })
+                }
+                _ => value.is_null(),
+            })
+        })
 }
 
 pub(super) fn is_self_stat_timer(node: &Node) -> bool {

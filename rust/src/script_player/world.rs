@@ -336,6 +336,13 @@ impl World for BodyWorld {
     }
 
     fn entity_exists(&self, entity: u32) -> Option<bool> {
+        if entity == GAME_MODE_ENTITY {
+            return match self.graphs.mode_variables(self.mode) {
+                Some(_) => Some(true),
+                None if is_junkenstein_mode(self.mode) => Some(false),
+                None => None,
+            };
+        }
         (valid_entity(entity) && (entity == self.entity || entity == self.controller))
             .then_some(true)
     }
@@ -769,14 +776,6 @@ impl World for BodyWorld {
             }
         }
         if self.is_player_site(site) && is_junkenstein_mode(self.mode) {
-            if (site.graph, site.node) == (0x01ca, Some(179))
-                && native_shape(config, "STU_E72F6348", Some("m_entity"))
-                && config
-                    .get("m_entity")
-                    .is_some_and(|mode| native_shape(mode, "STU_A3DEF368", None))
-            {
-                return Some(Value::Bool(self.graphs.mode_variables(self.mode).is_some()));
-            }
             if (site.graph, site.node) == (0x01ca, Some(126))
                 && junkenstein_messages::sighting_selector(config)
             {
@@ -805,8 +804,24 @@ impl World for BodyWorld {
                 Some(Value::Vector([right, forward, 0.0]))
             }
             "STU_37F20D24" => Some(Value::Asset(self.mode)),
-            "STU_A3DEF368" if self.graphs.mode_variables(self.mode).is_some() => {
+            "STU_A3DEF368"
+                if self.is_player_site(site)
+                    && native_shape(config, "STU_A3DEF368", None)
+                    && self.entity_exists(GAME_MODE_ENTITY) == Some(true) =>
+            {
                 Some(Value::Entity(GAME_MODE_ENTITY))
+            }
+            "STU_E72F6348"
+                if self.is_player_site(site)
+                    && self.entity_exists(GAME_MODE_ENTITY) == Some(false)
+                    && native_shape(config, "STU_E72F6348", Some("m_entity"))
+                    && config
+                        .get("m_entity")
+                        .is_some_and(|mode| native_shape(mode, "STU_A3DEF368", None)) =>
+            {
+                // An existence check still has an answer when the mode
+                // supplies no script entity for the bare selector to return.
+                Some(Value::Bool(false))
             }
             "STU_4A101787" => Some(Value::Bool(false)),
             "STU_ED45C5E8"
