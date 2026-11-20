@@ -23,6 +23,7 @@ mod observer_eye_position;
 mod parent_owned_state;
 mod physics_explosion;
 mod projected_messages;
+mod relocation;
 mod room_cue;
 mod runtime_state_metadata;
 mod self_damage;

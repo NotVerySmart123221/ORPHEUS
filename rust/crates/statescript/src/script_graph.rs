@@ -66,6 +66,7 @@ enum ActionBehavior {
     HealthChange,
     RadialHealth,
     SweptDisplacement,
+    Relocation,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
@@ -304,6 +305,10 @@ impl Node {
 
     pub(crate) fn declares_swept_displacement_action(&self) -> bool {
         self.action_behavior == Some(ActionBehavior::SweptDisplacement)
+    }
+
+    pub(crate) fn declares_relocation_action(&self) -> bool {
+        self.action_behavior == Some(ActionBehavior::Relocation)
     }
 
     pub(crate) fn declares_radial_health_action(&self) -> bool {
@@ -764,6 +769,7 @@ impl Graph {
                     ActionBehavior::SweptDisplacement => {
                         ("swept displacement action", &["m_outPlug"])
                     }
+                    ActionBehavior::Relocation => ("relocation action", &["m_outPlug"]),
                 };
                 let state_slot = authored_state_slots.contains_key(&node.pos);
                 if !node.server_only
@@ -831,14 +837,19 @@ impl Graph {
                         }
                         "ActionRoomCue".into()
                     }
-                    ActionBehavior::SweptDisplacement => {
-                        if node.field("delta").is_none_or(Value::is_null) {
+                    ActionBehavior::SweptDisplacement | ActionBehavior::Relocation => {
+                        let (operand, class) = if behavior == ActionBehavior::Relocation {
+                            ("destination", "ActionRelocation")
+                        } else {
+                            ("delta", "ActionSweptDisplacement")
+                        };
+                        if node.field(operand).is_none_or(Value::is_null) {
                             return Err(invalid(format!(
-                                "{action} in graph {} at node {} requires delta",
+                                "{action} in graph {} at node {} requires {operand}",
                                 self.index, node.pos
                             )));
                         }
-                        "ActionSweptDisplacement".into()
+                        class.into()
                     }
                     ActionBehavior::HealthChange => {
                         for operand in ["target", "delta"] {
@@ -1367,6 +1378,7 @@ enum AuthoredClassBehavior {
     HealthChangeAction,
     RadialHealthAction,
     SweptDisplacementAction,
+    RelocationAction,
     ClientOnly,
 }
 
@@ -1390,6 +1402,7 @@ impl AuthoredClassBehavior {
             Self::HealthChangeAction => (false, None, Some(ActionBehavior::HealthChange)),
             Self::RadialHealthAction => (false, None, Some(ActionBehavior::RadialHealth)),
             Self::SweptDisplacementAction => (false, None, Some(ActionBehavior::SweptDisplacement)),
+            Self::RelocationAction => (false, None, Some(ActionBehavior::Relocation)),
             Self::ClientOnly => (true, None, None),
         };
         if (node.client_only && !client_only)

@@ -46,7 +46,7 @@ pub(crate) struct AiControlRecords {
     same_team_contact_suppressions: HashSet<Site>,
     outgoing_damage_filters: IndexMap<Site, OutgoingDamageFilter>,
     velocity_changes: Vec<(u32, crate::mover::VelocityChange)>,
-    swept_displacement: Option<(u32, script_init::SweptDisplacement)>,
+    scripted_motion: Option<(u32, script_init::ScriptedMotion)>,
     defenders: Arc<[u32]>,
     sightings: Vec<DefenderSighting>,
     defender_messages: Vec<DefenderMessage>,

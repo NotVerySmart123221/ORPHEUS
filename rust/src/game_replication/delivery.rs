@@ -1568,7 +1568,7 @@ impl WorldDelivery {
         }
         if fault.is_none() && used < budget && pending.poses.len() != 0 {
             if let Some(runtime) = runtime.as_deref_mut() {
-                stage_swept_displacement(runtime, mover);
+                stage_scripted_motion(runtime, mover);
             }
         }
         let stepped = mover.step_pending(
@@ -1587,14 +1587,14 @@ impl WorldDelivery {
                 }
                 if let Some(script) = script.as_mut() {
                     // The pose already moved even if the state's next update fails.
-                    script.record_swept_movement(
+                    script.record_scripted_movement(
                         mover,
                         command.frame,
                         frame_us,
                         previously_processed,
                     );
                     if fault.is_some() {
-                        if let Some(history) = script.swept_history() {
+                        if let Some(history) = script.scripted_motion_history() {
                             history.record(mover.pose());
                         }
                     }

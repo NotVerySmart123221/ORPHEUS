@@ -2192,16 +2192,16 @@ impl RoomSimulation {
                 if bot.dead || vitals.death().is_some() {
                     enemy.scripts.clear_pending_script_motion();
                 }
-                if let Some(displacement) = enemy
+                if let Some(motion) = enemy
                     .scripts
-                    .take_swept_displacement(tick)
+                    .take_scripted_motion(tick)
                     .filter(|_| !bot.dead && vitals.death().is_none())
                 {
                     if !enemy.objective_mover_attached {
                         enemy.objective_mover_attached = queries.attach_objective_mover(bot);
                     }
                     if enemy.objective_mover_attached {
-                        bot.apply_swept_displacement(tick, displacement);
+                        bot.apply_scripted_motion(tick, motion);
                     }
                 }
                 enemy.binding.frame = tick;

@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Add an authored point relocation action with destination capsule clearance for players and NPCs. It shares the motion queue and owner corrections with swept displacement. Added original fixtures for placement, queue admission, and correction. Shared-branch verification is pending.
+
 - Cancel queued script motion on player and NPC death or runtime failure. Commands recovered after a script fault continue from the settled pose without applying the old script's future velocity edits. Shared-branch verification is pending.
 
 - Apply effective character-collision settings to player and NPC movement. Body defaults and timed modifiers determine actor contact participation while static geometry continues to block movement. Added synthetic coverage for modifier retirement and both movement paths. Shared-branch verification is pending.

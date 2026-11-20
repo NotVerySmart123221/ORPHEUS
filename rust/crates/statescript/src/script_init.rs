@@ -212,9 +212,9 @@ pub use types::{
 pub use world::{
     AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, CreationKind,
     EmptyWorld, EntityCreation, HealthTargetFacts, HitTags, HostEvent, HostHealthContext,
-    LandingSelection, MovementSample, PlayScript, RoomBodyIdentity, RoomCue, RoomEntityStatus,
-    RoomMessage, Site, SweptDisplacement, TargetTagEffect, TargetTagEffects, TargetTagSnapshot,
-    World,
+    LandingSelection, MovementSample, PlayScript, Relocation, RoomBodyIdentity, RoomCue,
+    RoomEntityStatus, RoomMessage, ScriptedMotion, Site, SweptDisplacement, TargetTagEffect,
+    TargetTagEffects, TargetTagSnapshot, World,
 };
 
 use machine::{Event, Machine, Startup, StateKey, VarKey};

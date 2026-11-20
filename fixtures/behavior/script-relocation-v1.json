@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "case_id": "script-relocation.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "source": {
+    "basis": "Original authored destination admission and bounded self motion."
+  },
+  "input": {
+    "body": 1202,
+    "graph": 720,
+    "message": 98,
+    "constructor_cases": [
+      {"name": "requested precision", "destination": [0.100000001, 0, 0], "origin": [0, 0, 0], "constructed": true, "reachable": true},
+      {"name": "32-unit boundary", "destination": [32, 0, 0], "origin": [0, 0, 0], "constructed": true, "reachable": true},
+      {"name": "absolute zero", "destination": [0, 0, 0], "origin": [2, 0, 0], "constructed": true, "reachable": true},
+      {"name": "same point", "destination": [0, 0, 0], "origin": [0, 0, 0], "constructed": true, "reachable": false},
+      {"name": "too distant", "destination": [32.001, 0, 0], "origin": [0, 0, 0], "constructed": true, "reachable": false},
+      {"name": "large absolute point", "destination": [1002, -3, 1], "origin": [1000, -3, 1], "constructed": true, "reachable": true},
+      {"name": "converted displacement boundary", "destination": [19.2, 25.6, 0], "origin": [0, 0, 0], "constructed": true, "reachable": false},
+      {"name": "underflowed displacement", "destination": [1e-300, 0, 0], "origin": [0, 0, 0], "constructed": true, "reachable": false},
+      {"name": "float32 overflow", "destination": [1e100, 0, 0], "origin": [0, 0, 0], "constructed": false, "reachable": false},
+      {"name": "nan destination", "destination": ["nan", 0, 0], "origin": [0, 0, 0], "constructed": false, "reachable": false},
+      {"name": "infinite destination", "destination": [0, "infinity", 0], "origin": [0, 0, 0], "constructed": false, "reachable": false},
+      {"name": "unavailable origin", "destination": [1, 0, 0], "origin": ["nan", 0, 0], "constructed": true, "reachable": false}
+    ],
+    "steps": [
+      {"name": "accepted", "frame": 20, "destination": [3, 1, -2], "admission": "accepted", "host_call": true, "continued": true},
+      {"name": "distance checked by consuming host", "frame": 21, "destination": [1002, -3, 1], "admission": "accepted", "host_call": true, "continued": true},
+      {"name": "ordinary refusal", "frame": 22, "destination": [0, 0, 0], "admission": "refused", "host_call": true, "continued": false},
+      {"name": "unavailable service", "frame": 23, "destination": [1, 0, 0], "admission": "unavailable", "host_call": true, "continued": false, "diagnostic": "service"},
+      {"name": "wrong operand type", "frame": 24, "destination": true, "admission": "accepted", "host_call": false, "continued": false, "diagnostic": "destination"},
+      {"name": "nonfinite", "frame": 25, "destination": ["nan", 0, 0], "admission": "accepted", "host_call": false, "continued": false, "diagnostic": "destination"},
+      {"name": "overflowing coordinate", "frame": 26, "destination": [1e100, 0, 0], "admission": "accepted", "host_call": false, "continued": false, "diagnostic": "destination"},
+      {"name": "invalid source", "body": 0, "frame": 27, "destination": [1, 0, 0], "admission": "accepted", "host_call": false, "continued": false, "diagnostic": "source"},
+      {"name": "frame overflow", "frame": 4294967295, "destination": [1, 0, 0], "admission": "accepted", "host_call": false, "continued": false, "diagnostic": "frame"},
+      {"name": "unsupported expression", "frame": 28, "destination": [1, 0, 0], "invalid_expression": true, "admission": "accepted", "host_call": false, "continued": false, "diagnostic": "expression"}
+    ]
+  }
+}

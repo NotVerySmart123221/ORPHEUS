@@ -26,7 +26,9 @@ use super::super::{
         source_key, static_target_operand, stored,
     },
     types::{InitFault, Issue, SpawnSearch, SpawnSearchKey, State, StateKind},
-    world::{CreationKind, EntityCreation, Site, SweptDisplacement, World},
+    world::{
+        CreationKind, EntityCreation, Relocation, ScriptedMotion, Site, SweptDisplacement, World,
+    },
 };
 use super::Vm;
 
@@ -138,6 +140,47 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     Some(false) => Ok(false),
                     None => {
                         self.report(site, Issue::UnsupportedField("swept displacement service"));
+                        Ok(false)
+                    }
+                }
+            }
+            _ if node.declares_relocation_action() => {
+                let site = self.site(id, node);
+                if !script_expr::valid_entity(site.entity) {
+                    self.report(site, Issue::UnsupportedField("relocation source"));
+                    return Ok(false);
+                }
+                let Some(destination) =
+                    self.evaluate(id, node, field(&node.fields, "destination"), caller)
+                else {
+                    return Ok(false);
+                };
+                let relocation = match destination {
+                    Value::Vector(destination) => Relocation::new(destination),
+                    _ => None,
+                };
+                let Some(relocation) = relocation else {
+                    self.report(site, Issue::Expression(EvalError::MalformedConfig(
+                        "expected a finite float32-representable relocation destination",
+                    )));
+                    return Ok(false);
+                };
+                let Some(frame) = self.machine.frame.checked_add(1) else {
+                    self.report(site, Issue::UnsupportedField("relocation frame"));
+                    return Ok(false);
+                };
+                match self.world.queue_scripted_motion(
+                    site,
+                    frame,
+                    ScriptedMotion::Relocate(relocation),
+                ) {
+                    Some(true) => {
+                        self.follow(id, node, "m_outPlug", caller, depth)?;
+                        Ok(true)
+                    }
+                    Some(false) => Ok(false),
+                    None => {
+                        self.report(site, Issue::UnsupportedField("relocation service"));
                         Ok(false)
                     }
                 }

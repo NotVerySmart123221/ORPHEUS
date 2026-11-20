@@ -18,7 +18,7 @@ use crate::{
         CROUCHED, IN_AIR, JUMPED, NOT_GROUND_UNDER, Posture, PostureStep, TOUCHING, snap,
     },
     mover_settings::MoverSettings,
-    script_init::SweptDisplacement,
+    script_init::{Relocation, ScriptedMotion, SweptDisplacement},
     world::{Movement, NO_INPUT},
 };
 
@@ -113,8 +113,8 @@ pub struct Mover {
     cinematic_aim: Option<[i32; 2]>,
     authored_facing: Option<[i32; 2]>,
     velocity_changes: Vec<(u32, VelocityChange)>,
-    swept_displacement: Option<(u32, SweptDisplacement)>,
-    swept_displacement_frame: Option<u32>,
+    scripted_motion: Option<(u32, ScriptedMotion)>,
+    scripted_motion_frame: Option<u32>,
     last_command: Option<Command>,
     last_input: Option<u32>,
     pose: Movement,
@@ -143,8 +143,8 @@ impl Mover {
             cinematic_aim: None,
             authored_facing: None,
             velocity_changes: Vec::new(),
-            swept_displacement: None,
-            swept_displacement_frame: None,
+            scripted_motion: None,
+            scripted_motion_frame: None,
             last_command: None,
             last_input: None,
             pose: Movement {
@@ -235,31 +235,36 @@ impl Mover {
     }
 
     /// Keep the first request until its first actual pose at or after `frame`.
+    pub(crate) fn queue_scripted_motion(&mut self, frame: u32, motion: ScriptedMotion) -> bool {
+        if self.scripted_motion.is_some() {
+            return false;
+        }
+        self.scripted_motion = Some((frame, motion));
+        true
+    }
+
+    #[cfg(test)]
     pub(crate) fn queue_swept_displacement(
         &mut self,
         frame: u32,
         displacement: SweptDisplacement,
     ) -> bool {
-        if self.swept_displacement.is_some() {
-            return false;
-        }
-        self.swept_displacement = Some((frame, displacement));
-        true
+        self.queue_scripted_motion(frame, ScriptedMotion::Sweep(displacement))
     }
 
     /// Drop script work that has not reached a pose on this body.
     pub(crate) fn clear_pending_script_motion(&mut self) {
         self.velocity_changes.clear();
-        self.swept_displacement = None;
+        self.scripted_motion = None;
     }
 
-    pub(crate) fn has_swept_displacement(&self) -> bool {
-        self.swept_displacement.is_some()
+    pub(crate) fn has_pending_script_motion(&self) -> bool {
+        self.scripted_motion.is_some()
     }
 
-    /// Whether this successfully completed pose changed feet through a swept request.
-    pub(crate) fn swept_displacement_at(&self, frame: u32) -> bool {
-        self.swept_displacement_frame == Some(frame)
+    /// Whether this successfully completed pose moved through a script request.
+    pub(crate) fn scripted_motion_at(&self, frame: u32) -> bool {
+        self.scripted_motion_frame == Some(frame)
     }
 
     /// Simulate the newest command and any reconstructible poses before it.
@@ -336,18 +341,25 @@ impl Mover {
         } else {
             &[]
         };
-        self.swept_displacement_frame = None;
-        let mut swept_changed = false;
+        self.scripted_motion_frame = None;
+        let mut scripted_motion_changed = false;
         if self
-            .swept_displacement
+            .scripted_motion
             .is_some_and(|(frame, _)| frame <= command.frame)
         {
             // Consume once even if the solver rejects the attempt. Stage on a
             // fresh capsule so an error cannot separate the body from its feet.
-            if let Some((_, displacement)) = self.swept_displacement.take() {
+            if let Some((_, motion)) = self.scripted_motion.take() {
                 let before = self.pose.position;
-                self.apply_swept_displacement(displacement, dt, blockers)?;
-                swept_changed = self.pose.position != before;
+                match motion {
+                    ScriptedMotion::Sweep(displacement) => {
+                        self.apply_swept_displacement(displacement, dt, blockers)?;
+                    }
+                    ScriptedMotion::Relocate(relocation) => {
+                        self.apply_relocation(relocation, blockers)?;
+                    }
+                }
+                scripted_motion_changed = self.pose.position != before;
             }
         }
         let mut launched = false;
@@ -450,7 +462,7 @@ impl Mover {
         self.pose.spring = self.posture.spring_steps().map(i32::from);
         self.pose.spring_speed = f64::from(self.posture.spring_speed());
         self.pose.fall = self.posture.fall;
-        self.swept_displacement_frame = swept_changed.then_some(command.frame);
+        self.scripted_motion_frame = scripted_motion_changed.then_some(command.frame);
         Ok(())
     }
 
@@ -469,15 +481,37 @@ impl Mover {
             self.pose.position[axis] + f64::from(end[axis]) - f64::from(start[axis])
         })
         .map(snap);
-        let lift = pogo(&self.base, self.posture.crouched()) as f32 + self.posture.spring_offset();
-        staged.teleport([
-            feet[0] as f32,
-            (feet[1] + f64::from(lift)) as f32,
-            feet[2] as f32,
-        ]);
+        staged.teleport(self.capsule_origin(feet));
         self.body = staged;
         self.pose.position = feet;
         Ok(())
+    }
+
+    fn apply_relocation(
+        &mut self,
+        relocation: Relocation,
+        blockers: &[CapsulePose],
+    ) -> Result<(), HullContactError> {
+        let Some(feet) = relocation
+            .destination_from(self.pose.position)
+            .map(|feet| feet.map(snap))
+        else {
+            return Ok(());
+        };
+        let delta = std::array::from_fn(|axis| feet[axis] - self.pose.position[axis]);
+        if SweptDisplacement::new(delta).is_none() {
+            return Ok(());
+        }
+        let origin = self.capsule_origin(feet);
+        if self.body.relocate_if_clear(origin, blockers)? {
+            self.pose.position = feet;
+        }
+        Ok(())
+    }
+
+    fn capsule_origin(&self, [x, y, z]: [f64; 3]) -> [f32; 3] {
+        let lift = pogo(&self.base, self.posture.crouched()) as f32 + self.posture.spring_offset();
+        [x as f32, (y + f64::from(lift)) as f32, z as f32]
     }
 
     fn move_body(
@@ -637,7 +671,7 @@ mod tests {
         reference.pose.velocity = velocity;
         assert!(moved.queue_swept_displacement(due, displacement));
         assert!(!moved.queue_swept_displacement(due, second));
-        assert!(moved.has_swept_displacement());
+        assert!(moved.has_pending_script_motion());
         for frame in 1..=due + 2 {
             let command = Command {
                 frame,
@@ -651,15 +685,15 @@ mod tests {
                         .unwrap(),
                     0
                 );
-                assert!(moved.has_swept_displacement());
-                assert!(!moved.swept_displacement_at(frame));
+                assert!(moved.has_pending_script_motion());
+                assert!(!moved.scripted_motion_at(frame));
             }
             if frame == due + 1 {
                 assert!(moved.queue_swept_displacement(frame, second));
                 moved.clear_pending_script_motion();
-                assert!(!moved.has_swept_displacement());
-                assert!(moved.swept_displacement_at(due));
-                assert!(!moved.swept_displacement_at(frame));
+                assert!(!moved.has_pending_script_motion());
+                assert!(moved.scripted_motion_at(due));
+                assert!(!moved.scripted_motion_at(frame));
             }
             moved.step(&rays, command, 0.016, |_, _| {}).unwrap();
             reference.step(&rays, command, 0.016, |_, _| {}).unwrap();
@@ -671,8 +705,8 @@ mod tests {
             assert_eq!(moved.pose.velocity, reference.pose.velocity);
             assert_eq!(moved.pose.flags, reference.pose.flags);
             assert_eq!(moved.pose.frame, reference.pose.frame);
-            assert_eq!(moved.has_swept_displacement(), frame < due);
-            assert_eq!(moved.swept_displacement_at(frame), frame == due);
+            assert_eq!(moved.has_pending_script_motion(), frame < due);
+            assert_eq!(moved.scripted_motion_at(frame), frame == due);
         }
     }
 
@@ -704,8 +738,8 @@ mod tests {
             )
             .unwrap();
         assert_eq!(mover.pose.position[0], 0.0);
-        assert!(!mover.has_swept_displacement());
-        assert!(!mover.swept_displacement_at(1));
+        assert!(!mover.has_pending_script_motion());
+        assert!(!mover.scripted_motion_at(1));
         assert!(
             mover.queue_swept_displacement(2, SweptDisplacement::new([2.0, 0.0, 0.0]).unwrap())
         );
@@ -722,8 +756,8 @@ mod tests {
             )
             .unwrap();
         assert_eq!(mover.pose.position[0], 0.0);
-        assert!(!mover.has_swept_displacement());
-        assert!(!mover.swept_displacement_at(2));
+        assert!(!mover.has_pending_script_motion());
+        assert!(!mover.scripted_motion_at(2));
     }
 
     #[test]
@@ -792,12 +826,12 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(samples, frame);
-            assert_eq!(mover.swept_displacement_at(frame), frame == due);
+            assert_eq!(mover.scripted_motion_at(frame), frame == due);
         }
         assert!(mover.pose.position[2] > fixture["expected"]["wall_min_z"].as_f64().unwrap());
         assert!(mover.pose.position[2] < fixture["expected"]["wall_max_z"].as_f64().unwrap());
         assert_eq!(mover.contact_capsule(), mover.body.capsule_pose());
-        assert!(!mover.has_swept_displacement());
+        assert!(!mover.has_pending_script_motion());
         let before = mover.pose.position;
         assert!(mover.queue_swept_displacement(due + 2, displacement));
         mover.clear_pending_script_motion();
@@ -914,7 +948,7 @@ mod tests {
                     assert!(
                         mover.pose.position[2] < fixture["expected"]["maximum_z"].as_f64().unwrap()
                     );
-                    assert!(!mover.swept_displacement_at(command.frame));
+                    assert!(!mover.scripted_motion_at(command.frame));
                 },
             )
             .unwrap();
@@ -926,7 +960,7 @@ mod tests {
         assert_eq!(posed, fixture["expected"]["posed_frames"].as_u64().unwrap());
         assert!(blocked.pose.position[2] > fixture["expected"]["minimum_z"].as_f64().unwrap());
         assert!(free.pose.position[2] > fixture["expected"]["maximum_z"].as_f64().unwrap());
-        assert!(!blocked.has_swept_displacement());
+        assert!(!blocked.has_pending_script_motion());
     }
 
     fn swept_wall_world(input: &serde_json::Value, category: u16) -> Arc<ContactWorld> {
@@ -953,6 +987,61 @@ mod tests {
         let mesh = ContactMesh::new(wall, [1.0; 3], u16::MAX).unwrap();
         let shape = StaticShape::new(StaticGeometry::Mesh(Arc::new(mesh)), None).unwrap();
         Arc::new(ContactWorld::new(vec![shape]).unwrap())
+    }
+
+    #[test]
+    fn relocation_shares_deadline_and_marks_only_a_clear_destination() {
+        let fixture = swept_fixture();
+        let input = &fixture["input"];
+        let category = u16::try_from(input["category"].as_u64().unwrap()).unwrap();
+        let settings = MoverSettings {
+            gravity_scale: 0.0,
+            stand_height: input["stand_height"].as_f64().unwrap(),
+            stand_radius: input["stand_radius"].as_f64().unwrap(),
+            ..MoverSettings::default()
+        };
+        let mut mover = Mover::new(
+            settings,
+            swept_wall_world(input, category),
+            [0.0; 3],
+            0,
+            category,
+        )
+        .unwrap();
+        let destination = serde_json::from_value(input["wall_displacement"].clone()).unwrap();
+        let blocker = crate::mover_ground::standing_capsule(&settings, destination);
+        let motion = ScriptedMotion::Relocate(Relocation::new(destination).unwrap());
+        let rays = TriangleIndex::new([]).unwrap();
+        assert!(mover.queue_scripted_motion(2, motion));
+        assert!(!mover.queue_swept_displacement(2, SweptDisplacement::new(destination).unwrap()));
+        for frame in 1..=4 {
+            if frame == 3 {
+                assert!(mover.queue_scripted_motion(frame, motion));
+            }
+            let blockers = if frame < 3 {
+                std::slice::from_ref(&blocker)
+            } else {
+                &[]
+            };
+            mover
+                .step_against(
+                    &rays,
+                    Command {
+                        frame,
+                        ..Command::default()
+                    },
+                    0.016,
+                    blockers,
+                    |_, _| {},
+                )
+                .unwrap();
+            assert_eq!(mover.has_pending_script_motion(), frame == 1);
+            assert_eq!(mover.scripted_motion_at(frame), frame == 3);
+            assert_eq!(
+                mover.pose.position,
+                if frame < 3 { [0.0; 3] } else { destination }
+            );
+        }
     }
 
     #[test]
@@ -1034,7 +1123,7 @@ mod tests {
                     range.contains(&z) && z > range.start,
                     "frame {frame}, swept {swept}, z {z}"
                 );
-                assert_eq!(mover.swept_displacement_at(frame), swept);
+                assert_eq!(mover.scripted_motion_at(frame), swept);
                 if frame == 1 {
                     mover.track_modifiers(frame, &collision_disabled);
                 } else if frame == 2 {
