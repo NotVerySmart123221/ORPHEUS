@@ -192,6 +192,28 @@ empty team yields zero. Asset-only factory preparation has no room roster.
 The roster rule follows the existing Python ready-switch adapter at
 `c73e5a49` in `src/ow174/game/match.py`.
 
+### Compare a prepared startup matrix with Python
+
+Run the comparison with a clean Python checkout and its full commit SHA.
+Use the same runtime and the Rust report generated above.
+
+```powershell
+$pythonReference = 'C:\work\orpheus-python'
+$pythonRevision = git -C $pythonReference rev-parse HEAD
+python -I -S -B scripts/compare_actor_startup.py --python-reference $pythonReference --python-revision $pythonRevision --runtime $env:ORPHEUS_RUNTIME_DIR --rust-report 'C:\private\actor-startup.json' --private-output 'C:\private\actor-startup-comparison.json'
+```
+
+The comparison verifies the SHA-256 of all eight inputs from the Rust
+matrix and matches the exact hero and body IDs. Python uses the ordinary
+room and body switch with the existing in-memory client. It decodes the
+initial full tree and the first owner frame after acknowledging the tree.
+The report records the Python strict flag and counts distinct compatibility
+notices observed per actor. Silent compatibility paths require separate
+observation. Rust retains its recorded independent factory result and
+its separate room factory result. This comparison measures startup
+milestones. Frame parity, gameplay, and original-client acceptance have
+separate tests.
+
 ### Generate a synthetic test scaffold
 
 ```text
