@@ -21,6 +21,14 @@ The [pinned Python → Rust parity matrix](https://github.com/leafall903/ORPHEUS
 
 ## Shared StateScript integration
 
+
+The shared branch validated Phase 2 settled bonus credit and direct target filters
+at `29df13cb`. The coverage-enabled server and StateScript library tests passed
+(656 total), as did strict Clippy. The 900-frame owner trace and 32-actor input
+matrix matched `6027a713` after excluding revision metadata. The matrix remained
+at 12 admitted actors and four completed 311-frame schedules. Three charge
+probes passed in the same handoff cycle with the annotated prepared graph pack.
+
 The local `work/statescript-integration` checkpoint `79e8a5b9` combines
 Phase 2 `90702e42`, Phase 3A `055adca3`, and native Practice Range
 admission. The prepared 104319 matrix completed independent startup and

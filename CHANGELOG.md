@@ -6,13 +6,13 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
-- Applied the settled target's tags, affiliation and liveness to direct `EntityMatches` filters in a health event. A lethal impact retains its original target's qualification after the body retires. Source membership and spatial searches still use the current room frame. Shared-branch validation pending.
+- Applied the settled target's tags, affiliation and liveness to direct `EntityMatches` filters in a health event. A lethal impact retains its original target's qualification after the body retires. Source membership and spatial searches still use the current room frame. Validated in shared candidate `29df13cb`.
 
-- Carried target facts with positive NPC-local health events at VM publication. Added room coverage for a capped heal issuing one configured bonus on the recipient's next VM frame and for dropping the award when that recipient is replaced. A prepared probe exercises original local admission, award, and revocation through the graph. Shared-branch validation pending.
+- Carried target facts with positive NPC-local health events at VM publication. Added room coverage for a capped heal issuing one configured bonus on the recipient's next VM frame and for dropping the award when that recipient is replaced. A prepared probe exercises original local admission, award, and revocation through the graph. Validated in shared candidate `29df13cb`.
 
 - Taught parent-owned StateScript states to honor a finite, typed duration. The existing state timer runs the ordinary finish path and is cleared when the state or its parent exits.
 
-- Fixed NPC script direction sampling when navigation turns a body with an active authored facing claim. The room can publish the navigation pose on the frame the claim ends. Shared-branch verification is pending.
+- Fixed NPC script direction sampling when navigation turns a body with an active authored facing claim. The room can publish the navigation pose on the frame the claim ends. Validated in shared candidate `6027a713`.
 
 - Added Inspector traces for StateScript ray queries. Player and NPC queries share the room's bounded ray history with weapon rays. Each script sample includes the graph, node, instance, VM frame and room capture tick. The overlay distinguishes actor hits, walls, misses and unavailable samples. The Phase 3A branch verified this on `05ab525e` against its synced `131dfdae` baseline.
 
@@ -48,7 +48,7 @@ This log records tested changes and their acceptance status. Entries are grouped
 - Validated both views of a candidate body's initial script snapshot before publishing the replacement. The owner and observer startup checks use the existing full-frame encoder and datagram budget. The synthetic input regression reproduced the old replacement after an observer-only link failure and verified rejection followed by a successful retry. Workspace tests with script coverage, Python script tests, and the prepared input-gap replacement passed. Both prepared 104319 reports matched the preceding startup results, and the #72 capture matched all 476 observations.
 
 - Kept the current player body active when a candidate script fails to initialize or encode its first owner snapshot. The room records a new body generation and commits the controller stream only after successful replacement. A synthetic input regression reproduced the old failure and exercised three rejections followed by a successful retry. Workspace tests with script coverage, Clippy, and the Python script tests passed. Prepared input-gap replacement passed, both 104319 startup reports matched the preceding results, and the #72 capture matched all 476 observations.
-- Matched two immediate StateScript self-damage forms from their authored fields instead of fixed graph positions. Both use the current NPC vitals callback, retaining the distinct cleanup death rule and native integer rounding. Synthetic regression added. Shared-branch validation pending.
+- Matched two immediate StateScript self-damage forms from their authored fields instead of fixed graph positions. Both use the current NPC vitals callback, retaining the distinct cleanup death rule and native integer rounding. Synthetic regression added. Validated in shared candidate `6027a713`.
 
 - Added opt-in native directed numeric messages with same-generation source and target checks. The prepared bonus probe exercises the original local and foreign actions against the original receiver. Static model protection now uses validated state fields and an explicit body capability, preserving the mask until the last protecting state retires.
 
