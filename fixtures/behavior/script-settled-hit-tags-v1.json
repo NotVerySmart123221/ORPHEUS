@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "case_id": "script-settled-hit-tags.synthetic.v1",
-  "source": {"basis": "Synthetic room impacts and healing, frozen target facts, and body replacement."},
+  "source": {"basis": "Synthetic room impacts and healing, overkill attribution, frozen target facts, and body replacement."},
   "evidence": "synthetic-rust",
   "input": {
     "bot_impact": 23.5,

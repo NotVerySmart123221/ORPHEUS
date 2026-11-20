@@ -298,6 +298,12 @@ three instance operands read by its outgoing grant. The original
 dispatcher, the origin of those three values, and the order relative
 to health settlement still need original-build evidence.
 
+Player hit notices, immediate damage credit and deferred notifications
+now use the same actual pool loss. The prepared `0012` probe supplies
+explicit pool records to the original charge receiver and checks how
+matching identifiers affect the award. Native production of those
+records and temporary named-pool admission still require evidence.
+
 Static model protection now uses the authored state slots and an
 explicit host capability. The prepared boss graph regression passed its
 link, encoding, and final restoration checks. The current encounter

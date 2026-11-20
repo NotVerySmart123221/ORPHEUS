@@ -457,7 +457,7 @@ mod tests {
             Some(&simulation),
         ));
 
-        let (_, killed, _) = simulation
+        let (_, outcome, _) = simulation
             .damage_player_body_by_wire(
                 listener,
                 input["late_damage"].as_f64().unwrap(),
@@ -469,7 +469,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        assert!(killed);
+        assert!(outcome.killed);
         assert_eq!(
             simulation.player_handle_for_wire(listener.entity),
             Some(listener)
