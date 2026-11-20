@@ -97,6 +97,15 @@ returns no runtime for a different hero. The independent probe calls
 the per-hero factory builder directly. Ability coverage and original
 client acceptance require separate verification.
 
+At `339b05d8`, the Phase 3A authored static ray query passed synthetic
+expression, observer lifecycle, and native room collision tests. Two
+startup runs with the default build and the same 104319 pack produced
+byte-identical reports. The script-coverage report matched the preceding capture
+apart from its source revision, with **11 of 32** independent passes,
+**one** ordinary Practice Range attachment, and **47** blocking sites.
+All 476 #72 observation sites matched. Dynamic actor ray hits and
+ability-state integration remain open.
+
 Seven actor probes have one blocking site each. Mercy's tag query needs
 the tagged placement inventory and live actor tags. Orisa and Sigma
 still hit persistent message registration. Baptiste cannot read a
