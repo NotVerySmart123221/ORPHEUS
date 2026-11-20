@@ -458,6 +458,9 @@ impl RoomSimulation {
         state.mover.clear_pending_script_motion();
         if let Some(mut runtime) = state.runtime.take() {
             state.halted_vitals = runtime.take_vitals();
+            if let Some(vitals) = &mut state.halted_vitals {
+                vitals.clear_temporary_shields();
+            }
         }
         state.fields.clear();
         state.launches.clear();

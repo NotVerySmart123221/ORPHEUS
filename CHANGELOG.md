@@ -31,6 +31,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Retire a player script as soon as synchronous encounter messages halt it. Clear its control effects and publish the body's final health after older updates, with a generation check for the owner and each observer. Added a synthetic regression for both message routes. Integration validation is pending.
 
+- Clear named temporary shields when a player script stops and keep the body's ordinary pools and their IDs. The owner and observers receive the cleared slots through the existing health stream. Added a synthetic fault and retransmission regression. Integration validation is pending.
+
 - Applied the settled target's tags, affiliation and liveness to direct `EntityMatches` filters in a health event. A lethal impact retains its original target's qualification after the body retires. Source membership and spatial searches still use the current room frame. Validated in shared candidate `29df13cb`.
 
 - Added field-driven decay for named temporary shields. The state samples the authored rate on the VM clock and finishes at zero. Decay uses the shared grant-draining routine independently from attributed weapon hits. Synthetic lifecycle and native settlement regressions are pending integration validation.
