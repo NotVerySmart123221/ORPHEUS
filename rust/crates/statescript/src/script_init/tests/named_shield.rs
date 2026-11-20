@@ -268,7 +268,8 @@ fn named_shield_decay_uses_the_live_rate_and_retires_at_zero() {
         world.temporary_shield_current(site, identifier),
         Some(starting_amount)
     );
-    for (frame, (rate, expected)) in (1..=2).zip(rates.into_iter().zip(expected_amounts)) {
+    // Frame zero ends at 15 ms. Subsequent frame ends are 16 ms apart.
+    for (frame, (rate, expected)) in (0..=1).zip(rates.into_iter().zip(expected_amounts)) {
         component
             .set_instance_variable(1, RATE, Value::Float(rate), &mut world)
             .unwrap();
@@ -278,7 +279,7 @@ fn named_shield_decay_uses_the_live_rate_and_retires_at_zero() {
             Some(expected)
         );
     }
-    component.advance_frame(3, &mut world).unwrap();
+    component.advance_frame(2, &mut world).unwrap();
     let snapshot = component.snapshot().unwrap();
     assert_eq!(
         snapshot.instances[&1].states[&0].kind,
