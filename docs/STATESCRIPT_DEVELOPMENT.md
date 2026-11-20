@@ -857,10 +857,28 @@ The probe keeps its target facts fixed and compares empty, unrelated
 and matching records in slot `0624`. The authored fold reads a typed
 pool identifier and a numeric amount, then deducts matching records
 before capping the award. Current player hits use the actual pool loss,
-following the pinned Python settlement path. The compatibility bridge
-still supplies an empty pool list. Temporary named pools and the
-native producer's exact output and timing need independent evidence.
+following the pinned Python settlement path. Room hits carry actual
+named shield drains from the same outcome into the compatibility
+bridge. The slot uses full identifiers and rounded amounts.
+The original producer's exact output and timing need independent evidence.
 [Pinned damage settlement](https://github.com/leafall903/ORPHEUS/blob/c73e5a499ec73d499c97eaae46357af30c9e4b39/src/ow174/game/combat.py#L1870-L1896)
+
+Named temporary shields use typed owner-scoped pool identifiers.
+They absorb damage before permanent pools and group contributions into
+a single component 51 row by name. A depleted auto-retiring grant
+finishes its owning state. An ordinary grant is removed when its state
+ends. Generic healing and shield recovery affect permanent pools.
+The named owner query reads current shield points, and aggregate
+vitality includes them. The optional named-state outputs and authored
+decay remain separate parity work. [Pinned temporary shield lifecycle](https://github.com/leafall903/ORPHEUS/blob/c73e5a499ec73d499c97eaae46357af30c9e4b39/src/ow174/game/script/nodes.py#L3255-L3310)
+
+The prepared `0044` probe passes a numeric amount, a subject entity and
+an array of asset identifiers to the stock receiver. It checks
+multipliers, exclusions, admission and capping under a fixed host.
+
+```text
+cargo test --locked -p orpheus-statescript --test stock_charge -- --ignored --exact prepared_stock_0044_charge_applies_receiver_gates_and_scales
+```
 
 ## Apply a radial health change
 

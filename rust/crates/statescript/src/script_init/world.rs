@@ -736,6 +736,20 @@ pub trait World {
         None
     }
 
+    fn add_temporary_shield(
+        &mut self,
+        _site: Site,
+        _identifier: u64,
+        _amount: f64,
+        _stacked: bool,
+    ) -> Option<u32> {
+        None
+    }
+
+    fn temporary_shield_current(&self, _site: Site, _identifier: u64) -> Option<f64> {
+        None
+    }
+
     fn health_pool_current(&self, _site: Site, _pool: u32) -> Option<f64> {
         None
     }

@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Implemented shared named temporary shield grants, depletion, and removal. The charge bridge now projects actual damage drained from these shields as typed pool records. Added synthetic lifecycle and settlement coverage and a prepared probe for the stock 0044 charge receiver. Integration validation pending.
+
 - Keep the settled target context when an immediate same-body GameMessage carries the target as a typed entity parameter. The synthetic contract checks relayed requests across replacement and independent messages on the same VM frame. Integration validation pending.
 
 - Use actual player damage for attacker credit and hit notices. The settled-hit contract compares an overkill impact against the same capped result in the deferred event. A prepared probe checks the stock damage receiver's typed pool deductions, floor and cap. Integration validation pending.

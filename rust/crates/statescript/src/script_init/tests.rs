@@ -14,6 +14,7 @@ mod local_combat_accumulator;
 mod local_command;
 mod local_message;
 mod movement_edges;
+mod named_shield;
 mod observer_eye_position;
 mod parent_owned_state;
 mod projected_messages;

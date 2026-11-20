@@ -65,7 +65,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         if let Some(current) =
                             self.world.health_pool_current(self.site(id, node), pool)
                         {
-                            self.publish_health_pool(key, node, current)?;
+                            if current == 0.0 && !field(&node.fields, "m_7BE02F89").is_null() {
+                                self.post(id, Event::Finish(raw))?;
+                            } else {
+                                self.publish_health_pool(key, node, current)?;
+                            }
                         }
                     }
                     Some(StateKind::ShieldRecharge) => {

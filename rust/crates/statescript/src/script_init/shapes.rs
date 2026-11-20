@@ -794,6 +794,78 @@ pub(super) fn is_base_health_pool(node: &Node) -> bool {
             || matches!(script_expr::lvalue(config("m_CEAB19E8")), Ok(Some(_))))
 }
 
+pub(super) fn named_temporary_shield(node: &Node, raw: u16) -> Option<u64> {
+    let config = |name| field(&node.fields, name);
+    let flag = |name, enabled| {
+        let value = config(name);
+        script_expr::native_shape(value, "STUConfigVarBool", Some("m_value"))
+            && (field(value, "m_value").as_bool() == Some(enabled)
+                || field(value, "m_value").as_u64() == Some(u64::from(enabled)))
+    };
+    let source = config("m_69A20070");
+    if !node.is_networked()
+        || node.state != Some(raw)
+        || !node.is_state()
+        || node.is_action()
+        || pool_kind(config("m_7E8B666C")) != Some(PoolKind::Shields)
+        || !flag("m_0E8A5C8E", true)
+        || !flag("m_64839023", false)
+        || !is_self_target(node, "m_FA3ECC43")
+        || !script_expr::native_shape(source, "STU_FEDD683C", Some("m_entity"))
+        || !script_expr::native_shape(field(source, "m_entity"), "STU_B5A0CAF0", None)
+        || ![
+            "m_BCFDD2E9",
+            "m_4895B8B6",
+            "m_FF79E783",
+            "m_AF1104D0",
+            "m_BFA825EA",
+        ]
+        .into_iter()
+        .all(|name| config(name).is_null())
+        || !["m_CEAB19E8", "m_C99FAFDD"].into_iter().all(|name| {
+            config(name).is_null()
+                || matches!(
+                    script_expr::lvalue(config(name)),
+                    Ok(Some(Variable {
+                        scope: Scope::Instance,
+                        ..
+                    }))
+                )
+        })
+        || !node.fields.as_object()?.iter().all(|(name, value)| {
+            value.is_null()
+                || matches!(
+                    name.as_str(),
+                    "m_FA3ECC43"
+                        | "m_69A20070"
+                        | "m_7E8B666C"
+                        | "m_7BE02F89"
+                        | "m_0E8A5C8E"
+                        | "m_64839023"
+                        | "m_amount"
+                        | "m_CEAB19E8"
+                        | "m_C99FAFDD"
+                        | "m_A2287776"
+                        | "m_AED90719"
+                        | "m_2BBEEAB8"
+                        | "m_ADEB6E05"
+                        | "m_8BF03679"
+                        | "m_BF5B22B7"
+                        | "m_F198FD3A"
+                        | "m_beginPlug"
+                        | "m_onBeginPlug"
+                        | "m_onEndPlug"
+                        | "m_onAbortPlug"
+                        | "m_onFinishedPlug"
+                        | "m_subgraphPlug"
+                )
+        })
+    {
+        return None;
+    }
+    script_expr::named_shield_identifier(config("m_7BE02F89"))
+}
+
 pub(super) fn is_wave_health_pool(node: &Node) -> bool {
     let config = |name| field(&node.fields, name);
     let amount = config("m_amount");

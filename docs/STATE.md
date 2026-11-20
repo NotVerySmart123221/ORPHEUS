@@ -304,8 +304,13 @@ to health settlement still need original-build evidence.
 Player hit notices, immediate damage credit and deferred notifications
 now use the same actual pool loss. The prepared `0012` probe supplies
 explicit pool records to the original charge receiver and checks how
-matching identifiers affect the award. Native production of those
-records and temporary named-pool admission still require evidence.
+matching identifiers affect the award. The room records each named
+temporary shield's actual loss in damage settlement and supplies the
+typed records to the compatibility route.
+Owner grants and their named current query use the shared pool lifecycle.
+Authored decay, the optional state outputs and original-engine event
+timing still need verification. The detached `0044` probe checks conditional
+credit using explicit typed inputs.
 
 Static model protection now uses the authored state slots and an
 explicit host capability. The prepared boss graph regression passed its

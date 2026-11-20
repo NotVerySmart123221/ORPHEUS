@@ -473,6 +473,11 @@ fn prepared_stock_damage_credit_consumes_typed_pool_records() {
         ("empty", vec![], CAP),
         ("unrelated", vec![pool_record(OTHER_POOL, 7.0)], CAP),
         (
+            "wire alias",
+            vec![pool_record(EXCLUDED_POOL | (1 << 32), 7.0)],
+            CAP,
+        ),
+        (
             "matching and unrelated",
             vec![
                 pool_record(EXCLUDED_POOL, 2.0),
@@ -518,4 +523,90 @@ fn prepared_stock_damage_credit_consumes_typed_pool_records() {
         let diagnostics = &body.snapshot().unwrap().diagnostics;
         assert!(diagnostics.is_empty(), "{case}: {diagnostics:?}");
     }
+}
+
+#[test]
+#[ignore = "requires an authorized 104319 graph pack in ORPHEUS_RUNTIME_DIR"]
+fn prepared_stock_0044_charge_applies_receiver_gates_and_scales() {
+    const TOPIC: u64 = 0x0240_0000_0000_0044;
+    const TARGET: u32 = 704;
+    const TARGET_EXCLUSION: u32 = 17625;
+    const FIRST_EXCLUSION: u64 = 0x0d80_0000_0000_0292;
+    const SECOND_EXCLUSION: u64 = 0x0d80_0000_0000_025a;
+    const OTHER_IDENTIFIER: u64 = 0x0d80_0000_0000_090d;
+    const CAP: f64 = 10.0;
+
+    struct BonusHost {
+        target_excluded: bool,
+    }
+
+    impl World for BonusHost {
+        fn position(&mut self, _: u32) -> Option<[f64; 3]> {
+            None
+        }
+
+        fn entity_variable(&mut self, entity: u32, id: u32) -> Option<Value> {
+            (entity == TARGET && id == TARGET_EXCLUSION)
+                .then_some(Value::Bool(self.target_excluded))
+        }
+    }
+
+    let runtime =
+        PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").expect("set ORPHEUS_RUNTIME_DIR"));
+    let graphs = Arc::new(GraphStore::load(runtime.join("data/game_graphs_174.json.gz")).unwrap());
+    let mut world = BonusHost {
+        target_excluded: false,
+    };
+    let mut body = Component::start(
+        graphs,
+        OWNER,
+        Variables::from([
+            (METER_CAP, Value::Float(CAP)),
+            (METER, Value::Float(1.0)),
+            (ADMITTED, Value::Bool(true)),
+            (INHIBITED, Value::Bool(false)),
+            (9532, Value::Float(1.5)),
+            (13022, Value::Float(0.5)),
+        ]),
+        vec![Root::listener(ROOT, GRAPH, None)],
+        0,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+
+    // Inject parameters into the stock listener. The original producer of
+    // this topic is outside the probe.
+    let deliver =
+        |body: &mut Component, world: &mut BonusHost, amount, identifiers: &[u64], expected| {
+            let parameters = Variables::from([
+                (0x3f, Value::Entity(TARGET)),
+                (0x40, Value::Float(amount)),
+                (
+                    0x41,
+                    Value::Array(identifiers.iter().copied().map(Value::Asset).collect()),
+                ),
+            ]);
+            assert_eq!(body.queue_message(ROOT, TOPIC, parameters).unwrap(), 1);
+            body.run_now(world).unwrap();
+            assert_eq!(meter(body), expected);
+            let diagnostics = &body.snapshot().unwrap().diagnostics;
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        };
+
+    deliver(&mut body, &mut world, 4.0, &[OTHER_IDENTIFIER], 4.0);
+    deliver(&mut body, &mut world, 4.0, &[FIRST_EXCLUSION], 4.0);
+    deliver(&mut body, &mut world, 4.0, &[SECOND_EXCLUSION], 4.0);
+
+    world.target_excluded = true;
+    deliver(&mut body, &mut world, 4.0, &[], 4.0);
+    world.target_excluded = false;
+
+    body.set_entity_variable(ADMITTED, Value::Bool(false), &mut world)
+        .unwrap();
+    deliver(&mut body, &mut world, 4.0, &[], 4.0);
+
+    body.set_entity_variable(ADMITTED, Value::Bool(true), &mut world)
+        .unwrap();
+    deliver(&mut body, &mut world, 16.0, &[], CAP);
 }

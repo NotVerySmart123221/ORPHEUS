@@ -1306,6 +1306,25 @@ impl Evaluator {
                         .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
                 )
             }
+            "STU_783B4CF0"
+                if !child(config, "m_7BE02F89").is_null()
+                    && native_fields(config, &["m_entity", "m_7E8B666C", "m_7BE02F89"])
+                    && native_shape(child(config, "m_entity"), "STU_B5A0CAF0", None) =>
+            {
+                let unsupported = || EvalError::UnsupportedConfig(class.into());
+                let selector = child(config, "m_7E8B666C");
+                if !native_shape(selector, "STU_297E1A30", Some("m_7E8B666C"))
+                    || child(selector, "m_7E8B666C").as_u64() != Some(2)
+                {
+                    return Err(unsupported());
+                }
+                let identifier =
+                    named_shield_identifier(child(config, "m_7BE02F89")).ok_or_else(unsupported)?;
+                let amount = context
+                    .temporary_shield_current(identifier)
+                    .ok_or_else(unsupported)?;
+                Value::Float(rounded(amount))
+            }
             "STU_783B4CF0" | "STU_68883EAC" => {
                 let unsupported = || EvalError::UnsupportedConfig(class.into());
                 if !native_fields(config, &["m_entity", "m_7E8B666C", "m_7BE02F89"])

@@ -365,6 +365,11 @@ pub trait Context {
     ) -> Option<f64> {
         None
     }
+    /// Current amount in an authored named temporary shield on this body.
+    fn temporary_shield_current(&mut self, _identifier: u64) -> Option<f64> {
+        None
+    }
+
     fn total_health(&mut self, entity: u32) -> HealthQuery {
         self.body_health(entity, None, false)
             .map_or(HealthQuery::Unavailable, HealthQuery::Present)
@@ -843,6 +848,7 @@ mod evaluator;
 mod helpers;
 
 use evaluator::Evaluator;
+pub(crate) use helpers::named_shield_identifier;
 use helpers::*;
 pub(crate) use helpers::{client_only_fallback, native_entity_operand};
 pub use helpers::{excluded_tags_admit, native_fields, native_shape, target_tag_config};

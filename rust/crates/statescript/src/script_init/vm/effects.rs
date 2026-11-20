@@ -19,7 +19,7 @@ use super::super::{
     machine::{Event, LinkValue, StateKey, VarKey, VariableLink, Volley},
     shapes::{
         array_field, chase_lerp, chase_step, chase_value, configured, field, immediate_self_damage,
-        pool_kind, pool_number, same, shot_delay, source_key, stored,
+        named_temporary_shield, pool_kind, pool_number, same, shot_delay, source_key, stored,
     },
     types::{ChasePayload, InitFault, Issue, ShotEvent, StateKind},
     world::{
@@ -1216,6 +1216,32 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             self.report(site, Issue::UnsupportedField("health pool capacity"));
             return Ok(());
         };
+        if let Some(identifier) = named_temporary_shield(node, key.raw) {
+            let instance = &self.machine.snapshot.instances[&id];
+            let stacked = instance.parent.is_none() && instance.retire_after_frame.is_some();
+            if maximum == 0.0 {
+                if stacked {
+                    self.post(id, Event::Finish(key.raw))?;
+                }
+                return Ok(());
+            }
+            let Some(pool) = self
+                .world
+                .add_temporary_shield(site, identifier, maximum, stacked)
+            else {
+                self.report(
+                    site,
+                    Issue::UnsupportedField("temporary shield registration"),
+                );
+                return Ok(());
+            };
+            self.state_mut(key).expect("active temporary shield").kind =
+                StateKind::HealthPool { pool: Some(pool) };
+            if stacked {
+                self.register_tick(key, self.machine.now_ms);
+            }
+            return self.publish_health_totals(site);
+        }
         let initial = field(&node.fields, "m_BCFDD2E9");
         let current = if initial.is_null() {
             maximum
@@ -1298,6 +1324,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         node: &Node,
         current: f64,
     ) -> Result<(), InitFault> {
+        if !field(&node.fields, "m_7BE02F89").is_null() {
+            // The reference exposes the named value through the pool query.
+            return self.publish_health_totals(self.site(key.instance, node));
+        }
         let output = script_expr::lvalue(field(&node.fields, "m_CEAB19E8"))
             .expect("validated health pool output");
         if let Some(output) = output {

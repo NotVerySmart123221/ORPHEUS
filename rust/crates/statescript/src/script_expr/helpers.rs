@@ -27,6 +27,19 @@ pub(crate) fn native_entity_operand<'a>(config: &'a Json, expected: &str) -> Opt
         .filter(|_| native_shape(config, expected, Some("m_entity")))
 }
 
+pub(crate) fn named_shield_identifier(config: &Json) -> Option<u64> {
+    if class(config) != Some("STUConfigVarIdentifier")
+        || !native_fields(config, &["m_identifier", "m_resourceKey"])
+        || !child(config, "m_resourceKey").is_null()
+    {
+        return None;
+    }
+    child(config, "m_identifier")
+        .as_str()
+        .and_then(orpheus_runtime::format::parse_guid)
+        .filter(|id| id >> 52 == 0x0d8 && *id as u32 != 0)
+}
+
 pub fn native_fields(config: &Json, operands: &[&str]) -> bool {
     config.as_object().is_some_and(|fields| {
         fields.iter().all(|(key, value)| match key.as_str() {

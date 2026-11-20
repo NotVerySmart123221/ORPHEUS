@@ -20,8 +20,8 @@ use super::super::{
         is_message_recipient_set, is_networked_for_code_synced, is_owner_movement_sampler,
         is_parent_owned_timed_graph, is_projected_self_message, is_self_shield_recharge,
         is_self_stat_timer, is_self_target, is_wave_health_pool, living_body_array_shape,
-        participant_filter, persistent_message, placement_collection_tag, pool_number, raw_indices,
-        registered_state, source_key, static_target_operand, stored,
+        named_temporary_shield, participant_filter, persistent_message, placement_collection_tag,
+        pool_number, raw_indices, registered_state, source_key, static_target_operand, stored,
     },
     types::{InitFault, Issue, SpawnSearch, SpawnSearchKey, State, StateKind},
     world::{CreationKind, EntityCreation, Site, World},
@@ -1293,7 +1293,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             {
                 StateKind::HealthCapacity
             }
-            "STUStatescriptStateHealthPool" if is_base_health_pool(node) => {
+            "STUStatescriptStateHealthPool"
+                if is_base_health_pool(node) || named_temporary_shield(node, key.raw).is_some() =>
+            {
                 StateKind::HealthPool { pool: None }
             }
             "STUStatescriptStateHealthPool"

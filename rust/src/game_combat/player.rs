@@ -963,6 +963,7 @@ impl RoomSimulation {
             damage: AppliedDamage {
                 source,
                 amount: outcome.dealt,
+                named_pool_losses: outcome.named_pool_losses,
                 tags: impact.tags,
                 target_facts,
             },

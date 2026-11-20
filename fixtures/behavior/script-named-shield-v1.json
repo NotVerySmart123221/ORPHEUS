@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "case_id": "script-named-shield.synthetic.v1",
+  "source": {"basis": "Invented pool identifier and capacity for an owner StateScript grant."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "pool_identifier": "0x0D800000000071A4",
+    "amount": 18.0
+  },
+  "expected": {
+    "current_after_grant": 18.0,
+    "current_after_removal": 0.0
+  }
+}
