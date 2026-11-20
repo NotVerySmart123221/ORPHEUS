@@ -284,13 +284,12 @@ mod tests {
     #[test]
     fn local_npc_healing_publishes_committed_target_facts() {
         use crate::{
-            game_combat::EnemySpawn,
             game_content::JUNKENSTEIN_REVENGE,
             game_hitscan::TargetPose,
             game_pools::HealthPools,
             npc_catalog::NpcDefinition,
             script_codecs::CodecTable,
-            script_enemy::{EnemyTarget, WitchStaffSource},
+            script_enemy::{EnemySpawn, EnemyTarget, WitchStaffSource},
             script_graph::GraphStore,
             script_init::{CreationKind, EntityCreation, OWNER_HEALTH},
             script_wire::Value,
