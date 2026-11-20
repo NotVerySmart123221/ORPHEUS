@@ -869,8 +869,15 @@ a single component 51 row by name. A depleted auto-retiring grant
 finishes its owning state. An ordinary grant is removed when its state
 ends. Generic healing and shield recovery affect permanent pools.
 The named owner query reads current shield points, and aggregate
-vitality includes them. The optional named-state outputs and authored
-decay remain separate parity work. [Pinned temporary shield lifecycle](https://github.com/leafall903/ORPHEUS/blob/c73e5a499ec73d499c97eaae46357af30c9e4b39/src/ow174/game/script/nodes.py#L3255-L3310)
+vitality includes them. [Pinned temporary shield lifecycle](https://github.com/leafall903/ORPHEUS/blob/c73e5a499ec73d499c97eaae46357af30c9e4b39/src/ow174/game/script/nodes.py#L3255-L3310)
+
+A mode-2 owner effect can decay the named pool using a typed selector
+and a finite positive rate. The VM evaluates the current rate and uses
+the elapsed time from the shared scheduler. The state finishes at zero.
+Decay changes the shield row directly. Only a settled hit produces
+the pool-loss rows used by the charge consumer. The compatible
+prepared states share this field layout. The optional named-state
+outputs and original-client timing still need evidence. [Pinned named shield decay](https://github.com/leafall903/ORPHEUS/blob/c73e5a499ec73d499c97eaae46357af30c9e4b39/src/ow174/game/script/driver.py#L986-L1000)
 
 The prepared `0044` probe passes a numeric amount, a subject entity and
 an array of asset identifiers to the stock receiver. It checks

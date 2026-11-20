@@ -622,6 +622,10 @@ impl World for BodyWorld {
         (self.is_player_site(site)).then(|| self.vitals.temporary_shield_current(identifier))
     }
 
+    fn drain_temporary_shield(&mut self, site: Site, identifier: u64, amount: f64) -> Option<f64> {
+        (self.is_player_site(site)).then(|| self.vitals.drain_temporary_shield(identifier, amount))
+    }
+
     fn health_pool_current(&self, site: Site, pool: u32) -> Option<f64> {
         if !self.is_player_site(site) {
             return None;

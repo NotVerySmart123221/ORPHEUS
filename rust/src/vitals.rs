@@ -85,6 +85,20 @@ impl TemporaryShield {
             .sum()
     }
 
+    fn drain(&mut self, left: &mut f64) -> f64 {
+        let mut taken = 0.0;
+        for grant in &mut self.grants {
+            if *left <= 0.0 {
+                break;
+            }
+            let drain = (*left).min(grant.current);
+            grant.current -= drain;
+            *left -= drain;
+            taken += drain;
+        }
+        taken
+    }
+
     fn wire(&self) -> [u8; 20] {
         let maximum = self.amount(true);
         let id = if maximum > 0.0 {
@@ -264,6 +278,21 @@ impl Vitals {
             .map_or(0.0, |shield| shield.amount(false))
     }
 
+    /// Return the named pool's remaining shields after a pool-local drain.
+    pub(crate) fn drain_temporary_shield(&mut self, identifier: u64, mut amount: f64) -> f64 {
+        let Some(shield) = self
+            .temporary_shields
+            .iter_mut()
+            .find(|shield| shield.identifier == identifier)
+        else {
+            return 0.0;
+        };
+        if amount.is_finite() && amount > 0.0 && shield.drain(&mut amount) > 0.0 {
+            self.changed |= 1 << shield.field;
+        }
+        shield.amount(false)
+    }
+
     pub(crate) fn pool_current(&self, id: u32) -> Option<f64> {
         self.pools
             .iter()
@@ -353,16 +382,7 @@ impl Vitals {
         let mut dealt = 0.0;
         let mut named_pool_losses = Vec::new();
         for shield in &mut self.temporary_shields {
-            let mut taken = 0.0;
-            for grant in &mut shield.grants {
-                if left <= 0.0 {
-                    break;
-                }
-                let drain = left.min(grant.current);
-                grant.current -= drain;
-                left -= drain;
-                taken += drain;
-            }
+            let taken = shield.drain(&mut left);
             if taken > 0.0 {
                 self.changed |= 1 << shield.field;
                 dealt += taken;
@@ -696,6 +716,57 @@ mod tests {
             vitals.component().fields[BASE_SLOT + 1],
             Some(ComponentValue::Blob20(pool(0, 2, 0.0, 0.0)))
         );
+    }
+
+    #[test]
+    fn local_named_shield_drain_does_not_count_as_the_next_hit() {
+        const DECAYING: u64 = 0x0d80_0000_0044_0123;
+        const OTHER: u64 = 0x0d80_0000_0044_0124;
+        const BASE_SLOT: usize = SHIELDS_POOL * POOLS;
+        let mut vitals = Vitals::new(100.0, 0.0, 20.0);
+        let first = vitals.add_temporary_shield(DECAYING, 5.0, false).unwrap();
+        let second = vitals.add_temporary_shield(DECAYING, 7.0, true).unwrap();
+        vitals.add_temporary_shield(OTHER, 3.0, false).unwrap();
+        vitals.clear_changed();
+
+        assert_eq!(vitals.drain_temporary_shield(DECAYING, 6.25), 5.75);
+        assert_eq!(vitals.pool_current(first), Some(0.0));
+        assert_eq!(vitals.pool_current(second), Some(5.75));
+        assert_eq!(vitals.temporary_shield_current(OTHER), 3.0);
+        assert_eq!(vitals.amount(Some(PoolKind::Shields), false), 20.0);
+        let changed = vitals.changed_component().unwrap();
+        assert_eq!(changed.fields[BASE_SLOT], None);
+        assert_eq!(
+            changed.fields[BASE_SLOT + 1],
+            Some(ComponentValue::Blob20(pool(DECAYING as u32, 2, 12.0, 5.75)))
+        );
+        assert_eq!(changed.fields[BASE_SLOT + 2], None);
+
+        vitals.clear_changed();
+        assert_eq!(vitals.drain_temporary_shield(DECAYING, f64::NAN), 5.75);
+        assert_eq!(vitals.drain_temporary_shield(DECAYING, -1.0), 5.75);
+        assert_eq!(
+            vitals.drain_temporary_shield(0x0d80_0000_0044_0125, 10.0),
+            0.0
+        );
+        assert!(!vitals.has_changed());
+
+        let damage = vitals.damage(10.0, HIT);
+        assert_eq!(damage.dealt, 10.0);
+        assert_eq!(
+            damage.named_pool_losses,
+            [
+                NamedPoolLoss {
+                    identifier: DECAYING,
+                    amount: 5.75
+                },
+                NamedPoolLoss {
+                    identifier: OTHER,
+                    amount: 3.0
+                },
+            ]
+        );
+        assert_eq!(vitals.amount(Some(PoolKind::Shields), false), 18.75);
     }
 
     #[test]

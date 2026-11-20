@@ -356,6 +356,43 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         self.publish_health_totals(site)
     }
 
+    pub(in crate::script_init) fn update_named_shield_decay(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+        elapsed_ms: u64,
+    ) -> Result<bool, InitFault> {
+        let site = self.site(key.instance, node);
+        if self.machine.owner_dead {
+            self.post(key.instance, Event::Finish(key.raw))?;
+            return Ok(false);
+        }
+        let identifier = script_expr::named_shield_identifier(field(&node.fields, "m_7BE02F89"))
+            .expect("validated named shield identifier");
+        let effect = field(&node.fields, "m_modifyHealth");
+        let Some(rate) = self
+            .creation_scalar(key.instance, node, field(effect, "m_amount"), Value::Null)?
+            .and_then(pool_number)
+            .filter(|rate| *rate > 0.0 && *rate <= f64::from(f32::MAX))
+        else {
+            self.report(site, Issue::UnsupportedField("named shield decay rate"));
+            return Ok(false);
+        };
+        let amount = rate * (elapsed_ms as f64 / 1_000.0);
+        let Some(remaining) = self.world.drain_temporary_shield(site, identifier, amount) else {
+            self.report(site, Issue::UnsupportedField("named shield decay service"));
+            return Ok(false);
+        };
+        if elapsed_ms != 0 {
+            self.publish_health_totals(site)?;
+        }
+        if remaining <= 0.0 {
+            self.post(key.instance, Event::Finish(key.raw))?;
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
     pub(in crate::script_init) fn begin_shield_recharge(
         &mut self,
         key: StateKey,

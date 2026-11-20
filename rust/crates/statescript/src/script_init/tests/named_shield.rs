@@ -2,6 +2,7 @@ use super::*;
 
 const BOOTSTRAP: u32 = 0x7110;
 const SHIELD: u32 = 0x7111;
+const DECAY: u32 = 0x7112;
 const OWNER: u32 = 777;
 const GRANT: u32 = 5;
 
@@ -9,6 +10,7 @@ const GRANT: u32 = 5;
 struct ShieldWorld {
     grant: Option<(u64, f64, bool)>,
     removals: usize,
+    decays: Vec<f64>,
 }
 
 impl World for ShieldWorld {
@@ -41,6 +43,20 @@ impl World for ShieldWorld {
                 .filter(|grant| grant.0 == identifier)
                 .map_or(0.0, |grant| grant.1)
         })
+    }
+
+    fn drain_temporary_shield(&mut self, site: Site, identifier: u64, amount: f64) -> Option<f64> {
+        assert_eq!(
+            (site.entity, site.graph, site.node),
+            (OWNER, DECAY, Some(1))
+        );
+        self.decays.push(amount);
+        let Some((_, current, _)) = self.grant.as_mut().filter(|grant| grant.0 == identifier)
+        else {
+            return Some(0.0);
+        };
+        *current = (*current - amount).max(0.0);
+        Some(*current)
     }
 
     fn health_pool_current(&self, _: Site, pool: u32) -> Option<f64> {
@@ -171,4 +187,108 @@ fn named_owner_shield_uses_the_pool_lifecycle_and_self_query() {
         component.advance_frame(2, &mut world).unwrap();
         assert_eq!(world.removals, 1);
     }
+}
+
+#[test]
+fn named_shield_decay_uses_the_live_rate_and_retires_at_zero() {
+    const RATE: u32 = 43;
+    let contract: Json = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/script-named-shield-v1.json"
+    )))
+    .unwrap();
+    let pool = &contract["input"]["pool_identifier"];
+    let identifier = asset_guid(pool).unwrap();
+    let decay = &contract["input"]["decay"];
+    let starting_amount = decay["initial_amount"].as_f64().unwrap();
+    let rates: [f64; 2] = serde_json::from_value(decay["rates_per_second"].clone()).unwrap();
+    let expected_amounts: [f64; 2] =
+        serde_json::from_value(contract["expected"]["after_decay_frames"].clone()).unwrap();
+    let expected_calls: Vec<f64> =
+        serde_json::from_value(contract["expected"]["decay_amounts"].clone()).unwrap();
+    let owner = json!({"$":"STU_B5A0CAF0"});
+    let graphs = Arc::new(store(vec![graph(
+        DECAY,
+        vec![
+            node(
+                0,
+                "STUStatescriptEntry",
+                None,
+                json!({"m_outPlug":plug(&[(1, "m_beginPlug")], &[])}),
+            ),
+            node(
+                1,
+                "STUStatescriptStateModifyHealth",
+                Some(0),
+                json!({
+                    "m_DD792FF0":2, "m_7B2B3F5C":1, "m_8B707686":1,
+                    "m_FA3ECC43":owner,
+                    "m_7BE02F89":{"$":"STUConfigVarIdentifier", "m_identifier":pool, "m_resourceKey":null},
+                    "m_95F1FB0B":{"$":"STUConfigVarInt", "m_value":1},
+                    "m_modifyHealth":{
+                        "$":"STUStatescriptModifyHealth", "m_724CBA57":owner, "m_93CDFD2F":1,
+                        "m_F8EA2036":{"$":"STUConfigVarBool","m_value":1},
+                        "m_62E3835A":{"$":"STUConfigVarBool","m_value":0},
+                        "m_148F3152":[{
+                            "$":"STUStatescriptModifyHealthTag",
+                            "m_EE3055BD":{"$":"STUConfigVarIdentifier",
+                                "m_identifier":"0x0D8000000000E130", "m_resourceKey":null}
+                        }],
+                        "m_amount":var(RATE,false)
+                    }
+                }),
+            ),
+        ],
+        json!([1]),
+        json!([0]),
+    )]));
+    let mut root = Root::new(1, DECAY);
+    root.variables.insert(RATE, Value::Float(rates[0]));
+    let mut world = ShieldWorld {
+        grant: Some((identifier, starting_amount, false)),
+        ..ShieldWorld::default()
+    };
+    let mut component = Component::start(
+        graphs,
+        OWNER,
+        Variables::new(),
+        vec![root],
+        0,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let site = Site {
+        entity: OWNER,
+        instance: 1,
+        graph: DECAY,
+        node: Some(1),
+    };
+    assert_eq!(
+        world.temporary_shield_current(site, identifier),
+        Some(starting_amount)
+    );
+    for (frame, (rate, expected)) in (1..=2).zip(rates.into_iter().zip(expected_amounts)) {
+        component
+            .set_instance_variable(1, RATE, Value::Float(rate), &mut world)
+            .unwrap();
+        component.advance_frame(frame, &mut world).unwrap();
+        assert_eq!(
+            world.temporary_shield_current(site, identifier),
+            Some(expected)
+        );
+    }
+    component.advance_frame(3, &mut world).unwrap();
+    let snapshot = component.snapshot().unwrap();
+    assert_eq!(
+        snapshot.instances[&1].states[&0].kind,
+        StateKind::NamedShieldDecay
+    );
+    assert!(!snapshot.instances[&1].states[&0].active);
+    assert!(
+        snapshot.diagnostics.is_empty(),
+        "{:?}",
+        snapshot.diagnostics
+    );
+    assert_eq!(world.decays, expected_calls);
 }

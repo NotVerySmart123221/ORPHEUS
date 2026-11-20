@@ -308,9 +308,11 @@ matching identifiers affect the award. The room records each named
 temporary shield's actual loss in damage settlement and supplies the
 typed records to the compatibility route.
 Owner grants and their named current query use the shared pool lifecycle.
-Authored decay, the optional state outputs and original-engine event
-timing still need verification. The detached `0044` probe checks conditional
-credit using explicit typed inputs.
+A checked mode-2 effect drains only its own named pool at the authored
+rate and ends at zero. Native and VM regressions cover decay separately
+from rewarded impact loss. The optional state outputs and original
+event timing still need verification. The detached `0044` probe checks
+conditional credit using explicit typed inputs.
 
 Static model protection now uses the authored state slots and an
 explicit host capability. The prepared boss graph regression passed its

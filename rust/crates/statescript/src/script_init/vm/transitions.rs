@@ -75,6 +75,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     Some(StateKind::ShieldRecharge) => {
                         self.tick_shield_recharge(key, elapsed_ms)?
                     }
+                    Some(StateKind::NamedShieldDecay) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("named shield decay");
+                        self.update_named_shield_decay(key, node, elapsed_ms)?;
+                    }
                     Some(StateKind::WitchStaffHealing) => {
                         self.tick_witch_staff_healing(key, elapsed_ms)?
                     }

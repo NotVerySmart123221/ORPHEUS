@@ -36,6 +36,7 @@ pub enum StateKind {
     SummonerBeamDamage,
     ModifyHealth,
     ShieldRecharge,
+    NamedShieldDecay,
     ForCode,
     AiBehavior {
         record: Option<AiBehaviorRequest>,
