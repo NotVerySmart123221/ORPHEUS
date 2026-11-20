@@ -206,6 +206,19 @@ A node's absence from a snapshot gives no evidence that execution reached it.
 The Inspector VM summary displays counts by category and the bounded list
 of rejected graph and node locations.
 
+## Compare pseudocode with VM diagnostics
+
+In the 104319 pseudocode listings, use the numeric suffix of a State label
+to look up the decoded node's `rid`. The number after `state` in the header is
+the state slot, and Inspector registration rejections report `pos`. Join on
+graph ID and `rid`, confirm the class and state slot, then read `pos` to locate
+the registration check. If the prepared graph has no matching node, record
+the missing match before interpreting the listing.
+
+Pseudocode shows the authored fields and links. An exporter annotation such as
+`plain State` describes its interpretation of the node. Check Rust dispatch
+and runtime evidence before drawing conclusions about the node's effects.
+
 ## Inspect observed node targets
 
 Inspector builds collect up to 128 distinct graph and node positions per
