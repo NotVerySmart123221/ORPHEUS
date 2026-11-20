@@ -7,6 +7,8 @@ use crate::script_init::{
 use crate::script_stream::{BodyStream, ChangeKey, DeltaKind};
 use serde_json::{Value as Json, json};
 
+mod voice;
+
 const ENTITY: u32 = 0xa000_0101;
 pub(crate) const CODECS: &str = r#"{"classes":{
     "12340001":{"name":"STUStatescriptState","codec":"none","stec":false,"status":"VERIFIED","layout":[]},

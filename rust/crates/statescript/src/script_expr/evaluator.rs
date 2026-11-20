@@ -717,6 +717,34 @@ impl Evaluator {
                         .ok_or(EvalError::UnavailableBodyEyePosition(entity))?,
                 )
             }
+            "STU_719E45B8" => {
+                let Some((entity, hardpoint)) = fields
+                    .get("m_entity")
+                    .zip(fields.get("m_hardPoint"))
+                    .filter(|_| native_fields(config, &["m_entity", "m_hardPoint"]))
+                else {
+                    return Err(EvalError::MalformedConfig(
+                        "expected hardpoint entity and resource operands",
+                    ));
+                };
+                let Some(Value::Asset(hardpoint)) =
+                    literal_asset(hardpoint, "STUConfigVarHardPoint", "m_hardPoint", 0x0dc0)
+                else {
+                    return Err(EvalError::MalformedConfig(
+                        "expected a literal model hardpoint",
+                    ));
+                };
+                self.charge()?;
+                let entity = match self.config(entity, context, nested)? {
+                    Value::Entity(entity) if valid_entity(entity) => entity,
+                    _ => return Err(EvalError::MalformedConfig("expected a bound entity")),
+                };
+                Value::Bool(
+                    context
+                        .body_has_hardpoint(entity, hardpoint)
+                        .ok_or(EvalError::UnavailableBodyHardpoint { entity, hardpoint })?,
+                )
+            }
             "BodyActive" => {
                 if fields.len() != 1 {
                     return Err(EvalError::MalformedConfig("BodyActive takes no operands"));

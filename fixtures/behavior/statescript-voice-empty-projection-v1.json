@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "case_id": "statescript-voice-empty-projection.synthetic.v1",
+  "source": {"basis": "Original graph exercised under the verified empty stock voice codec."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "graph": 60351,
+    "abort_message": "0x0000000000000027",
+    "dormant_fields": {
+      "m_B0263D2D": {"$": "SyntheticDormantVoiceDelay"},
+      "m_targets": {"$": "SyntheticDormantVoiceTargets"}
+    }
+  }
+}

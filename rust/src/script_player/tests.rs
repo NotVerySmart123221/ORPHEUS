@@ -289,6 +289,7 @@ fn owner_reports_absent_presentation_contexts_only_for_valid_own_body() {
             let site = Site { entity, ..site };
             assert_eq!(world.spatial_binding_owner_available(site), expected);
             assert_eq!(world.outline_context_available(site), expected);
+            assert_eq!(world.voice_context(site), expected);
         }
     }
 
@@ -296,6 +297,7 @@ fn owner_reports_absent_presentation_contexts_only_for_valid_own_body() {
     let invalid = Site { entity: 0, ..site };
     assert_eq!(world.spatial_binding_owner_available(invalid), None);
     assert_eq!(world.outline_context_available(invalid), None);
+    assert_eq!(world.voice_context(invalid), None);
 }
 
 #[test]

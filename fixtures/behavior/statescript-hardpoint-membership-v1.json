@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "case_id": "statescript-hardpoint-membership.synthetic.v1",
+  "source": {"basis": "Original entity IDs and hardpoint key exercising the typed predicate fields."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "foreign_entity": 917,
+    "predicate": {
+      "$": "STU_719E45B8",
+      "m_EE729DCB": 0,
+      "m_hardPoint": {
+        "$": "STUConfigVarHardPoint", "m_EE729DCB": 0, "m_resourceKey": null,
+        "m_hardPoint": "0x0DC0000000A1B28C"
+      }
+    },
+    "valid_cases": [
+      {"selector": {"$": "STU_B5A0CAF0", "m_EE729DCB": 0}, "foreign": false, "membership": true},
+      {"selector": {"$": "STUConfigVarDynamic", "m_identifier": 74, "m_60DB8F99": true}, "foreign": true, "membership": false},
+      {"selector": {"$": "STU_B5A0CAF0"}, "foreign": false, "membership": null}
+    ],
+    "malformed_cases": [
+      {"field": "m_hardpoint", "value": 1},
+      {"field": "m_entity", "value": {"$": "STUConfigVarInt", "m_value": 831}},
+      {"field": "m_entity", "value": {"$": "STUConfigVarDynamic", "m_identifier": 74, "m_60DB8F99": true}, "selected": 0},
+      {"field": "m_hardPoint", "value": {"$": "STUConfigVarHardPoint", "m_hardPoint": "0x0D60000000A1B28C"}},
+      {"field": "m_hardPoint", "value": {"$": "STUConfigVarHardPoint", "m_hardPoint": "0x0DC0000000A1B28C", "m_resourceKey": "0x0000000000000001"}}
+    ]
+  }
+}

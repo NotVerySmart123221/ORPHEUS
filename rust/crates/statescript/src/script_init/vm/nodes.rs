@@ -1288,7 +1288,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 if registration.shape(
                     static_target_operand(node).is_some()
                         || participant_filter(node).is_some()
-                        || excluded_target_tags(self.graph(id).index, node).is_some(),
+                        || excluded_target_tags(node).is_some(),
                 ) =>
             {
                 StateKind::Plain
@@ -2599,7 +2599,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 return Ok(false);
             }
         };
-        if let Some((tag, excluded)) = excluded_target_tags(self.graph(id).index, node) {
+        if let Some((tag, excluded)) = excluded_target_tags(node) {
             let Some(entities) = self.world.targets_with_tag(site, tag, excluded) else {
                 self.report(
                     site,

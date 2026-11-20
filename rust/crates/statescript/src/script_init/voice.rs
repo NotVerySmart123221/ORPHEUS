@@ -496,6 +496,11 @@ impl<W: World> Context for InstanceContext<'_, W> {
         self.world.body_eye_position(entity)
     }
 
+    fn body_has_hardpoint(&mut self, entity: u32, hardpoint: u64) -> Option<bool> {
+        self.read_native = true;
+        self.world.body_has_hardpoint(self.site, entity, hardpoint)
+    }
+
     fn body_active(&mut self) -> Option<bool> {
         self.read_native = true;
         self.world.body_active(self.site)

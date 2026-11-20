@@ -33,15 +33,14 @@ pub(super) fn placement_collection_tag(node: &Node) -> Option<u64> {
     script_expr::target_tag_config(static_target_operand(node)?).filter(|&tag| tag != 0)
 }
 
-pub(super) fn excluded_target_tags(graph: u32, node: &Node) -> Option<(u64, u64)> {
-    if (graph, node.pos) != (0x00ca, 33)
-        || !field(&node.fields, "m_filter").is_null()
-        || !field(&node.fields, "m_B486603E").is_null()
-    {
+pub(super) fn excluded_target_tags(node: &Node) -> Option<(u64, u64)> {
+    if !field(&node.fields, "m_filter").is_null() || !field(&node.fields, "m_B486603E").is_null() {
         return None;
     }
-    let tag = script_expr::target_tag_config(field(&node.fields, "m_9C7BD8B8"))?;
-    let excluded = script_expr::target_tag_config(field(&node.fields, "m_8B2A4DF3"))?;
+    let tag = script_expr::target_tag_config(field(&node.fields, "m_9C7BD8B8"))
+        .filter(|&tag| tag != 0)?;
+    let excluded = script_expr::target_tag_config(field(&node.fields, "m_8B2A4DF3"))
+        .filter(|&tag| tag != 0)?;
     Some((tag, excluded))
 }
 

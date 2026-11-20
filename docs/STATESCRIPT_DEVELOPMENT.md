@@ -133,6 +133,19 @@ ability support.
   slots must both refer to the state. Room simulation still uses its
   existing clock.
 
+- A scoped headless player body can report that its native voice context
+  is absent. A voice state keeps its lifecycle and uses its verified
+  empty codec. Authored room cues use their existing request and
+  delivery path.
+
+- Tagged target selection with literal include and exclude operands
+  uses the same VM path at any placement. It preserves the host's
+  ordered result and reports unavailable scene context.
+
+- The hardpoint membership expression queries a bound entity and a
+  literal hardpoint asset. A known model can report presence or absence.
+  Unavailable model facts produce a runtime diagnostic.
+
 Native target tracking still needs ordered samples, optional typed
 output bindings, and the lifecycle of its embedded state slots. The
 authored `track_entities` node owns separate child graph instances.

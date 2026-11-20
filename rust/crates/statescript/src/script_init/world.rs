@@ -579,6 +579,11 @@ pub trait World {
         None
     }
 
+    /// A known model can confirm presence or absence. None means unavailable.
+    fn body_has_hardpoint(&self, _site: Site, _entity: u32, _hardpoint: u64) -> Option<bool> {
+        None
+    }
+
     /// Activity of the component's own body at this site. None means unavailable.
     fn body_active(&self, _site: Site) -> Option<bool> {
         None

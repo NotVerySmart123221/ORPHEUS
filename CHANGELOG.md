@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Preserved the native voice-state lifecycle when the player host reports no voice context. Verified empty owner and observer state codecs can project the state. Matched paired target tags by validated operands and added a shared three-way model hardpoint query. Missing tag inventories and model membership still produce startup diagnostics. The locked workspace suite with script coverage passed, including 378 native and 222 portable StateScript library tests.
+
 - Added an explicit authored charge root selection for player bodies with a private health-event graph. The loader and room factory reject duplicate mounts. Opted-in bodies use the settled health event path. The compatibility bridge reads live room activity and keeps its existing startup projection. Formatting, locked Clippy, and workspace tests with script coverage passed, including 376 native and 221 portable StateScript library tests.
 
 - Rechecked the authored cue listener's live owner and body generation before reliable admission. Queued cues expire when the listener dies or is replaced. The synthetic regression covers late death and legacy notice matching.

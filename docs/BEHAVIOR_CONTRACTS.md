@@ -43,6 +43,12 @@ The Rust-only [movement edge fixture](../fixtures/behavior/script-movement-edges
 
 The Rust-only [stack claim fixture](../fixtures/behavior/script-stack-claim-v1.json) checks priority, ties, scope, dependent values and release through the production VM. The native room regression combines stack admission with a tag filter and verifies the lifetime of the input and movement effects.
 
+The [hardpoint membership fixture](../fixtures/behavior/statescript-hardpoint-membership-v1.json) checks a true or false model fact, an unavailable model, and malformed operands through the StateScript condition.
+
+The [tagged target pair fixture](../fixtures/behavior/script-tagged-target-pair-v1.json) exercises literal include and exclude tags, output ordering, and a missing scene query at a synthetic placement.
+
+The [voice projection fixture](../fixtures/behavior/statescript-voice-empty-projection-v1.json) checks lifecycle, owner and observer projection, and rejection of missing host facts or an incompatible codec.
+
 The Rust-only [server root allocation fixture](../fixtures/behavior/script-server-root-ids-v1.json) checks root identity, installation order and exhaustion at the boundary of the public and private ranges. Native projection coverage compares owner and observer wire bytes with an active private meter and a public child.
 
 The Rust-only [authored resource meter fixture](../fixtures/behavior/script-authored-meter-v1.json) checks body-specific settings on one shared graph. It exercises settled health events, affiliation filtering, passive gains and saturation in the production loader and VM. The [authored charge route](../fixtures/behavior/script-authored-charge-route-v1.json) checks private mount validation, deferred health events, and owner and observer projection.

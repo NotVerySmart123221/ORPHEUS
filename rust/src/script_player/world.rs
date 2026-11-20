@@ -173,6 +173,12 @@ impl World for BodyWorld {
         self.is_player_site(site).then_some(false)
     }
 
+    fn voice_context(&mut self, site: Site) -> Option<bool> {
+        // This body has no native voice manager. Authored room cues use
+        // the separate room request path.
+        self.is_player_site(site).then_some(false)
+    }
+
     fn team_members(&self, team: u8) -> Option<u32> {
         self.team_member_counts?.count(team)
     }
