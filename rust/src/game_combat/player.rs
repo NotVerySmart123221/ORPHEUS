@@ -36,6 +36,7 @@ pub(crate) struct PlayerBodyHandle {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlayerDeath {
     pub(crate) owner: u32,
+    pub(crate) body: BodyId,
     pub(crate) source: u32,
     pub(crate) killed_by: bool,
 }
@@ -943,6 +944,7 @@ impl RoomSimulation {
         if killed {
             self.player_deaths.push(PlayerDeath {
                 owner,
+                body: id,
                 source,
                 killed_by: true,
             });

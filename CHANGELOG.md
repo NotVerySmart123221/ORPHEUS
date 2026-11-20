@@ -10,6 +10,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Carried target facts with positive NPC-local health events at VM publication. Added room coverage for a capped heal issuing one configured bonus on the recipient's next VM frame and for dropping the award when that recipient is replaced. A prepared probe exercises original local admission, award, and revocation through the graph. Validated in shared candidate `29df13cb`.
 
+- Settle pending hitscan before replacing the owner's hero or skin, including when both inputs arrive in one worker turn. Scope queued player death notices to the victim body's generation so they cannot follow a replacement.
+
 - Taught parent-owned StateScript states to honor a finite, typed duration. The existing state timer runs the ordinary finish path and is cleared when the state or its parent exits.
 
 - Fixed NPC script direction sampling when navigation turns a body with an active authored facing claim. The room can publish the navigation pose on the frame the claim ends. Validated in shared candidate `6027a713`.

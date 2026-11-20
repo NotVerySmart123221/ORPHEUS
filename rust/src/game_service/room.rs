@@ -632,36 +632,47 @@ impl Room {
                     .simulation_mut()
                     .set_player_activity(id, activity);
             }
-            let (used, leave) = match peer.world.advance_input(
-                &mut world.scene,
-                &viewer,
-                context.quanta,
-                budget,
-            ) {
-                Ok(result) => result,
-                Err(error) => {
-                    eprintln!(
-                        "Game input for connection {connection} at frame {tick} stopped: {error}"
-                    );
-                    (budget, true)
+            let mut used = 0;
+            let leave = loop {
+                let remaining = budget - used;
+                let (steps, leave) = match peer.world.advance_input(
+                    &mut world.scene,
+                    &viewer,
+                    context.quanta,
+                    remaining,
+                ) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        eprintln!(
+                            "Game input for connection {connection} at frame {tick} stopped: {error}"
+                        );
+                        (remaining, true)
+                    }
+                };
+                if steps > remaining {
+                    return Err(RoomError::Invariant("input exceeded assigned budget"));
                 }
-            };
-            if used > budget {
-                return Err(RoomError::Invariant("input exceeded assigned budget"));
-            }
-            let shots = peer.world.take_hitscan(world.scene.simulation_mut());
-            if (!leave && peer.world.combat_body_active()) || !shots.is_empty() {
-                let (bots, queries) = world.scene.bot_simulation();
-                bots.activate_combat();
-                for shot in shots {
-                    if let Some(hit) = bots.hitscan(&queries, shot, context, |entity| {
-                        peer.world.identity_ready(entity)
-                    })? {
-                        bots.deliver_applied_damage(peer.world.owner(), hit.damage.clone());
-                        peer.bot_hit(hit);
+                used += steps;
+                let shots = peer.world.take_hitscan(world.scene.simulation_mut());
+                let settled_shots = !shots.is_empty();
+                if (!leave && peer.world.combat_body_active()) || settled_shots {
+                    let (bots, queries) = world.scene.bot_simulation();
+                    bots.activate_combat();
+                    for shot in shots {
+                        if let Some(hit) = bots.hitscan(&queries, shot, context, |entity| {
+                            peer.world.identity_ready(entity)
+                        })? {
+                            bots.deliver_applied_damage(peer.world.owner(), hit.damage.clone());
+                            peer.bot_hit(hit);
+                        }
                     }
                 }
-            }
+                // A batch may have yielded before a body selection so these
+                // shots could settle. Resume within the same peer budget.
+                if leave || used == budget || !settled_shots || !peer.world.has_input_work() {
+                    break leave;
+                }
+            };
             if leave {
                 peer.clear_world_in_room(world.scene.simulation_mut());
                 world.scene.retire_projectiles(connection);
@@ -727,12 +738,7 @@ impl Room {
         for death in deaths {
             for member in self.members.values_mut() {
                 if let Some(peer) = &mut member.peer {
-                    if peer.world.owner() == death.owner {
-                        peer.queue_combat_notice(CombatNotice::Death {
-                            source: death.source,
-                            killed_by: death.killed_by,
-                        });
-                    }
+                    peer.queue_player_death(death);
                 }
             }
         }

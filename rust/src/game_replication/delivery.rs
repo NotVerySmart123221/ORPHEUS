@@ -1383,6 +1383,18 @@ impl WorldDelivery {
             let Some(work) = self.input.work.pop_front() else {
                 break;
             };
+            // A selection can despawn the body that owns these shots. Let the
+            // room settle them with that body and its runtime still present.
+            if matches!(work, InputWork::Message { .. } | InputWork::Skin { .. })
+                && self
+                    .body_script
+                    .as_ref()
+                    .and_then(|script| scene.simulation().player_body(script.id))
+                    .is_some_and(|body| !body.hitscan.is_empty())
+            {
+                self.input.work.push_front(work);
+                break;
+            }
             match work {
                 InputWork::Message {
                     message,

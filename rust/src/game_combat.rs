@@ -268,7 +268,7 @@ pub(crate) use encounter::{EncounterPhase, GateDamageStage, GateHealth};
 use enemy::{BotState, EnemyState};
 use health::HealthEffect;
 use health_events::{HealthEventContext, SampledBody};
-pub(crate) use player::{PlayerBodyEvent, PlayerBodyHandle, PlayerBodyState};
+pub(crate) use player::{PlayerBodyEvent, PlayerBodyHandle, PlayerBodyState, PlayerDeath};
 use script_requests::{PlayerRoomCue, RoomScriptTarget};
 pub(crate) use script_requests::{RoomScriptRequest, RoomScriptRequests};
 

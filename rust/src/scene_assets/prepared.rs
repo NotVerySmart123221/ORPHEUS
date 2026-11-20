@@ -26,6 +26,9 @@ impl PreparedScene {
         let mut scene = Self::fixture_for_bots(Vec::new());
         scene.contacts = Some(Arc::new(ContactWorld::new(Vec::new()).unwrap()));
         scene.controller = Controller::fixture_for_owner_admission();
+        let stats = PlayerStats::default();
+        scene.initial_board =
+            StatsCatalog::default().component(&stats, scene.map.mode_guid, None, None);
         scene.heroes = Arc::new(heroes);
         scene
     }
