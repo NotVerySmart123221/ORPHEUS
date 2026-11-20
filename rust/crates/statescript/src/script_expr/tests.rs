@@ -1780,6 +1780,13 @@ fn authored_radius_query_filters_and_bounds_spatial_candidates() {
     type RelationRows = Vec<(u32, [f64; 3], Option<u8>)>;
 
     #[derive(serde::Deserialize)]
+    struct ConeQuery {
+        direction: [f64; 3],
+        half_angle_degrees: Json,
+        opponent_of: Option<u32>,
+    }
+
+    #[derive(serde::Deserialize)]
     struct Input {
         config: Json,
         center: [f64; 3],
@@ -1790,6 +1797,9 @@ fn authored_radius_query_filters_and_bounds_spatial_candidates() {
         relation_source: Json,
         relation_candidates: RelationRows,
         relation_queries: Vec<(String, u32)>,
+        cone_direction: Json,
+        cone_candidates: RelationRows,
+        cone_queries: Vec<ConeQuery>,
     }
 
     #[derive(serde::Deserialize)]
@@ -1797,6 +1807,7 @@ fn authored_radius_query_filters_and_bounds_spatial_candidates() {
         matches: Vec<u32>,
         large_matches: Vec<u32>,
         relation_matches: Vec<Option<Vec<u32>>>,
+        cone_matches: Vec<Vec<u32>>,
     }
 
     #[derive(serde::Deserialize)]
@@ -1811,6 +1822,7 @@ fn authored_radius_query_filters_and_bounds_spatial_candidates() {
     struct Host {
         center: [f64; 3],
         source: u32,
+        direction: [f64; 3],
         candidates: Option<Vec<SpatialCandidate>>,
     }
 
@@ -1820,6 +1832,8 @@ fn authored_radius_query_filters_and_bounds_spatial_candidates() {
             match variable.id {
                 61 => Value::Vector(self.center),
                 62 => Value::Entity(self.source),
+                63 => Value::Vector(self.direction),
+                64 => Value::Float(f64::INFINITY),
                 id => panic!("unexpected variable {id}"),
             }
         }
@@ -1851,6 +1865,9 @@ fn authored_radius_query_filters_and_bounds_spatial_candidates() {
         relation_source,
         relation_candidates,
         relation_queries,
+        cone_direction,
+        cone_candidates,
+        cone_queries,
     } = contract.input;
     let spatial_candidates = |rows: CandidateRows| {
         rows.into_iter()
@@ -1866,6 +1883,7 @@ fn authored_radius_query_filters_and_bounds_spatial_candidates() {
     let mut host = Host {
         center,
         source: 0,
+        direction: [0.0; 3],
         candidates: Some(spatial_candidates(candidates)),
     };
     assert_eq!(
@@ -1925,17 +1943,17 @@ fn authored_radius_query_filters_and_bounds_spatial_candidates() {
         );
     }
 
-    let limit = relation_candidates.len();
-    host.candidates = Some(
-        relation_candidates
-            .into_iter()
+    let team_candidates = |rows: RelationRows| {
+        rows.into_iter()
             .map(|(entity, position, team)| SpatialCandidate {
                 entity,
                 position,
                 team,
             })
-            .collect(),
-    );
+            .collect()
+    };
+    let limit = relation_candidates.len();
+    host.candidates = Some(team_candidates(relation_candidates));
     let filter = |relation: &str| json!({"relation": relation, "source": &relation_source});
     let mut filtered = config;
     assert_eq!(
@@ -1994,6 +2012,60 @@ fn authored_radius_query_filters_and_bounds_spatial_candidates() {
         evaluate(&filtered, &mut host),
         Err(EvalError::UnavailableSpatialCandidates)
     );
+
+    let limit = cone_candidates.len();
+    host.candidates = Some(team_candidates(cone_candidates));
+    let cone = |degrees: Json| json!({"direction": &cone_direction, "half_angle_degrees": degrees});
+    assert_eq!(cone_queries.len(), contract.expected.cone_matches.len());
+    for (query, expected) in cone_queries.into_iter().zip(contract.expected.cone_matches) {
+        host.direction = query.direction;
+        filtered["cone"] = cone(query.half_angle_degrees);
+        if let Some(source) = query.opponent_of {
+            host.source = source;
+            filtered["filter"] = filter("opponent");
+        } else {
+            filtered.as_object_mut().unwrap().remove("filter");
+        }
+        assert_eq!(
+            evaluate(&filtered, &mut host),
+            Ok(entities(expected)),
+            "{filtered}"
+        );
+    }
+    filtered.as_object_mut().unwrap().remove("filter");
+
+    host.direction = [0.0, -1.0, 0.0];
+    filtered["cone"] = cone(json!(0));
+    assert_eq!(evaluate(&filtered, &mut host), Ok(Value::Array(Vec::new())));
+    assert_eq!(
+        evaluate_with_budget(&filtered, &mut host, limit),
+        Err(EvalError::BudgetExceeded { offset: 0, limit })
+    );
+
+    for direction in [[0.0; 3], [0.0, f64::NAN, 1.0], [0.0, f64::INFINITY, 1.0]] {
+        host.direction = direction;
+        assert!(matches!(
+            evaluate(&filtered, &mut host),
+            Err(EvalError::MalformedConfig(_))
+        ));
+    }
+    host.direction = [0.0, 0.0, 1.0];
+    for malformed in [
+        Json::Null,
+        json!({"direction": &cone_direction}),
+        json!({"direction": &cone_direction, "half_angle_degrees": 45, "extra": null}),
+        json!({"direction": 1, "half_angle_degrees": 45}),
+        cone(json!(-1)),
+        cone(json!(180.1)),
+        cone(json!(true)),
+        cone(variable(64, Scope::Instance)),
+    ] {
+        filtered["cone"] = malformed;
+        assert!(matches!(
+            evaluate(&filtered, &mut host),
+            Err(EvalError::MalformedConfig(_))
+        ));
+    }
 }
 
 #[test]

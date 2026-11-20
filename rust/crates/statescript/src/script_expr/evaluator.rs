@@ -7,6 +7,33 @@ pub(super) struct Fold {
     item: Option<Value>,
 }
 
+struct SpatialCone {
+    direction: [f64; 3],
+    angle_limit: f64,
+}
+
+impl SpatialCone {
+    fn scale_direction(vector: [f64; 3]) -> Option<[f64; 3]> {
+        if !vector.iter().all(|part| part.is_finite()) {
+            return None;
+        }
+        let largest = vector.into_iter().map(f64::abs).fold(0.0, f64::max);
+        (largest > 0.0).then(|| vector.map(|part| part / largest))
+    }
+
+    fn contains(&self, offset: [f64; 3]) -> bool {
+        let Some([x, y, z]) = Self::scale_direction(offset) else {
+            return false;
+        };
+        let [a, b, c] = self.direction;
+        // Scaling each vector keeps the cross and dot finite without changing
+        // the angle. atan2 distinguishes narrow cones and exact right angles.
+        let cross = (b * z - c * y).hypot(c * x - a * z).hypot(a * y - b * x);
+        let dot = a * x + b * y + c * z;
+        cross.atan2(dot) <= self.angle_limit
+    }
+}
+
 pub(super) struct Evaluator {
     pub(super) limit: usize,
     pub(super) steps: usize,
@@ -1339,10 +1366,12 @@ impl Evaluator {
         depth: usize,
     ) -> Result<Value, EvalError> {
         let filter = fields.get("filter");
+        let cone = fields.get("cone");
+        let expected_fields = 3 + usize::from(filter.is_some()) + usize::from(cone.is_some());
         let Some((center, radius)) = fields
             .get("center")
             .zip(fields.get("radius"))
-            .filter(|_| fields.len() == 3 + usize::from(filter.is_some()))
+            .filter(|_| fields.len() == expected_fields)
         else {
             return Err(EvalError::MalformedConfig("expected a center and radius"));
         };
@@ -1389,6 +1418,9 @@ impl Evaluator {
             })
             .transpose()?;
 
+        let cone = cone
+            .map(|cone| self.spatial_cone(cone, context, depth))
+            .transpose()?;
         let candidates = context
             .spatial_candidates()
             .ok_or(EvalError::UnavailableSpatialCandidates)?;
@@ -1413,8 +1445,11 @@ impl Evaluator {
                 }
                 continue;
             }
-            let [dx, dy, dz] = std::array::from_fn(|axis| position[axis] - center[axis]);
-            if dx.hypot(dy).hypot(dz) <= radius {
+            let offset = std::array::from_fn(|axis| position[axis] - center[axis]);
+            let [dx, dy, dz] = offset;
+            if dx.hypot(dy).hypot(dz) <= radius
+                && cone.as_ref().is_none_or(|cone| cone.contains(offset))
+            {
                 matches.push((entity, team));
             }
         }
@@ -1431,6 +1466,47 @@ impl Evaluator {
                 .map(|(entity, _)| Value::Entity(entity))
                 .collect(),
         ))
+    }
+
+    fn spatial_cone(
+        &mut self,
+        cone: &Json,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<SpatialCone, EvalError> {
+        let Some((direction, half_angle)) = cone
+            .as_object()
+            .filter(|cone| cone.len() == 2)
+            .and_then(|cone| cone.get("direction").zip(cone.get("half_angle_degrees")))
+        else {
+            return Err(EvalError::MalformedConfig(
+                "expected a cone direction and half angle",
+            ));
+        };
+        let direction = match self.config(direction, context, depth)? {
+            Value::Vector(vector) => SpatialCone::scale_direction(vector),
+            _ => None,
+        }
+        .ok_or(EvalError::MalformedConfig(
+            "expected a finite nonzero cone direction",
+        ))?;
+        let invalid_angle =
+            EvalError::MalformedConfig("expected a cone half angle from 0 to 180 degrees");
+        let degrees = match self.config(half_angle, context, depth)? {
+            Value::Integer(value) => value as f64,
+            Value::Float(value) => value,
+            _ => return Err(invalid_angle),
+        };
+        if !(0.0..=180.0).contains(&degrees) {
+            return Err(invalid_angle);
+        }
+        let angle = degrees.to_radians();
+        // Allow a relative rounding margin at an inclusive boundary.
+        let angle_limit = angle + angle * (4.0 * f64::EPSILON);
+        Ok(SpatialCone {
+            direction,
+            angle_limit,
+        })
     }
 
     fn expression(

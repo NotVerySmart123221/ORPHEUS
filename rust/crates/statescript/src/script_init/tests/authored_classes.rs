@@ -153,6 +153,7 @@ fn authored_observer_samples_radius_once_per_frame_until_aborted() {
     struct Step {
         frame: u32,
         candidates: Option<Vec<CandidateRow>>,
+        direction: Option<[f64; 3]>,
         message: Option<u64>,
         override_output: Option<Vec<u32>>,
         #[serde(default)]
@@ -162,6 +163,7 @@ fn authored_observer_samples_radius_once_per_frame_until_aborted() {
     #[derive(Deserialize)]
     struct Input {
         bundle: Json,
+        initial_direction: [f64; 3],
         common_candidates: Vec<CandidateRow>,
         steps: Vec<Step>,
     }
@@ -187,6 +189,7 @@ fn authored_observer_samples_radius_once_per_frame_until_aborted() {
     #[derive(Default)]
     struct SpatialWorld {
         candidates: Option<Vec<SpatialCandidate>>,
+        direction: [f64; 3],
         reads: Cell<usize>,
     }
 
@@ -197,6 +200,10 @@ fn authored_observer_samples_radius_once_per_frame_until_aborted() {
 
         fn position(&mut self, entity: u32) -> Option<[f64; 3]> {
             (entity == ENTITY).then_some([0.0; 3])
+        }
+
+        fn forward(&self, entity: u32) -> Option<[f64; 3]> {
+            (entity == ENTITY).then_some(self.direction)
         }
 
         fn spatial_candidates(&self) -> Option<&[SpatialCandidate]> {
@@ -220,7 +227,10 @@ fn authored_observer_samples_radius_once_per_frame_until_aborted() {
     let node = graphs.graph(GRAPH).unwrap().node(1).unwrap();
     assert!(node.server_only && !node.is_networked());
 
-    let mut world = SpatialWorld::default();
+    let mut world = SpatialWorld {
+        direction: contract.input.initial_direction,
+        ..SpatialWorld::default()
+    };
     let mut component = Component::start(
         graphs,
         ENTITY,
@@ -238,6 +248,9 @@ fn authored_observer_samples_radius_once_per_frame_until_aborted() {
     let common_candidates = contract.input.common_candidates;
     for (step, expected) in contract.input.steps.into_iter().zip(contract.expected) {
         let before = world.reads.get();
+        if let Some(direction) = step.direction {
+            world.direction = direction;
+        }
         world.candidates = step.candidates.map(|rows| {
             rows.into_iter()
                 .chain(common_candidates.iter().copied())

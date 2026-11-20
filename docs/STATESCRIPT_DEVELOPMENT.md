@@ -137,6 +137,13 @@ participants, are opponents of every other entity. A missing source or
 conflicting snapshots for its affiliation yield an unavailable query.
 Omit `filter` to include every entity in range.
 
+Add a `cone` object to restrict the same query by direction. Its `direction`
+expression must yield a finite nonzero vector, and `half_angle_degrees`
+must yield a number from 0 to 180. A cone includes its angular boundary and
+excludes bodies exactly at its center because they have no bearing.
+Use `EntityDirection` to read a direction supplied by the host. A cone
+can be combined with a team filter and uses the same candidate budget.
+
 See the [synthetic radius contract](../fixtures/behavior/statescript-entities-in-radius-v1.json).
 
 ## Observe an expression across frames
