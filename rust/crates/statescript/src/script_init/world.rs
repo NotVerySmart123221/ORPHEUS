@@ -20,6 +20,15 @@ pub struct Site {
     pub node: Option<u16>,
 }
 
+/// Authoritative movement facts captured from a single owner pose.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MovementSample {
+    pub flags: u16,
+    pub air_ticks: u32,
+    /// Source frame of the movement record, when known.
+    pub pose_frame: Option<u32>,
+}
+
 /// A bounded, typed message evaluated by the sending StateScript VM.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RoomMessage {
@@ -576,8 +585,8 @@ pub trait World {
         None
     }
 
-    /// The implicit owner's movement sample, if the world knows all its bits.
-    fn movement_sample(&self, _site: Site) -> Option<u16> {
+    /// The implicit owner's pose flags and air duration, if the host can read them.
+    fn movement_sample(&self, _site: Site) -> Option<MovementSample> {
         None
     }
 

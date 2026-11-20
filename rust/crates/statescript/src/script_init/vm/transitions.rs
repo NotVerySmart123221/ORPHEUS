@@ -98,12 +98,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             .expect("movement modifier");
                         self.refresh_movement_modifier(key, node)?;
                     }
-                    Some(StateKind::MovementSample(previous)) => {
+                    Some(StateKind::MovementSample { .. }) => {
                         let node = self
                             .graph(id)
                             .state(usize::from(raw))
                             .expect("movement sample");
-                        self.update_movement_sample(key, node, previous)?;
+                        self.update_movement_sample(key, node, 0)?;
                     }
                     Some(StateKind::Switch { .. }) => self.post(id, Event::Reevaluate(raw))?,
                     Some(StateKind::Shockwave { .. }) => self.tick_shockwave(key)?,
@@ -1281,8 +1281,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     .movement_modifiers
                     .retain(|entry, _| entry.instance != key.instance || entry.state != key.raw);
             }
-            StateKind::MovementSample(previous) => {
-                self.update_movement_sample(key, node, previous)?;
+            StateKind::MovementSample { .. } => {
+                self.update_movement_sample(key, node, depth)?;
             }
             StateKind::Shockwave { .. } => {
                 if let Some(state) = self.state_mut(key) {

@@ -593,7 +593,7 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
                 ("undecided".into(), Value::Bool(undecided)),
             ])
         }
-        (StateKind::MovementSample(mask), Some("flags13")) => {
+        (StateKind::MovementSample { flags: mask, .. }, Some("flags13")) => {
             StatePayload::from([("value".into(), Value::Integer(i64::from(mask)))])
         }
         (StateKind::SubScript { child }, Some("subscript")) => StatePayload::from([(

@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
 use super::{policy::body_has_target_tag, *};
-use crate::{game_hitscan::direction_for_angles, script_expr::RoomEntityFacts};
+use crate::{
+    game_hitscan::direction_for_angles, script_expr::RoomEntityFacts, script_init::MovementSample,
+};
 
 const MAX_LOCAL_HEALTH_CHANGES: usize = 64;
 
@@ -1105,10 +1107,16 @@ impl World for EnemyWorld<'_> {
         }
         self.binding.spawn_anchors.as_ref()?.targets(tag)
     }
-    fn movement_sample(&self, site: Site) -> Option<u16> {
-        (site.entity == self.binding.body)
-            .then(|| sample_movement_flags(&self.binding.pose))
-            .flatten()
+    fn movement_sample(&self, site: Site) -> Option<MovementSample> {
+        if site.entity != self.binding.body {
+            return None;
+        }
+        let pose = &self.binding.pose;
+        Some(MovementSample {
+            flags: sample_movement_flags(pose)?,
+            air_ticks: pose.air_ticks,
+            pose_frame: pose.frame,
+        })
     }
     fn total_health(&self, site: Site, entity: u32) -> crate::script_expr::HealthQuery {
         use crate::script_expr::HealthQuery;

@@ -2,7 +2,7 @@ use super::encode::write_mask;
 use super::*;
 use crate::script_expr::Scope;
 use crate::script_init::{
-    Diagnostic, EmptyWorld, Issue, MAX_INIT_WORK, Root, Site, Snapshot, initialize,
+    Diagnostic, EmptyWorld, Issue, MAX_INIT_WORK, MovementSample, Root, Site, Snapshot, initialize,
 };
 use crate::script_stream::{BodyStream, ChangeKey, DeltaKind};
 use serde_json::{Value as Json, json};
@@ -1405,8 +1405,12 @@ fn movement_sample_uses_the_owner_flags_codec() {
             None
         }
 
-        fn movement_sample(&self, _: Site) -> Option<u16> {
-            Some(0x842)
+        fn movement_sample(&self, _: Site) -> Option<MovementSample> {
+            Some(MovementSample {
+                flags: 0x842,
+                air_ticks: 1,
+                pose_frame: None,
+            })
         }
     }
 

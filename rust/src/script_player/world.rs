@@ -19,7 +19,9 @@ use crate::{
     scene_assets::MOVER_CATEGORY,
     script_expr::{EntityRelation, OnFire, RoomEntityFacts, native_shape, valid_entity},
     script_graph::GraphStore,
-    script_init::{MAX_INIT_WORK, RoomMessage, Site, TargetTagEffect, TargetTagEffects, World},
+    script_init::{
+        MAX_INIT_WORK, MovementSample, RoomMessage, Site, TargetTagEffect, TargetTagEffects, World,
+    },
     script_wire::{Value, Variables},
     static_ray::{Vec3, capsule_entry_distance, norm},
     vitals::{PoolKind, Vitals},
@@ -472,11 +474,16 @@ impl World for BodyWorld {
         true
     }
 
-    fn movement_sample(&self, site: Site) -> Option<u16> {
+    fn movement_sample(&self, site: Site) -> Option<MovementSample> {
         if !self.is_player_site(site) {
             return None;
         }
-        sample_movement_flags(&self.movement)
+        let pose = &self.movement;
+        Some(MovementSample {
+            flags: sample_movement_flags(pose)?,
+            air_ticks: pose.air_ticks,
+            pose_frame: pose.frame,
+        })
     }
 
     fn body_scale(&mut self, site: Site, target: u32, override_value: &Value) -> Option<f64> {

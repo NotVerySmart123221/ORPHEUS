@@ -556,7 +556,7 @@ fn state_kind_summary(kind: StateKind) -> (&'static str, Option<u8>) {
         StateKind::VictoryVoice => ("VictoryVoice", None),
         StateKind::SameTeamContact { .. } => ("SameTeamContact", None),
         StateKind::OutgoingDamageFilter { .. } => ("OutgoingDamageFilter", None),
-        StateKind::MovementSample(_) => ("MovementSample", None),
+        StateKind::MovementSample { .. } => ("MovementSample", None),
         StateKind::Anim => ("Anim", None),
         StateKind::Effect => ("Effect", None),
         StateKind::ClientPulse { .. } => ("ClientPulse", None),

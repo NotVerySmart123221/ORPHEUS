@@ -115,7 +115,11 @@ pub enum StateKind {
     OutgoingDamageFilter {
         registered: bool,
     },
-    MovementSample(u16),
+    MovementSample {
+        flags: u16,
+        pose_frame: Option<u32>,
+        sampled_at: Option<u32>,
+    },
     Anim,
     Effect,
     ClientPulse {

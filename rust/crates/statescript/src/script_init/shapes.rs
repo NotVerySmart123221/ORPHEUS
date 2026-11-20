@@ -387,9 +387,6 @@ pub(super) fn is_owner_movement_sampler(node: &Node) -> bool {
         ]
         .iter()
         .all(|name| field(&node.fields, name).is_null())
-        && ["m_E37BC6C2", "m_2102C541"]
-            .iter()
-            .all(|path| node.links(path).next().is_none())
         && MOVEMENT_BOOLEAN_OUTPUTS
             .iter()
             .all(|name| script_expr::lvalue(field(&node.fields, name)).is_ok())

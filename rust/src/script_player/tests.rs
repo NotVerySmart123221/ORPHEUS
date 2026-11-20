@@ -1065,7 +1065,14 @@ fn verified_body_starts_fresh_instances_and_advances_only_its_own_retail_clock()
         graph: 42,
         node: None,
     };
-    assert_eq!(first.world.movement_sample(site), Some(2));
+    assert_eq!(
+        first.world.movement_sample(site),
+        Some(crate::script_init::MovementSample {
+            flags: 2,
+            air_ticks: spawn.pose.air_ticks,
+            pose_frame: spawn.pose.frame,
+        })
+    );
     assert_eq!(second.world.movement_sample(site), None);
     let mut mover = Mover::new(
         MoverSettings::default(),
@@ -1096,7 +1103,14 @@ fn verified_body_starts_fresh_instances_and_advances_only_its_own_retail_clock()
     let posed = mover.pose();
     let sample = sample_movement_flags(&posed).expect("a regular posed movement record");
     assert_eq!(first.world.movement, posed);
-    assert_eq!(first.world.movement_sample(site), Some(sample));
+    assert_eq!(
+        first.world.movement_sample(site),
+        Some(crate::script_init::MovementSample {
+            flags: sample,
+            air_ticks: posed.air_ticks,
+            pose_frame: posed.frame,
+        })
+    );
     assert_eq!(first.component.now_ms(), 102 * FRAME_MS - 1);
     assert_eq!(second.component.now_ms(), 101 * FRAME_MS - 1);
     let gap = Command {
@@ -1538,7 +1552,10 @@ fn prepared_soldier_starts_the_tagged_body_and_weapon_tree() {
     let movement_graph = &snapshot.instances[&12];
     let movement = &movement_graph.states[&4];
     assert!(movement.active);
-    assert_eq!(movement.kind, StateKind::MovementSample(2));
+    assert!(matches!(
+        movement.kind,
+        StateKind::MovementSample { flags: 2, .. }
+    ));
     assert_eq!(snapshot.variables[&545], Value::Bool(true));
     assert!(
         !snapshot

@@ -6,6 +6,10 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Replaced the placement whitelist for a base action with validated action and wire-slot shape. An original graph reproduced the placement rejection before the fix. The regression checks valid continuations at two positions and rejection of malformed headers and a remote index on an action.
+
+- Added takeoff and landing continuations to owner movement sampling. Boolean outputs update before the edge callbacks. The sampler compares source movement frames to avoid duplicate restarts when command gaps retain a pose. Existing wire encoding continues to carry the movement flags. With script coverage, the StateScript and native library suites passed with 195 and 360 tests respectively. They skipped 13 and 120 opt-in cases respectively.
+
 - Added a private comparison of the Python room startup and Rust prepared actor matrix. It verifies the eight input digests and joins exact hero and body identities. Two runs at Python `c73e5a49` and Rust `f506d762` produced identical reports. Python decoded both startup frames for all 32 actors and reported a native config compatibility notice for each actor. Rust independently passed 10 of 32. A separate trace found that Python reached the eight sender sites still blocked in Rust and handled them as one-shot sends. Script unittest discovery passed with 27 tests and five skipped.
 
 - Supplied the process-local command availability fact to the StateScript evaluator from the headless player and NPC hosts. The original synthetic fixture checks startup before any commands, held remote commands, unknown host context, and malformed operands. Two prepared runs at `f506d762` produced identical reports. Seven local-command diagnostics cleared and independent startup rose from 9 to 10 of 32, with Hanzo newly passing. Ordinary Practice Range admission stayed at 1 of 32. The #72 capture matched the prior run across all 476 observed sites. The locked StateScript and native library suites passed with 191 and 360 tests respectively. They skipped 13 and 120 opt-in cases respectively.

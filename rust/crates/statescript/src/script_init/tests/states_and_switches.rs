@@ -839,8 +839,12 @@ fn state_elapsed_condition_rearms_one_timer_and_completes_at_the_authored_age() 
 fn movement_sample_updates_only_changed_authored_outputs() {
     struct SampleWorld(Option<u16>);
     impl World for SampleWorld {
-        fn movement_sample(&self, _: Site) -> Option<u16> {
-            self.0
+        fn movement_sample(&self, _: Site) -> Option<MovementSample> {
+            self.0.map(|flags| MovementSample {
+                flags,
+                air_ticks: 1,
+                pose_frame: None,
+            })
         }
         fn position(&mut self, _entity: u32) -> Option<[f64; 3]> {
             None
@@ -901,7 +905,10 @@ fn movement_sample_updates_only_changed_authored_outputs() {
     let snapshot = component.snapshot().unwrap();
     assert!(snapshot.initialization_complete());
     let owner = &snapshot.instances[&1];
-    assert_eq!(owner.states[&0].kind, StateKind::MovementSample(2));
+    assert!(matches!(
+        owner.states[&0].kind,
+        StateKind::MovementSample { flags: 2, .. }
+    ));
     assert_eq!(owner.states[&1].kind, StateKind::BooleanSwitch(true));
     assert_eq!(snapshot.variables[&100], Value::Bool(true));
     assert!(!owner.variables.contains_key(&101));
@@ -910,7 +917,10 @@ fn movement_sample_updates_only_changed_authored_outputs() {
     component.advance_frame(1, &mut world).unwrap();
     let snapshot = component.snapshot().unwrap();
     let owner = &snapshot.instances[&1];
-    assert_eq!(owner.states[&0].kind, StateKind::MovementSample(65));
+    assert!(matches!(
+        owner.states[&0].kind,
+        StateKind::MovementSample { flags: 65, .. }
+    ));
     assert_eq!(owner.states[&1].kind, StateKind::BooleanSwitch(false));
     assert_eq!(snapshot.variables[&100], Value::Bool(false));
     assert_eq!(owner.variables[&101], Value::Bool(true));
@@ -918,10 +928,10 @@ fn movement_sample_updates_only_changed_authored_outputs() {
     world.0 = Some(0);
     component.advance_frame(2, &mut world).unwrap();
     let snapshot = component.snapshot().unwrap();
-    assert_eq!(
+    assert!(matches!(
         snapshot.instances[&1].states[&0].kind,
-        StateKind::MovementSample(0)
-    );
+        StateKind::MovementSample { flags: 0, .. }
+    ));
     assert_eq!(snapshot.instances[&1].variables[&101], Value::Bool(false));
 
     let unsupported = start(&mut SampleWorld(None));
@@ -1946,6 +1956,90 @@ fn criteria_actions_continue_their_output() {
                 has_output.then_some(&Value::Bool(true))
             );
             assert!(snapshot.instances[&1].states.is_empty());
+        }
+    }
+}
+
+#[test]
+fn base_action_shape_controls_continuation_at_new_placements() {
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../../../../fixtures/behavior/script-base-action-placement-v1.json"
+    ))
+    .unwrap();
+    let input = &fixture["input"];
+    let class = input["class"].as_str().unwrap();
+    let marker = u32::try_from(input["marker_variable"].as_u64().unwrap()).unwrap();
+    let value = input["marker_value"].as_i64().unwrap();
+    let cases = input["cases"].as_array().unwrap();
+    let expected = fixture["expected"].as_array().unwrap();
+    assert_eq!(cases.len(), expected.len());
+
+    for (case, expected) in cases.iter().zip(expected) {
+        let graph_id = u32::try_from(case["graph"].as_u64().unwrap()).unwrap();
+        let position = u16::try_from(case["node"].as_u64().unwrap()).unwrap();
+        let output = u16::try_from(case["output_node"].as_u64().unwrap()).unwrap();
+        let mut action = node(
+            position,
+            class,
+            None,
+            json!({"m_outPlug":plug(&[(output,"m_inPlug")], &[])}),
+        );
+        action["fields"]["m_ADEB6E05"] = case["action_header"].clone();
+        action["remote"] = case["remote_slot"].clone();
+        let mut graph_fixture = graph(
+            graph_id,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({"m_outPlug":plug(&[(position,"m_inPlug")], &[])}),
+                ),
+                action,
+                node(
+                    output,
+                    "STUStatescriptActionSetVar",
+                    None,
+                    json!({"m_out_Var":var(marker,true),"m_value":value}),
+                ),
+            ],
+            json!([]),
+            json!([0]),
+        );
+        if case["remote_slot"].as_i64() == Some(0) {
+            graph_fixture["remote"] = json!([position]);
+        }
+        let snapshot = initialize(
+            &store(vec![graph_fixture]),
+            42,
+            Variables::new(),
+            vec![Root::new(1, graph_id)],
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+
+        let expected_value = Value::Integer(value);
+        let continues = expected["continues"].as_bool().unwrap();
+        assert_eq!(
+            snapshot.variables.get(&marker),
+            continues.then_some(&expected_value),
+            "{case}: {:?}",
+            snapshot.diagnostics
+        );
+        if continues {
+            assert!(snapshot.initialization_complete());
+        } else {
+            assert!(matches!(
+                snapshot.diagnostics.as_slice(),
+                [Diagnostic {
+                    site,
+                    issue: Issue::UnsupportedAction(unsupported),
+                    registration_rejected: false,
+                    ..
+                }]
+                    if site.graph == graph_id && site.node == Some(position) && unsupported == class
+            ));
         }
     }
 }

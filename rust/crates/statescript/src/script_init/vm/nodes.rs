@@ -546,11 +546,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", caller, depth)
             }
             "STU_43B63AD0"
-                if registration.permits(self.graph(id).index == 0x0b8b
-                    && matches!(node.pos, 14 | 16))
-                    && node.is_action()
-                    && node.remote < 0 =>
+                if registration.shape(
+                    node.state.is_none()
+                        && !node.is_state()
+                        && node.remote == -1
+                        && (field(&node.fields, "m_ADEB6E05").as_bool() == Some(true)
+                            || field(&node.fields, "m_ADEB6E05").as_u64() == Some(1)),
+                ) =>
             {
+                // This class uses the base Action continuation.
                 self.follow(id, node, "m_outPlug", caller, depth)
             }
             "STU_FF3471E9" if registration.permits((self.graph(id).index, node.pos) == (0x224e, 31)) => {
@@ -1403,8 +1407,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             "STU_96F1DBCF" if registration.shape(is_owner_movement_sampler(node)) => {
                 match self.state(key).map(|state| state.kind) {
-                    Some(kind @ StateKind::MovementSample(_)) => kind,
-                    _ => StateKind::MovementSample(0),
+                    Some(kind @ StateKind::MovementSample { .. }) => kind,
+                    _ => StateKind::MovementSample {
+                        flags: 0,
+                        pose_frame: None,
+                        sampled_at: None,
+                    },
                 }
             }
             "STUStatescriptStateAnim" => StateKind::Anim,
@@ -1796,8 +1804,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     self.register_tick(key, self.machine.now_ms);
                 }
             }
-            StateKind::MovementSample(previous) => {
-                self.update_movement_sample(key, node, previous)?;
+            StateKind::MovementSample { .. } => {
+                self.update_movement_sample(key, node, depth)?;
                 self.register_tick(key, self.machine.now_ms);
             }
             StateKind::PhaseScriptList => self.refresh_phase_scripts(key, node)?,
@@ -2706,23 +2714,40 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         &mut self,
         key: StateKey,
         node: &Node,
-        previous: u16,
+        depth: usize,
     ) -> Result<(), InitFault> {
+        let frame = self.machine.frame;
+        let Some(state) = self.state_mut(key) else {
+            return Ok(());
+        };
+        let StateKind::MovementSample {
+            flags: previous,
+            pose_frame: previous_pose_frame,
+            sampled_at,
+        } = &mut state.kind
+        else {
+            return Ok(());
+        };
+        if *sampled_at == Some(frame) {
+            return Ok(());
+        }
+        let (previous, previous_pose_frame) = (*previous, *previous_pose_frame);
+        *sampled_at = Some(frame);
         let site = self.site(key.instance, node);
         let Some(sample) = self
             .world
             .movement_sample(site)
-            .filter(|&mask| mask < 1 << 13)
+            .filter(|sample| sample.flags < 1 << 13)
         else {
             self.report(site, Issue::UnsupportedField("owner movement sample"));
             return Ok(());
         };
-        let changed = previous ^ sample;
-        if changed == 0 {
-            return Ok(());
-        }
-        self.state_mut(key).expect("active movement sample").kind =
-            StateKind::MovementSample(sample);
+        let changed = previous ^ sample.flags;
+        self.state_mut(key).expect("active movement sample").kind = StateKind::MovementSample {
+            flags: sample.flags,
+            pose_frame: sample.pose_frame,
+            sampled_at: Some(frame),
+        };
         for (bit, name) in MOVEMENT_BOOLEAN_OUTPUTS.iter().enumerate() {
             let mask = 1 << bit;
             if changed & mask == 0 {
@@ -2733,9 +2758,31 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             {
                 self.write(
                     source_key(key.instance, variable),
-                    Value::Bool(sample & mask != 0),
+                    Value::Bool(sample.flags & mask != 0),
                 )?;
             }
+        }
+        let was_airborne = previous & 1 != 0;
+        let airborne = sample.flags & 1 != 0;
+        // Gap frames can retain the last pose. A restart requires a fresh
+        // movement record with an authoritative zero air-tick count.
+        let airborne_restart = was_airborne
+            && airborne
+            && sample.air_ticks == 0
+            && sample.pose_frame.is_some()
+            && sample.pose_frame != previous_pose_frame;
+        if was_airborne
+            && (!airborne || airborne_restart)
+            && node.links("m_2102C541").next().is_some()
+        {
+            self.follow(key.instance, node, "m_2102C541", Some(key), depth + 1)?;
+        }
+        if airborne
+            && (!was_airborne || airborne_restart)
+            && self.state(key).is_some_and(|state| state.active)
+            && node.links("m_E37BC6C2").next().is_some()
+        {
+            self.follow(key.instance, node, "m_E37BC6C2", Some(key), depth + 1)?;
         }
         Ok(())
     }
