@@ -21,7 +21,8 @@ fn acknowledge_world_frame(peer: &mut Peer, sequence: &mut u32) {
             |_| Ok::<_, io::Error>(*sequence),
         )
         .unwrap();
-    let report = peer.egress.acknowledge(*sequence, 0);
+    // Bit zero acknowledges the sequence immediately before the window's next value.
+    let report = peer.egress.acknowledge(*sequence + 1, 1);
     peer.world.acknowledge(report, Duration::ZERO);
 }
 
