@@ -1464,6 +1464,131 @@ fn authored_target_children_reuse_instances_and_clear_retired_schedules() {
     }
 }
 
+#[test]
+fn halted_target_tracker_teardown_releases_child_effect_without_dispatching_timer() {
+    #[derive(Default)]
+    struct TagWorld(Vec<(u64, bool)>);
+
+    impl World for TagWorld {
+        fn position(&mut self, _entity: u32) -> Option<[f64; 3]> {
+            None
+        }
+
+        fn entity_variable(&mut self, _entity: u32, _id: u32) -> Option<Value> {
+            None
+        }
+
+        fn set_target_tag_effect(
+            &mut self,
+            _: Site,
+            effect: TargetTagEffect,
+            active: bool,
+        ) -> bool {
+            self.0.push((effect.tag, active));
+            true
+        }
+    }
+
+    let contract: Json = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/script-target-children-v1.json"
+    )))
+    .unwrap();
+    let failure = &contract["input"]["fatal_cleanup"];
+    let budget = usize::try_from(failure["work_budget"].as_u64().unwrap()).unwrap();
+    let count = usize::try_from(failure["duplicate_targets"].as_u64().unwrap()).unwrap();
+    let target = u32::try_from(failure["target"].as_u64().unwrap()).unwrap();
+    let release_tag = crate::script_graph::asset_guid(&failure["installed_tag"]).unwrap();
+    let timer_tag = crate::script_graph::asset_guid(&failure["pending_timer_tag"]).unwrap();
+
+    let mut bundle = contract["input"]["bundle"].clone();
+    let root = u32::try_from(bundle["graphs"][0]["index"].as_u64().unwrap()).unwrap();
+    let child = &mut bundle["graphs"][1];
+    child["items"] = json!(6);
+    child["states"] = json!([2, 4, 5]);
+    child["nodes"][0]["fields"]["m_outPlug"] = plug(
+        &[(1, "m_inPlug"), (2, "m_beginPlug"), (4, "m_beginPlug")],
+        &[],
+    );
+    child["nodes"][2]["fields"]["interval_frames"] = json!(1);
+    child["nodes"][2]["fields"]["on_interval"] = plug(&[(5, "m_beginPlug")], &[]);
+    let tag_state = |position, slot, tag: u64| {
+        node(
+            position,
+            "STU_E56BA8D8",
+            Some(slot),
+            json!({
+                "m_31714AFC": {"$": "STU_B5A0CAF0"},
+                "m_targetTags": {"$": "STU_357DABBB", "m_7D7C86A1": format!("0x{tag:016X}")},
+            }),
+        )
+    };
+    child["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .extend([tag_state(4, 1, release_tag), tag_state(5, 2, timer_tag)]);
+
+    let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    let mut world = TagWorld::default();
+    let mut component = Component::start(
+        graphs,
+        847,
+        Variables::from([(1, Value::Array(vec![Value::Entity(target)]))]),
+        vec![Root::listener(1, root, Some(0))],
+        0,
+        &mut world,
+        budget,
+    )
+    .unwrap();
+
+    component.advance_frame(1, &mut world).unwrap();
+    let snapshot = component.snapshot().unwrap();
+    assert!(
+        snapshot.diagnostics.is_empty(),
+        "{:?}",
+        snapshot.diagnostics
+    );
+    assert_eq!(world.0, [(release_tag, true)]);
+    let (&child, timers) = snapshot.pending_timers.iter().next().unwrap();
+    let due = 2 * crate::script_runtime::FRAME_MS;
+    assert!(timers.iter().any(|timer| timer.due_ms == due));
+
+    component
+        .set_entity_variable(
+            1,
+            Value::Array(vec![Value::Entity(target); count]),
+            &mut world,
+        )
+        .unwrap();
+    assert!(matches!(
+        component.advance_frame(2, &mut world),
+        Err(InitFault::WorkBudget {
+            operation: "tracked target entity",
+            ..
+        })
+    ));
+    assert_eq!(component.now_ms(), due);
+    assert!(
+        component
+            .machine
+            .queues
+            .iter(child)
+            .any(|(when, _)| when == due)
+    );
+    assert_eq!(world.0, [(release_tag, true)]);
+    assert_eq!(component.run_now(&mut world), Err(InitFault::Halted));
+
+    component.teardown(&mut world).unwrap();
+    component.teardown(&mut world).unwrap();
+    assert_eq!(world.0, [(release_tag, true), (release_tag, false)]);
+    assert!(component.machine.snapshot.instances.is_empty());
+    assert!(component.machine.queues.next_due().is_none());
+    assert_eq!(
+        component.advance_frame(3, &mut world),
+        Err(InitFault::Halted)
+    );
+}
+
 #[derive(Deserialize)]
 struct RoomMessageContract {
     schema_version: u8,

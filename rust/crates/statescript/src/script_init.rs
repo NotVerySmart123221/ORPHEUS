@@ -229,8 +229,10 @@ pub struct Component {
 }
 
 impl Component {
+    /// Release host effects and queued work, including after a fatal VM fault.
     pub fn teardown(&mut self, world: &mut impl World) -> Result<(), InitFault> {
-        self.run(world, |vm| {
+        let notify_observers = !self.halted;
+        self.run_with_budget(world, |vm| {
             let roots = vm
                 .machine
                 .snapshot
@@ -241,7 +243,10 @@ impl Component {
             for root in roots {
                 vm.destroy(root)?;
             }
-            vm.notify_code(1)
+            if notify_observers {
+                vm.notify_code(1)?;
+            }
+            Ok(())
         })
     }
     pub fn register_code_observer(&mut self, token: u64, identifier: Option<u64>) {
@@ -1033,10 +1038,18 @@ impl Component {
         if self.halted {
             return Err(InitFault::Halted);
         }
+        self.run_with_budget(world, operation)
+    }
+
+    fn run_with_budget<W: World>(
+        &mut self,
+        world: &mut W,
+        operation: impl FnOnce(&mut Vm<'_, '_, '_, W>) -> Result<(), InitFault>,
+    ) -> Result<(), InitFault> {
         self.machine.work_left = self.machine.max_work;
         let result = operation(&mut Vm::new(&self.graphs, world, &mut self.machine));
-        self.halted = result.is_err();
-        if result.is_ok() {
+        self.halted |= result.is_err();
+        if !self.halted {
             self.machine.capture_outputs();
         }
         result

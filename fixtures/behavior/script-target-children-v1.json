@@ -90,6 +90,13 @@
       "bodies": {},
       "missing": []
     },
+    "fatal_cleanup": {
+      "work_budget": 1024,
+      "duplicate_targets": 2048,
+      "target": 99,
+      "installed_tag": "0x0D6000000000EA81",
+      "pending_timer_tag": "0x0D6000000000EA82"
+    },
     "radius_expression": {
       "$": "EntitiesInRadius",
       "center": {"$": "STUConfigVarDynamic", "m_identifier": 2, "m_60DB8F99": true},
