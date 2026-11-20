@@ -2245,13 +2245,28 @@ impl RoomSimulation {
                     enemy.fault = Some(error.to_string());
                     continue;
                 }
-                enemy.binding.pose = bot.movement(tick);
+                let navigation_pose = bot.movement(tick);
+                enemy.binding.pose = navigation_pose;
                 enemy.binding.roster = roster.clone();
-                if let Err(error) =
-                    enemy
-                        .scripts
-                        .advance(&enemy.graphs, &enemy.binding, vitals, tick)
+                // Sample the facing already held at entry without overriding the
+                // bot's navigation pose if the script releases it this update.
+                if let Some([yaw, pitch]) = enemy
+                    .scripts
+                    .authored_facing(enemy.binding.body)
+                    .filter(|_| {
+                        !bot.dead
+                            && vitals.death().is_none()
+                            && enemy.scripts.cinematic_aim().is_none()
+                    })
                 {
+                    enemy.binding.pose.yaw = yaw;
+                    enemy.binding.pose.pitch = pitch;
+                }
+                let advanced = enemy
+                    .scripts
+                    .advance(&enemy.graphs, &enemy.binding, vitals, tick);
+                enemy.binding.pose = navigation_pose;
+                if let Err(error) = advanced {
                     eprintln!("enemy {} halted: {error}", enemy.binding.body);
                     bot.stop_objective(tick);
                     enemy.fault = Some(error);

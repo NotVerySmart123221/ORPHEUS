@@ -734,3 +734,247 @@ fn assert_held_aim_lifecycle(authored_listener: bool) {
             .all(|sample| sample["tick"] != expected["retired_frame"])
     );
 }
+
+#[test]
+fn npc_facing_claim_controls_live_ray_samples_before_navigation_publication() {
+    use crate::{
+        game_debug::DebugScriptRay,
+        game_pools::HealthPools,
+        npc_catalog::NpcDefinition,
+        script_enemy::EnemySpawn,
+        script_init::{ABORT_PLUG, CreationKind, EntityCreation},
+        script_wire::Variables,
+    };
+
+    const HERO: u64 = 0x02e0_0000_0050_0201;
+    const BODY: u64 = 0x0400_0000_0050_0202;
+    const CONTROLLER: u64 = 0x0400_0000_0050_0203;
+    const RELEASE: u64 = 0x0240_0000_0050_0204;
+    let contract: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/statescript-facing-claim-v1.json"
+    ))
+    .unwrap();
+    let input = &contract["input"]["npc_navigation"];
+    let expected = &contract["expected"]["npc_navigation"];
+    let graph = u32::try_from(input["graph"].as_u64().unwrap()).unwrap();
+    let sample = u32::try_from(input["sample_variable"].as_u64().unwrap()).unwrap();
+    let position: Vec3 = serde_json::from_value(input["position"].clone()).unwrap();
+    let [x, y, z]: Vec3 = serde_json::from_value(input["claim_direction"].clone()).unwrap();
+    let navigation: Vec3 = serde_json::from_value(input["navigation_direction"].clone()).unwrap();
+    let claimed_angles: [i32; 2] =
+        serde_json::from_value(expected["claimed_angles"].clone()).unwrap();
+    let navigation_angles: [i32; 2] =
+        serde_json::from_value(expected["navigation_angles"].clone()).unwrap();
+    let hit_point: Vec3 = serde_json::from_value(expected["hit_point"].clone()).unwrap();
+    let miss_end: Vec3 = serde_json::from_value(expected["miss_end"].clone()).unwrap();
+    let assert_point = |actual: Vec3, expected: Vec3| {
+        assert!(
+            actual
+                .into_iter()
+                .zip(expected)
+                .all(|(actual, expected)| (actual - expected).abs() < 1e-6),
+            "point {actual:?} differs from {expected:?}"
+        );
+    };
+    let output = json!({"$":"STUConfigVarDynamic","m_identifier":sample,"m_60DB8F99":true});
+    let plug = |links: &[(u16, &str)]| json!({"$":"Plug","links":links});
+    let node = |pos: u16, class: &str, raw: Option<u16>, mut fields: serde_json::Value| {
+        fields["m_2BBEEAB8"] = json!(raw.is_some());
+        json!({"pos":pos,"rid":pos,"uid":pos,"remote":-1,"state":raw,
+            "class":class,"server_only":true,"client_only":false,"fields":fields})
+    };
+    let mut claim = node(
+        1,
+        "authored.npc_sample_facing",
+        Some(0),
+        json!({
+            "direction":{"$":"STUConfigVarVec3","m_value":{"X":x,"Y":y,"Z":z}},
+            "priority":contract["input"]["priority"]
+        }),
+    );
+    claim["state_behavior"] = json!("facing_claim");
+    let mut observe = node(
+        2,
+        "authored.npc_forward_ray",
+        Some(1),
+        json!({"value":{"$":"RayCast",
+            "origin":{"$":"EntityPosition","entity":{"$":"STU_B5A0CAF0"}},
+            "direction":{"$":"EntityDirection","entity":{"$":"STU_B5A0CAF0"}},
+            "max_distance":input["max_distance"]},"output":output}),
+    );
+    observe["state_behavior"] = json!("observe");
+    let bundle = json!({"version":1,"bodies":{},"missing":[],
+    "graphs":[{
+        "index":graph,"items":4,"states":[1,2],"entries":[0,3],"remote":[],
+        "sync_vars":[],"containers":{},"unknown_nodes":[],"fields":{},
+        "header":{"m_nodesBitCount":3,"m_statesBitCount":3,
+            "m_remoteSyncNodesBitCount":3,"m_syncVarsBitCount":3},
+        "nodes":[
+            node(0,"STUStatescriptEntry",None,
+                json!({"m_outPlug":plug(&[(1,"m_beginPlug"),(2,"m_beginPlug")])})),
+            claim,observe,
+            node(3,"STUStatescriptEntryGameMessage",None,
+                json!({"m_gameMessage":{"m_gameMessage":format!("0x{RELEASE:016X}")},
+                    "m_outPlug":plug(&[(1,ABORT_PLUG)])}))
+        ]
+    },{
+        "index":graph+1,"items":0,"nodes":[],"states":[],"entries":[],"remote":[],
+        "sync_vars":[],"containers":{},"unknown_nodes":[],"fields":{},
+        "header":{"m_nodesBitCount":3,"m_statesBitCount":3,
+            "m_remoteSyncNodesBitCount":3,"m_syncVarsBitCount":3}
+    }],
+    "junkenstein":{
+        "pairs":{format!("0x{HERO:016X}"):{
+            "body":format!("0x{BODY:016X}"),"controller":format!("0x{CONTROLLER:016X}")}},
+        "entities":{
+            format!("0x{BODY:016X}"):{"hero":format!("0x{HERO:016X}"),
+                "name":"Facing sample fixture","manager":null,"weapons":[],"target_tags":[],
+                "graphs":[{"graph":graph,"m_75408640":0}]},
+            format!("0x{CONTROLLER:016X}"):{"hero":null,"name":"Facing sample control",
+                "manager":null,"weapons":[],"target_tags":[],
+                "graphs":[{"graph":graph+1,"m_75408640":0}]}
+        }
+    }});
+    let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    let definition = NpcDefinition {
+        hero: HERO,
+        body: BODY,
+        name: "Facing sample fixture".into(),
+        pools: HealthPools {
+            health: 100.0,
+            armour: 0.0,
+            shields: 0.0,
+        },
+    };
+    let request = EntityCreation {
+        position,
+        kind: CreationKind::Hero {
+            hero: HERO,
+            team: 1,
+            yaw: 0.0,
+            flags: [Value::Bool(false), Value::Bool(false)],
+            controller: None,
+            skin: None,
+        },
+    };
+    let ground = Arc::new(fixture_ground());
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, &ground, None);
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    room.enable_spatial_queries(false, Arc::clone(&ground), graphs.room_spatial_needs());
+    room.prepare_spatial_frame(0).unwrap();
+    room.activate_combat();
+    let entity = room
+        .create_enemy(EnemySpawn {
+            graphs,
+            codecs: Arc::new(CodecTable::from_json(r#"{"classes":{}}"#).unwrap()),
+            definition: &definition,
+            request: &request,
+            mode: 0,
+            mode_variables: Arc::new(Variables::new()),
+            tick: 0,
+            walk: crate::game_bots::BotWalk::default(),
+            gate: None,
+        })
+        .unwrap();
+    let claimed_frames: Vec<u32> = serde_json::from_value(input["claimed_frames"].clone()).unwrap();
+    let release_frame = u32::try_from(input["release_frame"].as_u64().unwrap()).unwrap();
+    let released_frame = u32::try_from(input["released_frame"].as_u64().unwrap()).unwrap();
+
+    let advance = |room: &mut RoomSimulation, frame| {
+        // Supply fresh steering through the same aim publication used by navigation.
+        room.body_mut(entity)
+            .unwrap()
+            .apply_objective_aim(navigation, frame);
+        assert_eq!(
+            room.body_mut(entity).unwrap().movement(frame).yaw,
+            navigation_angles[0]
+        );
+        room.finish_tick(
+            &queries,
+            frame,
+            Duration::from_millis(u64::from(frame) * 16),
+        )
+        .unwrap();
+        let state = state(room, entity).unwrap();
+        assert!(state.enemy.as_ref().unwrap().fault.is_none());
+    };
+    for &frame in &claimed_frames {
+        advance(&mut room, frame);
+        let state = state(&room, entity).unwrap();
+        let pose = state.bot.movement(frame);
+        assert_eq!([pose.yaw, pose.pitch], claimed_angles);
+        let enemy = state.enemy.as_ref().unwrap();
+        let result = &enemy.scripts.body.snapshot().unwrap().variables[&sample];
+        let Value::Array(hit) = result else {
+            panic!("expected ray result, got {result:?}")
+        };
+        assert_eq!(
+            hit.first(),
+            Some(&Value::Float(expected["hit_distance"].as_f64().unwrap()))
+        );
+        let Some(Value::Vector(point)) = hit.get(1) else {
+            panic!("expected a ray hit point, got {hit:?}");
+        };
+        assert_point(*point, hit_point);
+    }
+    {
+        let handle = room.by_wire[&entity];
+        let mut state = room.world.get_mut::<BotState>(handle).unwrap();
+        let queued = state
+            .enemy
+            .as_mut()
+            .unwrap()
+            .scripts
+            .body
+            .queue_frame_message(release_frame, 1, RELEASE, Variables::new())
+            .unwrap();
+        assert_eq!(queued, 1);
+    }
+    advance(&mut room, release_frame);
+    {
+        let state = state(&room, entity).unwrap();
+        assert_eq!(
+            state
+                .enemy
+                .as_ref()
+                .unwrap()
+                .scripts
+                .authored_facing(entity),
+            None
+        );
+        let pose = state.bot.movement(release_frame);
+        assert_eq!([pose.yaw, pose.pitch], navigation_angles);
+    }
+    advance(&mut room, released_frame);
+    let enemy = state(&room, entity).unwrap().enemy.as_ref().unwrap();
+    assert_eq!(
+        enemy.scripts.body.snapshot().unwrap().variables[&sample],
+        Value::Array(Vec::new())
+    );
+    let overlay = room.debug_physics().unwrap().unwrap();
+    for frame in claimed_frames.into_iter().chain([released_frame]) {
+        let ray = overlay
+            .rays
+            .iter()
+            .find(|ray| ray.source == entity && ray.tick == frame && ray.kind == "script_static")
+            .expect("fresh NPC script ray");
+        assert_eq!(ray.origin, position);
+        assert_eq!(
+            ray.script,
+            Some(DebugScriptRay {
+                graph,
+                instance: 1,
+                node: Some(2),
+                vm_frame: frame
+            })
+        );
+        if frame == released_frame {
+            assert_eq!(ray.hit, "none");
+            assert_point(ray.end, miss_end);
+        } else {
+            assert_eq!(ray.hit, "world");
+            assert_point(ray.end, hit_point);
+        }
+    }
+}

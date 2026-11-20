@@ -535,9 +535,11 @@ the usual StateScript expressions and variables.
 Finishing, aborting or tearing down the state releases its claim.
 An invalid direction or a refused host refresh aborts the state and
 releases its previous claim. Players apply the accepted direction at
-the next processed pose. NPCs apply it through the room's existing aim
-update. Server-facing claims support vertical directions. An active
-cinematic aim has precedence.
+the next processed pose. An NPC's own direction queries sample the claim
+that was active when its script update began. The room resolves facing
+again for the published pose, so a claim that ends during the update can
+return control to navigation in that frame. Server-facing claims support
+vertical directions. An active cinematic aim has precedence.
 
 See the [synthetic facing claim contract](../fixtures/behavior/statescript-facing-claim-v1.json).
 
