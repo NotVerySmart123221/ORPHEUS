@@ -40,6 +40,11 @@ impl World for EnemyWorld<'_> {
             .then_some(false)
     }
 
+    fn has_dynamic_map_rigid_bodies(&self, site: Site) -> Option<bool> {
+        (site.entity == self.binding.body && crate::script_expr::valid_entity(site.entity))
+            .then_some(false)
+    }
+
     fn cap_horizontal_velocity(&mut self, site: Site, frame: u32, cap: f64) -> bool {
         if site.entity != self.binding.body
             || !is_junkenstein_mode(self.binding.mode)

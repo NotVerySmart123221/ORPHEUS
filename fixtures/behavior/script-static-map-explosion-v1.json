@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "case_id": "script-static-map-explosion.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "input": {
+    "placements": [
+      {"graph": 61246, "position": 6, "networked": true},
+      {"graph": 61247, "position": 11, "networked": false}
+    ],
+    "fields": {
+      "m_86CE02DE": 1,
+      "m_A2287776": 0,
+      "m_AED90719": 0,
+      "m_position": {
+        "$": "STU_919FD47C",
+        "m_EE729DCB": 0,
+        "m_expression": {"$": "STUConfigVarExpressionData", "m_opcodes": [14, 0, 0]},
+        "m_configVars": [{"$": "STU_71A87E92", "m_EE729DCB": 0}]
+      },
+      "m_radius": {"$": "STUConfigVarFloat", "m_value": 7.0},
+      "m_65438EEB": {"$": "STUConfigVarFloat", "m_value": 2.0},
+      "m_66D29548": {"$": "STUConfigVarInt", "m_value": 3},
+      "m_6EFD110C": {"$": "STUConfigVarInt", "m_value": 4},
+      "m_D80AEDB1": {"$": "STUConfigVarFloat", "m_value": 5.0}
+    },
+    "contexts": [
+      {"has_dynamic_map_rigid_bodies": false, "admitted": true},
+      {"has_dynamic_map_rigid_bodies": true, "admitted": false},
+      {"has_dynamic_map_rigid_bodies": null, "admitted": false}
+    ]
+  }
+}

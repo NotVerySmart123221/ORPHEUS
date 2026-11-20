@@ -173,6 +173,11 @@ impl World for BodyWorld {
         self.is_player_site(site).then_some(false)
     }
 
+    fn has_dynamic_map_rigid_bodies(&self, site: Site) -> Option<bool> {
+        // Native rooms load only static map collision, including during startup.
+        self.is_player_site(site).then_some(false)
+    }
+
     fn voice_context(&mut self, site: Site) -> Option<bool> {
         // This body has no native voice manager. Authored room cues use
         // the separate room request path.
