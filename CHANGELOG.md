@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Scope compatibility damage credit facts and native filters to their immediate receiving VM instance. The targeted message retains its current-clock delivery and ordinary sender binding. Same-clock unrelated entries use their own query data. Added portable isolation and native filter regressions. Integration validation pending.
+
 - Replace fixed `TrackStat` placements with authored selectors and explicit host stat availability. Charge, melee, and NPC graphs share the continuation path when stat recording is unavailable. A dynamic target requires the entire service to be absent. Added portable policy and continuation coverage. Integration validation pending.
 
 - Expose actual named shield losses on the authored health settlement event. The room uses the same damage result for weapon hits, direct damage, and NPC-local damage. The authored binding and compatibility charge share one record encoder. Tests cover ordered losses, known empty lists, and unavailable records. Integration validation pending.

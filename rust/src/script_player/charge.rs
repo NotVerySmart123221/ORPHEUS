@@ -1,6 +1,6 @@
 //! Charge admission and damage credit for the supported owner profile.
 
-use std::io;
+use std::{io, sync::Arc};
 
 use crate::{
     game_combat::AppliedDamage,
@@ -18,15 +18,15 @@ use super::{
     world::BodyWorld,
 };
 
-pub(super) struct ChargeBinding {
-    pub(super) graph: u32,
+struct ChargeBinding {
+    graph: u32,
     admission: u32,
     damage_message: u64,
     inhibited_by: (u32, u16),
 }
 
 impl BodyWorld {
-    pub(super) fn charge_binding(&self) -> Option<ChargeBinding> {
+    fn charge_binding(&self) -> Option<ChargeBinding> {
         // A declared authored charge root owns this body's meter. Otherwise the
         // existing profile uses the native charge admission and credit path.
         (!self.uses_authored_charge && self.hero == CASSIDY && is_junkenstein_mode(self.mode))
@@ -121,12 +121,14 @@ impl PlayerBodyRuntime {
             (0x624, named_pool_records(&damage.named_pool_losses)),
         ]);
         self.component
-            .queue_message(instance, binding.damage_message, parameters)
+            .queue_settled_damage_message(
+                instance,
+                binding.damage_message,
+                parameters,
+                Arc::new(damage.target_facts),
+            )
             .map_err(unsupported)?;
-        self.world.damage_credit = Some(damage);
-        let result = self.component.run_now(&mut self.world).map_err(unsupported);
-        self.world.damage_credit = None;
-        result
+        self.component.run_now(&mut self.world).map_err(unsupported)
     }
 }
 
@@ -134,6 +136,76 @@ impl PlayerBodyRuntime {
 mod tests {
     use super::*;
     use crate::vitals::{Death, Vitals};
+
+    #[test]
+    fn settled_damage_host_filter_uses_the_sampled_target_and_current_owner() {
+        use crate::{
+            game_content::PRACTICE_RANGE_MODE,
+            script_expr::{FilterPredicate, FilterRelation, SceneFilterPolicy},
+            script_init::{HealthTargetFacts, Site, World},
+            script_player::fixture_body_factory,
+        };
+        use serde_json::json;
+
+        let (factory, spawn) = fixture_body_factory();
+        let mut runtime = factory.start(spawn).unwrap();
+        let world = &mut runtime.world;
+        world.mode = PRACTICE_RANGE_MODE;
+        world.body_filter = 1 << 23;
+        let site = Site {
+            entity: spawn.entity,
+            instance: 2,
+            graph: 61_042,
+            node: Some(5),
+        };
+        let mut facts = HealthTargetFacts {
+            target: spawn.entity + 1,
+            filter_flags: None,
+            room_status: None,
+            tags: Default::default(),
+            script_state: crate::script_entity_state::EntityScriptState::Unavailable,
+        };
+        let filter = json!({"m_66747E7D":2, "m_89831602":0});
+        let policy = world
+            .settled_scene_filter_policy(site, &filter, &facts)
+            .unwrap();
+        assert!(matches!(
+            policy,
+            SceneFilterPolicy {
+                relation: FilterRelation::Hostile,
+                predicate: FilterPredicate::None,
+            }
+        ));
+        assert!(world.scene_filter_policy(site, &filter).is_none());
+        assert!(
+            world
+                .settled_scene_filter_policy(site, &json!({"m_66747E7D":3}), &facts)
+                .is_none()
+        );
+
+        for (flags, expected) in [
+            (Some(1 << 24), Some(true)),
+            (Some(1 << 23), Some(false)),
+            (Some(1 << 24 | 1 << 28), Some(false)),
+            (Some(1 << 25), None),
+            (None, None),
+        ] {
+            facts.filter_flags = flags;
+            assert_eq!(
+                world.settled_entities_hostile(site, spawn.entity, &facts, false),
+                expected
+            );
+        }
+        facts.filter_flags = Some(1 << 24);
+        assert_eq!(
+            world.settled_entities_hostile(site, spawn.controller, &facts, false),
+            None
+        );
+        assert_eq!(
+            world.settled_entities_hostile(site, spawn.entity, &facts, true),
+            None
+        );
+    }
 
     #[test]
     fn damage_credit_projects_only_drained_named_pools_in_order() {

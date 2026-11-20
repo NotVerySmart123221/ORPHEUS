@@ -1,11 +1,12 @@
 use std::{
+    cell::Cell,
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
 
 use orpheus_statescript::{
     script_entity_state::EntityScriptState,
-    script_expr::RoomEntityFacts,
+    script_expr::{RoomEntityFacts, SceneFilterPolicy},
     script_graph::GraphStore,
     script_init::{
         Component, EmptyWorld, HealthTargetFacts, HitTags, HostEvent, HostHealthContext,
@@ -77,6 +78,7 @@ struct Expected {
     host_variables: [u32; 7],
     deliveries: Vec<Option<Delivery>>,
     target_tag_query: ExpectedTargetTagQuery,
+    settled_damage_query: ExpectedSettledDamageQuery,
     target_generation_relay: ExpectedGenerationRelay,
     source_generation_relay: ExpectedGenerationRelay,
 }
@@ -89,6 +91,17 @@ struct ExpectedTargetTagQuery {
     retired_match: bool,
     retired_alive_match: bool,
     unavailable_fact_diagnostics: usize,
+}
+
+type DamageQueryResult = (Option<i64>, bool, bool, bool);
+
+#[derive(Deserialize)]
+struct ExpectedSettledDamageQuery {
+    sampled: DamageQueryResult,
+    ordinary: DamageQueryResult,
+    host_event: DamageQueryResult,
+    absent: DamageQueryResult,
+    unavailable_diagnostics: usize,
 }
 
 #[derive(Deserialize)]
@@ -492,6 +505,263 @@ fn settled_target_facts_are_scoped_to_immediate_host_delivery() {
         body.snapshot().unwrap().diagnostics.len(),
         expected.unavailable_fact_diagnostics
     );
+}
+
+#[test]
+fn settled_damage_facts_are_scoped_to_the_targeted_ordinary_message() {
+    const SOURCE: u32 = 739;
+    const TARGET: u32 = 740;
+    const OTHER: u32 = 741;
+    const OTHER_ROOT: u16 = 2;
+    const MESSAGE: u64 = 0x0240_0000_0055_0022;
+    const TAG: u64 = 0x0d60_0000_0055_0023;
+    const TARGET_SLOT: u32 = 2;
+    const SENDER_SLOT: u32 = 4;
+    const SENDER_MARKER: i64 = 47;
+
+    #[derive(Default)]
+    struct LiveWorld {
+        settled_filters: Cell<usize>,
+        settled_relations: Cell<usize>,
+    }
+
+    impl World for LiveWorld {
+        fn position(&mut self, _: u32) -> Option<[f64; 3]> {
+            None
+        }
+
+        fn entity_variable(&mut self, entity: u32, _: u32) -> Option<Value> {
+            (entity == TARGET).then_some(Value::Integer(11))
+        }
+
+        fn has_target_tag(&self, _: Site, entity: u32, tag: u64) -> Option<bool> {
+            (entity == TARGET && tag == TAG).then_some(true)
+        }
+
+        fn entity_filter_flags(&self, _: Site, entity: u32) -> Option<u64> {
+            (entity == TARGET).then_some(2)
+        }
+
+        fn settled_scene_filter_policy(
+            &self,
+            site: Site,
+            filter: &Json,
+            target: &HealthTargetFacts,
+        ) -> Option<SceneFilterPolicy> {
+            assert_eq!(
+                (site.entity, site.instance, target.target),
+                (SOURCE, ROOT, TARGET)
+            );
+            assert_eq!(filter["m_84065FD1"], 1);
+            self.settled_filters.set(self.settled_filters.get() + 1);
+            None
+        }
+
+        fn entities_hostile(
+            &self,
+            _: Site,
+            source: u32,
+            target: u32,
+            option: bool,
+        ) -> Option<bool> {
+            assert_eq!((source, target, option), (SOURCE, TARGET, false));
+            Some(false)
+        }
+
+        fn settled_entities_hostile(
+            &self,
+            site: Site,
+            source: u32,
+            target: &HealthTargetFacts,
+            option: bool,
+        ) -> Option<bool> {
+            assert_eq!(
+                (site.entity, site.instance, source, target.target, option),
+                (SOURCE, ROOT, SOURCE, TARGET, false)
+            );
+            self.settled_relations.set(self.settled_relations.get() + 1);
+            target.filter_flags.map(|flags| flags == 1)
+        }
+    }
+
+    let contract: Contract = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/script-host-health-events-v1.json"
+    ))
+    .unwrap();
+    let expected = contract.expected.settled_damage_query;
+    let var = |id| json!({"$":"STUConfigVarDynamic","m_identifier":id,"m_60DB8F99":false});
+    let outputs = [
+        json!({"$":"STU_919FD47C","m_configVars":[{"$":"STUConfigVarInt","m_value":7}],
+            "m_expression":{"m_opcodes":[8,0,14,0,15,0],"m_dynamicVars":[var(TARGET_SLOT)]}}),
+        json!({"$":"STU_25ECB55F","m_entity":var(TARGET_SLOT),"m_88B0050A":format!("0x{TAG:016X}")}),
+        json!({"$":"STU_AC829876","m_entity":var(TARGET_SLOT),
+            "m_filter":{"$":"STUConfigVarFilter","m_84065FD1":1}}),
+        json!({"$":"STU_A58C1E63","m_source":{"$":"STU_B5A0CAF0"},"m_target":var(TARGET_SLOT),
+            "m_AFBBE9C3":{"$":"STUConfigVarBool","m_value":0}}),
+    ];
+    let links: Vec<_> = (2..2 + outputs.len())
+        .map(|pos| (pos, "m_inPlug"))
+        .collect();
+    let binding =
+        json!({"m_B5051BCE":format!("0x{TARGET_SLOT:016X}"), "m_out_Var":var(TARGET_SLOT)});
+    let mut nodes = vec![
+        json!({
+            "pos":0,"rid":0,"uid":0,"class":"STUStatescriptEntryGameMessage","state":null,
+            "remote":-1,"client_only":false,"server_only":true,
+            "fields":{
+                "m_gameMessage":{"$":"STUConfigVarGameMessage","m_gameMessage":format!("0x{MESSAGE:016X}")},
+                "m_params":[binding],"m_FF703F20":var(SENDER_SLOT),
+                "m_outPlug":{"$":"STUStatescriptOutputPlug","links":links}
+            }
+        }),
+        json!({
+            "pos":1,"rid":1,"uid":1,"class":"EntryHostEvent","state":null,
+            "remote":-1,"client_only":false,"server_only":true,"host_event_entry":"health_applied",
+            "fields":{"m_params":[binding],"m_outPlug":{"$":"STUStatescriptOutputPlug","links":links}}
+        }),
+    ];
+    nodes.extend(outputs.into_iter().enumerate().map(|(i, value)| {
+        let pos = i + 2;
+        json!({"pos":pos,"rid":pos,"uid":pos,"class":"STUStatescriptActionSetVar","state":null,
+            "remote":-1,"client_only":false,"server_only":true,
+            "fields":{"m_ADEB6E05":true,"m_out_Var":var((i + 10) as u32),"m_value":value}})
+    }));
+    let bundle = json!({"version":1,"bodies":{},"missing":[],"graphs":[{
+        "index":GRAPH,"items":nodes.len(),"nodes":nodes,"fields":{},"containers":{},"entries":[0],
+        "states":[],"remote":[],"sync_vars":[],"unknown_nodes":[],
+        "header":{"m_nodesBitCount":3,"m_statesBitCount":3,"m_remoteSyncNodesBitCount":3,"m_syncVarsBitCount":3}
+    }]});
+    let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    let mut world = LiveWorld::default();
+    let roots = [ROOT, OTHER_ROOT].map(|id| {
+        let mut root = Root::new(id, GRAPH);
+        root.variables
+            .insert(SENDER_SLOT, Value::Integer(SENDER_MARKER));
+        root
+    });
+    let mut body = Component::start(
+        graphs,
+        SOURCE,
+        Variables::new(),
+        roots.into(),
+        0,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let reads = |body: &Component, instance| {
+        let variables = &body.snapshot().unwrap().instances[&instance].variables;
+        assert_eq!(variables[&SENDER_SLOT], Value::Integer(SENDER_MARKER));
+        [10, 11, 12, 13].map(|id| variables.get(&id).cloned().unwrap_or(Value::Null))
+    };
+    let expected_reads = |(member, tag, mask, hostile): DamageQueryResult| {
+        [
+            member.map_or(Value::Null, Value::Integer),
+            Value::Bool(tag),
+            Value::Bool(mask),
+            Value::Bool(hostile),
+        ]
+    };
+    let settled_calls =
+        |world: &LiveWorld| (world.settled_filters.get(), world.settled_relations.get());
+    let sampled = HealthTargetFacts {
+        target: TARGET,
+        room_status: None,
+        filter_flags: Some(1),
+        tags: TargetTagEffects::default().snapshot(Some(&BTreeSet::new())),
+        script_state: EntityScriptState::Running(Arc::new(Variables::from([(
+            7,
+            Value::Integer(9),
+        )]))),
+    };
+    let parameters = |target| Variables::from([(TARGET_SLOT, target)]);
+    for invalid in [
+        Value::Entity(OTHER),
+        Value::Integer(i64::from(TARGET)),
+        Value::Array(vec![Value::Entity(TARGET)]),
+    ] {
+        assert_eq!(
+            body.queue_settled_damage_message(
+                ROOT,
+                MESSAGE,
+                parameters(invalid),
+                Arc::new(sampled.clone())
+            )
+            .unwrap(),
+            0
+        );
+    }
+    let bound = parameters(Value::Entity(TARGET));
+    assert_eq!(
+        body.queue_settled_damage_message(ROOT, MESSAGE, bound.clone(), Arc::new(sampled.clone()))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        body.queue_message(OTHER_ROOT, MESSAGE, bound.clone())
+            .unwrap(),
+        1
+    );
+    body.run_now(&mut world).unwrap();
+    assert_eq!(reads(&body, ROOT), expected_reads(expected.sampled));
+    assert_eq!(reads(&body, OTHER_ROOT), expected_reads(expected.ordinary));
+
+    assert_eq!(body.queue_message(ROOT, MESSAGE, bound.clone()).unwrap(), 1);
+    body.run_now(&mut world).unwrap();
+    assert_eq!(reads(&body, ROOT), expected_reads(expected.ordinary));
+
+    let host_event = HostEvent::HealthApplied {
+        source: Some(SOURCE),
+        target: TARGET,
+        delta: -2.5,
+        killed: false,
+        hit_tags: None,
+    };
+    assert_eq!(
+        body.queue_host_event_with_target_facts(host_event, Some(Arc::new(sampled.clone())))
+            .unwrap(),
+        2
+    );
+    body.advance_frame(1, &mut world).unwrap();
+    assert_eq!(reads(&body, ROOT), expected_reads(expected.host_event));
+    assert_eq!(
+        reads(&body, OTHER_ROOT),
+        expected_reads(expected.host_event)
+    );
+    assert_eq!(settled_calls(&world), (1, 1));
+
+    let absent = HealthTargetFacts {
+        script_state: EntityScriptState::Absent,
+        ..sampled
+    };
+    assert_eq!(
+        body.queue_settled_damage_message(ROOT, MESSAGE, bound.clone(), Arc::new(absent))
+            .unwrap(),
+        1
+    );
+    body.run_now(&mut world).unwrap();
+    assert_eq!(reads(&body, ROOT), expected_reads(expected.absent));
+    assert!(body.snapshot().unwrap().diagnostics.is_empty());
+
+    let unavailable = HealthTargetFacts {
+        target: TARGET,
+        room_status: None,
+        filter_flags: None,
+        tags: Default::default(),
+        script_state: EntityScriptState::Unavailable,
+    };
+    assert_eq!(
+        body.queue_settled_damage_message(ROOT, MESSAGE, bound, Arc::new(unavailable))
+            .unwrap(),
+        1
+    );
+    body.run_now(&mut world).unwrap();
+    assert_eq!(reads(&body, ROOT), expected_reads(expected.absent));
+    assert_eq!(
+        body.snapshot().unwrap().diagnostics.len(),
+        expected.unavailable_diagnostics
+    );
+    assert_eq!(settled_calls(&world), (3, 3));
 }
 
 #[test]

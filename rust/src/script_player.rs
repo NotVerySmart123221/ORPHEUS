@@ -234,7 +234,6 @@ impl PlayerBodyFactory {
             cinematic_aim: None,
             deadeye_scene: DeadeyeScene::default(),
             velocity_changes: Vec::new(),
-            damage_credit: None,
             uses_authored_charge: self.uses_authored_charge,
         };
         let mut component = Component::start(

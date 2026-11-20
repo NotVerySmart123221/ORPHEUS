@@ -46,6 +46,7 @@ pub(super) struct Vm<'graph, 'world, 'machine, W> {
     pub(super) machine: &'machine mut Machine,
     pub(super) parameters: Option<Arc<Variables>>,
     health_context: HostHealthContext,
+    settled_damage_receiver: Option<u16>,
     pub(super) output_write_depth: usize,
 }
 
@@ -61,6 +62,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             machine,
             parameters: None,
             health_context: HostHealthContext::default(),
+            settled_damage_receiver: None,
             output_write_depth: 0,
         }
     }
@@ -1051,8 +1053,16 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             sender,
                             parameters,
                             health_context,
+                            settled_damage,
                         } => {
-                            self.deliver(id, position, sender, parameters, health_context)?;
+                            self.deliver(
+                                id,
+                                position,
+                                sender,
+                                parameters,
+                                health_context,
+                                settled_damage,
+                            )?;
                         }
                     }
                 }
@@ -1185,6 +1195,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         sender: Option<u32>,
         parameters: Arc<Variables>,
         health_context: HostHealthContext,
+        settled_damage: bool,
     ) -> Result<(), InitFault> {
         let Some(node) = self.graph(id).node(position) else {
             return Ok(());
@@ -1194,7 +1205,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         }
         self.parameters = Some(parameters);
         self.health_context = health_context;
+        self.settled_damage_receiver = settled_damage.then_some(id);
         let result = self.deliver_entry(id, node, sender);
+        self.settled_damage_receiver = None;
         self.health_context = HostHealthContext::default();
         self.parameters = None;
         result
@@ -2241,6 +2254,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             foreign_reads: Vec::new(),
             parameters: self.parameters.as_deref(),
             health_target_facts: self.health_context.target_facts.as_deref(),
+            settled_damage: self.settled_damage_receiver == Some(site.instance),
             watcher,
             read_native: false,
             untrusted_native: false,

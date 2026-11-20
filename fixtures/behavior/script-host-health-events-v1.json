@@ -106,6 +106,13 @@
       "retired_alive_match": false,
       "unavailable_fact_diagnostics": 5
     },
+    "settled_damage_query": {
+      "sampled": [9, false, true, true],
+      "ordinary": [11, true, false, false],
+      "host_event": [9, false, true, false],
+      "absent": [null, false, true, true],
+      "unavailable_diagnostics": 4
+    },
     "target_generation_relay": {
       "stable": [-2.5, -2.5, -1.75],
       "replaced_with_ordinary_deliveries": [0.75, 1.25, -1.75]

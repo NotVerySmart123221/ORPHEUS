@@ -879,6 +879,16 @@ pub trait World {
     ) -> Option<script_expr::SceneFilterPolicy> {
         None
     }
+    /// Resolve a scene filter during delivery of a settled health target.
+    fn settled_scene_filter_policy(
+        &self,
+        site: Site,
+        filter: &Json,
+        _target: &HealthTargetFacts,
+    ) -> Option<script_expr::SceneFilterPolicy> {
+        self.scene_filter_policy(site, filter)
+    }
+
     fn entity_filter_flags(&self, _site: Site, _entity: u32) -> Option<u64> {
         None
     }
@@ -890,6 +900,17 @@ pub trait World {
         _option: bool,
     ) -> Option<bool> {
         None
+    }
+
+    /// Resolve hostility using a target sampled at health settlement.
+    fn settled_entities_hostile(
+        &self,
+        site: Site,
+        source: u32,
+        target: &HealthTargetFacts,
+        option: bool,
+    ) -> Option<bool> {
+        self.entities_hostile(site, source, target.target, option)
     }
 
     fn body_on_fire(&mut self, _site: Site, _entity: u32) -> Option<OnFire> {

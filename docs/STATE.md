@@ -320,7 +320,9 @@ now use the same actual pool loss. The prepared `0012` probe supplies
 explicit pool records to the original charge receiver and checks how
 matching identifiers affect the award. The room records each named
 temporary shield's actual loss in damage settlement and supplies the
-typed records to the compatibility route. The authored `health_applied`
+typed records to the compatibility route. Its synchronous message now
+carries its own target snapshot and native filter scope. Other queued
+messages on the same frame reuse ordinary queries. The authored `health_applied`
 event can also bind those records. Weapon and direct damage use the
 same settlement, including NPC-local self damage. Healing and damage
 with unavailable pool accounting omit the binding. Regression runs

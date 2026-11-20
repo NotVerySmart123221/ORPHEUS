@@ -472,6 +472,7 @@ impl Component {
             foreign_reads: Vec::new(),
             parameters: None,
             health_target_facts: None,
+            settled_damage: false,
             watcher: None,
             read_native: false,
             untrusted_native: false,
@@ -554,6 +555,36 @@ impl Component {
         parameters: Variables,
     ) -> Result<usize, InitFault> {
         self.queue_message_at(self.machine.now_ms, instance, message, parameters)
+    }
+
+    /// Queue one instance's ordinary message with room-authenticated target facts.
+    pub fn queue_settled_damage_message(
+        &mut self,
+        instance: u16,
+        message: u64,
+        parameters: Variables,
+        target_facts: Arc<HealthTargetFacts>,
+    ) -> Result<usize, InitFault> {
+        if self.halted {
+            return Err(InitFault::Halted);
+        }
+        if !script_expr::valid_entity(target_facts.target)
+            || !parameters.values().any(
+                |value| matches!(value, Value::Entity(entity) if *entity == target_facts.target),
+            )
+        {
+            return Ok(0);
+        }
+        self.machine.queue_settled_damage_entries(
+            &self.graphs,
+            instance,
+            message,
+            parameters,
+            HostHealthContext {
+                target_facts: Some(target_facts),
+                ..HostHealthContext::default()
+            },
+        )
     }
 
     pub fn queue_frame_message(

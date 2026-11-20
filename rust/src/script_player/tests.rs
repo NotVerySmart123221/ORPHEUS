@@ -2436,7 +2436,6 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
         cinematic_aim: None,
         deadeye_scene: DeadeyeScene::default(),
         velocity_changes: Vec::new(),
-        damage_credit: None,
         uses_authored_charge: false,
     };
     let mut component = Component::start(
@@ -2862,7 +2861,6 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             cinematic_aim: None,
             deadeye_scene: DeadeyeScene::default(),
             velocity_changes: Vec::new(),
-            damage_credit: None,
             uses_authored_charge: false,
         };
         let component = Component::start(

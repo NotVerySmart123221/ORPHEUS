@@ -740,6 +740,12 @@ Target facts follow the target parameter. Numeric parameters, incoming
 room messages, externally scheduled messages and later graph work
 use their own context.
 
+The compatibility damage message runs at the current VM clock on its
+selected receiver. It carries the same settlement snapshot and must
+supply a matching typed target parameter. The host's compatibility
+filter and hostility queries apply only during that original delivery.
+A relay can carry matching target facts through its own typed parameter.
+
 The enabled room records successful weapon damage, room-settled script
 and AI requests, field healing, and VM-local AI damage and healing.
 Pool mitigation and caps are already reflected in the delta. Changes
