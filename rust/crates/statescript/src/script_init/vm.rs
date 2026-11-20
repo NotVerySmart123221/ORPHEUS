@@ -21,8 +21,8 @@ use super::{
     ABILITY_HELD, ABILITY_PUSHED, ABILITY_RUNNING, ABORT_PLUG, MAX_EVENTS_PER_UPDATE,
     MAX_PLAY_INSTANCES, MAX_PLUG_DEPTH, Root, SCRIPT_SOURCE,
     machine::{
-        AbilityPress, Event, LinkValue, Machine, ObservationInput, ObservedSample, Startup,
-        StateKey, UnavailableSample, VarKey, VariableLink,
+        AbilityPress, Event, LinkValue, LogicalButtonStage, Machine, ObservationInput,
+        ObservedSample, Startup, StateKey, UnavailableSample, VarKey, VariableLink,
     },
     shapes::{
         ability_is_stacked, array_field, configured, field, is_entry, is_self_target, same,
@@ -513,6 +513,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
     ) -> Result<(), InitFault> {
         let state = self.state(key).expect("active logical button");
         let activation = state.activation;
+        let initial_stage = LogicalButtonStage {
+            activation,
+            revision: state.logical_button_revision,
+            down: false,
+        };
         let buffer = state
             .buffered_press
             .filter(|press| press.activation == activation);
@@ -534,7 +539,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         if early {
             self.follow(key.instance, node, "m_onGoingDownPlug", Some(key), depth)?;
         }
-        if !self.logical_button_is_current(key, activation, false) {
+        if !self.logical_button_stage_is_current(key, initial_stage) {
             return Ok(());
         }
         let blocked = blocked
@@ -546,13 +551,16 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let down = held || buffered;
         self.state_mut(key).expect("active logical button").kind =
             StateKind::LogicalButton { down };
+        let stage = LogicalButtonStage {
+            down,
+            ..initial_stage
+        };
         if early {
-            self.queue_logical_button_branch(key, activation, down)?;
+            self.queue_logical_button_branch(key, stage)?;
         } else {
             self.follow_logical_button_branch(
                 key,
-                activation,
-                down,
+                stage,
                 self.current_observation_sample(),
                 depth,
             )?;
@@ -601,34 +609,44 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         depth: usize,
     ) -> Result<(), InitFault> {
         let state = self.state_mut(key).expect("active logical button");
+        if state.kind == (StateKind::LogicalButton { down }) {
+            return Ok(());
+        }
         state.kind = StateKind::LogicalButton { down };
-        let activation = state.activation;
+        // A listener can leave and re-enter the same branch before its queue runs.
+        state.logical_button_revision = state.logical_button_revision.wrapping_add(1);
+        let stage = LogicalButtonStage {
+            activation: state.activation,
+            revision: state.logical_button_revision,
+            down,
+        };
         let (previous, edge) = if down {
             ("m_1C9EF058", "m_onGoingDownPlug")
         } else {
             ("m_80AF45FB", "m_onComingUpPlug")
         };
         self.exit_subgraph(key.instance, node, previous, depth + 1)?;
-        if !self.logical_button_is_current(key, activation, down) {
+        if !self.logical_button_stage_is_current(key, stage) {
             return Ok(());
         }
         self.follow(key.instance, node, edge, Some(key), depth)?;
-        self.queue_logical_button_branch(key, activation, down)
+        if self.logical_button_stage_is_current(key, stage) {
+            self.queue_logical_button_branch(key, stage)?;
+        }
+        Ok(())
     }
 
     fn queue_logical_button_branch(
         &mut self,
         key: StateKey,
-        activation: u16,
-        down: bool,
+        stage: LogicalButtonStage,
     ) -> Result<(), InitFault> {
         // Edge callbacks can schedule state changes for this same instant.
         self.post(
             key.instance,
             Event::LogicalButtonBranch {
                 state: key.raw,
-                activation,
-                down,
+                stage,
                 sample: self.current_observation_sample(),
             },
         )
@@ -640,29 +658,33 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .map(|input| Arc::clone(&input.sample))
     }
 
-    fn logical_button_is_current(&self, key: StateKey, activation: u16, down: bool) -> bool {
+    fn logical_button_stage_is_current(&self, key: StateKey, stage: LogicalButtonStage) -> bool {
         self.state(key).is_some_and(|state| {
             state.active
                 && !state.ending
-                && state.activation == activation
-                && matches!(state.kind, StateKind::LogicalButton { down: current } if current == down)
+                && state.activation == stage.activation
+                && state.logical_button_revision == stage.revision
+                && state.kind == (StateKind::LogicalButton { down: stage.down })
         })
     }
 
     fn follow_logical_button_branch(
         &mut self,
         key: StateKey,
-        activation: u16,
-        down: bool,
+        stage: LogicalButtonStage,
         sample: Option<Arc<ObservedSample>>,
         depth: usize,
     ) -> Result<(), InitFault> {
-        if self.logical_button_is_current(key, activation, down) {
+        if self.logical_button_stage_is_current(key, stage) {
             let node = self
                 .graph(key.instance)
                 .state(usize::from(key.raw))
                 .expect("logical button state");
-            let path = if down { "m_80AF45FB" } else { "m_1C9EF058" };
+            let path = if stage.down {
+                "m_80AF45FB"
+            } else {
+                "m_1C9EF058"
+            };
             let follow = |vm: &mut Self| {
                 vm.follow(key.instance, node, path, Some(key), depth)
                     .map(|_| ())
@@ -1196,16 +1218,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         Event::Button(edge) => self.button_edge(id, edge)?,
                         Event::LogicalButtonBranch {
                             state,
-                            activation,
-                            down,
+                            stage,
                             sample,
                         } => self.follow_logical_button_branch(
                             StateKey {
                                 instance: id,
                                 raw: state,
                             },
-                            activation,
-                            down,
+                            stage,
                             sample,
                             0,
                         )?,

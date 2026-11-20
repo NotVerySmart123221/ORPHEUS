@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Fixed outdated held-input branches that could start after a lock was acquired, released, and acquired again in the same VM update. Shared-branch verification is pending.
+
 - Preserve observation inputs through a committed StateScript logical-button branch. Its child states use current values if the source expires, so finishing a sample does not interrupt the listener's held or idle lifecycle. Shared-branch verification is pending.
 
 - Fixed StateScript logical-button listeners that retained a held effect after a live binding change. Listeners discard the previous button's buffer and reconcile against the new button's held and admission state. Shared-branch verification is pending.

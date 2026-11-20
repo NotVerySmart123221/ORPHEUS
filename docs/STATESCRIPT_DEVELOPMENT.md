@@ -492,6 +492,8 @@ Use distinct child slots in listeners that can be active at the same time.
 The `on_press` and `on_release` plugs are optional edge callbacks.
 A listener that starts while the button is already held enters its held
 branch using the current admission state.
+If several transitions happen before a branch starts, only the latest
+transition can start a queued branch.
 
 Set optional `allow_dead` to true to admit input while the owner is dead.
 Otherwise owner death releases the held branch before the next observation
