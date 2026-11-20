@@ -678,6 +678,11 @@ impl Evaluator {
                         "expected one native direction entity operand",
                     ));
                 }
+                let native = context.native(config);
+                if matches!(&native, Some(Value::Null)) {
+                    // A host can explicitly report that this query has no target.
+                    return Ok(Value::Null);
+                }
                 self.charge()?;
                 let Value::Entity(entity) =
                     self.config(child(config, "m_entity"), context, nested)?
@@ -689,7 +694,7 @@ impl Evaluator {
                 }
                 // Preserve existing host-specific numeric adapters before using
                 // the room's authoritative pitched direction.
-                let direction = match context.native(config) {
+                let direction = match native {
                     Some(Value::Vector(direction)) => Some(direction),
                     Some(_) => None,
                     None => context.authored_forward(entity),

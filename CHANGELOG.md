@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Preserved the explicit no-target reply from the native direction host before evaluating the entity selector. The prepared bot firing-placement and timer regression reproduced the failure in the generic evaluator and passed after the fix. The workspace suite and the prepared #72 session also passed.
+
 - Removed placement checks from scene target collection and from timed graph states with no configured finish operands or alternate graph. Scene collection reads the authored tag and the host placement inventory. The existing timed placement with a duration keeps its compatibility path. Added native pitched direction evaluation through the shared entity pose provider, preserving the existing host override. Workspace tests with script coverage passed, including 366 native and 211 StateScript library tests. Formatting, Clippy, and the prepared #72 owner session passed.
 
 - Corrected timing evidence for malformed multi-argument waits. Coverage reports now follow declared target-tracking child graphs transitively and identify missing child bundles. Runtime reach remains tied to observations. Python checks ran 36 tests with five skips, and the coverage tool joined the pinned 104319 owner trace against the matching graph bundle.

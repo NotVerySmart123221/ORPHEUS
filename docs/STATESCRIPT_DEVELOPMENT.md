@@ -98,7 +98,9 @@ ability support.
 
 - The native pitched direction operand reads a bound entity through the
   host pose provider. The existing roll adapter still supplies its
-  compatibility vector. Eye-position reads need their own host contract.
+  compatibility vector. A host's explicit no-target reply completes the
+  operand before selector evaluation. Eye-position reads need their own
+  host contract.
 - The scene placement collection action uses a literal required tag and
   a scene placement inventory from its host. An empty inventory and an
   unavailable inventory produce distinct results.
@@ -146,7 +148,7 @@ ordered literal random bounds. Dynamic and unsupported operands keep
 their location and classification. A null unit indicates that the
 listing lacks an explicit unit. Use VM traces to verify elapsed time
 and event order.
-The v3 importer requires exactly one wait operand before inferring
+The v3 report generator requires exactly one wait operand before inferring
 timing. A malformed multi-argument wait stays unresolved.
 
 The `variable-access.json` report records definite reads and write sites,
@@ -188,7 +190,8 @@ nodes. `missing_dependency_graphs` identifies absent targets. A graph
 with origin `referenced_child` has a static reference and no observed
 site in that scenario. Dynamic graph choices need a capture. Use repeated
 `--observation` options for separate runs. With no observation, the report
-marks inventory nodes as having no sampled scenario. The report lists each node's declared
+marks inventory nodes as having no sampled scenario. The report lists each
+node's declared
 `scope` and effective `server_scope`. Its `runtime_classification` identifies
 an exact client state or a candidate for plain lifecycle fallback. Review
 scope skips, registration rejections, and unsupported sites separately.

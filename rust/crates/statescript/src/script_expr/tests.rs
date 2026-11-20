@@ -2115,6 +2115,18 @@ fn native_pitched_direction_reads_known_entity_pose_without_a_placement_gate() {
         );
         assert!(host.reads.is_empty());
     }
+    host.override_value = Some(Value::Null);
+    let host_owned_selector = json!({
+        "$":"STU_2200A66D", "m_entity":{"$":"STU_SyntheticHostSelector"}
+    });
+    assert_eq!(evaluate(&host_owned_selector, &mut host), Ok(Value::Null));
+    assert!(host.reads.is_empty());
+    host.override_value = None;
+    assert!(matches!(
+        evaluate(&host_owned_selector, &mut host),
+        Err(EvalError::UnsupportedConfig(_))
+    ));
+    assert!(host.reads.is_empty());
 }
 
 #[test]
