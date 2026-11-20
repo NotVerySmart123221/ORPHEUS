@@ -758,6 +758,99 @@ fn entity_relations_resolve_only_the_active_player_pair() {
 }
 
 #[test]
+fn body_factory_preparation_retains_distinct_startup_failures() {
+    use crate::script_init::{Diagnostic, Issue};
+    use crate::script_snapshot_wire::{SnapshotError, StateSite};
+    use serde_json::json;
+
+    const GRAPH: u32 = 91;
+    const UNKNOWN_ACTION: &str = "SyntheticUnknownStartupAction";
+    const PLAIN_STATE: &str = "STUStatescriptState";
+
+    let (fixture, spawn) = fixture_body_factory();
+    let hero = Hero {
+        guid: 1,
+        name: "Synthetic".into(),
+        role: "Fixture".into(),
+        body: 2,
+    };
+    let prepare = |class: &str, state, probe| {
+        let (slot, states, plug) = if state {
+            (Some(0), json!([1]), "m_beginPlug")
+        } else {
+            (None, json!([]), "m_inPlug")
+        };
+        let bundle = json!({
+            "version":1, "missing":[],
+            "graphs":[{
+                "index":GRAPH, "items":2, "entries":[0], "states":states,
+                "remote":[], "sync_vars":[], "containers":{}, "unknown_nodes":[], "fields":{},
+                "header":{"m_nodesBitCount":2,"m_statesBitCount":2,
+                    "m_remoteSyncNodesBitCount":2,"m_syncVarsBitCount":2},
+                "nodes":[
+                    {"pos":0,"rid":0,"uid":0,"remote":-1,"class":"STUStatescriptEntry",
+                     "state":null,"server_only":false,"client_only":false,
+                     "fields":{"m_outPlug":{"$":"Plug","links":[[1,plug]]}}},
+                    {"pos":1,"rid":1,"uid":1,"remote":-1,"class":class,
+                     "state":slot,"server_only":false,"client_only":false,
+                     "fields":{"m_2BBEEAB8":state,"m_ADEB6E05":!state}}
+                ]
+            }],
+            "bodies":{
+                format!("0x{:016X}", hero.body):{
+                    "hero":format!("0x{:016X}",hero.guid),"name":"Synthetic",
+                    "graphs":[{"graph":GRAPH,"m_75408640":0}],"weapons":[]
+                }
+            }
+        });
+        let graphs = GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap();
+        PlayerBodyFactory::prepare(
+            Arc::new(graphs),
+            Arc::clone(&fixture.codecs),
+            3,
+            &hero,
+            None,
+            false,
+            probe,
+        )
+    };
+
+    let Err(OwnerBodyPreparationError::Projection(SnapshotError::Incomplete {
+        entity,
+        diagnostics,
+    })) = prepare(UNKNOWN_ACTION, false, spawn)
+    else {
+        panic!("unknown action must retain the initialization diagnostics");
+    };
+    assert_eq!(entity, spawn.entity);
+    assert!(matches!(
+        diagnostics.as_slice(),
+        [Diagnostic {
+            site: Site { graph: GRAPH, node: Some(1), .. },
+            issue: Issue::UnsupportedAction(class),
+            registration_rejected: false,
+            server_only: false,
+        }] if class == UNKNOWN_ACTION
+    ));
+
+    assert!(matches!(
+        prepare(PLAIN_STATE, true, spawn),
+        Err(OwnerBodyPreparationError::Projection(SnapshotError::UnsupportedState {
+            site: StateSite { graph: GRAPH, state: 0, .. },
+            class,
+            ..
+        })) if class == PLAIN_STATE
+    ));
+
+    assert!(matches!(
+        prepare(PLAIN_STATE, true, OwnerBodySpawn { quanta: 0, ..spawn }),
+        Err(OwnerBodyPreparationError::Start(
+            OwnerBodyStartupError::Clock
+        ))
+    ));
+}
+
+#[test]
 fn verified_body_starts_fresh_instances_and_advances_only_its_own_retail_clock() {
     let (factory, spawn) = fixture_body_factory();
     assert!(

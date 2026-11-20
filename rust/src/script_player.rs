@@ -27,8 +27,8 @@ use crate::{
     game_replication::OwnerBodyRuntime,
     script_codecs::CodecTable,
     script_graph::GraphStore,
-    script_init::{Component, MAX_INIT_WORK, Root, TargetTagEffects},
-    script_snapshot_wire::View,
+    script_init::{Component, InitFault, MAX_INIT_WORK, Root, TargetTagEffects},
+    script_snapshot_wire::{SnapshotError, View},
     script_wire::Variables,
     vitals::Vitals,
     world::Movement,
@@ -59,6 +59,40 @@ pub(crate) struct PlayerBodyFactory {
     controller_on_fire: bool,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum OwnerBodyPreparationError {
+    #[error("the hero body definition is absent from the graph bundle")]
+    MissingBody,
+    #[error(transparent)]
+    RootLayout(InitFault),
+    #[error("defender body graph instance ID exhausted")]
+    ModeRootId,
+    #[error("Junkenstein defender body graph is absent")]
+    MissingModeRoot,
+    #[error(transparent)]
+    Start(#[from] OwnerBodyStartupError),
+    #[error(transparent)]
+    Projection(SnapshotError),
+    #[error(transparent)]
+    Encoding(SnapshotError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum OwnerBodyStartupError {
+    #[error("the owner VM requires the 16 ms retail clock")]
+    Clock,
+    #[error(transparent)]
+    VmInitialize(InitFault),
+    #[error(transparent)]
+    FirstFrame(InitFault),
+    #[error(transparent)]
+    MovementModifiers(InitFault),
+    #[error(transparent)]
+    ProjectileLeases(io::Error),
+    #[error(transparent)]
+    ChargeAdmission(io::Error),
+}
+
 impl PlayerBodyFactory {
     pub(crate) fn prepare(
         graphs: Arc<GraphStore>,
@@ -68,15 +102,14 @@ impl PlayerBodyFactory {
         pools: Option<HealthPools>,
         controller_on_fire: bool,
         probe: OwnerBodySpawn,
-    ) -> io::Result<Self> {
+    ) -> Result<Self, OwnerBodyPreparationError> {
         let body = graphs
             .bodies()
             .get(&hero.body)
             .filter(|body| body.hero.as_deref().and_then(parse_guid) == Some(hero.guid))
-            .ok_or_else(|| {
-                unsupported("the hero body definition is absent from the graph bundle")
-            })?;
-        let mut roots = crate::script_init::player_roots(body, &graphs).map_err(unsupported)?;
+            .ok_or(OwnerBodyPreparationError::MissingBody)?;
+        let mut roots = crate::script_init::player_roots(body, &graphs)
+            .map_err(OwnerBodyPreparationError::RootLayout)?;
         if is_junkenstein_mode(mode) {
             const DEFENDER_BODY_GRAPH: u32 = 0x0ca5;
             let public_roots = roots
@@ -87,9 +120,9 @@ impl PlayerBodyFactory {
                 .last()
                 .map_or(0, |root| root.id)
                 .checked_add(1)
-                .ok_or_else(|| unsupported("defender body graph instance ID exhausted"))?;
+                .ok_or(OwnerBodyPreparationError::ModeRootId)?;
             if graphs.graph(DEFENDER_BODY_GRAPH).is_none() {
-                return Err(unsupported("Junkenstein defender body graph is absent"));
+                return Err(OwnerBodyPreparationError::MissingModeRoot);
             }
             roots.insert(public_roots, Root::new(id, DEFENDER_BODY_GRAPH));
         }
@@ -107,21 +140,34 @@ impl PlayerBodyFactory {
             target_tags,
             controller_on_fire,
         };
-        let runtime = factory.start(probe)?;
+        let runtime = factory.start_runtime(probe)?;
         let encoder = runtime.encoder();
         let snapshot = runtime
             .snapshot()
             .expect("successful body startup has a snapshot");
         let projected = encoder
             .project(snapshot, View::Owner)
-            .map_err(unsupported)?;
-        encoder.full(&projected).map_err(unsupported)?;
+            .map_err(OwnerBodyPreparationError::Projection)?;
+        encoder
+            .full(&projected)
+            .map_err(OwnerBodyPreparationError::Encoding)?;
         Ok(factory)
     }
 
     pub(crate) fn start(&self, spawn: OwnerBodySpawn) -> io::Result<PlayerBodyRuntime> {
+        self.start_runtime(spawn).map_err(|error| match error {
+            OwnerBodyStartupError::ProjectileLeases(source)
+            | OwnerBodyStartupError::ChargeAdmission(source) => source,
+            other => io::Error::new(io::ErrorKind::Unsupported, other),
+        })
+    }
+
+    fn start_runtime(
+        &self,
+        spawn: OwnerBodySpawn,
+    ) -> Result<PlayerBodyRuntime, OwnerBodyStartupError> {
         if spawn.quanta != RETAIL_QUANTA {
-            return Err(unsupported("the owner VM requires the 16 ms retail clock"));
+            return Err(OwnerBodyStartupError::Clock);
         }
         let has_authored_pools = self
             .roots
@@ -165,14 +211,14 @@ impl PlayerBodyFactory {
             &mut world,
             MAX_INIT_WORK,
         )
-        .map_err(unsupported)?;
+        .map_err(OwnerBodyStartupError::VmInitialize)?;
         component
             .advance_frame(spawn.frame, &mut world)
-            .map_err(unsupported)?;
+            .map_err(OwnerBodyStartupError::FirstFrame)?;
         world.vitals.clear_changed();
         let modifiers = component
             .movement_modifiers(&mut world)
-            .map_err(unsupported)?;
+            .map_err(OwnerBodyStartupError::MovementModifiers)?;
         let leases = ProjectileLeases::from_authored(
             &self.graphs,
             component.snapshot().expect("body startup has a snapshot"),
@@ -181,7 +227,8 @@ impl PlayerBodyFactory {
             |instance, raw, config| {
                 component.evaluate_state_config(instance, raw, config, &mut world)
             },
-        )?;
+        )
+        .map_err(OwnerBodyStartupError::ProjectileLeases)?;
         let mut runtime = PlayerBodyRuntime {
             component,
             world,
@@ -191,7 +238,9 @@ impl PlayerBodyFactory {
             frame: spawn.frame,
             encounter_active: false,
         };
-        runtime.sync_charge_admission(true)?;
+        runtime
+            .sync_charge_admission(true)
+            .map_err(OwnerBodyStartupError::ChargeAdmission)?;
         Ok(runtime)
     }
 }

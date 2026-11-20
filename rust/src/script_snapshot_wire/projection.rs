@@ -63,15 +63,7 @@ impl<'a> SnapshotEncoder<'a> {
                     .diagnostics
                     .iter()
                     .filter(relevant)
-                    .map(|diagnostic| {
-                        let site = diagnostic.site;
-                        match site.node {
-                            Some(node) => {
-                                format!("{:04X}:{node}:{:?}", site.graph, diagnostic.issue)
-                            }
-                            None => format!("{:04X}:-:{:?}", site.graph, diagnostic.issue),
-                        }
-                    })
+                    .cloned()
                     .collect(),
             });
         }

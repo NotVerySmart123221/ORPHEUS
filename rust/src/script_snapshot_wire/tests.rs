@@ -846,7 +846,7 @@ fn unsupported_active_states_and_initialization_diagnostics_are_explicit() {
         })
     ));
     assert!(encoder.project(&snapshot, View::Observer).is_ok());
-    snapshot.diagnostics.push(Diagnostic {
+    let first = Diagnostic {
         site: Site {
             entity: ENTITY,
             instance: 1,
@@ -856,8 +856,8 @@ fn unsupported_active_states_and_initialization_diagnostics_are_explicit() {
         issue: Issue::UnsupportedAction("fixture".into()),
         registration_rejected: false,
         server_only: false,
-    });
-    snapshot.diagnostics.push(Diagnostic {
+    };
+    let last = Diagnostic {
         site: Site {
             entity: ENTITY,
             instance: 1,
@@ -865,9 +865,21 @@ fn unsupported_active_states_and_initialization_diagnostics_are_explicit() {
             node: Some(7),
         },
         issue: Issue::UnsupportedState("later".into()),
-        registration_rejected: false,
+        registration_rejected: true,
         server_only: false,
-    });
+    };
+    snapshot.diagnostics.extend([
+        first.clone(),
+        Diagnostic {
+            server_only: true,
+            ..first.clone()
+        },
+        Diagnostic {
+            issue: Issue::ObservationUnavailable,
+            ..first.clone()
+        },
+        last.clone(),
+    ]);
     let error = encoder.project(&snapshot, View::Observer).unwrap_err();
     assert_eq!(
         error.to_string(),
@@ -876,6 +888,15 @@ fn unsupported_active_states_and_initialization_diagnostics_are_explicit() {
              002A:-:UnsupportedAction(\"fixture\"), 002A:7:UnsupportedState(\"later\")"
         )
     );
+    let SnapshotError::Incomplete {
+        entity,
+        diagnostics,
+    } = error
+    else {
+        panic!("expected initialization diagnostics");
+    };
+    assert_eq!(entity, ENTITY);
+    assert_eq!(diagnostics, [first, last]);
 }
 
 #[test]

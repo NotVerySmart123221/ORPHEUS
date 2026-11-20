@@ -1,9 +1,17 @@
 //! Opt-in inventory and startup probes of the unchanged native owner factory.
 
 use super::*;
+use crate::{
+    script_expr::EvalError,
+    script_init::{Diagnostic, InitFault, Issue},
+    script_player::OwnerBodyStartupError,
+    script_snapshot_wire::{SnapshotError, StateSite},
+};
 use serde_json::{Value as Json, json};
 use sha2::{Digest, Sha256};
 use std::{env, io::Write};
+
+const MAX_DIAGNOSTIC_SITES: usize = 128;
 
 const SCENE_INPUTS: &[&str] = &[
     "data/ai_spawners_174.json",
@@ -39,9 +47,7 @@ fn scene_inputs(runtime: &Path) -> BTreeMap<String, Json> {
         .collect()
 }
 
-fn diagnostic_category(diagnostic: &script_init::Diagnostic) -> &'static str {
-    use script_init::Issue;
-
+fn diagnostic_category(diagnostic: &Diagnostic) -> &'static str {
     if diagnostic.registration_rejected {
         return "registration_rejection";
     }
@@ -54,45 +60,156 @@ fn diagnostic_category(diagnostic: &script_init::Diagnostic) -> &'static str {
         Issue::UnsupportedField(_) => "unsupported_field",
         Issue::EntityCreation(_) => "entity_creation",
         Issue::InvalidSubScript => "invalid_subscript",
+        Issue::Expression(EvalError::UnsupportedConfig(_)) => "unsupported_config",
         Issue::Expression(_) => "expression",
         Issue::ObservationUnavailable => "observation_unavailable",
     }
 }
 
-fn factory_result(
-    result: io::Result<Option<Box<dyn OwnerBodyRuntime>>>,
-    not_admitted: &'static str,
-) -> Json {
-    let runtime = match result {
-        Err(error) => {
-            return json!({"status": "factory_error", "error_kind": format!("{:?}", error.kind())});
+fn node_class(graphs: &GraphStore, graph: u32, node: Option<u16>) -> Option<&str> {
+    let class = &graphs.graph(graph)?.node(node?)?.class;
+    (class.len() <= 128).then_some(class.as_str())
+}
+
+fn diagnostic_sites(graphs: &GraphStore, diagnostics: &[Diagnostic]) -> (Vec<Json>, bool) {
+    let mut sites = BTreeSet::new();
+    let mut truncated = false;
+    for diagnostic in diagnostics {
+        sites.insert((
+            diagnostic.site.graph,
+            diagnostic.site.node,
+            diagnostic_category(diagnostic),
+            diagnostic.server_only,
+        ));
+        if sites.len() > MAX_DIAGNOSTIC_SITES {
+            sites.pop_last();
+            truncated = true;
         }
-        Ok(None) => return json!({"status": not_admitted}),
-        Ok(Some(runtime)) => runtime,
-    };
-    let Some(snapshot) = runtime.snapshot() else {
-        return json!({"status": "snapshot_unavailable"});
-    };
-    let diagnostics: BTreeSet<_> = snapshot
-        .diagnostics
-        .iter()
-        .map(|diagnostic| {
-            (
-                diagnostic.site.graph,
-                diagnostic.site.node,
-                diagnostic_category(diagnostic),
-                diagnostic.server_only,
-            )
-        })
-        .collect();
-    let sites: Vec<_> = diagnostics
+    }
+    let rows = sites
         .into_iter()
         .map(|(graph, node, category, server_only)| {
             json!({
-                "graph": graph, "node": node, "category": category, "server_only": server_only,
+                "graph": graph, "node": node, "class": node_class(graphs, graph, node),
+                "category": category, "server_only": server_only,
             })
         })
         .collect();
+    (rows, truncated)
+}
+
+fn simple_failure(stage: &'static str, category: &'static str) -> Json {
+    json!({"stage": stage, "category": category})
+}
+
+fn io_failure(stage: &'static str, category: &'static str, error: &io::Error) -> Json {
+    json!({"stage": stage, "category": category, "cause_error_kind": format!("{:?}", error.kind())})
+}
+
+fn vm_failure(stage: &'static str, fault: &InitFault) -> Json {
+    let category = match fault {
+        InitFault::InvalidBudget => "invalid_budget",
+        InitFault::InvalidRoot(_) => "invalid_root",
+        InitFault::InstanceIdExhausted => "instance_id_exhausted",
+        InitFault::MissingPlayerGraph(_) => "missing_player_graph",
+        InitFault::RootBinding { .. } => "root_binding",
+        InitFault::WorkBudget { .. } => "work_budget",
+        InitFault::EventBudget { .. } => "event_budget",
+        InitFault::PendingEvents { .. } => "pending_events",
+        InitFault::PendingShots => "pending_shots",
+        InitFault::FrameOrder { .. } => "frame_order",
+        InitFault::Halted => "halted",
+        InitFault::PlugDepth => "plug_depth",
+    };
+    let mut failure = simple_failure(stage, category);
+    if let InitFault::MissingPlayerGraph(graph) | InitFault::RootBinding { graph, .. } = fault {
+        failure["graph"] = json!(graph);
+    }
+    failure
+}
+
+fn snapshot_failure(graphs: &GraphStore, stage: &'static str, error: &SnapshotError) -> Json {
+    let (category, site) = match error {
+        SnapshotError::Incomplete { diagnostics, .. } => {
+            let (sites, truncated) = diagnostic_sites(graphs, diagnostics);
+            return json!({
+                "stage": stage, "category": "incomplete", "diagnostics": sites,
+                "diagnostics_truncated": truncated,
+            });
+        }
+        SnapshotError::MissingGraph { graph, .. } => {
+            return json!({"stage": stage, "category": "missing_graph", "graph": graph});
+        }
+        SnapshotError::MissingStateIndex { graph, node, .. } => {
+            return json!({
+                "stage": stage, "category": "missing_state_index", "graph": graph,
+                "node": node, "class": node_class(graphs, *graph, Some(*node)),
+            });
+        }
+        SnapshotError::MissingState(site) => ("missing_state", Some(site)),
+        SnapshotError::UnsupportedState { site, .. } => ("unsupported_state", Some(site)),
+        SnapshotError::UnsupportedTimer { site, .. } => ("unsupported_timer", Some(site)),
+        SnapshotError::Payload { site, .. } => ("payload", Some(site)),
+        SnapshotError::MissingBoundValue { .. } => ("missing_bound_value", None),
+        SnapshotError::UnsupportedMap { .. } => ("unsupported_map", None),
+        SnapshotError::InvalidBinding { .. } => ("invalid_binding", None),
+        SnapshotError::DifferentStream => ("different_stream", None),
+        SnapshotError::ReboundInstance(_) => ("rebound_instance", None),
+        SnapshotError::FrameTime => ("frame_time", None),
+        SnapshotError::Wire(_) => ("wire", None),
+        SnapshotError::Stream(_) => ("stream", None),
+    };
+    let mut failure = simple_failure(stage, category);
+    if let Some(StateSite { graph, state, .. }) = site {
+        let node = graphs
+            .graph(*graph)
+            .and_then(|definition| definition.state(usize::from(*state)))
+            .map(|node| node.pos);
+        failure["graph"] = json!(graph);
+        failure["state"] = json!(state);
+        failure["node"] = json!(node);
+        failure["class"] = json!(node_class(graphs, *graph, node));
+    }
+    failure
+}
+
+fn startup_failure(error: &OwnerBodyStartupError) -> Json {
+    use OwnerBodyStartupError as Start;
+    match error {
+        Start::Clock => simple_failure("start", "clock"),
+        Start::VmInitialize(fault) => vm_failure("vm_initialize", fault),
+        Start::FirstFrame(fault) => vm_failure("first_frame", fault),
+        Start::MovementModifiers(fault) => vm_failure("movement_modifiers", fault),
+        Start::ProjectileLeases(error) => io_failure("start", "projectile_leases", error),
+        Start::ChargeAdmission(error) => io_failure("start", "charge_admission", error),
+    }
+}
+
+fn preparation_failure(graphs: &GraphStore, error: &SceneOwnerPreparationError) -> Json {
+    use OwnerBodyPreparationError as Body;
+    use SceneOwnerPreparationError as Scene;
+    match error {
+        Scene::Codecs => simple_failure("scene_preparation", "codecs"),
+        Scene::ControllerFlag => simple_failure("scene_preparation", "controller_flag"),
+        Scene::SpawnMover(error) => io_failure("scene_preparation", "spawn_mover", error),
+        Scene::TeamFilter(error) => io_failure("scene_preparation", "team_filter", error),
+        Scene::Body(error) => match error.as_ref() {
+            Body::MissingBody => simple_failure("body_preparation", "missing_body"),
+            Body::RootLayout(fault) => vm_failure("root_layout", fault),
+            Body::ModeRootId => simple_failure("body_preparation", "mode_root_id"),
+            Body::MissingModeRoot => simple_failure("body_preparation", "missing_mode_root"),
+            Body::Start(error) => startup_failure(error),
+            Body::Projection(error) => snapshot_failure(graphs, "projection", error),
+            Body::Encoding(error) => snapshot_failure(graphs, "encoding", error),
+        },
+    }
+}
+
+fn runtime_result(graphs: &GraphStore, runtime: &dyn OwnerBodyRuntime) -> Json {
+    let Some(snapshot) = runtime.snapshot() else {
+        return json!({"status": "snapshot_unavailable"});
+    };
+    let (sites, truncated) = diagnostic_sites(graphs, &snapshot.diagnostics);
     let observations = snapshot.node_observations().map(|observed| {
         let sites: Vec<_> = observed.sites().map(|(graph, node, client_scope_skipped)| {
             json!({"graph": graph, "node": node, "client_scope_skipped": client_scope_skipped})
@@ -104,6 +221,7 @@ fn factory_result(
         "initialization_complete": snapshot.initialization_complete(),
         "instances": snapshot.instances.len(),
         "diagnostics": sites,
+        "diagnostics_truncated": truncated,
         "observations": observations,
     })
 }
@@ -141,30 +259,37 @@ fn actor_row(assets: &SceneAssets, scene: &PreparedScene, hero: &Hero) -> Json {
         "controller_on_fire_present": initial_on_fire(&scene.initial_board).is_some(),
         "spawn_error_kind": mover.as_ref().err().map(|error| format!("{:?}", error.kind())),
     });
-    let (admission, bootstrap) = if let Ok(mover) = mover {
-        let spawn = OwnerBodySpawn {
-            slot: 0,
-            controller: 0xa000_0100,
-            entity: 0xa000_0101,
-            body_filter: team_bit(0).unwrap(),
-            frame: FIRST_TICK,
-            pose: mover.pose(),
-            quanta: RETAIL_QUANTA,
-        };
-        let admission = factory_result(scene.owner_body_runtime(hero, spawn), "not_admitted");
-        // Probe the same factory for this hero without adding it to the scene.
-        let bootstrap = factory_result(
-            assets
-                .prepare_owner_body(scene, hero.guid)
-                .map_or(Ok(None), |factory| factory(hero, spawn)),
-            "factory_unavailable",
-        );
-        (admission, bootstrap)
-    } else {
-        (
-            json!({"status": "not_probed"}),
-            json!({"status": "not_probed"}),
-        )
+    let spawn = mover.ok().map(|mover| OwnerBodySpawn {
+        slot: 0,
+        controller: 0xa000_0100,
+        entity: 0xa000_0101,
+        body_filter: team_bit(0).unwrap(),
+        frame: FIRST_TICK,
+        pose: mover.pose(),
+        quanta: RETAIL_QUANTA,
+    });
+    let admission = match spawn.map(|spawn| scene.owner_body_runtime(hero, spawn)) {
+        None => json!({"status": "not_probed"}),
+        Some(Ok(None)) => json!({"status": "not_admitted"}),
+        Some(Ok(Some(runtime))) => runtime_result(&assets.graphs, runtime.as_ref()),
+        Some(Err(error)) => {
+            json!({"status": "factory_error", "error_kind": format!("{:?}", error.kind())})
+        }
+    };
+    // Exercise the same preparation gate without admitting the actor to the scene.
+    let bootstrap = match assets.prepare_owner_factory(scene, hero) {
+        Err(error) => json!({
+            "status": "factory_error", "error_kind": "Unsupported",
+            "failure": preparation_failure(&assets.graphs, &error),
+        }),
+        Ok(factory) => match spawn.map(|spawn| factory.start(spawn)) {
+            None => json!({"status": "not_probed"}),
+            Some(Ok(runtime)) => runtime_result(&assets.graphs, &runtime),
+            Some(Err(error)) => json!({
+                "status": "factory_error", "error_kind": format!("{:?}", error.kind()),
+                "failure": simple_failure("start", "io"),
+            }),
+        },
     };
     json!({
         "hero": format!("0x{:016X}", hero.guid),
@@ -226,8 +351,8 @@ fn prepared_practice_actor_startup_matrix() {
         "startup report inputs changed"
     );
     let report = json!({
-        "schema_version": 1,
-        "scenario": "practice-owner-startup-v1",
+        "schema_version": 2,
+        "scenario": "practice-owner-startup-v2",
         "source_revision": revision.to_ascii_lowercase(),
         "inputs": inputs,
         "scene": scene,

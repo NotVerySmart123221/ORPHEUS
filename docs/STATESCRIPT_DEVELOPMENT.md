@@ -162,6 +162,12 @@ cargo test --locked -p orpheus --features script-coverage --lib prepared_practic
 
 Use a new private output path for each run. The report records input
 digests and the source revision, and leaves existing output files intact.
+In schema version 2, a factory rejection also records its failure stage.
+This distinguishes scene prerequisites, root layout, VM startup steps,
+snapshot projection, and full snapshot encoding. An incomplete projection
+lists a bounded set of typed diagnostics with graph and node positions.
+The independent factory probe retains these details when the ordinary
+room admission reports a generic unsupported error.
 
 ### Generate a synthetic test scaffold
 

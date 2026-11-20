@@ -46,7 +46,7 @@ use crate::{
     script_expr::native_shape,
     script_graph::{GraphStore, ModeValue, asset_guid},
     script_init::{self, Root},
-    script_player::{OwnerBodySpawn, PlayerBodyFactory},
+    script_player::{OwnerBodyPreparationError, OwnerBodySpawn, PlayerBodyFactory},
     script_wire::{Value, Variables},
     world::{Component, EntityUpdate},
 };
@@ -91,6 +91,20 @@ fn ground_height(
 
 type OwnerBodyFactory =
     dyn Fn(&Hero, OwnerBodySpawn) -> io::Result<Option<Box<dyn OwnerBodyRuntime>>> + Send + Sync;
+
+#[derive(Debug, thiserror::Error)]
+enum SceneOwnerPreparationError {
+    #[error("the owner statescript codec table is unavailable")]
+    Codecs,
+    #[error("the controller's initial on-fire flag is unavailable")]
+    ControllerFlag,
+    #[error(transparent)]
+    SpawnMover(io::Error),
+    #[error(transparent)]
+    TeamFilter(io::Error),
+    #[error(transparent)]
+    Body(Box<OwnerBodyPreparationError>),
+}
 
 #[derive(Clone)]
 struct MapCollision {
@@ -543,37 +557,7 @@ impl SceneAssets {
         hero_guid: u64,
     ) -> Option<Arc<OwnerBodyFactory>> {
         let hero = self.heroes.get(hero_guid)?;
-        let prepared = self
-            .codecs
-            .as_ref()
-            .ok_or_else(|| "the owner statescript codec table is unavailable".to_owned())
-            .and_then(|codecs| {
-                let controller_on_fire =
-                    initial_on_fire(&scene.initial_board).ok_or_else(|| {
-                        "the controller's initial on-fire flag is unavailable".to_owned()
-                    })?;
-                let mover = scene
-                    .player_spawn_mover(hero.body, 0)
-                    .map_err(|error| error.to_string())?;
-                PlayerBodyFactory::prepare(
-                    Arc::clone(&self.graphs),
-                    Arc::clone(codecs),
-                    scene.map.mode_guid,
-                    hero,
-                    self.pools.hero_pools(hero.guid),
-                    controller_on_fire,
-                    OwnerBodySpawn {
-                        slot: 0,
-                        controller: 0xa000_0100,
-                        entity: 0xa000_0101,
-                        body_filter: team_bit(0).map_err(|error| error.to_string())?,
-                        frame: FIRST_TICK,
-                        pose: mover.pose(),
-                        quanta: RETAIL_QUANTA,
-                    },
-                )
-                .map_err(|error| error.to_string())
-            });
+        let prepared = self.prepare_owner_factory(scene, hero).map_err(Arc::new);
         if let Err(reason) = &prepared {
             eprintln!(
                 "{} owner statescript unavailable in {} ({reason})",
@@ -586,10 +570,44 @@ impl SceneAssets {
             }
             let factory = prepared
                 .as_ref()
-                .map_err(|reason| io::Error::new(io::ErrorKind::Unsupported, reason.clone()))?;
+                .map_err(|reason| io::Error::new(io::ErrorKind::Unsupported, Arc::clone(reason)))?;
             let runtime: Box<dyn OwnerBodyRuntime> = Box::new(factory.start(spawn)?);
             Ok(Some(runtime))
         }))
+    }
+
+    fn prepare_owner_factory(
+        &self,
+        scene: &PreparedScene,
+        hero: &Hero,
+    ) -> Result<PlayerBodyFactory, SceneOwnerPreparationError> {
+        let codecs = self
+            .codecs
+            .as_ref()
+            .ok_or(SceneOwnerPreparationError::Codecs)?;
+        let controller_on_fire = initial_on_fire(&scene.initial_board)
+            .ok_or(SceneOwnerPreparationError::ControllerFlag)?;
+        let mover = scene
+            .player_spawn_mover(hero.body, 0)
+            .map_err(SceneOwnerPreparationError::SpawnMover)?;
+        PlayerBodyFactory::prepare(
+            Arc::clone(&self.graphs),
+            Arc::clone(codecs),
+            scene.map.mode_guid,
+            hero,
+            self.pools.hero_pools(hero.guid),
+            controller_on_fire,
+            OwnerBodySpawn {
+                slot: 0,
+                controller: 0xa000_0100,
+                entity: 0xa000_0101,
+                body_filter: team_bit(0).map_err(SceneOwnerPreparationError::TeamFilter)?,
+                frame: FIRST_TICK,
+                pose: mover.pose(),
+                quanta: RETAIL_QUANTA,
+            },
+        )
+        .map_err(|source| SceneOwnerPreparationError::Body(Box::new(source)))
     }
 }
 

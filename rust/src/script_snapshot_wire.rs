@@ -218,7 +218,7 @@ pub struct StateSite {
 pub enum SnapshotError {
     Incomplete {
         entity: u32,
-        diagnostics: Vec<String>,
+        diagnostics: Vec<crate::script_init::Diagnostic>,
     },
     MissingBoundValue {
         owner: u16,
@@ -272,10 +272,22 @@ impl fmt::Display for SnapshotError {
             } => {
                 write!(
                     f,
-                    "body {entity:08X} has {} initialization diagnostics: {}",
-                    diagnostics.len(),
-                    diagnostics.join(", ")
-                )
+                    "body {entity:08X} has {} initialization diagnostics: ",
+                    diagnostics.len()
+                )?;
+                for (index, diagnostic) in diagnostics.iter().enumerate() {
+                    if index != 0 {
+                        f.write_str(", ")?;
+                    }
+                    let site = diagnostic.site;
+                    match site.node {
+                        Some(node) => {
+                            write!(f, "{:04X}:{node}:{:?}", site.graph, diagnostic.issue)?
+                        }
+                        None => write!(f, "{:04X}:-:{:?}", site.graph, diagnostic.issue)?,
+                    }
+                }
+                Ok(())
             }
             Self::MissingBoundValue { owner, variable } => {
                 write!(
