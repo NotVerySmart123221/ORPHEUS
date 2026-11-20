@@ -25,6 +25,7 @@ use std::sync::{
 
 mod npc_chunk_delivery;
 pub(crate) mod owner_effects;
+mod owner_fault_shields;
 mod owner_model;
 pub(crate) mod practice_observation;
 
