@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added bounded operand class identifiers to private actor startup diagnostics. Distinct classes at one node now remain distinct in the report. Other error text stays outside the report.
+
 - Preserved typed owner startup failures from scene preparation through snapshot projection and encoding. The private startup matrix now distinguishes those stages and reports bounded diagnostic sites. Existing room admission and error messages are preserved. At `0ddb271e`, two prepared runs produced identical reports. All 23 rejected bootstrap probes reached projection with blocking initialization diagnostics. The overlapping categories included unsupported configs in 21 actors, unsupported states in nine, and registration rejections in eight. The synthetic factory test, 28 projection tests, all-targets Clippy with script coverage, and the #72 900-frame regression passed. Three other projection tests require separate prepared inputs.
 
 - Added an opt-in headless startup matrix that records prepared input digests, room admission, and body factory results for each catalog actor. Two runs at `574958c0` produced identical reports. All 32 actors had their direct roots and spawn inputs available. Nine passed independent startup, 23 returned an unsupported factory result, and the current room admitted one. The separate #72 900-frame regression passed with all 476 previously observed sites retained.

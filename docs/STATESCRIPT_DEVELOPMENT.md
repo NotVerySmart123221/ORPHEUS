@@ -166,6 +166,10 @@ In schema version 2, a factory rejection also records its failure stage.
 This distinguishes scene prerequisites, root layout, VM startup steps,
 snapshot projection, and full snapshot encoding. An incomplete projection
 lists a bounded set of typed diagnostics with graph and node positions.
+For an unsupported config diagnostic, `operand_class` records the
+bounded identifier from the evaluator when available. The containing
+node class remains a separate field. A class identifier shows where
+the evaluator attributed the error, including shape and context failures.
 The independent factory probe retains these details when the ordinary
 room admission reports a generic unsupported error.
 

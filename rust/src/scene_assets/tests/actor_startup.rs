@@ -71,6 +71,19 @@ fn node_class(graphs: &GraphStore, graph: u32, node: Option<u16>) -> Option<&str
     (class.len() <= 128).then_some(class.as_str())
 }
 
+fn diagnostic_operand_class(diagnostic: &Diagnostic) -> Option<&str> {
+    let Issue::Expression(EvalError::UnsupportedConfig(class)) = &diagnostic.issue else {
+        return None;
+    };
+    let (first, rest) = class.as_bytes().split_first()?;
+    (class.len() <= 128
+        && (first.is_ascii_alphabetic() || *first == b'_')
+        && rest
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_'))
+    .then_some(class.as_str())
+}
+
 fn diagnostic_sites(graphs: &GraphStore, diagnostics: &[Diagnostic]) -> (Vec<Json>, bool) {
     let mut sites = BTreeSet::new();
     let mut truncated = false;
@@ -80,6 +93,7 @@ fn diagnostic_sites(graphs: &GraphStore, diagnostics: &[Diagnostic]) -> (Vec<Jso
             diagnostic.site.node,
             diagnostic_category(diagnostic),
             diagnostic.server_only,
+            diagnostic_operand_class(diagnostic),
         ));
         if sites.len() > MAX_DIAGNOSTIC_SITES {
             sites.pop_last();
@@ -88,10 +102,11 @@ fn diagnostic_sites(graphs: &GraphStore, diagnostics: &[Diagnostic]) -> (Vec<Jso
     }
     let rows = sites
         .into_iter()
-        .map(|(graph, node, category, server_only)| {
+        .map(|(graph, node, category, server_only, operand_class)| {
             json!({
                 "graph": graph, "node": node, "class": node_class(graphs, graph, node),
                 "category": category, "server_only": server_only,
+                "operand_class": operand_class,
             })
         })
         .collect();
@@ -321,6 +336,66 @@ fn measure_scene(runtime: &Path) -> Result<(Json, Vec<Json>), (&'static str, io:
         }),
         rows,
     ))
+}
+
+#[test]
+fn startup_diagnostics_keep_distinct_operand_classes_and_omit_error_text() {
+    let graphs =
+        GraphStore::from_json(br#"{"version":1,"graphs":[],"bodies":{},"missing":[]}"#).unwrap();
+    let site = script_init::Site {
+        entity: 417,
+        instance: 6,
+        graph: 720,
+        node: Some(3),
+    };
+    let row = |error| Diagnostic {
+        site,
+        issue: Issue::Expression(error),
+        registration_rejected: false,
+        server_only: false,
+    };
+    let unsupported = |class: &str| row(EvalError::UnsupportedConfig(class.into()));
+    let freeform = "synthetic detail with spaces: internal payload";
+    let overlong = "A".repeat(129);
+    let diagnostics = vec![
+        unsupported("SyntheticOperand"),
+        unsupported(freeform),
+        unsupported("_SyntheticOperand2"),
+        unsupported("SyntheticOperand"),
+        unsupported("9BadPrefix"),
+        unsupported(&overlong),
+        row(EvalError::MalformedConfig("synthetic malformed detail")),
+    ];
+    let report = snapshot_failure(
+        &graphs,
+        "projection",
+        &SnapshotError::Incomplete {
+            entity: site.entity,
+            diagnostics,
+        },
+    );
+    let entries = report["diagnostics"].as_array().unwrap();
+    assert_eq!(entries.len(), 4);
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry["graph"] == 720 && entry["node"] == 3)
+    );
+    assert_eq!(entries[0]["category"], "expression");
+    assert_eq!(entries[0]["operand_class"], Json::Null);
+    let operand_classes: Vec<_> = entries[1..]
+        .iter()
+        .map(|entry| entry["operand_class"].as_str())
+        .collect();
+    assert_eq!(
+        operand_classes,
+        [None, Some("SyntheticOperand"), Some("_SyntheticOperand2")]
+    );
+    let serialized = report.to_string();
+    assert!(!serialized.contains(freeform));
+    assert!(!serialized.contains("synthetic malformed detail"));
+    assert!(!serialized.contains("9BadPrefix"));
+    assert!(!serialized.contains(overlong.as_str()));
 }
 
 #[test]
