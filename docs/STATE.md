@@ -165,6 +165,31 @@ Range attachment, and **47** blocking sites. The #72 replay matched all
 476 observation sites across 900 frames. Original ability mappings
 and client zoom acceptance remain open.
 
+At `055adca3`, the original held-aim fixture composed command input,
+actor rays, an owner-only target indicator, and a scoped movement
+multiplier. The native test verified activation, repeated hold,
+occlusion, temporary sampling failure, recovery, release, and
+replacement of the source body. Failure cleared the derived indicator
+while keeping the last successful raw ray sample. Observer full bytes
+were stable through these changes. The movement modifier test
+observed activation and release at the next pose boundary.
+
+The portable VM fixture verified that a listener requiring a living
+owner refuses late entry and lock release after death. It also verified
+cleanup before a timer-only update and preserved the explicit dead-input
+opt-in. Observation tests covered unavailable first samples, unchanged
+recovery, invalid expressions, and cancellation on retirement.
+
+Formatting, Clippy, and all public workspace tests passed for default
+and Inspector builds. Default passed 369 native server tests and 221
+StateScript tests. Inspector passed 375 native server tests and 222
+StateScript tests. The two prepared startup reports were byte-identical
+and matched the preceding 104319 baseline apart from source revision.
+The matrix recorded **11 of 32** independent passes, **one** ordinary
+Practice Range attachment, and **47** blocking sites. The #72 replay
+matched all 476 observation sites across 900 frames. Original ability
+mappings and client zoom acceptance remain open.
+
 Seven actor probes have one blocking site each. Mercy's tag query needs
 the tagged placement inventory and live actor tags. Orisa and Sigma
 still hit persistent message registration. Baptiste cannot read a
