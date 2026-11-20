@@ -892,15 +892,27 @@ pub(super) fn chase_step(current: Value, destination: Value, step: f64) -> (Valu
 }
 
 pub(super) fn is_parent_owned_timed_graph(node: &Node) -> bool {
-    let has_no_finish_operand = [
-        "m_7C8AD485",
-        "m_C7A42E2A",
-        "m_F8CE386A",
-        "m_C46403A5",
-        "m_ED97A97C",
-    ]
-    .iter()
-    .all(|name| field(&node.fields, name).is_null());
+    field(&node.fields, "m_ED97A97C").is_null() && is_parent_owned_graph(node)
+}
+
+pub(super) fn parent_owned_graph_duration(node: &Node) -> Option<&Json> {
+    if node.class != "STU_54FEB21C" {
+        return None;
+    }
+    let duration = field(&node.fields, "m_ED97A97C");
+    (duration.get("$").and_then(Json::as_str) == Some("STUConfigVarFloat")
+        && duration
+            .get("m_value")
+            .and_then(Json::as_f64)
+            .is_some_and(f64::is_finite)
+        && is_parent_owned_graph(node))
+    .then_some(duration)
+}
+
+fn is_parent_owned_graph(node: &Node) -> bool {
+    let has_no_finish_operand = ["m_7C8AD485", "m_C7A42E2A", "m_F8CE386A", "m_C46403A5"]
+        .iter()
+        .all(|name| field(&node.fields, name).is_null());
     let alternate = field(&node.fields, "m_E5790891");
     let has_no_alternate = alternate.is_null()
         || (alternate.is_object()

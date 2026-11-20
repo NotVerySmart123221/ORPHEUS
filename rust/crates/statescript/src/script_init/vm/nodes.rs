@@ -19,9 +19,9 @@ use super::super::{
         is_horizontal_velocity_clamp, is_literal_frame_wait, is_message_recipient_set,
         is_networked_for_code_synced, is_owner_movement_sampler, is_parent_owned_timed_graph,
         is_projected_self_message, is_self_shield_recharge, is_self_stat_timer, is_self_target,
-        is_wave_health_pool, living_body_array_shape, participant_filter, persistent_message,
-        placement_collection_tag, pool_number, raw_indices, registered_state, source_key,
-        static_target_operand, stored,
+        is_wave_health_pool, living_body_array_shape, parent_owned_graph_duration,
+        participant_filter, persistent_message, placement_collection_tag, pool_number, raw_indices,
+        registered_state, source_key, static_target_operand, stored,
     },
     types::{InitFault, Issue, SpawnSearch, SpawnSearchKey, State, StateKind},
     world::{CreationKind, EntityCreation, Site, World},
@@ -1086,6 +1086,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let interval_frames = node.interval_frames();
         let button_lock = node.button_lock();
         let movement_scale = node.movement_scale();
+        let legacy_timed_graph =
+            node.class == "STU_54FEB21C" && (self.graph(id).index, node.pos) == (0x01f0, 14);
+        let timed_graph_duration = if legacy_timed_graph {
+            None
+        } else {
+            parent_owned_graph_duration(node)
+        };
         let mut wave_bonus = false;
         let kind = match node.class.as_str() {
             // These client presentation states use the base state lifecycle on the server.
@@ -1321,15 +1328,16 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             },
             "STUStatescriptStateMoveTo" => StateKind::MoveTo { movement: None },
             "STU_54FEB21C"
-                if registration.shape(is_parent_owned_timed_graph(node))
-                    || (registration.permits((self.graph(id).index, node.pos) == (0x01f0, 14))
+                if registration
+                    .shape(is_parent_owned_timed_graph(node) || timed_graph_duration.is_some())
+                    || (registration.permits(legacy_timed_graph)
                         && ["m_7C8AD485", "m_C7A42E2A", "m_F8CE386A", "m_C46403A5"]
                             .iter()
                             .all(|name| field(&node.fields, name).is_null())
                         && node.links("m_E5790891").next().is_none()) =>
             {
-                // Field-free instances use the base lifecycle. Retain the
-                // historical placement's compatibility for its timing fields.
+                // This class uses the base lifecycle and wire state. The
+                // duration shape arms a regular state-owned timer on entry.
                 StateKind::Plain
             }
             "STUStatescriptStatePhysicsExplosion"
@@ -1597,6 +1605,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 ..State::dormant(kind)
             },
         );
+        if let Some(duration) = timed_graph_duration {
+            self.arm_parent_owned_duration(key, node, duration)?;
+        }
         match kind {
             StateKind::Registered { .. } => self.register_state(key, node)?,
             StateKind::GamePadVibration => self.post(id, Event::Finish(key.raw))?,

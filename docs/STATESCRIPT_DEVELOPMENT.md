@@ -4,16 +4,18 @@ Use the current `rust` module boundaries when extending the VM. This guide integ
 
 ## Shared Rust integration
 
-Use `work/statescript-integration` as the common local checkpoint for
-verified StateScript batches. Keep the working branches for the separate
-lanes and merge their completed commits after the focused checks. Review
-the shared checkpoint before changing a module that another lane also uses.
+Use `work/statescript-integration` for all local integration updates.
+Phase 2 and Phase 3 keep their existing worktrees for development and
+hand off commit IDs, scope, and known risks. The integration maintainer
+merges those commits, resolves conflicts, validates each shared update,
+and owns actor admission and gameplay diagnosis. Run checks once on the
+shared candidate.
 
 | Working branch | Scope |
 | --- | --- |
 | `work/phase2-generic-vm` | Shared VM primitives, mode rules, voice and message dispatch |
 | `work/statescript-local` | Phase 3 targeting, movement and owner projection |
-| `work/statescript-integration` | Combined checks, native actor admission and weapon readiness |
+| `work/statescript-integration` | Integration, verification, actor admission, and gameplay fixes |
 
 Run the workspace checks and prepared input and startup regressions on
 the combined source before treating it as the next shared baseline.
