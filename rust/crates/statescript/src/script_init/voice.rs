@@ -562,6 +562,11 @@ impl<W: World> Context for InstanceContext<'_, W> {
 
     fn native(&mut self, config: &Json) -> Option<Value> {
         self.read_native = true;
+        if script_expr::native_shape(config, "STU_D3685C04", None)
+            && self.world.local_command_present(self.site) == Some(false)
+        {
+            return Some(Value::Bool(false));
+        }
         self.world.native(self.site, config)
     }
 

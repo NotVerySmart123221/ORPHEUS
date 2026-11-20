@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Supplied the process-local command availability fact to the StateScript evaluator from the headless player and NPC hosts. The original synthetic fixture checks startup before any commands, held remote commands, unknown host context, and malformed operands. The locked StateScript library suite passed with 191 tests and 13 prepared cases skipped.
+
 - Reported missing persistent message registration separately from ordinary target expression failures. Validated receiver parameter and sender bindings before writing outputs or ending an active receiver branch. The locked StateScript library suite passed with 190 tests and 13 prepared cases skipped.
 
 - Wired the player host's team count to the room's admitted roster at startup and on departure. Players count before body creation. NPCs do not count. The startup matrix now declares the synthetic admitted roster used by its probes. Two prepared runs at `007a6d02` produced identical reports. They cleared one team count diagnostic, taking the total from 63 to 62. Independent startup stayed at 9 of 32 and ordinary admission at 1 of 32. The #72 report matched its prior capture across all 476 observation sites. Formatting, the locked workspace check, all-targets Clippy with script coverage, and the native library suite passed. The library suite reported 360 passed and 120 prepared cases skipped.

@@ -33,6 +33,11 @@ impl EnemyWorld<'_> {
 }
 
 impl World for EnemyWorld<'_> {
+    fn local_command_present(&self, site: Site) -> Option<bool> {
+        (site.entity == self.binding.body && is_junkenstein_mode(self.binding.mode))
+            .then_some(false)
+    }
+
     fn edit_velocity(&mut self, site: Site, frame: u32, value: Value, cap: bool) -> bool {
         if site.entity != self.binding.body
             || (site.graph, site.node) != (0x224e, Some(31))
@@ -1424,12 +1429,6 @@ impl World for EnemyWorld<'_> {
         {
             // A newly initialized Summoner owns no deployables.
             return Some(Value::Integer(0));
-        }
-        if site.entity == self.binding.body
-            && is_junkenstein_mode(self.binding.mode)
-            && native_shape(config, "STU_D3685C04", None)
-        {
-            return Some(Value::Bool(false));
         }
         if site.entity == self.binding.body && is_junkenstein_mode(self.binding.mode) {
             if config.get("$").and_then(Json::as_str) == Some("STU_4049CF77")

@@ -158,6 +158,10 @@ pub(super) struct BodyWorld {
 }
 
 impl World for BodyWorld {
+    fn local_command_present(&self, site: Site) -> Option<bool> {
+        self.is_player_site(site).then_some(false)
+    }
+
     fn team_members(&self, team: u8) -> Option<u32> {
         self.team_member_counts?.count(team)
     }

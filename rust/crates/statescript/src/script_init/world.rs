@@ -585,6 +585,12 @@ pub trait World {
         script_expr::EngineSetting::Unavailable
     }
 
+    /// Whether the process has a local presentation command at this site.
+    /// Remote player and AI commands do not supply this fact.
+    fn local_command_present(&self, _site: Site) -> Option<bool> {
+        None
+    }
+
     fn native(&mut self, _site: Site, _config: &Json) -> Option<Value> {
         None
     }

@@ -6,6 +6,7 @@ mod ai_and_spawning;
 mod arrays_and_boss;
 mod authored_classes;
 mod destination_and_victory;
+mod local_command;
 mod local_message;
 mod room_cue;
 mod runtime_state_metadata;
