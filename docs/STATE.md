@@ -35,6 +35,8 @@ The [prepared Python comparison](STATESCRIPT_DEVELOPMENT.md#compare-a-prepared-s
 
 The next independent matrix at `934f4fec` used the same pack and removed one movement-sampler diagnostic each for Doomfist and Baptiste with no new sites. The matrix has **53** blocking sites across the same 22 actors. The #72 900-frame result matched the preceding run across all 476 observed sites.
 
+At `d3da7e1a`, two same-pack runs retained 10 independent passes and 53 blocking sites. Two stat timer sites now report unsupported state after the placement checks were removed. Baptiste's remaining site reports an unavailable entity-variable read, which is a controller lookup in the startup expression. The #72 capture kept all 476 observation sites.
+
 | Workflow | Python reference | Rust implementation | Open client or parity gap |
 | --- | --- | --- | --- |
 | **Login, Profiles & Lobby** | Battle.net/JAM auth, profiles, settings (`22200`–`22204`), queues, Windows launcher + TLS relay. | Native BNet/JAM lobby, `profile-settings-v1` (CI verified), encrypted UDP seat handoff. | Standalone Rust launcher & public client connection flow open. |
