@@ -131,6 +131,22 @@ other byte for byte and retained the preceding 11 independent passes,
 one ordinary Practice Range attachment, and 47 blocking sites. The #72
 capture matched all 476 observations.
 
+At `9d5b9644`, ordinary Practice Range admission uses the prepared actor
+catalog. Static graph layouts are shared across rooms. The selected
+body starts with the current spawn, admitted roster, and spatial
+snapshot. The scene validates both full baselines before room insertion.
+On the same 104319 inputs, the ordinary startup matrix rose from
+**1 of 32** to **11 of 32**. An independent test through queued selection
+and room insertion also admitted **11 of 32**. The ten new passes in the
+ordinary matrix were Reaper, Hanzo, Pharah, Winston, Roadhog, Cassidy,
+Junkrat, Zarya, Mei, and Sombra. The queued test confirmed that rejected
+candidates preserve the existing body and delivery state. The input-gap
+test mounted Zarya's script while preserving movement and command
+acknowledgements. Independent startup still has 47 blocking sites
+across the other 21 actors. The two startup reports were byte-identical,
+and all 476 #72 observations matched. Ability coverage and client
+playability still require separate validation.
+
 | Workflow | Python reference | Rust implementation | Open client or parity gap |
 | --- | --- | --- | --- |
 | **Login, Profiles & Lobby** | Battle.net/JAM auth, profiles, settings (`22200`–`22204`), queues, Windows launcher + TLS relay. | Native BNet/JAM lobby, `profile-settings-v1` (CI verified), encrypted UDP seat handoff. | Standalone Rust launcher & public client connection flow open. |
