@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Used the same NPC liveness result for spatial candidates and script request admission. The next room frame excludes a body whose vitals already record death, and the entity facts still retain its dead status. The original synthetic regression reproduced the mismatch and passed after the fix along with two existing spatial tests.
+
 - Kept temporary authored observation diagnostics visible while continuing owner and observer snapshot projection. An original synthetic graph reproduced the projection failure and now verifies recovery. The projection suite passed with 28 tests and three private-runtime tests skipped.
 
 - Added an extended headless StateScript coverage build that retains up to 4,096 sites from component startup. The live Inspector response retains its 128-site limit. The coverage report now separates declared scope from effective server eligibility and distinguishes exact client-state annotations from plain fallback candidates. The extended observation limit test and locked workspace check passed. Script unittest discovery passed with 21 tests and four skips. Two prepared 900-frame runs at `8d40141e` passed and produced identical captures with 476 sites across 25 graphs. They retained all 128 previous sites without truncation.

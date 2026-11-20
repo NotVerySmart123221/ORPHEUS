@@ -142,6 +142,62 @@ fn check_spatial_candidates_frame(free_for_all: bool) {
 }
 
 #[test]
+fn spatial_candidates_exclude_vitals_death_before_bot_reconciliation() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/room-spatial-liveness-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(fixture["schema_version"], 1);
+    assert_eq!(fixture["evidence"], "synthetic-rust");
+    let frame = u32::try_from(fixture["input"]["frame"].as_u64().unwrap()).unwrap();
+    let damage = fixture["input"]["damage"].as_f64().unwrap();
+    let expected = &fixture["expected"];
+
+    let bot = fixture_bots().remove(0);
+    let wire = bot.entity;
+    let mut room = RoomSimulation::new(vec![bot]).unwrap();
+    room.enable_spatial_queries(
+        false,
+        Arc::new(fixture_ground()),
+        RoomSpatialNeeds::EntityFacts,
+    );
+    room.prepare_spatial_frame(frame).unwrap();
+    let initial = Arc::clone(&room.spatial_frame.as_ref().unwrap().1);
+    assert_eq!(initial.candidates()[0].entity, wire);
+    assert!(initial.entity_facts().unwrap()[&wire].alive);
+
+    let state = room.state_mut(wire).unwrap().unwrap();
+    let death = Death {
+        time: 0.0,
+        frame,
+        killer: 0,
+    };
+    assert!(state.vitals.damage(damage, death).killed);
+    assert!(!state.bot.dead);
+
+    room.prepare_spatial_frame(frame).unwrap();
+    assert!(Arc::ptr_eq(
+        &initial,
+        &room.spatial_frame.as_ref().unwrap().1
+    ));
+
+    room.prepare_spatial_frame(frame + 1).unwrap();
+    let next = &room.spatial_frame.as_ref().unwrap().1;
+    assert_eq!(
+        next.entity_facts().unwrap()[&wire].alive,
+        expected["next_frame_alive"].as_bool().unwrap()
+    );
+    assert_eq!(
+        RoomScriptRequests::default().queue_health(next, wire, -1.0),
+        expected["next_frame_health_target"].as_bool().unwrap()
+    );
+    assert_eq!(
+        next.candidates().len() as u64,
+        expected["next_frame_candidates"].as_u64().unwrap()
+    );
+}
+
+#[test]
 fn spatial_visibility_blocks_only_hits_before_the_target() {
     let mut room = RoomSimulation::new(Vec::new()).unwrap();
     room.enable_spatial_queries(

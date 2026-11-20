@@ -735,20 +735,18 @@ impl RoomSimulation {
                 };
                 facts.insert(bot.entity, RoomEntityFacts { team, alive, tags });
             }
-            if !bot.dead {
-                if alive {
-                    script_targets.insert(
-                        bot.entity,
-                        RoomScriptTarget {
-                            entity,
-                            health: true,
-                            messages: state.enemy.as_ref().is_some_and(|enemy| {
-                                enemy.fault.is_none() && !enemy.scripts.retirement_requested
-                            }),
-                            cue_listener: false,
-                        },
-                    );
-                }
+            if alive {
+                script_targets.insert(
+                    bot.entity,
+                    RoomScriptTarget {
+                        entity,
+                        health: true,
+                        messages: state.enemy.as_ref().is_some_and(|enemy| {
+                            enemy.fault.is_none() && !enemy.scripts.retirement_requested
+                        }),
+                        cue_listener: false,
+                    },
+                );
                 candidates.push(SpatialCandidate {
                     entity: bot.entity,
                     position: bot.position,
