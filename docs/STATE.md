@@ -51,6 +51,17 @@ At `b7f953ae` and `60b2b955`, the ordinary health pool and bound body angle chan
 
 The Windows idle and single-shot reload checks at `60b2b955` matched the prior Windows input and observation hashes for both implementations. Each schedule covered 339 ticks. The strict comparison retained the same four RNG setup differences.
 
+At `8fbc2fa3`, the authored projected-message contract passed loader,
+lifecycle, dispatch exclusion, and owner and observer wire tests. Two
+runs on the existing 104319 pack matched each other byte for byte.
+All 32 actor results and 49 blocking sites matched the preceding run,
+with 10 independent passes and one ordinary Practice Range attachment.
+The eight persistent registration diagnostics remain open. The #72
+capture matched across all 476 observed sites.
+Both 339-tick Windows schedules matched the preceding input and
+observation hashes, with the same four RNG differences in strict
+comparison.
+
 | Workflow | Python reference | Rust implementation | Open client or parity gap |
 | --- | --- | --- | --- |
 | **Login, Profiles & Lobby** | Battle.net/JAM auth, profiles, settings (`22200`–`22204`), queues, Windows launcher + TLS relay. | Native BNet/JAM lobby, `profile-settings-v1` (CI verified), encrypted UDP seat handoff. | Standalone Rust launcher & public client connection flow open. |

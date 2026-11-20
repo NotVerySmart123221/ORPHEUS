@@ -211,9 +211,9 @@ message topics, including the sole startup blocker for Orisa and Sigma.
 The prepared bundle and listing audit found ten matching receivers
 marked client-only. The actor graph closures still contain unresolved
 references, and the wider bundle contains unresolved server-side message
-selectors. The audit establishes candidate client projection coverage.
-Persistent registration still requires an explicit scope contract that
-covers dynamic routes and preserves parameter bindings.
+selectors. The declared projection contract has synthetic coverage for
+the fixed-self sender shape and preserves parameter bindings. The existing
+prepared pack still reports the eight registration diagnostics.
 
 The report's `probe_roster` declares the synthetic admitted player slots
 used by both attempts. In a live room, the player host reads the admitted
