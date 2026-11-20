@@ -2917,9 +2917,19 @@ fn actual_shared_ui_graph_baselines_match_python() {
 
 #[test]
 fn synthetic_two_instance_registered_state_link_encodes_for_owner_and_observer() {
-    let registered_graph = |index, items, state_pos, state_idx, remote_idx, remote_bits| {
-        let mut state_node = node(state_pos, "STU_9028E035", Some(state_idx), json!({}));
-        state_node["remote"] = json!(remote_idx);
+    let registered_graph = |index,
+                            items,
+                            state_pos,
+                            state_idx,
+                            kind,
+                            remote_idx: Option<usize>,
+                            remote_bits| {
+        let mut state_node = node(
+            state_pos,
+            "STU_9028E035",
+            Some(state_idx),
+            json!({"m_type": kind}),
+        );
         let entry_node = node(
             0,
             "STUStatescriptEntry",
@@ -2930,8 +2940,12 @@ fn synthetic_two_instance_registered_state_link_encodes_for_owner_and_observer()
         );
         let mut states = vec![Json::Null; usize::from(state_idx) + 1];
         states[usize::from(state_idx)] = json!(state_pos);
-        let mut remote = vec![Json::Null; remote_idx + 1];
-        remote[remote_idx] = json!(state_pos);
+        let mut remote = Vec::new();
+        if let Some(index) = remote_idx {
+            state_node["remote"] = json!(index);
+            remote.resize(index + 1, Json::Null);
+            remote[index] = json!(state_pos);
+        }
         let mut built = graph(
             index,
             vec![entry_node, state_node],
@@ -2946,19 +2960,23 @@ fn synthetic_two_instance_registered_state_link_encodes_for_owner_and_observer()
         built
     };
 
-    let graphs = GraphStore::from_json(
-        &serde_json::to_vec(&json!({
-            "version": 1,
-            "graphs": [
-                registered_graph(0x0ce0, 39, 38, 10, 0, 1),
-                registered_graph(0x0d03, 2, 1, 1, 2, 3),
-            ],
-            "bodies": {},
-            "missing": []
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+    let load_graphs = |observer_slots: bool| {
+        GraphStore::from_json(
+            &serde_json::to_vec(&json!({
+                "version": 1,
+                "graphs": [
+                    registered_graph(0x0ce0, 39, 38, 10, 0, observer_slots.then_some(0), 1),
+                    registered_graph(0x0d03, 2, 1, 1, 1, observer_slots.then_some(2), 3),
+                ],
+                "bodies": {},
+                "missing": []
+            }))
+            .unwrap(),
+        )
+        .unwrap()
+    };
+
+    let graphs = load_graphs(false);
     let snapshot = initialize(
         &graphs,
         ENTITY,
@@ -2991,8 +3009,16 @@ fn synthetic_two_instance_registered_state_link_encodes_for_owner_and_observer()
 
     let codecs = CodecTable::from_json(CODECS).unwrap();
     let encoder = SnapshotEncoder::new(&graphs, &codecs);
-    let observer = encoder.project(&snapshot, View::Observer).unwrap();
     let owner = encoder.project(&snapshot, View::Owner).unwrap();
+    let native_observer = encoder.project(&snapshot, View::Observer).unwrap();
+    assert!(native_observer.instances[&1].states.is_empty());
+    assert!(native_observer.instances[&2].states.is_empty());
+
+    // These invented remote slots exercise observer link encoding independently
+    // of the native state registration, which requires local state slots.
+    let observer_graphs = load_graphs(true);
+    let observer_encoder = SnapshotEncoder::new(&observer_graphs, &codecs);
+    let observer = observer_encoder.project(&snapshot, View::Observer).unwrap();
     assert_eq!(
         observer.instances[&1].states[&10].link,
         Some(ProjectedStateLink {
@@ -3013,7 +3039,9 @@ fn synthetic_two_instance_registered_state_link_encodes_for_owner_and_observer()
     assert_eq!(owner.instances[&2].states[&1].link, None);
 
     let mut obs_stream = BodyStream::new(ENTITY);
-    let obs_full = encoder.queue_full(&mut obs_stream, &observer).unwrap();
+    let obs_full = observer_encoder
+        .queue_full(&mut obs_stream, &observer)
+        .unwrap();
     let obs_bits = obs_full.update.chunk.as_ref().unwrap();
     assert!(obs_bits.bit_len() > 0 && !obs_bits.as_bytes().is_empty());
 
