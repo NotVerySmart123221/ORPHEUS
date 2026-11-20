@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "case_id": "script-projected-message-topics.synthetic.v1",
+  "source": {"basis": "Invented graph placements, topic, parameter binding, and lifecycle markers."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "topic": "0x02400000000000F1",
+    "abort_message": "0x02400000000000F2",
+    "sender_graph": 62101,
+    "receiver_graph": 62102,
+    "parameters": [{"id": "0x0A40000000000056", "variable": 786}]
+  },
+  "expected": {"began": 784, "ended": 785, "received": 787}
+}

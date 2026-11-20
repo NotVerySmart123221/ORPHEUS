@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added explicit projected message topics for authored bundles. The loader requires a matching client receiver and rejects conflicting server receivers. Validated self-targeted send states use the existing codec and lifecycle, with server dispatch reserved for other topics. Synthetic fixtures reproduce the missing registration capability and check owner and observer projection and cleanup.
+
 - Removed encounter-mode checks from the player and NPC body angle queries. Both hosts use the current bound body pose and the same packed angle conversion. The synthetic host tests reproduced the missing reads outside encounter mode and cover unbound targets, foreign targets, and invalid angles. The `60b2b955` prepared reports matched the preceding startup report and #72 capture. Formatting, the locked workspace check, all-target tests, and all-target Clippy with script coverage passed.
 
 - Routed ordinary health pools through their validated field shape independently of graph placement. The wave path keeps its explicit admission checks and uses the same pool lifecycle after registration. The synthetic fixture reproduced the old placement rejection and checks registration, exit, and cleanup. The prepared capacity and retirement regression passed at six wave placements across four difficulty values. Two same-pack reports at `b7f953ae` retained 49 blockers and 10 of 32 independent passes, with all 476 #72 observation sites matching.

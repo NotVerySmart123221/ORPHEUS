@@ -650,9 +650,10 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             "counter".into(),
             Value::Integer(i64::from(state.activation & 3)),
         )]),
-        (StateKind::SendMessage | StateKind::PersistentSend(_), Some("send")) => {
-            StatePayload::new()
-        }
+        (
+            StateKind::SendMessage | StateKind::ProjectedSelfSend | StateKind::PersistentSend(_),
+            Some("send"),
+        ) => StatePayload::new(),
         (StateKind::ClientPulse { count, fresh_at }, Some("pulser")) => StatePayload::from([
             ("count".into(), Value::Integer(i64::from(count))),
             (

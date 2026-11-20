@@ -203,6 +203,30 @@ class StateScriptCoverageTest(unittest.TestCase):
         self.assertIsNone(nodes[2]["client_scope_skipped"])
         self.assertEqual(scenario["counts"]["client_skipped"], 1)
 
+    def test_projected_message_topics_validate_syntax_without_affecting_coverage(self):
+        baseline = self.read_report()
+        self.output.unlink()
+
+        topic = "0x9C00000000000001"
+        metadata = self.prepared["runtime_state_metadata"] = {
+            "projected_message_topics": [topic],
+        }
+        self.write_bundle()
+        annotated = self.read_report()
+        self.assertNotIn(topic, self.output.read_text(encoding="utf-8"))
+        self.assertNotEqual(annotated.pop("graph_bundle_sha256"), baseline.pop("graph_bundle_sha256"))
+        self.assertEqual(annotated, baseline)
+        self.output.unlink()
+
+        for topics in ([topic, topic], [topic.lower()], ["0x1"], ["0x" + "0" * 16], [1], topic):
+            with self.subTest(topics=topics):
+                metadata["projected_message_topics"] = topics
+                self.write_bundle()
+                result = self.run_report()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("projected message topic", result.stderr)
+                self.assertFalse(self.output.exists())
+
     def test_runtime_client_rows_require_exact_eligible_states(self):
         client = {"graph": 42, "state": 1, "rid": 101, "class": "SyntheticState"}
         graph = self.prepared["graphs"][1]

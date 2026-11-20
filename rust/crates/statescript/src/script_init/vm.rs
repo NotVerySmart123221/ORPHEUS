@@ -2054,6 +2054,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         node: &Node,
         caller: Option<StateKey>,
     ) -> Result<Option<Variables>, InitFault> {
+        if node
+            .game_message_id()
+            .is_some_and(|topic| self.graphs.is_projected_message_topic(topic))
+        {
+            self.report(self.site(id, node), Issue::UnsupportedMessageRegistration);
+            return Ok(None);
+        }
         let mut parameters = Variables::new();
         for parameter in array_field(&node.fields, "m_params")
             .iter()

@@ -16,7 +16,7 @@ use serde_json::{Map, Value};
 use rulesets::{ModeRulesetDefinition, ModeRulesets};
 
 use crate::script_expr::{
-    StackPriority, Variable, authored_stack_priority, authored_stack_variable,
+    StackPriority, Variable, authored_stack_priority, authored_stack_variable, native_fields,
 };
 
 mod rulesets;
@@ -264,6 +264,21 @@ impl Node {
             .and_then(asset_guid)
     }
 
+    pub(crate) fn literal_game_message_id(&self) -> Option<u64> {
+        let message = self.field("m_gameMessage")?;
+        if !native_fields(message, &["m_gameMessage", "m_resourceKey"])
+            || message
+                .get("$")
+                .is_some_and(|class| class.as_str() != Some("STUConfigVarGameMessage"))
+            || message
+                .get("m_resourceKey")
+                .is_some_and(|key| !key.is_null())
+        {
+            return None;
+        }
+        self.game_message_id().filter(|&id| id != 0)
+    }
+
     pub(crate) fn is_message_entry(&self) -> bool {
         self.class == "STUStatescriptEntryGameMessage"
     }
@@ -285,7 +300,7 @@ impl Node {
             && self.valid_message_parameters(MAX_ROOM_MESSAGE_PARAMETERS)
     }
 
-    fn valid_message_parameters(&self, max_parameters: usize) -> bool {
+    pub(crate) fn valid_message_parameters(&self, max_parameters: usize) -> bool {
         let Some(parameters) = self.fields.get("m_params").filter(|value| !value.is_null()) else {
             return true;
         };
@@ -1094,6 +1109,8 @@ struct RuntimeStateMetadata {
     plain_classes: Vec<String>,
     #[serde(default)]
     client_states: Vec<RuntimeClientState>,
+    #[serde(default)]
+    projected_message_topics: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -1111,6 +1128,62 @@ fn valid_runtime_class_name(class: &str) -> bool {
         && class
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+fn validate_projected_message_topics(
+    declarations: Vec<String>,
+    graphs: &BTreeMap<u32, Graph>,
+) -> io::Result<BTreeSet<u64>> {
+    let mut topics = BTreeSet::new();
+    for declaration in declarations {
+        let id = asset_guid(&Value::String(declaration))
+            .filter(|&id| id != 0)
+            .ok_or_else(|| invalid("invalid projected message topic"))?;
+        if !topics.insert(id) {
+            return Err(invalid(format!(
+                "duplicate projected message topic {id:#018X}"
+            )));
+        }
+    }
+    if topics.is_empty() {
+        return Ok(topics);
+    }
+    let mut unmatched = topics.clone();
+    for graph in graphs.values() {
+        for node in &graph.nodes {
+            let stateful = node.class == "STUStatescriptStateGameMessageEntry";
+            if !stateful && !node.is_message_entry() {
+                continue;
+            }
+            let Some(id) = node.game_message_id().filter(|id| topics.contains(id)) else {
+                continue;
+            };
+            if node.runs_on_server() || node.server_only {
+                return Err(invalid(format!(
+                    "projected message topic {id:#018X} has a server receiver in graph {} at node {}",
+                    graph.index, node.pos
+                )));
+            }
+            let valid_receiver = if stateful {
+                node.is_state()
+                    && node
+                        .state
+                        .and_then(|slot| graph.state(usize::from(slot)))
+                        .is_some_and(|state| state.pos == node.pos)
+            } else {
+                node.state.is_none() && !node.is_state()
+            };
+            if valid_receiver && !node.is_action() && node.literal_game_message_id() == Some(id) {
+                unmatched.remove(&id);
+            }
+        }
+    }
+    if let Some(id) = unmatched.first() {
+        return Err(invalid(format!(
+            "projected message topic {id:#018X} has no client receiver"
+        )));
+    }
+    Ok(topics)
 }
 
 #[derive(Deserialize)]
@@ -1188,6 +1261,7 @@ fn room_spatial_needs(value: &Value) -> RoomSpatialNeeds {
 #[derive(Debug)]
 pub struct GraphStore {
     graphs: BTreeMap<u32, Graph>,
+    projected_message_topics: BTreeSet<u64>,
     room_spatial_needs: RoomSpatialNeeds,
     uses_host_health_events: bool,
     bodies: BTreeMap<u64, Body>,
@@ -1327,6 +1401,10 @@ impl GraphStore {
                 }
             }
         }
+        let projected_message_topics = validate_projected_message_topics(
+            bundle.runtime_state_metadata.projected_message_topics,
+            &graphs,
+        )?;
         let room_spatial_needs = graphs
             .values()
             .flat_map(|graph| &graph.nodes)
@@ -1350,6 +1428,7 @@ impl GraphStore {
             .any(|graph| graph.entry_handlers.contains_key(&health_topic));
         Ok(Self {
             graphs,
+            projected_message_topics,
             room_spatial_needs,
             uses_host_health_events,
             bodies: keyed_by_guid(bundle.bodies)?,
@@ -1388,6 +1467,10 @@ impl GraphStore {
 
     pub fn graph(&self, index: u32) -> Option<&Graph> {
         self.graphs.get(&index)
+    }
+
+    pub(crate) fn is_projected_message_topic(&self, id: u64) -> bool {
+        self.projected_message_topics.contains(&id)
     }
 
     /// Inspect local graph structure on demand. Unresolved null links and links

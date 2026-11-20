@@ -30,6 +30,23 @@ skips execution while preserving the raw class, scope flags, and
 owner and observer slot tables. A class may have different scopes in
 different graphs.
 
+An authored bundle can declare `projected_message_topics` in this metadata.
+Each topic is a unique, nonzero literal message ID. The loader requires a
+matching static client receiver and rejects a matching server receiver
+across all loaded graphs. The declaration reserves the topic in the VM's
+message dispatcher. An eligible fixed-self sender with reciprocal state
+and remote slots in a networked instance uses the ordinary
+state lifecycle and existing `send` codec. Its parameter records stay in
+the graph for client use. Server evaluation and delivery are skipped.
+
+```json
+{
+  "runtime_state_metadata": {
+    "projected_message_topics": ["0x02400000000000F1"]
+  }
+}
+```
+
 Verified wire codecs still come from the separate codec table. A plain
 classification alone supplies no codec or payload layout. The portable
 contract exercises ordinary lifecycle and scope. Native tests verify

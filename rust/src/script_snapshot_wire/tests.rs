@@ -93,6 +93,163 @@ fn graph(
 }
 
 #[test]
+fn projected_self_send_matches_ordinary_send_wire_lifecycle() {
+    use crate::script_init::{ABORT_PLUG, Component};
+    use std::sync::Arc;
+
+    const SEND_CLASS: &str = "STU_38EE1100";
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-projected-message-topics-v1.json"
+    ))
+    .unwrap();
+    let input = &fixture["input"];
+    let topic = &input["topic"];
+    let abort = &input["abort_message"];
+    let abort_id = crate::script_graph::asset_guid(abort).unwrap();
+    let sender_graph = u32::try_from(input["sender_graph"].as_u64().unwrap()).unwrap();
+    let receiver_graph = u32::try_from(input["receiver_graph"].as_u64().unwrap()).unwrap();
+    let parameter = &input["parameters"][0];
+    let parameter_id = parameter["id"].as_str().unwrap();
+    let parameter_variable = parameter["variable"].as_u64().unwrap();
+
+    let mut registry: Json = serde_json::from_str(CODECS).unwrap();
+    registry["classes"]["38EE1100"] = json!({
+        "name":SEND_CLASS,"codec":"send","stec":false,"status":"VERIFIED","layout":[]
+    });
+    let codecs = CodecTable::from_json(&registry.to_string()).unwrap();
+
+    let capture = |projected| {
+        let fields = if projected {
+            json!({
+                "m_gameMessage":{"m_gameMessage":topic},
+                "m_target":{"$":"STU_9B213168","m_targets":{"$":"STU_B5A0CAF0"}},
+                "m_67FD6A60":1,
+                "m_params":[{"m_B5051BCE":parameter_id,"m_value":{"$":"UnevaluatedWireOperand"}}]
+            })
+        } else {
+            json!({})
+        };
+        let mut send = node(1, SEND_CLASS, Some(0), fields);
+        send["remote"] = json!(0);
+        let sender = graph(
+            sender_graph,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({
+                        "m_outPlug":{"$":"Plug","links":[[1,"m_beginPlug"]]}
+                    }),
+                ),
+                send,
+                node(
+                    2,
+                    "STUStatescriptEntryGameMessage",
+                    None,
+                    json!({
+                        "m_gameMessage":{"m_gameMessage":abort},
+                        "m_outPlug":{"$":"Plug","links":[[1,ABORT_PLUG]]}
+                    }),
+                ),
+            ],
+            json!([1]),
+            json!([0, 2]),
+            json!([1]),
+            json!([]),
+        );
+        let mut receiver = node(
+            0,
+            "STUStatescriptEntryGameMessage",
+            None,
+            json!({
+                "m_gameMessage":{"m_gameMessage":topic},
+                "m_outPlug":{"$":"Plug","links":[]},
+                "m_params":[{"m_B5051BCE":parameter_id,"m_out_Var":{
+                    "$":"STUConfigVarDynamic","m_identifier":parameter_variable,"m_60DB8F99":true
+                }}]
+            }),
+        );
+        receiver["client_only"] = json!(true);
+        let receiver = graph(
+            receiver_graph,
+            vec![receiver],
+            json!([]),
+            json!([0]),
+            json!([]),
+            json!([]),
+        );
+        let mut bundle = json!({"version":1,"graphs":[sender,receiver],"bodies":{},"missing":[]});
+        if projected {
+            bundle["runtime_state_metadata"] = json!({"projected_message_topics":[topic]});
+        }
+        let graphs =
+            Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+        let mut component = Component::start(
+            Arc::clone(&graphs),
+            ENTITY,
+            Variables::new(),
+            vec![Root::new(1, sender_graph)],
+            0,
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        let active = component.snapshot().unwrap().clone();
+        assert!(active.initialization_complete(), "{:?}", active.diagnostics);
+        let state = &active.instances[&1].states[&0];
+        assert!(state.active);
+        assert_eq!(
+            state.kind,
+            if projected {
+                StateKind::ProjectedSelfSend
+            } else {
+                StateKind::SendMessage
+            }
+        );
+        assert_eq!(
+            component
+                .queue_message(1, abort_id, Variables::new())
+                .unwrap(),
+            1
+        );
+        component.run_now(&mut EmptyWorld).unwrap();
+        let retired = component.snapshot().unwrap();
+        assert!(
+            retired.initialization_complete(),
+            "{:?}",
+            retired.diagnostics
+        );
+        let encoder = SnapshotEncoder::new(&graphs, &codecs);
+        [
+            (View::Owner, DeltaKind::Correction(1)),
+            (View::Observer, DeltaKind::Observer { resend: false }),
+        ]
+        .map(|(view, kind)| {
+            let before = encoder.project(&active, view).unwrap();
+            assert!(before.instances[&1].states[&0].payload.is_empty());
+            let after = encoder.project_next(retired, &before).unwrap();
+            assert!(after.instances[&1].states.is_empty());
+            let delta = encoder
+                .differences(&before, &after, &BTreeSet::new(), &BTreeSet::from([1]))
+                .unwrap();
+            assert!(delta.keys.contains(&ChangeKey::State(1, 0)));
+            (
+                encoder.full(&before).unwrap(),
+                encoder.delta_frame(&after, &delta, kind, 16).unwrap(),
+            )
+        })
+    };
+
+    for ((on, off), (control_on, control_off)) in capture(true).into_iter().zip(capture(false)) {
+        for (actual, control) in [(on, control_on), (off, control_off)] {
+            assert_eq!(actual.bit_len(), control.bit_len());
+            assert_eq!(actual.as_bytes(), control.as_bytes());
+        }
+    }
+}
+
+#[test]
 fn runtime_class_metadata_preserves_owner_and_observer_wire_format() {
     const PLAIN: &str = "SyntheticRuntimePlain";
     const CLIENT: &str = "SyntheticClientState";

@@ -205,6 +205,27 @@ pub(super) fn is_message_recipient_set(target: &Json) -> bool {
     field(target, "$").as_str() == Some("STU_9B213168")
 }
 
+pub(super) fn is_projected_self_message(graph: &Graph, node: &Node, state: u16) -> bool {
+    let target = field(&node.fields, "m_target");
+    let notification = field(&node.fields, "m_67FD6A60");
+    node.is_networked()
+        && node.is_state()
+        && !node.is_action()
+        && node.state == Some(state)
+        && usize::try_from(node.remote)
+            .ok()
+            .and_then(|slot| graph.remote_node(slot))
+            .is_some_and(|remote| remote.pos == node.pos)
+        && node.literal_game_message_id().is_some()
+        && script_expr::native_shape(target, "STU_9B213168", Some("m_targets"))
+        && script_expr::native_shape(field(target, "m_targets"), "STU_B5A0CAF0", None)
+        && (notification.as_u64() == Some(1) || notification.as_bool() == Some(true))
+        && field(&node.fields, "m_targets").is_null()
+        && field(&node.fields, "m_priority").is_null()
+        && !configured(node, "m_AED90719")
+        && node.valid_message_parameters(usize::MAX)
+}
+
 pub(super) fn persistent_message(graph: u32, node: &Node) -> Option<u64> {
     let message = node
         .field("m_gameMessage.m_gameMessage")

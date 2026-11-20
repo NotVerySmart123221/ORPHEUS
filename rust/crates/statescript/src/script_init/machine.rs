@@ -499,6 +499,9 @@ impl Machine {
         due_ms: u64,
     ) -> Result<usize, InitFault> {
         let topic = destination.topic();
+        if matches!(topic, EntryTopic::Message(id) if graphs.is_projected_message_topic(id)) {
+            return Ok(0);
+        }
         let mut entries = Vec::new();
         for (&id, item) in &self.snapshot.instances {
             if matches!(destination, MessageDestination::Ordinary(Some(recipient), _) if recipient != id)

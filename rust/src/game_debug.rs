@@ -562,6 +562,7 @@ fn state_kind_summary(kind: StateKind) -> (&'static str, Option<u8>) {
         StateKind::ClientPulse { .. } => ("ClientPulse", None),
         StateKind::EmptyTargets => ("EmptyTargets", None),
         StateKind::SendMessage => ("SendMessage", None),
+        StateKind::ProjectedSelfSend => ("ProjectedSelfSend", None),
         StateKind::PersistentSend(_) => ("PersistentSend", None),
         StateKind::CosmeticEntity => ("CosmeticEntity", None),
         StateKind::ChaseVar => ("ChaseVar", None),

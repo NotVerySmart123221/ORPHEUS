@@ -6,7 +6,7 @@ use crate::{
     script_expr::{self, EntityRelation, EvalError, equal, truthy},
     script_graph::{Node, asset_guid},
     script_runtime::{ENCOUNTER_RESULT, FRAME_MS, POST_MATCH_COMPLETE, VICTORY_VIEW},
-    script_wire::{Value, Variables},
+    script_wire::Value,
 };
 
 use super::super::{
@@ -16,10 +16,10 @@ use super::super::{
         array_field, array_insertion_index, case_path, configured, encounter_base_state_shape,
         excluded_target_tags, field, is_bare_header_action, is_base_health_pool,
         is_client_subgraph_controller, is_entry, is_literal_frame_wait, is_message_recipient_set,
-        is_networked_for_code_synced, is_owner_movement_sampler, is_self_stat_timer,
-        is_self_target, is_wave_health_pool, living_body_array_shape, participant_filter,
-        persistent_message, pool_number, raw_indices, registered_state, source_key,
-        static_target_operand, stored,
+        is_networked_for_code_synced, is_owner_movement_sampler, is_projected_self_message,
+        is_self_stat_timer, is_self_target, is_wave_health_pool, living_body_array_shape,
+        participant_filter, persistent_message, pool_number, raw_indices, registered_state,
+        source_key, static_target_operand, stored,
     },
     types::{InitFault, Issue, SpawnSearch, SpawnSearchKey, State, StateKind},
     world::{CreationKind, EntityCreation, Site, World},
@@ -399,15 +399,17 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             "STU_C43F9944" if registration.permits((self.graph(id).index, node.pos) == (0x180a, 28)) => {
                 let site = self.site(id, node);
                 let message = POST_MATCH_COMPLETE;
-                if node
-                    .field("m_gameMessage.m_gameMessage")
-                    .and_then(asset_guid)
-                    != Some(message)
-                    || !field(&node.fields, "m_params").is_null()
-                    || !self
-                        .world
-                        .route_game_message(site, message, &Variables::new())
+                let delivered = if node.game_message_id() == Some(message)
+                    && field(&node.fields, "m_params").is_null()
                 {
+                    let Some(parameters) = self.game_message_parameters(id, node)? else {
+                        return Ok(false);
+                    };
+                    self.world.route_game_message(site, message, &parameters)
+                } else {
+                    false
+                };
+                if !delivered {
                     self.report(site, Issue::UnsupportedField("post-match completion"));
                     return Ok(false);
                 }
@@ -1495,6 +1497,20 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             "STU_E3CEF6B9" if registration.shape(is_literal_frame_wait(node)) => {
                 StateKind::WaitFrames { target: 0 }
             }
+            "STU_38EE1100"
+                if node
+                    .game_message_id()
+                    .is_some_and(|topic| self.graphs.is_projected_message_topic(topic)) =>
+            {
+                if !script_expr::valid_entity(self.machine.snapshot.entity)
+                    || self.machine.snapshot.instances[&id].is_server_only()
+                    || !is_projected_self_message(self.graph(id), node, key.raw)
+                {
+                    self.report(self.site(id, node), Issue::UnsupportedMessageRegistration);
+                    return Ok(());
+                }
+                StateKind::ProjectedSelfSend
+            }
             "STU_38EE1100" => persistent_message(self.graph(id).index, node)
                 .map_or(StateKind::SendMessage, StateKind::PersistentSend),
             "STUStatescriptStateCosmeticEntity" => StateKind::CosmeticEntity,
@@ -1831,6 +1847,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             StateKind::WeaponVolley { .. } => self.begin_volley(key, node, depth)?,
             StateKind::Plain
+            | StateKind::ProjectedSelfSend
             | StateKind::PersistentSend(_)
             | StateKind::Effect
             | StateKind::ClientPulse { .. }

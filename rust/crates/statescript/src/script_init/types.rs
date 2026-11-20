@@ -128,6 +128,7 @@ pub enum StateKind {
     },
     EmptyTargets,
     SendMessage,
+    ProjectedSelfSend,
     PersistentSend(u64),
     CosmeticEntity,
     ChaseVar,

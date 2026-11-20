@@ -11,7 +11,7 @@ import re
 
 
 GUID = re.compile(r"(?:0[xX])?[0-9A-Fa-f]{1,16}")
-HERO_ID = re.compile(r"0x[0-9A-F]{16}")
+CANONICAL_GUID = re.compile(r"0x[0-9A-F]{16}")
 REVISION = re.compile(r"[0-9a-f]{40}")
 SCENARIO = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 CLASS_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,127}")
@@ -66,13 +66,22 @@ def guid_index(records):
 
 def runtime_state_metadata(bundle):
     metadata = bundle.get("runtime_state_metadata", {})
-    if not isinstance(metadata, dict) or set(metadata) - {"plain_classes", "client_states"}:
+    if not isinstance(metadata, dict) or set(metadata) - {
+        "plain_classes", "client_states", "projected_message_topics",
+    }:
         raise ValueError("invalid runtime state metadata fields")
     plain = metadata.get("plain_classes", [])
     if not isinstance(plain, list) or any(
         not isinstance(name, str) or not CLASS_NAME.fullmatch(name) for name in plain
     ) or len(set(plain)) != len(plain):
         raise ValueError("invalid or duplicate runtime plain state class")
+
+    topics = metadata.get("projected_message_topics", [])
+    if not isinstance(topics, list) or any(
+        not isinstance(topic, str) or not CANONICAL_GUID.fullmatch(topic) or int(topic, 16) == 0
+        for topic in topics
+    ) or len(set(topics)) != len(topics):
+        raise ValueError("invalid or duplicate projected message topic")
 
     entries = metadata.get("client_states", [])
     if not isinstance(entries, list):
@@ -221,7 +230,7 @@ def read_observation(path, bundle_sha256):
         or any(
             not isinstance(row[field], str) or not pattern.fullmatch(row[field])
             for field, pattern in (
-                ("scenario", SCENARIO), ("hero", HERO_ID), ("source_revision", REVISION)
+                ("scenario", SCENARIO), ("hero", CANONICAL_GUID), ("source_revision", REVISION)
             )
         )
         or row["hero"] == "0x0000000000000000"
