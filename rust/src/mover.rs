@@ -28,10 +28,12 @@ const EPSILON: f64 = 1.1754943508222875e-36;
 pub enum VelocityChange {
     Delta([f64; 3]),
     HorizontalCap(f64),
+    VerticalImpulse { vertical: f64, delta: [f64; 3] },
 }
 
 impl VelocityChange {
-    pub(crate) fn apply(self, velocity: &mut [f64; 3]) {
+    /// Apply this edit and report a positive launch that should leave the ground.
+    pub(crate) fn apply(self, velocity: &mut [f64; 3]) -> bool {
         match self {
             Self::Delta(delta) => {
                 for (axis, delta) in velocity.iter_mut().zip(delta) {
@@ -46,13 +48,28 @@ impl VelocityChange {
                     }
                 }
             }
+            Self::VerticalImpulse { vertical, delta } => {
+                let mut next = *velocity;
+                next[1] = vertical;
+                Self::Delta(delta).apply(&mut next);
+                if next.iter().all(|axis| axis.is_finite()) {
+                    *velocity = next;
+                    return next[1] > 0.0;
+                }
+            }
         }
+        false
     }
 
     pub(crate) fn valid(self) -> bool {
         match self {
             Self::Delta(delta) => delta.iter().all(|value| (*value as f32).is_finite()),
             Self::HorizontalCap(cap) => (cap as f32).is_finite() && cap >= 0.0,
+            Self::VerticalImpulse { vertical, delta } => {
+                (vertical as f32).is_finite()
+                    && Self::Delta(delta).valid()
+                    && (vertical as f32 + delta[1] as f32).is_finite()
+            }
         }
     }
 }
@@ -247,14 +264,18 @@ impl Mover {
         command: Command,
         dt: f64,
     ) -> Result<(), HullContactError> {
+        let mut launched = false;
         self.velocity_changes.retain(|&(frame, change)| {
             if frame <= command.frame {
-                change.apply(&mut self.pose.velocity);
+                launched |= change.apply(&mut self.pose.velocity);
                 false
             } else {
                 true
             }
         });
+        if launched && self.pose.velocity[1] > 0.0 {
+            self.posture.begin_velocity_launch();
+        }
         let active = self.modifiers.at(command.frame);
         let settings = active.settings(&self.base);
         let mut input = MotionInput::from(&command).with_modifiers(&active);
@@ -512,6 +533,81 @@ mod tests {
         VelocityChange::HorizontalCap(5.0).apply(&mut velocity);
         assert_eq!(velocity, [3.0, 7.0, 4.0]);
         assert!(!VelocityChange::HorizontalCap(-1.0).valid());
+    }
+
+    #[test]
+    fn vertical_impulse_leaves_supported_ground_at_the_due_pose() {
+        use crate::collision_index::SceneTriangle;
+
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/script-vertical-velocity-impulse-v1.json"
+        ))
+        .unwrap();
+        let input = &contract["input"];
+        let expected = &contract["expected"];
+        let change = VelocityChange::VerticalImpulse {
+            vertical: input["vertical_reset"].as_f64().unwrap(),
+            delta: serde_json::from_value(input["delta"].clone()).unwrap(),
+        };
+        let mut velocity: [f64; 3] =
+            serde_json::from_value(input["prior_velocity"].clone()).unwrap();
+        let before_physics: [f64; 3] =
+            serde_json::from_value(expected["velocity_before_ground_and_gravity"].clone()).unwrap();
+        assert!(change.valid());
+        assert!(change.apply(&mut velocity));
+        assert_eq!(velocity, before_physics);
+
+        let extreme = f64::from(f32::MAX);
+        let overflow = VelocityChange::VerticalImpulse {
+            vertical: 2.0,
+            delta: [extreme, 8.0, 1.0],
+        };
+        velocity = [extreme, -4.0, -1.5];
+        assert!(overflow.valid());
+        assert!(!overflow.apply(&mut velocity));
+        assert_eq!(velocity, [extreme, -4.0, -1.5]);
+
+        let rays = TriangleIndex::new([SceneTriangle {
+            vertices: [[-10.0, 0.0, -10.0], [0.0, 0.0, 20.0], [10.0, 0.0, -10.0]],
+            mask: 0x18,
+            surface: 0,
+        }])
+        .unwrap();
+        let mut mover = Mover::new(
+            MoverSettings::default(),
+            Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+            [0.0; 3],
+            0,
+            0x18,
+        )
+        .unwrap();
+        let source = input["frame"].as_u64().unwrap() as u32;
+        let due = expected["apply_frame"].as_u64().unwrap() as u32;
+        mover.queue_velocity_change(due, change);
+        let mut step = |frame| {
+            mover
+                .step(
+                    &rays,
+                    Command {
+                        frame,
+                        ..Default::default()
+                    },
+                    0.016,
+                    |_, _| {},
+                )
+                .unwrap();
+            mover.pose()
+        };
+        let grounded = step(source);
+        assert_eq!(grounded.flags & IN_AIR, 0);
+        let lifted = step(due);
+        assert_ne!(lifted.flags & IN_AIR, 0);
+        assert!(lifted.position[1] > grounded.position[1]);
+        assert!(lifted.velocity[1] > 0.0);
+        let next = step(due + 1);
+        assert!(next.position[1] > lifted.position[1]);
+        assert!(next.velocity[1] < lifted.velocity[1]);
+        assert!(mover.velocity_changes.is_empty());
     }
 
     #[test]

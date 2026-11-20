@@ -822,10 +822,40 @@ pub(super) fn is_bare_header_action(node: &Node) -> bool {
 }
 
 pub(super) fn is_horizontal_velocity_clamp(node: &Node) -> bool {
-    let fields = &node.fields;
-    let [row] = array_field(fields, "m_BC5E91CF") else {
+    let [row] = array_field(&node.fields, "m_BC5E91CF") else {
         return false;
     };
+    is_local_velocity_action(node)
+        && field(row, "$").as_str() == Some("STU_20E18047")
+        && script_expr::native_fields(
+            row,
+            &["m_A9561CA0", "m_priority", "m_8AD739CE", "m_8213EB22"],
+        )
+        && field(row, "m_A9561CA0").as_u64() == Some(1)
+        && field(row, "m_priority").is_null()
+        && !field(row, "m_8AD739CE").is_null()
+        && !field(row, "m_8213EB22").is_null()
+}
+
+pub(super) fn is_vertical_velocity_impulse(node: &Node) -> bool {
+    let [reset, impulse] = array_field(&node.fields, "m_BC5E91CF") else {
+        return false;
+    };
+    let is_row = |row: &Json, class: &str, selector: &str, index| {
+        field(row, "$").as_str() == Some(class)
+            && script_expr::native_fields(row, &[selector, "m_priority", "m_9B7A63EA"])
+            && field(row, selector).as_u64() == Some(index)
+            && field(row, "m_priority").is_null()
+            && !field(row, "m_9B7A63EA").is_null()
+    };
+    is_local_velocity_action(node)
+        && node.runs_on_server()
+        && is_row(reset, "STU_9AF0FA80", "m_A9561CA0", 2)
+        && is_row(impulse, "STU_4635C5E2", "m_CFEC5F76", 1)
+}
+
+fn is_local_velocity_action(node: &Node) -> bool {
+    let fields = &node.fields;
     node.state.is_none()
         && node.remote == -1
         && node.is_action()
@@ -850,15 +880,6 @@ pub(super) fn is_horizontal_velocity_clamp(node: &Node) -> bool {
             let value = field(fields, name);
             matches!(value, Json::Null | Json::Bool(false)) || value.as_u64() == Some(0)
         })
-        && field(row, "$").as_str() == Some("STU_20E18047")
-        && script_expr::native_fields(
-            row,
-            &["m_A9561CA0", "m_priority", "m_8AD739CE", "m_8213EB22"],
-        )
-        && field(row, "m_A9561CA0").as_u64() == Some(1)
-        && field(row, "m_priority").is_null()
-        && !field(row, "m_8AD739CE").is_null()
-        && !field(row, "m_8213EB22").is_null()
 }
 
 // These authored placements resolve to the PC base State.

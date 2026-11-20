@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "case_id": "script-vertical-velocity-impulse-v1",
+  "source": {
+    "basis": "Synthetic StateScript launch operands and a controlled grounded movement step."
+  },
+  "evidence": "rust-synthetic",
+  "input": {
+    "vertical_reset": 1,
+    "delta": [-2.0, 8.0, 3.5],
+    "prior_velocity": [5.0, -4.0, -1.5],
+    "frame": 100
+  },
+  "expected": {
+    "velocity_before_ground_and_gravity": [3.0, 9.0, 2.0],
+    "apply_frame": 101,
+    "cases": [
+      {"graph": 21991, "position": 1, "kind": "accepted"},
+      {"graph": 21992, "position": 3, "kind": "accepted"},
+      {"graph": 21993, "position": 4, "kind": "reverse_rows"},
+      {"graph": 21994, "position": 5, "kind": "wrong_operand"},
+      {"graph": 21995, "position": 6, "kind": "prioritized"},
+      {"graph": 21996, "position": 7, "kind": "no_host"}
+    ]
+  }
+}

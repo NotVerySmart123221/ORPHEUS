@@ -756,6 +756,39 @@ fn shared_horizontal_cap_queues_on_a_live_player_without_a_roll_profile() {
 }
 
 #[test]
+fn authored_impulse_queues_only_for_its_live_body() {
+    use crate::mover::VelocityChange;
+
+    let spawn = fixture_body_factory().1;
+    let mut body = fixture_hitscan_factory(20.0).start(spawn).unwrap();
+    let site = Site {
+        entity: spawn.entity,
+        instance: 2,
+        graph: 61061,
+        node: Some(9),
+    };
+    let foreign = Site {
+        entity: spawn.entity + 1,
+        ..site
+    };
+    let delta = [2.0, 7.0, -0.5];
+    assert!(!body.world.apply_velocity_impulse(foreign, 12, 1.0, delta));
+    assert!(!body.world.apply_velocity_impulse(site, 12, f64::MAX, delta));
+    assert!(body.world.apply_velocity_impulse(site, 12, 1.0, delta));
+    assert_eq!(
+        body.take_velocity_changes(),
+        [(
+            13,
+            VelocityChange::VerticalImpulse {
+                vertical: 1.0,
+                delta,
+            },
+        )]
+    );
+    assert!(body.take_velocity_changes().is_empty());
+}
+
+#[test]
 fn player_natives_follow_the_verified_owner_and_override_shapes() {
     use crate::script_expr::EvalError;
     use serde_json::json;
@@ -2333,7 +2366,10 @@ fn authored_pose_queries_read_live_player_position_and_aim_outside_encounter_mod
     assert_eq!(world.known_position(spawn.entity), Some(current));
     assert_eq!(world.position(spawn.entity), Some(current));
     assert_eq!(world.authored_position(spawn.entity), Some(current));
-    assert_eq!(world.forward(spawn.entity), None);
+    let heading = world.forward(spawn.entity).unwrap();
+    for (actual, expected) in heading.into_iter().zip([1.0, 0.0, 0.0]) {
+        assert!((actual - expected).abs() < 1e-12);
+    }
     let axis = std::f64::consts::FRAC_1_SQRT_2;
     let direction = world.authored_forward(spawn.entity).unwrap();
     for (actual, expected) in direction.into_iter().zip([axis, axis, 0.0]) {

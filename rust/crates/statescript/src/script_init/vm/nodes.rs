@@ -20,10 +20,10 @@ use super::super::{
         is_message_recipient_set, is_named_shield_decay, is_networked_for_code_synced,
         is_owner_movement_sampler, is_parent_owned_timed_graph, is_projected_self_message,
         is_self_shield_recharge, is_self_stat_timer, is_self_target, is_static_map_explosion,
-        is_wave_health_pool, living_body_array_shape, named_temporary_shield,
-        parent_owned_graph_duration, participant_filter, persistent_message,
-        placement_collection_tag, pool_number, raw_indices, registered_state, source_key,
-        static_target_operand, stored,
+        is_vertical_velocity_impulse, is_wave_health_pool, living_body_array_shape,
+        named_temporary_shield, parent_owned_graph_duration, participant_filter,
+        persistent_message, placement_collection_tag, pool_number, raw_indices, registered_state,
+        source_key, static_target_operand, stored,
     },
     types::{InitFault, Issue, SpawnSearch, SpawnSearchKey, State, StateKind},
     world::{CreationKind, EntityCreation, Site, World},
@@ -591,6 +591,32 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         high,
                     )
                 {
+                    return Ok(false);
+                }
+                self.follow(id, node, "m_outPlug", caller, depth)
+            }
+            "STU_FF3471E9" if registration.shape(is_vertical_velocity_impulse(node)) => {
+                let rows = array_field(&node.fields, "m_BC5E91CF");
+                let Some(reset) = self.evaluate(id, node, field(&rows[0], "m_9B7A63EA"), caller) else {
+                    return Ok(false);
+                };
+                let Some(impulse) = self.evaluate(id, node, field(&rows[1], "m_9B7A63EA"), caller) else {
+                    return Ok(false);
+                };
+                let site = self.site(id, node);
+                let (Some(vertical), Value::Vector(delta)) = (pool_number(reset), impulse) else {
+                    self.report(site, Issue::Expression(EvalError::MalformedConfig("velocity impulse operands")));
+                    return Ok(false);
+                };
+                if !(vertical as f32).is_finite()
+                    || !delta.iter().all(|&axis| (axis as f32).is_finite())
+                    || !(vertical as f32 + delta[1] as f32).is_finite()
+                {
+                    self.report(site, Issue::Expression(EvalError::MalformedConfig("nonfinite velocity impulse")));
+                    return Ok(false);
+                }
+                if !self.world.apply_velocity_impulse(site, self.machine.frame, vertical, delta) {
+                    self.report(site, Issue::UnsupportedField("velocity impulse service"));
                     return Ok(false);
                 }
                 self.follow(id, node, "m_outPlug", caller, depth)
