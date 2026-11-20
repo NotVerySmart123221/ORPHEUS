@@ -12,6 +12,7 @@ workspace = true
 
 [features]
 node-observations = []
+extended-node-observations = ["node-observations"]
 
 [dependencies]
 flate2 = "1.1"

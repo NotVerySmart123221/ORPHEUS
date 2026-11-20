@@ -8,7 +8,10 @@ use std::{
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::script_init::{Issue, Snapshot};
+use crate::{
+    game_debug::summarize_script_snapshot,
+    script_init::{Issue, NodeObservations, Snapshot},
+};
 
 pub(super) struct Capture {
     path: PathBuf,
@@ -40,6 +43,16 @@ impl Capture {
         let observed = snapshot
             .node_observations()
             .expect("coverage build collects node observations");
+        let summary = summarize_script_snapshot(snapshot.entity, "coverage", snapshot)
+            .node_observations
+            .unwrap();
+        let site_count = observed.sites().len();
+        let response_limit = NodeObservations::DEFAULT_SITE_LIMIT;
+        assert_eq!(summary.sites.len(), site_count.min(response_limit));
+        assert_eq!(
+            summary.truncated,
+            observed.truncated() || site_count > response_limit
+        );
         let observations: Vec<_> = observed
             .sites()
             .map(|(graph, node, client_scope_skipped)| {
@@ -69,9 +82,14 @@ impl Capture {
             .into_iter()
             .map(|(graph, node, kind)| json!({"graph": graph, "node": node, "kind": kind}))
             .collect();
+        let scenario = if cfg!(feature = "script-coverage") {
+            "owner-probe-900-frames-extended-v1"
+        } else {
+            "owner-probe-900-frames-v1"
+        };
         let value = json!({
             "schema_version": 1,
-            "scenario": "owner-probe-900-frames-v1",
+            "scenario": scenario,
             "hero": format!("0x{hero:016X}"),
             "available": true,
             "frames": frames,

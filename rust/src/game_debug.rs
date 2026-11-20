@@ -10,7 +10,7 @@ use serde::Serialize;
 #[cfg(any(test, feature = "inspector"))]
 use crate::{
     game_timing::WorkerTiming,
-    script_init::{Issue as ScriptIssue, Snapshot as ScriptSnapshot, StateKind},
+    script_init::{Issue as ScriptIssue, NodeObservations, Snapshot as ScriptSnapshot, StateKind},
     script_wire::{Value as ScriptValue, Variables},
 };
 
@@ -399,22 +399,23 @@ pub(crate) fn summarize_script_snapshot(
             unsupported_nodes += 1;
         }
     }
-    let node_observations =
-        snapshot
-            .node_observations()
-            .map(|observations| ScriptNodeObservations {
-                sites: observations
-                    .sites()
-                    .map(
-                        |(graph, node, client_scope_skipped)| ScriptNodeObservation {
-                            graph,
-                            node,
-                            client_scope_skipped,
-                        },
-                    )
-                    .collect(),
-                truncated: observations.truncated(),
-            });
+    let node_observations = snapshot.node_observations().map(|observations| {
+        let sites = observations.sites();
+        let limit = NodeObservations::DEFAULT_SITE_LIMIT;
+        ScriptNodeObservations {
+            truncated: observations.truncated() || sites.len() > limit,
+            sites: sites
+                .take(limit)
+                .map(
+                    |(graph, node, client_scope_skipped)| ScriptNodeObservation {
+                        graph,
+                        node,
+                        client_scope_skipped,
+                    },
+                )
+                .collect(),
+        }
+    });
     EntityScriptSnapshot {
         entity,
         kind,

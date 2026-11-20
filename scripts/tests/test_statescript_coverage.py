@@ -20,10 +20,12 @@ PRIVATE_VALUE = "synthetic operand value excluded by the report"
 REVISION = "a" * 40
 
 
-def node(pos, rid, state, client_only=False):
+def node(pos, rid, state, client_only=False, **overrides):
     return {
         "pos": pos, "rid": rid, "state": state, "class": "SyntheticState",
-        "client_only": client_only, "server_only": False, "fields": {"private": PRIVATE_VALUE},
+        "client_only": client_only, "server_only": False,
+        "fields": {"private": PRIVATE_VALUE, "m_2BBEEAB8": state is not None},
+        **overrides,
     }
 
 
@@ -45,11 +47,11 @@ class StateScriptCoverageTest(unittest.TestCase):
         self.observation = root / "observation.json"
         self.secondary = root / "secondary.json"
         self.output = root / "coverage.json"
-        prepared = {
+        self.prepared = {
             "version": 1,
             "graphs": [
-                {"index": 51, "nodes": [node(6, 502, 4)]},
-                {"index": 42, "nodes": [
+                {"index": 51, "states": [None, None, None, None, 6], "nodes": [node(6, 502, 4)]},
+                {"index": 42, "states": [2, 3, 4], "nodes": [
                     node(5, 105, None), node(4, 107, 2), node(3, 101, 1),
                     node(2, 109, 0, client_only=True), node(1, 102, None),
                 ]},
@@ -62,12 +64,15 @@ class StateScriptCoverageTest(unittest.TestCase):
                 },
             },
         }
-        self.bundle.write_bytes(gzip.compress(json.dumps(prepared).encode(), mtime=0))
-        self.bundle_digest = hashlib.sha256(self.bundle.read_bytes()).hexdigest()
+        self.write_bundle()
         self.catalog.write_text(
             json.dumps({NO_BODY[2:]: {"body": OTHER_BODY}, HERO: {"body": BODY}}),
             encoding="utf-8",
         )
+
+    def write_bundle(self):
+        self.bundle.write_bytes(gzip.compress(json.dumps(self.prepared).encode(), mtime=0))
+        self.bundle_digest = hashlib.sha256(self.bundle.read_bytes()).hexdigest()
 
     def write_observation(self, path, **overrides):
         sidecar = {
@@ -134,7 +139,8 @@ class StateScriptCoverageTest(unittest.TestCase):
         ])
         self.assertEqual(graph["nodes"][1], {
             "node": 2, "rid": 109, "class": "SyntheticState", "state": 0,
-            "scope": "client_only", "coverage": "client_skipped",
+            "scope": "client_only", "server_scope": "client_only",
+            "runtime_classification": None, "coverage": "client_skipped",
             "client_scope_skipped": True, "diagnostics": [],
         })
         self.assertFalse(graph["nodes"][2]["client_scope_skipped"])
@@ -145,6 +151,79 @@ class StateScriptCoverageTest(unittest.TestCase):
             [(row["graph"], row["node"], row["reason"]) for row in scenario["unmatched_sites"]],
             [(42, 600, "unknown_node"), (79, 1, "unknown_graph"), (79, 2, "unknown_graph")],
         )
+
+    def test_static_state_metadata_respects_each_state_and_keeps_observations_separate(self):
+        self.prepared["runtime_state_metadata"] = {
+            "plain_classes": ["SyntheticState"],
+            "client_states": [
+                {"graph": 42, "state": 1, "rid": 101, "class": "SyntheticState"},
+                {"graph": 42, "state": 0, "rid": 109, "class": "SyntheticState"},
+            ],
+        }
+        self.prepared["authored_classes"] = [
+            {"class": "authored.overlay", "behavior": "client_only"},
+        ]
+        graph = self.prepared["graphs"][1]
+        graph["states"].extend([8, 9, 10, None, 12])
+        graph["nodes"].extend([
+            node(8, 201, 3, server_only=True),
+            node(9, 202, 4, fields={}),
+            node(10, 203, 5, server_only=True, state_behavior="plain"),
+            node(11, 204, 6),
+            node(12, 205, 7, **{"class": "authored.overlay"}),
+        ])
+        self.write_bundle()
+        self.write_observation(
+            self.observation,
+            observations=[target(42, 3, True)],
+            diagnostics=[diagnostic(42, 4, "registration_rejection")],
+        )
+        report = self.read_report(self.observation)
+        scenario = report["heroes"][0]["scenarios"][0]
+        rows = scenario["graphs"][0]["nodes"]
+        self.assertEqual([row["node"] for row in rows], [1, 2, 3, 4, 5, 8, 9, 10, 11, 12])
+        nodes = {row["node"]: row for row in rows}
+        for pos, raw, server, annotation, status in (
+            (1, "networked", "eligible", None, "not_observed"),
+            (2, "client_only", "client_only", "client_state", "not_observed"),
+            (3, "networked", "client_only", "client_state", "client_skipped"),
+            (4, "networked", "eligible", "plain_candidate", "registration_rejection"),
+            (8, "server_only", "eligible", "plain_candidate", "not_observed"),
+            (9, "networked", "eligible", None, "not_observed"),
+            (10, "server_only", "eligible", None, "not_observed"),
+            (11, "networked", "eligible", None, "not_observed"),
+            (12, "networked", "client_only", None, "not_observed"),
+        ):
+            with self.subTest(pos=pos):
+                row = nodes[pos]
+                self.assertEqual(
+                    (row["scope"], row["server_scope"], row["runtime_classification"], row["coverage"]),
+                    (raw, server, annotation, status),
+                )
+        self.assertIsNone(nodes[2]["client_scope_skipped"])
+        self.assertEqual(scenario["counts"]["client_skipped"], 1)
+
+    def test_runtime_client_rows_require_exact_eligible_states(self):
+        client = {"graph": 42, "state": 1, "rid": 101, "class": "SyntheticState"}
+        graph = self.prepared["graphs"][1]
+        for annotations, states, server_only in (
+            ([{**client, "graph": 88}], [2, 3, 4], False),
+            ([{**client, "state": 0}], [2, 3, 4], False),
+            ([{**client, "rid": 102}], [2, 3, 4], False),
+            ([{**client, "class": "DifferentState"}], [2, 3, 4], False),
+            ([client], [2, 4, 3], False),
+            ([client], [2, 3, 4], True),
+            ([client, client], [2, 3, 4], False),
+        ):
+            with self.subTest(annotations=annotations, states=states, server_only=server_only):
+                self.prepared["runtime_state_metadata"] = {"client_states": annotations}
+                graph["states"] = states
+                next(row for row in graph["nodes"] if row["pos"] == 3)["server_only"] = server_only
+                self.write_bundle()
+                result = self.run_report()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("runtime client state", result.stderr)
+                self.assertFalse(self.output.exists())
 
     def test_observations_of_unknown_hero_stay_unmatched(self):
         self.write_observation(self.observation, hero=UNKNOWN_HERO, observations=[target(42, 1)],

@@ -14,6 +14,7 @@ GUID = re.compile(r"(?:0[xX])?[0-9A-Fa-f]{1,16}")
 HERO_ID = re.compile(r"0x[0-9A-F]{16}")
 REVISION = re.compile(r"[0-9a-f]{40}")
 SCENARIO = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+CLASS_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,127}")
 COVERAGE = (
     "observed", "client_skipped", "unsupported", "registration_rejection",
     "not_observed", "no_scenario",
@@ -63,15 +64,56 @@ def guid_index(records):
     return index
 
 
+def runtime_state_metadata(bundle):
+    metadata = bundle.get("runtime_state_metadata", {})
+    if not isinstance(metadata, dict) or set(metadata) - {"plain_classes", "client_states"}:
+        raise ValueError("invalid runtime state metadata fields")
+    plain = metadata.get("plain_classes", [])
+    if not isinstance(plain, list) or any(
+        not isinstance(name, str) or not CLASS_NAME.fullmatch(name) for name in plain
+    ) or len(set(plain)) != len(plain):
+        raise ValueError("invalid or duplicate runtime plain state class")
+
+    entries = metadata.get("client_states", [])
+    if not isinstance(entries, list):
+        raise ValueError("expected a runtime client state list")
+    clients = {}
+    for row in entries:
+        if (
+            not isinstance(row, dict) or set(row) != {"graph", "state", "rid", "class"}
+            or not uint(row["graph"], 32) or not uint(row["state"], 16)
+            or not uint(row["rid"], 16)
+            or not isinstance(row["class"], str) or not CLASS_NAME.fullmatch(row["class"])
+        ):
+            raise ValueError("invalid runtime client state identity")
+        graph, slot = row["graph"], row["state"]
+        slots = clients.setdefault(graph, {})
+        if slot in slots:
+            raise ValueError(f"duplicate runtime client state in graph {graph} at slot {slot}")
+        slots[slot] = row["rid"], row["class"]
+    return set(plain), clients
+
+
 def graph_index(bundle):
-    if not isinstance(bundle, dict) or bundle.get("version") != 1:
+    if not isinstance(bundle, dict) or not uint(bundle.get("version"), 32) or bundle["version"] != 1:
         raise ValueError("expected a version 1 prepared graph bundle")
+    plain_classes, client_slots = runtime_state_metadata(bundle)
+    authored_client_classes = {
+        row["class"] for row in bundle.get("authored_classes", [])
+        if row["behavior"] == "client_only"
+    }
     graphs = {}
     for graph in bundle["graphs"]:
         index = graph["index"]
         if not uint(index, 32) or index in graphs:
             raise ValueError("invalid or duplicate prepared graph index")
         nodes = {}
+        states = graph.get("states", [])
+        if not isinstance(states, list) or any(
+            position is not None and not uint(position, 16) for position in states
+        ):
+            raise ValueError("invalid prepared graph state slots")
+        annotations = client_slots.pop(index, {})
         for node in graph["nodes"]:
             pos, rid, state, name = (node[key] for key in ("pos", "rid", "state", "class"))
             if (
@@ -85,8 +127,43 @@ def graph_index(bundle):
                 (False, False): "networked", (False, True): "server_only",
                 (True, False): "client_only", (True, True): "conflicting",
             }[client, server]
-            nodes[pos] = {"node": pos, "rid": rid, "state": state, "class": name, "scope": scope}
+            # Scope and runtime classification describe eligibility only. The sidecar remains
+            # the sole source of reached, skipped, unsupported and rejected statuses.
+            runtime_classification = None
+            client_scope = client or name in authored_client_classes
+            if state is not None and state < len(states) and states[state] == pos:
+                fields = node.get("fields")
+                is_state = isinstance(fields, dict) and bool(fields.get("m_2BBEEAB8"))
+                authored = (
+                    name.startswith("authored.") or node.get("state_behavior") is not None
+                    or node.get("action_behavior") is not None
+                    or node.get("room_message_entry") is True
+                    or node.get("host_event_entry") is not None
+                )
+                if state in annotations:
+                    identity = annotations.pop(state)
+                    if identity != (rid, name) or not is_state or server or authored:
+                        raise ValueError(
+                            f"runtime client state in graph {index} at slot {state}"
+                            " does not match an eligible state"
+                        )
+                    client_scope = True
+                    runtime_classification = "client_state"
+                elif is_state and not authored and not client_scope and name in plain_classes:
+                    runtime_classification = "plain_candidate"
+            nodes[pos] = {
+                "node": pos, "rid": rid, "state": state, "class": name, "scope": scope,
+                "server_scope": "client_only" if client_scope else "eligible",
+                "runtime_classification": runtime_classification,
+            }
+        if annotations:
+            raise ValueError(
+                f"runtime client state in graph {index} at slot {min(annotations)}"
+                " has no matching state"
+            )
         graphs[index] = nodes
+    if client_slots:
+        raise ValueError(f"runtime client state references unknown graph {min(client_slots)}")
     return graphs, guid_index(bundle["bodies"])
 
 

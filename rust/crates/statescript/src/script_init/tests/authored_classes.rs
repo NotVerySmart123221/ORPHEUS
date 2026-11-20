@@ -1635,17 +1635,18 @@ fn authored_room_messages_require_explicit_server_receiver_and_bounded_sender() 
 #[cfg(feature = "node-observations")]
 #[test]
 fn node_observation_limit_counts_only_distinct_sites() {
+    let limit = u16::try_from(NodeObservations::SITE_LIMIT).unwrap();
     let mut observations = NodeObservations::default();
-    for node in 0..128 {
+    for node in 0..limit {
         observations.record(42, node, false);
     }
     observations.record(42, 0, false);
     assert!(!observations.truncated());
-    assert_eq!(observations.sites().count(), 128);
+    assert_eq!(observations.sites().count(), usize::from(limit));
 
     observations.record(77, 0, true);
     assert!(observations.truncated());
-    assert_eq!(observations.sites().count(), 128);
+    assert_eq!(observations.sites().count(), usize::from(limit));
     assert!(
         observations
             .sites()

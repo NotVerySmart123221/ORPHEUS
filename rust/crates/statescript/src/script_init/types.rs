@@ -378,8 +378,18 @@ pub struct NodeObservations {
 }
 
 impl NodeObservations {
+    /// The observation limit used by ordinary diagnostic builds.
+    pub const DEFAULT_SITE_LIMIT: usize = 128;
+
+    #[cfg(feature = "node-observations")]
+    pub(super) const SITE_LIMIT: usize = if cfg!(feature = "extended-node-observations") {
+        4096
+    } else {
+        Self::DEFAULT_SITE_LIMIT
+    };
+
     /// Each graph and node location, with whether its client scope skipped it.
-    pub fn sites(&self) -> impl Iterator<Item = (u32, u16, bool)> + '_ {
+    pub fn sites(&self) -> impl ExactSizeIterator<Item = (u32, u16, bool)> + '_ {
         self.sites
             .iter()
             .map(|(&(graph, node), &client_scope_skipped)| (graph, node, client_scope_skipped))
@@ -391,11 +401,10 @@ impl NodeObservations {
 
     #[cfg(feature = "node-observations")]
     pub(super) fn record(&mut self, graph: u32, node: u16, client_scope_skipped: bool) {
-        const MAX_SITES: usize = 128;
         if self.truncated {
             return;
         }
-        let full = self.sites.len() == MAX_SITES;
+        let full = self.sites.len() == Self::SITE_LIMIT;
         if let std::collections::btree_map::Entry::Vacant(site) = self.sites.entry((graph, node)) {
             if full {
                 self.truncated = true;

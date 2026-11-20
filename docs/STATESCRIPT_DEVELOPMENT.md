@@ -114,15 +114,17 @@ default values.
 
 ### Collect a headless coverage baseline
 
-Run the existing 900-frame owner test with the Inspector feature and a
-local prepared pack that includes target tags. Set a fresh output path
-and record the full revision of the checkout used for the run.
+Run the existing 900-frame owner test with the `script-coverage` feature
+and a local prepared pack that includes target tags. The capture tracks
+up to 4,096 distinct positions per component starting at VM initialization.
+The live Inspector response remains capped at 128 positions per component.
+Set a fresh output path and record the full revision used for the run.
 
 ```powershell
 $env:ORPHEUS_RUNTIME_DIR = 'C:\private\runtime'
 $env:ORPHEUS_SCRIPT_COVERAGE = 'C:\private\owner-coverage.json'
 $env:ORPHEUS_SCRIPT_COVERAGE_REVISION = git rev-parse HEAD
-cargo test --locked -p orpheus --features inspector --lib stock_soldier_owner_session_idles_fires_reloads_and_sprints -- --ignored
+cargo test --locked -p orpheus --features script-coverage --lib stock_soldier_owner_session_idles_fires_reloads_and_sprints -- --ignored
 ```
 
 Join observations with the exact graph bundle and a local hero catalog
@@ -135,12 +137,13 @@ python scripts/summarize_statescript_coverage.py --graph-bundle path/to/game_gra
 The input catalog supplies direct body roots. An observation can also
 identify a child graph. Use repeated `--observation` options for separate
 runs. With no observation, the report lists catalog roots and marks their
-nodes as having no sampled scenario. Review scope skips, registration
-rejections, and unsupported sites separately. Passed dispatch scope
-shows an observed target. Missing rows in a capped observation have
-unknown coverage. The scripted inputs exercise one hero and one path.
-Record new scenarios before using the report to prioritize other
-heroes or declaring a path covered.
+nodes as having no sampled scenario. The report lists each node's declared
+`scope` and effective `server_scope`. Its `runtime_classification` identifies
+an exact client state or a candidate for plain lifecycle fallback. Review
+scope skips, registration rejections, and unsupported sites separately.
+An observed target passed the VM scope check. Missing rows in a capped
+observation have unknown coverage. The scripted inputs exercise one hero
+and one path. Use scenario-specific captures to prioritize other paths.
 
 ### Generate a synthetic test scaffold
 
