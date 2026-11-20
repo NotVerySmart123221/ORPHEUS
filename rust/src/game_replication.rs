@@ -88,6 +88,9 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
     fn take_velocity_changes(&mut self) -> Vec<(u32, crate::mover::VelocityChange)> {
         Vec::new()
     }
+    fn take_health_requests(&mut self) -> Vec<crate::game_combat::RoomHealthRequest> {
+        Vec::new()
+    }
     fn set_spatial_frame(&mut self, _frame: Arc<crate::game_combat::RoomSpatialFrame>) {}
     fn set_defenders(&mut self, _defenders: Arc<[u32]>) {}
     fn take_sightings(&mut self) -> Vec<crate::junkenstein_messages::DefenderSighting> {

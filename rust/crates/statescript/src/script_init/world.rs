@@ -256,6 +256,10 @@ pub trait World {
     fn self_damage(&mut self, _site: Site, _amount: f64) -> bool {
         false
     }
+    /// Admit a signed health request for application by the world.
+    fn queue_health_change(&mut self, _site: Site, _target: u32, _delta: f64) -> bool {
+        false
+    }
     fn recharge_shields(&mut self, _site: Site, _amount: f64) -> bool {
         false
     }

@@ -237,6 +237,7 @@ pub(crate) struct BotReplacement {
 
 mod encounter;
 mod enemy;
+mod health;
 mod player;
 pub(crate) use encounter::{
     ENCOUNTER_INSTANCE, EncounterRegistration, EncounterWorld, GateState, GateWorld,
@@ -245,6 +246,8 @@ use encounter::{EncounterComponent, GateHandle};
 #[cfg(test)]
 pub(crate) use encounter::{EncounterPhase, GateDamageStage, GateHealth};
 use enemy::{BotState, EnemyState};
+use health::HealthEffect;
+pub(crate) use health::{RoomHealthRequest, RoomHealthRequests};
 pub(crate) use player::{PlayerBodyEvent, PlayerBodyHandle, PlayerBodyState};
 
 #[derive(Component)]
@@ -271,6 +274,7 @@ struct FlightBatch {
 /// A room frame's living candidate rows and the shared static collision view.
 pub(crate) struct RoomSpatialFrame {
     candidates: Box<[SpatialCandidate]>,
+    health_targets: HashMap<u32, Entity>,
     ground: Arc<CollisionScene>,
 }
 
@@ -673,10 +677,16 @@ impl RoomSimulation {
             return Ok(());
         }
 
-        let mut candidates = Vec::with_capacity(self.players_by_wire.len() + self.by_wire.len());
-        for state in self.states() {
-            let bot = &state?.bot;
+        let capacity = self.players_by_wire.len() + self.by_wire.len();
+        let mut candidates = Vec::with_capacity(capacity);
+        let mut health_targets = HashMap::with_capacity(capacity);
+        for (state, &entity) in self.states().zip(self.by_wire.values()) {
+            let state = state?;
+            let bot = &state.bot;
             if !bot.dead {
+                if state.vitals.death().is_none() {
+                    health_targets.insert(bot.entity, entity);
+                }
                 candidates.push(SpatialCandidate {
                     entity: bot.entity,
                     position: bot.position,
@@ -696,6 +706,14 @@ impl RoomSimulation {
                 });
             }
             if state.alive() {
+                if state
+                    .runtime
+                    .as_ref()
+                    .and_then(|runtime| runtime.vitals())
+                    .is_some()
+                {
+                    health_targets.insert(wire, entity);
+                }
                 candidates.push(SpatialCandidate {
                     entity: wire,
                     position: state.mover.pose().position,
@@ -706,6 +724,7 @@ impl RoomSimulation {
 
         let spatial = Arc::new(RoomSpatialFrame {
             candidates: candidates.into_boxed_slice(),
+            health_targets,
             ground: Arc::clone(ground),
         });
         for &entity in self.players_by_wire.values() {
@@ -1723,6 +1742,7 @@ impl RoomSimulation {
             self.set_player_defenders(defenders);
         }
         if !self.combat_active {
+            self.settle_authored_health(tick, now)?;
             return Ok(Vec::new());
         }
         let external_and_players = self.collect_player_enemy_targets();
@@ -2079,51 +2099,20 @@ impl RoomSimulation {
                 .map(|projectile| self.world.spawn(projectile).id()),
         );
         for hit in enemy_damage {
-            if let Some(state) = self.state_mut(hit.target)? {
-                if Self::damage_bot(
-                    state,
-                    hit.amount,
-                    Death {
-                        time: now.as_secs_f64(),
-                        frame: tick,
-                        killer: hit.source,
-                    },
-                    now,
-                )
-                .is_some()
-                {
-                    let health = state.vitals.component();
-                    state.vitals.clear_changed();
-                    self.scripted_health.push(EntityUpdate {
-                        entity: hit.target,
-                        operation: Some(Operation::Update(vec![health])),
-                        ..Default::default()
-                    });
-                }
-            } else if let Some(id) = self.player_handle_for_wire(hit.target) {
-                if let Some((owner, killed, health)) = self.damage_player_body_by_wire(
-                    id,
-                    hit.amount,
-                    Death {
-                        time: now.as_secs_f64(),
-                        frame: tick,
-                        killer: hit.source,
-                    },
-                ) {
-                    if let Some(health) = health {
-                        self.scripted_health.push(health);
-                    }
-                    if killed {
-                        self.player_deaths.push(player::PlayerDeath {
-                            owner,
-                            source: hit.source,
-                        });
-                    }
-                }
-            } else {
+            if !self.settle_health(
+                hit.target,
+                HealthEffect::Damage(hit.amount),
+                Death {
+                    time: now.as_secs_f64(),
+                    frame: tick,
+                    killer: hit.source,
+                },
+                now,
+            )? {
                 self.external_enemy_damage.push(hit);
             }
         }
+        self.settle_authored_health(tick, now)?;
         for wire in retired {
             let entity = self.by_wire.shift_remove(&wire).expect("retired NPC body");
             let enemy = self

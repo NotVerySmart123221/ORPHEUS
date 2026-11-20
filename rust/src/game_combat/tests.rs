@@ -74,6 +74,7 @@ fn check_spatial_candidates_frame(free_for_all: bool) {
     let (captured, initial) = room.spatial_frame.as_ref().unwrap();
     assert_eq!(*captured, frame);
     assert_eq!(initial.candidates().len(), 3);
+    assert!(!RoomHealthRequests::default().queue(initial, player.entity, -1.0));
     let bot_team = (!free_for_all).then_some(1);
     assert!(
         initial

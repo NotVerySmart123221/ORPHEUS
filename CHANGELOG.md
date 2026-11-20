@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added an authored action for targeted healing and damage. Player and AI requests share the room's body snapshot, generation checks, health publication, and death handling. Added synthetic VM and room coverage for admission, queue limits, health caps, and replaced targets. Validated with both locked workspace lanes, Rust 1.85, pinned Python public contracts, and the prepared 900-frame regression.
+
 - Documented how to match StateScript pseudocode labels to Inspector node positions and check exporter annotations against runtime evidence. Verified against the prepared graph bundle. Health-focused Rust tests passed.
 
 - Added static visibility to authored radius queries. Player and AI scripts share the room collision scene, and visibility checks run after the other filters with their own expression budget charge. Both locked workspace lanes, Rust 1.85, pinned Python public contracts, and the prepared 900-frame regression passed.

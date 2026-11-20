@@ -244,6 +244,7 @@ impl Vitals {
             return 0.0;
         }
         let mut left = amount;
+        let mut healed = 0.0;
         for pool in &mut self.pools {
             if left <= 0.0 {
                 break;
@@ -253,9 +254,10 @@ impl Vitals {
                 pool.current += given;
                 self.changed |= 1 << pool.field;
                 left -= given;
+                healed += given;
             }
         }
-        amount - left
+        healed
     }
 
     pub(crate) fn recharge_shields(&mut self, mut amount: f64) {

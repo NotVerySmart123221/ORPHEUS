@@ -259,6 +259,10 @@ impl EnemyScripts {
         self.control_records.ai_control_setting
     }
 
+    pub(crate) fn take_health_requests(&mut self) -> Vec<crate::game_combat::RoomHealthRequest> {
+        self.control_records.health_requests.take()
+    }
+
     pub(crate) fn take_scripted_damage(&mut self) -> Vec<EnemyDamage> {
         std::mem::take(&mut self.control_records.scripted_damage)
     }

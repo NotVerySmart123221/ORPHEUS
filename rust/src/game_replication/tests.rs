@@ -828,9 +828,21 @@ struct SyntheticOwner {
     failed: Arc<AtomicBool>,
     health_update: Arc<Mutex<Option<WorldComponent>>>,
     vitals: Option<crate::vitals::Vitals>,
+    authored_health_change: Option<(u32, f64)>,
+    health_requests: crate::game_combat::RoomHealthRequests,
 }
 
 impl OwnerBodyRuntime for SyntheticOwner {
+    fn set_spatial_frame(&mut self, frame: Arc<crate::game_combat::RoomSpatialFrame>) {
+        if let Some((target, delta)) = self.authored_health_change.take() {
+            assert!(self.health_requests.queue(&frame, target, delta));
+        }
+    }
+
+    fn take_health_requests(&mut self) -> Vec<crate::game_combat::RoomHealthRequest> {
+        self.health_requests.take()
+    }
+
     fn snapshot(&self) -> Option<&Snapshot> {
         (!self.failed.load(Ordering::Relaxed))
             .then(|| self.component.snapshot())
@@ -917,6 +929,8 @@ fn synthetic_owner_with_vitals(
         failed,
         health_update: Arc::default(),
         vitals,
+        authored_health_change: None,
+        health_requests: Default::default(),
     }
 }
 
@@ -2569,6 +2583,118 @@ fn death_and_respawn_preserve_friendly_passthrough_and_hostile_blocking() {
             .total(),
         200.0
     );
+}
+
+#[test]
+fn authored_player_health_settles_once_for_the_accepted_body() {
+    use crate::{
+        mover_settings::MoverCatalog,
+        scene_assets::BotQueries,
+        vitals::{PoolKind, Vitals},
+    };
+
+    let ground = Arc::new(fixture_ground());
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, &ground, None);
+    let source = BodyId {
+        entity: OWNER | 1,
+        generation: 1,
+    };
+    let target_owner = OWNER + 0x100;
+    let frame = 100;
+    let now = Duration::from_secs(2);
+
+    for (delta, replace_target, expected_pools, killed) in [
+        (-60.0, false, [65.0, 0.0], false),
+        (500.0, false, [200.0, 25.0], false),
+        (-500.0, true, [100.0, 25.0], false),
+        (-500.0, false, [0.0, 0.0], true),
+    ] {
+        let mut target = BodyId {
+            entity: target_owner | 1,
+            generation: 1,
+        };
+        let target_state = |id: BodyId| {
+            let mut state =
+                fixture_player_state(id, target_owner, 1, 1, [3.0, 0.0, 0.0], 200.0, false);
+            state.runtime = Some(Box::new(synthetic_owner_with_vitals(
+                id.entity,
+                frame,
+                Arc::default(),
+                Some(Vitals::with_current_health(200.0, 0.0, 25.0, 100.0)),
+            )));
+            state
+        };
+        let mut source_state = fixture_player_state(source, OWNER, 0, 0, [0.0; 3], 150.0, false);
+        let mut source_runtime = synthetic_owner_with_vitals(
+            source.entity,
+            frame,
+            Arc::default(),
+            Some(Vitals::new(150.0, 0.0, 0.0)),
+        );
+        source_runtime.authored_health_change = Some((target.entity, delta));
+        source_state.runtime = Some(Box::new(source_runtime));
+
+        let mut simulation = RoomSimulation::new(Vec::new()).unwrap();
+        simulation.spawn_player_body(source_state).unwrap();
+        simulation.spawn_player_body(target_state(target)).unwrap();
+        simulation.activate_combat();
+        simulation.enable_spatial_queries(false, Arc::clone(&ground));
+        simulation.prepare_spatial_frame(frame).unwrap();
+
+        if replace_target {
+            target.generation += 1;
+            simulation.spawn_player_body(target_state(target)).unwrap();
+        }
+        simulation.finish_tick(&queries, frame, now).unwrap();
+
+        let vitals = simulation
+            .player_body(target)
+            .unwrap()
+            .runtime
+            .as_ref()
+            .unwrap()
+            .vitals()
+            .unwrap();
+        assert_eq!(
+            [
+                vitals.amount(Some(PoolKind::Health), false),
+                vitals.amount(Some(PoolKind::Shields), false),
+            ],
+            expected_pools
+        );
+        assert_eq!(vitals.death().is_some(), killed);
+        assert_eq!(
+            simulation
+                .player_body(source)
+                .unwrap()
+                .runtime
+                .as_ref()
+                .unwrap()
+                .vitals()
+                .unwrap()
+                .total(),
+            150.0
+        );
+        let updates = simulation.take_scripted_health();
+        assert_eq!(updates.len(), usize::from(!replace_target));
+        for update in updates {
+            assert_eq!(update.entity, target.entity);
+            assert!(
+                matches!(update.operation, Some(Operation::Update(components)) if components.len() == 1)
+            );
+        }
+        let deaths = simulation.take_player_deaths();
+        assert_eq!(deaths.len(), usize::from(killed));
+        for death in deaths {
+            assert_eq!((death.owner, death.source), (target_owner, source.entity));
+            assert!(death.killed_by);
+        }
+
+        simulation.finish_tick(&queries, frame + 1, now).unwrap();
+        assert!(simulation.take_scripted_health().is_empty());
+        assert!(simulation.take_player_deaths().is_empty());
+    }
 }
 
 #[test]

@@ -937,6 +937,18 @@ impl World for EnemyWorld<'_> {
         };
         Some(variables.get(&id).cloned().unwrap_or(Value::Null))
     }
+
+    fn queue_health_change(&mut self, site: Site, target: u32, delta: f64) -> bool {
+        if site.entity != self.binding.body {
+            return false;
+        }
+        self.binding.spatial_frame.as_deref().is_some_and(|frame| {
+            self.control_records
+                .health_requests
+                .queue(frame, target, delta)
+        })
+    }
+
     fn spatial_candidates(&self) -> Option<&[crate::script_expr::SpatialCandidate]> {
         Some(self.binding.spatial_frame.as_deref()?.candidates())
     }

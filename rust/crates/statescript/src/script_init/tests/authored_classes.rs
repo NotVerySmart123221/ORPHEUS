@@ -438,6 +438,181 @@ fn authored_spatial_operands_read_live_world_data_on_each_message() {
     }
 }
 
+#[test]
+fn authored_health_change_admits_live_operands_before_continuing() {
+    const GRAPH: u32 = 109;
+    const INSTANCE: u16 = 1;
+    const ENTITY: u32 = 4242;
+    const MESSAGE: u64 = 0x49;
+    const CONTINUED: u32 = 3;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Operand {
+        Entity { entity: u32 },
+        Integer(i64),
+        Float(f64),
+        Bool(bool),
+        Nonfinite { nonfinite: String },
+    }
+
+    impl From<Operand> for Value {
+        fn from(value: Operand) -> Self {
+            match value {
+                Operand::Entity { entity } => Self::Entity(entity),
+                Operand::Integer(value) => Self::Integer(value),
+                Operand::Float(value) => Self::Float(value),
+                Operand::Bool(value) => Self::Bool(value),
+                Operand::Nonfinite { nonfinite } => Self::Float(match nonfinite.as_str() {
+                    "infinity" => f64::INFINITY,
+                    "nan" => f64::NAN,
+                    _ => panic!("unknown nonfinite operand {nonfinite}"),
+                }),
+            }
+        }
+    }
+
+    #[derive(Deserialize)]
+    struct Step {
+        target: Operand,
+        delta: Operand,
+        accept: bool,
+    }
+
+    #[derive(Deserialize)]
+    struct Input {
+        bundle: Json,
+        steps: Vec<Step>,
+    }
+
+    #[derive(Deserialize)]
+    struct Expected {
+        request: Option<(u32, f64)>,
+        continued: bool,
+        diagnostic: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct HealthChangeContract {
+        schema_version: u8,
+        case_id: String,
+        evidence: String,
+        input: Input,
+        expected: Vec<Expected>,
+    }
+
+    #[derive(Default)]
+    struct HealthWorld {
+        accept: bool,
+        requests: Vec<(Site, u32, f64)>,
+    }
+
+    impl World for HealthWorld {
+        fn entity_variable(&mut self, _: u32, _: u32) -> Option<Value> {
+            None
+        }
+
+        fn position(&mut self, _: u32) -> Option<[f64; 3]> {
+            None
+        }
+
+        fn queue_health_change(&mut self, site: Site, target: u32, delta: f64) -> bool {
+            self.requests.push((site, target, delta));
+            self.accept
+        }
+    }
+
+    let contract: HealthChangeContract = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/script-health-change-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    assert_eq!(contract.case_id, "script-health-change.synthetic.v1");
+    assert_eq!(contract.evidence, "synthetic-rust");
+    assert_eq!(contract.input.steps.len(), contract.expected.len());
+
+    let bundle = serde_json::to_vec(&contract.input.bundle).unwrap();
+    let graphs = Arc::new(GraphStore::from_json(&bundle).unwrap());
+    let node = graphs.graph(GRAPH).unwrap().node(1).unwrap();
+    assert!(node.declares_health_change_action());
+    assert_eq!(node.class, "ActionHealthChange");
+    assert!(node.server_only && !node.is_networked());
+
+    let mut world = HealthWorld::default();
+    let mut component = Component::start(
+        graphs,
+        ENTITY,
+        Variables::new(),
+        vec![Root::listener(INSTANCE, GRAPH, None)],
+        0,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    assert!(world.requests.is_empty());
+    let site = Site {
+        entity: ENTITY,
+        instance: INSTANCE,
+        graph: GRAPH,
+        node: Some(1),
+    };
+    let mut diagnostics = Vec::new();
+    for (step, expected) in contract.input.steps.into_iter().zip(contract.expected) {
+        world.accept = step.accept;
+        for (id, value) in [
+            (1, step.target.into()),
+            (2, step.delta.into()),
+            (CONTINUED, Value::Bool(false)),
+        ] {
+            component
+                .set_entity_variable(id, value, &mut world)
+                .unwrap();
+        }
+        assert_eq!(
+            component
+                .queue_message(INSTANCE, MESSAGE, Variables::new())
+                .unwrap(),
+            1
+        );
+        component.run_now(&mut world).unwrap();
+
+        let request = expected
+            .request
+            .map(|(target, delta)| (site, target, delta));
+        assert_eq!(
+            std::mem::take(&mut world.requests).as_slice(),
+            request.as_slice()
+        );
+        if let Some(diagnostic) = expected.diagnostic {
+            let issue = match diagnostic.as_str() {
+                "target" => Issue::Expression(EvalError::MalformedConfig(
+                    "expected a bound health change target",
+                )),
+                "delta" => Issue::Expression(EvalError::MalformedConfig(
+                    "expected a finite nonzero health change delta",
+                )),
+                "unavailable" => Issue::UnsupportedField("health change request"),
+                _ => panic!("unknown diagnostic {diagnostic}"),
+            };
+            let diagnostic = Diagnostic {
+                site,
+                issue,
+                registration_rejected: false,
+            };
+            if !diagnostics.contains(&diagnostic) {
+                diagnostics.push(diagnostic);
+            }
+        }
+        let snapshot = component.snapshot().unwrap();
+        assert_eq!(
+            snapshot.variables[&CONTINUED],
+            Value::Bool(expected.continued)
+        );
+        assert_eq!(snapshot.diagnostics, diagnostics);
+    }
+}
+
 #[cfg(feature = "node-observations")]
 #[test]
 fn node_observation_limit_counts_only_distinct_sites() {

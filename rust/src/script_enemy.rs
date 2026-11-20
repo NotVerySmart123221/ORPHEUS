@@ -2,6 +2,7 @@
 
 use crate::{
     commands::{Command, FIRE, SECONDARY},
+    game_combat::RoomHealthRequests,
     game_content::{TUTORIAL_MODE, is_junkenstein_mode},
     game_hitscan::{HitDefinition, HitscanShot, TargetPose, aim_direction},
     junkenstein_messages::{
@@ -52,6 +53,7 @@ pub(crate) struct AiControlRecords {
     voice_requests: Vec<VoiceRequest>,
     voice_variation: u64,
     scripted_damage: Vec<EnemyDamage>,
+    health_requests: RoomHealthRequests,
     objective_route_active: Option<bool>,
     weapon_target: Option<BossTarget>,
     summoner_targets: [Option<u32>; 2],

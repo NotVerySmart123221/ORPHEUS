@@ -34,6 +34,7 @@ pub(crate) struct PlayerBodyHandle {
 pub(crate) struct PlayerDeath {
     pub(crate) owner: u32,
     pub(crate) source: u32,
+    pub(crate) killed_by: bool,
 }
 
 #[derive(Clone)]
@@ -904,7 +905,11 @@ impl RoomSimulation {
         };
         self.scripted_health.push(health.clone());
         if killed {
-            self.player_deaths.push(PlayerDeath { owner, source });
+            self.player_deaths.push(PlayerDeath {
+                owner,
+                source,
+                killed_by: true,
+            });
         }
         Ok(Some(BotHit {
             damage: AppliedDamage {

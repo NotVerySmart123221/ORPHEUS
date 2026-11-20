@@ -174,6 +174,10 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         self.world.deadeye_scene = scene;
     }
 
+    fn take_health_requests(&mut self) -> Vec<crate::game_combat::RoomHealthRequest> {
+        self.world.health_requests.take()
+    }
+
     fn set_spatial_frame(&mut self, frame: Arc<crate::game_combat::RoomSpatialFrame>) {
         self.world.spatial_frame = Some(frame);
     }

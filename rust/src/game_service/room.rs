@@ -716,7 +716,7 @@ impl Room {
                     if peer.world.owner() == death.owner {
                         peer.queue_combat_notice(CombatNotice::Death {
                             source: death.source,
-                            killed_by: true,
+                            killed_by: death.killed_by,
                         });
                     }
                 }

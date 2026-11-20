@@ -62,8 +62,8 @@ Add `authored_classes` to a version 1 bundle and use those names in the
 Each name starts with `authored.` and has a nonempty suffix of ASCII
 letters, digits, underscores or hyphens. Duplicate names are rejected.
 The scope flags are still required. Set both to false to inherit a
-declared class's scope, or set only the matching flag to true. Plain
-states and forwarding actions inherit server-only scope. Client-only
+declared class's scope, or set only the matching flag to true. Authored
+states and actions inherit server-only scope. Client-only
 nodes skip server execution and wire projection. Conflicting flags or
 per-node behavior fail at load time with the graph and node positions.
 
@@ -88,6 +88,27 @@ plug. Message entries are indexed at graph load in their original order.
 State listeners still need to be active when the message is queued and
 delivered. Client-only listeners remain outside the server route.
 See the [synthetic local message contract](../fixtures/behavior/script-local-message-v1.json).
+
+## Request a health change
+
+Set `action_behavior` to `"health_change"` on a server-only action, or
+declare `"health_change_action"` for an authored class. Supply a `target`
+expression yielding a bound entity reference, a `delta` expression yielding
+a finite nonzero number, and a valid `m_outPlug`. Positive deltas heal and
+negative deltas deal damage through the room's existing health rules.
+
+Run this action from events after the body receives its first room frame.
+During component initialization, the host can lack a room frame and reject
+the request. Admission requires a living target with health pools in that
+frame and free space in the source body's queue. The output runs when the host accepts it.
+The room settles accepted requests before retirement and checks the target's
+generation again, so an accepted request can expire before it changes health.
+The queue belongs to the source runtime and is dropped if that runtime is
+retired before settlement. Effects follow queued order within each source body. Death and health updates
+use the existing room lifecycle. These authored actions also enable the room
+body snapshot in bundles that use no spatial expressions.
+
+See the [synthetic health contract](../fixtures/behavior/script-health-change-v1.json).
 
 ## Declare a client-only operand
 

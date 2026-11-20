@@ -71,6 +71,44 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 };
                 self.follow(id, node, output, caller, depth)
             }
+            _ if node.declares_health_change_action() => {
+                let site = self.site(id, node);
+                let Some(target) = self.evaluate(id, node, field(&node.fields, "target"), caller)
+                else {
+                    return Ok(false);
+                };
+                let entity = match target {
+                    Value::Entity(entity) if script_expr::valid_entity(entity) => entity,
+                    _ => {
+                        self.report(
+                            site,
+                            Issue::Expression(EvalError::MalformedConfig("expected a bound health change target")),
+                        );
+                        return Ok(false);
+                    }
+                };
+                let Some(delta) = self.evaluate(id, node, field(&node.fields, "delta"), caller)
+                else {
+                    return Ok(false);
+                };
+                let delta = match delta {
+                    Value::Integer(amount) if amount != 0 => amount as f64,
+                    Value::Float(amount) if amount.is_finite() && amount != 0.0 => amount,
+                    _ => {
+                        self.report(
+                            site,
+                            Issue::Expression(EvalError::MalformedConfig("expected a finite nonzero health change delta")),
+                        );
+                        return Ok(false);
+                    }
+                };
+                if !self.world.queue_health_change(site, entity, delta) {
+                    self.report(site, Issue::UnsupportedField("health change request"));
+                    return Ok(false);
+                }
+                self.follow(id, node, "m_outPlug", caller, depth)?;
+                Ok(true)
+            }
             "STU_BB4AC733" => self.follow(id, node, "m_outPlug", None, depth),
             "STUStatescriptActionCreateEntity" => self.create_entity(id, node, depth),
             "STU_6E18DEA0"

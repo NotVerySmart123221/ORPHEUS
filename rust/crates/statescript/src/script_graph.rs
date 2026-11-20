@@ -39,6 +39,7 @@ enum ActionBehavior {
     Forward,
     Branch,
     LocalMessage,
+    HealthChange,
 }
 
 #[derive(Debug, Deserialize)]
@@ -91,6 +92,10 @@ impl Node {
 
     pub(crate) fn declares_branch_action(&self) -> bool {
         matches!(self.action_behavior, Some(ActionBehavior::Branch))
+    }
+
+    pub(crate) fn declares_health_change_action(&self) -> bool {
+        matches!(self.action_behavior, Some(ActionBehavior::HealthChange))
     }
 
     pub(crate) fn game_message_id(&self) -> Option<u64> {
@@ -323,6 +328,7 @@ impl Graph {
                     ActionBehavior::Forward => ("forward action", &["m_outPlug"]),
                     ActionBehavior::Branch => ("branch action", &["m_truePlug", "m_falsePlug"]),
                     ActionBehavior::LocalMessage => ("local message action", &["m_outPlug"]),
+                    ActionBehavior::HealthChange => ("health change action", &["m_outPlug"]),
                 };
                 let state_slot = authored_state_slots.contains_key(&node.pos);
                 if !node.server_only
@@ -365,6 +371,17 @@ impl Graph {
                             )));
                         }
                         "STUStatescriptActionSendGameMessage".into()
+                    }
+                    ActionBehavior::HealthChange => {
+                        for operand in ["target", "delta"] {
+                            if node.field(operand).is_none_or(Value::is_null) {
+                                return Err(invalid(format!(
+                                    "{action} in graph {} at node {} requires a {operand} expression",
+                                    self.index, node.pos
+                                )));
+                            }
+                        }
+                        "ActionHealthChange".into()
                     }
                 };
             }
@@ -647,6 +664,7 @@ enum AuthoredClassBehavior {
     ForwardAction,
     BranchAction,
     LocalMessageAction,
+    HealthChangeAction,
     ClientOnly,
 }
 
@@ -658,6 +676,7 @@ impl AuthoredClassBehavior {
             Self::ForwardAction => (false, None, Some(ActionBehavior::Forward)),
             Self::BranchAction => (false, None, Some(ActionBehavior::Branch)),
             Self::LocalMessageAction => (false, None, Some(ActionBehavior::LocalMessage)),
+            Self::HealthChangeAction => (false, None, Some(ActionBehavior::HealthChange)),
             Self::ClientOnly => (true, None, None),
         };
         if (node.client_only && !client_only)
@@ -710,7 +729,7 @@ fn uses_radius_query(value: &Value) -> bool {
 #[derive(Debug)]
 pub struct GraphStore {
     graphs: BTreeMap<u32, Graph>,
-    uses_spatial_queries: bool,
+    uses_room_spatial_frame: bool,
     bodies: BTreeMap<u64, Body>,
     entities: BTreeMap<u64, Body>,
     mode_variables: BTreeMap<u64, BTreeMap<u32, ModeValue>>,
@@ -775,15 +794,15 @@ impl GraphStore {
                 )));
             }
         }
-        let uses_spatial_queries = graphs.values().any(|graph| {
-            graph
-                .nodes
-                .iter()
-                .any(|node| node.runs_on_server() && uses_radius_query(&node.fields))
+        let uses_room_spatial_frame = graphs.values().any(|graph| {
+            graph.nodes.iter().any(|node| {
+                node.runs_on_server()
+                    && (node.declares_health_change_action() || uses_radius_query(&node.fields))
+            })
         });
         Ok(Self {
             graphs,
-            uses_spatial_queries,
+            uses_room_spatial_frame,
             bodies: keyed_by_guid(bundle.bodies)?,
             entities: keyed_by_guid(bundle.entities)?,
             mode_variables: keyed_by_guid(bundle.mode_variables)?
@@ -802,9 +821,9 @@ impl GraphStore {
         })
     }
 
-    /// Whether server graph data contains a request for the shared room candidate frame.
-    pub fn uses_spatial_queries(&self) -> bool {
-        self.uses_spatial_queries
+    /// Whether any server graph uses the room's living body snapshot.
+    pub fn uses_room_spatial_frame(&self) -> bool {
+        self.uses_room_spatial_frame
     }
 
     pub fn graph(&self, index: u32) -> Option<&Graph> {
@@ -1361,14 +1380,14 @@ mod tests {
         let mut data = fixture();
         let load =
             |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap()).unwrap();
-        assert!(!load(&data).uses_spatial_queries());
+        assert!(!load(&data).uses_room_spatial_frame());
 
         data["graphs"][0]["nodes"][0]["fields"]["nested"] =
             json!([{"value":{"$":"EntitiesInRadius","center":null,"radius":1}}]);
-        assert!(load(&data).uses_spatial_queries());
+        assert!(load(&data).uses_room_spatial_frame());
 
         data["graphs"][0]["nodes"][0]["client_only"] = json!(true);
-        assert!(!load(&data).uses_spatial_queries());
+        assert!(!load(&data).uses_room_spatial_frame());
     }
 
     #[test]
@@ -1399,6 +1418,47 @@ mod tests {
             );
             assert!(result.to_string().contains(field));
         }
+    }
+
+    #[test]
+    fn health_change_action_requires_server_scope_and_operands() {
+        let mut data = fixture();
+        let node = &mut data["graphs"][0]["nodes"][2];
+        node["action_behavior"] = json!("health_change");
+        node["server_only"] = json!(true);
+        node["fields"] = json!({
+            "target": {"$": "STUConfigVarDynamic", "m_identifier": 1, "m_60DB8F99": false},
+            "delta": -1,
+            "m_outPlug": {"$": "Plug", "links": []},
+        });
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let store = load(&data).unwrap();
+        assert!(store.uses_room_spatial_frame());
+        let action = store.graph(42).unwrap().node(2).unwrap();
+        assert!(action.declares_health_change_action() && action.is_action());
+        assert!(!action.is_networked() && !action.is_state());
+        assert_eq!(action.class, "ActionHealthChange");
+
+        for field in ["target", "delta", "m_outPlug"] {
+            let mut invalid = data.clone();
+            invalid["graphs"][0]["nodes"][2]["fields"][field] = Value::Null;
+            let error = load(&invalid).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(
+                error
+                    .to_string()
+                    .contains("health change action in graph 42 at node 2")
+            );
+            assert!(error.to_string().contains(field));
+        }
+        data["graphs"][0]["nodes"][2]["server_only"] = json!(false);
+        let error = load(&data).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            error
+                .to_string()
+                .contains("must be server-only with no state slot")
+        );
     }
 
     #[test]

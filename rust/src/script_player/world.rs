@@ -9,7 +9,7 @@ use super::lifecycle::{DEADEYE_GRAPH, DEADEYE_TARGET_EFFECT};
 use crate::{
     collision_scene::CollisionScene,
     commands::Command,
-    game_combat::eye_height,
+    game_combat::{RoomHealthRequests, eye_height},
     game_content::{PRACTICE_RANGE_MODE, TUTORIAL_MODE, is_junkenstein_mode},
     game_heroes::{CASSIDY, SOLDIER},
     game_hitscan::{TargetPose, aim_direction},
@@ -133,6 +133,7 @@ pub(super) struct BodyWorld {
     pub(super) damage_credit: Option<crate::game_combat::AppliedDamage>,
     pub(super) graphs: Arc<GraphStore>,
     pub(super) spatial_frame: Option<Arc<crate::game_combat::RoomSpatialFrame>>,
+    pub(super) health_requests: RoomHealthRequests,
     pub(super) controller: u32,
     pub(super) entity: u32,
     pub(super) body_filter: u64,
@@ -325,6 +326,15 @@ impl World for BodyWorld {
             .find(|target| target.entity == entity)
             .and_then(|target| target.velocity)
             .map_or(VelocityQuery::Unavailable, VelocityQuery::Present)
+    }
+
+    fn queue_health_change(&mut self, site: Site, target: u32, delta: f64) -> bool {
+        if !self.is_player_site(site) {
+            return false;
+        }
+        self.spatial_frame
+            .as_deref()
+            .is_some_and(|frame| self.health_requests.queue(frame, target, delta))
     }
 
     fn spatial_candidates(&self) -> Option<&[crate::script_expr::SpatialCandidate]> {
