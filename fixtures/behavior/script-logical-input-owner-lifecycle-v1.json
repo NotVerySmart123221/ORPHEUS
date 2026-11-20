@@ -2,7 +2,7 @@
   "schema_version": 1,
   "case_id": "script-logical-input-owner-lifecycle.synthetic.v1",
   "source": {
-    "basis": "Original held-input lifetimes with a state-owned speed scale."
+    "basis": "Original held-input lifetimes, state-owned speed scales, and buffered input binding."
   },
   "evidence": "synthetic-rust",
   "input": {
@@ -10,7 +10,23 @@
     "graph": 608,
     "button": 29,
     "command_mask": 2,
-    "hold_scale": 0.6
+    "hold_scale": 0.6,
+    "authored_input": {
+      "graph": 609,
+      "body": 942,
+      "button": 29,
+      "command_mask": 2,
+      "held_scale": 0.6,
+      "idle_scale": 0.8
+    },
+    "buffered_input": {
+      "graph": 610,
+      "body": 943,
+      "button": 20,
+      "command_mask": 1,
+      "new_button": 29,
+      "buffer_ms": 100
+    }
   },
   "expected": {
     "default_dead_listener": false,

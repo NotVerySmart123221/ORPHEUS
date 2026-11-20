@@ -6,6 +6,9 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added authored held-input states with automatic listener registration and explicit state ownership for held and idle branches. The loader uses the existing logical-button lifecycle for button edges, locks, death admission, and teardown. An early buffered press follows its originating button binding.
+- Cancelled pending starts for a departing subgraph after all its child teardown callbacks run. An end callback can no longer reactivate an earlier sibling during the same release.
+
 - Applied logical button death admission consistently on presses, state entry, and lock changes. Held scopes that require a living owner release before the next VM update samples their observations.
 - Added an optional StateScript `on_unavailable` observation plug for clearing derived target state when a host sample is temporarily unavailable.
 - Isolated queued StateScript observation callbacks from intervening output writes. A callback receives its own successful sample and stays inactive while a higher-priority binding hides that sample.

@@ -322,6 +322,37 @@ its normal input and lock behavior.
 
 See the [synthetic button lock contract](../fixtures/behavior/script-button-lock-v1.json).
 
+## Start and stop states with held input
+
+Set `"state_behavior": "held_input"` on a server-only state, or declare
+`held_input_state` for an authored class. Use a logical button from 1 through
+255. List the graph's raw state slots in the order they should begin.
+
+```json
+{
+  "button": 29,
+  "held_states": [1, 2],
+  "idle_states": [3],
+  "on_press": {"$": "Plug", "links": []},
+  "on_release": {"$": "Plug", "links": []}
+}
+```
+
+The loader registers the listener automatically and uses the existing
+logical-button lifecycle. Entering a branch starts its declared states.
+Switching branches, ending the listener, or retiring its instance releases
+the outgoing branch's states. Omit `idle_states` for an empty idle branch.
+Use distinct child slots in listeners that can be active at the same time.
+The `on_press` and `on_release` plugs are optional edge callbacks.
+A listener that starts while the button is already held enters its held
+branch using the current admission state.
+
+Set optional `allow_dead` to true to admit input while the owner is dead.
+Otherwise owner death releases the held branch before the next observation
+update, and the existing logical-button lock also controls admission.
+
+See the [synthetic held input contract](../fixtures/behavior/script-logical-input-owner-lifecycle-v1.json).
+
 ## Scale movement speed for a state
 
 Set `"state_behavior": "movement_scale"` on a server-only state, or declare

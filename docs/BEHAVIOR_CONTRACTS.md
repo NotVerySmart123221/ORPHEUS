@@ -82,8 +82,12 @@ unavailable geometry, known misses, failure callbacks, and retirement before
 callback dispatch.
 [Synthetic observation sample fixture](../fixtures/behavior/statescript-observation-sample-v1.json)
 
-The Rust-only held input lifecycle contract verifies behavior on late
-listener entry, lock release, and owner death during a timer-only update.
+The Rust-only held input lifecycle contract verifies automatic listener
+registration, branch ownership, and cancellation of sibling restarts
+queued during release. It also covers late entry, lock release, owner death
+during a timer-only update, and early press ownership after a binding
+change. Native room coverage exercises both listener forms with the same
+actor ray, movement scope, owner projection and body replacement scenario.
 [Synthetic logical input fixture](../fixtures/behavior/script-logical-input-owner-lifecycle-v1.json)
 
 The Rust-only owner instance visibility contract verifies owner and observer

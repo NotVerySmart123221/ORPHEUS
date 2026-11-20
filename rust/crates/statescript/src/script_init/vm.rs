@@ -22,8 +22,8 @@ use super::{
     MAX_PLAY_INSTANCES, MAX_PLUG_DEPTH, Root, SCRIPT_SOURCE,
     machine::{AbilityPress, Event, LinkValue, Machine, Startup, StateKey, VarKey, VariableLink},
     shapes::{
-        ability_is_stacked, array_field, configured, field, is_entry, is_self_target, raw_indices,
-        same, source_key, stored,
+        ability_is_stacked, array_field, configured, field, is_entry, is_self_target, same,
+        source_key, stored,
     },
     types::{
         AbilityCooldown, BufferedPress, Diagnostic, InitFault, Instance, InstanceScope, Issue,
@@ -335,7 +335,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 .retain(|&button| button != edge.button);
         }
         let graph = self.graph(id);
-        for raw in raw_indices(array_field(&graph.fields, "m_680A2CB2")) {
+        for raw in graph.logical_button_slots() {
             let Some(node) = graph.state(usize::from(raw)) else {
                 continue;
             };
@@ -368,6 +368,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 state.buffered_press = Some(BufferedPress {
                     time_ms: self.machine.now_ms,
                     activation: state.activation.wrapping_add(u16::from(!state.active)),
+                    button: edge.button,
                 });
             }
             if self.state(key).is_some_and(|state| {
@@ -499,6 +500,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .buffered_press
             .filter(|press| press.activation == state.activation);
         let button = self.logical_button_id(key.instance, node);
+        let buffer = buffer.filter(|press| button == Some(press.button));
         let blocked = button.is_some_and(|button| self.logical_button_blocked(key, node, button))
             || !self.logical_button_allows_press(key.instance, node);
         let duration = field(&node.fields, "m_246438AD");

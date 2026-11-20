@@ -285,7 +285,7 @@ const HELD_SAMPLE: u32 = 881;
 const HELD_INPUT: u32 = 882;
 const HELD_STATUS: u32 = 883;
 
-fn held_aim_factory(spawn: OwnerBodySpawn) -> PlayerBodyFactory {
+fn held_aim_factory(spawn: OwnerBodySpawn, authored_listener: bool) -> PlayerBodyFactory {
     let hero = Hero {
         guid: 0x02e0_0000_0000_f911,
         body: 0x0400_0000_0000_f912,
@@ -343,8 +343,35 @@ fn held_aim_factory(spawn: OwnerBodySpawn) -> PlayerBodyFactory {
         "m_falsePlug":plug(&[(9,"m_inPlug")],&[])}),
     );
     branch["action_behavior"] = json!("branch");
-    // Original graph composition. The legacy logical-input dispatcher is a
-    // shared component; no camera field or game-specific aiming behavior is assumed.
+    let mut graph_fields = json!({"m_9CEC6985":[format!("0x000000000000{HELD_SAMPLE:04X}")]});
+    let listener = if authored_listener {
+        let mut listener = node(
+            3,
+            "authored.held_aim_input",
+            Some(0),
+            json!({
+                "button":29,"held_states":[1,2,3],
+                "on_press":plug(&[(9,"m_inPlug")],&[]),
+                "on_release":plug(&[(9,"m_inPlug")],&[])
+            }),
+        );
+        listener["state_behavior"] = json!("held_input");
+        listener
+    } else {
+        graph_fields["m_680A2CB2"] = json!([0]);
+        node(
+            3,
+            "STUStatescriptStateLogicalButton",
+            Some(0),
+            json!({
+                "m_logicalButton":{"$":"STUConfigVarLogicalButton","m_logicalButton":29},
+                "m_onGoingDownPlug":plug(&[(9,"m_inPlug")],&[]),
+                "m_onComingUpPlug":plug(&[(9,"m_inPlug")],&[]),
+                "m_80AF45FB":plug(&[(4,"m_beginPlug"),(5,"m_beginPlug"),
+                    (6,"m_beginPlug")],&[1,2,3]),"m_1C9EF058":plug(&[],&[])
+            }),
+        )
+    };
     let bundle = json!({"version":1,"missing":[],
     "bodies":{format!("0x{:016X}",hero.body):{
         "hero":format!("0x{:016X}",hero.guid),"name":"Held aim fixture",
@@ -352,8 +379,7 @@ fn held_aim_factory(spawn: OwnerBodySpawn) -> PlayerBodyFactory {
     "graphs":[{"index":94,"items":10,"entries":[0],"states":[3,4,5,6],
         "remote":[],"sync_vars":[[HELD_STATUS,0,0]],"containers":{},"unknown_nodes":[],
         "owner_only_instance_vars":[HELD_INPUT,HELD_STATUS],
-        "fields":{"m_680A2CB2":[0],
-            "m_9CEC6985":[format!("0x000000000000{HELD_SAMPLE:04X}")]},
+        "fields":graph_fields,
         "header":{"m_nodesBitCount":4,"m_statesBitCount":4,
             "m_remoteSyncNodesBitCount":4,"m_syncVarsBitCount":4},
         "nodes":[
@@ -361,13 +387,7 @@ fn held_aim_factory(spawn: OwnerBodySpawn) -> PlayerBodyFactory {
                 json!({"m_outPlug":plug(&[(1,"m_inPlug")],&[])})),
             setter(1,HELD_INPUT,false,&[(2,"m_inPlug")]),
             setter(2,HELD_STATUS,false,&[(3,"m_beginPlug")]),
-            node(3,"STUStatescriptStateLogicalButton",Some(0),json!({
-                "m_logicalButton":{"$":"STUConfigVarLogicalButton","m_logicalButton":29},
-                "m_onGoingDownPlug":plug(&[(9,"m_inPlug")],&[]),
-                "m_onComingUpPlug":plug(&[(9,"m_inPlug")],&[]),
-                "m_80AF45FB":plug(&[(4,"m_beginPlug"),(5,"m_beginPlug"),
-                    (6,"m_beginPlug")],&[1,2,3]),"m_1C9EF058":plug(&[],&[])})),
-            claim,observe,movement,branch,
+            listener,claim,observe,movement,branch,
             setter(8,HELD_INPUT,true,&[]),setter(9,HELD_INPUT,false,&[])
         ]}]});
     PlayerBodyFactory::prepare(
@@ -451,6 +471,15 @@ fn held_aim_projection(
 
 #[test]
 fn held_aim_composes_private_status_scoped_movement_and_fresh_actor_queries() {
+    assert_held_aim_lifecycle(false);
+}
+
+#[test]
+fn authored_held_aim_uses_the_shared_room_and_snapshot_lifecycle() {
+    assert_held_aim_lifecycle(true);
+}
+
+fn assert_held_aim_lifecycle(authored_listener: bool) {
     let source = BodyId {
         entity: 71,
         generation: 1,
@@ -472,7 +501,7 @@ fn held_aim_composes_private_status_scoped_movement_and_fresh_actor_queries() {
         },
         quanta: RETAIL_QUANTA,
     };
-    let factory = held_aim_factory(spawn);
+    let factory = held_aim_factory(spawn, authored_listener);
     let source_body = |id, spawn: OwnerBodySpawn| {
         PlayerBodyState::new(
             id,
