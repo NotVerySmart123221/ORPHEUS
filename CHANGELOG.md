@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Separate NPC StateScript chunks from reliable messages under contention. A peer alternates sends so delayed or lost NPC chunks and sustained combat notices can both make progress. Added synthetic coverage for the wire payload and retry order. Original-client verification is pending.
+
 - Process training bot respawn deadlines after authored damage, including before normal room combat starts. Preserve bot replacement order for each peer while its old body records are being acknowledged.
 
 - Replaced fixed PhysicsExplosion placements with authored state checks and an explicit map physics capability. Static rooms retain the ordinary state lifecycle and transitions. Unknown and dynamic map physics still produce a diagnostic. Added a synthetic regression for scope, lifecycle, and unsupported fields. Integration validation pending.
