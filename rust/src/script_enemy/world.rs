@@ -850,12 +850,10 @@ impl World for EnemyWorld<'_> {
         true
     }
 
-    fn player_stats_available(&self, site: Site) -> Option<bool> {
-        // The bound encounter NPC controller has no player stats record.
-        (site.entity == self.binding.body
-            && crate::script_expr::valid_entity(site.entity)
-            && is_junkenstein_mode(self.binding.mode))
-        .then_some(false)
+    fn player_stats_service_available(&self, site: Site) -> Option<bool> {
+        // The bound NPC body has no StateScript player stats service.
+        (site.entity == self.binding.body && crate::script_expr::valid_entity(site.entity))
+            .then_some(false)
     }
 
     fn local_combat_context_available(&self, _site: Site) -> Option<bool> {

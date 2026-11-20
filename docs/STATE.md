@@ -270,6 +270,11 @@ attachment, and **46 blocking sites**. The #72 trace retained its
 476 observations. Both #131 schedules reproduced the previous 339
 ticks per implementation and the same four RNG setup differences.
 
+The shared stat action now uses the authored target and stat selectors.
+The body host can confirm that it has no stats writer. These actions
+follow their continuation without evaluating unused operands. Live stat
+updates remain open.
+
 The server-only form of the directed numeric route accepts a terminal
 send of one instance value. Its target is either an entity-scope variable
 or the owner's possessed body. One prepared `14F2` probe supplies

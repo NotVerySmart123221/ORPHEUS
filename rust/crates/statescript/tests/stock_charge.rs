@@ -58,7 +58,7 @@ impl World for ChargeHost<'_> {
         true
     }
 
-    fn player_stats_available(&self, site: Site) -> Option<bool> {
+    fn player_stats_service_available(&self, site: Site) -> Option<bool> {
         // This detached graph harness does not mount a player stats record.
         (site.entity == OWNER).then_some(false)
     }
@@ -430,6 +430,10 @@ fn prepared_stock_damage_credit_consumes_typed_pool_records() {
     struct DamageHost;
 
     impl World for DamageHost {
+        fn player_stats_service_available(&self, site: Site) -> Option<bool> {
+            (site.entity == OWNER).then_some(false)
+        }
+
         fn position(&mut self, _: u32) -> Option<[f64; 3]> {
             None
         }
@@ -541,6 +545,10 @@ fn prepared_stock_0044_charge_applies_receiver_gates_and_scales() {
     }
 
     impl World for BonusHost {
+        fn player_stats_service_available(&self, site: Site) -> Option<bool> {
+            (site.entity == OWNER).then_some(false)
+        }
+
         fn position(&mut self, _: u32) -> Option<[f64; 3]> {
             None
         }

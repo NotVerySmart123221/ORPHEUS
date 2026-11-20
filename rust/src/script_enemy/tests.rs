@@ -356,10 +356,7 @@ fn shared_flashbang_velocity_action_contract() {
             graph: index,
             node: Some(position),
         };
-        assert_eq!(
-            world.player_stats_available(site),
-            encounter.then_some(false)
-        );
+        assert_eq!(world.player_stats_available(site), Some(false));
         for entity in [binding.controller, 999] {
             assert_eq!(world.player_stats_available(Site { entity, ..site }), None);
         }

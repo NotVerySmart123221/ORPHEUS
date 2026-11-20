@@ -30,6 +30,10 @@ struct ChargeReceiverHost {
 }
 
 impl World for ChargeReceiverHost {
+    fn player_stats_service_available(&self, site: Site) -> Option<bool> {
+        (site.entity == OWNER).then_some(false)
+    }
+
     fn ruleset(&mut self, id: u32) -> Option<Value> {
         (id == RULESET_GATE).then_some(Value::Bool(self.ruleset_blocks))
     }

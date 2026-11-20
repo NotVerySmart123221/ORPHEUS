@@ -461,6 +461,70 @@ pub(super) fn is_self_stat_timer(node: &Node) -> bool {
     }
 }
 
+pub(super) fn is_stat_action(node: &Node) -> bool {
+    let fields = &node.fields;
+    let target = field(fields, "m_targets");
+    let has_variable_target = native_dynamic_operand(target)
+        && field(target, "m_identifier")
+            .as_u64()
+            .is_some_and(|id| id != 0);
+    if !node.runs_on_server()
+        || node.remote != -1
+        || node.state.is_some()
+        || node.is_state()
+        || !node.is_action()
+        || !(is_self_target(node, "m_targets") || has_variable_target)
+    {
+        return false;
+    }
+    let stat = field(fields, "m_stat");
+    let stats = field(fields, "m_stats");
+    let is_stat = |value| asset_guid(value).is_some_and(|id| id >> 48 == 0x0860);
+    let stat_selection = if stat.is_null() {
+        stats
+            .as_array()
+            .is_some_and(|items| !items.is_empty() && items.iter().all(is_stat))
+    } else {
+        stats.is_null() && is_stat(stat)
+    };
+    let amount = field(fields, "m_amount");
+    let output = field(fields, "m_outPlug");
+    let output_states = field(output, "m_FF3DAF1E");
+    let neutral_flag =
+        |value: &Json| matches!(value, Json::Null | Json::Bool(false)) || value.as_u64() == Some(0);
+    stat_selection
+        && (native_integer_operand(amount)
+            || native_dynamic_operand(amount)
+            || native_expression_operand(amount))
+        && (field(fields, "m_inPlug").is_null()
+            || is_unlinked_plug(fields, "m_inPlug", "STUStatescriptInputPlug"))
+        && matches!(
+            field(output, "$").as_str(),
+            Some("STUStatescriptOutputPlug" | "Plug")
+        )
+        && script_expr::native_fields(output, &["links", "m_FF3DAF1E"])
+        && (output_states.is_null() || output_states.as_array().is_some_and(Vec::is_empty))
+        && field(output, "links").as_array().is_some_and(|links| {
+            links.iter().all(|link| {
+                matches!(
+                    link.as_array().map(Vec::as_slice),
+                    Some([position, input])
+                        if (position.is_null()
+                            || position.as_u64().is_some_and(|pos| u16::try_from(pos).is_ok()))
+                            && input.as_str().is_some_and(|name| !name.is_empty())
+                )
+            })
+        })
+        && fields.as_object().is_some_and(|fields| {
+            fields.iter().all(|(name, value)| match name.as_str() {
+                "m_2BBEEAB8" | "m_A2287776" | "m_AED90719" => neutral_flag(value),
+                "m_ADEB6E05" => value.as_bool() == Some(true) || value.as_u64() == Some(1),
+                "m_amount" | "m_inPlug" | "m_outPlug" | "m_stat" | "m_stats" | "m_targets" => true,
+                _ => value.is_null(),
+            })
+        })
+}
+
 pub(super) fn is_elapsed_wait(node: &Node) -> bool {
     let dynamic = field(&node.fields, "m_BF1A93B0");
     if matches!(dynamic, Json::Null | Json::Bool(false)) || dynamic.as_u64() == Some(0) {
@@ -555,8 +619,8 @@ pub(super) fn is_static_map_explosion(graph: &Graph, node: &Node, state: u16) ->
     let extra_scalar = field(fields, "m_3E3DFE0F");
     let optional_float = field(fields, "m_015FF666");
     let owner = field(fields, "m_0B1AA8CA");
-    let literal_number = |config| explosion_integer(config) || explosion_float(config);
-    let number = |config| literal_number(config) || explosion_expression(config);
+    let literal_number = |config| native_integer_operand(config) || explosion_float(config);
+    let number = |config| literal_number(config) || native_expression_operand(config);
     visibility_matches
         && field(fields, "m_86CE02DE").as_u64() == Some(1)
         && field(fields, "m_A2287776").as_u64() == Some(0)
@@ -574,10 +638,10 @@ pub(super) fn is_static_map_explosion(graph: &Graph, node: &Node, state: u16) ->
         && (direction.is_null() || explosion_direction(direction))
         && number(field(fields, "m_radius"))
         && explosion_float(field(fields, "m_65438EEB"))
-        && explosion_integer(field(fields, "m_66D29548"))
+        && native_integer_operand(field(fields, "m_66D29548"))
         && {
             let strength = field(fields, "m_6EFD110C");
-            explosion_integer(strength) || explosion_expression(strength)
+            native_integer_operand(strength) || native_expression_operand(strength)
         }
         && number(scalar)
         && (extra_scalar.is_null() || literal_number(extra_scalar))
@@ -619,11 +683,11 @@ fn explosion_position(config: &Json) -> bool {
     match field(config, "$").as_str() {
         Some("STU_71A87E92") => {
             script_expr::native_shape(config, "STU_71A87E92", Some("m_entity"))
-                && explosion_dynamic(field(config, "m_entity"))
+                && native_dynamic_operand(field(config, "m_entity"))
         }
         Some("STU_B5A0CAF0") => script_expr::native_shape(config, "STU_B5A0CAF0", None),
-        Some("STUConfigVarDynamic") => explosion_dynamic(config),
-        _ => explosion_expression(config),
+        Some("STUConfigVarDynamic") => native_dynamic_operand(config),
+        _ => native_expression_operand(config),
     }
 }
 
@@ -637,12 +701,12 @@ fn explosion_direction(config: &Json) -> bool {
                 && field(config, "m_5B94EDB8").is_null()
                 && script_expr::native_shape(field(config, "m_entity"), "STU_B5A0CAF0", None)
         }
-        "STUConfigVarDynamic" => explosion_dynamic(config),
-        _ => explosion_expression(config),
+        "STUConfigVarDynamic" => native_dynamic_operand(config),
+        _ => native_expression_operand(config),
     }
 }
 
-fn explosion_integer(config: &Json) -> bool {
+fn native_integer_operand(config: &Json) -> bool {
     script_expr::native_shape(config, "STUConfigVarInt", Some("m_value"))
         && field(config, "m_value")
             .as_i64()
@@ -656,7 +720,7 @@ fn explosion_float(config: &Json) -> bool {
             .is_some_and(|value| (value as f32).is_finite())
 }
 
-fn explosion_expression(config: &Json) -> bool {
+fn native_expression_operand(config: &Json) -> bool {
     let vars = field(config, "m_configVars");
     field(config, "$").as_str() == Some("STU_919FD47C")
         && script_expr::native_fields(config, &["m_expression", "m_configVars"])
@@ -664,7 +728,7 @@ fn explosion_expression(config: &Json) -> bool {
         && (vars.is_null() || vars.is_array())
 }
 
-fn explosion_dynamic(config: &Json) -> bool {
+fn native_dynamic_operand(config: &Json) -> bool {
     field(config, "$").as_str() == Some("STUConfigVarDynamic")
         && script_expr::native_fields(config, &["m_identifier", "m_60DB8F99"])
         && script_expr::dynamic(config).is_ok_and(|value| value.is_some())

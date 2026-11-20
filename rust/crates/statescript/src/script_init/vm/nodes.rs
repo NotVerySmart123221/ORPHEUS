@@ -19,10 +19,10 @@ use super::super::{
         is_elapsed_wait, is_entry, is_horizontal_velocity_clamp, is_literal_frame_wait,
         is_message_recipient_set, is_named_shield_decay, is_networked_for_code_synced,
         is_owner_movement_sampler, is_parent_owned_timed_graph, is_projected_self_message,
-        is_self_shield_recharge, is_self_stat_timer, is_self_target, is_static_map_explosion,
-        is_wave_health_pool, living_body_array_shape, named_temporary_shield, participant_filter,
-        persistent_message, placement_collection_tag, pool_number, raw_indices, registered_state,
-        source_key, static_target_operand, stored,
+        is_self_shield_recharge, is_self_stat_timer, is_self_target, is_stat_action,
+        is_static_map_explosion, is_wave_health_pool, living_body_array_shape,
+        named_temporary_shield, participant_filter, persistent_message, placement_collection_tag,
+        pool_number, raw_indices, registered_state, source_key, static_target_operand, stored,
     },
     types::{InitFault, Issue, SpawnSearch, SpawnSearchKey, State, StateKind},
     world::{CreationKind, EntityCreation, Site, World},
@@ -539,18 +539,18 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
-            "STU_CEBDAF17"
-                if ((registration.permits(self.graph(id).index == 0x0b8b
-                    && matches!(node.pos, 50 | 51 | 74))
-                    && node.server_only)
-                    || (registration.permits(self.graph(id).index == 0x0043
-                        && matches!(node.pos, 1 | 40 | 53..=55))
-                        && node.is_action()))
-                    && node.remote < 0
-                    && is_self_target(node, "m_targets") =>
-            {
-                // These player stat continuations preserve the caller and
-                // report whether the output took a transition.
+            "STU_CEBDAF17" if registration.shape(is_stat_action(node)) => {
+                let site = self.site(id, node);
+                let stats_available = if is_self_target(node, "m_targets") {
+                    self.world.player_stats_available(site)
+                } else {
+                    self.world.player_stats_service_available(site)
+                };
+                if stats_available != Some(false) {
+                    self.report(site, Issue::UnsupportedAction(node.class.clone()));
+                    return Ok(false);
+                }
+                // A missing stat service leaves the operands dormant.
                 self.follow(id, node, "m_outPlug", caller, depth)
             }
             "STU_43B63AD0"
@@ -642,16 +642,6 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     && field(&node.fields, "m_93CDFD2F").as_u64() == Some(1) =>
             {
                 // Pinned Python Roll fallback; the native service remains unverified.
-                self.follow(id, node, "m_outPlug", caller, depth)?;
-                Ok(true)
-            }
-            "STU_CEBDAF17"
-                if registration.permits(matches!(
-                    (self.graph(id).index, node.pos),
-                    (0x0079, 22) | (0x157c, 44 | 134 | 137 | 148..=150 | 153..=155 | 192 | 193 | 196)
-                )) =>
-            {
-                // The healer is a scene NPC with no player stats record.
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }

@@ -178,6 +178,12 @@ ability support.
   state payload. The static path leaves the impulse operands dormant.
   A dynamic-body implementation and original-client acceptance remain open.
 
+- `TrackStat` actions use their typed stat fields and target selectors.
+  A confirmed absent owner stats record supports self-target actions.
+  A variable target requires confirmation that this VM exposes no stat
+  service. The VM leaves the operands dormant and follows the normal
+  continuation. Live stat recording still needs a host implementation.
+
 Native target tracking still needs ordered samples, optional typed
 output bindings, and the lifecycle of its embedded state slots. The
 authored `track_entities` node owns separate child graph instances.

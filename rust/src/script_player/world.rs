@@ -247,8 +247,9 @@ impl World for BodyWorld {
         )
     }
 
-    fn player_stats_available(&self, site: Site) -> Option<bool> {
-        (self.is_player_site(site) && is_junkenstein_mode(self.mode)).then_some(false)
+    fn player_stats_service_available(&self, site: Site) -> Option<bool> {
+        // The bound body cannot update the scoreboard through StateScript.
+        self.is_player_site(site).then_some(false)
     }
 
     fn spatial_binding_owner_available(&self, site: Site) -> Option<bool> {

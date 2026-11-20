@@ -14,6 +14,8 @@ The [meter activity contract](../fixtures/behavior/script-meter-body-activity-v1
 
 The Rust-only [base action fixture](../fixtures/behavior/script-base-action-placement-v1.json) runs the same valid continuation at two original placements. It also checks malformed action markers and an invalid remote slot on an action.
 
+The Rust-only [stat action fixture](../fixtures/behavior/script-stat-action-facts-v1.json) exercises relocated single-stat and list forms, the authored continuation, and the distinct owner and service availability checks. It rejects unavailable facts and unsupported field shapes.
+
 The Rust-only [stat state fixture](../fixtures/behavior/script-stat-state-facts-v1.json) checks the lifetime of both validated stat selectors when the bound actor has no player stats record. It covers the distinct stat and combat host queries and rejects unknown stats context and malformed selectors.
 
 The Rust-only [frame wait fixture](../fixtures/behavior/script-frame-wait-v1.json) checks the existing VM clock for literal waits at two original placements and in both server-running scopes. It covers zero duration and rejects malformed durations, rearm and remote bindings.

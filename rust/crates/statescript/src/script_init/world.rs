@@ -635,9 +635,16 @@ pub trait World {
     fn spatial_binding_owner_available(&self, _site: Site) -> Option<bool> {
         None
     }
-    /// Whether this body's linked controller has a player stats record.
-    /// Unknown bindings return None.
-    fn player_stats_available(&self, _site: Site) -> Option<bool> {
+    /// Whether the bound controller exposes a player stats record to this VM.
+    /// A missing service also rules out its own record.
+    fn player_stats_available(&self, site: Site) -> Option<bool> {
+        self.player_stats_service_available(site)
+            .filter(|&available| !available)
+    }
+
+    /// Whether any player stats are exposed to this VM's bound controller.
+    /// None means the host cannot resolve this binding or its service.
+    fn player_stats_service_available(&self, _site: Site) -> Option<bool> {
         None
     }
     /// Whether the local combat accumulator is available to this state's owner.
