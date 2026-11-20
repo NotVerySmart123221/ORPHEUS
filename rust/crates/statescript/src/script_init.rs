@@ -13,7 +13,7 @@ use serde_json::Value as Json;
 
 use crate::{
     script_expr::{self, EmptyContext, EvalError, StackPriority, Variable},
-    script_graph::{Body, GraphStore, Node, asset_guid},
+    script_graph::{Body, GraphBinding, GraphStore, Node, asset_guid},
     script_modifiers::{Modifier, ModifierKey},
     script_runtime::{FRAME_MS, frame_start},
     script_wire::{Value, Variables},
@@ -60,6 +60,7 @@ pub struct Root {
     pub variables: Variables,
     run_startup: bool,
     initial_state: Option<u16>,
+    server_only: bool,
 }
 
 impl Root {
@@ -70,7 +71,20 @@ impl Root {
             variables: Variables::new(),
             run_startup: true,
             initial_state: None,
+            server_only: false,
         }
+    }
+
+    /// Mount a private root. The VM assigns its instance ID separately.
+    pub fn server_only(graph: u32) -> Self {
+        Self {
+            server_only: true,
+            ..Self::new(0, graph)
+        }
+    }
+
+    pub fn is_server_only(&self) -> bool {
+        self.server_only
     }
 
     #[doc(hidden)]
@@ -81,17 +95,8 @@ impl Root {
             ..Self::new(id, graph)
         }
     }
-}
 
-/// Initial body bindings use their asset order. Entries run after all roots exist.
-pub fn body_roots(body: &Body) -> Result<Vec<Root>, InitFault> {
-    let mut roots = Vec::new();
-    for (offset, binding) in body.graphs.iter().enumerate() {
-        let Some(graph) = binding.graph else {
-            continue;
-        };
-        let id = u16::try_from(offset + 1).map_err(|_| InitFault::InstanceIdExhausted)?;
-        let mut root = Root::new(id, graph);
+    fn with_binding(mut self, binding: &GraphBinding) -> Result<Self, InitFault> {
         for field in binding.sync.iter().flatten() {
             let key = field
                 .get("m_0D09D2D9")
@@ -101,17 +106,47 @@ pub fn body_roots(body: &Body) -> Result<Vec<Root>, InitFault> {
                 field.get("m_value").unwrap_or(&Json::Null),
                 &mut EmptyContext,
             )
-            .map_err(|error| InitFault::RootBinding { id, graph, error })?;
-            root.variables.insert(u32::from(key), value);
+            .map_err(|error| InitFault::RootBinding {
+                id: self.id,
+                graph: self.graph,
+                error,
+            })?;
+            self.variables.insert(u32::from(key), value);
         }
-        roots.push(root);
+        Ok(self)
+    }
+}
+
+fn public_body_roots(body: &Body) -> Result<Vec<Root>, InitFault> {
+    let mut roots = Vec::new();
+    for (offset, binding) in body.graphs.iter().enumerate() {
+        if let Some(graph) = binding.graph {
+            let id = u16::try_from(offset + 1).map_err(|_| InitFault::InstanceIdExhausted)?;
+            roots.push(Root::new(id, graph).with_binding(binding)?);
+        }
     }
     Ok(roots)
 }
 
-/// Initial body bindings, then the manager and equipped weapon slots in asset order.
+fn append_server_body_roots(body: &Body, roots: &mut Vec<Root>) -> Result<(), InitFault> {
+    for binding in &body.server_graphs {
+        if let Some(graph) = binding.graph {
+            roots.push(Root::server_only(graph).with_binding(binding)?);
+        }
+    }
+    Ok(())
+}
+
+/// Initial body bindings use their asset order. Private roots follow those bindings.
+pub fn body_roots(body: &Body) -> Result<Vec<Root>, InitFault> {
+    let mut roots = public_body_roots(body)?;
+    append_server_body_roots(body, &mut roots)?;
+    Ok(roots)
+}
+
+/// Body bindings, manager and equipped weapon slots in asset order, then private roots.
 pub fn player_roots(body: &Body, graphs: &GraphStore) -> Result<Vec<Root>, InitFault> {
-    let mut roots = body_roots(body)?;
+    let mut roots = public_body_roots(body)?;
     let mut id = roots.last().map_or(0, |root| root.id);
     let mut append = |graph, slot: Option<usize>| {
         id = id.checked_add(1).ok_or(InitFault::InstanceIdExhausted)?;
@@ -130,6 +165,7 @@ pub fn player_roots(body: &Body, graphs: &GraphStore) -> Result<Vec<Root>, InitF
             append(*graph, Some(slot))?;
         }
     }
+    append_server_body_roots(body, &mut roots)?;
     if let Some(root) = roots.iter().find(|root| graphs.graph(root.graph).is_none()) {
         return Err(InitFault::MissingPlayerGraph(root.graph));
     }
@@ -716,10 +752,17 @@ impl Component {
         amount: f64,
         world: &mut impl World,
     ) -> Result<u16, InitFault> {
-        let id = u16::try_from(self.machine.next_id).map_err(|_| InitFault::InstanceIdExhausted)?;
+        let id = self.machine.next_instance_id(false)?;
         self.run(world, |vm| {
             let variables = Variables::from([(SCRIPT_SOURCE, Value::Entity(source))]);
-            vm.create(id, 0x0079, None, variables, Startup::Ordinary, false)?;
+            vm.create(
+                id,
+                0x0079,
+                None,
+                variables,
+                Startup::Ordinary,
+                types::InstanceScope::Projected,
+            )?;
             vm.machine.queue_entries_from(
                 vm.graphs,
                 Some(id),

@@ -79,7 +79,11 @@ impl PlayerBodyFactory {
         let mut roots = crate::script_init::player_roots(body, &graphs).map_err(unsupported)?;
         if is_junkenstein_mode(mode) {
             const DEFENDER_BODY_GRAPH: u32 = 0x0ca5;
-            let id = roots
+            let public_roots = roots
+                .iter()
+                .position(Root::is_server_only)
+                .unwrap_or(roots.len());
+            let id = roots[..public_roots]
                 .last()
                 .map_or(0, |root| root.id)
                 .checked_add(1)
@@ -87,7 +91,7 @@ impl PlayerBodyFactory {
             if graphs.graph(DEFENDER_BODY_GRAPH).is_none() {
                 return Err(unsupported("Junkenstein defender body graph is absent"));
             }
-            roots.push(Root::new(id, DEFENDER_BODY_GRAPH));
+            roots.insert(public_roots, Root::new(id, DEFENDER_BODY_GRAPH));
         }
         let health = pools.unwrap_or(FALLBACK_POOLS).total();
         let variables = crate::script_init::player_entity_variables(body, health, health);
@@ -119,7 +123,10 @@ impl PlayerBodyFactory {
         if spawn.quanta != RETAIL_QUANTA {
             return Err(unsupported("the owner VM requires the 16 ms retail clock"));
         }
-        let has_authored_pools = self.roots.iter().any(|root| root.graph == BODY_GRAPH);
+        let has_authored_pools = self
+            .roots
+            .iter()
+            .any(|root| !root.is_server_only() && root.graph == BODY_GRAPH);
         let mut world = BodyWorld {
             spatial_frame: None,
             script_requests: Default::default(),

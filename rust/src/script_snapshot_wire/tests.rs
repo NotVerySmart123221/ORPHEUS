@@ -2013,6 +2013,170 @@ fn tracked_entity_children_and_descendants_stay_out_of_both_wire_views() {
 }
 
 #[test]
+fn authored_server_meter_leaves_both_wire_views_and_public_child_identity_unchanged() {
+    use std::sync::Arc;
+
+    use crate::script_init::{Component, PlayScript, player_roots};
+
+    const BODY: u64 = 0x0400_0000_0000_0a01;
+    const PUBLIC: u32 = 445;
+    const PUBLIC_CHILD: u32 = 446;
+    const PRIVATE_CHILD: u32 = 447;
+    const METER: u32 = 444;
+
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-authored-meter-v1.json"
+    ))
+    .unwrap();
+    let mut bundle = contract["input"]["bundle"].clone();
+    let body = &mut bundle["bodies"][format!("0x{BODY:016X}")];
+    body["server_graphs"] = std::mem::take(&mut body["graphs"]);
+    body["graphs"] = json!([{"graph": PUBLIC, "m_75408640": 0}]);
+
+    let child_graph = format!("0x{:016X}", 0x0580_0000_0000_0000 | u64::from(PUBLIC_CHILD));
+    bundle["graphs"].as_array_mut().unwrap().extend([
+        graph(
+            PUBLIC,
+            vec![node(
+                0,
+                "STU_37D754C8",
+                Some(0),
+                json!({"m_36F7B64C":{"m_36F7B64C":{"m_C974E369":{"m_graph":child_graph}}}}),
+            )],
+            json!([0]),
+            json!([]),
+            json!([0]),
+            json!([]),
+        ),
+        graph(
+            PUBLIC_CHILD,
+            vec![],
+            json!([]),
+            json!([]),
+            json!([]),
+            json!([]),
+        ),
+        graph(
+            PRIVATE_CHILD,
+            vec![],
+            json!([]),
+            json!([]),
+            json!([]),
+            json!([]),
+        ),
+    ]);
+    let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    let start = |roots| {
+        Component::start(
+            Arc::clone(&graphs),
+            ENTITY,
+            Variables::from([(55, Value::Integer(-12))]),
+            roots,
+            0,
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap()
+    };
+    let mut control = start(vec![Root::new(1, PUBLIC)]);
+    let mut with_meter = start(player_roots(&graphs.bodies()[&BODY], &graphs).unwrap());
+    let control_start = control.snapshot().unwrap().clone();
+    let meter_start = with_meter.snapshot().unwrap().clone();
+    let (&meter_id, meter) = meter_start
+        .instances
+        .iter()
+        .find(|(_, instance)| instance.graph == METER)
+        .unwrap();
+    assert!(meter.is_server_only());
+    assert_eq!(meter.variables[&71], Value::Float(0.0));
+    assert_eq!(meter.variables[&75], Value::Float(12.0));
+    assert!(!meter_start.pending_timers[&meter_id].is_empty());
+
+    with_meter
+        .receive_play_script(
+            Site {
+                entity: ENTITY,
+                graph: METER,
+                instance: meter_id,
+                node: None,
+            },
+            &PlayScript {
+                policy: 1,
+                overrides: vec![],
+                graph: PRIVATE_CHILD,
+                source: ENTITY,
+                parameters: vec![],
+                auto_retire: false,
+            },
+            &mut EmptyWorld,
+        )
+        .unwrap();
+
+    for component in [&mut control, &mut with_meter] {
+        component.advance_frame(3, &mut EmptyWorld).unwrap();
+        component.begin_state(1, 0, &mut EmptyWorld).unwrap();
+        let snapshot = component.snapshot().unwrap();
+        assert!(
+            snapshot.initialization_complete(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        assert_eq!(snapshot.instances[&1].graph, PUBLIC);
+        assert_eq!(snapshot.instances[&2].graph, PUBLIC_CHILD);
+        assert_eq!(snapshot.instances[&2].parent, Some((1, 0)));
+    }
+    let control_end = control.snapshot().unwrap();
+    let meter_end = with_meter.snapshot().unwrap();
+    assert_eq!(
+        meter_end.instances[&meter_id].variables[&71],
+        Value::Float(1.0)
+    );
+    assert!(
+        meter_end
+            .instances
+            .values()
+            .any(|instance| { instance.graph == PRIVATE_CHILD && instance.is_server_only() })
+    );
+
+    let codecs = CodecTable::from_json(CODECS).unwrap();
+    let encoder = SnapshotEncoder::new(&graphs, &codecs);
+    for view in [View::Owner, View::Observer] {
+        let encode = |start: &Snapshot, end: &Snapshot| {
+            let initial = encoder.project(start, view).unwrap();
+            assert_eq!(initial.instances.keys().copied().collect::<Vec<_>>(), [1]);
+            let next = encoder.project_next(end, &initial).unwrap();
+            assert_eq!(next.instances.keys().copied().collect::<Vec<_>>(), [1, 2]);
+            let full = encoder.full(&initial).unwrap();
+            let mut stream = BodyStream::new(ENTITY);
+            let baseline = encoder.queue_full(&mut stream, &initial).unwrap();
+            stream.create_arrived();
+            assert!(stream.arrived(baseline.last).advanced);
+            let kind = match view {
+                View::Owner => DeltaKind::InitialOwner(3),
+                View::Observer => DeltaKind::Observer { resend: true },
+            };
+            let update = encoder
+                .queue_delta(&mut stream, &next, kind, 16)
+                .unwrap()
+                .unwrap()
+                .update
+                .chunk
+                .unwrap();
+            (initial, next, full, update)
+        };
+        let (control_initial, control_next, control_full, control_update) =
+            encode(&control_start, control_end);
+        let (meter_initial, meter_next, meter_full, meter_update) = encode(&meter_start, meter_end);
+        assert_eq!(meter_initial, control_initial);
+        assert_eq!(meter_next, control_next);
+        for (expected, actual) in [(control_full, meter_full), (control_update, meter_update)] {
+            assert_eq!(actual.bit_len(), expected.bit_len(), "{view:?}");
+            assert_eq!(actual.as_bytes(), expected.as_bytes(), "{view:?}");
+        }
+    }
+}
+
+#[test]
 fn quick_melee_hit_list_projects_empty_hits_payload() {
     let mut melee = graph(
         0x0043,

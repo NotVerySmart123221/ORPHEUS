@@ -293,12 +293,37 @@ pub struct ChasePayload {
     pub last_ms: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum InstanceScope {
+    Projected,
+    ServerOnly,
+    Isolated,
+}
+
+impl InstanceScope {
+    pub(super) fn is_isolated(self) -> bool {
+        self == Self::Isolated
+    }
+
+    pub(super) fn is_server_only(self) -> bool {
+        self != Self::Projected
+    }
+
+    pub(super) fn hide_if(self, server_only: bool) -> Self {
+        if server_only && self == Self::Projected {
+            Self::ServerOnly
+        } else {
+            self
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Instance {
     pub graph: u32,
     pub(super) start_ms: u64,
     pub(super) retire_after_frame: Option<u32>,
-    pub(super) server_only: bool,
+    pub(super) scope: InstanceScope,
     /// Parent instance and raw state index, as carried on the wire.
     pub parent: Option<(u16, u16)>,
     pub variables: Variables,
@@ -308,7 +333,7 @@ pub struct Instance {
 
 impl Instance {
     pub fn is_server_only(&self) -> bool {
-        self.server_only
+        self.scope.is_server_only()
     }
 }
 

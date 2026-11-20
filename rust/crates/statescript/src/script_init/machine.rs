@@ -212,7 +212,8 @@ pub(super) struct Machine {
     pub(super) movement_modifiers: BTreeMap<ModifierKey, Modifier>,
     pub(super) shots: Vec<ShotEvent>,
     pub(super) ability_presses: BTreeMap<StateKey, Vec<AbilityPress>>,
-    pub(super) next_id: u32,
+    next_public_id: u32,
+    next_private_id: u32,
     pub(super) work_left: usize,
     pub(super) max_work: usize,
     pub(super) frame: u32,
@@ -247,7 +248,8 @@ impl Clone for Machine {
             movement_modifiers: self.movement_modifiers.clone(),
             shots: self.shots.clone(),
             ability_presses: self.ability_presses.clone(),
-            next_id: self.next_id,
+            next_public_id: self.next_public_id,
+            next_private_id: self.next_private_id,
             work_left: self.work_left,
             max_work: self.max_work,
             frame: self.frame,
@@ -327,7 +329,8 @@ impl Machine {
             movement_modifiers: BTreeMap::new(),
             shots: Vec::new(),
             ability_presses: BTreeMap::new(),
-            next_id: 1,
+            next_public_id: 1,
+            next_private_id: u32::from(u16::MAX),
             work_left: max_work,
             max_work,
             frame,
@@ -342,6 +345,37 @@ impl Machine {
             disabled_start_entries: HashSet::new(),
             public_schemas: false,
         })
+    }
+
+    pub(super) fn next_instance_id(&self, isolated: bool) -> Result<u16, InitFault> {
+        if self.next_public_id > self.next_private_id {
+            return Err(InitFault::InstanceIdExhausted);
+        }
+        let id = if isolated {
+            self.next_private_id
+        } else {
+            self.next_public_id
+        };
+        u16::try_from(id).map_err(|_| InitFault::InstanceIdExhausted)
+    }
+
+    pub(super) fn claim_instance_id(&mut self, id: u16, isolated: bool) -> Result<(), InitFault> {
+        if id == 0 || self.snapshot.instances.contains_key(&id) {
+            return Err(InitFault::InstanceIdExhausted);
+        }
+        let id = u32::from(id);
+        if isolated {
+            if id < self.next_public_id || id != self.next_private_id {
+                return Err(InitFault::InstanceIdExhausted);
+            }
+            self.next_private_id = id - 1;
+        } else {
+            if id > self.next_private_id {
+                return Err(InitFault::InstanceIdExhausted);
+            }
+            self.next_public_id = self.next_public_id.max(id + 1);
+        }
+        Ok(())
     }
 
     pub(super) fn capture_outputs(&mut self) {
@@ -560,5 +594,42 @@ impl Machine {
                         || (entry.priority.level == priority.level && priority.above_equals)
                 })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn isolated_and_projected_instance_ids_meet_without_reuse() {
+        let mut machine = Machine::new(1, Variables::new(), 0, 100).unwrap();
+        assert_eq!(machine.next_instance_id(false), Ok(1));
+        assert_eq!(machine.next_instance_id(true), Ok(u16::MAX));
+
+        machine.claim_instance_id(u16::MAX - 2, false).unwrap();
+        machine.claim_instance_id(u16::MAX, true).unwrap();
+
+        let remaining = u16::MAX - 1;
+        assert_eq!(machine.next_instance_id(false), Ok(remaining));
+        assert_eq!(machine.next_instance_id(true), Ok(remaining));
+        machine.claim_instance_id(remaining, false).unwrap();
+
+        assert_eq!(
+            machine.next_instance_id(false),
+            Err(InitFault::InstanceIdExhausted)
+        );
+        assert_eq!(
+            machine.next_instance_id(true),
+            Err(InitFault::InstanceIdExhausted)
+        );
+        assert!(
+            machine.snapshot.instances.is_empty(),
+            "retirement must not make an allocated ID available"
+        );
+        assert_eq!(
+            machine.clone().next_instance_id(true),
+            Err(InitFault::InstanceIdExhausted)
+        );
     }
 }

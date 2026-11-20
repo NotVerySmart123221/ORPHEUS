@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "case_id": "script-server-root-ids.synthetic.v1",
+  "source": {"basis": "Invented graph and root schedules for the VM instance allocators."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "graph": 901,
+    "bundle": {
+      "version": 1,
+      "bodies": {},
+      "missing": [],
+      "graphs": [{
+        "index": 901,
+        "items": 0,
+        "header": {
+          "m_nodesBitCount": 1, "m_statesBitCount": 1,
+          "m_remoteSyncNodesBitCount": 1, "m_syncVarsBitCount": 1
+        },
+        "fields": {}, "containers": {}, "unknown_nodes": [],
+        "nodes": [], "states": [], "entries": [], "remote": [], "sync_vars": []
+      }]
+    },
+    "cases": [
+      {"name": "public order and separate private sequence", "roots": [null, 9, 2, null]},
+      {"name": "last slot goes to the private root", "roots": [null, 65534]},
+      {"name": "private root needs a free slot", "roots": [null, 65535]},
+      {"name": "two private roots need two free slots", "roots": [65534, null, null]},
+      {"name": "public root zero remains invalid", "roots": [0, null]},
+      {"name": "duplicate public roots remain invalid", "roots": [null, 9, 9]},
+      {"name": "ordinary roots support the entire legacy range", "roots": [65535]}
+    ]
+  },
+  "expected": {
+    "cases": [
+      {"instances": [[9, false], [2, false], [65535, true], [65534, true]]},
+      {"instances": [[65534, false], [65535, true]]},
+      {"exhausted": true},
+      {"exhausted": true},
+      {"invalid_root": 0},
+      {"invalid_root": 9},
+      {"instances": [[65535, false]]}
+    ]
+  }
+}

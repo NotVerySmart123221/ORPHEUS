@@ -7,7 +7,7 @@ use crate::{
     script_wire::{Value, Variables},
 };
 
-use super::{InitFault, Instance, Issue, Startup, StateKey, StateKind, Vm, World, field};
+use super::{InitFault, Issue, Startup, StateKey, StateKind, Vm, World, field};
 
 const MAX_TRACKED_TARGETS: usize = 64;
 
@@ -113,23 +113,9 @@ impl<W: World> Vm<'_, '_, '_, W> {
         if let Some(&child) = children.get(&entity) {
             return Ok(Some(child));
         }
-        let child =
-            u16::try_from(self.machine.next_id).map_err(|_| InitFault::InstanceIdExhausted)?;
-        let server_only = server_only
-            || self
-                .machine
-                .snapshot
-                .instances
-                .get(&key.instance)
-                .is_some_and(Instance::is_server_only);
-        let created = self.create(
-            child,
-            graph,
-            None,
-            variables(),
-            Startup::Ordinary,
-            server_only,
-        );
+        let scope = self.instance_scope(key.instance).hide_if(server_only);
+        let child = self.machine.next_instance_id(scope.is_isolated())?;
+        let created = self.create(child, graph, None, variables(), Startup::Ordinary, scope);
         // Track a partially initialized child too, so teardown can reclaim it.
         if self.machine.snapshot.instances.contains_key(&child) {
             self.state_mut(key)

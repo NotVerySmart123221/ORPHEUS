@@ -26,7 +26,8 @@ use super::{
         same, source_key, stored,
     },
     types::{
-        AbilityCooldown, BufferedPress, Diagnostic, InitFault, Instance, Issue, State, StateKind,
+        AbilityCooldown, BufferedPress, Diagnostic, InitFault, Instance, InstanceScope, Issue,
+        State, StateKind,
     },
     voice::InstanceContext,
     world::{PlayScript, RoomMessage, Site, World},
@@ -60,26 +61,55 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         }
     }
 
-    pub(in crate::script_init) fn start(&mut self, roots: Vec<Root>) -> Result<(), InitFault> {
+    pub(in crate::script_init) fn start(&mut self, mut roots: Vec<Root>) -> Result<(), InitFault> {
         let mut seen = HashSet::new();
         for root in &roots {
-            if root.id == 0 || !seen.insert(root.id) {
+            let valid = if root.is_server_only() {
+                root.id == 0
+            } else {
+                root.id != 0 && seen.insert(root.id)
+            };
+            if !valid {
                 return Err(InitFault::InvalidRoot(root.id));
             }
         }
+        let private_count = roots.len() - seen.len();
+        if private_count != 0 {
+            let highest_public = seen.into_iter().max().unwrap_or(0);
+            if private_count > usize::from(u16::MAX - highest_public) {
+                return Err(InitFault::InstanceIdExhausted);
+            }
+            roots.sort_by_key(Root::is_server_only);
+        }
         for root in roots {
+            let (id, scope) = if root.is_server_only() {
+                (
+                    self.machine.next_instance_id(true)?,
+                    InstanceScope::Isolated,
+                )
+            } else {
+                (root.id, InstanceScope::Projected)
+            };
             let startup = if root.run_startup {
                 Startup::Ordinary
             } else {
                 Startup::Passive
             };
-            if self.create(root.id, root.graph, None, root.variables, startup, false)? {
+            if self.create(id, root.graph, None, root.variables, startup, scope)? {
                 if let Some(raw) = root.initial_state {
-                    self.post(root.id, Event::Begin(raw))?;
+                    self.post(id, Event::Begin(raw))?;
                 }
             }
         }
         self.run()
+    }
+
+    fn instance_scope(&self, id: u16) -> InstanceScope {
+        self.machine
+            .snapshot
+            .instances
+            .get(&id)
+            .map_or(InstanceScope::Projected, |instance| instance.scope)
     }
 
     pub(in crate::script_init) fn spend(
@@ -104,28 +134,26 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         parent: Option<(u16, u16)>,
         mut variables: Variables,
         startup: Startup,
-        server_only: bool,
+        scope: InstanceScope,
     ) -> Result<bool, InitFault> {
         self.spend("instance creation")?;
         let Some(definition) = self.graphs.graph(graph) else {
-            self.report(
-                Site {
+            self.record_diagnostic(Diagnostic {
+                site: Site {
                     entity: self.machine.snapshot.entity,
                     instance: id,
                     graph,
                     node: None,
                 },
-                Issue::MissingGraph(graph),
-            );
+                issue: Issue::MissingGraph(graph),
+                registration_rejected: false,
+                server_only: scope.is_server_only(),
+            });
             return Ok(false);
         };
         let apply_schema =
             self.machine.public_schemas && !matches!(startup, Startup::Played { .. });
-        let server_only = server_only
-            || parent
-                .and_then(|(parent, _)| self.machine.snapshot.instances.get(&parent))
-                .is_some_and(Instance::is_server_only);
-        self.machine.next_id = self.machine.next_id.max(u32::from(id) + 1);
+        self.machine.claim_instance_id(id, scope.is_isolated())?;
         self.machine.snapshot.instances.insert(
             id,
             Instance {
@@ -133,7 +161,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 start_ms: self.machine.now_ms,
                 retire_after_frame: matches!(startup, Startup::Played { auto_retire: true })
                     .then(|| self.machine.frame.saturating_add(1)),
-                server_only,
+                scope,
                 parent,
                 variables: if apply_schema {
                     Variables::new()
@@ -1097,12 +1125,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 .node
                 .and_then(|position| self.graphs.graph(site.graph)?.node(position))
                 .is_some_and(|node| node.target_child_binding().is_some());
-        let diagnostic = Diagnostic {
+        self.record_diagnostic(Diagnostic {
             site,
             issue,
             registration_rejected,
             server_only,
-        };
+        });
+    }
+
+    fn record_diagnostic(&mut self, diagnostic: Diagnostic) {
         if !self
             .machine
             .snapshot
@@ -1408,19 +1439,19 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             self.report(site, Issue::UnsupportedField("PlayScript policy"));
             return Ok(());
         }
-        let server_only = self
-            .machine
-            .snapshot
-            .instances
-            .get(&site.instance)
-            .is_some_and(Instance::is_server_only);
+        let scope = match self.instance_scope(site.instance) {
+            InstanceScope::Isolated if site.entity != self.machine.snapshot.entity => {
+                InstanceScope::Projected
+            }
+            scope => scope,
+        };
         let matches: Vec<_> = self
             .machine
             .snapshot
             .instances
             .iter()
             .filter_map(|(&id, instance)| {
-                (instance.graph == *graph && instance.is_server_only() == server_only).then_some(id)
+                (instance.graph == *graph && instance.scope == scope).then_some(id)
             })
             .collect();
         if *policy == 0 && !matches.is_empty() {
@@ -1446,8 +1477,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let id = if let Some(id) = reused {
             id
         } else {
-            let id =
-                u16::try_from(self.machine.next_id).map_err(|_| InitFault::InstanceIdExhausted)?;
+            let id = self.machine.next_instance_id(scope.is_isolated())?;
             self.create(
                 id,
                 *graph,
@@ -1456,7 +1486,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Startup::Played {
                     auto_retire: *auto_retire,
                 },
-                server_only,
+                scope,
             )?;
             id
         };
@@ -1657,9 +1687,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         for child in remaining {
             self.destroy(child)?;
         }
+        let scope = self.instance_scope(id);
         for value in added {
-            let child =
-                u16::try_from(self.machine.next_id).map_err(|_| InitFault::InstanceIdExhausted)?;
+            let child = self.machine.next_instance_id(scope.is_isolated())?;
             let values = Variables::from([
                 (target.id, value),
                 (SCRIPT_SOURCE, Value::Entity(site.entity)),
@@ -1670,7 +1700,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Some((id, key.raw)),
                 values,
                 Startup::Passive,
-                false,
+                scope,
             )? {
                 self.follow(child, node, "m_C41A9BE2", None, 0)?;
             }
@@ -1714,8 +1744,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let Some(parameters) = self.play_parameters(id, node)? else {
             return Ok(());
         };
-        let child =
-            u16::try_from(self.machine.next_id).map_err(|_| InitFault::InstanceIdExhausted)?;
+        let scope = self.instance_scope(id);
+        let child = self.machine.next_instance_id(scope.is_isolated())?;
         let values = Variables::from([(SCRIPT_SOURCE, Value::Entity(site.entity))]);
         if self.create(
             child,
@@ -1723,7 +1753,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             Some((id, key.raw)),
             values,
             Startup::Played { auto_retire: false },
-            false,
+            scope,
         )? {
             self.queue_script_start(child, graph, site.entity, &parameters)?;
         }

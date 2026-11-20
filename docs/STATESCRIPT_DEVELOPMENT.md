@@ -199,6 +199,27 @@ corresponding simulation phase.
 
 See the [synthetic host health contract](../fixtures/behavior/script-host-health-events-v1.json).
 
+## Attach a server-only graph to a body
+
+Use a body's optional `server_graphs` list to install an authored
+graph as an isolated root. Each entry uses the same graph index and
+sync bindings as a `graphs` entry. Sync bindings seed instance variables
+before the root's startup entries run.
+
+The VM installs numbered roots first. Private roots and the scripts they
+start within the same component allocate IDs from the top of the
+instance range. The public sequence grows from the low end. The VM
+reports exhaustion when the ranges run out of free IDs and keeps retired
+IDs reserved for the component lifetime. Isolated instances stay outside owner and
+observer projection.
+
+Use instance-scoped variables for private balances. A graph that writes
+shared entity variables or requests room effects still participates in
+those shared interfaces. Compare both wire views when adding a binding
+to a client-facing body.
+
+See the [synthetic root allocation contract](../fixtures/behavior/script-server-root-ids-v1.json).
+
 ## Compose a graph-owned resource meter
 
 Bind the same meter graph to the actors that use it. Each body's

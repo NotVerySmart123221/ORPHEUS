@@ -529,15 +529,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Scope::Entity => entity_vars.insert(target.id, value),
             };
         }
-        let child =
-            u16::try_from(self.machine.next_id).map_err(|_| InitFault::InstanceIdExhausted)?;
+        let scope = self.instance_scope(id);
+        let child = self.machine.next_instance_id(scope.is_isolated())?;
         if self.create(
             child,
             graph,
             Some((id, key.raw)),
             vars,
             Startup::Ordinary,
-            false,
+            scope,
         )? {
             // The reference sets child binding bases directly before Entry.
             self.machine.snapshot.variables.extend(entity_vars);

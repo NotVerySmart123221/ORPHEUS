@@ -712,6 +712,9 @@ pub struct Body {
     pub hero: Option<String>,
     pub name: String,
     pub graphs: Vec<GraphBinding>,
+    /// Server roots mounted without consuming the body's projected IDs.
+    #[serde(default)]
+    pub server_graphs: Vec<GraphBinding>,
     pub manager: Option<u32>,
     pub weapons: Vec<Option<u32>>,
     #[serde(default)]
@@ -1044,6 +1047,25 @@ impl GraphStore {
                 }
             }
         }
+        for (body, definition) in bundle
+            .bodies
+            .iter()
+            .chain(&bundle.entities)
+            .chain(&bundle.junkenstein.entities)
+        {
+            for binding in &definition.server_graphs {
+                let graph = binding.graph.ok_or_else(|| {
+                    invalid(format!(
+                        "body {body} declares a server root without a graph"
+                    ))
+                })?;
+                if !graphs.contains_key(&graph) {
+                    return Err(invalid(format!(
+                        "body {body} declares missing server graph {graph}"
+                    )));
+                }
+            }
+        }
         let room_spatial_needs = graphs
             .values()
             .flat_map(|graph| &graph.nodes)
@@ -1358,6 +1380,51 @@ mod tests {
             }},
             "missing": [43]
         })
+    }
+
+    #[test]
+    fn body_server_graphs_preserve_public_roots_and_bind_variables_in_order() {
+        use crate::{
+            script_init::{Root, body_roots, player_roots},
+            script_wire::Value as ScriptValue,
+        };
+
+        const BODY: &str = "0x0400000000000001";
+        let mut data = fixture();
+        let body = &mut data["bodies"][BODY];
+        body["manager"] = json!(42);
+        body["graphs"].as_array_mut().unwrap().extend([
+            json!({"graph":null,"m_75408640":0}),
+            json!({"graph":42,"m_75408640":0}),
+        ]);
+        body["server_graphs"] = json!([
+            {"graph":42,"m_75408640":0,"m_1EB5A024":[{"m_0D09D2D9":"0x0000000000000017","m_value":11}]},
+            {"graph":42,"m_75408640":0,"m_1EB5A024":[{"m_0D09D2D9":"0x0000000000000017","m_value":12}]}
+        ]);
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let store = load(&data).unwrap();
+        let body = &store.bodies()[&0x0400_0000_0000_0001];
+        let ids = |roots: &[Root]| roots.iter().map(|root| root.id).collect::<Vec<_>>();
+        let body = body_roots(body).unwrap();
+        assert_eq!(ids(&body), [1, 3, 0, 0]);
+        let player = player_roots(&store.bodies()[&0x0400_0000_0000_0001], &store).unwrap();
+        assert_eq!(ids(&player), [1, 3, 4, 5, 0, 0]);
+        assert_eq!(player[3].variables[&28], ScriptValue::Integer(1));
+        for roots in [&body, &player] {
+            let seeded = roots
+                .iter()
+                .filter(|root| root.is_server_only())
+                .map(|root| &root.variables[&23])
+                .collect::<Vec<_>>();
+            assert_eq!(
+                seeded,
+                [&ScriptValue::Integer(11), &ScriptValue::Integer(12)]
+            );
+        }
+        for invalid in [Value::Null, json!(43)] {
+            data["bodies"][BODY]["server_graphs"][0]["graph"] = invalid;
+            assert_eq!(load(&data).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        }
     }
 
     #[test]

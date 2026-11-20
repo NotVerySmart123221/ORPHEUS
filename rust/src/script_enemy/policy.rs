@@ -1233,7 +1233,7 @@ impl EnemyScripts {
         // NPCs using 0C89's capacity binding retain their catalog-owned pools.
         if roots
             .iter()
-            .any(|root| root.graph == crate::game_pools::BODY_GRAPH)
+            .any(|root| !root.is_server_only() && root.graph == crate::game_pools::BODY_GRAPH)
         {
             *vitals = Vitals::empty();
         }
