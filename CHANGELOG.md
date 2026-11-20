@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Keep the settled target context when an immediate same-body GameMessage carries the target as a typed entity parameter. The synthetic contract checks relayed requests across replacement and independent messages on the same VM frame. Integration validation pending.
+
 - Use actual player damage for attacker credit and hit notices. The settled-hit contract compares an overkill impact against the same capped result in the deferred event. A prepared probe checks the stock damage receiver's typed pool deductions, floor and cap. Integration validation pending.
 
 - Kept a settled health event bound to its original target generation through the next VM frame. Direct awards and health requests skip an expired target. Added a room regression for same-wire replacement before the source VM handles the event and a fresh award after replacement. Integration validation pending.

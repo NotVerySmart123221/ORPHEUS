@@ -288,7 +288,10 @@ room preserves these facts if a lethal target retires before delivery.
 The health event also carries the original body identity through VM
 delivery. A subsequent direct request to that same wire expires if the
 room now identifies a different body. The room regression includes a
-fresh award to the replacement to exercise the normal path.
+fresh award to the replacement to exercise the normal path. An
+immediate same-body message can relay the original target's context
+through a typed entity parameter. The portable regression exercises
+both direct and relayed awards across body replacement.
 A prepared probe uses the original admission claim and local sender
 with the stock cap. These additions are pending integration verification.
 

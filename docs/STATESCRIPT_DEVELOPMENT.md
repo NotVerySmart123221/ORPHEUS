@@ -712,7 +712,10 @@ frame used for admission. An expired target is skipped for directed
 messages and direct health changes. This keeps historical target facts
 usable by the source after the original body retires. Radial effects
 still select present candidates through their normal spatial query.
-Ordinary messages and later graph work start with their own context.
+An immediate same-body GameMessage carries the context when a top-level
+entity parameter names the health event target. Numeric parameters,
+incoming room messages, externally scheduled messages and later graph
+work use their own context.
 
 The enabled room records successful weapon damage, room-settled script
 and AI requests, field healing, and VM-local AI damage and healing.
