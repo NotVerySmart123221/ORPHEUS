@@ -17,11 +17,12 @@ use crate::accounts::parse_guid;
 use crate::ai_script::{AiActorSnapshot, AiPatrolSnapshot};
 use crate::collision_scene::CollisionScene;
 use crate::contact_body::CharacterBody;
+use crate::contact_cache::CapsulePose;
 use crate::contact_math::{add, sub};
 use crate::contact_world::ContactWorld;
 use crate::game_clock::TICK_PERIOD;
 use crate::game_debug::ContactClip;
-use crate::mover_ground::{pogo, standing_body, standing_origin};
+use crate::mover_ground::{pogo, standing_body, standing_capsule, standing_origin};
 use crate::mover_settings::MoverSettings;
 use crate::navigation::{PathOptions, PathQuery, find_path};
 use crate::patrol_script::{PatrolScript, WaitEvent};
@@ -297,7 +298,7 @@ impl PatrolCollision {
     }
 
     fn advance(&mut self, tick: u32, from: [f64; 3], to: [f64; 3], dt: f64) -> [f64; 3] {
-        self.try_advance(tick, from, to, dt).unwrap_or(from)
+        self.try_advance(tick, from, to, dt, &[]).unwrap_or(from)
     }
 
     fn try_advance(
@@ -306,15 +307,18 @@ impl PatrolCollision {
         from: [f64; 3],
         to: [f64; 3],
         dt: f64,
+        actor_capsules: &[CapsulePose],
     ) -> Result<[f64; 3], crate::contact_hull::HullContactError> {
         let start = standing_origin(from, self.lift);
         self.body.teleport(start);
         let delta = sub(standing_origin(to, self.lift), start);
         let mut clip = None;
         let movement = if self.trace.is_some() {
-            self.body.move_capsule_traced(delta, dt as f32, &mut clip)
+            self.body
+                .move_capsule_against_traced(delta, dt as f32, actor_capsules, &mut clip)
         } else {
-            self.body.move_capsule(delta, dt as f32)
+            self.body
+                .move_capsule_against(delta, dt as f32, actor_capsules)
         };
         let after = match movement {
             Ok(moved) => {
@@ -1031,11 +1035,23 @@ impl Bot {
         self.velocity_changes.extend(changes);
     }
 
+    /// Use the bound physical capsule, or the same standing geometry before binding.
+    pub(crate) fn contact_capsule(&self, settings: &MoverSettings) -> CapsulePose {
+        self.collision.as_ref().map_or_else(
+            || standing_capsule(settings, self.position),
+            |collision| CapsulePose {
+                position: standing_origin(self.position, collision.lift),
+                ..collision.body.capsule_pose()
+            },
+        )
+    }
+
     /// Attempt one bounded capsule move without changing steering or velocity.
     pub(crate) fn apply_swept_displacement(
         &mut self,
         tick: u32,
         displacement: SweptDisplacement,
+        actor_capsules: &[CapsulePose],
     ) -> bool {
         if self.dead {
             return false;
@@ -1053,7 +1069,9 @@ impl Bot {
         {
             return false;
         }
-        let Ok(after) = collision.try_advance(tick, from, to, TICK_PERIOD.as_secs_f64()) else {
+        let Ok(after) =
+            collision.try_advance(tick, from, to, TICK_PERIOD.as_secs_f64(), actor_capsules)
+        else {
             return false;
         };
         self.position = after;
@@ -1231,7 +1249,7 @@ mod tests {
             SweptDisplacement::new(serde_json::from_value(input["displacement"].clone()).unwrap())
                 .unwrap();
         let mut free = walker([0.0, 0.0, 10.0]);
-        assert!(!free.apply_swept_displacement(1, displacement));
+        assert!(!free.apply_swept_displacement(1, displacement, &[]));
         assert_eq!(free.position, [0.0; 3]);
         free.attach_collision(
             &settings,
@@ -1245,7 +1263,7 @@ mod tests {
         free.held = [21, -32];
         let before = free.movement(1);
         let input_tick = free.input_tick;
-        assert!(free.apply_swept_displacement(2, displacement));
+        assert!(free.apply_swept_displacement(2, displacement, &[]));
         assert_eq!(free.position, displacement.delta().map(f64::from));
         let after = free.movement(2);
         assert_eq!(after.velocity, before.velocity);
@@ -1257,7 +1275,7 @@ mod tests {
         assert_eq!(free.moved_tick, Some(2));
         free.dead = true;
         let stopped = free.position;
-        assert!(!free.apply_swept_displacement(3, displacement));
+        assert!(!free.apply_swept_displacement(3, displacement, &[]));
         assert_eq!(free.position, stopped);
 
         let wall = Mesh {
@@ -1291,7 +1309,7 @@ mod tests {
             serde_json::from_value(input["wall_displacement"].clone()).unwrap(),
         )
         .unwrap();
-        assert!(blocked.apply_swept_displacement(10, displacement));
+        assert!(blocked.apply_swept_displacement(10, displacement, &[]));
         assert!(blocked.position[2] > fixture["expected"]["wall_min_z"].as_f64().unwrap());
         assert!(blocked.position[2] < fixture["expected"]["wall_max_z"].as_f64().unwrap());
         assert_eq!(blocked.velocity, before.velocity);
@@ -1304,12 +1322,38 @@ mod tests {
         assert_eq!(clip.tick, 10);
         assert_eq!(clip.after, blocked.position);
         let stopped = blocked.position;
-        assert!(blocked.apply_swept_displacement(11, displacement));
+        assert!(blocked.apply_swept_displacement(11, displacement, &[]));
         let tolerance = fixture["expected"]["repeated_block_tolerance"]
             .as_f64()
             .unwrap();
         assert!((blocked.position[2] - stopped[2]).abs() <= tolerance);
         assert_eq!(blocked.velocity, before.velocity);
+
+        let mut actor_blocked = walker([0.0, 0.0, 10.0]);
+        let fallback = actor_blocked.contact_capsule(&settings);
+        actor_blocked.attach_collision(
+            &settings,
+            Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+            category,
+            |_, _, _, _| Some(0.0),
+        );
+        assert_eq!(actor_blocked.contact_capsule(&settings), fallback);
+        actor_blocked.enable_contact_trace();
+        actor_blocked.velocity = before.velocity;
+        let actor = standing_capsule(
+            &settings,
+            serde_json::from_value(input["actor_feet"].clone()).unwrap(),
+        );
+        assert!(actor_blocked.apply_swept_displacement(20, displacement, &[actor]));
+        assert!(actor_blocked.position[2] > fixture["expected"]["wall_min_z"].as_f64().unwrap());
+        assert!(actor_blocked.position[2] < fixture["expected"]["wall_max_z"].as_f64().unwrap());
+        assert_eq!(actor_blocked.velocity, before.velocity);
+        assert_eq!(actor_blocked.moved_tick, Some(20));
+        assert!(actor_blocked.last_contact_clip().is_none());
+        assert_eq!(
+            actor_blocked.contact_capsule(&settings),
+            standing_capsule(&settings, actor_blocked.position)
+        );
     }
 
     fn route_vector(bots: &mut [Bot], ticks: impl IntoIterator<Item = u32>) -> String {

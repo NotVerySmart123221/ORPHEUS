@@ -454,6 +454,7 @@ mod tests {
                 })
                 .collect(),
             actor_capsules: None,
+            movement_contacts: None,
             entity_facts: None,
             script_targets: HashMap::from([
                 (1, target(0, true, false)),

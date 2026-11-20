@@ -1,6 +1,74 @@
 use super::*;
 
 #[test]
+fn player_displacement_uses_room_actor_contacts_for_the_authoritative_pose() {
+    use crate::{
+        mover::VelocityChange, script_graph::RoomSpatialNeeds, script_init::SweptDisplacement,
+    };
+
+    let card = PlayerCard::default();
+    let viewer = PlayerAppearance {
+        entity: OWNER,
+        slot: 0,
+        team: 0,
+        card: &card,
+    };
+    let displacement = SweptDisplacement::new([4.0, 0.0, 0.0]).unwrap();
+    let target_x = 2.0;
+    for (blocker_team, velocity_x) in [(0, 0.0), (1, 0.0), (1, 160.0)] {
+        let mut scene = PreparedScene::fixture_for_bots(Vec::new());
+        let room = scene.simulation_mut();
+        let mut world = WorldDelivery::new(OWNER);
+        let id = avatar(1, 1);
+        let mut target = avatar(2, 1);
+        target.entity += 0x100;
+        world.started = Some(100);
+        activate_script(&mut world, room, id, 7, Arc::default());
+        room.spawn_player_body(PlayerBodyState::new(
+            target,
+            OWNER + 0x100,
+            1,
+            blocker_team,
+            7,
+            mover_at([target_x, 0.0, 0.0]),
+            None,
+            100,
+            None,
+        ))
+        .unwrap();
+        room.enable_spatial_queries(false, Arc::new(fixture_ground()), RoomSpatialNeeds::Queries);
+        room.enable_movement_contacts(Arc::new(crate::mover_settings::MoverCatalog::default()));
+        room.prepare_spatial_frame(101).unwrap();
+        let mover = &mut room.player_body_mut(id).unwrap().mover;
+        assert!(mover.queue_swept_displacement(101, displacement));
+        mover.queue_velocity_change(101, VelocityChange::Delta([velocity_x, 0.0, 0.0]));
+
+        world.queue_commands(
+            101,
+            &[Command {
+                frame: 101,
+                ..Command::default()
+            }],
+        );
+        world
+            .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
+            .unwrap();
+        let moved_x = scene
+            .simulation()
+            .player_body(id)
+            .unwrap()
+            .mover
+            .pose()
+            .position[0];
+        if blocker_team == 0 {
+            assert_eq!(moved_x, 4.0);
+        } else {
+            assert!(0.0 < moved_x && moved_x < target_x, "position: {moved_x}");
+        }
+    }
+}
+
+#[test]
 fn swept_owner_correction_uses_the_applied_pose_and_outlives_a_script_fault() {
     use crate::script_init::SweptDisplacement;
 

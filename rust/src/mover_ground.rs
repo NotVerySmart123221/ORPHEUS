@@ -277,16 +277,17 @@ pub(crate) fn standing_body(
     position: [f64; 3],
     category: u16,
 ) -> CharacterBody {
+    CharacterBody::new(world, standing_capsule(settings, position), category)
+}
+
+/// The physical standing capsule, including its authored floor lift.
+pub(crate) fn standing_capsule(settings: &MoverSettings, position: [f64; 3]) -> CapsulePose {
     let (radius, segment) = capsule(settings, false);
-    CharacterBody::new(
-        world,
-        CapsulePose {
-            position: standing_origin(position, pogo(settings, false) as f32),
-            radius,
-            top: segment + radius,
-        },
-        category,
-    )
+    CapsulePose {
+        position: standing_origin(position, pogo(settings, false) as f32),
+        radius,
+        top: segment + radius,
+    }
 }
 
 pub(crate) fn standing_origin([x, y, z]: [f64; 3], lift: f32) -> Vec3 {

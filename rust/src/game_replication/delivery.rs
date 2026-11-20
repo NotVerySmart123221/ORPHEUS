@@ -1465,6 +1465,7 @@ impl WorldDelivery {
             return Ok((1, true));
         };
         let (simulation, rays) = scene.simulation_and_rays();
+        let motion_frame = simulation.movement_contact_frame();
         let Some(state) = simulation.player_body_mut(id) else {
             return Ok((1, true));
         };
@@ -1476,6 +1477,7 @@ impl WorldDelivery {
         });
         let mut used = 0;
         let mut fault = None;
+        let team = state.team;
         let previously_processed = self.input.processed;
         let script = &mut self.body_script;
         let mut detached_motion = self
@@ -1525,6 +1527,11 @@ impl WorldDelivery {
             &mut pending.poses,
             f64::from(frame_us) / 1_000_000.0,
             budget - used,
+            || {
+                motion_frame
+                    .as_ref()
+                    .map_or_else(Vec::new, |frame| frame.movement_blockers(id.entity, team))
+            },
             |mover, command| {
                 if let Some(history) = detached_motion.as_deref_mut() {
                     history.record(mover.pose());

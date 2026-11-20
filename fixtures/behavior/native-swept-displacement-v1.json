@@ -3,7 +3,7 @@
   "case_id": "native-swept-displacement.synthetic.v1",
   "evidence": "synthetic-native",
   "source": {
-    "basis": "Original command frames, capsule dimensions, and a planar wall. No client assets or ability parameters."
+    "basis": "Original command frames, capsule dimensions, an actor blocker, and a planar wall. No client assets or ability parameters."
   },
   "input": {
     "due_frame": 3,
@@ -11,6 +11,7 @@
     "rejected_second_displacement": [7, 0, 0],
     "velocity": [1, 2, 3],
     "wall_displacement": [0, 0, 4],
+    "actor_feet": [0, 0, 2],
     "stand_height": 1,
     "stand_radius": 0.25,
     "category": 24,

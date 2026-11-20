@@ -562,17 +562,20 @@ when the host accepts the request.
 The player mover consumes the request once on the first actual posed
 frame at or after its due frame. Script-only timer updates can queue the
 request. NPCs consume it once when due on the room tick before their
-steering update. Both move through the existing capsule solver and static
-collision category. The sweep preserves velocity for the ordinary
-movement step. Death and runtime retirement clear pending displacement.
+steering update. The same capsule solver checks static geometry and
+living bodies from the frozen room frame. Teammates pass through one
+another in team modes. In free-for-all every other living actor can
+block the sweep. The player mover also uses the same actor sample when
+integrating velocity on that pose. Death and runtime retirement clear
+pending displacement.
 
 An actual player displacement opens a bounded owner correction window at
 the moved pose. Delivery uses the existing create acknowledgement,
 packet budget, and input replay rules, including the input acknowledged
 before this motion. A correction for an already moved
 pose stays eligible if its body script stops. Body retirement discards
-the old generation's correction. Dynamic actor contact and
-original-client acceptance remain open.
+the old generation's correction. Regular movement between scripted
+displacements and original-client acceptance still have separate checks.
 
 See the [script dispatch contract](../fixtures/behavior/script-swept-displacement-v1.json)
 and the [native capsule contract](../fixtures/behavior/native-swept-displacement-v1.json).

@@ -15,7 +15,7 @@ use crate::{
 };
 
 #[test]
-fn authored_npc_displacement_waits_for_the_next_room_tick_and_is_consumed_once() {
+fn authored_npc_displacement_is_consumed_once_with_room_team_contacts() {
     const HERO: u64 = 0x02e0_0000_0052_0401;
     const BODY: u64 = 0x0400_0000_0052_0402;
     const CONTROLLER: u64 = 0x0400_0000_0052_0403;
@@ -79,12 +79,42 @@ fn authored_npc_displacement_waits_for_the_next_room_tick_and_is_consumed_once()
         },
     };
     let contacts = Arc::new(ContactWorld::new(Vec::new()).unwrap());
-    let ground = fixture_ground();
-    let movers = MoverCatalog::default();
-    let supported = BotQueries::new(false, &movers, &ground, Some(&contacts));
-    let unavailable = BotQueries::new(false, &movers, &ground, None);
-    for geometry_available in [true, false] {
-        let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    let ground = Arc::new(fixture_ground());
+    let movers = Arc::new(MoverCatalog::default());
+    assert_eq!(graphs.room_spatial_needs(), RoomSpatialNeeds::Queries);
+    assert!(graphs.uses_movement_contacts());
+    assert!(!graphs.uses_spatial_actor_rays());
+    let obstacle_position = [3.6875, 0.0, 2.625];
+    for (geometry_available, blocker_team, free_for_all, blocker_dead) in [
+        (true, None, false, false),
+        (false, None, false, false),
+        (true, Some(1), false, false),
+        (true, Some(0), false, false),
+        (true, Some(0), false, true),
+        (true, Some(1), true, false),
+    ] {
+        let supported = BotQueries::new(free_for_all, &movers, &ground, Some(&contacts));
+        let unavailable = BotQueries::new(free_for_all, &movers, &ground, None);
+        let obstacle = blocker_team.map(|team| {
+            let mut blocker = Bot::scene_enemy(
+                BOT_ENTITY,
+                &definition,
+                team,
+                obstacle_position,
+                0.0,
+                BotWalk::default(),
+                0,
+            );
+            blocker.dead = blocker_dead;
+            blocker
+        });
+        let mut room = RoomSimulation::new(obstacle.into_iter().collect()).unwrap();
+        room.enable_spatial_queries(
+            free_for_all,
+            Arc::clone(&ground),
+            graphs.room_spatial_needs(),
+        );
+        room.enable_movement_contacts(Arc::clone(&movers));
         let wire = room
             .create_enemy(EnemySpawn {
                 graphs: Arc::clone(&graphs),
@@ -104,19 +134,32 @@ fn authored_npc_displacement_waits_for_the_next_room_tick_and_is_consumed_once()
             &unavailable
         };
         room.finish_tick(first_queries, 0, Duration::ZERO).unwrap();
+        let blocking = !blocker_dead && blocker_team.is_some_and(|team| team != 1 || free_for_all);
+        assert_eq!(
+            room.movement_contact_frame()
+                .unwrap()
+                .movement_blockers(wire, 1)
+                .len(),
+            usize::from(blocking)
+        );
         assert_eq!(state(&room, wire).unwrap().bot.position, start);
         room.finish_tick(first_queries, 1, Duration::from_millis(16))
             .unwrap();
-        let expected = if geometry_available {
-            [4.25, 0.0, 2.5]
+        let moved = state(&room, wire).unwrap().bot.position;
+        if blocking {
+            assert!(
+                start[0] < moved[0] && moved[0] < obstacle_position[0],
+                "{moved:?}"
+            );
+        } else if geometry_available {
+            assert_eq!(moved, [4.25, 0.0, 2.5]);
         } else {
-            start
-        };
-        assert_eq!(state(&room, wire).unwrap().bot.position, expected);
+            assert_eq!(moved, start);
+        }
         room.finish_tick(&supported, 2, Duration::from_millis(32))
             .unwrap();
         let body = state(&room, wire).unwrap();
-        assert_eq!(body.bot.position, expected);
+        assert_eq!(body.bot.position, moved);
         assert_eq!(body.bot.velocity, [0.0; 3]);
         assert!(body.enemy.as_ref().unwrap().fault.is_none());
     }

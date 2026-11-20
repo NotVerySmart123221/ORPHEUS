@@ -6,6 +6,7 @@ use crate::{
     collision_index::TriangleIndex,
     commands::Command,
     contact_body::CharacterBody,
+    contact_cache::CapsulePose,
     contact_gjk::PointSetSize,
     contact_hull::HullContactError,
     contact_solver::clip_velocity,
@@ -146,6 +147,10 @@ impl Mover {
         self.pose
     }
 
+    pub(crate) fn contact_capsule(&self) -> CapsulePose {
+        self.body.capsule_pose()
+    }
+
     #[cfg(any(test, feature = "inspector"))]
     pub(crate) fn debug_ground_probe(
         &self,
@@ -242,7 +247,7 @@ impl Mover {
         after_pose: impl FnMut(&mut Self, Command),
     ) -> Result<(), HullContactError> {
         let mut pending = self.pending_poses(newest);
-        self.step_pending(rays, &mut pending, dt, usize::MAX, after_pose)?;
+        self.step_pending(rays, &mut pending, dt, usize::MAX, Vec::new, after_pose)?;
         Ok(())
     }
 
@@ -256,6 +261,7 @@ impl Mover {
         pending: &mut Poses,
         dt: f64,
         limit: usize,
+        mut actor_capsules: impl FnMut() -> Vec<CapsulePose>,
         mut after_pose: impl FnMut(&mut Self, Command),
     ) -> Result<usize, HullContactError> {
         let mut stepped = 0;
@@ -263,7 +269,7 @@ impl Mover {
             if let Some(aim) = self.cinematic_aim.or(self.authored_facing) {
                 [command.yaw, command.pitch] = aim;
             }
-            self.step_pose(rays, command, dt)?;
+            self.step_pose(rays, command, dt, &mut actor_capsules)?;
             after_pose(self, command);
             stepped += 1;
         }
@@ -278,9 +284,11 @@ impl Mover {
         rays: &TriangleIndex,
         command: Command,
         dt: f64,
+        actor_capsules: &mut impl FnMut() -> Vec<CapsulePose>,
     ) -> Result<(), HullContactError> {
         self.swept_displacement_frame = None;
         let mut swept_changed = false;
+        let mut blockers = Vec::new();
         if self
             .swept_displacement
             .is_some_and(|(frame, _)| frame <= command.frame)
@@ -289,7 +297,8 @@ impl Mover {
             // fresh capsule so an error cannot separate the body from its feet.
             if let Some((_, displacement)) = self.swept_displacement.take() {
                 let before = self.pose.position;
-                self.apply_swept_displacement(displacement, dt)?;
+                blockers = actor_capsules();
+                self.apply_swept_displacement(displacement, dt, &blockers)?;
                 swept_changed = self.pose.position != before;
             }
         }
@@ -369,14 +378,7 @@ impl Mover {
             self.posture.apply_fall(settings.gravity_scale, dt);
         }
         let normal = probe.ground.map_or([0.0, 1.0, 0.0], |hit| hit.normal);
-        let vertical = self.move_body(
-            rays,
-            velocity,
-            normal,
-            ground == Ground::Standing,
-            dt,
-            command.frame,
-        )?;
+        let vertical = self.move_body(rays, velocity, normal, dt, command.frame, &blockers)?;
         self.posture.finish_fall(settings.gravity_scale, vertical);
 
         if input.throttles != [0; 2] {
@@ -406,11 +408,12 @@ impl Mover {
         &mut self,
         displacement: SweptDisplacement,
         dt: f64,
+        actor_capsules: &[CapsulePose],
     ) -> Result<(), HullContactError> {
         let start = self.body.position();
         let mut staged = self.body.fresh_at(start);
         let end = staged
-            .move_capsule(displacement.delta(), dt as f32)?
+            .move_capsule_against(displacement.delta(), dt as f32, actor_capsules)?
             .position;
         let feet = std::array::from_fn(|axis| {
             self.pose.position[axis] + f64::from(end[axis]) - f64::from(start[axis])
@@ -432,10 +435,11 @@ impl Mover {
         rays: &TriangleIndex,
         velocity: [f64; 3],
         normal: [f64; 3],
-        grounded: bool,
         dt: f64,
         _frame: u32,
+        blockers: &[CapsulePose],
     ) -> Result<f64, HullContactError> {
+        let grounded = self.posture.ground() == Ground::Standing;
         let [x, y, z] = velocity;
         let velocity = if grounded && (x * x + y * y) + z * z >= EPSILON {
             along_ground([x, z], normal)
@@ -450,7 +454,7 @@ impl Mover {
             ((rise + y) * dt) + 0.0,
             ((0.0 * rise + z) * dt) + 0.0,
         ];
-        let movement = self.body.move_capsule(displacement, dt)?;
+        let movement = self.body.move_capsule_against(displacement, dt, blockers)?;
         let [mut x, mut y, mut z] = clip_velocity([x, y, z], movement.planes).map(f64::from);
         if grounded {
             let squared = (x * x + y * y) + z * z;
@@ -593,7 +597,7 @@ mod tests {
                 let mut pending = moved.pending_poses(command);
                 assert_eq!(
                     moved
-                        .step_pending(&rays, &mut pending, 0.016, 0, |_, _| {})
+                        .step_pending(&rays, &mut pending, 0.016, 0, Vec::new, |_, _| {})
                         .unwrap(),
                     0
                 );
@@ -672,6 +676,98 @@ mod tests {
     }
 
     #[test]
+    fn swept_displacement_samples_actor_capsules_only_for_its_due_pose() {
+        let fixture = swept_fixture();
+        let input = &fixture["input"];
+        let due: u32 = input["due_frame"].as_u64().unwrap().try_into().unwrap();
+        let settings = MoverSettings {
+            gravity_scale: 0.0,
+            stand_height: input["stand_height"].as_f64().unwrap(),
+            stand_radius: input["stand_radius"].as_f64().unwrap(),
+            ..MoverSettings::default()
+        };
+        let blocker = crate::mover_ground::standing_capsule(
+            &settings,
+            serde_json::from_value(input["actor_feet"].clone()).unwrap(),
+        );
+        let displacement = SweptDisplacement::new(
+            serde_json::from_value(input["wall_displacement"].clone()).unwrap(),
+        )
+        .unwrap();
+        let rays = TriangleIndex::new([]).unwrap();
+        let mut mover = Mover::new(
+            settings,
+            Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+            [0.0; 3],
+            0,
+            0x18,
+        )
+        .unwrap();
+        assert!(mover.queue_swept_displacement(due, displacement));
+        let mut samples = 0;
+        for frame in 1..=due + 1 {
+            let command = Command {
+                frame,
+                ..Command::default()
+            };
+            let mut pending = mover.pending_poses(command);
+            if frame == due {
+                mover
+                    .step_pending(
+                        &rays,
+                        &mut pending,
+                        0.016,
+                        0,
+                        || {
+                            samples += 1;
+                            vec![blocker]
+                        },
+                        |_, _| {},
+                    )
+                    .unwrap();
+                assert_eq!(samples, 0);
+            }
+            mover
+                .step_pending(
+                    &rays,
+                    &mut pending,
+                    0.016,
+                    usize::MAX,
+                    || {
+                        samples += 1;
+                        vec![blocker]
+                    },
+                    |_, _| {},
+                )
+                .unwrap();
+            assert_eq!(samples, usize::from(frame >= due));
+            assert_eq!(mover.swept_displacement_at(frame), frame == due);
+        }
+        assert!(mover.pose.position[2] > fixture["expected"]["wall_min_z"].as_f64().unwrap());
+        assert!(mover.pose.position[2] < fixture["expected"]["wall_max_z"].as_f64().unwrap());
+        assert_eq!(mover.contact_capsule(), mover.body.capsule_pose());
+        assert!(!mover.has_swept_displacement());
+        let before = mover.pose.position;
+        assert!(mover.queue_swept_displacement(due + 2, displacement));
+        mover.clear_swept_displacement();
+        let mut pending = mover.pending_poses(Command {
+            frame: due + 2,
+            ..Command::default()
+        });
+        mover
+            .step_pending(
+                &rays,
+                &mut pending,
+                0.016,
+                usize::MAX,
+                || panic!("canceled displacement must not sample actor capsules"),
+                |_, _| {},
+            )
+            .unwrap();
+        assert_eq!(mover.pose.position, before);
+    }
+
+    #[test]
     fn swept_displacement_uses_the_existing_capsule_without_clipping_velocity() {
         use crate::{
             collision_cache::{Mesh, Triangle},
@@ -717,7 +813,9 @@ mod tests {
             serde_json::from_value(input["wall_displacement"].clone()).unwrap(),
         )
         .unwrap();
-        mover.apply_swept_displacement(displacement, 0.016).unwrap();
+        mover
+            .apply_swept_displacement(displacement, 0.016, &[])
+            .unwrap();
         let after = mover.pose();
         assert!(after.position[2] > fixture["expected"]["wall_min_z"].as_f64().unwrap());
         assert!(after.position[2] < fixture["expected"]["wall_max_z"].as_f64().unwrap());
@@ -736,7 +834,9 @@ mod tests {
                 after.position[2] as f32,
             ]
         );
-        mover.apply_swept_displacement(displacement, 0.016).unwrap();
+        mover
+            .apply_swept_displacement(displacement, 0.016, &[])
+            .unwrap();
         let tolerance = fixture["expected"]["repeated_block_tolerance"]
             .as_f64()
             .unwrap();
