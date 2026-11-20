@@ -310,7 +310,8 @@ mod tests {
             "nodes":[
                 {"pos":0,"rid":0,"uid":0,"remote":-1,"state":0,"client_only":false,
                     "server_only":true,"class":"STUStatescriptStateModifyHealth",
-                    "fields":{"m_modifyHealth":{"m_amount":input["requested_per_second"]}}},
+                    "fields":{"m_2BBEEAB8":1,"m_ADEB6E05":0,
+                        "m_modifyHealth":{"m_amount":input["requested_per_second"]}}},
                 {"pos":1,"rid":1,"uid":1,"remote":-1,"state":null,"client_only":false,
                     "server_only":true,"class":"STUStatescriptEntry",
                     "fields":{"m_outPlug":{"$":"Plug","links":[[0,"m_beginPlug"]]}}}
