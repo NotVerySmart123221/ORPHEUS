@@ -26,7 +26,7 @@ The Rust-only [room message fixture](../fixtures/behavior/script-room-message-v1
 
 The Rust-only [projected message topics fixture](../fixtures/behavior/script-projected-message-topics-v1.json) checks explicit client scope, loading conflicts, ordinary state entry and exit, and server dispatch exclusion. The native test compares owner and observer activation frames and removal deltas with the existing send codec.
 
-The Rust-only [room cue fixture](../fixtures/behavior/script-room-cue-v1.json) covers authored audience selection and host admission. Native coverage checks selected player generations and the reliable notice path.
+The Rust-only [room cue fixture](../fixtures/behavior/script-room-cue-v1.json) covers authored audience selection and host admission. Native coverage checks selected player generations, late listener death, and reliable notice admission.
 
 The Rust-only [health action fixture](../fixtures/behavior/script-health-change-v1.json) checks signed health request admission, continuation, and rejection diagnostics. Room tests cover player and bot settlement, stale body identity, and death and health updates.
 
@@ -45,7 +45,7 @@ The Rust-only [stack claim fixture](../fixtures/behavior/script-stack-claim-v1.j
 
 The Rust-only [server root allocation fixture](../fixtures/behavior/script-server-root-ids-v1.json) checks root identity, installation order and exhaustion at the boundary of the public and private ranges. Native projection coverage compares owner and observer wire bytes with an active private meter and a public child.
 
-The Rust-only [authored resource meter fixture](../fixtures/behavior/script-authored-meter-v1.json) checks body-specific settings on one shared graph. It exercises settled health events, affiliation filtering, passive gains and saturation in the production loader and VM.
+The Rust-only [authored resource meter fixture](../fixtures/behavior/script-authored-meter-v1.json) checks body-specific settings on one shared graph. It exercises settled health events, affiliation filtering, passive gains and saturation in the production loader and VM. The [authored charge route](../fixtures/behavior/script-authored-charge-route-v1.json) checks private mount validation, deferred health events, and owner and observer projection.
 
 The Rust-only [local health outcomes fixture](../fixtures/behavior/script-local-health-outcomes-v1.json) checks actual damage from AI callbacks and capped field healing. Room tests also exercise source provenance across body replacement.
 

@@ -182,6 +182,26 @@ repeated and matched their previous 339-tick captures for each
 implementation. Strict comparison retained the four RNG setup
 differences. The cinematic payload tests used a synthetic graph.
 
+At `0d3716e4`, a player body gained an explicit private charge-root
+selection. Synthetic tests cover mount validation after the room adds
+its roots, settled health delivery, and owner and observer projection.
+The existing bridge takes damage eligibility from the room phase and
+retains its startup projection. The local 104319 catalog gives each of
+32 player bodies an authored cost binding read by the shared startup
+graph. The selected charge route was exercised by the synthetic
+fixture.
+
+At `5b269875`, authored cues began rechecking listener liveness at
+reliable admission. The synthetic case kills the listener with its
+generation unchanged and verifies that the queued cue is discarded.
+
+Two same-pack startup reports at `0d3716e4` matched byte for byte.
+All 32 rows remained at 11 independent passes, one ordinary attachment
+and 47 blocking sites. The #72 trace retained 476 observations. Both
+Windows #131 schedules repeated and matched their preceding 339-tick
+captures for each implementation. Strict comparison retained the four
+RNG setup differences.
+
 Two of the three remaining native target-tracking startup sites have
 empty embedded plugs. One configures a second filter and an entity list
 output. The other configures a count output. Both read a dynamic radius.

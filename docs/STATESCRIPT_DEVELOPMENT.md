@@ -515,8 +515,8 @@ entities. The batch uses the sender's existing request budget. The action
 continues once the batch is accepted.
 
 The notice carries the sender as its anchor and speaker. Before reliable
-delivery, the transport checks both body generations and waits for both
-identity acknowledgements. Each player has at most one unacknowledged
+admission, the transport checks both body generations and the listener's
+liveness. It waits for both identity acknowledgements. Each player has at most one unacknowledged
 authored cue in reliable delivery. When the pending combat queue is full,
 a new cue is dropped. Cue identifiers describe resources supplied by the
 author.
@@ -679,7 +679,28 @@ The [activity contract](../fixtures/behavior/script-meter-body-activity-v1.json)
 checks when gains stop, resume, or belong to a replacement actor.
 Adding a root to a client-facing body also requires an owner and observer
 projection regression, since body graph bindings participate in instance
-ordering. The existing charge bridge uses synchronous damage delivery.
+ordering.
+
+A player body can select one private root as its charge graph. Use the
+normal graph binding for settings and a canonical graph asset GUID for
+`authored_charge_graph`. This example uses a synthetic graph ID.
+
+```json
+{
+  "server_graphs": [{"graph": 612, "m_75408640": 0}],
+  "authored_charge_graph": "0x0580000000000264"
+}
+```
+
+The loader requires exactly one private mount of the selected graph and
+a valid server `health_applied` entry. The factory checks the same mount
+constraint after adding room roots. A selected root uses the ordinary
+settled events on its next VM frame. The host skips its compatibility
+charge admission and synchronous damage credit for that body. An
+omitted selection retains the existing bridge for its supported profile.
+Graph bindings remain the source for authored starting values and costs.
+
+See the [synthetic charge route contract](../fixtures/behavior/script-authored-charge-route-v1.json).
 
 ## Apply a radial health change
 
