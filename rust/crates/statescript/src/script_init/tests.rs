@@ -10,6 +10,7 @@ mod frame_wait;
 mod local_command;
 mod local_message;
 mod movement_edges;
+mod parent_owned_state;
 mod projected_messages;
 mod room_cue;
 mod runtime_state_metadata;

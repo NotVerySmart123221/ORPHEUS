@@ -1971,6 +1971,153 @@ fn authored_spatial_queries_read_current_entity_vectors() {
 }
 
 #[test]
+fn native_pitched_direction_reads_known_entity_pose_without_a_placement_gate() {
+    struct Host {
+        entity: Value,
+        direction: Option<[f64; 3]>,
+        override_value: Option<Value>,
+        reads: Vec<u32>,
+    }
+
+    impl Context for Host {
+        fn variable(&mut self, variable: Variable) -> Value {
+            assert_eq!(
+                variable,
+                Variable {
+                    scope: Scope::Instance,
+                    id: 61
+                }
+            );
+            self.entity.clone()
+        }
+
+        fn authored_forward(&mut self, entity: u32) -> Option<[f64; 3]> {
+            self.reads.push(entity);
+            self.direction
+        }
+
+        fn forward(&mut self, _: u32) -> Option<[f64; 3]> {
+            panic!("pitched direction must not use the horizontal-facing query")
+        }
+
+        fn native(&mut self, _: &Json) -> Option<Value> {
+            self.override_value.clone()
+        }
+    }
+
+    let contract: Json = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/statescript-native-direction-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract["schema_version"], 1);
+    assert_eq!(
+        contract["case_id"],
+        "statescript-native-direction.synthetic.v1"
+    );
+    let config = &contract["input"]["config"];
+    let mut host = Host {
+        entity: Value::Null,
+        direction: None,
+        override_value: None,
+        reads: Vec::new(),
+    };
+    for (sample, expected) in contract["input"]["samples"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(contract["expected"].as_array().unwrap())
+    {
+        let entity = sample["entity"].as_u64().unwrap() as u32;
+        let direction: [f64; 3] = serde_json::from_value(sample["direction"].clone()).unwrap();
+        host.entity = Value::Entity(entity);
+        host.direction = Some(direction);
+        assert_eq!(
+            evaluate(config, &mut host),
+            Ok(Value::Vector(
+                serde_json::from_value(expected.clone()).unwrap()
+            ))
+        );
+        assert_eq!(std::mem::take(&mut host.reads), [entity]);
+        let mut with_header = config.clone();
+        with_header["m_EE729DCB"] = json!(0);
+        assert_eq!(
+            evaluate(&with_header, &mut host),
+            Ok(Value::Vector(direction))
+        );
+        assert_eq!(std::mem::take(&mut host.reads), [entity]);
+    }
+
+    host.entity = Value::Entity(17);
+    for direction in [
+        None,
+        Some([f64::NAN, 0.0, 1.0]),
+        Some([0.0, f64::INFINITY, 1.0]),
+    ] {
+        host.direction = direction;
+        assert_eq!(
+            evaluate(config, &mut host),
+            Err(EvalError::UnavailableEntityDirection(17))
+        );
+        assert_eq!(std::mem::take(&mut host.reads), [17]);
+    }
+
+    for entity in [
+        Value::Null,
+        Value::Entity(0),
+        Value::Integer(17),
+        Value::Array(vec![Value::Entity(17)]),
+    ] {
+        host.entity = entity;
+        assert!(matches!(
+            evaluate(config, &mut host),
+            Err(EvalError::MalformedConfig(_))
+        ));
+        assert!(host.reads.is_empty());
+    }
+    host.entity = Value::Entity(17);
+    for malformed in [
+        json!({"$":"STU_2200A66D"}),
+        json!({"$":"STU_2200A66D", "m_entity":config["m_entity"], "extra":null}),
+        json!({"$":"STU_2200A66D", "m_entity":config["m_entity"], "m_EE729DCB":1}),
+    ] {
+        assert!(matches!(
+            evaluate(&malformed, &mut host),
+            Err(EvalError::MalformedConfig(_))
+        ));
+        assert!(host.reads.is_empty());
+    }
+    let nested = json!({
+        "$":"STU_2200A66D", "m_entity":{
+            "$":"ClientOnly", "value":null, "server_fallback":config["m_entity"]
+        }
+    });
+    assert_eq!(
+        evaluate_with_budget(&nested, &mut host, 1),
+        Err(EvalError::BudgetExceeded {
+            offset: 0,
+            limit: 1
+        })
+    );
+    assert!(host.reads.is_empty());
+
+    host.override_value = Some(Value::Vector([0.0, -0.5, 1.0]));
+    assert_eq!(
+        evaluate(config, &mut host),
+        Ok(Value::Vector([0.0, -0.5, 1.0]))
+    );
+    assert!(host.reads.is_empty());
+    for invalid_override in [Value::Bool(false), Value::Vector([0.0, f64::INFINITY, 1.0])] {
+        host.override_value = Some(invalid_override);
+        assert_eq!(
+            evaluate(config, &mut host),
+            Err(EvalError::UnavailableEntityDirection(17))
+        );
+        assert!(host.reads.is_empty());
+    }
+}
+
+#[test]
 fn authored_stack_admission_passes_strict_scoped_inputs_to_the_context() {
     #[derive(Default)]
     struct StackContext {

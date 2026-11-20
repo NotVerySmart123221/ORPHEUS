@@ -26,6 +26,13 @@ pub(super) fn participant_filter(node: &Node) -> Option<&Json> {
     .then_some(filter)
 }
 
+pub(super) fn placement_collection_tag(node: &Node) -> Option<u64> {
+    if !field(&node.fields, "m_9C7BD8B8").is_null() {
+        return None;
+    }
+    script_expr::target_tag_config(static_target_operand(node)?).filter(|&tag| tag != 0)
+}
+
 pub(super) fn excluded_target_tags(graph: u32, node: &Node) -> Option<(u64, u64)> {
     if (graph, node.pos) != (0x00ca, 33)
         || !field(&node.fields, "m_filter").is_null()
@@ -704,4 +711,35 @@ pub(super) fn chase_step(current: Value, destination: Value, step: f64) -> (Valu
         });
         (Value::Vector(next), false)
     }
+}
+
+pub(super) fn is_parent_owned_timed_graph(node: &Node) -> bool {
+    let has_no_finish_operand = [
+        "m_7C8AD485",
+        "m_C7A42E2A",
+        "m_F8CE386A",
+        "m_C46403A5",
+        "m_ED97A97C",
+    ]
+    .iter()
+    .all(|name| field(&node.fields, name).is_null());
+    let alternate = field(&node.fields, "m_E5790891");
+    let has_no_alternate = alternate.is_null()
+        || (alternate.is_object()
+            && matches!(
+                alternate.get("$").and_then(Json::as_str),
+                Some("Plug" | "STUStatescriptOutputPlug" | "STU_904BFCEC")
+            )
+            && alternate.as_object().is_some_and(|fields| {
+                fields
+                    .keys()
+                    .all(|name| matches!(name.as_str(), "$" | "links" | "m_FF3DAF1E"))
+            })
+            && alternate
+                .get("links")
+                .is_some_and(|value| value.as_array().is_some_and(Vec::is_empty))
+            && alternate.get("m_FF3DAF1E").is_none_or(|value| {
+                value.is_null() || value.as_array().is_some_and(Vec::is_empty)
+            }));
+    has_no_finish_operand && has_no_alternate
 }

@@ -16,10 +16,10 @@ use super::super::{
         array_field, array_insertion_index, case_path, configured, encounter_base_state_shape,
         excluded_target_tags, field, is_bare_header_action, is_base_health_pool,
         is_client_subgraph_controller, is_entry, is_literal_frame_wait, is_message_recipient_set,
-        is_networked_for_code_synced, is_owner_movement_sampler, is_projected_self_message,
-        is_self_stat_timer, is_self_target, is_wave_health_pool, living_body_array_shape,
-        participant_filter, persistent_message, pool_number, raw_indices, registered_state,
-        source_key, static_target_operand, stored,
+        is_networked_for_code_synced, is_owner_movement_sampler, is_parent_owned_timed_graph,
+        is_projected_self_message, is_self_stat_timer, is_self_target, is_wave_health_pool,
+        living_body_array_shape, participant_filter, persistent_message, placement_collection_tag,
+        pool_number, raw_indices, registered_state, source_key, static_target_operand, stored,
     },
     types::{InitFault, Issue, SpawnSearch, SpawnSearchKey, State, StateKind},
     world::{CreationKind, EntityCreation, Site, World},
@@ -300,7 +300,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             "STU_42578342"
                 if node.is_action()
                     && (participant_filter(node).is_some()
-                        || registration.permits((self.graph(id).index, node.pos) == (0x0c95, 9))) =>
+                        || placement_collection_tag(node).is_some()) =>
             {
                 if !self.collect_targets(id, node)? {
                     return Ok(false);
@@ -1317,16 +1317,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             },
             "STUStatescriptStateMoveTo" => StateKind::MoveTo { movement: None },
             "STU_54FEB21C"
-                if registration.permits(matches!(
-                    (self.graph(id).index, node.pos),
-                    (0x01f0, 14) | (0x0043, 38)
-                )) && ["m_7C8AD485", "m_C7A42E2A", "m_F8CE386A", "m_C46403A5"]
-                    .iter()
-                    .all(|name| field(&node.fields, name).is_null())
-                    && node.links("m_E5790891").next().is_none() =>
+                if registration.shape(is_parent_owned_timed_graph(node))
+                    || (registration.permits((self.graph(id).index, node.pos) == (0x01f0, 14))
+                        && ["m_7C8AD485", "m_C7A42E2A", "m_F8CE386A", "m_C46403A5"]
+                            .iter()
+                            .all(|name| field(&node.fields, name).is_null())
+                        && node.links("m_E5790891").next().is_none()) =>
             {
-                // With no finish predicate or alternate graph the Python timer
-                // cannot finish this state; its parent owns the end plug.
+                // Field-free instances use the base lifecycle. Retain the
+                // historical placement's compatibility for its timing fields.
                 StateKind::Plain
             }
             "STUStatescriptStatePhysicsExplosion"
@@ -2655,15 +2654,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.world.participant_targets(site, filter),
                 "scene participant filter",
             )
-        } else if field(&node.fields, "m_9C7BD8B8").is_null()
-            && script_expr::target_tag_config(field(&node.fields, "m_B486603E"))
-                == Some(0x0d60_0000_0000_0321)
-            && static_target_operand(node).is_some()
-        {
+        } else if let Some(tag) = placement_collection_tag(node) {
             (
-                self.world
-                    .tagged_placements(site, 0x0d60_0000_0000_0321)
-                    .map(<[u32]>::to_vec),
+                self.world.tagged_placements(site, tag).map(<[u32]>::to_vec),
                 "scene target collection",
             )
         } else {

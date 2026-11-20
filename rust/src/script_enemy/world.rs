@@ -1105,9 +1105,7 @@ impl World for EnemyWorld<'_> {
     }
 
     fn tagged_placements(&self, site: Site, tag: u64) -> Option<&[u32]> {
-        if (site.entity, site.graph, site.node) != (self.binding.controller, 0x0c95, Some(9))
-            || !is_junkenstein_mode(self.binding.mode)
-        {
+        if site.entity != self.binding.controller {
             return None;
         }
         self.binding.spawn_anchors.as_ref()?.targets(tag)

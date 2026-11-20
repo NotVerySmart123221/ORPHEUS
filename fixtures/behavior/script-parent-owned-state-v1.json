@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "case_id": "script-parent-owned-state.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "input": {
+    "placements": [[113, 3], [173, 6]],
+    "empty_fields": [
+      {},
+      {"m_E5790891": {"$": "STU_904BFCEC", "links": [], "m_FF3DAF1E": []}},
+      {
+        "m_7C8AD485": null,
+        "m_C7A42E2A": null,
+        "m_F8CE386A": null,
+        "m_C46403A5": null,
+        "m_ED97A97C": null,
+        "m_E5790891": {"$": "Plug", "links": [], "m_FF3DAF1E": []}
+      }
+    ],
+    "rejected_fields": [
+      {"m_7C8AD485": false},
+      {"m_C7A42E2A": 0},
+      {"m_F8CE386A": {}},
+      {"m_C46403A5": {"$": "unsupported-predicate"}},
+      {"m_ED97A97C": 0.0},
+      {"m_ED97A97C": 0.125},
+      {"m_ED97A97C": {"$": "unsupported-duration"}},
+      {"m_E5790891": {"$": "Plug", "links": [[7, "m_inPlug"]]}},
+      {"m_E5790891": {"$": "Plug", "links": [], "m_FF3DAF1E": [2]}},
+      {"m_E5790891": "malformed"},
+      {"m_E5790891": {"$": "Plug", "links": false}},
+      {"m_E5790891": {"$": "foreign-plug", "links": []}},
+      {"m_E5790891": {"$": "Plug", "links": [], "unknown": true}}
+    ],
+    "child_wait_seconds": 0.125,
+    "late_frame": 20
+  }
+}

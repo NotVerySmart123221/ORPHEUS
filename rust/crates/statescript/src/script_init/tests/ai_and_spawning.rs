@@ -791,6 +791,94 @@ fn participant_collection_writes_before_following_and_preserves_order() {
 }
 
 #[test]
+fn tagged_placement_collection_uses_the_required_field_outside_legacy_graphs() {
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../../../../fixtures/behavior/script-tagged-placement-collection-v1.json"
+    ))
+    .unwrap();
+    let tag = fixture["tag"].as_str().unwrap();
+    let tag_id = orpheus_runtime::format::parse_guid(tag).unwrap();
+    let placements = |rows: &Json| {
+        rows.as_array().map(|rows| {
+            rows.iter()
+                .map(|row| u32::try_from(row.as_u64().unwrap()).unwrap())
+                .collect::<Vec<_>>()
+        })
+    };
+    struct Placements {
+        tag: u64,
+        entities: Option<Vec<u32>>,
+        queries: std::cell::Cell<usize>,
+    }
+    impl World for Placements {
+        fn tagged_placements(&self, _: Site, tag: u64) -> Option<&[u32]> {
+            self.queries.set(self.queries.get() + 1);
+            assert_eq!(tag, self.tag);
+            self.entities.as_deref()
+        }
+        fn position(&mut self, _: u32) -> Option<[f64; 3]> {
+            None
+        }
+        fn entity_variable(&mut self, _: u32, _: u32) -> Option<Value> {
+            None
+        }
+    }
+    for (index, case) in (71..).zip(fixture["cases"].as_array().unwrap()) {
+        let mut fields = json!({
+            "m_4AEEE6A1":var(100,true),
+            "m_B486603E":{"$":"STU_357DABBB","m_7D7C86A1":tag},
+            "m_outPlug":plug(&[(2,"m_inPlug")], &[]),
+        });
+        let malformed = case["extra_exclusion"] == true;
+        if malformed {
+            fields["m_8B2A4DF3"] = fields["m_B486603E"].clone();
+        }
+        let mut collect = node(1, "STU_42578342", None, fields);
+        collect["fields"]["m_ADEB6E05"] = json!(true);
+        let graphs = store(vec![graph(
+            index,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({"m_outPlug":plug(&[(1,"m_inPlug")], &[])}),
+                ),
+                collect,
+                node(
+                    2,
+                    "STUStatescriptActionSetVar",
+                    None,
+                    json!({"m_out_Var":var(101,true),"m_value":var(100,true)}),
+                ),
+            ],
+            json!([]),
+            json!([0]),
+        )]);
+        let mut world = Placements {
+            tag: tag_id,
+            entities: placements(&case["inventory"]),
+            queries: std::cell::Cell::new(0),
+        };
+        let snapshot = initialize(
+            &graphs,
+            42,
+            Variables::new(),
+            vec![Root::new(1, index)],
+            &mut world,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        let expected = placements(&case["expected"])
+            .map(|rows| Value::Array(rows.into_iter().map(Value::Entity).collect()));
+        assert_eq!(world.queries.get(), usize::from(!malformed));
+        assert_eq!(snapshot.initialization_complete(), expected.is_some());
+        assert_eq!(snapshot.variables.get(&100), expected.as_ref());
+        assert_eq!(snapshot.variables.get(&101), expected.as_ref());
+    }
+}
+
+#[test]
 #[ignore = "requires the prepared 104319 Junkenstein spawner graph"]
 fn authored_spawner_filters_dead_and_removed_bodies_in_order() {
     struct Bodies(BTreeMap<u32, bool>);

@@ -94,6 +94,25 @@ ability support.
    shape and lifecycle outline. Use invented values, graphs, IDs and
    expected results derived from the server contract.
 
+### Phase 2 shared VM paths
+
+- The native pitched direction operand reads a bound entity through the
+  host pose provider. The existing roll adapter still supplies its
+  compatibility vector. Eye-position reads need their own host contract.
+- The scene placement collection action uses a literal required tag and
+  a scene placement inventory from its host. An empty inventory and an
+  unavailable inventory produce distinct results.
+- Timed graph states with no completion operands or alternate links use
+  parent-owned lifecycle at any placement. The prior configured-duration
+  path remains a compatibility case. Configured predicates and alternate
+  subgraphs need separate contracts.
+
+Native target tracking still needs the lifecycle of its embedded
+per-target subgraph and both output bindings. The authored
+`track_entities` node owns separate child graph instances. The other
+pending paths include shared charge admission, health effects, spatial
+queries, control effects, and voice recipients.
+
 ### Generate the static reports
 
 ```text
@@ -127,6 +146,8 @@ ordered literal random bounds. Dynamic and unsupported operands keep
 their location and classification. A null unit indicates that the
 listing lacks an explicit unit. Use VM traces to verify elapsed time
 and event order.
+The v3 importer requires exactly one wait operand before inferring
+timing. A malformed multi-argument wait stays unresolved.
 
 The `variable-access.json` report records definite reads and write sites,
 schema default declarations, direct message bindings, and uncertain
@@ -160,10 +181,14 @@ to identify graph position, RID, state slot, and class.
 python scripts/summarize_statescript_coverage.py --graph-bundle path/to/game_graphs_174.json.gz --hero-catalog path/to/game_heroes_174.json --observation path/to/owner-coverage.json --output path/to/new-coverage.json
 ```
 
-The input catalog supplies direct body roots. An observation can also
-identify a child graph. Use repeated `--observation` options for separate
-runs. With no observation, the report lists catalog roots and marks their
-nodes as having no sampled scenario. The report lists each node's declared
+The input catalog supplies direct body roots. The report follows declared
+`track_entities` child graph links from those roots and any observed
+graphs. `static_dependencies` lists those references and their source
+nodes. `missing_dependency_graphs` identifies absent targets. A graph
+with origin `referenced_child` has a static reference and no observed
+site in that scenario. Dynamic graph choices need a capture. Use repeated
+`--observation` options for separate runs. With no observation, the report
+marks inventory nodes as having no sampled scenario. The report lists each node's declared
 `scope` and effective `server_scope`. Its `runtime_classification` identifies
 an exact client state or a candidate for plain lifecycle fallback. Review
 scope skips, registration rejections, and unsupported sites separately.

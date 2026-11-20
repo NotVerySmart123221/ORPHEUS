@@ -670,6 +670,36 @@ impl Evaluator {
                         .ok_or(unavailable)?,
                 )
             }
+            "STU_2200A66D" => {
+                if !native_shape(config, class, Some("m_entity"))
+                    || !fields.contains_key("m_entity")
+                {
+                    return Err(EvalError::MalformedConfig(
+                        "expected one native direction entity operand",
+                    ));
+                }
+                self.charge()?;
+                let Value::Entity(entity) =
+                    self.config(child(config, "m_entity"), context, nested)?
+                else {
+                    return Err(EvalError::MalformedConfig("expected a bound entity"));
+                };
+                if !valid_entity(entity) {
+                    return Err(EvalError::MalformedConfig("expected a bound entity"));
+                }
+                // Preserve existing host-specific numeric adapters before using
+                // the room's authoritative pitched direction.
+                let direction = match context.native(config) {
+                    Some(Value::Vector(direction)) => Some(direction),
+                    Some(_) => None,
+                    None => context.authored_forward(entity),
+                };
+                Value::Vector(
+                    direction
+                        .filter(|parts| parts.iter().all(|part| part.is_finite()))
+                        .ok_or(EvalError::UnavailableEntityDirection(entity))?,
+                )
+            }
             "EntityMatches" => self.entity_matches(fields, context, nested)?,
             "EntitiesInRadius" => self.entities_in_radius(fields, context, nested)?,
             "SegmentClear" => self.segment_clear(fields, context, nested)?,
