@@ -647,6 +647,12 @@ and continue from `m_outPlug`.
 | 2 | Target entity at settlement |
 | 3 | Actual signed pool delta, positive for healing and negative for damage |
 | 4 | Whether damage killed the target |
+| 5 | Ordered hit tag assets, or null at a declared binding when unavailable |
+
+The hit tag slot uses the list carried by the applied impact. A known
+empty list stays empty. Other settled effects that lack hit attribution
+omit the slot, so delivery clears any previous value in a declared
+binding. Tags preserve authored order and duplicates.
 
 The enabled room records successful weapon damage, room-settled script
 and AI requests, field healing, and VM-local AI damage and healing.
@@ -739,6 +745,10 @@ settled events on its next VM frame. The host skips its compatibility
 charge admission and synchronous damage credit for that body. An
 omitted selection retains the existing bridge for its supported profile.
 Graph bindings remain the source for authored starting values and costs.
+A configured private root can inspect hit tags after weapon settlement.
+The stock charge graph still reads its synchronous native damage message
+and target snapshot. Its timing, target flags, and mitigation records
+need separate validation before switching routes.
 
 See the [synthetic charge route contract](../fixtures/behavior/script-authored-charge-route-v1.json).
 

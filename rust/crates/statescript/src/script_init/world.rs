@@ -65,6 +65,36 @@ impl RoomCue {
     pub const MAX_TARGETS: usize = 64;
 }
 
+// Host admission bound, independent of the size of a native tag list.
+const MAX_HIT_TAGS: usize = 16;
+
+/// Bounded, ordered asset tags supplied by a settled hit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HitTags {
+    values: [u64; MAX_HIT_TAGS],
+    len: usize,
+}
+
+impl HitTags {
+    pub const EMPTY: Self = Self {
+        values: [0; MAX_HIT_TAGS],
+        len: 0,
+    };
+
+    pub fn as_slice(&self) -> &[u64] {
+        &self.values[..self.len]
+    }
+
+    pub fn push(&mut self, guid: u64) -> bool {
+        if self.len == MAX_HIT_TAGS {
+            return false;
+        }
+        self.values[self.len] = guid;
+        self.len += 1;
+        true
+    }
+}
+
 /// Authoritative notification emitted by the simulation after a health change.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum HostEvent {
@@ -73,6 +103,9 @@ pub enum HostEvent {
         target: u32,
         delta: f64,
         killed: bool,
+        /// Optional asset list for parameter 5. An unavailable list leaves the
+        /// parameter absent and clears a declared binding through message delivery.
+        hit_tags: Option<HitTags>,
     },
 }
 
@@ -84,6 +117,7 @@ impl HostEvent {
                 target,
                 delta,
                 killed,
+                hit_tags,
             } => {
                 if !script_expr::valid_entity(target)
                     || source.is_some_and(|source| !script_expr::valid_entity(source))
@@ -94,12 +128,18 @@ impl HostEvent {
                 {
                     return None;
                 }
-                let parameters = Variables::from([
+                let mut parameters = Variables::from([
                     (1, source.map_or(Value::Null, Value::Entity)),
                     (2, Value::Entity(target)),
                     (3, Value::Float(delta)),
                     (4, Value::Bool(killed)),
                 ]);
+                if let Some(tags) = hit_tags {
+                    parameters.insert(
+                        5,
+                        Value::Array(tags.as_slice().iter().copied().map(Value::Asset).collect()),
+                    );
+                }
                 Some((HostEventKind::HealthApplied, parameters))
             }
         }

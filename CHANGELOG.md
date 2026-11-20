@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Carried applied player and bot impact tags through the shared health settlement event. StateScript bindings distinguish an ordered tag list, an empty list, and unavailable attribution. The room still uses the actual signed pool delta and checks body generations at delivery. The locked workspace suite with script coverage passed, including 381 native and 225 portable StateScript library tests.
+
 - Registered the native linked state through its authored type and reciprocal slot. Periodic self shield recovery now matches validated fields and uses the existing encounter shield service. Owner graphs query the active mode entity through the shared host path. The locked workspace suite with script coverage passed, including 379 native and 225 portable StateScript library tests.
 
 - Preserved the native voice-state lifecycle when the player host reports no voice context. Verified empty owner and observer state codecs can project the state. Matched paired target tags by validated operands and added a shared three-way model hardpoint query. Missing tag inventories and model membership still produce startup diagnostics. The locked workspace suite with script coverage passed, including 378 native and 222 portable StateScript library tests.

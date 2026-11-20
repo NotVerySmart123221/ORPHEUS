@@ -18,6 +18,7 @@ use crate::{
     junkenstein_messages::{DefenderMessage, DefenderSighting},
     mover::Mover,
     script_enemy::EnemyTarget,
+    script_init::HitTags,
     script_snapshot_wire::SceneProjection,
     vitals::{Damage, Death},
     world::{EntityUpdate, Operation},
@@ -223,7 +224,7 @@ impl RoomSimulation {
         tick: u32,
     ) -> Option<(Vec<HealingPulse>, Vec<ProjectileToken>)> {
         let (pulses, expired_tokens, healed) = self.player_body_mut(owner)?.advance_fields(tick);
-        self.record_health_applied(owner.entity, owner.entity, healed, false);
+        self.record_health_applied(owner.entity, owner.entity, healed, false, None);
         Some((pulses, expired_tokens))
     }
 
@@ -693,6 +694,7 @@ impl RoomSimulation {
         id: BodyId,
         amount: f64,
         source: Death,
+        hit_tags: Option<HitTags>,
     ) -> Option<(u32, bool, Option<EntityUpdate>)> {
         let cassidy_protected = self.cassidy_protected;
         let state = self.player_body_mut(id)?;
@@ -711,7 +713,13 @@ impl RoomSimulation {
                 operation: Some(Operation::Update(vec![component])),
                 ..EntityUpdate::default()
             });
-        self.record_health_applied(source.killer, entity, -outcome.dealt, outcome.killed);
+        self.record_health_applied(
+            source.killer,
+            entity,
+            -outcome.dealt,
+            outcome.killed,
+            hit_tags,
+        );
         Some((owner, outcome.killed, health))
     }
 
@@ -918,6 +926,7 @@ impl RoomSimulation {
                 frame: context.tick,
                 killer: source,
             },
+            Some(impact.tags),
         ) else {
             return Ok(None);
         };
@@ -998,7 +1007,7 @@ impl RoomSimulation {
                     });
                 }
                 self.health_events
-                    .stage(source, SampledBody { wire, entity }, healed, false);
+                    .stage(source, SampledBody { wire, entity }, healed, false, None);
             }
         }
     }

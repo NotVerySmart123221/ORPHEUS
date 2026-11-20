@@ -448,16 +448,28 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
     const BODY: &str = "0x040000000000B013";
     const METER: u32 = 612;
     const DELTA_SLOT: u32 = 607;
+    const HIT_TAG_SLOT: u32 = 608;
     let contract: Json = serde_json::from_str(include_str!(
         "../../../fixtures/behavior/script-authored-charge-route-v1.json"
     ))
     .unwrap();
     let mut bundle = contract["input"]["bundle"].clone();
+    let hits: Vec<u64> = serde_json::from_value(contract["input"]["hit_tags"].clone()).unwrap();
+    let mut hit_tags = DamageTags::EMPTY;
+    for &tag in &hits {
+        assert!(hit_tags.push(tag));
+    }
     let probe = &mut bundle["graphs"][0];
-    probe["nodes"][0]["fields"]["m_params"] = json!([{
-        "m_B5051BCE": "0x0000000000000003",
-        "m_out_Var": {"$":"STUConfigVarDynamic","m_identifier":DELTA_SLOT,"m_60DB8F99":false}
-    }]);
+    probe["nodes"][0]["fields"]["m_params"] = json!([
+        {
+            "m_B5051BCE": "0x0000000000000003",
+            "m_out_Var": {"$":"STUConfigVarDynamic","m_identifier":DELTA_SLOT,"m_60DB8F99":false}
+        },
+        {
+            "m_B5051BCE": "0x0000000000000005",
+            "m_out_Var": {"$":"STUConfigVarDynamic","m_identifier":HIT_TAG_SLOT,"m_60DB8F99":false}
+        }
+    ]);
     bundle["graphs"].as_array_mut().unwrap().push(json!({
         "index": 0x0ca5, "items": 0, "nodes": [], "states": [], "entries": [], "remote": [],
         "sync_vars": [], "containers": {}, "unknown_nodes": [], "fields": {},
@@ -550,6 +562,7 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
                 target: spawn.entity + 1,
                 delta: -3.0,
                 killed: false,
+                hit_tags: Some(hit_tags),
             })
             .unwrap(),
         1
@@ -571,6 +584,10 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
         .unwrap();
     assert!(meter.is_server_only());
     assert_eq!(meter.variables[&DELTA_SLOT], Value::Float(-3.0));
+    assert_eq!(
+        meter.variables[&HIT_TAG_SLOT],
+        Value::Array(hits.into_iter().map(Value::Asset).collect())
+    );
     let encoder = authored.encoder();
     for view in [View::Owner, View::Observer] {
         let projected = encoder.project(snapshot, view).unwrap();
@@ -1496,6 +1513,7 @@ fn authored_body_activity_reads_room_bootstrap_and_current_generation() {
                 frame,
                 killer: 42,
             },
+            None,
         )
         .unwrap();
     assert!(killed);

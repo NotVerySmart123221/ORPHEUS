@@ -48,7 +48,7 @@ impl RoomSimulation {
                     operation: Some(Operation::Update(vec![health])),
                     ..Default::default()
                 });
-                self.record_health_applied(source.killer, wire, delta, killed);
+                self.record_health_applied(source.killer, wire, delta, killed, None);
             }
             return Ok(true);
         }
@@ -58,7 +58,7 @@ impl RoomSimulation {
         match effect {
             HealthEffect::Damage(amount) => {
                 if let Some((owner, killed, health)) =
-                    self.damage_player_body_by_wire(id, amount, source)
+                    self.damage_player_body_by_wire(id, amount, source, None)
                 {
                     self.scripted_health.extend(health);
                     if killed {
@@ -81,7 +81,7 @@ impl RoomSimulation {
                                 ..Default::default()
                             });
                         }
-                        self.record_health_applied(source.killer, wire, healed, false);
+                        self.record_health_applied(source.killer, wire, healed, false, None);
                     }
                 }
             }

@@ -16,34 +16,9 @@ use crate::{
     static_ray::{Vec3, capsule_entry_distance},
 };
 
+pub use crate::script_init::HitTags as DamageTags;
+
 pub const DEFAULT_REACH: f64 = 200.0;
-// Server admission bound, not a native tag-count limit. Prepared 104319 graphs
-// currently use at most eight tags per modify-health payload.
-const MAX_DAMAGE_TAGS: usize = 16;
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DamageTags {
-    values: [u64; MAX_DAMAGE_TAGS],
-    len: usize,
-}
-
-impl DamageTags {
-    pub const EMPTY: Self = Self {
-        values: [0; MAX_DAMAGE_TAGS],
-        len: 0,
-    };
-    pub fn as_slice(&self) -> &[u64] {
-        &self.values[..self.len]
-    }
-    fn push(&mut self, guid: u64) -> bool {
-        if self.len == MAX_DAMAGE_TAGS {
-            return false;
-        }
-        self.values[self.len] = guid;
-        self.len += 1;
-        true
-    }
-}
 const HISTORY: usize = 64;
 const HEAD_BELOW_EYE: f64 = 0.2;
 const ANGLE_STEP: f64 = std::f64::consts::TAU / 65536.0;

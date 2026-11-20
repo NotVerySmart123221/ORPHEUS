@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use orpheus_statescript::{
     script_graph::GraphStore,
-    script_init::{Component, EmptyWorld, HostEvent, MAX_INIT_WORK, RoomMessage, Root},
+    script_init::{Component, EmptyWorld, HitTags, HostEvent, MAX_INIT_WORK, RoomMessage, Root},
     script_wire::{Value, Variables},
 };
 use serde::Deserialize;
@@ -48,15 +48,16 @@ struct Event {
     target: u32,
     delta: Json,
     killed: bool,
+    hit_tags: Option<Vec<u64>>,
 }
 
-type Delivery = (Option<u32>, u32, f64, bool);
+type Delivery = (Option<u32>, u32, f64, bool, Option<Vec<u64>>);
 
 #[derive(Deserialize)]
 struct Expected {
     ordinary_variable: u32,
     room_variable: u32,
-    host_variables: [u32; 5],
+    host_variables: [u32; 6],
     deliveries: Vec<Option<Delivery>>,
 }
 
@@ -159,6 +160,13 @@ fn host_health_entries_only_receive_settled_events_on_the_next_frame() {
             Some("infinity") => f64::INFINITY,
             _ => event.delta.as_f64().unwrap(),
         };
+        let hit_tags = event.hit_tags.map(|tags| {
+            let mut hit_tags = HitTags::EMPTY;
+            for tag in tags {
+                assert!(hit_tags.push(tag));
+            }
+            hit_tags
+        });
         assert_eq!(
             recipient
                 .queue_host_event(HostEvent::HealthApplied {
@@ -166,6 +174,7 @@ fn host_health_entries_only_receive_settled_events_on_the_next_frame() {
                     target: event.target,
                     delta,
                     killed: event.killed,
+                    hit_tags,
                 })
                 .unwrap(),
             usize::from(delivery.is_some()),
@@ -177,7 +186,7 @@ fn host_health_entries_only_receive_settled_events_on_the_next_frame() {
         recipient.advance_frame(frame + 1, &mut EmptyWorld).unwrap();
 
         let mut after = before;
-        if let Some((source, target, delta, killed)) = delivery {
+        if let Some((source, target, delta, killed, tags)) = delivery {
             let after = after.as_mut().unwrap();
             for (variable, value) in expected.host_variables.into_iter().zip([
                 source.map_or(Value::Null, Value::Entity),
@@ -185,6 +194,9 @@ fn host_health_entries_only_receive_settled_events_on_the_next_frame() {
                 Value::Float(delta),
                 Value::Bool(killed),
                 Value::Float(delta),
+                tags.map_or(Value::Null, |tags| {
+                    Value::Array(tags.into_iter().map(Value::Asset).collect())
+                }),
             ]) {
                 after.insert(variable, value);
             }

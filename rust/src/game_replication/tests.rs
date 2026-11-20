@@ -2904,6 +2904,7 @@ fn body_replacement_rejects_stale_generation_mutations() {
                     frame: 100,
                     killer: 9,
                 },
+                None,
             )
             .is_none()
     );

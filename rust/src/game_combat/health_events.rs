@@ -5,7 +5,10 @@ use std::collections::VecDeque;
 use bevy_ecs::entity::Entity;
 use indexmap::IndexMap;
 
-use crate::{script_expr::valid_entity, script_init::HostEvent};
+use crate::{
+    script_expr::valid_entity,
+    script_init::{HitTags, HostEvent},
+};
 
 use super::{BotState, PlayerBodyState, RoomSimulation};
 
@@ -36,6 +39,7 @@ struct HealthApplied {
     target: SampledBody,
     delta: f64,
     killed: bool,
+    hit_tags: Option<HitTags>,
 }
 
 impl HealthApplied {
@@ -53,6 +57,7 @@ impl HealthApplied {
             target: self.target.wire,
             delta: self.delta,
             killed: self.killed,
+            hit_tags: self.hit_tags,
         };
         Some((event, [source.filter(|&body| body != self.target), target]))
     }
@@ -71,6 +76,7 @@ impl RoomHealthEvents {
         target: SampledBody,
         delta: f64,
         killed: bool,
+        hit_tags: Option<HitTags>,
     ) {
         if !self.enabled
             || self.pending.len() >= MAX_ROOM_HEALTH_EVENTS
@@ -85,6 +91,7 @@ impl RoomHealthEvents {
             target,
             delta,
             killed,
+            hit_tags,
         });
     }
 }
@@ -100,6 +107,7 @@ impl RoomSimulation {
         target: u32,
         delta: f64,
         killed: bool,
+        hit_tags: Option<HitTags>,
     ) {
         if !self.health_events.enabled {
             return;
@@ -108,7 +116,8 @@ impl RoomSimulation {
             return;
         };
         let source = self.sample_health_body(source);
-        self.health_events.stage(source, target, delta, killed);
+        self.health_events
+            .stage(source, target, delta, killed, hit_tags);
     }
 
     /// Queue each event for the recipients' next VM frames, in settlement order.
@@ -143,7 +152,7 @@ impl RoomSimulation {
                 let source =
                     SampledBody::lookup(change.source, &self.by_wire, &self.players_by_wire);
                 self.health_events
-                    .stage(source, target, change.delta, change.killed);
+                    .stage(source, target, change.delta, change.killed, None);
             }
         }
     }
@@ -169,6 +178,10 @@ impl RoomSimulation {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "health_events/tests.rs"]
+mod settled_hit_tests;
 
 #[cfg(test)]
 mod tests {
@@ -209,6 +222,7 @@ mod tests {
             let actual = room.health_events.pending.pop_front().map(|entry| {
                 assert_eq!(entry.source.map(|body| body.wire), Some(source));
                 assert_eq!(entry.target.wire, target);
+                assert_eq!(entry.hit_tags, None);
                 (entry.delta, entry.killed)
             });
             assert_eq!(actual, expected);
@@ -343,18 +357,18 @@ mod tests {
             (-0.0, false),
             (1.0, true),
         ] {
-            room.record_health_applied(source, target, delta, killed);
+            room.record_health_applied(source, target, delta, killed, None);
         }
-        room.record_health_applied(source, 0, -1.0, false);
+        room.record_health_applied(source, 0, -1.0, false, None);
         assert!(room.health_events.pending.is_empty());
 
-        room.record_health_applied(source, source, -1.0, false);
+        room.record_health_applied(source, source, -1.0, false, None);
         let self_damage = room.health_events.pending.pop_front().unwrap();
         let (_, receivers) = self_damage.resolve(&room).unwrap();
         assert_eq!(receivers.into_iter().flatten().count(), 1);
 
         for amount in 1..=MAX_ROOM_HEALTH_EVENTS + 1 {
-            room.record_health_applied(source, target, -(amount as f64), false);
+            room.record_health_applied(source, target, -(amount as f64), false, None);
         }
         assert_eq!(room.health_events.pending.len(), MAX_ROOM_HEALTH_EVENTS);
         let retired = room.by_wire.shift_remove(&target).unwrap();
@@ -367,7 +381,8 @@ mod tests {
                 source: Some(source),
                 target,
                 delta: -1.0,
-                killed: false
+                killed: false,
+                hit_tags: None,
             }
         );
         assert_eq!(

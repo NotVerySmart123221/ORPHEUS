@@ -1560,7 +1560,7 @@ impl RoomSimulation {
                 ..EntityUpdate::default()
             });
             self.health_events
-                .stage(source, SampledBody { wire, entity }, healed, false);
+                .stage(source, SampledBody { wire, entity }, healed, false, None);
         }
         self.heal_player_bodies(team, skip_player_wire, source, pulses, &mut updates);
         Ok(updates)
@@ -1806,7 +1806,13 @@ impl RoomSimulation {
             ],
             health,
         };
-        self.record_health_applied(source, entity, -result.dealt, result.killed);
+        self.record_health_applied(
+            source,
+            entity,
+            -result.dealt,
+            result.killed,
+            Some(impact.tags),
+        );
         Ok(Some(hit))
     }
 
