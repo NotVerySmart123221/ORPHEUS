@@ -39,6 +39,8 @@ The Rust-only [button lock fixture](../fixtures/behavior/script-button-lock-v1.j
 
 The Rust-only [movement scale fixture](../fixtures/behavior/script-movement-scale-v1.json) checks overlapping movement modifiers, timing and cleanup through the production VM. Native room coverage checks when a message-triggered modifier enters and exits the receiver's movement timeline.
 
+The [horizontal cap fixture](../fixtures/behavior/flashbang-horizontal-cap-v1.json) covers the one-row selector, integer and floating bounds, and unrelated graph placements. Native tests verify that admitted effects are queued for the next movement frame.
+
 The Rust-only [movement edge fixture](../fixtures/behavior/script-movement-edges-v1.json) checks flag writes before takeoff and landing, landing before a renewed takeoff, and event deduplication when the VM samples a retained pose. A renewed takeoff in the air requires a new source movement frame. Unknown movement samples retain a diagnostic.
 
 The Rust-only [stack claim fixture](../fixtures/behavior/script-stack-claim-v1.json) checks priority, ties, scope, dependent values and release through the production VM. The native room regression combines stack admission with a tag filter and verifies the lifetime of the input and movement effects.
@@ -62,7 +64,7 @@ The Rust-only [authored resource meter fixture](../fixtures/behavior/script-auth
 
 The Rust-only [local health outcomes fixture](../fixtures/behavior/script-local-health-outcomes-v1.json) checks actual damage from AI callbacks and capped field healing. Room tests also exercise source provenance across body replacement.
 
-The Rust-only [host health event fixture](../fixtures/behavior/script-host-health-events-v1.json) checks authenticated delivery through the ordinary VM event timeline, typed receipt parameters, and separation from script-sent messages. It distinguishes ordered hit tags, an explicitly empty list, and clearing the binding when tags are unavailable. The [settled hit fixture](../fixtures/behavior/script-settled-hit-tags-v1.json) exercises native player and bot impact settlement and the captured tag list.
+The Rust-only [host health event fixture](../fixtures/behavior/script-host-health-events-v1.json) checks authenticated delivery through the ordinary VM event timeline, typed receipt parameters, and separation from script-sent messages. It distinguishes ordered hit tags, an explicitly empty list, and clearing the binding when tags are unavailable. The [settled hit fixture](../fixtures/behavior/script-settled-hit-tags-v1.json) exercises native player and bot impact settlement and the captured tag list. It also checks which target facts survive settlement and how the room handles source and target replacement. Portable coverage checks that those facts are scoped to their own host event.
 
 The Rust-only [mode ruleset fixture](../fixtures/behavior/script-mode-rulesets-v1.json) checks mode isolation, actor overrides, typed values, and explicit null results through the production StateScript loader. The same fixture covers the separate engine settings table, including an omitted table, an empty table, and an absent key. The owner host reads these values through its bound mode.
 

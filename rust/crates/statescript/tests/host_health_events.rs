@@ -1,12 +1,16 @@
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use orpheus_statescript::{
+    script_entity_state::EntityScriptState,
     script_graph::GraphStore,
-    script_init::{Component, EmptyWorld, HitTags, HostEvent, MAX_INIT_WORK, RoomMessage, Root},
+    script_init::{
+        Component, EmptyWorld, HealthTargetFacts, HitTags, HostEvent, MAX_INIT_WORK, RoomMessage,
+        Root, Site, TargetTagEffects, World,
+    },
     script_wire::{Value, Variables},
 };
 use serde::Deserialize;
-use serde_json::Value as Json;
+use serde_json::{Value as Json, json};
 
 const ROOT: u16 = 1;
 const GRAPH: u32 = 302;
@@ -203,4 +207,153 @@ fn host_health_entries_only_receive_settled_events_on_the_next_frame() {
         }
         assert_eq!(variables(recipient), after.as_ref(), "{}", event.name);
     }
+}
+
+#[test]
+fn settled_target_facts_are_scoped_to_immediate_host_delivery() {
+    const SOURCE: u32 = 731;
+    const TARGET: u32 = 732;
+    const OTHER: u32 = 733;
+    const MESSAGE: u64 = 197;
+    const TAG: u64 = 0x0d60_0000_0000_5521;
+
+    struct LiveWorld;
+    impl World for LiveWorld {
+        fn position(&mut self, _: u32) -> Option<[f64; 3]> {
+            None
+        }
+
+        fn entity_variable(&mut self, _: u32, _: u32) -> Option<Value> {
+            Some(Value::Integer(11))
+        }
+
+        fn has_target_tag(&self, _: Site, entity: u32, _: u64) -> Option<bool> {
+            Some(entity == OTHER)
+        }
+
+        fn entity_filter_flags(&self, _: Site, _: u32) -> Option<u64> {
+            Some(2)
+        }
+    }
+
+    let var = |id| json!({"$":"STUConfigVarDynamic","m_identifier":id,"m_60DB8F99":false});
+    let tag =
+        |entity| json!({"$":"STU_25ECB55F","m_entity":entity,"m_88B0050A":format!("0x{TAG:016X}")});
+    let outputs = [
+        json!({"$":"STU_919FD47C","m_configVars":[{"$":"STUConfigVarInt","m_value":7}],
+            "m_expression":{"m_opcodes":[8,0,14,0,15,0],"m_dynamicVars":[var(1)]}}),
+        tag(var(1)),
+        json!({"$":"STU_AC829876","m_entity":var(1),
+            "m_filter":{"$":"STUConfigVarFilter","m_84065FD1":1}}),
+        tag(var(2)),
+    ];
+    let parameter = json!({"m_B5051BCE":"0x0000000000000002","m_out_Var":var(1)});
+    let links =
+        json!({"$":"Plug","links":[[2,"m_inPlug"],[3,"m_inPlug"],[4,"m_inPlug"],[5,"m_inPlug"]]});
+    let mut nodes = vec![
+        json!({"pos":0,"rid":0,"uid":0,"class":"EntryHostEvent","state":null,
+            "remote":-1,"client_only":false,"server_only":true,"host_event_entry":"health_applied",
+            "fields":{"m_params":[parameter.clone()],"m_outPlug":links.clone()}}),
+        json!({"pos":1,"rid":1,"uid":1,"class":"STUStatescriptEntryGameMessage","state":null,
+            "remote":-1,"client_only":false,"server_only":true,"room_message_entry":true,
+            "fields":{"m_gameMessage":{"m_gameMessage":format!("0x{MESSAGE:016X}")},
+                "m_params":[parameter],"m_outPlug":links}}),
+    ];
+    nodes.extend(outputs.into_iter().enumerate().map(|(i, value)| {
+        let pos = i + 2;
+        json!({"pos":pos,"rid":pos,"uid":pos,"class":"STUStatescriptActionSetVar","state":null,
+            "remote":-1,"client_only":false,"server_only":true,
+            "fields":{"m_ADEB6E05":true,"m_out_Var":var(i+10),"m_value":value}})
+    }));
+    let bundle = json!({"version":1,"bodies":{},"missing":[],"graphs":[{
+        "index":GRAPH,"items":nodes.len(),"nodes":nodes,"fields":{},"containers":{},"entries":[1],
+        "states":[],"remote":[],"sync_vars":[],"unknown_nodes":[],
+        "header":{"m_nodesBitCount":3,"m_statesBitCount":3,"m_remoteSyncNodesBitCount":3,"m_syncVarsBitCount":3}
+    }]});
+    let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    let mut root = Root::new(ROOT, GRAPH);
+    root.variables.insert(2, Value::Entity(OTHER));
+    let mut world = LiveWorld;
+    let mut body = Component::start(
+        graphs,
+        SOURCE,
+        Variables::new(),
+        vec![root],
+        0,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let reads = |body: &Component| [10, 11, 12, 13].map(|id| variables(body).unwrap()[&id].clone());
+    let event = HostEvent::HealthApplied {
+        source: Some(SOURCE),
+        target: TARGET,
+        delta: -2.5,
+        killed: false,
+        hit_tags: None,
+    };
+    let sampled = HealthTargetFacts {
+        target: TARGET,
+        filter_flags: Some(1),
+        tags: TargetTagEffects::default().snapshot(Some(&BTreeSet::from([TAG]))),
+        script_state: EntityScriptState::Running(Arc::new(Variables::from([(
+            7,
+            Value::Integer(9),
+        )]))),
+    };
+    let wrong_target = HealthTargetFacts {
+        target: OTHER,
+        ..sampled.clone()
+    };
+    assert_eq!(
+        body.queue_host_event_with_target_facts(event, Some(Arc::new(wrong_target)))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        body.queue_host_event_with_target_facts(event, Some(Arc::new(sampled)))
+            .unwrap(),
+        1
+    );
+    body.advance_frame(1, &mut world).unwrap();
+    assert_eq!(
+        reads(&body),
+        [
+            Value::Integer(9),
+            Value::Bool(true),
+            Value::Bool(true),
+            Value::Bool(true)
+        ]
+    );
+
+    let plain_event_values = [
+        Value::Integer(11),
+        Value::Bool(false),
+        Value::Bool(false),
+        Value::Bool(true),
+    ];
+    body.queue_host_event(event).unwrap();
+    body.advance_frame(2, &mut world).unwrap();
+    assert_eq!(reads(&body), plain_event_values);
+    assert!(body.snapshot().unwrap().diagnostics.is_empty());
+
+    let unavailable = HealthTargetFacts {
+        target: TARGET,
+        filter_flags: None,
+        tags: Default::default(),
+        script_state: EntityScriptState::Unavailable,
+    };
+    body.queue_host_event_with_target_facts(event, Some(Arc::new(unavailable)))
+        .unwrap();
+    let room_message = RoomMessage {
+        id: MESSAGE,
+        parameters: Variables::from([(2, Value::Entity(TARGET))]),
+    };
+    assert_eq!(
+        body.queue_room_message_from(OTHER, room_message).unwrap(),
+        1
+    );
+    body.advance_frame(3, &mut world).unwrap();
+    assert_eq!(reads(&body), plain_event_values);
+    assert_eq!(body.snapshot().unwrap().diagnostics.len(), 3);
 }

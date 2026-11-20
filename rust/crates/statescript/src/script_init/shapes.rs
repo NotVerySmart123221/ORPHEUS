@@ -497,6 +497,46 @@ pub(super) fn is_bare_header_action(node: &Node) -> bool {
         && is_unlinked_plug(&node.fields, "m_outPlug", "STUStatescriptOutputPlug")
 }
 
+pub(super) fn is_horizontal_velocity_clamp(node: &Node) -> bool {
+    let fields = &node.fields;
+    let [row] = array_field(fields, "m_BC5E91CF") else {
+        return false;
+    };
+    node.state.is_none()
+        && node.remote == -1
+        && node.is_action()
+        && !node.is_state()
+        && script_expr::native_fields(
+            fields,
+            &[
+                "m_BF5B22B7",
+                "m_8BF03679",
+                "m_A2287776",
+                "m_AED90719",
+                "m_2BBEEAB8",
+                "m_ADEB6E05",
+                "m_BC5E91CF",
+                "m_inPlug",
+                "m_outPlug",
+            ],
+        )
+        && field(fields, "m_BF5B22B7").is_null()
+        && field(fields, "m_8BF03679").is_null()
+        && ["m_A2287776", "m_AED90719"].iter().all(|name| {
+            let value = field(fields, name);
+            matches!(value, Json::Null | Json::Bool(false)) || value.as_u64() == Some(0)
+        })
+        && field(row, "$").as_str() == Some("STU_20E18047")
+        && script_expr::native_fields(
+            row,
+            &["m_A9561CA0", "m_priority", "m_8AD739CE", "m_8213EB22"],
+        )
+        && field(row, "m_A9561CA0").as_u64() == Some(1)
+        && field(row, "m_priority").is_null()
+        && !field(row, "m_8AD739CE").is_null()
+        && !field(row, "m_8213EB22").is_null()
+}
+
 // These authored placements resolve to the PC base State.
 pub(super) fn encounter_base_state_shape(graph: u32, node: &Node) -> Option<bool> {
     let placement = (graph, node.pos);

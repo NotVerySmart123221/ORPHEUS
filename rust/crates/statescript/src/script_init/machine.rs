@@ -19,7 +19,7 @@ use crate::{
 };
 
 use super::{
-    MAX_PENDING_EVENTS, RoomMessage,
+    HealthTargetFacts, MAX_PENDING_EVENTS, RoomMessage,
     shapes::stored,
     types::{
         InitFault, PendingTimer, RandomCheckpoint, ShotEvent, Snapshot, SpawnSearchKey,
@@ -159,6 +159,7 @@ pub(super) enum Event {
         position: u16,
         sender: Option<u32>,
         parameters: Arc<Variables>,
+        health_target_facts: Option<Arc<HealthTargetFacts>>,
     },
 }
 
@@ -455,6 +456,7 @@ impl Machine {
             sender,
             parameters,
             due_ms,
+            None,
         )
     }
 
@@ -471,6 +473,7 @@ impl Machine {
             Some(sender),
             message.parameters,
             due_ms,
+            None,
         )
     }
 
@@ -480,6 +483,7 @@ impl Machine {
         kind: HostEventKind,
         parameters: Variables,
         due_ms: u64,
+        target_facts: Option<Arc<HealthTargetFacts>>,
     ) -> Result<usize, InitFault> {
         self.queue_message_entries(
             graphs,
@@ -487,6 +491,7 @@ impl Machine {
             None,
             parameters,
             due_ms,
+            target_facts,
         )
     }
 
@@ -497,6 +502,7 @@ impl Machine {
         sender: Option<u32>,
         parameters: Variables,
         due_ms: u64,
+        target_facts: Option<Arc<HealthTargetFacts>>,
     ) -> Result<usize, InitFault> {
         let topic = destination.topic();
         if matches!(topic, EntryTopic::Message(id) if graphs.is_projected_message_topic(id)) {
@@ -540,6 +546,7 @@ impl Machine {
                     position,
                     sender,
                     parameters: Arc::clone(&parameters),
+                    health_target_facts: target_facts.clone(),
                 },
             )?;
         }

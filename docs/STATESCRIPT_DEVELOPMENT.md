@@ -158,6 +158,11 @@ ability support.
   shared query. An available mode table supplies the entity. The verified
   encounter scope can report it absent. The existing voice recipient
   audience and team selectors still need their own routing contracts.
+- The native horizontal clamp action accepts one unprioritized selector-1
+  row with a zero lower bound. Integer and floating bounds use the same
+  schema. A supported host queues the cap for its next movement frame.
+  This action preserves vertical velocity and uses the existing mover
+  and NPC motion primitives.
 
 Native target tracking still needs ordered samples, optional typed
 output bindings, and the lifecycle of its embedded state slots. The
@@ -653,6 +658,14 @@ The hit tag slot uses the list carried by the applied impact. A known
 empty list stays empty. Other settled effects that lack hit attribution
 omit the slot, so delivery clears any previous value in a declared
 binding. Tags preserve authored order and duplicates.
+
+Weapon notifications also carry the target's captured filter flags,
+target tags, and script variables. An immediate foreign query about
+that target reads the captured values. Own-body queries, watched
+expressions, and other entities continue through their usual host.
+Unavailable captured facts stay unavailable. The room checks body
+generation when dispatching the event, and the VM clears the snapshot
+at the end of each delivery.
 
 The enabled room records successful weapon damage, room-settled script
 and AI requests, field healing, and VM-local AI damage and healing.

@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Applied the native horizontal velocity cap by authored selector and bounds at any supported host site, including integer bounds, through the next-frame movement queue. Settled impact events now share their original target's filter flags, target tags, and script state with immediate foreign queries in subscribed graphs. Tests cover target replacement and isolation between consecutive events. The locked workspace suite with script coverage passed, including 382 native and 226 portable StateScript library tests.
+
 - Carried applied player and bot impact tags through the shared health settlement event. StateScript bindings distinguish an ordered tag list, an empty list, and unavailable attribution. The room still uses the actual signed pool delta and checks body generations at delivery. The locked workspace suite with script coverage passed, including 381 native and 225 portable StateScript library tests.
 
 - Registered the native linked state through its authored type and reciprocal slot. Periodic self shield recovery now matches validated fields and uses the existing encounter shield service. Owner graphs query the active mode entity through the shared host path. The locked workspace suite with script coverage passed, including 379 native and 225 portable StateScript library tests.

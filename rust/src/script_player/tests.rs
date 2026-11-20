@@ -341,12 +341,14 @@ fn charge_admission_preserves_profile_scope_and_requires_a_live_instance_for_cre
     let (mut factory, spawn) = fixture_body_factory();
     let damage = AppliedDamage {
         source: spawn.entity,
-        target: spawn.entity + 1,
         amount: 1.0,
         tags: DamageTags::EMPTY,
-        target_flags: None,
-        target_tags: Default::default(),
-        target_state: EntityScriptState::Unavailable,
+        target_facts: crate::script_init::HealthTargetFacts {
+            target: spawn.entity + 1,
+            filter_flags: None,
+            tags: Default::default(),
+            script_state: EntityScriptState::Unavailable,
+        },
     };
     let admission =
         |runtime: &PlayerBodyRuntime| runtime.snapshot().unwrap().variables.get(&2426).cloned();
@@ -423,7 +425,7 @@ fn charge_admission_preserves_profile_scope_and_requires_a_live_instance_for_cre
                 Death {
                     time: 0.0,
                     frame: spawn.frame,
-                    killer: damage.target,
+                    killer: damage.target_facts.target,
                 },
             );
             assert!(outcome.killed);
@@ -440,8 +442,11 @@ fn charge_admission_preserves_profile_scope_and_requires_a_live_instance_for_cre
 #[test]
 fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
     use crate::{
-        game_combat::AppliedDamage, game_content::JUNKENSTEIN_REVENGE, game_hitscan::DamageTags,
-        script_entity_state::EntityScriptState, script_init::HostEvent,
+        game_combat::AppliedDamage,
+        game_content::JUNKENSTEIN_REVENGE,
+        game_hitscan::DamageTags,
+        script_entity_state::EntityScriptState,
+        script_init::{HealthTargetFacts, HostEvent},
     };
     use serde_json::json;
 
@@ -535,12 +540,14 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
     let mut compatibility = build(&bundle);
     let damage = AppliedDamage {
         source: spawn.entity,
-        target: spawn.entity + 1,
         amount: 3.0,
         tags: DamageTags::EMPTY,
-        target_flags: None,
-        target_tags: Default::default(),
-        target_state: EntityScriptState::Unavailable,
+        target_facts: crate::script_init::HealthTargetFacts {
+            target: spawn.entity + 1,
+            filter_flags: None,
+            tags: Default::default(),
+            script_state: EntityScriptState::Unavailable,
+        },
     };
     assert!(!authored.snapshot().unwrap().variables.contains_key(&2426));
     assert_eq!(
@@ -557,13 +564,21 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
     );
     assert_eq!(
         authored
-            .receive_host_event(HostEvent::HealthApplied {
-                source: Some(spawn.entity),
-                target: spawn.entity + 1,
-                delta: -3.0,
-                killed: false,
-                hit_tags: Some(hit_tags),
-            })
+            .receive_host_event(
+                HostEvent::HealthApplied {
+                    source: Some(spawn.entity),
+                    target: spawn.entity + 1,
+                    delta: -3.0,
+                    killed: false,
+                    hit_tags: Some(hit_tags),
+                },
+                Some(Arc::new(HealthTargetFacts {
+                    target: spawn.entity + 1,
+                    filter_flags: None,
+                    tags: Default::default(),
+                    script_state: EntityScriptState::Unavailable,
+                })),
+            )
             .unwrap(),
         1
     );
@@ -694,6 +709,42 @@ fn roll_velocity_bridge_preserves_sampled_delta_and_rejects_foreign_owners() {
         runtime.take_velocity_changes(),
         vec![(12, VelocityChange::HorizontalCap(5.5))]
     );
+}
+
+#[test]
+fn shared_horizontal_cap_queues_on_a_live_player_without_a_roll_profile() {
+    use crate::mover::VelocityChange;
+
+    let spawn = fixture_body_factory().1;
+    let mut body = fixture_hitscan_factory(20.0).start(spawn).unwrap();
+    let site = Site {
+        entity: spawn.entity,
+        instance: 2,
+        graph: 61061,
+        node: Some(8),
+    };
+    let foreign_site = Site {
+        entity: spawn.entity + 1,
+        ..site
+    };
+    assert!(!body.world.cap_horizontal_velocity(foreign_site, 12, 4.0));
+    assert!(!body.world.cap_horizontal_velocity(site, 12, f64::INFINITY));
+    assert!(!body.world.cap_horizontal_velocity(site, 12, -1.0));
+    assert!(body.world.cap_horizontal_velocity(site, 12, 4.0));
+    assert_eq!(
+        body.take_velocity_changes(),
+        [(13, VelocityChange::HorizontalCap(4.0))]
+    );
+    assert!(body.take_velocity_changes().is_empty());
+    body.world.vitals.damage(
+        10_000.0,
+        crate::vitals::Death {
+            time: 1.0,
+            frame: 13,
+            killer: foreign_site.entity,
+        },
+    );
+    assert!(!body.world.cap_horizontal_velocity(site, 13, 4.0));
 }
 
 #[test]

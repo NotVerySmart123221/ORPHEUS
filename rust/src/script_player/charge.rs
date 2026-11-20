@@ -105,7 +105,7 @@ impl PlayerBodyRuntime {
             })?;
         let parameters = Variables::from([
             (0x13, Value::Float(f64::from(damage.amount as f32))),
-            (0x15, Value::Entity(damage.target)),
+            (0x15, Value::Entity(damage.target_facts.target)),
             (
                 0x3d,
                 Value::Array(

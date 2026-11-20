@@ -30,7 +30,7 @@ use super::{
         State, StateKind,
     },
     voice::InstanceContext,
-    world::{PlayScript, RoomCue, RoomMessage, Site, World},
+    world::{HealthTargetFacts, PlayScript, RoomCue, RoomMessage, Site, World},
 };
 
 mod effects;
@@ -43,6 +43,7 @@ pub(super) struct Vm<'graph, 'world, 'machine, W> {
     pub(super) world: &'world mut W,
     pub(super) machine: &'machine mut Machine,
     pub(super) parameters: Option<Arc<Variables>>,
+    health_target_facts: Option<Arc<HealthTargetFacts>>,
     pub(super) output_write_depth: usize,
 }
 
@@ -57,6 +58,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             world,
             machine,
             parameters: None,
+            health_target_facts: None,
             output_write_depth: 0,
         }
     }
@@ -1046,8 +1048,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             position,
                             sender,
                             parameters,
+                            health_target_facts,
                         } => {
-                            self.deliver(id, position, sender, parameters)?;
+                            self.deliver(id, position, sender, parameters, health_target_facts)?;
                         }
                     }
                 }
@@ -1179,6 +1182,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         position: u16,
         sender: Option<u32>,
         parameters: Arc<Variables>,
+        health_target_facts: Option<Arc<HealthTargetFacts>>,
     ) -> Result<(), InitFault> {
         let Some(node) = self.graph(id).node(position) else {
             return Ok(());
@@ -1187,7 +1191,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             return Ok(());
         }
         self.parameters = Some(parameters);
+        self.health_target_facts = health_target_facts;
         let result = self.deliver_entry(id, node, sender);
+        self.health_target_facts = None;
         self.parameters = None;
         result
     }
@@ -2170,6 +2176,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             reads: Vec::new(),
             foreign_reads: Vec::new(),
             parameters: self.parameters.as_deref(),
+            health_target_facts: self.health_target_facts.as_deref(),
             watcher,
             read_native: false,
             untrusted_native: false,

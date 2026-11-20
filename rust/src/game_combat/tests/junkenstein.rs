@@ -279,12 +279,21 @@ pub(super) fn verify_natural_ending(ending: NormalEnding) {
                 )
                 .unwrap()
             {
-                let hero = state(room, hit.damage.target).unwrap().bot.spawn.hero;
+                let hero = state(room, hit.damage.target_facts.target)
+                    .unwrap()
+                    .bot
+                    .spawn
+                    .hero;
                 let killed = matches!(hit.notices[0], Some(CombatNotice::Hit { killed: true, .. }));
-                deadeye_hits.push((hit.damage.target, hero, hit.damage.amount, killed));
+                deadeye_hits.push((
+                    hit.damage.target_facts.target,
+                    hero,
+                    hit.damage.amount,
+                    killed,
+                ));
                 if killed && crate::npc_catalog::is_junkenstein_boss(hero) {
                     deadeye_kills.insert(hero);
-                    deadeye_bodies.insert(hit.damage.target);
+                    deadeye_bodies.insert(hit.damage.target_facts.target);
                 }
                 owner.receive_applied_damage(hit.damage).unwrap();
             }
@@ -929,7 +938,11 @@ pub(super) fn normal_encounter_first_reaper_finishes_intro_and_pursues_live_defe
             )
             .unwrap();
         for hit in hits {
-            assert_eq!(Some(hit.damage.target), reaper, "E hit another enemy");
+            assert_eq!(
+                Some(hit.damage.target_facts.target),
+                reaper,
+                "E hit another enemy"
+            );
             assert_eq!(hit.damage.amount, 25.0);
             assert_eq!(
                 state(room, reaper.unwrap()).unwrap().vitals.total(),

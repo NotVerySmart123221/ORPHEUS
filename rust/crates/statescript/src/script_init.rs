@@ -211,8 +211,9 @@ pub use types::{
 };
 pub use world::{
     AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, CreationKind,
-    EmptyWorld, EntityCreation, HitTags, HostEvent, LandingSelection, MovementSample, PlayScript,
-    RoomCue, RoomMessage, Site, TargetTagEffect, TargetTagEffects, TargetTagSnapshot, World,
+    EmptyWorld, EntityCreation, HealthTargetFacts, HitTags, HostEvent, LandingSelection,
+    MovementSample, PlayScript, RoomCue, RoomMessage, Site, TargetTagEffect, TargetTagEffects,
+    TargetTagSnapshot, World,
 };
 
 use machine::{Event, Machine, Startup, StateKey, VarKey};
@@ -469,6 +470,7 @@ impl Component {
             reads: Vec::new(),
             foreign_reads: Vec::new(),
             parameters: None,
+            health_target_facts: None,
             watcher: None,
             read_native: false,
             untrusted_native: false,
@@ -663,8 +665,24 @@ impl Component {
 
     /// Notify explicitly subscribed server graphs at the next receiver VM frame.
     pub fn queue_host_event(&mut self, event: HostEvent) -> Result<usize, InitFault> {
+        self.queue_host_event_with_target_facts(event, None)
+    }
+
+    /// Deliver facts for the event's original target with its server notification.
+    /// Facts are available only to immediate foreign queries during delivery.
+    pub fn queue_host_event_with_target_facts(
+        &mut self,
+        event: HostEvent,
+        target_facts: Option<Arc<HealthTargetFacts>>,
+    ) -> Result<usize, InitFault> {
         if self.halted {
             return Err(InitFault::Halted);
+        }
+        if target_facts
+            .as_ref()
+            .is_some_and(|facts| facts.target != event.target())
+        {
+            return Ok(0);
         }
         let Some(due_ms) = self.next_vm_frame_ms() else {
             return Ok(0);
@@ -673,7 +691,7 @@ impl Component {
             return Ok(0);
         };
         self.machine
-            .queue_host_entries(&self.graphs, kind, parameters, due_ms)
+            .queue_host_entries(&self.graphs, kind, parameters, due_ms, target_facts)
     }
 
     fn next_vm_frame_ms(&self) -> Option<u64> {

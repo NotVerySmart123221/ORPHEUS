@@ -8,6 +8,7 @@ mod authored_classes;
 mod destination_and_victory;
 mod elapsed_wait;
 mod frame_wait;
+mod horizontal_velocity_clamp;
 mod linked_state;
 mod local_combat_accumulator;
 mod local_command;

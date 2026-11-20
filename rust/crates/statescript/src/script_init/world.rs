@@ -5,6 +5,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use serde_json::Value as Json;
 
 use crate::{
+    script_entity_state::EntityScriptState,
     script_expr::{self, EntityRelation, OnFire, RoomEntityFacts, SpatialCandidate, StackPriority},
     script_graph::{HostEventKind, MAX_ROOM_MESSAGE_PARAMETERS, Node},
     script_runtime::PoolKind,
@@ -110,6 +111,11 @@ pub enum HostEvent {
 }
 
 impl HostEvent {
+    pub(super) fn target(self) -> u32 {
+        let Self::HealthApplied { target, .. } = self;
+        target
+    }
+
     pub(super) fn bindings_for(self, receiver: u32) -> Option<(HostEventKind, Variables)> {
         match self {
             Self::HealthApplied {
@@ -144,6 +150,15 @@ impl HostEvent {
             }
         }
     }
+}
+
+/// Room-sampled facts for the original target of a settled health event.
+#[derive(Clone, Debug)]
+pub struct HealthTargetFacts {
+    pub target: u32,
+    pub filter_flags: Option<u64>,
+    pub tags: TargetTagSnapshot,
+    pub script_state: EntityScriptState,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -311,6 +326,11 @@ pub struct BeamContact {
 /// ruleset, and entity data and can decline a query without guessing its value.
 pub trait World {
     fn edit_velocity(&mut self, _site: Site, _frame: u32, _value: Value, _cap: bool) -> bool {
+        false
+    }
+
+    /// Queue a horizontal velocity cap for the frame after the action ran.
+    fn cap_horizontal_velocity(&mut self, _site: Site, _frame: u32, _cap: f64) -> bool {
         false
     }
     fn summoner_beam_contact(&self, _site: Site) -> Option<BeamContact> {

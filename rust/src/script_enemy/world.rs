@@ -40,20 +40,15 @@ impl World for EnemyWorld<'_> {
             .then_some(false)
     }
 
-    fn edit_velocity(&mut self, site: Site, frame: u32, value: Value, cap: bool) -> bool {
+    fn cap_horizontal_velocity(&mut self, site: Site, frame: u32, cap: f64) -> bool {
         if site.entity != self.binding.body
-            || (site.graph, site.node) != (0x224e, Some(31))
             || !is_junkenstein_mode(self.binding.mode)
             || self.vitals.death().is_some()
-            || !cap
             || self.control_records.velocity_changes.len() >= MAX_INIT_WORK
         {
             return false;
         }
-        let Value::Float(high) = value else {
-            return false;
-        };
-        let change = crate::mover::VelocityChange::HorizontalCap(high);
+        let change = crate::mover::VelocityChange::HorizontalCap(cap);
         if !change.valid() {
             return false;
         }

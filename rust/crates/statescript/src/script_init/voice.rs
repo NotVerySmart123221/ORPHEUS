@@ -16,7 +16,7 @@ use super::{
     shapes::{field, source_key},
     types::{InitFault, Issue, StateKind},
     vm::Vm,
-    world::{Site, World},
+    world::{HealthTargetFacts, Site, World},
 };
 
 pub(super) enum VoiceFault {
@@ -365,6 +365,7 @@ pub(super) struct InstanceContext<'a, W> {
     pub(super) reads: Vec<VarKey>,
     pub(super) foreign_reads: Vec<(u32, u32)>,
     pub(super) parameters: Option<&'a Variables>,
+    pub(super) health_target_facts: Option<&'a HealthTargetFacts>,
     pub(super) watcher: Option<StateKey>,
     pub(super) read_native: bool,
     pub(super) untrusted_native: bool,
@@ -386,6 +387,12 @@ pub(super) const CLIENT_AGREED_NATIVES: [&str; 9] = [
 ];
 
 impl<W: World> InstanceContext<'_, W> {
+    fn settled_target(&self, entity: u32) -> Option<&HealthTargetFacts> {
+        self.health_target_facts.filter(|facts| {
+            self.watcher.is_none() && entity != self.site.entity && facts.target == entity
+        })
+    }
+
     pub(super) fn read(&mut self, key: VarKey) -> Value {
         if !self.reads.contains(&key) {
             self.reads.push(key);
@@ -441,6 +448,9 @@ impl<W: World> Context for InstanceContext<'_, W> {
             Some(self.read(VarKey::Entity(id)))
         } else {
             self.read_native = true;
+            if let Some(facts) = self.settled_target(entity) {
+                return facts.script_state.read(id);
+            }
             if !self.foreign_reads.contains(&(entity, id)) {
                 self.foreign_reads.push((entity, id));
             }
@@ -602,7 +612,10 @@ impl<W: World> Context for InstanceContext<'_, W> {
 
     fn has_target_tag(&mut self, entity: u32, tag: u64) -> Option<bool> {
         self.read_native = true;
-        self.world.has_target_tag(self.site, entity, tag)
+        match self.settled_target(entity) {
+            Some(facts) => facts.tags.presence(tag),
+            None => self.world.has_target_tag(self.site, entity, tag),
+        }
     }
 
     fn scene_filter_policy(&mut self, filter: &Json) -> Option<script_expr::SceneFilterPolicy> {
@@ -611,7 +624,10 @@ impl<W: World> Context for InstanceContext<'_, W> {
     }
     fn entity_filter_flags(&mut self, entity: u32) -> Option<u64> {
         self.read_native = true;
-        self.world.entity_filter_flags(self.site, entity)
+        match self.settled_target(entity) {
+            Some(facts) => facts.filter_flags,
+            None => self.world.entity_filter_flags(self.site, entity),
+        }
     }
     fn entities_hostile(&mut self, source: u32, target: u32, option: bool) -> Option<bool> {
         self.read_native = true;

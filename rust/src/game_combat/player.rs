@@ -18,7 +18,7 @@ use crate::{
     junkenstein_messages::{DefenderMessage, DefenderSighting},
     mover::Mover,
     script_enemy::EnemyTarget,
-    script_init::HitTags,
+    script_init::HealthTargetFacts,
     script_snapshot_wire::SceneProjection,
     vitals::{Damage, Death},
     world::{EntityUpdate, Operation},
@@ -694,7 +694,7 @@ impl RoomSimulation {
         id: BodyId,
         amount: f64,
         source: Death,
-        hit_tags: Option<HitTags>,
+        impact: Option<&AppliedDamage>,
     ) -> Option<(u32, bool, Option<EntityUpdate>)> {
         let cassidy_protected = self.cassidy_protected;
         let state = self.player_body_mut(id)?;
@@ -718,7 +718,7 @@ impl RoomSimulation {
             entity,
             -outcome.dealt,
             outcome.killed,
-            hit_tags,
+            impact,
         );
         Some((owner, outcome.killed, health))
     }
@@ -918,6 +918,17 @@ impl RoomSimulation {
             .as_ref()
             .and_then(|runtime| runtime.vitals())
             .map(|vitals| vitals.cumulative_component());
+        let damage = AppliedDamage {
+            source,
+            amount: impact.damage,
+            tags: impact.tags,
+            target_facts: HealthTargetFacts {
+                target: id.entity,
+                filter_flags: target_flags,
+                tags: target_tags,
+                script_state: target_state,
+            },
+        };
         let Some((owner, killed, health)) = self.damage_player_body_by_wire(
             id,
             impact.damage,
@@ -926,7 +937,7 @@ impl RoomSimulation {
                 frame: context.tick,
                 killer: source,
             },
-            Some(impact.tags),
+            Some(&damage),
         ) else {
             return Ok(None);
         };
@@ -948,15 +959,7 @@ impl RoomSimulation {
             });
         }
         Ok(Some(BotHit {
-            damage: AppliedDamage {
-                source,
-                target: id.entity,
-                amount: impact.damage,
-                tags: impact.tags,
-                target_flags,
-                target_tags,
-                target_state,
-            },
+            damage,
             notices: [
                 Some(CombatNotice::Hit {
                     target: id.entity,
