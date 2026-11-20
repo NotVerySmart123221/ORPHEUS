@@ -622,12 +622,13 @@ Run this action from events after the body receives its first room frame.
 During component initialization, the host can lack a room frame and reject
 the request. Admission requires a living target with health pools in that
 frame and free space in the source body's queue. The output runs when the host accepts it.
-The room settles accepted requests before retirement and checks the target's
-generation again, so an accepted request can expire before it changes health.
-The queue belongs to the source runtime and is dropped if that runtime is
-retired before settlement. Effects follow queued order within each source body. Death and health updates
-use the existing room lifecycle. These authored actions also enable the room
-body snapshot in bundles that use no spatial expressions.
+The room settles accepted requests before retirement and checks both body
+generations again. A replacement can neither receive nor inherit a queued
+health effect. Already accepted effects keep their attribution if the same
+source body dies while the room is settling the batch. Effects follow queued
+order within each source body. Death and health updates use the existing room
+lifecycle. These authored actions also enable the room body snapshot in
+bundles that use no spatial expressions.
 
 See the [synthetic health contract](../fixtures/behavior/script-health-change-v1.json).
 
@@ -884,16 +885,31 @@ message in the recipient's next VM frame after routing. The recipient
 graph owns admission and capping. A body replacement between request
 admission and room settlement discards the pending grant.
 
-The prepared local probe exercises the isolated original admission
-claim, stock sender, receiver and cap from the available body binding.
+The prepared local probe exercises the original admission claim, passive
+wait, damage and alternate-credit receivers, and local bonus sender on one
+meter. It checks damage-pool deductions, cap and re-arm, and cancellation on
+admission withdrawal.
 
 ```text
 cargo test --locked -p orpheus-statescript --test stock_charge -- --ignored --exact prepared_stock_admission_controls_local_bonus_credit
 ```
 
-This probe supplies the admission trigger and bonus amount. Room-origin
-native `0D9A` emission and the previously unbound foreign operands still
-need independent evidence.
+This probe supplies the admission trigger, damage and alternate-credit
+messages, and bonus amount. The `0044` receiver's native producer and the
+connection to an actual heal are still unverified. Room-origin native
+`0D9A` emission and the previously unbound foreign operands also need
+independent evidence.
+
+The prepared Mercy probe injects `0D9A` into the original weapon graph
+and follows its local `00EB` sender. It supplies a filter policy and
+typed target facts inside the test because the production player host
+does not yet provide that policy. The sibling `0042` action still
+reports an unsupported diagnostic. This exercises the receiver and
+amount gates with controlled inputs.
+
+```text
+cargo test --locked -p orpheus-statescript --test stock_charge -- --ignored --exact mercy_receiver::prepared_mercy_admission_delivers_local_bonus_with_explicit_policy
+```
 
 To exercise incoming stock damage credit with explicit pool records, use
 the same private runtime:

@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Check both body generations before settling queued health changes. Retired sources cannot credit replacement bodies. Previously accepted effects in the same batch retain attribution when their source dies without changing generation. Added a room regression and expanded the prepared stock charge probes across admission, passive timing, damage deductions, and Mercy's local bonus receiver with explicit test inputs. Integration validation pending.
+
 - Add opt-in charge compatibility settings for selected modes, validated ordinary damage receivers, and optional ability inhibition. A receiver can be a public root or its existing native child. The legacy profile remains available when neither charge route is declared. Synthetic regressions are pending integration validation. Original stock admission and rollout remain open.
 
 - Scope compatibility damage credit facts and native filters to their immediate receiving VM instance. The targeted message retains its current-clock delivery and ordinary sender binding. Same-clock unrelated entries use their own query data. Added portable isolation and native filter regressions. Integration validation pending.

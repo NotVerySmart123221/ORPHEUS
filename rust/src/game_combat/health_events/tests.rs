@@ -5,8 +5,8 @@ use super::{BotState, HitTags, HostEvent, PlayerBodyState, RoomSimulation};
 use crate::{
     contact_world::ContactWorld,
     game_combat::{
-        HealthEffect,
-        tests::{FIXTURE_CONTEXT, fixture_bots, fixture_impact},
+        HealthEffect, RoomScriptRequests,
+        tests::{FIXTURE_CONTEXT, fixture_bots, fixture_ground, fixture_impact},
     },
     game_heroes::SOLDIER,
     game_replication::BodyId,
@@ -52,6 +52,8 @@ struct Expected {
     ordered_outcomes: Vec<Outcome>,
     bot_health: f64,
     player_health: f64,
+    health_after_stale_request: f64,
+    health_after_current_dead_source_request: f64,
     replacement: Replacement,
 }
 
@@ -147,6 +149,82 @@ fn spawn_player(room: &mut RoomSimulation, generation: u64) -> BodyId {
     ))
     .unwrap();
     id
+}
+
+#[test]
+fn admitted_health_request_cannot_credit_a_replacement_source() {
+    let Contract { input, expected } = contract();
+    let bots = fixture_bots();
+    let source = bots[0].entity;
+    let target = bots[1].entity;
+    let mut room = RoomSimulation::new(bots).unwrap();
+    room.enable_host_health_events();
+    room.enable_spatial_queries(
+        false,
+        Arc::new(fixture_ground()),
+        crate::script_graph::RoomSpatialNeeds::Queries,
+    );
+    let tick = FIXTURE_CONTEXT.tick;
+    let now = FIXTURE_CONTEXT.now;
+    room.prepare_spatial_frame(tick).unwrap();
+    let queue_damage = |room: &RoomSimulation| {
+        let mut requests = RoomScriptRequests::default();
+        let frame = &room.spatial_frame.as_ref().unwrap().1;
+        assert!(requests.queue_health(frame, target, -input.generic_damage));
+        requests.take().pop().unwrap()
+    };
+    let previous = room.sample_health_body(source).unwrap();
+    let stale = queue_damage(&room);
+    let body = room
+        .world
+        .entity_mut(previous.entity)
+        .take::<BotState>()
+        .unwrap();
+    assert!(room.world.despawn(previous.entity));
+    let replacement = room.world.spawn(body).id();
+    assert_ne!(replacement, previous.entity);
+    assert_eq!(
+        room.by_wire.insert(source, replacement),
+        Some(previous.entity)
+    );
+
+    room.settle_script_request(stale, previous, tick, now)
+        .unwrap();
+    assert!(room.health_events.pending.is_empty());
+    assert!(room.take_scripted_health().is_empty());
+    assert_eq!(
+        room.body_healths().unwrap()[&target],
+        expected.health_after_stale_request
+    );
+
+    let current = room.sample_health_body(source).unwrap();
+    let queued_before_death = queue_damage(&room);
+    let dealer = Death {
+        killer: target,
+        frame: tick,
+        time: now.as_secs_f64(),
+    };
+    room.settle_health(
+        source,
+        HealthEffect::Damage(input.bot_lethal_impact),
+        dealer,
+        now,
+    )
+    .unwrap();
+    assert!(room.observed_bot_death(source).unwrap().is_some());
+    room.flush_health_events();
+
+    room.settle_script_request(queued_before_death, current, tick, now)
+        .unwrap();
+    assert_eq!(
+        room.body_healths().unwrap()[&target],
+        expected.health_after_current_dead_source_request
+    );
+    let change = room.health_events.pending.pop_front().unwrap();
+    assert!(change.source == Some(current));
+    assert_eq!(change.target.wire, target);
+    assert_eq!(change.delta, -input.generic_damage);
+    assert!(room.health_events.pending.is_empty());
 }
 
 #[test]

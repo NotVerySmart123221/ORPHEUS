@@ -10,6 +10,9 @@ use orpheus_statescript::{
 };
 use serde_json::{Value as Json, json};
 
+#[path = "stock_charge/mercy_receiver.rs"]
+mod mercy_receiver;
+
 const GRAPH: u32 = 0x0b8b;
 const ROOT: u16 = 1;
 const OWNER: u32 = 701;
@@ -23,10 +26,12 @@ const METER: u32 = 342;
 const METER_CAP: u32 = 338;
 const ADMITTED: u32 = 2426;
 const INHIBITED: u32 = 842;
+const TARGET_EXCLUSION: u32 = 17625;
 
 struct ChargeHost<'a> {
     mode_variables: &'a BTreeMap<u32, ModeValue>,
     outgoing: Vec<(u32, RoomMessage)>,
+    target: Option<u32>,
 }
 
 impl World for ChargeHost<'_> {
@@ -45,12 +50,32 @@ impl World for ChargeHost<'_> {
     }
 
     fn entity_variable(&mut self, entity: u32, id: u32) -> Option<Value> {
+        if self.target == Some(entity) {
+            return Some(if id == TARGET_EXCLUSION {
+                Value::Bool(false)
+            } else {
+                Value::Null
+            });
+        }
         (entity == GAME_MODE_ENTITY).then(|| {
             self.mode_variables
                 .get(&id)
                 .copied()
                 .map_or(Value::Null, Value::from)
         })
+    }
+
+    fn entity_filter_flags(&self, site: Site, entity: u32) -> Option<u64> {
+        (site.entity == OWNER && self.target == Some(entity)).then_some(1)
+    }
+
+    fn entities_hostile(&self, site: Site, source: u32, target: u32, option: bool) -> Option<bool> {
+        (site.entity == OWNER && source == OWNER && self.target == Some(target) && !option)
+            .then_some(true)
+    }
+
+    fn has_target_tag(&self, site: Site, entity: u32, _: u64) -> Option<bool> {
+        (site.entity == OWNER && self.target == Some(entity)).then_some(false)
     }
 
     fn queue_room_message(&mut self, _: Site, target: u32, message: RoomMessage) -> bool {
@@ -107,6 +132,7 @@ fn prepared_stock_charge_uses_authored_passive_clock_and_bonus_entry() {
             .mode_variables(PRACTICE_MODE)
             .expect("prepared Practice mode variables"),
         outgoing: Vec::new(),
+        target: None,
     };
     let variables = Variables::from([
         (METER_CAP, Value::Float(11.0)),
@@ -240,6 +266,7 @@ fn prepared_bonus_actions_preserve_local_and_directed_delivery() {
     let mut world = ChargeHost {
         mode_variables: graphs.mode_variables(PRACTICE_MODE).unwrap(),
         outgoing: Vec::new(),
+        target: None,
     };
     let mut local = Root::listener(2, LOCAL, None);
     local.variables.insert(476, Value::Float(2.0));
@@ -330,6 +357,10 @@ fn prepared_stock_admission_controls_local_bonus_credit() {
     const DONOR_GRAPH: u32 = 61245;
     const DONOR_TRIGGER: u64 = 0x0240_0000_0000_fa1a;
     const DONOR_AMOUNT: u32 = 476;
+    const DAMAGE: u64 = 0x0240_0000_0000_0012;
+    const OTHER_CREDIT: u64 = 0x0240_0000_0000_0044;
+    const TARGET: u32 = 703;
+    const EXCLUDED_POOL: u64 = 0x0d80_0000_0000_3ebb;
 
     let runtime =
         PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").expect("set ORPHEUS_RUNTIME_DIR"));
@@ -346,22 +377,29 @@ fn prepared_stock_admission_controls_local_bonus_credit() {
         .expect("stock charge cap binding");
     let cap = cap_binding.variables[&METER_CAP].clone();
     let maximum = to_float(&cap);
-    assert!(maximum.is_finite() && maximum > 0.0);
+    assert!(maximum.is_finite() && maximum > 16.0);
     let credit = maximum * 0.75;
     let mut donor = Root::listener(DONOR_ROOT, DONOR_GRAPH, None);
     donor.variables.insert(DONOR_AMOUNT, Value::Float(credit));
     let mut world = ChargeHost {
         mode_variables: graphs.mode_variables(PRACTICE_MODE).unwrap(),
         outgoing: Vec::new(),
+        target: Some(TARGET),
     };
-    // Isolate the native admission provider and bonus receiver from room startup
-    // and passive credit. The admission variable is written only by the stock graph.
+    // Use the authored admission claim and passive clock on a single meter.
+    // The damage and alternate credit inputs are injected receiver probes.
     let mut body = Component::start(
         Arc::clone(&graphs),
         OWNER,
-        Variables::from([(METER_CAP, cap), (METER, Value::Float(0.0))]),
+        Variables::from([
+            (METER_CAP, cap),
+            (METER, Value::Float(0.0)),
+            (INHIBITED, Value::Bool(false)),
+            (9532, Value::Float(1.0)),
+            (13022, Value::Float(1.0)),
+        ]),
         vec![
-            Root::listener(ROOT, GRAPH, None),
+            Root::listener(ROOT, GRAPH, Some(PASSIVE_ENTRY_STATE)),
             Root::listener(ADMISSION_ROOT, ADMISSION_GRAPH, Some(ADMISSION_RECEIVER)),
             donor,
         ],
@@ -388,6 +426,7 @@ fn prepared_stock_admission_controls_local_bonus_credit() {
     };
 
     assert_eq!(body.resolved_variable(ROOT, admission), Some(Value::Null));
+    assert_eq!(wait_deadline(&body), None);
     send_bonus(&mut body, &mut world);
     assert_eq!(meter(&body), 0.0);
 
@@ -401,19 +440,73 @@ fn prepared_stock_admission_controls_local_bonus_credit() {
         body.resolved_variable(ROOT, admission),
         Some(Value::Bool(true))
     );
+    assert_eq!(wait_deadline(&body), Some(1_000));
+
+    body.advance_frame(10, &mut world).unwrap();
+    let damage = Variables::from([
+        (0x13, Value::Float(12.0)),
+        (0x15, Value::Entity(TARGET)),
+        (0x3d, Value::Array(Vec::new())),
+        (
+            0x624,
+            Value::Array(vec![Value::Map(vec![
+                (Value::Integer(16056), Value::Asset(EXCLUDED_POOL)),
+                (Value::Integer(499), Value::Float(5.0)),
+            ])]),
+        ),
+    ]);
+    assert_eq!(body.queue_message(ROOT, DAMAGE, damage).unwrap(), 1);
+    body.run_now(&mut world).unwrap();
+    assert_eq!(
+        meter(&body),
+        7.0,
+        "damage credit deducts the named pool loss"
+    );
+    assert_eq!(wait_deadline(&body), Some(1_000));
+
+    body.advance_frame(20, &mut world).unwrap();
+    let other_credit = Variables::from([
+        (0x3f, Value::Entity(TARGET)),
+        (0x40, Value::Float(4.0)),
+        (0x41, Value::Array(Vec::new())),
+    ]);
+    assert_eq!(
+        body.queue_message(ROOT, OTHER_CREDIT, other_credit.clone())
+            .unwrap(),
+        1
+    );
+    body.run_now(&mut world).unwrap();
+    assert_eq!(meter(&body), 11.0, "alternate credit shares the meter");
+    assert_eq!(wait_deadline(&body), Some(1_000));
+
+    check_passive_credit(&mut body, &mut world, 1_000, 11.0, 16.0);
+    assert_eq!(wait_deadline(&body), Some(2_000));
     send_bonus(&mut body, &mut world);
-    assert_eq!(meter(&body), credit);
+    assert_eq!(meter(&body), (16.0 + credit).min(maximum));
     send_bonus(&mut body, &mut world);
     assert_eq!(meter(&body), maximum);
+    assert_eq!(wait_deadline(&body), None);
 
-    // Spend some charge so the cap cannot mask a stale admission claim.
+    // Spend charge and withdraw admission with a pending passive wait.
     body.set_entity_variable(METER, Value::Float(credit), &mut world)
         .unwrap();
+    body.run_now(&mut world).unwrap();
+    let cancelled_due = wait_deadline(&body).expect("passive wait re-arms after spending");
     body.debug_end_state(ADMISSION_ROOT, ADMISSION_CLAIM, &mut world)
         .unwrap();
+    body.run_now(&mut world).unwrap();
     assert_eq!(body.resolved_variable(ROOT, admission), Some(Value::Null));
+    assert_eq!(wait_deadline(&body), None);
     send_bonus(&mut body, &mut world);
-    assert_eq!(meter(&body), credit);
+    assert_eq!(
+        body.queue_message(ROOT, OTHER_CREDIT, other_credit)
+            .unwrap(),
+        1
+    );
+    body.run_now(&mut world).unwrap();
+    body.advance_frame(u32::try_from(cancelled_due / FRAME_MS).unwrap(), &mut world)
+        .unwrap();
+    assert_eq!(meter(&body), credit, "withdrawn admission cancels credit");
     let diagnostics = &body.snapshot().unwrap().diagnostics;
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
 }
@@ -534,7 +627,6 @@ fn prepared_stock_damage_credit_consumes_typed_pool_records() {
 fn prepared_stock_0044_charge_applies_receiver_gates_and_scales() {
     const TOPIC: u64 = 0x0240_0000_0000_0044;
     const TARGET: u32 = 704;
-    const TARGET_EXCLUSION: u32 = 17625;
     const FIRST_EXCLUSION: u64 = 0x0d80_0000_0000_0292;
     const SECOND_EXCLUSION: u64 = 0x0d80_0000_0000_025a;
     const OTHER_IDENTIFIER: u64 = 0x0d80_0000_0000_090d;

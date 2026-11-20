@@ -72,6 +72,8 @@
     ],
     "bot_health": 75.0,
     "player_health": 0.0,
+    "health_after_stale_request": 100.0,
+    "health_after_current_dead_source_request": 75.0,
     "replacement": {
       "heal_delta": 25.0,
       "heal_target_facts": {"filter_flags": 16777217, "owner_health": null},

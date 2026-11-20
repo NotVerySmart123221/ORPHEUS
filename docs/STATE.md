@@ -322,6 +322,12 @@ and no literal sender. The `0B9E` entry binds different slots from the
 three instance operands read by its outgoing grant. The original
 dispatcher, the origin of those three values, and the order relative
 to health settlement still need original-build evidence.
+The Mercy receiver requires two positive numeric inputs before its local
+bonus. Baptiste has separate branches for positive and negative values
+from the same message slot. These checks establish a signed input format.
+What the sender measures and how it relates to the applied health delta
+remain open. All 17 literal `0044` references in the pseudocode are
+receiver entries. Original attribution to healing still needs evidence.
 
 Player hit notices, immediate damage credit and deferred notifications
 now use the same actual pool loss. The prepared `0012` probe supplies
