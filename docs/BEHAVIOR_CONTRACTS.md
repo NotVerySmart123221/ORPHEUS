@@ -93,6 +93,8 @@ The Rust-only [owner startup spatial fixture](../fixtures/behavior/script-owner-
 
 The Rust-only [owner replacement fixture](../fixtures/behavior/owner-admission-transaction-v1.json) drives the room input queue through a factory error, an invalid runtime identity, an initial snapshot packing error, an observer-only link error, and a successful retry. The observer-only candidate has a valid owner baseline that fits the datagram. The fixture checks the current body and script, controller counters, replication records, and room events while input continues.
 
+The Rust-only [hitscan order fixture](../fixtures/behavior/owner-hitscan-before-switch-v1.json) checks that an acknowledged shot settles once before a queued hero or skin replacement, under split and shared input budgets. The [owner death notice fixture](../fixtures/behavior/owner-death-notice-v1.json) checks that a waiting notice stays with the victim generation and that a current death can still enter the reliable queue after mode UI readiness.
+
 The Rust-only [Practice Range selection fixture](../fixtures/behavior/practice-owner-selector-v1.json) starts two distinct catalog definitions through the ordinary scene selector and checks their graph roots. It distinguishes an invalid authored definition from an identity absent from the selector.
 
 The Rust-only [Practice Range owner content fixture](../fixtures/behavior/practice-owner-content-v1.json) covers a scene with no owner script inputs. It also verifies explicit startup errors for a partial catalog, including misplaced and malformed owner body declarations.

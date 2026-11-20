@@ -3,7 +3,10 @@
 use bevy_ecs::entity::Entity;
 
 use super::*;
-use crate::{game_combat::RoomSimulation, game_replication::BodyId};
+use crate::{
+    game_combat::{PlayerDeath, RoomSimulation},
+    game_replication::BodyId,
+};
 
 const MAX_PENDING_COMBAT_NOTICES: usize = 256;
 
@@ -33,7 +36,13 @@ struct AuthoredCueIdentity {
 
 struct PendingCombatNotice {
     notice: CombatNotice,
-    authored: Option<AuthoredCueIdentity>,
+    audience: CombatAudience,
+}
+
+enum CombatAudience {
+    Legacy,
+    Victim(BodyId),
+    Authored(AuthoredCueIdentity),
 }
 
 impl PendingCombatNotice {
@@ -43,26 +52,29 @@ impl PendingCombatNotice {
         owner: u32,
         simulation: Option<&RoomSimulation>,
     ) -> bool {
-        let Some(cue) = &self.authored else {
-            return match self.notice {
+        match &self.audience {
+            CombatAudience::Legacy => match self.notice {
                 CombatNotice::Voice { listener, .. } => {
                     body.is_some_and(|body| body.entity == listener)
                 }
                 _ => true,
-            };
-        };
-        let CombatNotice::Voice {
-            anchor, listener, ..
-        } = self.notice
-        else {
-            return false;
-        };
-        body == Some(cue.listener)
-            && cue.listener.entity == listener
-            && simulation.is_some_and(|room| {
-                room.room_cue_source_current(anchor, cue.source)
-                    && room.room_cue_listener_current(owner, cue.listener)
-            })
+            },
+            CombatAudience::Victim(victim) => body == Some(*victim),
+            CombatAudience::Authored(cue) => {
+                let CombatNotice::Voice {
+                    anchor, listener, ..
+                } = self.notice
+                else {
+                    return false;
+                };
+                body == Some(cue.listener)
+                    && cue.listener.entity == listener
+                    && simulation.is_some_and(|room| {
+                        room.room_cue_source_current(anchor, cue.source)
+                            && room.room_cue_listener_current(owner, cue.listener)
+                    })
+            }
+        }
     }
 }
 
@@ -136,13 +148,28 @@ impl Peer {
     }
 
     pub(super) fn queue_combat_notice(&mut self, notice: CombatNotice) {
+        self.queue_notice(notice, CombatAudience::Legacy);
+    }
+
+    pub(super) fn queue_player_death(&mut self, death: PlayerDeath) {
+        if self.world.owner() == death.owner && self.world.active_body_id() == Some(death.body) {
+            self.queue_notice(
+                CombatNotice::Death {
+                    source: death.source,
+                    killed_by: death.killed_by,
+                },
+                CombatAudience::Victim(death.body),
+            );
+        }
+    }
+
+    fn queue_notice(&mut self, notice: CombatNotice, audience: CombatAudience) {
         if self.combat_ui.notices.len() == MAX_PENDING_COMBAT_NOTICES {
             self.combat_ui.notices.pop_front();
         }
-        self.combat_ui.notices.push_back(PendingCombatNotice {
-            notice,
-            authored: None,
-        });
+        self.combat_ui
+            .notices
+            .push_back(PendingCombatNotice { notice, audience });
     }
 
     pub(super) fn queue_player_cue(
@@ -156,7 +183,7 @@ impl Peer {
         }
         self.combat_ui.notices.push_back(PendingCombatNotice {
             notice,
-            authored: Some(AuthoredCueIdentity { listener, source }),
+            audience: CombatAudience::Authored(AuthoredCueIdentity { listener, source }),
         });
     }
 
@@ -185,7 +212,11 @@ impl Peer {
                 continue;
             }
             let notice = pending.notice;
-            if pending.authored.as_ref().is_some_and(|cue| {
+            let authored = match &pending.audience {
+                CombatAudience::Authored(cue) => Some(cue),
+                _ => None,
+            };
+            if authored.is_some_and(|cue| {
                 !self.world.identity_ready(cue.listener.entity)
                     || self.authored_cue_ordinal.is_some_and(|ordinal| {
                         self.egress.oldest_pending_reliable() <= u64::from(ordinal)
@@ -204,7 +235,7 @@ impl Peer {
             }
             let bytes = notice.encode(schemas)?;
             let ordinal = self.egress.queue_reliable(bytes)?;
-            if pending.authored.is_some() {
+            if authored.is_some() {
                 self.authored_cue_ordinal = Some(ordinal);
             }
             for entity in notice.referenced_entities() {

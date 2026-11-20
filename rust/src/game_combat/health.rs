@@ -64,6 +64,7 @@ impl RoomSimulation {
                     if killed {
                         self.player_deaths.push(PlayerDeath {
                             owner,
+                            body: id,
                             source: source.killer,
                             killed_by: source.killer != wire,
                         });
