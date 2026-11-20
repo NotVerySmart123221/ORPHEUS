@@ -1,6 +1,6 @@
 //! StateScript state ticking, timers, watches, switches, registration, and teardown.
 
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, sync::Arc};
 
 use serde_json::Value as Json;
 
@@ -13,7 +13,10 @@ use crate::{
 
 use super::super::{
     ABILITY_HELD, MAX_PLUG_DEPTH, SUBGRAPH_STATES, SWITCH_TO_FALSE, SWITCH_TO_TRUE,
-    machine::{Event, RegisteredClass, Startup, StateKey, VarKey},
+    machine::{
+        Event, ObservationInput, ObservedSample, RegisteredClass, Startup, StateKey,
+        UnavailableSample, VarKey,
+    },
     shapes::{
         array_field, branch_path, case_path, configured, field, is_unlinked_plug,
         parent_owned_graph_duration, pool_number, raw_indices, registered_state, same, source_key,
@@ -105,6 +108,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             .state(usize::from(raw))
                             .expect("movement modifier");
                         self.refresh_movement_modifier(key, node)?;
+                    }
+                    Some(StateKind::LogicalButton { .. }) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("logical button state");
+                        self.refresh_logical_button_binding(key, node)?;
                     }
                     Some(StateKind::MovementSample { .. }) => {
                         let node = self
@@ -665,6 +675,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     .state(usize::from(key.raw))
                     .expect("movement modifier");
                 self.refresh_movement_modifier(key, node)?;
+            } else if state.active && matches!(state.kind, StateKind::LogicalButton { .. }) {
+                let node = self
+                    .graph(key.instance)
+                    .state(usize::from(key.raw))
+                    .expect("logical button state");
+                self.refresh_logical_button_binding(key, node)?;
             } else if state.active && state.kind == StateKind::ExplosionContact {
                 let node = self
                     .graph(key.instance)
@@ -817,9 +833,22 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
         };
         state.watch_seen = Some(value.clone());
-        self.write(source_key(id, target), value)?;
-        if changed {
-            self.follow(id, node, "on_change", Some(key), 0)?;
+        let output = source_key(id, target);
+        self.write(output, value)?;
+        if changed
+            && configured(node, "on_change")
+            && self.is_current_observation(key, activation, frame)
+        {
+            self.run_observation_callback(
+                ObservedSample {
+                    source: key,
+                    activation,
+                    frame,
+                    input: Some((output, self.machine.value(output, None))),
+                },
+                node,
+                "on_change",
+            )?;
         }
         if !self
             .state(key)
@@ -850,17 +879,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         frame: u32,
         available: bool,
     ) -> Result<(), InitFault> {
-        if frame != self.machine.frame
-            || !self.state(key).is_some_and(|state| {
-                state.active
-                    && !state.ending
-                    && state.activation == activation
-                    && state.kind
-                        == StateKind::Observe {
-                            sampled_frame: frame,
-                        }
-            })
-        {
+        if !self.is_current_observation(key, activation, frame) {
             return Ok(());
         }
         let activation_is_live = |vm: &Self| {
@@ -891,17 +910,115 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 visible = same(&self.machine.value(output, None), &sample);
             }
             if visible {
-                self.follow(key.instance, node, "on_sample", Some(key), 0)?;
+                self.run_observation_callback(
+                    ObservedSample {
+                        source: key,
+                        activation,
+                        frame,
+                        input: Some((output, sample)),
+                    },
+                    node,
+                    "on_sample",
+                )?;
             } else {
                 self.report(self.site(key.instance, node), Issue::ObservationUnavailable);
             }
         } else {
-            self.follow(key.instance, node, "on_unavailable", Some(key), 0)?;
+            self.run_observation_callback(
+                ObservedSample {
+                    source: key,
+                    activation,
+                    frame,
+                    input: None,
+                },
+                node,
+                "on_unavailable",
+            )?;
         }
         if activation_is_live(self) {
             self.try_complete(key, node, 0)?;
         }
         Ok(())
+    }
+
+    fn is_current_observation(&self, source: StateKey, activation: u16, frame: u32) -> bool {
+        frame == self.machine.frame
+            && self.state(source).is_some_and(|state| {
+                state.active
+                    && !state.ending
+                    && state.activation == activation
+                    && state.kind
+                        == StateKind::Observe {
+                            sampled_frame: frame,
+                        }
+            })
+    }
+
+    fn run_observation_callback(
+        &mut self,
+        sample: ObservedSample,
+        node: &Node,
+        path: &str,
+    ) -> Result<(), InitFault> {
+        let source = sample.source;
+        self.with_observation_input(
+            Some(ObservationInput {
+                sample: Arc::new(sample),
+                on_unavailable: UnavailableSample::CancelStart,
+            }),
+            |vm| {
+                vm.follow(source.instance, node, path, Some(source), 0)
+                    .map(|_| ())
+            },
+        )
+    }
+
+    fn with_observation_input(
+        &mut self,
+        input: Option<ObservationInput>,
+        run: impl FnOnce(&mut Self) -> Result<(), InitFault>,
+    ) -> Result<(), InitFault> {
+        let previous = std::mem::replace(&mut self.observed_input, input);
+        let result = run(self);
+        self.observed_input = previous;
+        result
+    }
+
+    pub(super) fn resume_observed(
+        &mut self,
+        input: ObservationInput,
+        run: impl FnOnce(&mut Self) -> Result<(), InitFault>,
+    ) -> Result<(), InitFault> {
+        if self.observation_input_available(&input.sample) {
+            self.with_observation_input(Some(input), run)
+        } else if input.on_unavailable == UnavailableSample::ReadCurrent {
+            self.with_observation_input(None, run)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn observation_input_available(&mut self, sample: &ObservedSample) -> bool {
+        if !self.is_current_observation(sample.source, sample.activation, sample.frame) {
+            return false;
+        }
+        if sample.input.as_ref().is_some_and(|(output, value)| {
+            self.machine
+                .links
+                .get(output)
+                .is_some_and(|entries| !entries.is_empty())
+                && !same(&self.machine.value(*output, None), value)
+        }) {
+            let source = sample.source;
+            if let Some(node) = self.graph(source.instance).state(usize::from(source.raw)) {
+                self.report(
+                    self.site(source.instance, node),
+                    Issue::ObservationUnavailable,
+                );
+            }
+            return false;
+        }
+        true
     }
 
     pub(super) fn observation_value(&mut self, site: Site, value: &Json) -> Option<Value> {
@@ -1638,7 +1755,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let now = self.machine.now_ms;
         self.machine.queues.retain(id, |due, event| {
             due != now
-                || !matches!(event, Event::Begin(state) if raw_indices(slots).any(|raw| raw == *state))
+                || event
+                    .begin_state()
+                    .is_none_or(|state| raw_indices(slots).all(|raw| raw != state))
         });
         Ok(())
     }
@@ -1646,7 +1765,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
     pub(in crate::script_init) fn drop_begin(&mut self, id: u16, raw: u16) {
         let now = self.machine.now_ms;
         self.machine.queues.retain(id, |due, event| {
-            due != now || !matches!(event, Event::Begin(state) if *state == raw)
+            due != now || event.begin_state() != Some(raw)
         });
     }
 
@@ -1673,6 +1792,38 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         Ok(())
     }
 
+    fn owned_children(&self, id: u16) -> Vec<u16> {
+        let instances = &self.machine.snapshot.instances;
+        instances[&id]
+            .states
+            .values()
+            .flat_map(|state| state.target_children.values().copied())
+            .filter(|child| instances.contains_key(child))
+            .chain(instances.iter().rev().filter_map(|(&child, instance)| {
+                instance
+                    .parent
+                    .is_some_and(|(parent, _)| parent == id)
+                    .then_some(child)
+            }))
+            .collect()
+    }
+
+    pub(super) fn quiesce_actor_scopes(&mut self, roots: &[u16]) -> Result<(), InitFault> {
+        let mut pending = roots.to_vec();
+        let mut visited = std::collections::BTreeSet::new();
+        while let Some(id) = pending.pop() {
+            if !self.machine.snapshot.instances.contains_key(&id) || !visited.insert(id) {
+                continue;
+            }
+            self.spend("retiring actor scope")?;
+            pending.extend(self.owned_children(id));
+            for state in self.machine.snapshot.instances[&id].states.values_mut() {
+                state.ending = true;
+            }
+        }
+        Ok(())
+    }
+
     pub(in crate::script_init) fn destroy(&mut self, id: u16) -> Result<(), InitFault> {
         let mut pending = vec![(id, false)];
         while let Some((id, children_done)) = pending.pop() {
@@ -1681,26 +1832,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             if !children_done {
                 self.spend("instance teardown")?;
-                let mut effects = Vec::new();
+                let children = self.owned_children(id);
                 for state in self.machine.snapshot.instances[&id].states.values_mut() {
                     state.ending = true;
-                    effects.extend(std::mem::take(&mut state.target_children).into_values());
+                    state.target_children.clear();
                 }
                 pending.push((id, true));
-                pending.extend(
-                    effects
-                        .into_iter()
-                        .filter(|child| self.machine.snapshot.instances.contains_key(child))
-                        .map(|child| (child, false)),
-                );
-                pending.extend(self.machine.snapshot.instances.iter().rev().filter_map(
-                    |(&child, instance)| {
-                        instance
-                            .parent
-                            .is_some_and(|(parent, _)| parent == id)
-                            .then_some((child, false))
-                    },
-                ));
+                pending.extend(children.into_iter().map(|child| (child, false)));
                 continue;
             }
             let outputs: Vec<_> = self.machine.snapshot.instances[&id]
@@ -1846,6 +1984,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     self.unlink_single_output(key, 0)?;
                 }
             }
+            self.detach_actor_target_guard(id);
             self.machine.snapshot.instances.shift_remove(&id);
             self.machine
                 .movement_modifiers

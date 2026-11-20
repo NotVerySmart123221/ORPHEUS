@@ -55,6 +55,33 @@ pub(super) struct StateKey {
     pub(super) raw: u16,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct ActorTargetGuard {
+    pub(super) tracker: StateKey,
+    pub(super) entity: u32,
+    pub(super) identity: u64,
+}
+
+#[derive(Clone)]
+pub(super) struct ObservedSample {
+    pub(super) source: StateKey,
+    pub(super) activation: u16,
+    pub(super) frame: u32,
+    pub(super) input: Option<(VarKey, Value)>,
+}
+
+#[derive(Clone)]
+pub(super) struct ObservationInput {
+    pub(super) sample: Arc<ObservedSample>,
+    pub(super) on_unavailable: UnavailableSample,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum UnavailableSample {
+    CancelStart,
+    ReadCurrent,
+}
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum RegisteredClass {
     CinematicAim,
@@ -142,6 +169,10 @@ pub(super) enum Event {
     Assign(VarKey, Value),
     ExitInstance,
     Begin(u16),
+    BeginObserved {
+        state: u16,
+        input: ObservationInput,
+    },
     Finish(u16),
     Abort(u16),
     Changed(u16),
@@ -152,6 +183,7 @@ pub(super) enum Event {
         state: u16,
         activation: u16,
         down: bool,
+        sample: Option<Arc<ObservedSample>>,
     },
     AbilityCheck(u16),
     CheckTransitions(u16),
@@ -181,6 +213,13 @@ pub(super) enum Startup {
 }
 
 impl Event {
+    pub(super) fn begin_state(&self) -> Option<u16> {
+        match *self {
+            Self::Begin(state) | Self::BeginObserved { state, .. } => Some(state),
+            _ => None,
+        }
+    }
+
     pub(super) fn state(&self) -> Option<u16> {
         match *self {
             Self::SpawnResult { key, .. } => Some(key.raw),
@@ -192,6 +231,7 @@ impl Event {
             | Self::Message { .. }
             | Self::Button(_) => None,
             Self::Begin(state)
+            | Self::BeginObserved { state, .. }
             | Self::Finish(state)
             | Self::Abort(state)
             | Self::Changed(state)
@@ -219,6 +259,7 @@ pub(super) struct Machine {
     pub(super) watchers: BTreeMap<VarKey, Vec<StateKey>>,
     pub(super) foreign_watchers: BTreeMap<(u32, u32), Vec<StateKey>>,
     pub(super) ticking: BTreeMap<u16, IndexMap<u16, u64>>,
+    pub(super) actor_target_guards: BTreeMap<u16, ActorTargetGuard>,
     pub(super) deferred: BTreeMap<u16, Vec<(f64, u16)>>,
     pub(super) voice_poll: Vec<StateKey>,
     pub(super) links: BTreeMap<VarKey, Vec<VariableLink>>,
@@ -256,6 +297,7 @@ impl Clone for Machine {
             watchers: self.watchers.clone(),
             foreign_watchers: self.foreign_watchers.clone(),
             ticking: self.ticking.clone(),
+            actor_target_guards: self.actor_target_guards.clone(),
             deferred: self.deferred.clone(),
             voice_poll: self.voice_poll.clone(),
             links: self.links.clone(),
@@ -338,6 +380,7 @@ impl Machine {
             watchers: BTreeMap::new(),
             foreign_watchers: BTreeMap::new(),
             ticking: BTreeMap::new(),
+            actor_target_guards: BTreeMap::new(),
             deferred: BTreeMap::new(),
             voice_poll: Vec::new(),
             links: BTreeMap::new(),
@@ -573,13 +616,14 @@ impl Machine {
     }
 
     pub(super) fn value(&self, key: VarKey, below: Option<StateKey>) -> Value {
-        self.value_with_clock_dependency(key, below).0
+        self.value_with_clock_dependency(key, below, None).0
     }
 
     pub(super) fn value_with_clock_dependency(
         &self,
         key: VarKey,
         below: Option<StateKey>,
+        sampled_base: Option<&Value>,
     ) -> (Value, bool) {
         let link = self.links.get(&key).and_then(|entries| {
             entries
@@ -592,7 +636,12 @@ impl Machine {
                 self.link_value(entry),
                 matches!(entry.output, LinkValue::Cooldown | LinkValue::Volley(0)),
             ),
-            None => (stored(&self.snapshot, key), false),
+            None => (
+                sampled_base
+                    .cloned()
+                    .unwrap_or_else(|| stored(&self.snapshot, key)),
+                false,
+            ),
         }
     }
 

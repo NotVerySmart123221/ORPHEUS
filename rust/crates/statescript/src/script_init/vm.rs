@@ -22,7 +22,10 @@ use crate::{
 use super::{
     ABILITY_HELD, ABILITY_PUSHED, ABILITY_RUNNING, ABORT_PLUG, MAX_EVENTS_PER_UPDATE,
     MAX_PLAY_INSTANCES, MAX_PLUG_DEPTH, Root, SCRIPT_SOURCE,
-    machine::{AbilityPress, Event, LinkValue, Machine, Startup, StateKey, VarKey, VariableLink},
+    machine::{
+        AbilityPress, Event, LinkValue, Machine, ObservationInput, ObservedSample, Startup,
+        StateKey, UnavailableSample, VarKey, VariableLink,
+    },
     shapes::{
         ability_is_stacked, array_field, configured, field, is_entry, is_self_target, same,
         source_key, stored,
@@ -46,6 +49,7 @@ pub(super) struct Vm<'graph, 'world, 'machine, W> {
     pub(super) machine: &'machine mut Machine,
     pub(super) parameters: Option<Arc<Variables>>,
     health_context: HostHealthContext,
+    observed_input: Option<ObservationInput>,
     pub(super) output_write_depth: usize,
 }
 
@@ -61,6 +65,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             machine,
             parameters: None,
             health_context: HostHealthContext::default(),
+            observed_input: None,
             output_write_depth: 0,
         }
     }
@@ -356,7 +361,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 continue;
             }
             self.spend("logical button edge")?;
-            if self.logical_button_id(id, node) != Some(edge.button)
+            if self.logical_button_id(id, node, None) != Some(edge.button)
                 || self.logical_button_blocked(key, node, edge.button)
             {
                 continue;
@@ -385,13 +390,18 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         Ok(())
     }
 
-    pub(in crate::script_init) fn logical_button_id(&mut self, id: u16, node: &Node) -> Option<u8> {
-        let value = self.evaluate(id, node, field(&node.fields, "m_logicalButton"), None)?;
+    pub(in crate::script_init) fn logical_button_id(
+        &mut self,
+        id: u16,
+        node: &Node,
+        watcher: Option<StateKey>,
+    ) -> Option<u8> {
+        let value = self.evaluate(id, node, field(&node.fields, "m_logicalButton"), watcher)?;
         u8::try_from(script_expr::to_int(&value, 0)).ok()
     }
 
     pub(in crate::script_init) fn button_held(&mut self, key: StateKey, node: &Node) -> bool {
-        self.logical_button_id(key.instance, node)
+        self.logical_button_id(key.instance, node, None)
             .is_some_and(|button| self.machine.held_buttons.contains(&button))
     }
 
@@ -420,6 +430,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             || self
                 .evaluate(id, node, field(&node.fields, "m_5AE05408"), None)
                 .is_some_and(|value| truthy(&value))
+    }
+
+    fn logical_button_admitted_and_held(&mut self, key: StateKey, node: &Node, button: u8) -> bool {
+        self.machine.held_buttons.contains(&button)
+            && !self.logical_button_blocked(key, node, button)
+            && self.logical_button_allows_press(key.instance, node)
     }
 
     pub(in crate::script_init) fn resync_logical_buttons(
@@ -460,14 +476,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 .state(usize::from(key.raw))
                 .expect("logical button state");
             let Some(button) = self
-                .logical_button_id(key.instance, node)
+                .logical_button_id(key.instance, node, None)
                 .filter(|&button| button_filter.is_none_or(|filter| filter == button))
             else {
                 continue;
             };
-            let held = self.machine.held_buttons.contains(&button)
-                && !self.logical_button_blocked(key, node, button)
-                && self.logical_button_allows_press(key.instance, node);
+            let held = self.logical_button_admitted_and_held(key, node, button);
             if held != down {
                 self.set_button_down(key, node, held, depth)?;
             }
@@ -504,7 +518,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let buffer = state
             .buffered_press
             .filter(|press| press.activation == activation);
-        let button = self.logical_button_id(key.instance, node);
+        let button = self.logical_button_id(key.instance, node, Some(key));
+        self.state_mut(key)
+            .expect("active logical button")
+            .logical_button_binding = button;
         let buffer = buffer.filter(|press| button == Some(press.button));
         let blocked = button.is_some_and(|button| self.logical_button_blocked(key, node, button))
             || !self.logical_button_allows_press(key.instance, node);
@@ -534,11 +551,46 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         if early {
             self.queue_logical_button_branch(key, activation, down)?;
         } else {
-            let path = if down { "m_80AF45FB" } else { "m_1C9EF058" };
-            self.follow(key.instance, node, path, Some(key), depth)?;
+            self.follow_logical_button_branch(
+                key,
+                activation,
+                down,
+                self.current_observation_sample(),
+                depth,
+            )?;
         }
         if buffered && !held {
             self.post_after(key.instance, 1, Event::Timer(key.raw, 1))?;
+        }
+        Ok(())
+    }
+
+    pub(in crate::script_init) fn refresh_logical_button_binding(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        let button = self.logical_button_id(key.instance, node, Some(key));
+        let state = self.state_mut(key).expect("active logical button");
+        let StateKind::LogicalButton { down } = state.kind else {
+            return Ok(());
+        };
+        if state.ending || state.logical_button_binding == button {
+            return Ok(());
+        }
+        state.logical_button_binding = button;
+        state.buffered_press = state
+            .buffered_press
+            .filter(|press| Some(press.button) == button);
+        // A synthetic release scheduled for the old buffer cannot release the new binding.
+        self.machine.queues.retain(
+            key.instance,
+            |_, event| !matches!(event, Event::Timer(raw, 1) if *raw == key.raw),
+        );
+        let held =
+            button.is_some_and(|button| self.logical_button_admitted_and_held(key, node, button));
+        if held != down {
+            self.set_button_down(key, node, held, 0)?;
         }
         Ok(())
     }
@@ -579,8 +631,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 state: key.raw,
                 activation,
                 down,
+                sample: self.current_observation_sample(),
             },
         )
+    }
+
+    fn current_observation_sample(&self) -> Option<Arc<ObservedSample>> {
+        self.observed_input
+            .as_ref()
+            .map(|input| Arc::clone(&input.sample))
     }
 
     fn logical_button_is_current(&self, key: StateKey, activation: u16, down: bool) -> bool {
@@ -597,6 +656,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         key: StateKey,
         activation: u16,
         down: bool,
+        sample: Option<Arc<ObservedSample>>,
+        depth: usize,
     ) -> Result<(), InitFault> {
         if self.logical_button_is_current(key, activation, down) {
             let node = self
@@ -604,7 +665,22 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 .state(usize::from(key.raw))
                 .expect("logical button state");
             let path = if down { "m_80AF45FB" } else { "m_1C9EF058" };
-            self.follow(key.instance, node, path, Some(key), 0)?;
+            let follow = |vm: &mut Self| {
+                vm.follow(key.instance, node, path, Some(key), depth)
+                    .map(|_| ())
+            };
+            if let Some(sample) = sample {
+                // Once the input transition commits, its branch owns the lifecycle.
+                self.resume_observed(
+                    ObservationInput {
+                        sample,
+                        on_unavailable: UnavailableSample::ReadCurrent,
+                    },
+                    follow,
+                )?;
+            } else {
+                follow(self)?;
+            }
         }
         Ok(())
     }
@@ -1074,6 +1150,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
 
     pub(in crate::script_init) fn update(&mut self) -> Result<(), InitFault> {
         self.spend("component update")?;
+        self.retire_stale_actor_children()?;
         // Release scopes that cannot accept input before timers or observations
         // sample their next frame. Physical input remains available to opt-ins.
         if std::mem::take(&mut self.machine.logical_buttons_need_resync) {
@@ -1110,6 +1187,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         Event::Assign(target, value) => self.write(target, value)?,
                         Event::ExitInstance => self.exit_instance(id)?,
                         Event::Begin(raw) => self.begin(key(raw), 0)?,
+                        Event::BeginObserved { state, input } => {
+                            self.resume_observed(input, |vm| vm.begin(key(state), 0))?;
+                        }
                         Event::Finish(raw) => self.end(key(raw), true, 0)?,
                         Event::Abort(raw) => self.end(key(raw), false, 0)?,
                         Event::Changed(raw) => self.changed(key(raw))?,
@@ -1120,6 +1200,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             state,
                             activation,
                             down,
+                            sample,
                         } => self.follow_logical_button_branch(
                             StateKey {
                                 instance: id,
@@ -1127,6 +1208,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             },
                             activation,
                             down,
+                            sample,
+                            0,
                         )?,
                         Event::AbilityCheck(raw) => self.timer(key(raw), 1)?,
                         Event::CheckTransitions(raw) => {
@@ -2318,6 +2401,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             foreign_reads: Vec::new(),
             parameters: self.parameters.as_deref(),
             health_target_facts: self.health_context.target_facts.as_deref(),
+            observed_sample: self
+                .observed_input
+                .as_ref()
+                .map(|input| input.sample.as_ref()),
             watcher,
             read_native: false,
             read_clock: false,
@@ -2358,6 +2445,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                                 | StateKind::AiBehavior { .. }
                                 | StateKind::ExplosionContact
                                 | StateKind::MovementMod
+                                | StateKind::LogicalButton { .. }
                         )
                 })
                 .map(|state| state.start_ms)
@@ -2421,6 +2509,19 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
     }
 
     pub(in crate::script_init) fn set_base(&mut self, key: VarKey, value: Value) {
+        if let Some(sample) = self
+            .observed_input
+            .as_mut()
+            .map(|input| &mut input.sample)
+            .filter(|sample| {
+                sample
+                    .input
+                    .as_ref()
+                    .is_some_and(|(output, _)| *output == key)
+            })
+        {
+            Arc::make_mut(sample).input = Some((key, value.clone()));
+        }
         match key {
             VarKey::Entity(id) => self.machine.snapshot.variables.insert(id, value),
             VarKey::Instance(instance, id) => self.machine.snapshot.instances[&instance]
@@ -2545,6 +2646,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     }
                     let event = if input == ABORT_PLUG {
                         Event::Abort(raw)
+                    } else if let Some(input) = &self.observed_input {
+                        Event::BeginObserved {
+                            state: raw,
+                            input: input.clone(),
+                        }
                     } else {
                         Event::Begin(raw)
                     };

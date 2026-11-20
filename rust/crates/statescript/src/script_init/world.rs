@@ -673,6 +673,12 @@ pub trait World {
         None
     }
 
+    /// Opaque identity of a live actor in the current room sample. Compare
+    /// tokens only for the same entity ID within this room.
+    fn room_actor_identity(&self, _entity: u32) -> Option<u64> {
+        None
+    }
+
     /// A known model can confirm presence or absence. None means unavailable.
     fn body_has_hardpoint(&self, _site: Site, _entity: u32, _hardpoint: u64) -> Option<bool> {
         None

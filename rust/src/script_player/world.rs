@@ -429,6 +429,10 @@ impl World for BodyWorld {
         self.spatial_frame.as_deref()?.entity_facts()
     }
 
+    fn room_actor_identity(&self, entity: u32) -> Option<u64> {
+        self.spatial_frame.as_deref()?.actor_identity(entity)
+    }
+
     fn body_active(&self, site: Site) -> Option<bool> {
         self.is_player_site(site).then_some(())?;
         self.room_activity

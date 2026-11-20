@@ -80,7 +80,7 @@ The Rust-only [interval and health fixture](../fixtures/behavior/script-interval
 
 The [elapsed wait fixture](../fixtures/behavior/script-elapsed-wait-v1.json) covers duration changes, optional restart, abort and restart, and rejected operands. The [cinematic boundary fixture](../fixtures/behavior/script-cinematic-boundary-v1.json) checks the entry and release frame in owner and observer payloads at a synthetic placement.
 
-The Rust-only [target child fixture](../fixtures/behavior/script-target-children-v1.json) checks target ordering, duplicate removal, child reuse, invalid and unavailable samples, and cleanup on target removal, abort and teardown. A fatal work-budget case also checks that a halted component releases the child's host effect once and discards an already-due timer.
+The Rust-only [target child fixture](../fixtures/behavior/script-target-children-v1.json) checks target ordering, duplicate removal, child reuse, invalid and unavailable samples, and cleanup on target removal, abort and teardown. A fatal work-budget case also checks that a halted component releases the child's host effect once and discards an already-due timer. The room-actor cases exercise replacement under the same entity ID, cancellation of due timers and queued messages, and recovery after an unavailable identity.
 
 The Rust-only [entity spatial fixture](../fixtures/behavior/statescript-entity-spatial-v1.json) checks authored position and direction reads at two host snapshots. An in-memory VM test also exercises these operands through the ordinary component message queue.
 
@@ -126,6 +126,11 @@ The Rust-only observation sample contract checks repeated successful values,
 unavailable geometry, known misses, failure callbacks, and retirement before
 callback dispatch.
 [Synthetic observation sample fixture](../fixtures/behavior/statescript-observation-sample-v1.json)
+
+The deferred facing cases check that two rays can share one output while
+each queued claim initializes from its own sample. They cover direct and
+forwarded action links, ordinary reads after the callback, and
+cancellation of starts by the source activation or destination state.
 
 The Rust-only held input lifecycle contract verifies automatic listener
 registration, branch ownership, and cancellation of sibling restarts

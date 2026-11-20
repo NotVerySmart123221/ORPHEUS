@@ -12,7 +12,7 @@ use crate::{
 };
 
 use super::{
-    machine::{Event, Machine, StateKey, VarKey},
+    machine::{Event, Machine, ObservedSample, StateKey, VarKey},
     shapes::{field, source_key},
     types::{InitFault, Issue, StateKind},
     vm::Vm,
@@ -366,6 +366,7 @@ pub(super) struct InstanceContext<'a, W> {
     pub(super) foreign_reads: Vec<(u32, u32)>,
     pub(super) parameters: Option<&'a Variables>,
     pub(super) health_target_facts: Option<&'a HealthTargetFacts>,
+    pub(super) observed_sample: Option<&'a ObservedSample>,
     pub(super) watcher: Option<StateKey>,
     pub(super) read_native: bool,
     pub(super) read_clock: bool,
@@ -409,7 +410,14 @@ impl<W: World> InstanceContext<'_, W> {
                         && state.linked_variable == Some(key)
                 })
         });
-        let (value, read_clock) = self.machine.value_with_clock_dependency(key, below);
+        let sampled_base = self
+            .observed_sample
+            .and_then(|sample| sample.input.as_ref())
+            .filter(|(output, _)| *output == key)
+            .map(|(_, value)| value);
+        let (value, read_clock) =
+            self.machine
+                .value_with_clock_dependency(key, below, sampled_base);
         self.read_clock |= read_clock;
         value
     }

@@ -216,6 +216,11 @@ impl Node {
         (variable != 0).then_some((graph, variable))
     }
 
+    pub(crate) fn tracks_room_actor_identity(&self) -> bool {
+        self.state_behavior == Some(StateBehavior::TrackEntities)
+            && self.field("identity").and_then(Value::as_str) == Some("room_actor")
+    }
+
     pub fn is_action(&self) -> bool {
         self.action_behavior.is_some() || self.fields.get("m_ADEB6E05").is_some_and(truthy)
     }
@@ -727,6 +732,12 @@ impl Graph {
                         if node.target_child_binding().is_none() {
                             return Err(invalid(format!(
                                 "{state} in graph {} at node {} requires a u32 child_graph and nonzero u32 target_variable",
+                                self.index, node.pos
+                            )));
+                        }
+                        if node.field("identity").is_some() && !node.tracks_room_actor_identity() {
+                            return Err(invalid(format!(
+                                "{state} in graph {} at node {} requires identity to be room_actor when specified",
                                 self.index, node.pos
                             )));
                         }
@@ -1880,6 +1891,7 @@ impl GraphStore {
                     || node.declares_room_message_action()
                     || node.declares_room_cue_action()
                     || node.directed_numeric_parameter().is_some()
+                    || node.tracks_room_actor_identity()
                 {
                     requirements.needs = requirements.needs.max(RoomSpatialNeeds::Queries);
                 }
@@ -4089,6 +4101,21 @@ mod tests {
         assert_eq!(node.class, "StateTrackEntities");
         assert_eq!(node.target_child_binding(), Some((0, u32::MAX)));
         assert!(node.is_state() && !node.is_networked());
+        assert!(!node.tracks_room_actor_identity());
+        assert_eq!(graphs.room_spatial_needs(), RoomSpatialNeeds::None);
+
+        let mut room_actor = data.clone();
+        room_actor["graphs"][0]["nodes"][0]["fields"]["identity"] = json!("room_actor");
+        let graphs = load(&room_actor).unwrap();
+        assert!(
+            graphs
+                .graph(42)
+                .unwrap()
+                .state(0)
+                .unwrap()
+                .tracks_room_actor_identity()
+        );
+        assert_eq!(graphs.room_spatial_needs(), RoomSpatialNeeds::Queries);
 
         for (field, invalid) in [
             ("targets", Value::Null),
@@ -4098,6 +4125,9 @@ mod tests {
             ("target_variable", json!(0)),
             ("target_variable", json!(true)),
             ("target_variable", json!(u64::from(u32::MAX) + 1)),
+            ("identity", Value::Null),
+            ("identity", json!(true)),
+            ("identity", json!("unknown")),
         ] {
             let mut bad = data.clone();
             bad["graphs"][0]["nodes"][0]["fields"][field] = invalid;

@@ -97,6 +97,25 @@
       "installed_tag": "0x0D6000000000EA81",
       "pending_timer_tag": "0x0D6000000000EA82"
     },
+    "actor_identity": {
+      "target": 99,
+      "initial_token": 1101,
+      "replacement_token": 2202,
+      "recovered_token": 3303,
+      "interval_frames": 2,
+      "stale_child_value": 987,
+      "initial_frame": 1,
+      "retained_frame": 2,
+      "replacement_frame": 3,
+      "first_pulse_frame": 5,
+      "unavailable_frame": 7,
+      "identity_only_frame": 8,
+      "recovery_frame": 9,
+      "recovery_pulse_frame": 11,
+      "known_query_identity_loss_frame": 4,
+      "known_query_identity_recovery_frame": 6,
+      "child_message": 52
+    },
     "radius_expression": {
       "$": "EntitiesInRadius",
       "center": {"$": "STUConfigVarDynamic", "m_identifier": 2, "m_60DB8F99": true},

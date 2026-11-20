@@ -326,6 +326,11 @@ impl RoomSpatialFrame {
         self.actor_sample(entity)?.1.eye_position
     }
 
+    /// Opaque room-local identity from the same frozen actor admission as queries.
+    pub(crate) fn actor_identity(&self, entity: u32) -> Option<u64> {
+        Some(self.actor_sample(entity)?.1.entity.to_bits())
+    }
+
     fn actor_sample(&self, entity: u32) -> Option<(&SpatialCandidate, &RoomScriptTarget)> {
         let target = self.script_targets.get(&entity)?;
         let candidate = self.candidates.get(target.candidate_index)?;

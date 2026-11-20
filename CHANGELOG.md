@@ -18,6 +18,14 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Fixed NPC script direction sampling when navigation turns a body with an active authored facing claim. The room can publish the navigation pose on the frame the claim ends. Validated in shared candidate `6027a713`.
 
+- Preserve observation inputs through a committed StateScript logical-button branch. Its child states use current values if the source expires, so finishing a sample does not interrupt the listener's held or idle lifecycle. Shared-branch verification is pending.
+
+- Fixed StateScript logical-button listeners that retained a held effect after a live binding change. Listeners discard the previous button's buffer and reconcile against the new button's held and admission state. Shared-branch verification is pending.
+
+- Preserve a StateScript observation's output through queued state initialization. Starts from a stale activation or frame are discarded, and higher-priority bindings continue to control visibility. Shared-branch verification is pending.
+
+- Added room-actor identity tracking for authored target scopes. The opted-in tracker retires an old body's child scripts and timers before dispatch when the room reuses its entity ID. Shared-branch verification is pending.
+
 - Added Inspector traces for StateScript ray queries. Player and NPC queries share the room's bounded ray history with weapon rays. Each script sample includes the graph, node, instance, VM frame and room capture tick. The overlay distinguishes actor hits, walls, misses and unavailable samples. The Phase 3A branch verified this on `05ab525e` against its synced `131dfdae` baseline.
 
 - Added an opt-in prepared actor input matrix covering seven gameplay inputs, movement, release phases, and owner delivery. It reports the first failed frame and retains typed snapshot diagnostics before a body script is retired. Server library tests, Clippy, and the prepared matrix passed.

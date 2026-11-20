@@ -714,7 +714,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             "STU_3387AB5D" | "STU_7DEB522D" => {
                 let condition = if node.class == "STU_7DEB522D" {
-                    self.logical_button_id(id, node)
+                    self.logical_button_id(id, node, None)
                         .is_some_and(|button| self.effective_button_held(button))
                 } else {
                     let active = if (self.graph(id).index, node.pos) == (0x0c87, 21) {
@@ -1753,7 +1753,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             StateKind::ButtonBlock(_) => {
                 let button = button_lock
                     .map(|(button, _)| button)
-                    .or_else(|| self.logical_button_id(id, node));
+                    .or_else(|| self.logical_button_id(id, node, None));
                 if let Some(button) = button {
                     if let Some((_, duration)) = button_lock {
                         // Resynchronizing logical buttons can synchronously end this lock.

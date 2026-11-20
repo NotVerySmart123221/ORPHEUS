@@ -506,6 +506,11 @@ Set optional `allow_dead` to true to admit input while the owner is dead.
 Otherwise owner death releases the held branch before the next observation
 update, and the existing logical-button lock also controls admission.
 
+For logical-button nodes that read a binding expression, a change to the
+resolved button discards a buffered press from the old button and checks the
+new button against current held input, death admission, and button locks. If
+both bindings are held and admitted, the active branch keeps its state.
+
 See the [synthetic held input contract](../fixtures/behavior/script-logical-input-owner-lifecycle-v1.json).
 
 ## Scale movement speed for a state
@@ -1022,6 +1027,14 @@ A successful empty result removes all children. Removing an entity or
 ending the tracker tears down the corresponding child, scoped descendants
 and timers. The tracker and its child instances execute on the server.
 
+Set `"identity": "room_actor"` to bind each child to the actor in the room's
+frozen sample. A target with no live identity waits for a successful
+sample with a known identity. An unchanged identity keeps its child while
+the target query is unavailable. A changed or missing identity retires
+the child and its descendants before their queued work can run, even if
+the target query is unavailable. A subsequent successful sample can start
+a fresh child for the replacement body at the same entity ID.
+
 See the [synthetic target child contract](../fixtures/behavior/script-target-children-v1.json).
 
 ## Declare a client-only operand
@@ -1242,6 +1255,21 @@ activation's sample at callback entry. The normal variable binding
 priority still applies. If a binding hides the sample, the VM reports
 the output as unavailable and suppresses that callback.
 
+State starts queued directly by `on_sample` or `on_change`, or through
+their synchronous actions, carry the callback's view of the output into
+initialization. Another observer can write the shared variable before
+the queued state starts. The queued state's own read still uses its
+captured input, subject to ordinary binding priority. An explicit write
+in the callback affects starts queued after that write. A start is
+discarded when its source activation ends or the sample frame advances.
+The capture lasts for initialization and its synchronous actions.
+
+When a sampled callback starts or changes a logical-button listener's
+held or idle branch, the branch and its starting states use the sample
+while it is current and visible. If the observation ends or a higher
+binding hides the sample, the committed branch continues with current
+values. The listener's own cancellation still stops the branch.
+
 Sampling starts in the VM frame after activation and runs at most once
 per VM frame. That lets a body initialize before the room publishes its
 candidate snapshot. Unavailable scene data records an observation diagnostic
@@ -1250,7 +1278,10 @@ The state retries on the next frame. An optional `on_unavailable` plug
 runs after a transient host failure on that frame. It follows the same
 activation and frame guards as `on_sample`. Use it to clear derived
 target or presentation state while retaining the last successful raw
-sample. Invalid expressions still report regular evaluation errors. Finish and abort stop polling and leave the last written value
+sample. Queued starts also check those guards and read the ordinary
+variables when this callback has no fresh value. Invalid expressions
+still report regular evaluation errors. Finish and abort stop polling
+and leave the last written value
 available. The ordinary lifecycle plugs can clear it when needed.
 
 Use `on_sample` for effects that depend on a current ray result. When

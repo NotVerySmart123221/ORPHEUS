@@ -2,7 +2,7 @@
   "schema_version": 1,
   "case_id": "script-logical-input-owner-lifecycle.synthetic.v1",
   "source": {
-    "basis": "Original held-input lifetimes, state-owned speed scales, and buffered input binding."
+    "basis": "Original held-input lifetimes, state-owned speed scales, and buffered and live input rebinding."
   },
   "evidence": "synthetic-rust",
   "input": {
@@ -26,6 +26,23 @@
       "command_mask": 1,
       "new_button": 29,
       "buffer_ms": 100
+    },
+    "live_rebinding": {
+      "graph": 611,
+      "body": 944,
+      "initial_button": 20,
+      "steps": [
+        {"frame": 1, "buttons": 1, "held": true, "held_starts": 1},
+        {"binding": 29, "held": false, "held_starts": 1},
+        {"frame": 2, "buttons": 0, "held": false, "held_starts": 1},
+        {"frame": 3, "buttons": 2, "held": true, "held_starts": 2},
+        {"frame": 4, "buttons": 3, "held": true, "held_starts": 2},
+        {"binding": 20, "held": true, "held_starts": 2},
+        {"binding": 256, "held": false, "held_starts": 2},
+        {"frame": 5, "buttons": 2, "held": false, "held_starts": 2},
+        {"binding": 29, "held": true, "held_starts": 3},
+        {"frame": 6, "buttons": 0, "held": false, "held_starts": 3}
+      ]
     }
   },
   "expected": {

@@ -6,6 +6,8 @@ use super::*;
 use crate::script_expr::SpatialRayHit;
 use crate::script_init::machine::Event;
 
+mod held_input;
+
 const OUTPUT: u32 = 42;
 const CHANGE_COPY: u32 = 43;
 const SAMPLE_COPY: u32 = 44;
@@ -30,7 +32,19 @@ struct Input {
     hit_distance: f64,
     unavailable_callback_delta: f64,
     ownership: Ownership,
+    deferred_facing: DeferredFacing,
+    held_branch: held_input::HeldBranch,
     steps: Vec<Step>,
+}
+
+#[derive(Deserialize)]
+struct DeferredFacing {
+    directions: [[f64; 3]; 2],
+    ordinary_direction: [f64; 3],
+    distance: f64,
+    max_distance: f64,
+    frame: u32,
+    ordinary_message: u64,
 }
 
 #[derive(Deserialize)]
@@ -773,4 +787,289 @@ fn observation_unavailable_hook_respects_frame_activation_and_retirement() {
     assert!(!component.snapshot().unwrap().instances[&1].states[&0].active);
     assert!(host.callbacks.is_empty());
     assert_eq!(host.queries.get(), 1);
+}
+
+struct DeferredFacingHost {
+    directions: [[f64; 3]; 2],
+    distance: f64,
+    max_distance: f64,
+    queries: Cell<usize>,
+    active: Vec<(Site, AiFacing)>,
+}
+
+impl World for DeferredFacingHost {
+    fn position(&mut self, _: u32) -> Option<[f64; 3]> {
+        None
+    }
+
+    fn entity_variable(&mut self, _: u32, _: u32) -> Option<Value> {
+        None
+    }
+
+    fn spatial_ray_cast(
+        &self,
+        _: Site,
+        _: u32,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+    ) -> Option<Option<SpatialRayHit>> {
+        assert_eq!(origin, [0.0; 3]);
+        assert_eq!(max_distance, self.max_distance);
+        assert!(self.directions.contains(&direction));
+        self.queries.set(self.queries.get() + 1);
+        Some(Some(SpatialRayHit {
+            distance: self.distance,
+            point: direction.map(|axis| axis * self.distance),
+            normal: direction,
+        }))
+    }
+
+    fn set_facing_claim(&mut self, site: Site, record: AiFacing, active: bool) -> Option<bool> {
+        assert_eq!(record.target, site.entity);
+        self.active.retain(|(owner, _)| *owner != site);
+        if active {
+            self.active.push((site, record));
+        }
+        Some(true)
+    }
+}
+
+fn deferred_ray_value(direction: [f64; 3], distance: f64) -> Value {
+    Value::Array(vec![
+        Value::Float(distance),
+        Value::Vector(direction.map(|axis| axis * distance)),
+        Value::Vector(direction),
+    ])
+}
+
+fn deferred_facing_graph(input: &Input, hook: &str, indirect: bool) -> Json {
+    let fields = &input.deferred_facing;
+    let observe = |position, raw, direction, next| {
+        let mut observer = node(
+            position,
+            "AuthoredDeferredRaySample",
+            Some(raw),
+            json!({"value":{"$":"RayCast","origin":var(31,true),
+                "direction":var(direction,true),"max_distance":fields.max_distance},
+                "output":var(OUTPUT,true)}),
+        );
+        observer["fields"][hook] = plug(&[next], &[]);
+        observer["state_behavior"] = json!("observe");
+        observer["server_only"] = json!(true);
+        observer
+    };
+    let facing = |position, raw, level| {
+        let mut claim = node(
+            position,
+            "AuthoredDeferredFacing",
+            Some(raw),
+            json!({"direction":{"$":"STU_4BD39CFD","m_index":2,
+                "m_814F8EC3":var(OUTPUT,true)},
+                "priority":{"level":level,"above_equals":false}}),
+        );
+        claim["state_behavior"] = json!("facing_claim");
+        claim["server_only"] = json!(true);
+        claim
+    };
+    let mut relay = node(
+        8,
+        "AuthoredSampleRelay",
+        None,
+        json!({"m_outPlug":plug(&[(3,"m_beginPlug")],&[])}),
+    );
+    relay["action_behavior"] = json!("forward");
+    relay["server_only"] = json!(true);
+    graph(
+        input.graph,
+        vec![
+            node(
+                0,
+                "STUStatescriptEntry",
+                None,
+                json!({"m_outPlug":plug(&[(1,"m_beginPlug"),(2,"m_beginPlug")],&[])}),
+            ),
+            observe(
+                1,
+                0,
+                32,
+                if indirect {
+                    (8, "m_inPlug")
+                } else {
+                    (3, "m_beginPlug")
+                },
+            ),
+            observe(2, 1, 33, (4, "m_beginPlug")),
+            facing(3, 2, 3),
+            facing(4, 3, 4),
+            node(
+                5,
+                "STUStatescriptEntryGameMessage",
+                None,
+                json!({"m_gameMessage":{"m_gameMessage":format!("0x{:016X}",fields.ordinary_message)},
+                    "m_outPlug":plug(&[(6,"m_inPlug"),(7,"m_beginPlug")],&[])}),
+            ),
+            node(
+                6,
+                "STUStatescriptActionSetVar",
+                None,
+                json!({"m_out_Var":var(SAMPLE_COPY,true),"m_value":var(OUTPUT,true),
+                    "m_outPlug":plug(&[],&[])}),
+            ),
+            facing(7, 4, 1),
+            relay,
+        ],
+        json!([1, 2, 3, 4, 7]),
+        json!([0, 5]),
+    )
+}
+
+fn start_deferred_facing(
+    input: &Input,
+    hook: &str,
+    indirect: bool,
+) -> (Component, DeferredFacingHost) {
+    start_deferred_model(
+        input,
+        deferred_facing_graph(input, hook, indirect),
+        Variables::new(),
+    )
+}
+
+fn start_deferred_model(
+    input: &Input,
+    model: Json,
+    initial: Variables,
+) -> (Component, DeferredFacingHost) {
+    let fields = &input.deferred_facing;
+    let mut host = DeferredFacingHost {
+        directions: fields.directions,
+        distance: fields.distance,
+        max_distance: fields.max_distance,
+        queries: Cell::new(0),
+        active: Vec::new(),
+    };
+    let mut variables = Variables::from([
+        (31, Value::Vector([0.0; 3])),
+        (32, Value::Vector(fields.directions[0])),
+        (33, Value::Vector(fields.directions[1])),
+    ]);
+    variables.extend(initial);
+    let component = Component::start(
+        Arc::new(store(vec![model])),
+        input.body,
+        variables,
+        vec![Root::new(1, input.graph)],
+        0,
+        &mut host,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    (component, host)
+}
+
+#[test]
+fn observation_samples_preserve_their_ray_results_for_queued_facing_starts() {
+    let input = fixture().input;
+    let fields = &input.deferred_facing;
+    for (hook, indirect) in [
+        ("on_sample", false),
+        ("on_sample", true),
+        ("on_change", false),
+    ] {
+        let (mut component, mut host) = start_deferred_facing(&input, hook, indirect);
+        assert!(host.active.is_empty());
+        component.advance_frame(fields.frame, &mut host).unwrap();
+        assert_eq!(host.queries.get(), 2);
+        assert_eq!(host.active.len(), 2);
+        for (position, direction) in [(3, fields.directions[0]), (4, fields.directions[1])] {
+            let (_, claim) = host
+                .active
+                .iter()
+                .find(|(site, _)| site.node == Some(position))
+                .unwrap();
+            assert_eq!(
+                claim.direction, direction,
+                "hook: {hook}, indirect relay: {indirect}, claim {position}"
+            );
+        }
+        let last = deferred_ray_value(fields.directions[1], fields.distance);
+        assert_eq!(component.snapshot().unwrap().variables[&OUTPUT], last);
+        let ordinary = deferred_ray_value(fields.ordinary_direction, fields.distance);
+        component
+            .set_entity_variable(OUTPUT, ordinary.clone(), &mut host)
+            .unwrap();
+        component
+            .queue_message(1, fields.ordinary_message, Variables::new())
+            .unwrap();
+        component.run_now(&mut host).unwrap();
+        let (_, ordinary_claim) = host
+            .active
+            .iter()
+            .find(|(site, _)| site.node == Some(7))
+            .unwrap();
+        assert_eq!(ordinary_claim.direction, fields.ordinary_direction);
+        let snapshot = component.snapshot().unwrap();
+        assert_eq!(snapshot.variables[&OUTPUT], ordinary);
+        assert_eq!(snapshot.variables[&SAMPLE_COPY], ordinary);
+        assert!(
+            snapshot.diagnostics.is_empty(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        component.teardown(&mut host).unwrap();
+        assert!(host.active.is_empty());
+    }
+}
+
+#[test]
+fn queued_sample_facing_starts_respect_source_and_destination_cancellation() {
+    let input = fixture().input;
+    let fields = &input.deferred_facing;
+    for (hook, available, reactivate, cancel_destination) in [
+        ("on_sample", true, false, false),
+        ("on_sample", true, true, false),
+        ("on_unavailable", false, true, false),
+        ("on_sample", true, false, true),
+    ] {
+        let (mut component, mut host) = start_deferred_facing(&input, hook, true);
+        component.advance_frame(fields.frame, &mut host).unwrap();
+        let activation = component.snapshot().unwrap().instances[&1].states[&KEY.raw].activation;
+        component
+            .run(&mut host, |vm| {
+                vm.end(
+                    StateKey {
+                        instance: 1,
+                        raw: 2,
+                    },
+                    false,
+                    0,
+                )?;
+                vm.deliver_observed_sample(KEY, activation, fields.frame, available)?;
+                if cancel_destination {
+                    vm.drop_begin(1, 2);
+                    return Ok(());
+                }
+                vm.end(KEY, false, 0)?;
+                if reactivate {
+                    vm.begin(KEY, 0)?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        component.run_now(&mut host).unwrap();
+        assert!(
+            host.active.iter().all(|(site, _)| site.node != Some(3)),
+            "cancelled start ran ({hook}, reactivated: {reactivate}, destination: {cancel_destination})"
+        );
+        assert!(
+            !component.snapshot().unwrap().instances[&1]
+                .states
+                .get(&2)
+                .is_some_and(|state| state.active)
+        );
+        assert_eq!(host.queries.get(), 2);
+        component.teardown(&mut host).unwrap();
+        assert!(host.active.is_empty());
+    }
 }

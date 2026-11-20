@@ -471,6 +471,7 @@ impl Component {
             foreign_reads: Vec::new(),
             parameters: None,
             health_target_facts: None,
+            observed_sample: None,
             watcher: None,
             read_native: false,
             read_clock: false,
