@@ -407,6 +407,10 @@ fn lethal_impact_notifies_source_with_settled_room_status_after_target_retiremen
         fn vitals(&self) -> Option<&crate::vitals::Vitals> {
             self.runtime.vitals()
         }
+
+        fn take_vitals(&mut self) -> Option<crate::vitals::Vitals> {
+            self.runtime.take_vitals()
+        }
     }
 
     let Contract { input, expected } = contract();

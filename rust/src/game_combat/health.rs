@@ -72,18 +72,19 @@ impl RoomSimulation {
                 }
             }
             HealthEffect::Heal(amount) => {
-                if let Some(state) = self.player_body_mut(id).filter(|state| state.alive()) {
-                    if let Some(runtime) = &mut state.runtime {
-                        let healed = runtime.heal(amount);
-                        if let Some(health) = runtime.take_health_update() {
-                            self.scripted_health.push(EntityUpdate {
-                                entity: wire,
-                                operation: Some(Operation::Update(vec![health])),
-                                ..Default::default()
-                            });
-                        }
-                        self.record_health_applied(source.killer, wire, healed, false, None);
+                if let Some(state) = self
+                    .player_body_mut(id)
+                    .filter(|state| state.alive() && state.vitals().is_some())
+                {
+                    let healed = state.heal(amount);
+                    if let Some(health) = state.take_health_update() {
+                        self.scripted_health.push(EntityUpdate {
+                            entity: wire,
+                            operation: Some(Operation::Update(vec![health])),
+                            ..Default::default()
+                        });
                     }
+                    self.record_health_applied(source.killer, wire, healed, false, None);
                 }
             }
         }

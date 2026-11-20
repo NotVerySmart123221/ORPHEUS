@@ -289,6 +289,9 @@ fn owner_startup_spatial_frame_excludes_the_frozen_body_on_each_replacement() {
         fn vitals(&self) -> Option<&Vitals> {
             self.vitals.as_ref()
         }
+        fn take_vitals(&mut self) -> Option<Vitals> {
+            self.vitals.take()
+        }
         fn snapshot(&self) -> Option<&Snapshot> {
             None
         }
@@ -1313,6 +1316,7 @@ fn normal_deadeye_clears_natural_bosses_and_reaches_allied_victory() {
 
 mod aim_samples;
 mod encounter_ecs;
+mod faulted_owner_vitals;
 mod junkenstein;
 mod settled_bonus;
 

@@ -164,6 +164,10 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         Some(&self.world.vitals)
     }
 
+    fn take_vitals(&mut self) -> Option<Vitals> {
+        Some(std::mem::replace(&mut self.world.vitals, Vitals::empty()))
+    }
+
     fn receive_host_event(
         &mut self,
         event: HostEvent,
@@ -188,12 +192,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
     }
 
     fn take_health_update(&mut self) -> Option<EntityComponent> {
-        let vitals = &mut self.world.vitals;
-        if !vitals.has_changed() {
-            return None;
-        }
-        vitals.clear_changed();
-        Some(vitals.cumulative_component())
+        self.world.vitals.take_cumulative_update()
     }
 
     fn snapshot(&self) -> Option<&Snapshot> {

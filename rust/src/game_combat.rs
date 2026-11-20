@@ -1006,10 +1006,7 @@ impl RoomSimulation {
                         candidate_index: candidates.len(),
                         angles: [pose.yaw, pose.pitch],
                         eye_position: state.script_eye_position(),
-                        health: state
-                            .runtime
-                            .as_ref()
-                            .is_some_and(|runtime| runtime.vitals().is_some()),
+                        health: state.vitals().is_some(),
                         messages: state.runtime.is_some(),
                         cue_listener: true,
                     },
