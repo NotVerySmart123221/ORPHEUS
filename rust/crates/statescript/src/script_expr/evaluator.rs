@@ -7,6 +7,12 @@ pub(super) struct Fold {
     item: Option<Value>,
 }
 
+struct SpatialRay {
+    origin: [f64; 3],
+    direction: [f64; 3],
+    max_distance: f64,
+}
+
 struct SpatialCone {
     direction: [f64; 3],
     angle_limit: f64,
@@ -759,6 +765,8 @@ impl Evaluator {
             "EntityMatches" => self.entity_matches(fields, context, nested)?,
             "EntitiesInRadius" => self.entities_in_radius(fields, context, nested)?,
             "SegmentClear" => self.segment_clear(fields, context, nested)?,
+            "RayCast" => self.ray_cast(fields, context, nested)?,
+            "EntityRayCast" => self.entity_ray_cast(fields, context, nested)?,
             "StackAllows" => {
                 let (variable, priority) = fields
                     .get("variable")
@@ -1773,6 +1781,153 @@ impl Evaluator {
             .map(Value::Bool)
     }
 
+    fn ray_cast(
+        &mut self,
+        fields: &serde_json::Map<String, Json>,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<Value, EvalError> {
+        let Some(((origin, direction), max_distance)) = fields
+            .get("origin")
+            .zip(fields.get("direction"))
+            .zip(fields.get("max_distance"))
+            .filter(|_| fields.len() == 4)
+        else {
+            return Err(EvalError::MalformedConfig(
+                "expected RayCast origin, direction, and max_distance",
+            ));
+        };
+        let SpatialRay {
+            origin,
+            direction,
+            max_distance,
+        } = self.ray_parameters(origin, direction, max_distance, context, depth)?;
+        self.charge()?;
+        let hit = context
+            .spatial_ray_cast(origin, direction, max_distance)
+            .ok_or(EvalError::UnavailableSpatialRayCast)?;
+        let Some(hit) = hit else {
+            return Ok(Value::Array(Vec::new()));
+        };
+        if !hit.distance.is_finite()
+            || hit.distance <= 0.0
+            || hit.distance > max_distance
+            || !hit.point.iter().all(|axis| axis.is_finite())
+            || SpatialCone::scale_direction(hit.normal).is_none()
+        {
+            return Err(EvalError::UnavailableSpatialRayCast);
+        }
+        Ok(Value::Array(vec![
+            Value::Float(hit.distance),
+            Value::Vector(hit.point),
+            Value::Vector(hit.normal),
+        ]))
+    }
+
+    fn ray_parameters(
+        &mut self,
+        origin: &Json,
+        direction: &Json,
+        max_distance: &Json,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<SpatialRay, EvalError> {
+        let origin = self.segment_endpoint(origin, context, depth)?;
+        let direction_error = EvalError::MalformedConfig("expected a finite nonzero ray direction");
+        let Value::Vector(direction) = self.config(direction, context, depth)? else {
+            return Err(direction_error);
+        };
+        let scaled = SpatialCone::scale_direction(direction).ok_or(direction_error)?;
+        let magnitude = scaled.iter().map(|axis| axis * axis).sum::<f64>().sqrt();
+        let direction = scaled.map(|axis| axis / magnitude);
+        let max_distance = match self.config(max_distance, context, depth)? {
+            Value::Float(value) => value,
+            Value::Integer(value) => value as f64,
+            _ => {
+                return Err(EvalError::MalformedConfig(
+                    "expected a finite positive ray distance",
+                ));
+            }
+        };
+        if !max_distance.is_finite() || max_distance <= 0.0 {
+            return Err(EvalError::MalformedConfig(
+                "expected a finite positive ray distance",
+            ));
+        }
+        Ok(SpatialRay {
+            origin,
+            direction,
+            max_distance,
+        })
+    }
+
+    fn entity_ray_cast(
+        &mut self,
+        fields: &serde_json::Map<String, Json>,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<Value, EvalError> {
+        let filter = fields.get("filter");
+        let Some(((origin, direction), max_distance)) = fields
+            .get("origin")
+            .zip(fields.get("direction"))
+            .zip(fields.get("max_distance"))
+            .filter(|_| fields.len() == 4 + usize::from(filter.is_some()))
+        else {
+            return Err(EvalError::MalformedConfig(
+                "expected EntityRayCast origin, direction, max_distance, and optional filter",
+            ));
+        };
+        let SpatialRay {
+            origin,
+            direction,
+            max_distance,
+        } = self.ray_parameters(origin, direction, max_distance, context, depth)?;
+        let filter = self.room_entity_filter(filter, context, depth)?;
+        let mut candidates = self.select_room_candidates(&filter, context, |_| Some(()))?;
+        candidates.sort_unstable_by_key(|(candidate, _)| candidate.entity);
+        for group in candidates.chunk_by(|a, b| a.0.entity == b.0.entity) {
+            let candidate = group[0].0;
+            if group
+                .iter()
+                .any(|(row, _)| row.position != candidate.position || row.team != candidate.team)
+            {
+                return Err(EvalError::UnavailableSpatialCandidates);
+            }
+        }
+        candidates.dedup_by_key(|(candidate, _)| candidate.entity);
+        let targets = candidates
+            .into_iter()
+            .map(|(candidate, _)| candidate.entity)
+            .collect::<Vec<_>>();
+        for _ in &targets {
+            self.charge()?;
+        }
+        self.charge()?;
+        let hit = context
+            .spatial_actor_ray_cast(origin, direction, max_distance, &targets)
+            .ok_or(EvalError::UnavailableSpatialRayCast)?;
+        let Some(hit) = hit else {
+            return Ok(Value::Array(Vec::new()));
+        };
+        if !hit.distance.is_finite()
+            || hit.distance < 0.0
+            || hit.distance > max_distance
+            || targets.binary_search(&hit.entity).is_err()
+        {
+            return Err(EvalError::UnavailableSpatialRayCast);
+        }
+        let point = std::array::from_fn(|axis| origin[axis] + direction[axis] * hit.distance);
+        if !point.iter().all(|part| part.is_finite()) {
+            return Err(EvalError::UnavailableSpatialRayCast);
+        }
+        Ok(Value::Array(vec![
+            Value::Entity(hit.entity),
+            Value::Float(hit.distance),
+            Value::Vector(point),
+        ]))
+    }
+
     fn segment_endpoint(
         &mut self,
         operand: &Json,
@@ -1907,67 +2062,13 @@ impl Evaluator {
         let cone = cone
             .map(|cone| self.spatial_cone(cone, context, depth))
             .transpose()?;
-        let candidates = context
-            .spatial_candidates()
-            .ok_or(EvalError::UnavailableSpatialCandidates)?;
-        let mut source_team: Option<Option<u8>> = None;
-        let room_matches;
-        let mut matches = Vec::new();
-        for candidate in candidates {
-            let SpatialCandidate {
-                entity,
-                position,
-                team,
-            } = *candidate;
-            self.charge()?;
-            if !valid_entity(entity) || !position.iter().all(|axis| axis.is_finite()) {
-                return Err(EvalError::UnavailableSpatialCandidates);
-            }
-            if filter.relation.is_some_and(|(source, _)| entity == source) {
-                if source_team
-                    .replace(team)
-                    .is_some_and(|previous| previous != team)
-                {
-                    return Err(EvalError::UnavailableSpatialCandidates);
-                }
-                continue;
-            }
-            let offset = std::array::from_fn(|axis| position[axis] - center[axis]);
+        let mut matches = self.select_room_candidates(&filter, context, |candidate| {
+            let offset = std::array::from_fn(|axis| candidate.position[axis] - center[axis]);
             let [dx, dy, dz] = offset;
             let distance = dx.hypot(dy).hypot(dz);
-            if distance <= radius && cone.as_ref().is_none_or(|cone| cone.contains(offset)) {
-                matches.push((candidate, distance));
-            }
-        }
-        if let Some((_, relation)) = filter.relation {
-            let source_team = source_team.ok_or(EvalError::UnavailableSpatialCandidates)?;
-            matches.retain(|(candidate, _)| relation.matches(source_team, candidate.team));
-        }
-        if filter.needs_facts() {
-            // Copy only this query's survivors before borrowing the host again.
-            room_matches = matches
-                .into_iter()
-                .map(|(candidate, distance)| (*candidate, distance))
-                .collect::<Vec<_>>();
-            let entities = context
-                .room_entities()
-                .ok_or(EvalError::UnavailableRoomEntityFacts)?;
-            if filter
-                .relation
-                .is_some_and(|(source, _)| !entities.get(&source).is_some_and(|facts| facts.alive))
-            {
-                return Err(EvalError::UnavailableRoomEntityFacts);
-            }
-            matches = Vec::with_capacity(room_matches.len());
-            for (candidate, distance) in &room_matches {
-                let facts = entities
-                    .get(&candidate.entity)
-                    .ok_or(EvalError::UnavailableRoomEntityFacts)?;
-                if facts.alive && self.room_facts_match(&filter, facts)? {
-                    matches.push((candidate, *distance));
-                }
-            }
-        }
+            (distance <= radius && cone.as_ref().is_none_or(|cone| cone.contains(offset)))
+                .then_some(distance)
+        })?;
         matches.sort_unstable_by_key(|(candidate, _)| candidate.entity);
         if !line_of_sight {
             if require_consistent_distance {
@@ -2004,6 +2105,68 @@ impl Evaluator {
             }
         }
         Ok(hits)
+    }
+
+    fn select_room_candidates<T>(
+        &mut self,
+        filter: &RoomEntityFilter,
+        context: &mut impl Context,
+        mut select: impl FnMut(SpatialCandidate) -> Option<T>,
+    ) -> Result<Vec<(SpatialCandidate, T)>, EvalError> {
+        let candidates = context
+            .spatial_candidates()
+            .ok_or(EvalError::UnavailableSpatialCandidates)?;
+        let mut source_team: Option<Option<u8>> = None;
+        let mut matches = Vec::new();
+        for &candidate in candidates {
+            let SpatialCandidate {
+                entity,
+                position,
+                team,
+            } = candidate;
+            self.charge()?;
+            if !valid_entity(entity) || !position.iter().all(|axis| axis.is_finite()) {
+                return Err(EvalError::UnavailableSpatialCandidates);
+            }
+            if filter.relation.is_some_and(|(source, _)| entity == source) {
+                if source_team
+                    .replace(team)
+                    .is_some_and(|previous| previous != team)
+                {
+                    return Err(EvalError::UnavailableSpatialCandidates);
+                }
+                continue;
+            }
+            if let Some(sample) = select(candidate) {
+                matches.push((candidate, sample));
+            }
+        }
+        if let Some((_, relation)) = filter.relation {
+            let source_team = source_team.ok_or(EvalError::UnavailableSpatialCandidates)?;
+            matches.retain(|(candidate, _)| relation.matches(source_team, candidate.team));
+        }
+        if filter.needs_facts() {
+            let entities = context
+                .room_entities()
+                .ok_or(EvalError::UnavailableRoomEntityFacts)?;
+            if filter
+                .relation
+                .is_some_and(|(source, _)| !entities.get(&source).is_some_and(|facts| facts.alive))
+            {
+                return Err(EvalError::UnavailableRoomEntityFacts);
+            }
+            let mut filtered = Vec::with_capacity(matches.len());
+            for (candidate, sample) in matches {
+                let facts = entities
+                    .get(&candidate.entity)
+                    .ok_or(EvalError::UnavailableRoomEntityFacts)?;
+                if facts.alive && self.room_facts_match(filter, facts)? {
+                    filtered.push((candidate, sample));
+                }
+            }
+            matches = filtered;
+        }
+        Ok(matches)
     }
 
     fn spatial_cone(

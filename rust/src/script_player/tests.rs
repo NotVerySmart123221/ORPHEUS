@@ -1974,6 +1974,276 @@ fn owner_eye_query_reads_spawn_anchor_then_updates_with_live_crouch_and_spring()
 }
 
 #[test]
+fn authored_player_facing_claims_seed_the_mover_and_release_with_runtime() {
+    use crate::{
+        contact_world::ContactWorld,
+        game_combat::{PlayerBodyState, RoomSimulation},
+        game_replication::BodyId,
+        mover_settings::MoverSettings,
+        script_expr::StackPriority,
+        script_init::AiFacing,
+    };
+    use serde_json::json;
+
+    let (mut factory, spawn) = fixture_body_factory();
+    let bundle = json!({
+        "version": 1, "missing": [], "bodies": {},
+        "graphs": [{
+            "index": 87, "items": 2, "entries": [0], "states": [1], "remote": [],
+            "sync_vars": [], "containers": {}, "unknown_nodes": [], "fields": {},
+            "header": {"m_nodesBitCount": 2, "m_statesBitCount": 2,
+                "m_remoteSyncNodesBitCount": 2, "m_syncVarsBitCount": 2},
+            "nodes": [
+                {"pos": 0, "rid": 0, "uid": 0, "remote": -1, "class": "STUStatescriptEntry",
+                    "state": null, "server_only": false, "client_only": false,
+                    "fields": {"m_outPlug": {"$": "Plug", "links": [[1, "m_inPlug"]]}}},
+                {"pos": 1, "rid": 1, "uid": 1, "remote": -1, "class": "authored.native_facing",
+                    "state": 0, "server_only": true, "client_only": false,
+                    "state_behavior": "facing_claim", "fields": {
+                        "direction": {"$": "STUConfigVarDynamic", "m_identifier": 42,
+                            "m_60DB8F99": true},
+                        "priority": {"level": 17, "above_equals": false}}}
+            ]
+        }]
+    });
+    factory.graphs =
+        Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    factory.roots = vec![Root::new(1, 87)];
+    factory.variables.insert(42, Value::Vector([1.0, 0.0, 0.0]));
+    let mut runtime = factory.start(spawn).unwrap();
+    assert!(runtime.snapshot().unwrap().initialization_complete());
+    assert_eq!(runtime.authored_facing(), Some([16_384, 0]));
+    let first = Site {
+        entity: spawn.entity,
+        instance: 1,
+        graph: 87,
+        node: Some(1),
+    };
+    let second = Site {
+        node: Some(2),
+        ..first
+    };
+    let record = AiFacing {
+        target: spawn.entity,
+        direction: [-1.0, 0.0, 0.0],
+        priority: StackPriority {
+            level: 17,
+            above_equals: false,
+        },
+    };
+    assert_eq!(
+        runtime.world.set_facing_claim(second, record, true),
+        Some(true)
+    );
+    assert_eq!(runtime.authored_facing(), Some([16_384, 0]));
+    assert_eq!(
+        runtime.world.set_facing_claim(first, record, true),
+        Some(true)
+    );
+    assert_eq!(runtime.authored_facing(), Some([-16_384, 0]));
+    let later = AiFacing {
+        direction: [0.0, 1.0, 0.0],
+        priority: StackPriority {
+            above_equals: true,
+            ..record.priority
+        },
+        ..record
+    };
+    assert_eq!(
+        runtime.world.set_facing_claim(second, later, true),
+        Some(true)
+    );
+    assert_eq!(runtime.authored_facing(), Some([0, -16_384]));
+    assert_eq!(
+        runtime.world.set_facing_claim(second, later, false),
+        Some(true)
+    );
+    assert_eq!(runtime.authored_facing(), Some([-16_384, 0]));
+    assert_eq!(
+        runtime.world.set_facing_claim(
+            Site {
+                entity: spawn.controller,
+                ..first
+            },
+            record,
+            true
+        ),
+        None
+    );
+    assert_eq!(
+        runtime.world.set_facing_claim(
+            second,
+            AiFacing {
+                target: spawn.controller,
+                ..record
+            },
+            true
+        ),
+        Some(false)
+    );
+    assert_eq!(
+        runtime.world.set_facing_claim(
+            second,
+            AiFacing {
+                direction: [0.0; 3],
+                ..record
+            },
+            true
+        ),
+        Some(false)
+    );
+    let east = AiFacing {
+        direction: [1.0, 0.0, 0.0],
+        ..record
+    };
+    assert_eq!(
+        runtime.world.set_facing_claim(first, east, true),
+        Some(true)
+    );
+
+    let ground = crate::collision_index::TriangleIndex::new(Vec::new()).unwrap();
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        spawn.pose.position,
+        0,
+        MOVER_CATEGORY,
+    )
+    .unwrap();
+    let id = BodyId {
+        entity: spawn.entity,
+        generation: 1,
+    };
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    room.spawn_player_body(PlayerBodyState::new(
+        id,
+        spawn.controller,
+        0,
+        0,
+        factory.hero,
+        mover,
+        Some(Box::new(runtime)),
+        spawn.frame,
+        None,
+    ))
+    .unwrap();
+    let body = room.player_body_mut(id).unwrap();
+    body.mover
+        .step(
+            &ground,
+            Command {
+                frame: spawn.frame + 1,
+                yaw: 1234,
+                pitch: 5678,
+                ..Command::default()
+            },
+            0.016,
+            |_, _| {},
+        )
+        .unwrap();
+    assert_eq!(
+        [body.mover.pose().yaw, body.mover.pose().pitch],
+        [16_384, 0]
+    );
+    body.mover.set_cinematic_aim(Some([-1234, -5678]));
+    body.mover
+        .step(
+            &ground,
+            Command {
+                frame: spawn.frame + 2,
+                ..Command::default()
+            },
+            0.016,
+            |_, _| {},
+        )
+        .unwrap();
+    assert_eq!(
+        [body.mover.pose().yaw, body.mover.pose().pitch],
+        [-1234, -5678]
+    );
+    factory
+        .variables
+        .insert(42, Value::Vector([-1.0, 0.0, 0.0]));
+    let replacement = BodyId {
+        generation: 2,
+        ..id
+    };
+    let replacement_runtime = factory.start(spawn).unwrap();
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        spawn.pose.position,
+        0,
+        MOVER_CATEGORY,
+    )
+    .unwrap();
+    room.spawn_player_body(PlayerBodyState::new(
+        replacement,
+        spawn.controller,
+        0,
+        0,
+        factory.hero,
+        mover,
+        Some(Box::new(replacement_runtime)),
+        spawn.frame,
+        None,
+    ))
+    .unwrap();
+    assert!(room.player_body(id).is_none());
+    let body = room.player_body_mut(replacement).unwrap();
+    body.mover
+        .step(
+            &ground,
+            Command {
+                frame: spawn.frame + 3,
+                yaw: 4321,
+                pitch: -1234,
+                ..Command::default()
+            },
+            0.016,
+            |_, _| {},
+        )
+        .unwrap();
+    assert_eq!(
+        [body.mover.pose().yaw, body.mover.pose().pitch],
+        [-16_384, 0]
+    );
+    assert!(room.clear_player_runtime(replacement));
+    let body = room.player_body_mut(replacement).unwrap();
+    body.mover
+        .step(
+            &ground,
+            Command {
+                frame: spawn.frame + 4,
+                yaw: 4321,
+                pitch: -1234,
+                ..Command::default()
+            },
+            0.016,
+            |_, _| {},
+        )
+        .unwrap();
+    assert_eq!(
+        [body.mover.pose().yaw, body.mover.pose().pitch],
+        [4321, -1234]
+    );
+
+    let mut dead = factory.start(spawn).unwrap();
+    dead.receive_damage(
+        10_000.0,
+        crate::vitals::Death {
+            frame: spawn.frame,
+            time: 0.0,
+            killer: 0,
+        },
+    );
+    assert_eq!(dead.authored_facing(), None);
+    assert_eq!(dead.world.set_facing_claim(second, east, true), Some(false));
+    assert_eq!(dead.world.set_facing_claim(first, east, false), Some(true));
+    assert!(dead.world.facing_claims.is_empty());
+}
+
+#[test]
 fn authored_pose_queries_read_live_player_position_and_aim_outside_encounter_mode() {
     let (factory, spawn) = fixture_body_factory();
     let mut world = factory.start(spawn).unwrap().world;
@@ -2271,6 +2541,7 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
         sightings: Vec::new(),
         sighting_source: None,
         cinematic_aim: None,
+        facing_claims: Default::default(),
         deadeye_scene: DeadeyeScene::default(),
         velocity_changes: Vec::new(),
         damage_credit: None,
@@ -2697,6 +2968,7 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             sightings: Vec::new(),
             sighting_source: None,
             cinematic_aim: None,
+            facing_claims: Default::default(),
             deadeye_scene: DeadeyeScene::default(),
             velocity_changes: Vec::new(),
             damage_credit: None,

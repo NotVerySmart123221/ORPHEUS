@@ -90,13 +90,17 @@ impl BodyScript {
         step: BodyStep,
     ) -> io::Result<()> {
         if command.frame > *buffers.frame {
-            runtime.advance(command, mover, step)?;
+            if let Err(error) = runtime.advance(command, mover, step) {
+                mover.set_authored_facing(None);
+                return Err(error);
+            }
             *buffers.frame = command.frame;
             self.frame = command.frame;
         }
         match runtime.snapshot() {
             Some(snapshot) if snapshot.initialization_complete() => {}
             Some(snapshot) => {
+                mover.set_authored_facing(None);
                 let sites: Vec<String> = snapshot
                     .diagnostics
                     .iter()
@@ -115,9 +119,13 @@ impl BodyScript {
                     sites.join(", ")
                 )));
             }
-            None => return Err(invalid("body VM has no snapshot")),
+            None => {
+                mover.set_authored_facing(None);
+                return Err(invalid("body VM has no snapshot"));
+            }
         }
         mover.set_cinematic_aim(runtime.cinematic_aim());
+        mover.set_authored_facing(runtime.authored_facing());
         for (frame, change) in runtime.take_velocity_changes() {
             mover.queue_velocity_change(frame, change);
         }

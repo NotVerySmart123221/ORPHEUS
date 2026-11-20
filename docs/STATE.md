@@ -91,11 +91,11 @@ for byte, with **47 blocking sites** and **11 of 32** independent passes.
 Zarya passed independent startup, and Symmetra cleared her count
 diagnostic. The #72 capture matched across all 476 sites.
 
-Ordinary Practice Range attachment remains **1 of 32**. Scene
-preparation installs a Soldier-only factory there, and the factory
-returns no runtime for a different hero. The independent probe calls
-the per-hero factory builder directly. Ability coverage and original
-client acceptance require separate verification.
+At `39932467`, ordinary Practice Range attachment remained **1 of 32**.
+Scene preparation still installed a Soldier-only factory there, while
+the independent probe called the per-hero factory builder directly.
+Ability coverage and original-client acceptance require separate
+verification.
 
 At `9f6114ae` and `763b8e56`, two reports per revision from the same
 prepared 104319 runtime matched byte for byte. All 32 actor rows matched
@@ -212,15 +212,89 @@ retained all 476 observations. The two #131 schedules each reproduced
 339 ticks per implementation and kept the same four RNG setup differences
 in strict comparison.
 
-Two of the three remaining native target-tracking startup sites have
-empty embedded plugs. One configures a second filter and an entity list
-output. The other configures a count output. Both read a dynamic radius.
-The remaining site links embedded states. Each configuration still needs
-its native query and output semantics verified.
+The following Phase 3A results were measured on its standalone revisions.
 
-Six actor probes have one blocking site each. Mercy's paired tag query
-now selects its shared VM path by authored fields. Its host still needs
-the tagged placement inventory and live actor tags. Orisa and Sigma
+At `339b05d8`, the Phase 3A authored static ray query passed synthetic
+expression, observer lifecycle, and native room collision tests. Two
+startup runs with the default build and the same 104319 pack produced
+byte-identical reports. The script-coverage report matched the preceding capture
+apart from its source revision, with **11 of 32** independent passes,
+**one** ordinary Practice Range attachment, and **47** blocking sites.
+All 476 #72 observation sites matched. Dynamic actor ray hits and
+ability-state integration remain open.
+
+At `7510ba31`, the authored actor ray query passed the shared filter
+contract and the native frozen-frame collision test. The native test
+checks wall occlusion, equal-distance hits, crouch dimensions, and
+exclusion of retired bodies from replacement startup views. The default
+and script-coverage 104319 startup reports matched their respective
+baselines apart from the source revision. The matrix recorded **11 of 32**
+independent passes, **one** ordinary Practice Range attachment, and
+**47** blocking sites. All 476 #72 observation sites matched.
+The Phase 3A ability states still require integration and acceptance.
+
+At `5a56304c`, the authored facing claim passed its StateScript
+lifecycle contract and native player movement regressions. The tests
+cover priority ties, refresh and release on the following pose,
+vertical directions, runtime removal and failure, and replacement
+bodies. The legacy NPC-facing regression passed with two existing
+prepared packs containing its boss graph. The prepared 104319 startup
+matrix matched the preceding capture at **11 of 32** independent passes,
+**one** ordinary Practice Range attachment, and **47** blocking sites.
+All 476 #72 observation sites matched. Client zoom presentation and
+specific ability integration remain open.
+
+At `e4739efd`, Phase 3A scripted targeting gained an optional callback for
+each successful observation sample. The native synthetic room fixture
+verified repeated visible hits, wall occlusion, unavailable actor-ray
+data, target replacement before effect settlement, and runtime removal.
+StateScript tests also verified callback order and cancellation on
+retirement or reactivation. Formatting, Clippy, and all public workspace
+tests passed in both the default and Inspector configurations. The two
+prepared 104319 startup reports were byte-identical. After normalizing
+only the source revision, both the startup report and the #72 replay
+matched the preceding captures. The startup matrix recorded **11 of 32**
+independent passes, **one** ordinary Practice Range attachment, and
+**47** blocking sites. The #72 replay matched all 476 observation sites
+across 900 frames. Original ability mappings and client zoom acceptance
+remain open.
+
+At `3331f0f0`, fresh observation callbacks restored their own sample
+when another state or plug reused the output. A higher-priority binding
+suppressed the callback while it hid the sample. Portable tests verified
+recovery on release, and the native aiming fixture verified that an
+intervening write could not change the target of the sampled effect.
+
+At `3482c7b9`, explicit owner-only instance variables projected through
+the existing wire codec. Synthetic wire tests covered owner updates,
+correction before acknowledgement, release, and child instances.
+Observer full bytes stayed identical and no observer delta was queued
+when only private instance values changed. Same-ID shared entity values
+and explicit public copies retained their visibility.
+
+Formatting, Clippy, and all public workspace tests passed for both
+configurations. The default build passed 368 native server tests and
+217 StateScript tests. Inspector passed 374 native server tests and
+218 StateScript tests. The repeated 104319 startup reports were
+byte-identical and matched the preceding report apart from source
+revision at **11 of 32** independent passes, **one** ordinary Practice
+Range attachment, and **47** blocking sites. The #72 replay matched all
+476 observation sites across 900 frames. Original ability mappings
+and client zoom acceptance remain open.
+
+The integrated build still needs its own startup, room admission, and
+input measurements.
+
+Two of the three remaining native target-tracking startup sites in the
+Phase 2 run have empty embedded plugs. One configures a second filter
+and an entity list output. The other configures a count output. Both read
+a dynamic radius. The remaining site links embedded states. Each
+configuration still needs its native query and output semantics verified.
+
+The Phase 2 run left six actor probes with one blocking site each.
+Mercy's paired tag query selects its shared VM path by authored fields.
+Its host still needs the tagged placement inventory and live actor
+tags. Orisa and Sigma
 still hit persistent message registration. Baptiste cannot read a
 controller variable. Torbjörn's hardpoint query now reaches the shared
 host interface and reports unavailable active-model membership.

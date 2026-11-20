@@ -261,6 +261,130 @@ fn authored_client_only_fallback_preserves_assignment_group_context() {
 }
 
 #[test]
+fn authored_observer_retries_ray_cast_and_stops_after_abort() {
+    use std::cell::Cell;
+
+    use crate::script_expr::SpatialRayHit;
+
+    const GRAPH: u32 = 94;
+    const INSTANCE: u16 = 1;
+    const ENTITY: u32 = 4242;
+    const OUTPUT: u32 = 81;
+    const ORIGIN: [f64; 3] = [1.0, 2.0, 3.0];
+    const DIRECTION: [f64; 3] = [0.0, 0.0, 1.0];
+
+    struct RayWorld {
+        reply: Option<Option<SpatialRayHit>>,
+        reads: Cell<usize>,
+    }
+
+    impl World for RayWorld {
+        fn entity_variable(&mut self, _: u32, _: u32) -> Option<Value> {
+            None
+        }
+
+        fn position(&mut self, _: u32) -> Option<[f64; 3]> {
+            None
+        }
+
+        fn spatial_ray_cast(
+            &self,
+            origin: [f64; 3],
+            direction: [f64; 3],
+            max_distance: f64,
+        ) -> Option<Option<SpatialRayHit>> {
+            assert_eq!((origin, direction, max_distance), (ORIGIN, DIRECTION, 10.0));
+            self.reads.set(self.reads.get() + 1);
+            self.reply
+        }
+    }
+
+    let mut contract: Json = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/script-observe-radius-v1.json"
+    )))
+    .unwrap();
+    let bundle = &mut contract["input"]["bundle"];
+    bundle["graphs"][0]["nodes"][1]["fields"]["value"] = json!({
+        "$": "RayCast",
+        "origin": {"$":"STUConfigVarDynamic","m_identifier":31,"m_60DB8F99":true},
+        "direction": {"$":"STUConfigVarDynamic","m_identifier":32,"m_60DB8F99":true},
+        "max_distance": {"$":"STUConfigVarDynamic","m_identifier":33,"m_60DB8F99":true}
+    });
+    let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(bundle).unwrap()).unwrap());
+    let hit = SpatialRayHit {
+        distance: 4.0,
+        point: [1.0, 2.0, 7.0],
+        normal: [0.0, 0.0, -1.0],
+    };
+    let mut world = RayWorld {
+        reply: Some(Some(hit)),
+        reads: Cell::new(0),
+    };
+    let mut component = Component::start(
+        graphs,
+        ENTITY,
+        Variables::from([
+            (31, Value::Vector(ORIGIN)),
+            (32, Value::Vector(DIRECTION)),
+            (33, Value::Float(10.0)),
+        ]),
+        vec![Root::new(INSTANCE, GRAPH)],
+        0,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    assert_eq!(world.reads.get(), 0);
+
+    component.advance_frame(1, &mut world).unwrap();
+    let expected_hit = Value::Array(vec![
+        Value::Float(hit.distance),
+        Value::Vector(hit.point),
+        Value::Vector(hit.normal),
+    ]);
+    assert_eq!(
+        component.snapshot().unwrap().variables[&OUTPUT],
+        expected_hit
+    );
+    assert_eq!(world.reads.get(), 1);
+
+    world.reply = None;
+    component.advance_frame(2, &mut world).unwrap();
+    let unavailable = component.snapshot().unwrap();
+    assert_eq!(unavailable.variables[&OUTPUT], expected_hit);
+    assert_eq!(world.reads.get(), 2);
+    assert!(unavailable.initialization_complete());
+    assert_eq!(unavailable.diagnostics.len(), 1);
+    assert_eq!(
+        unavailable.diagnostics[0].issue,
+        Issue::ObservationUnavailable
+    );
+    assert!(unavailable.instances[&INSTANCE].states[&0].active);
+    let diagnostics = unavailable.diagnostics.to_vec();
+
+    world.reply = Some(None);
+    component.advance_frame(3, &mut world).unwrap();
+    let recovered = component.snapshot().unwrap();
+    assert_eq!(recovered.variables[&OUTPUT], Value::Array(Vec::new()));
+    assert_eq!(recovered.diagnostics, diagnostics);
+    assert_eq!(world.reads.get(), 3);
+
+    assert_eq!(
+        component
+            .queue_frame_message(4, INSTANCE, 11, Variables::new())
+            .unwrap(),
+        1
+    );
+    component.advance_frame(4, &mut world).unwrap();
+    component.advance_frame(5, &mut world).unwrap();
+    let stopped = component.snapshot().unwrap();
+    assert!(!stopped.instances[&INSTANCE].states[&0].active);
+    assert_eq!(stopped.variables[&OUTPUT], Value::Array(Vec::new()));
+    assert_eq!(world.reads.get(), 3);
+}
+
+#[test]
 fn authored_observer_samples_radius_once_per_frame_until_aborted() {
     use std::cell::Cell;
 

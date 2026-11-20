@@ -227,9 +227,21 @@ impl<'a> SnapshotEncoder<'a> {
         excluded: &BTreeSet<u32>,
         view: View,
     ) -> Result<ProjectedVariables, SnapshotError> {
+        let owner_only = if view == View::Observer && owner != 0 {
+            snapshot
+                .instances
+                .get(&owner)
+                .map(|instance| self.graph(owner, instance.graph))
+                .transpose()?
+                .map(Graph::owner_only_instance_vars)
+        } else {
+            None
+        };
         let mut projected = ProjectedVariables::default();
         for (&variable, base) in values {
-            if excluded.contains(&variable) {
+            if excluded.contains(&variable)
+                || owner_only.is_some_and(|private| private.binary_search(&variable).is_ok())
+            {
                 continue;
             }
             let key = (owner, variable);

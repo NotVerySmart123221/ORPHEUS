@@ -523,6 +523,10 @@ pub trait World {
     fn ai_facing(&mut self, _site: Site, _record: AiFacing, _active: bool) -> Option<bool> {
         None
     }
+    /// Admit or release an authored self-facing claim, keyed by its originating site.
+    fn set_facing_claim(&mut self, _site: Site, _record: AiFacing, _active: bool) -> Option<bool> {
+        None
+    }
     /// None: unavailable; false: the declared controller has no matching slot;
     /// true: the record was installed and must be removed on state teardown.
     fn ai_weapon_override(
@@ -601,6 +605,27 @@ pub trait World {
 
     /// Whether static geometry leaves the segment clear. None is unavailable.
     fn spatial_line_clear(&self, _origin: [f64; 3], _target: [f64; 3]) -> Option<bool> {
+        None
+    }
+
+    /// None is unavailable, Some(None) is an available miss.
+    fn spatial_ray_cast(
+        &self,
+        _origin: [f64; 3],
+        _direction: [f64; 3],
+        _max_distance: f64,
+    ) -> Option<Option<script_expr::SpatialRayHit>> {
+        None
+    }
+
+    /// None is unavailable, Some(None) is an available miss.
+    fn spatial_actor_ray_cast(
+        &self,
+        _origin: [f64; 3],
+        _direction: [f64; 3],
+        _max_distance: f64,
+        _targets: &[u32],
+    ) -> Option<Option<script_expr::SpatialActorRayHit>> {
         None
     }
 

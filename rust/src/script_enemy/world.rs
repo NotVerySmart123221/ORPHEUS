@@ -876,6 +876,29 @@ impl World for EnemyWorld<'_> {
         }
         Some(true)
     }
+    fn set_facing_claim(
+        &mut self,
+        site: Site,
+        record: script_init::AiFacing,
+        active: bool,
+    ) -> Option<bool> {
+        if site.entity != self.binding.body {
+            return None;
+        }
+        if active {
+            if record.target != self.binding.body
+                || self.vitals.death().is_some()
+                || crate::facing::angles(record.direction).is_none()
+            {
+                return Some(false);
+            }
+            self.control_records.facing.insert(site, record);
+        } else {
+            self.control_records.facing.shift_remove(&site);
+        }
+        Some(true)
+    }
+
     fn ai_facing(
         &mut self,
         site: Site,
@@ -1026,6 +1049,33 @@ impl World for EnemyWorld<'_> {
             .spatial_frame
             .as_deref()?
             .line_clear(origin, target)
+    }
+
+    fn spatial_ray_cast(
+        &self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+    ) -> Option<Option<crate::script_expr::SpatialRayHit>> {
+        self.binding
+            .spatial_frame
+            .as_deref()?
+            .ray_cast(origin, direction, max_distance)
+    }
+
+    fn spatial_actor_ray_cast(
+        &self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+        targets: &[u32],
+    ) -> Option<Option<crate::script_expr::SpatialActorRayHit>> {
+        self.binding.spatial_frame.as_deref()?.actor_ray_cast(
+            origin,
+            direction,
+            max_distance,
+            targets,
+        )
     }
 
     fn position(&mut self, entity: u32) -> Option<[f64; 3]> {

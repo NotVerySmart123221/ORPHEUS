@@ -513,6 +513,220 @@ fn spatial_visibility_blocks_only_hits_before_the_target() {
 }
 
 #[test]
+fn spatial_rays_return_the_first_static_hit_and_preserve_query_availability() {
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    room.enable_spatial_queries(
+        false,
+        Arc::new(fixture_ground()),
+        crate::script_graph::RoomSpatialNeeds::Queries,
+    );
+    let spatial = room.capture_spatial_frame(1).unwrap().unwrap();
+    let origin = [-2.0, 0.5, 0.25];
+    let direction = [1.0, 0.0, 0.0];
+    let expected = crate::script_expr::SpatialRayHit {
+        distance: 1.0,
+        point: [-1.0, 0.5, 0.25],
+        normal: [-1.0, 0.0, 0.0],
+    };
+    assert_eq!(
+        spatial.ray_cast(origin, direction, 1.0),
+        Some(Some(expected))
+    );
+    assert_eq!(spatial.ray_cast(origin, direction, 0.5), Some(None));
+    assert_eq!(spatial.ray_cast(origin, [-1.0, 0.0, 0.0], 2.0), Some(None));
+    assert_eq!(spatial.ray_cast([f64::MAX, 0.0, 0.0], direction, 1.0), None);
+    assert_eq!(spatial.ray_cast(origin, direction, f64::MAX), None);
+    assert_eq!(
+        spatial.ray_cast([0.0; 3], [0.0, 0.0, 1.0], 1_000_000.0),
+        None
+    );
+}
+
+#[test]
+fn actor_rays_sample_capsules_once_and_respect_occlusion_and_replacement() {
+    use crate::{
+        collision_index::{SceneTriangle, TriangleIndex},
+        contact_world::ContactWorld,
+        mover::Mover,
+        mover_settings::{MoverCatalog, MoverSettings},
+        script_expr::SpatialActorRayHit,
+    };
+
+    let mut bots = fixture_bots();
+    let bot_ids = [bots[0].entity, bots[1].entity];
+    for bot in &mut bots {
+        bot.position = [-2.0, 0.0, 0.25];
+    }
+    let mut room = RoomSimulation::new(bots).unwrap();
+    room.enable_spatial_queries(false, Arc::new(fixture_ground()), RoomSpatialNeeds::Queries);
+    let origin = [-3.0, 0.5, 0.25];
+    let direction = [1.0, 0.0, 0.0];
+    let targets = [7, bot_ids[1], bot_ids[0]];
+    let missing = room.capture_spatial_frame(1).unwrap().unwrap();
+    assert!(missing.actor_capsules.is_none());
+    assert_eq!(missing.actor_ray_cast(origin, direction, 4.0, &[]), None);
+
+    let movers = Arc::new(
+        MoverCatalog::from_json(r#"{"0x02":{"stand_height":1,"stand_radius":0.25}}"#).unwrap(),
+    );
+    room.enable_spatial_actor_rays(movers);
+    let contacts = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+    let player = |generation, position| {
+        let mover = Mover::new(
+            MoverSettings {
+                stand_height: 1.0,
+                stand_radius: 0.25,
+                crouch_height: 0.5,
+                crouch_radius: 0.125,
+                ..MoverSettings::default()
+            },
+            Arc::clone(&contacts),
+            position,
+            0,
+            MOVER_CATEGORY,
+        )
+        .unwrap();
+        PlayerBodyState::new(
+            BodyId {
+                entity: 7,
+                generation,
+            },
+            8,
+            0,
+            0,
+            1,
+            mover,
+            None,
+            1,
+            None,
+        )
+    };
+    room.spawn_player_body(player(1, [-2.0, 0.0, 0.25]))
+        .unwrap();
+    room.prepare_spatial_frame(1).unwrap();
+    let first = Arc::clone(&room.spatial_frame.as_ref().unwrap().1);
+    let capsules = first.actor_capsules.as_ref().unwrap();
+    assert_eq!(capsules.len(), 3);
+    assert_eq!(capsules[&7].radius, 0.25);
+    assert_eq!(capsules[&bot_ids[0]].height, 1.0);
+    assert_eq!(
+        first.actor_ray_cast(origin, direction, 0.75, &targets),
+        Some(Some(SpatialActorRayHit {
+            entity: 7,
+            distance: 0.75,
+        }))
+    );
+    assert_eq!(
+        first.actor_ray_cast(origin, direction, 4.0, &[bot_ids[1], bot_ids[0]]),
+        Some(Some(SpatialActorRayHit {
+            entity: bot_ids[0].min(bot_ids[1]),
+            distance: 0.75,
+        }))
+    );
+    assert_eq!(
+        first.actor_ray_cast(origin, direction, 0.5, &targets),
+        Some(None)
+    );
+    assert_eq!(
+        first.actor_ray_cast(origin, direction, 4.0, &[]),
+        Some(None)
+    );
+    assert_eq!(first.actor_ray_cast(origin, direction, 4.0, &[99]), None);
+    assert_eq!(
+        first.actor_ray_cast([-2.0, 2.0, 0.25], [0.0, -1.0, 0.0], 1.0, &targets),
+        Some(Some(SpatialActorRayHit {
+            entity: 7,
+            distance: 1.0,
+        }))
+    );
+    let mut incomplete = first.as_ref().clone();
+    incomplete
+        .actor_capsules
+        .as_mut()
+        .unwrap()
+        .remove(&bot_ids[0]);
+    assert_eq!(
+        incomplete.actor_ray_cast(origin, direction, 4.0, &[bot_ids[0]]),
+        None
+    );
+
+    room.body_mut(bot_ids[0]).unwrap().position = [-0.5, 0.0, 0.25];
+    room.body_mut(bot_ids[1]).unwrap().position = [-0.75, 0.0, 0.25];
+    let old_entity = first.script_targets[&7].entity;
+    for generation in [2, 3] {
+        room.spawn_player_body(player(generation, [5.0, 0.0, 0.25]))
+            .unwrap();
+        let replacement = room.owner_startup_spatial_frame(8).unwrap();
+        assert!(
+            !replacement
+                .actor_capsules
+                .as_ref()
+                .unwrap()
+                .contains_key(&7)
+        );
+        assert_eq!(
+            replacement.actor_ray_cast(origin, direction, 4.0, &[7]),
+            None
+        );
+        assert_eq!(
+            replacement.actor_capsules.as_ref().unwrap()[&bot_ids[0]],
+            capsules[&bot_ids[0]]
+        );
+    }
+    room.prepare_spatial_frame(1).unwrap();
+    assert!(Arc::ptr_eq(&first, &room.spatial_frame.as_ref().unwrap().1));
+    assert_eq!(
+        first.actor_ray_cast(origin, direction, 4.0, &[7]),
+        Some(Some(SpatialActorRayHit {
+            entity: 7,
+            distance: 0.75
+        }))
+    );
+    let standing_ground = TriangleIndex::new([SceneTriangle {
+        vertices: [[3.0, 0.0, -2.0], [5.0, 0.0, 3.0], [7.0, 0.0, -2.0]],
+        mask: MOVER_CATEGORY,
+        surface: 0,
+    }])
+    .unwrap();
+    let crouched = room
+        .player_body_mut(BodyId {
+            entity: 7,
+            generation: 3,
+        })
+        .unwrap();
+    crouched
+        .mover
+        .step(
+            &standing_ground,
+            Command {
+                frame: 2,
+                buttons: crate::commands::CROUCH,
+                ..Command::default()
+            },
+            0.016,
+            |_, _| {},
+        )
+        .unwrap();
+    assert!(crouched.mover.crouched());
+    room.prepare_spatial_frame(2).unwrap();
+    let next = &room.spatial_frame.as_ref().unwrap().1;
+    assert_eq!(next.actor_capsules.as_ref().unwrap()[&7].height, 0.5);
+    assert_eq!(next.actor_capsules.as_ref().unwrap()[&7].radius, 0.125);
+    assert_ne!(next.script_targets[&7].entity, old_entity);
+    assert_eq!(
+        next.actor_ray_cast(origin, direction, 4.0, &[7, bot_ids[0]]),
+        Some(None)
+    );
+    assert_eq!(
+        next.actor_ray_cast(origin, direction, 4.0, &[bot_ids[1]]),
+        Some(Some(SpatialActorRayHit {
+            entity: bot_ids[1],
+            distance: 2.0
+        }))
+    );
+}
+
+#[test]
 fn room_messages_and_host_health_events_reach_npc_bodies_on_their_next_frames() {
     use crate::{
         game_clock::TICK_PERIOD,
@@ -870,6 +1084,7 @@ fn normal_deadeye_clears_natural_bosses_and_reaches_allied_victory() {
     junkenstein::verify_natural_ending(junkenstein::NormalEnding::DeadeyeVictory);
 }
 
+mod aim_samples;
 mod encounter_ecs;
 mod junkenstein;
 

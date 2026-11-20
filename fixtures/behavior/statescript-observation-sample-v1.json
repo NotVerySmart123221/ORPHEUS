@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "case_id": "statescript-observation-sample.synthetic.v1",
+  "source": {"basis": "Original query samples, callback ordering, and state lifetimes."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "body": 941,
+    "graph": 607,
+    "hit_distance": 2,
+    "ownership": {
+      "samples": [1, 2],
+      "overwrite": 999
+    },
+    "steps": [
+      {"frame": 1, "queries": 1, "callbacks": [1, 2], "output": "hit"},
+      {"frame": 2, "override_output": true, "queries": 1, "callbacks": [2], "output": "hit"},
+      {"frame": 3, "unavailable": true, "queries": 1, "callbacks": [], "output": "hit"},
+      {"frame": 4, "invalid_direction": true, "queries": 0, "callbacks": [], "output": "hit"},
+      {"frame": 5, "miss": true, "queries": 1, "callbacks": [1, 2], "output": "empty"},
+      {"frame": 6, "miss": true, "override_output": true, "queries": 1, "callbacks": [2], "output": "empty"},
+      {"frame": 7, "abort": true, "queries": 0, "callbacks": [], "output": "empty"},
+      {"frame": 8, "queries": 0, "callbacks": [], "output": "empty"}
+    ]
+  }
+}

@@ -140,6 +140,10 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
         None
     }
 
+    fn authored_facing(&self) -> Option<[i32; 2]> {
+        None
+    }
+
     fn has_deadeye(&self) -> bool {
         false
     }

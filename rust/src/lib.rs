@@ -27,6 +27,7 @@ pub mod collection;
 mod debug_geometry;
 #[cfg(feature = "inspector")]
 mod debug_http;
+mod facing;
 pub mod game_body;
 pub mod game_bots;
 pub mod game_clock;

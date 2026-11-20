@@ -101,6 +101,20 @@ The Rust-only [local command fixture](../fixtures/behavior/statescript-local-com
 
 The Rust-only [segment query fixture](../fixtures/behavior/statescript-segment-clear-v1.json) checks endpoint validation, evaluation order, work limits, and the distinction between a blocked segment and unavailable geometry.
 
+The Rust-only [static ray fixture](../fixtures/behavior/statescript-ray-cast-v1.json) checks geometry query order and budget, direction normalization, and distinct results for a hit, a miss, and unavailable geometry. Native room coverage uses the existing scene collision query for endpoint hits and bounded traversal.
+
+The Rust-only [actor ray fixture](../fixtures/behavior/statescript-entity-ray-cast-v1.json) checks team and tag selection, stable candidate IDs, budget exhaustion, a zero-distance hit, and unavailable geometry. Native room tests exercise frozen capsules and static occlusion.
+
+The Rust-only observation sample contract checks repeated successful values,
+unavailable geometry, known misses, and retirement before callback dispatch.
+[Synthetic observation sample fixture](../fixtures/behavior/statescript-observation-sample-v1.json)
+
+The Rust-only owner instance visibility contract verifies owner and observer
+wire frames, resolved stack claims, and child instances.
+[Synthetic instance visibility fixture](../fixtures/behavior/script-owner-instance-visibility-v1.json)
+
+The Rust-only [facing claim fixture](../fixtures/behavior/statescript-facing-claim-v1.json) checks live direction updates, exact claim release on finish or abort, and teardown after a VM work-budget fault.
+
 The Rust-only [assignment fallback fixture](../fixtures/behavior/script-assignment-client-fallback-v1.json) checks config group selection and flattening through authored client-only wrappers, including opaque client values and scalar defaults.
 
 The Rust-only [room entity filter fixture](../fixtures/behavior/statescript-room-entity-filter-v1.json) checks affiliation, liveness, and tag presence for individual and spatial predicates. Component and room tests cover snapshot recovery and use of shared actor metadata.

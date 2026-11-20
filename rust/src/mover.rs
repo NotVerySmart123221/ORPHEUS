@@ -92,6 +92,7 @@ pub struct Mover {
     posture: Posture,
     modifiers: ModifierTimeline,
     cinematic_aim: Option<[i32; 2]>,
+    authored_facing: Option<[i32; 2]>,
     velocity_changes: Vec<(u32, VelocityChange)>,
     last_command: Option<Command>,
     last_input: Option<u32>,
@@ -119,6 +120,7 @@ impl Mover {
             posture: Posture::new(&base),
             modifiers: ModifierTimeline::default(),
             cinematic_aim: None,
+            authored_facing: None,
             velocity_changes: Vec::new(),
             last_command: None,
             last_input: None,
@@ -188,6 +190,10 @@ impl Mover {
         self.cinematic_aim = aim;
     }
 
+    pub(crate) fn set_authored_facing(&mut self, facing: Option<[i32; 2]>) {
+        self.authored_facing = facing;
+    }
+
     pub(crate) fn queue_velocity_change(&mut self, frame: u32, change: VelocityChange) {
         if change.valid() {
             self.velocity_changes.push((frame, change));
@@ -222,7 +228,7 @@ impl Mover {
     ) -> Result<usize, HullContactError> {
         let mut stepped = 0;
         for mut command in pending.by_ref().take(limit) {
-            if let Some(aim) = self.cinematic_aim {
+            if let Some(aim) = self.cinematic_aim.or(self.authored_facing) {
                 [command.yaw, command.pitch] = aim;
             }
             self.step_pose(rays, command, dt)?;
@@ -251,7 +257,17 @@ impl Mover {
         });
         let active = self.modifiers.at(command.frame);
         let settings = active.settings(&self.base);
-        let input = MotionInput::from(&command).with_modifiers(&active);
+        let mut input = MotionInput::from(&command).with_modifiers(&active);
+        // The authored direction has already been packed by the server. Keep
+        // its pitch, including straight up or down, when it supplies the pose.
+        if let (None, Some(_), Ok(pitch)) = (
+            self.cinematic_aim,
+            self.authored_facing,
+            i16::try_from(command.pitch),
+        ) {
+            input.pitch = pitch;
+            input.pitch_held = false;
+        }
         let probe = self.probe.probe(
             rays,
             self.body.world(),

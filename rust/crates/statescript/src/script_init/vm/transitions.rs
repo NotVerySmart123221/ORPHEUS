@@ -16,7 +16,7 @@ use super::super::{
     machine::{Event, RegisteredClass, Startup, StateKey, VarKey},
     shapes::{
         array_field, branch_path, case_path, configured, field, is_unlinked_plug, pool_number,
-        raw_indices, registered_state, source_key,
+        raw_indices, registered_state, same, source_key, stored,
     },
     types::{InitFault, Issue, StateKind},
     world::{Site, World},
@@ -24,8 +24,9 @@ use super::super::{
 use super::Vm;
 
 impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
-    pub(in crate::script_init) fn tick_states(&mut self, id: u16) -> Result<(), InitFault> {
+    pub(in crate::script_init) fn tick_states(&mut self, id: u16) -> Result<bool, InitFault> {
         let now = self.machine.now_ms;
+        let mut samples_queued = false;
         let due: Vec<_> = self
             .machine
             .ticking
@@ -158,7 +159,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     Some(StateKind::Observe { sampled_frame })
                         if sampled_frame < self.machine.frame =>
                     {
-                        self.sample_observed_value(key)?;
+                        samples_queued |= self.sample_observed_value(key)?;
                     }
                     Some(StateKind::TrackEntities { sampled_frame })
                         if sampled_frame < self.machine.frame =>
@@ -187,7 +188,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 }
             }
         }
-        Ok(())
+        Ok(samples_queued)
     }
 
     pub(in crate::script_init) fn clear_tick(&mut self, key: StateKey) {
@@ -717,30 +718,36 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         Ok(())
     }
 
-    fn sample_observed_value(&mut self, key: StateKey) -> Result<(), InitFault> {
+    fn sample_observed_value(&mut self, key: StateKey) -> Result<bool, InitFault> {
         let id = key.instance;
         let frame = self.machine.frame;
         let Some(node) = self.graph(id).state(usize::from(key.raw)) else {
-            return Ok(());
-        };
-        let Some(state) = self.state_mut(key) else {
-            return Ok(());
-        };
-        state.kind = StateKind::Observe {
-            sampled_frame: frame,
-        };
-        let site = self.site(id, node);
-        let Some(value) = self.observation_value(site, field(&node.fields, "value")) else {
-            return Ok(());
+            return Ok(false);
         };
         let Some(state) = self
             .state_mut(key)
             .filter(|state| state.active && !state.ending)
         else {
-            return Ok(());
+            return Ok(false);
         };
-        if state.watch_seen.as_ref() == Some(&value) {
-            return Ok(());
+        let activation = state.activation;
+        state.kind = StateKind::Observe {
+            sampled_frame: frame,
+        };
+        let site = self.site(id, node);
+        let Some(value) = self.observation_value(site, field(&node.fields, "value")) else {
+            return Ok(false);
+        };
+        let Some(state) = self
+            .state_mut(key)
+            .filter(|state| state.active && !state.ending && state.activation == activation)
+        else {
+            return Ok(false);
+        };
+        let changed = state.watch_seen.as_ref() != Some(&value);
+        let on_sample = node.field("on_sample").is_some_and(|plug| !plug.is_null());
+        if !changed && !on_sample {
+            return Ok(false);
         }
         let target = match script_expr::lvalue(field(&node.fields, "output")) {
             Ok(Some(target)) => target,
@@ -749,20 +756,90 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     self.site(id, node),
                     Issue::UnsupportedField("observe output"),
                 );
-                return Ok(());
+                return Ok(false);
             }
             Err(error) => {
                 self.report(self.site(id, node), Issue::Expression(error));
-                return Ok(());
+                return Ok(false);
             }
         };
         state.watch_seen = Some(value.clone());
         self.write(source_key(id, target), value)?;
-        self.follow(id, node, "on_change", Some(key), 0)?;
-        if self
+        if changed {
+            self.follow(id, node, "on_change", Some(key), 0)?;
+        }
+        if !self
             .state(key)
-            .is_some_and(|state| state.active && !state.ending)
+            .is_some_and(|state| state.active && !state.ending && state.activation == activation)
         {
+            return Ok(false);
+        }
+        if on_sample {
+            self.post(
+                id,
+                Event::ObserveSample {
+                    raw: key.raw,
+                    activation,
+                    frame,
+                },
+            )?;
+            return Ok(true);
+        }
+        self.try_complete(key, node, 0)?;
+        Ok(false)
+    }
+
+    pub(in crate::script_init) fn deliver_observed_sample(
+        &mut self,
+        key: StateKey,
+        activation: u16,
+        frame: u32,
+    ) -> Result<(), InitFault> {
+        if frame != self.machine.frame
+            || !self.state(key).is_some_and(|state| {
+                state.active
+                    && !state.ending
+                    && state.activation == activation
+                    && state.kind
+                        == StateKind::Observe {
+                            sampled_frame: frame,
+                        }
+            })
+        {
+            return Ok(());
+        }
+        let activation_is_live = |vm: &Self| {
+            vm.state(key).is_some_and(|state| {
+                state.active && !state.ending && state.activation == activation
+            })
+        };
+        let Some(sample) = self.state(key).and_then(|state| state.watch_seen.clone()) else {
+            return Ok(());
+        };
+        let Some(node) = self.graph(key.instance).state(usize::from(key.raw)) else {
+            return Ok(());
+        };
+        let Ok(Some(output)) = script_expr::lvalue(field(&node.fields, "output")) else {
+            return Ok(());
+        };
+        let output = source_key(key.instance, output);
+        // Other ticks and earlier plugs may have reused the output before
+        // this callback reached the queue. Publish the sample through the
+        // ordinary write path so existing bindings keep their priority.
+        let mut visible = same(&self.machine.value(output, None), &sample);
+        if !visible && !same(&stored(&self.machine.snapshot, output), &sample) {
+            self.write(output, sample.clone())?;
+            if !activation_is_live(self) {
+                return Ok(());
+            }
+            visible = same(&self.machine.value(output, None), &sample);
+        }
+        if visible {
+            self.follow(key.instance, node, "on_sample", Some(key), 0)?;
+        } else {
+            self.report(self.site(key.instance, node), Issue::ObservationUnavailable);
+        }
+        if activation_is_live(self) {
             self.try_complete(key, node, 0)?;
         }
         Ok(())
@@ -778,6 +855,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 | script_expr::EvalError::UnavailableEntityVariable { .. }
                 | script_expr::EvalError::UnavailableSpatialCandidates
                 | script_expr::EvalError::UnavailableSpatialVisibility
+                | script_expr::EvalError::UnavailableSpatialRayCast
                 | script_expr::EvalError::UnavailableRoomEntityFacts,
             ) => {
                 // A later sample can succeed as the scene updates.
@@ -1295,7 +1373,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     .ai_control_override(self.site(id, node), record, false);
             }
             StateKind::AiFacing(Some(record)) => {
-                self.world.ai_facing(self.site(id, node), record, false);
+                self.publish_facing_record(node, self.site(id, node), record, false);
             }
             StateKind::AiWeaponOverride {
                 record: Some(record),
@@ -1646,7 +1724,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         .graph(id)
                         .state(usize::from(raw))
                         .expect("AI facing state");
-                    self.world.ai_facing(self.site(id, node), record, false);
+                    self.publish_facing_record(node, self.site(id, node), record, false);
                 } else if let StateKind::AiWeaponOverride {
                     record: Some(record),
                 } = kind

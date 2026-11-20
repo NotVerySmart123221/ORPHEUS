@@ -159,6 +159,7 @@ pub(super) struct BodyWorld {
     pub(super) sightings: Vec<DefenderSighting>,
     pub(super) sighting_source: Option<SightingSource>,
     pub(super) cinematic_aim: Option<(Site, [i32; 2])>,
+    pub(super) facing_claims: indexmap::IndexMap<Site, crate::script_init::AiFacing>,
     pub(super) deadeye_scene: DeadeyeScene,
     pub(super) velocity_changes: Vec<(u32, crate::mover::VelocityChange)>,
 }
@@ -271,6 +272,29 @@ impl World for BodyWorld {
             self.cinematic_aim = None;
         }
         true
+    }
+
+    fn set_facing_claim(
+        &mut self,
+        site: Site,
+        record: crate::script_init::AiFacing,
+        active: bool,
+    ) -> Option<bool> {
+        if !self.is_player_site(site) {
+            return None;
+        }
+        if active {
+            if record.target != self.entity
+                || self.vitals.death().is_some()
+                || crate::facing::angles(record.direction).is_none()
+            {
+                return Some(false);
+            }
+            self.facing_claims.insert(site, record);
+        } else {
+            self.facing_claims.shift_remove(&site);
+        }
+        Some(true)
     }
 
     fn ruleset(&mut self, id: u32) -> Option<Value> {
@@ -404,6 +428,29 @@ impl World for BodyWorld {
 
     fn spatial_line_clear(&self, origin: [f64; 3], target: [f64; 3]) -> Option<bool> {
         self.spatial_frame.as_deref()?.line_clear(origin, target)
+    }
+
+    fn spatial_ray_cast(
+        &self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+    ) -> Option<Option<crate::script_expr::SpatialRayHit>> {
+        self.spatial_frame
+            .as_deref()?
+            .ray_cast(origin, direction, max_distance)
+    }
+
+    fn spatial_actor_ray_cast(
+        &self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+        targets: &[u32],
+    ) -> Option<Option<crate::script_expr::SpatialActorRayHit>> {
+        self.spatial_frame
+            .as_deref()?
+            .actor_ray_cast(origin, direction, max_distance, targets)
     }
 
     fn known_position(&self, entity: u32) -> Option<[f64; 3]> {

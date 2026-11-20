@@ -35,7 +35,7 @@ use crate::{
     script_expr::{RoomEntityFacts, SpatialCandidate},
     script_graph::RoomSpatialNeeds,
     script_init::ShotEvent,
-    static_ray::{Vec3, norm, segment_separation},
+    static_ray::{Vec3, capsule_entry_distance, norm, segment_separation},
     vitals::Death,
     world::{EntityUpdate, Operation},
 };
@@ -300,6 +300,7 @@ struct FlightBatch {
 #[derive(Clone)]
 pub(crate) struct RoomSpatialFrame {
     candidates: Vec<SpatialCandidate>,
+    actor_capsules: Option<BTreeMap<u32, TargetPose>>,
     entity_facts: Option<BTreeMap<u32, RoomEntityFacts>>,
     script_targets: HashMap<u32, RoomScriptTarget>,
     player_wires: HashMap<u32, u32>,
@@ -333,12 +334,77 @@ impl RoomSpatialFrame {
     pub(crate) fn line_clear(&self, origin: Vec3, target: Vec3) -> Option<bool> {
         self.ground.segment_clear(origin, target, MOVER_CATEGORY)
     }
+
+    pub(crate) fn ray_cast(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        max_distance: f64,
+    ) -> Option<Option<crate::script_expr::SpatialRayHit>> {
+        self.ground
+            .checked_cast_ray(origin, direction, max_distance, MOVER_CATEGORY)
+            .map(|hit| {
+                hit.map(|hit| crate::script_expr::SpatialRayHit {
+                    distance: hit.distance,
+                    point: hit.point,
+                    normal: hit.normal,
+                })
+            })
+    }
+
+    pub(crate) fn actor_ray_cast(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        max_distance: f64,
+        targets: &[u32],
+    ) -> Option<Option<crate::script_expr::SpatialActorRayHit>> {
+        let capsules = self.actor_capsules.as_ref()?;
+        let wall = self
+            .ground
+            .checked_cast_ray(origin, direction, max_distance, MOVER_CATEGORY)?;
+        let mut nearest: Option<crate::script_expr::SpatialActorRayHit> = None;
+        for &entity in targets {
+            let target = self.script_targets.get(&entity)?;
+            let candidate = self.candidates.get(target.candidate_index)?;
+            let pose = capsules.get(&entity)?;
+            if candidate.entity != entity
+                || candidate.position != pose.feet
+                || !pose.feet.into_iter().all(f64::is_finite)
+                || !pose.height.is_finite()
+                || pose.height < 0.0
+                || !pose.radius.is_finite()
+                || pose.radius <= 0.0
+            {
+                return None;
+            }
+            let [bottom, top] = pose.segment();
+            if !bottom.into_iter().chain(top).all(f64::is_finite) {
+                return None;
+            }
+            let Some(distance) =
+                capsule_entry_distance(origin, direction, max_distance, bottom, top, pose.radius)
+            else {
+                continue;
+            };
+            if wall.is_some_and(|wall| wall.distance < distance) {
+                continue;
+            }
+            if nearest.as_ref().is_none_or(|hit| {
+                distance < hit.distance || (distance == hit.distance && entity < hit.entity)
+            }) {
+                nearest = Some(crate::script_expr::SpatialActorRayHit { entity, distance });
+            }
+        }
+        Some(nearest)
+    }
 }
 
 struct RoomSpatialQueries {
     free_for_all: bool,
     ground: Arc<CollisionScene>,
     needs: RoomSpatialNeeds,
+    actor_movers: Option<Arc<crate::mover_settings::MoverCatalog>>,
 }
 
 /// Room-authoritative bot bodies, player bodies, and in-flight projectiles.
@@ -723,7 +789,17 @@ impl RoomSimulation {
             free_for_all,
             ground,
             needs,
+            actor_movers: None,
         });
+    }
+
+    pub(crate) fn enable_spatial_actor_rays(
+        &mut self,
+        movers: Arc<crate::mover_settings::MoverCatalog>,
+    ) {
+        if let Some(queries) = &mut self.spatial_queries {
+            queries.actor_movers = Some(movers);
+        }
     }
 
     /// Capture room state without changing the room's published frame.
@@ -736,6 +812,11 @@ impl RoomSimulation {
         };
         let capacity = self.players_by_wire.len() + self.by_wire.len();
         let mut candidates = Vec::with_capacity(capacity);
+        let actor_queries = queries
+            .actor_movers
+            .as_ref()
+            .map(|movers| BotQueries::new(queries.free_for_all, movers, &queries.ground, None));
+        let mut actor_capsules = actor_queries.as_ref().map(|_| BTreeMap::new());
         let mut entity_facts = (queries.needs >= RoomSpatialNeeds::EntityFacts).then(BTreeMap::new);
         let include_tags = queries.needs == RoomSpatialNeeds::EntityTags;
         let mut script_targets = HashMap::with_capacity(capacity);
@@ -757,6 +838,15 @@ impl RoomSimulation {
             }
             if alive {
                 let pose = bot.movement(frame);
+                if let Some((capsules, actor_queries)) =
+                    actor_capsules.as_mut().zip(actor_queries.as_ref())
+                {
+                    // Use the same collision proxy dimensions as other room
+                    // queries, including their catalog fallback policy.
+                    let mut capsule = actor_queries.target(bot);
+                    capsule.feet = pose.position;
+                    capsules.insert(bot.entity, capsule);
+                }
                 script_targets.insert(
                     bot.entity,
                     RoomScriptTarget {
@@ -805,6 +895,9 @@ impl RoomSimulation {
             }
             if alive {
                 let pose = state.mover.pose();
+                if let Some(capsules) = &mut actor_capsules {
+                    capsules.insert(wire, state.target_pose());
+                }
                 script_targets.insert(
                     wire,
                     RoomScriptTarget {
@@ -830,6 +923,7 @@ impl RoomSimulation {
 
         Ok(Some(Arc::new(RoomSpatialFrame {
             candidates,
+            actor_capsules,
             entity_facts,
             script_targets,
             player_wires,
@@ -845,6 +939,9 @@ impl RoomSimulation {
         };
         let view = Arc::make_mut(&mut frame);
         view.player_wires.remove(&owner);
+        if let Some(capsules) = &mut view.actor_capsules {
+            capsules.remove(&wire);
+        }
         if let Some(facts) = &mut view.entity_facts {
             facts.remove(&wire);
         }
@@ -2057,6 +2154,8 @@ impl RoomSimulation {
                     bot.stop_objective(tick);
                     enemy.fault = Some(error);
                 } else if let Some(aim) = enemy.scripts.cinematic_aim() {
+                    bot.apply_encounter_aim(aim, tick);
+                } else if let Some(aim) = enemy.scripts.authored_facing(enemy.binding.body) {
                     bot.apply_encounter_aim(aim, tick);
                 } else if crate::npc_catalog::is_junkenstein_boss(enemy.binding.hero) {
                     if let Some(direction) = enemy.scripts.facing_direction() {

@@ -771,21 +771,15 @@ impl EnemyScripts {
     }
 
     pub(crate) fn facing_direction(&self) -> Option<[f64; 3]> {
-        self.control_records
-            .facing
-            .values()
-            .fold(None, |winner: Option<&script_init::AiFacing>, record| {
-                if winner.is_none_or(|winner| {
-                    record.priority.level > winner.priority.level
-                        || (record.priority.level == winner.priority.level
-                            && record.priority.above_equals)
-                }) {
-                    Some(record)
-                } else {
-                    winner
-                }
-            })
-            .map(|record| record.direction)
+        crate::facing::winner(self.control_records.facing.iter())
+            .map(|(_, record)| record.direction)
+    }
+
+    pub(crate) fn authored_facing(&self, body: u32) -> Option<[i32; 2]> {
+        let (site, record) = crate::facing::winner(self.control_records.facing.iter())?;
+        (site.entity == body)
+            .then(|| crate::facing::angles(record.direction))
+            .flatten()
     }
 
     pub(crate) fn queue_wave_script(

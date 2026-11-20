@@ -2,6 +2,23 @@
 
 Use the current `rust` module boundaries when extending the VM. This guide integrates useful verification work from the older local foundation experiment without replacing the subsequently merged implementation.
 
+## Shared Rust integration
+
+Use `work/statescript-integration` as the common local checkpoint for
+verified StateScript batches. Keep the working branches for the separate
+lanes and merge their completed commits after the focused checks. Review
+the shared checkpoint before changing a module that another lane also uses.
+
+| Working branch | Scope |
+| --- | --- |
+| `work/phase2-generic-vm` | Shared VM primitives, mode rules, voice and message dispatch |
+| `work/statescript-local` | Phase 3 targeting, movement and owner projection |
+| `work/statescript-integration` | Combined checks, native actor admission and weapon readiness |
+
+Run the workspace checks and prepared input and startup regressions on
+the combined source before treating it as the next shared baseline.
+Keep the previous verified revision available in Git history.
+
 ## Execution scope
 
 The VM uses each node's declared execution scope for graph traversal, startup
@@ -409,6 +426,29 @@ rules.
 
 See the [synthetic movement scale contract](../fixtures/behavior/script-movement-scale-v1.json).
 
+## Control a body's facing for a state
+
+Set `state_behavior` to `"facing_claim"` on a server-only state or
+declare `facing_claim_state` for an authored class. Provide a
+`direction` expression and a `priority` with an integer `level` in
+the range -128 to 127 and a boolean `above_equals`. The state's own
+body is the target. The VM evaluates and normalizes the finite nonzero
+direction on entry and refresh.
+
+The highest priority claim supplies the body's facing. A later claim
+at the same level wins when it sets `above_equals`. Refreshing a claim
+preserves its place in that order. Area queries can supply inputs through
+the usual StateScript expressions and variables.
+
+Finishing, aborting or tearing down the state releases its claim.
+An invalid direction or a refused host refresh aborts the state and
+releases its previous claim. Players apply the accepted direction at
+the next processed pose. NPCs apply it through the room's existing aim
+update. Server-facing claims support vertical directions. An active
+cinematic aim has precedence.
+
+See the [synthetic facing claim contract](../fixtures/behavior/statescript-facing-claim-v1.json).
+
 ## Use priorities for control effects
 
 A server-only state can declare `"state_behavior": "stack_claim"`, or use
@@ -445,6 +485,21 @@ for the shot, wrapper, duration override, and NPC guards. Recipient scripts
 queue the existing wrapper and hit notification in order. The room can
 suppress its native control timer while the graph still handles the
 notification.
+
+## Limit instance variables to the owner
+
+A graph can declare `"owner_only_instance_vars": [12]` to restrict variable
+12 to owner StateScript snapshots. Declare unique nonzero variable IDs
+on the graph object. A declared ID can use one existing instance sync
+slot or the ordinary extra-variable encoding. A sync slot for shared
+entity scope or multiple sync slots for that ID is invalid.
+
+The owner receives the resolved value through the existing codec.
+Observer full snapshots and deltas omit the declared instance value.
+The declaration applies independently to every instance of the graph,
+including child instances. Entity variables, actions, and explicit
+copies to public variables keep their usual visibility. Client-side
+interpretation of the value requires a verified receiver.
 
 ## Share class behavior across a graph bundle
 
@@ -892,6 +947,49 @@ not require the service.
 
 See the [synthetic segment contract](../fixtures/behavior/statescript-segment-clear-v1.json).
 
+## Read the nearest static ray hit
+
+Use `RayCast` as the `$` tag with `origin`, `direction`, and
+`max_distance` expressions. Supply a finite origin vector, a finite
+nonzero direction vector, and a positive finite distance. The VM evaluates
+them in that order, normalizes the direction, and spends one work unit on
+the geometry query.
+
+The result is `[distance, point, normal]` when the static scene has a hit
+at or before the distance limit, and `[]` when the bounded ray misses.
+Player and NPC queries use the same room collision scene and movement
+category. A missing room frame or an invalid or untraversable ray reports
+unavailable geometry. An `observe` state retains the last successful
+result until the service recovers. Static ray results exclude dynamic
+bodies and gameplay effects.
+
+See the [synthetic ray contract](../fixtures/behavior/statescript-ray-cast-v1.json).
+
+## Find the first actor along a ray
+
+Use `EntityRayCast` with the same `origin`, `direction`, and
+`max_distance` expressions. An optional `filter` uses the existing room
+team, liveness, and tag rules. The team filter resolves its source from
+the full room snapshot and excludes that source from the eligible IDs.
+Without a filter the caller's captured capsule is eligible. A team
+filter whose source is absent from the sampled frame is unavailable,
+including when a replacement body has not joined the frame yet.
+The VM spends work for each scanned candidate and each eligible capsule
+before calling the room. Actor geometry uses the room's frozen player
+capsules and existing NPC collision proxies.
+
+A hit produces `[entity, distance, point]`. A ray starting inside an
+eligible capsule can return distance zero. At equal distances, the
+lowest entity ID wins. A static surface strictly ahead of the actor
+occludes it. An available ray with no visible eligible hit returns
+`[]`. Unavailable ray data preserves an observation's last successful
+value until the query recovers.
+
+The result identifies an actor in the sampled frame. If a script queues
+a health or message operation in that frame, the room captures the
+target's identity and checks its generation at settlement. See the
+[synthetic actor ray contract](../fixtures/behavior/statescript-entity-ray-cast-v1.json).
+
 ## Match a room entity against authored conditions
 
 Use `EntityMatches` as the `$` tag and supply an `entity` expression
@@ -925,7 +1023,15 @@ Declare `"state_behavior": "observe"` on a server-only state or use
 `"observe_state"` in the bundle class catalog. Give it a `value`
 expression and a writable `output` variable. An optional `on_change`
 plug follows the first successful sample and each changed sample after it.
-The state writes the current value before following the plug.
+An optional `on_sample` plug follows every successful sample, including
+an unchanged result or a known empty result. The state writes the current
+value before either plug. On a changed sample, `on_change` runs first.
+If the observation has stopped or restarted by the time the sample
+callback runs, the old activation's callback is dropped. If another
+state or an earlier plug overwrote the output, the VM restores this
+activation's sample at callback entry. The normal variable binding
+priority still applies. If a binding hides the sample, the VM reports
+the output as unavailable and suppresses that callback.
 
 Sampling starts in the VM frame after activation and runs at most once
 per VM frame. That lets a body initialize before the room publishes its
@@ -934,6 +1040,11 @@ and preserves the last successful result without failing the runtime.
 The state retries on the next frame. Invalid expressions still report
 regular evaluation errors. Finish and abort stop polling and leave the last written value
 available. The ordinary lifecycle plugs can clear it when needed.
+
+Use `on_sample` for effects that depend on a current ray result. When
+the geometry or room snapshot is unavailable, this plug stays inactive.
+A known empty ray result still reaches the plug so the graph can handle
+a miss. Keep target effects behind the graph's hit check.
 
 Use `EntitiesInRadius` as the value to follow membership of an area.
 The [synthetic observation contract](../fixtures/behavior/script-observe-radius-v1.json)

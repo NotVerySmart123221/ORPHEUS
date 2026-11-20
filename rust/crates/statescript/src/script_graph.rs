@@ -46,6 +46,7 @@ enum StateBehavior {
     ButtonLock,
     MovementScale,
     StackClaim,
+    FacingClaim,
     TrackEntities,
 }
 
@@ -152,6 +153,18 @@ impl Node {
             return None;
         }
         Some((factor, self.optional_duration_frames()?))
+    }
+
+    /// Whether authored metadata declares a self-facing claim.
+    pub fn declares_facing_claim(&self) -> bool {
+        self.state_behavior == Some(StateBehavior::FacingClaim)
+    }
+
+    pub(crate) fn facing_claim_priority(&self) -> Option<StackPriority> {
+        if !self.declares_facing_claim() {
+            return None;
+        }
+        authored_stack_priority(self.field("priority")?).ok()
     }
 
     pub(crate) fn declares_stack_claim(&self) -> bool {
@@ -423,6 +436,8 @@ pub struct Graph {
     #[serde(rename = "remote")]
     pub remote_nodes: Vec<Option<u16>>,
     pub sync_vars: Vec<SyncVar>,
+    #[serde(default)]
+    owner_only_instance_vars: Vec<u32>,
     #[serde(skip)]
     by_pos: Vec<Option<usize>>,
     #[serde(skip)]
@@ -486,6 +501,29 @@ impl Graph {
     }
 
     fn compile(&mut self) -> io::Result<()> {
+        if !self.owner_only_instance_vars.is_empty() {
+            let mut owner_variables = BTreeSet::new();
+            for &variable in &self.owner_only_instance_vars {
+                if variable == 0 || !owner_variables.insert(variable) {
+                    return Err(invalid(format!(
+                        "invalid owner-only instance variable {variable} in graph {}",
+                        self.index
+                    )));
+                }
+            }
+            let mut synchronized_owner_variables = BTreeSet::new();
+            for entry in &self.sync_vars {
+                if let Some(variable) = entry.0.filter(|id| owner_variables.contains(id)) {
+                    if entry.1 != 0 || !synchronized_owner_variables.insert(variable) {
+                        return Err(invalid(format!(
+                            "owner-only instance variable {variable} has an ambiguous synchronization scope in graph {}",
+                            self.index
+                        )));
+                    }
+                }
+            }
+            self.owner_only_instance_vars.sort_unstable();
+        }
         self.by_pos = vec![None; usize::from(self.items)];
         if let Some(max) = self.nodes.iter().map(|node| node.rid).max() {
             self.by_rid = vec![None; usize::from(max) + 1];
@@ -510,6 +548,7 @@ impl Graph {
                     StateBehavior::ButtonLock => "button lock state",
                     StateBehavior::MovementScale => "movement scale state",
                     StateBehavior::StackClaim => "stack claim state",
+                    StateBehavior::FacingClaim => "facing claim state",
                     StateBehavior::TrackEntities => "track entities state",
                 };
                 let occupies_state_slot = node
@@ -540,6 +579,7 @@ impl Graph {
                 ]
                 .into_iter()
                 .chain(node.declares_observe_state().then_some("on_change"))
+                .chain(node.declares_observe_state().then_some("on_sample"))
                 .chain(stack_outputs.iter().copied())
                 {
                     if node
@@ -609,6 +649,17 @@ impl Graph {
                             )));
                         }
                         "StateStackClaim"
+                    }
+                    StateBehavior::FacingClaim => {
+                        if node.field("direction").is_none_or(Value::is_null)
+                            || node.facing_claim_priority().is_none()
+                        {
+                            return Err(invalid(format!(
+                                "{state} in graph {} at node {} requires a direction expression and explicit i8 level and boolean above_equals priority",
+                                self.index, node.pos
+                            )));
+                        }
+                        "StateFacingClaim"
                     }
                     StateBehavior::TrackEntities => {
                         if node.field("targets").is_none_or(Value::is_null) {
@@ -836,6 +887,11 @@ impl Graph {
         &self.owner.positions
     }
 
+    /// Authored instance variables excluded from observer projection.
+    pub fn owner_only_instance_vars(&self) -> &[u32] {
+        &self.owner_only_instance_vars
+    }
+
     pub fn remote_positions(&self) -> &[u16] {
         &self.remote.positions
     }
@@ -1058,6 +1114,7 @@ enum AuthoredClassBehavior {
     ButtonLockState,
     MovementScaleState,
     StackClaimState,
+    FacingClaimState,
     TrackEntitiesState,
     ForwardAction,
     BranchAction,
@@ -1078,6 +1135,7 @@ impl AuthoredClassBehavior {
             Self::ButtonLockState => (false, Some(StateBehavior::ButtonLock), None),
             Self::MovementScaleState => (false, Some(StateBehavior::MovementScale), None),
             Self::StackClaimState => (false, Some(StateBehavior::StackClaim), None),
+            Self::FacingClaimState => (false, Some(StateBehavior::FacingClaim), None),
             Self::TrackEntitiesState => (false, Some(StateBehavior::TrackEntities), None),
             Self::ForwardAction => (false, None, Some(ActionBehavior::Forward)),
             Self::BranchAction => (false, None, Some(ActionBehavior::Branch)),
@@ -1212,8 +1270,9 @@ struct Bundle {
     missing: Vec<u32>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub enum RoomSpatialNeeds {
+    #[default]
     None,
     Queries,
     EntityFacts,
@@ -1233,51 +1292,67 @@ fn native_pose_needs_queries(value: &Value, class: &str) -> bool {
     entity.get("$").and_then(Value::as_str).is_some() && !native_shape(entity, "STU_B5A0CAF0", None)
 }
 
-fn room_spatial_needs(value: &Value) -> RoomSpatialNeeds {
+#[derive(Clone, Copy, Default)]
+struct RoomSpatialRequirements {
+    needs: RoomSpatialNeeds,
+    actor_rays: bool,
+}
+
+impl RoomSpatialRequirements {
+    fn merge(self, other: Self) -> Self {
+        Self {
+            needs: self.needs.max(other.needs),
+            actor_rays: self.actor_rays || other.actor_rays,
+        }
+    }
+}
+
+fn room_spatial_requirements(value: &Value) -> RoomSpatialRequirements {
     use RoomSpatialNeeds::{EntityFacts, EntityTags, None as NoQueries, Queries};
 
     if value.get("$").and_then(Value::as_str) == Some("ClientOnly") {
         return client_only_fallback(value)
             .ok()
             .flatten()
-            .map_or(NoQueries, room_spatial_needs);
+            .map_or_else(RoomSpatialRequirements::default, room_spatial_requirements);
     }
-    let requirements = |fields: &Map<String, Value>| {
-        let filter = fields.get("filter").and_then(Value::as_object);
-        let tags = filter.is_some_and(|filter| filter.contains_key("tags"));
-        match fields.get("$").and_then(Value::as_str) {
-            Some("EntityMatches" | "EntitiesInRadius") if tags => EntityTags,
-            Some("EntityMatches") => EntityFacts,
-            Some("EntitiesInRadius")
-                if filter.is_some_and(|filter| filter.contains_key("alive")) =>
-            {
-                EntityFacts
-            }
-            Some("EntitiesInRadius" | "SegmentClear" | "EntityPosition" | "EntityDirection") => {
-                Queries
-            }
-            Some(class @ ("STU_21A13145" | "STU_2200A66D"))
-                if native_pose_needs_queries(value, class) =>
-            {
-                Queries
-            }
-            _ => NoQueries,
-        }
-    };
     match value {
-        Value::Object(fields) => requirements(fields).max(
-            fields
-                .values()
-                .map(room_spatial_needs)
-                .max()
-                .unwrap_or(NoQueries),
+        Value::Object(fields) => {
+            let filter = fields.get("filter").and_then(Value::as_object);
+            let tags = filter.is_some_and(|filter| filter.contains_key("tags"));
+            let class = fields.get("$").and_then(Value::as_str);
+            let needs = match class {
+                Some("EntityMatches" | "EntitiesInRadius" | "EntityRayCast") if tags => EntityTags,
+                Some("EntityMatches") => EntityFacts,
+                Some("EntitiesInRadius" | "EntityRayCast")
+                    if filter.is_some_and(|filter| filter.contains_key("alive")) =>
+                {
+                    EntityFacts
+                }
+                Some(
+                    "EntitiesInRadius" | "SegmentClear" | "RayCast" | "EntityRayCast"
+                    | "EntityPosition" | "EntityDirection",
+                ) => Queries,
+                Some(class @ ("STU_21A13145" | "STU_2200A66D"))
+                    if native_pose_needs_queries(value, class) =>
+                {
+                    Queries
+                }
+                _ => NoQueries,
+            };
+            fields.values().map(room_spatial_requirements).fold(
+                RoomSpatialRequirements {
+                    needs,
+                    actor_rays: class == Some("EntityRayCast"),
+                },
+                RoomSpatialRequirements::merge,
+            )
+        }
+        Value::Array(values) => values.iter().map(room_spatial_requirements).fold(
+            RoomSpatialRequirements::default(),
+            RoomSpatialRequirements::merge,
         ),
-        Value::Array(values) => values
-            .iter()
-            .map(room_spatial_needs)
-            .max()
-            .unwrap_or(NoQueries),
-        _ => NoQueries,
+        _ => RoomSpatialRequirements::default(),
     }
 }
 
@@ -1286,6 +1361,7 @@ pub struct GraphStore {
     graphs: BTreeMap<u32, Graph>,
     projected_message_topics: BTreeSet<u64>,
     room_spatial_needs: RoomSpatialNeeds,
+    uses_spatial_actor_rays: bool,
     uses_host_health_events: bool,
     bodies: BTreeMap<u64, Body>,
     entities: BTreeMap<u64, Body>,
@@ -1470,30 +1546,32 @@ impl GraphStore {
             bundle.runtime_state_metadata.projected_message_topics,
             &graphs,
         )?;
-        let room_spatial_needs = graphs
+        let room_spatial_requirements = graphs
             .values()
             .flat_map(|graph| &graph.nodes)
             .filter(|node| node.runs_on_server())
             .map(|node| {
-                let needs = room_spatial_needs(&node.fields);
+                let mut requirements = room_spatial_requirements(&node.fields);
                 if node.declares_health_change_action()
                     || node.declares_room_message_action()
                     || node.declares_room_cue_action()
                 {
-                    needs.max(RoomSpatialNeeds::Queries)
-                } else {
-                    needs
+                    requirements.needs = requirements.needs.max(RoomSpatialNeeds::Queries);
                 }
+                requirements
             })
-            .max()
-            .unwrap_or(RoomSpatialNeeds::None);
+            .fold(
+                RoomSpatialRequirements::default(),
+                RoomSpatialRequirements::merge,
+            );
         let uses_host_health_events = graphs
             .values()
             .any(|graph| graph.entry_handlers.contains_key(&health_topic));
         Ok(Self {
             graphs,
             projected_message_topics,
-            room_spatial_needs,
+            room_spatial_needs: room_spatial_requirements.needs,
+            uses_spatial_actor_rays: room_spatial_requirements.actor_rays,
             uses_host_health_events,
             bodies: keyed_by_guid(bundle.bodies)?,
             entities: keyed_by_guid(bundle.entities)?,
@@ -1522,6 +1600,11 @@ impl GraphStore {
     /// The most detailed room data requested by any server graph.
     pub fn room_spatial_needs(&self) -> RoomSpatialNeeds {
         self.room_spatial_needs
+    }
+
+    /// Whether a server operand needs frozen actor collision shapes.
+    pub fn uses_spatial_actor_rays(&self) -> bool {
+        self.uses_spatial_actor_rays
     }
 
     /// Whether this bundle explicitly subscribes to a host health event.
@@ -1796,6 +1879,73 @@ mod tests {
             }},
             "missing": [43]
         })
+    }
+
+    #[test]
+    fn owner_only_instance_variables_validate_identity_and_synchronization_scope() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../fixtures/behavior/script-owner-instance-visibility-v1.json"
+        )))
+        .unwrap();
+        let source = &fixture["input"]["bundle"];
+        let load = |bundle: &Value| GraphStore::from_json(&serde_json::to_vec(bundle).unwrap());
+        let graphs = load(source).unwrap();
+        assert_eq!(
+            graphs.graph(121).unwrap().owner_only_instance_vars(),
+            [871, 872]
+        );
+        assert_eq!(graphs.graph(122).unwrap().owner_only_instance_vars(), [871]);
+        for invalid_ids in [
+            json!(null),
+            json!(true),
+            json!({}),
+            json!(0),
+            json!([0]),
+            json!([871, 871]),
+            json!([-1]),
+            json!([true]),
+            json!([1.5]),
+            json!(["871"]),
+            json!([4294967296_u64]),
+        ] {
+            let mut bundle = source.clone();
+            bundle["graphs"][0]["owner_only_instance_vars"] = invalid_ids;
+            assert!(load(&bundle).is_err());
+        }
+        for invalid_sync in [
+            json!([[871, 1, 0]]),
+            json!([[871, 2, 0]]),
+            json!([[871, 0, 0], [871, 0, 1]]),
+            json!([[871, 0, 0], [871, 1, 0]]),
+        ] {
+            let mut bundle = source.clone();
+            bundle["graphs"][0]["sync_vars"] = invalid_sync;
+            assert!(load(&bundle).is_err());
+        }
+        let mut legacy = source.clone();
+        legacy["graphs"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("owner_only_instance_vars");
+        assert!(
+            load(&legacy)
+                .unwrap()
+                .graph(121)
+                .unwrap()
+                .owner_only_instance_vars()
+                .is_empty()
+        );
+        let mut extras = source.clone();
+        extras["graphs"][0]["owner_only_instance_vars"] = json!([u32::MAX]);
+        assert_eq!(
+            load(&extras)
+                .unwrap()
+                .graph(121)
+                .unwrap()
+                .owner_only_instance_vars(),
+            [u32::MAX]
+        );
     }
 
     #[test]
@@ -2454,6 +2604,22 @@ mod tests {
                 RoomSpatialNeeds::Queries,
             ),
             (
+                json!({"$":"RayCast","origin":null,"direction":null,"max_distance":1}),
+                RoomSpatialNeeds::Queries,
+            ),
+            (
+                json!({"$":"EntityRayCast","origin":null,"direction":null,"max_distance":1}),
+                RoomSpatialNeeds::Queries,
+            ),
+            (
+                json!({"$":"EntityRayCast","origin":null,"direction":null,"max_distance":1,"filter":{"alive":true}}),
+                RoomSpatialNeeds::EntityFacts,
+            ),
+            (
+                json!({"$":"EntityRayCast","origin":null,"direction":null,"max_distance":1,"filter":{"tags":{}}}),
+                RoomSpatialNeeds::EntityTags,
+            ),
+            (
                 json!({"$":"EntitiesInRadius","center":null,"radius":1,"filter":{"alive":true}}),
                 RoomSpatialNeeds::EntityFacts,
             ),
@@ -2470,10 +2636,12 @@ mod tests {
                 RoomSpatialNeeds::EntityTags,
             ),
         ] {
+            let actor_rays = predicate.get("$").and_then(Value::as_str) == Some("EntityRayCast");
             data["graphs"][0]["nodes"][0]["fields"]["nested"][0]["value"] = predicate;
             let parsed = load(&data);
             assert!(parsed.uses_room_spatial_frame());
             assert_eq!(parsed.room_spatial_needs(), needs);
+            assert_eq!(parsed.uses_spatial_actor_rays(), actor_rays);
         }
 
         let wrapper = json!({
@@ -2486,7 +2654,23 @@ mod tests {
             json!({"$":"SegmentClear","origin":null,"target":null});
         assert_eq!(load(&data).room_spatial_needs(), RoomSpatialNeeds::Queries);
 
+        data["graphs"][0]["nodes"][0]["fields"]["nested"][0]["value"]["server_fallback"] =
+            json!({"$":"RayCast","origin":null,"direction":null,"max_distance":1});
+        assert_eq!(load(&data).room_spatial_needs(), RoomSpatialNeeds::Queries);
+
+        data["graphs"][0]["nodes"][0]["fields"]["nested"][0]["value"] = json!({
+            "$":"ClientOnly",
+            "value":{"$":"EntityRayCast","origin":null,"direction":null,"max_distance":1}
+        });
+        assert!(!load(&data).uses_spatial_actor_rays());
+        assert_eq!(load(&data).room_spatial_needs(), RoomSpatialNeeds::None);
+        data["graphs"][0]["nodes"][0]["fields"]["nested"][0]["value"]["server_fallback"] =
+            json!({"$":"EntityRayCast","origin":null,"direction":null,"max_distance":1});
+        assert!(load(&data).uses_spatial_actor_rays());
+        assert_eq!(load(&data).room_spatial_needs(), RoomSpatialNeeds::Queries);
+
         data["graphs"][0]["nodes"][0]["client_only"] = json!(true);
+        assert!(!load(&data).uses_spatial_actor_rays());
         assert!(!load(&data).uses_room_spatial_frame());
         assert!(load(&data).room_spatial_needs() < RoomSpatialNeeds::EntityFacts);
     }
@@ -2881,6 +3065,15 @@ mod tests {
         node["server_only"] = json!(false);
         node["fields"]["on_change"] = Value::Null;
         assert!(load(&data).is_ok());
+
+        for plug in [Value::Null, json!({"$":"Plug","links":[]})] {
+            data["graphs"][0]["nodes"][0]["fields"]["on_sample"] = plug;
+            assert!(load(&data).is_ok());
+        }
+        data["graphs"][0]["nodes"][0]["fields"]["on_sample"] =
+            json!({"$":"Plug","links":[[0,false]]});
+        let error = load(&data).unwrap_err();
+        assert!(error.to_string().contains("invalid on_sample output plug"));
     }
 
     #[test]
@@ -3096,6 +3289,79 @@ mod tests {
             Some((1.0, NonZeroU32::new(u32::MAX)))
         );
         assert!(scale.server_only && !scale.client_only);
+    }
+
+    #[test]
+    fn authored_facing_claim_requires_direction_and_explicit_priority() {
+        let load = |data: &Value| GraphStore::from_json(&serde_json::to_vec(data).unwrap());
+        let mut data = fixture();
+        data["graphs"][0]["states"][3] = Value::Null;
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["state"] = json!(0);
+        node["server_only"] = json!(true);
+        node["state_behavior"] = json!("facing_claim");
+        node["fields"] = json!({
+            "direction":{"$":"EntityDirection","entity":null},
+            "priority":{"level":-3,"above_equals":true}
+        });
+        let graphs = load(&data).unwrap();
+        let claim = graphs.graph(42).unwrap().state(0).unwrap();
+        assert_eq!(claim.class, "StateFacingClaim");
+        assert!(claim.declares_facing_claim() && claim.is_state() && !claim.is_networked());
+        assert_eq!(
+            claim.facing_claim_priority(),
+            Some(StackPriority {
+                level: -3,
+                above_equals: true
+            })
+        );
+
+        for (field, value) in [
+            ("direction", Value::Null),
+            ("priority", Value::Null),
+            ("priority", json!({"level":128,"above_equals":true})),
+            ("priority", json!({"level":-129,"above_equals":true})),
+            ("priority", json!({"level":1.5,"above_equals":true})),
+            ("priority", json!({"level":1,"above_equals":1})),
+            ("priority", json!({"level":1})),
+            (
+                "priority",
+                json!({"level":1,"above_equals":true,"extra":false}),
+            ),
+            ("m_onAbortPlug", json!({"$":"Plug","links":[[0,false]]})),
+        ] {
+            let mut bad = data.clone();
+            bad["graphs"][0]["nodes"][0]["fields"][field] = value;
+            let error = load(&bad).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(
+                error
+                    .to_string()
+                    .contains("facing claim state in graph 42 at node 0")
+            );
+        }
+        for field in ["direction", "priority"] {
+            let mut bad = data.clone();
+            bad["graphs"][0]["nodes"][0]["fields"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert_eq!(load(&bad).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        }
+        let mut bad = data.clone();
+        bad["graphs"][0]["nodes"][0]["server_only"] = json!(false);
+        assert!(load(&bad).unwrap_err().to_string().contains("server-only"));
+
+        data["authored_classes"] =
+            json!([{"class":"authored.facing","behavior":"facing_claim_state"}]);
+        let node = &mut data["graphs"][0]["nodes"][0];
+        node["class"] = json!("authored.facing");
+        node["state_behavior"] = Value::Null;
+        node["server_only"] = json!(false);
+        let graphs = load(&data).unwrap();
+        let claim = graphs.graph(42).unwrap().state(0).unwrap();
+        assert!(claim.declares_facing_claim() && claim.server_only && !claim.client_only);
+        assert_eq!(claim.class, "StateFacingClaim");
     }
 
     #[test]
