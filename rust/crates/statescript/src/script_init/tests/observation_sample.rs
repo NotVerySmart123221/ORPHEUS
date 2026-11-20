@@ -1030,7 +1030,8 @@ fn queued_sample_facing_starts_respect_source_and_destination_cancellation() {
                 )?;
                 vm.deliver_observed_sample(KEY, activation, fields.frame, available)?;
                 if cancel_destination {
-                    return vm.drop_begin(1, 2);
+                    vm.drop_begin(1, 2);
+                    return Ok(());
                 }
                 vm.end(KEY, false, 0)?;
                 if reactivate {
