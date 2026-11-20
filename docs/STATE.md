@@ -119,6 +119,18 @@ repeated, and every tick matched the preceding capture for its
 implementation. The strict comparison retained the same four RNG model
 and seed differences.
 
+At `15a10d4e`, authored owner graphs gained a `BodyActive` query.
+Synthetic tests covered initialization with and without room activity,
+paused and resumed gains, health awards at dispatch, death, and stale
+updates after same-wire replacement. Two same-pack startup reports
+matched byte for byte. The 32 rows matched the preceding revision,
+with 11 independent passes, one ordinary attachment, and 47 blocking
+sites. The #72 trace matched all 476 observations across 900 frames.
+On the same Windows #131 inputs, idle and single-shot reload each
+produced 339 ticks. Both implementations repeated their observations,
+passed individual trace validation, and matched their previous traces
+tick for tick. Strict comparison retained the four RNG setup differences.
+
 Seven actor probes have one blocking site each. Mercy's tag query needs
 the tagged placement inventory and live actor tags. Orisa and Sigma
 still hit persistent message registration. Baptiste cannot read a
