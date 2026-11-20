@@ -1246,6 +1246,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         &mut self,
         key: StateKey,
         node: &Node,
+        wave_bonus: bool,
     ) -> Result<(), InitFault> {
         let id = key.instance;
         let site = self.site(id, node);
@@ -1256,7 +1257,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             self.report(site, Issue::UnsupportedField("health pool target"));
             return Ok(());
         }
-        if site.graph == 0x0cbc {
+        if wave_bonus {
             return self.begin_wave_health(key, node, site);
         }
         let Some(maximum) = self

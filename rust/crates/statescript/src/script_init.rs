@@ -1011,7 +1011,7 @@ impl Component {
                     ..State::dormant(StateKind::HealthPool { pool: None })
                 },
             );
-            vm.begin_health_pool(StateKey { instance, raw }, node)
+            vm.begin_health_pool(StateKey { instance, raw }, node, true)
         })
     }
 

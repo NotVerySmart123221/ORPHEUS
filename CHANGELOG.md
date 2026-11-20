@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Routed ordinary health pools through their validated field shape independently of graph placement. The wave path keeps its explicit admission checks and uses the same pool lifecycle after registration. The synthetic fixture reproduced the old placement rejection and checks registration, exit, and cleanup.
+
 - Recognized an explicit integer-zero reset in a direct health query target slot. A boolean or nonzero integer remains a type error. The synthetic test reproduced the integer reset failure before the fix. Two identical same-pack reports at `d747f926` cleared both selected-pool diagnostics for Zenyatta, reducing blockers from 51 to 49. Independent startup remained at 10 of 32 and ordinary Practice Range attachment at 1 of 32. The #72 capture matched at all 476 observation sites. Formatting, the locked workspace check, Clippy with script coverage, and the two library suites passed. The library suites reported 199 StateScript and 360 native tests passed.
 
 - Removed a three-placement guard for an inherited base state. The loader records the verified class through the same metadata path for tagged and legacy bundles. The synthetic lifecycle contract reproduced the rejection at a new placement and covers abort, exit, client-only exclusion, and an unrelated unsupported class. Two same-pack runs at `eff202e3` retained 51 blockers and 10 of 32 independent passes. The #72 capture matched at all 476 observation sites. Formatting, the locked workspace check, Clippy with script coverage, and the two library suites passed with 199 StateScript tests and 360 native tests.

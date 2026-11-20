@@ -1085,6 +1085,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let interval_frames = node.interval_frames();
         let button_lock = node.button_lock();
         let movement_scale = node.movement_scale();
+        let mut wave_bonus = false;
         let kind = match node.class.as_str() {
             // These client presentation states use the base state lifecycle on the server.
             "STUStatescriptState"
@@ -1267,14 +1268,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             {
                 StateKind::HealthCapacity
             }
-            "STUStatescriptStateHealthPool"
-                if self.graph(id).index != 0x0cbc && is_base_health_pool(node) =>
-            {
+            "STUStatescriptStateHealthPool" if is_base_health_pool(node) => {
                 StateKind::HealthPool { pool: None }
             }
             "STUStatescriptStateHealthPool"
                 if self.graph(id).index == 0x0cbc && is_wave_health_pool(node) =>
             {
+                wave_bonus = true;
                 StateKind::HealthPool { pool: None }
             }
             "STU_B7D2C9C0" => StateKind::DisplayName { binding: None },
@@ -1612,7 +1612,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     return Ok(());
                 }
             }
-            StateKind::HealthPool { .. } => self.begin_health_pool(key, node)?,
+            StateKind::HealthPool { .. } => self.begin_health_pool(key, node, wave_bonus)?,
             StateKind::HealthCapacity => self.check_health_capacity(key, node)?,
             StateKind::SameTeamContact { .. } => {
                 let site = self.site(id, node);
