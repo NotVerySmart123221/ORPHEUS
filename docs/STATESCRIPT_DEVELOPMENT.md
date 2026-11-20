@@ -189,6 +189,15 @@ when its persistent registration path is unavailable. The probe keeps
 the failure blocking and records the sender node. The ordinary one-shot
 send path remains separate from registration of a persistent sender.
 
+The 49-site prepared review found eight fixed-self senders across two
+message topics, including the sole startup blocker for Orisa and Sigma.
+The prepared bundle and listing audit found ten matching receivers
+marked client-only. The actor graph closures still contain unresolved
+references, and the wider bundle contains unresolved server-side message
+selectors. The audit establishes candidate client projection coverage.
+Persistent registration still requires an explicit scope contract that
+covers dynamic routes and preserves parameter bindings.
+
 The report's `probe_roster` declares the synthetic admitted player slots
 used by both attempts. In a live room, the player host reads the admitted
 roster at startup and refreshes it on departure. The count includes members

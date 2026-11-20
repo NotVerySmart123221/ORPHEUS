@@ -47,6 +47,10 @@ The `d747f926` reports matched byte for byte and cleared both remaining selected
 
 The Windows paired room checks at `d747f926` used 339 ticks each for idle and single-shot reload. Python `45044d0d` and Rust produced two repeatable, individually valid traces in each case. Strict comparison returned `incompatible` for the host and player VM RNG model and seed. The RNG diagnostic found no first difference in the recorded tick fields. The manifest and schedule digests matched the earlier ARM64 runs. The effective input tree digest differed.
 
+At `b7f953ae` and `60b2b955`, the ordinary health pool and bound body angle changes retained **49 blocking sites**, **10 of 32** independent passes, and **1 of 32** ordinary Practice Range attachments. Two reports per revision matched byte for byte. Each revision matched the preceding startup and #72 captures apart from the recorded source revision. The isolated wave health regression passed for all six placements and four difficulty values.
+
+The Windows idle and single-shot reload checks at `60b2b955` matched the prior Windows input and observation hashes for both implementations. Each schedule covered 339 ticks. The strict comparison retained the same four RNG setup differences.
+
 | Workflow | Python reference | Rust implementation | Open client or parity gap |
 | --- | --- | --- | --- |
 | **Login, Profiles & Lobby** | Battle.net/JAM auth, profiles, settings (`22200`–`22204`), queues, Windows launcher + TLS relay. | Native BNet/JAM lobby, `profile-settings-v1` (CI verified), encrypted UDP seat handoff. | Standalone Rust launcher & public client connection flow open. |
