@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Added an opt-in prepared actor input matrix covering seven gameplay inputs, movement, release phases, and owner delivery. It reports the first failed frame and retains typed snapshot diagnostics before a body script is retired. Server library tests, Clippy, and the prepared matrix passed.
+
 - Added `prepare_server_runtime --mode-rulesets` to compose local mode profiles with the selected graph bundle. The packer and server share rule validation, and the destination manifest hashes the composed bundle. The runtime and StateScript tests, Clippy, and native server library check passed.
 
 - Recorded a controlled weapon readiness comparison using the existing graph-bundle rules. Three more actors emitted server weapon requests, and two primary input paths exposed unsupported states. Both runs admitted the same 12 actors. The alternate rule pack stays in local verification.

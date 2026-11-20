@@ -342,6 +342,28 @@ its separate room factory result. This comparison measures startup
 milestones. Frame parity, gameplay, and original-client acceptance have
 separate tests.
 
+### Inspect actor input and owner delivery
+
+The prepared Practice Range input matrix selects each actor in a fresh room
+and sends commands through the native input and owner delivery paths. Its
+schedule includes movement, primary and secondary fire, both ability inputs,
+quick melee, reload, ultimate input, and release phases.
+
+```powershell
+$env:ORPHEUS_RUNTIME_DIR = 'C:\private\runtime'
+$env:ORPHEUS_ACTOR_INPUT_REPORT = 'C:\private\actor-input.json'
+$env:ORPHEUS_ACTOR_INPUT_REVISION = git rev-parse HEAD # Optional
+cargo test --locked -p orpheus --lib game_replication::tests::practice_observation::prepared_practice_actor_input_matrix -- --ignored --exact
+```
+
+Use a new private output file for each run. The JSON records the schedule,
+completed input phases, owner acknowledgements, combat requests, and the
+first failed stage and frame for each actor. When a script fault is captured,
+its record includes the delivery step and available graph diagnostics.
+The matrix measures headless input processing and owner delivery. Weapon and
+ability mechanics, ultimate charge, and original-client presentation require
+separate verification.
+
 ### Generate a synthetic test scaffold
 
 ```text

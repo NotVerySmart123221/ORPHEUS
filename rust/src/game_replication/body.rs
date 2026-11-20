@@ -1,5 +1,5 @@
 use super::{delivery::*, *};
-use crate::script_control::LEGACY_PROJECTILE_CONTROL;
+use crate::{script_control::LEGACY_PROJECTILE_CONTROL, script_snapshot_wire::SnapshotError};
 
 pub(super) struct StepBuffers<'a> {
     pub(super) frame: &'a mut u32,
@@ -101,23 +101,13 @@ impl BodyScript {
             Some(snapshot) if snapshot.initialization_complete() => {}
             Some(snapshot) => {
                 mover.set_authored_facing(None);
-                let sites: Vec<String> = snapshot
-                    .diagnostics
-                    .iter()
-                    .map(|diagnostic| match diagnostic.site.node {
-                        Some(node) => {
-                            format!(
-                                "{:04X}:{node}:{:?}",
-                                diagnostic.site.graph, diagnostic.issue
-                            )
-                        }
-                        None => format!("{:04X}:-:{:?}", diagnostic.site.graph, diagnostic.issue),
-                    })
-                    .collect();
-                return Err(invalid(format!(
-                    "body VM reached an unsupported state: {}",
-                    sites.join(", ")
-                )));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    SnapshotError::Incomplete {
+                        entity: snapshot.entity,
+                        diagnostics: snapshot.diagnostics.clone(),
+                    },
+                ));
             }
             None => {
                 mover.set_authored_facing(None);

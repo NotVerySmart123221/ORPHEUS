@@ -253,6 +253,15 @@ impl Borrow<EntityUpdate> for Ready<'_> {
     }
 }
 
+#[cfg(test)]
+struct OwnerScriptFault {
+    id: BodyId,
+    frame: u32,
+    // Owner egress can fail without attempting a script step.
+    step: Option<BodyStep>,
+    error: io::Error,
+}
+
 pub(crate) struct WorldDelivery {
     owner: u32,
     queued: Vec<Arc<Record>>,
@@ -282,6 +291,8 @@ pub(crate) struct WorldDelivery {
     remote_players: HashMap<u32, (BodyId, BotLifetime)>,
     input: InputQueue,
     body_script: Option<BodyScript>,
+    #[cfg(test)]
+    owner_script_fault: Option<OwnerScriptFault>,
     projectile_destroys: HashMap<u32, (BodyId, ProjectileToken)>,
     biotic_views: BTreeMap<u32, BioticView>,
     scene_views: BTreeMap<u32, BodyStream<ProjectedSnapshot>>,

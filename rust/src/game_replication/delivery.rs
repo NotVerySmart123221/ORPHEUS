@@ -89,6 +89,8 @@ impl WorldDelivery {
             remote_players: HashMap::new(),
             input: InputQueue::default(),
             body_script: None,
+            #[cfg(test)]
+            owner_script_fault: None,
             projectile_destroys: HashMap::new(),
             biotic_views: BTreeMap::new(),
             scene_views: BTreeMap::new(),
@@ -765,6 +767,16 @@ impl WorldDelivery {
             Ok(None) => return,
             Err(error) => {
                 eprintln!("body {:08X} owner statescript stopped: {error}", id.entity);
+                #[cfg(test)]
+                {
+                    self.owner_script_fault =
+                        self.body_script.as_ref().map(|script| OwnerScriptFault {
+                            id,
+                            frame: script.frame,
+                            step: None,
+                            error,
+                        });
+                }
                 self.cancel_body_script(Some(simulation));
                 return;
             }
@@ -1440,7 +1452,7 @@ impl WorldDelivery {
             )
         });
         let mut used = 0;
-        let mut failed = false;
+        let mut fault = None;
         let script = &mut self.body_script;
         let PlayerBodyState {
             mover,
@@ -1464,13 +1476,11 @@ impl WorldDelivery {
                     frame,
                     ..Command::default()
                 };
-                if script
-                    .advance_step(runtime, mover, &mut buffers, neutral, step)
-                    .is_err()
+                if let Err(error) = script.advance_step(runtime, mover, &mut buffers, neutral, step)
                 {
                     mover.track_modifiers(frame, &BTreeMap::new());
                     pending.gap = ScriptGap::default();
-                    failed = true;
+                    fault = Some((frame, step, error));
                     break;
                 }
             }
@@ -1484,23 +1494,29 @@ impl WorldDelivery {
                 if let Some((script, runtime)) = script
                     .as_mut()
                     .zip(runtime.as_deref_mut())
-                    .filter(|_| !failed)
+                    .filter(|_| fault.is_none())
                 {
                     if let Err(error) =
                         script.advance_step(runtime, mover, &mut buffers, command, BodyStep::Posed)
                     {
-                        eprintln!(
-                            "body owner statescript stopped at frame {}: {error}",
-                            command.frame
-                        );
                         mover.track_modifiers(command.frame, &BTreeMap::new());
-                        failed = true;
+                        fault = Some((command.frame, BodyStep::Posed, error));
                     }
                 }
             },
         );
         let complete = pending.poses.len() == 0;
-        if failed {
+        if let Some((frame, step, error)) = fault {
+            eprintln!("body owner statescript stopped at frame {frame} during {step:?}: {error}");
+            #[cfg(test)]
+            {
+                self.owner_script_fault = Some(OwnerScriptFault {
+                    id,
+                    frame,
+                    step: Some(step),
+                    error,
+                });
+            }
             self.cancel_body_script(Some(simulation));
         }
         used += stepped.map_err(invalid)?;

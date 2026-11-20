@@ -54,6 +54,23 @@ of the 12 admitted actors with the rule. The alternate rule pack remains
 a local experiment. The state blockers belong to the shared combat
 states and Phase 3A ray tracking work.
 
+### Prepared actor input matrix
+
+The [actor input matrix](STATESCRIPT_DEVELOPMENT.md#inspect-actor-input-and-owner-delivery)
+measures 311 frames of movement, presses, releases, and owner delivery
+in the prepared room. On the local authored-rule experiment above,
+12 of 32 actors attached. Hanzo, Cassidy, Soldier: 76, and Mei completed
+the whole schedule. Ten admitted actors completed both fire phases,
+six completed ability 1, five completed ability 2, and four completed
+quick melee, reload, and ultimate input. The report records which
+phases completed before each actor's first failure.
+
+The two primary-input faults at frame 1017 now retain the attempted VM
+step and the original graph diagnostics. Reaper and Moira both reached
+an unsupported `STU_54FEB21C` state on ability 1 at frame 1105. The matrix
+observes command processing and owner acknowledgements. Ability effects,
+ultimate charge, and original-client acceptance have separate checks.
+
 ## Implementation and prepared-runtime observations
 
 Local integration check (2026-11-16): rifle/reload and controller/training-bot startup prepared tests passed with the target-tagged base pack, as did runtime preflight and headless startup. The longer `scene_assets::tests::stock_soldier_owner_session_idles_fires_reloads_and_sprints` test failed its fixed-instance assertion: instance `24` contained graph `0x0F82`, not `0x05AD`. The message table was present elsewhere; diagnostic inspection also found switch instance `19` versus expected `18`. At that revision the fixed instance assertion prevented the later frame checks from running.

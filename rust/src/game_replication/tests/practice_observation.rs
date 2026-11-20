@@ -1,7 +1,12 @@
 use super::*;
-use crate::script_expr::{Scope, Variable, dynamic, truthy};
 use crate::script_graph::Graph;
 use crate::script_wire::Value as ScriptValue;
+use crate::{
+    commands::{FIRE, SECONDARY},
+    script_expr::{Scope, Variable, dynamic, truthy},
+    script_snapshot_wire::SnapshotError,
+};
+use serde_json::{Value as Json, json};
 
 fn declared_reload_flag(graph: &Graph) -> bool {
     let reload = Variable {
@@ -231,16 +236,44 @@ struct InputObservation {
     owner_full_ack: bool,
     owner_delta_ack: bool,
     completed_frames: u32,
+    completed_phases: Vec<&'static str>,
+    script_fault: Option<OwnerScriptFault>,
     hitscan: usize,
     launches: usize,
 }
+
+type InputPhase = (&'static str, u32, i8, u32);
+
+const WEAPON_PHASES: &[InputPhase] = &[
+    ("idle", 4, 0, 0),
+    ("movement", 8, 127, 0),
+    ("primary", 24, 0, FIRE),
+    ("primary release", 8, 0, 0),
+    ("secondary", 24, 0, SECONDARY),
+    ("settle", 32, 0, 0),
+];
+
+// These masks are used by the existing prepared input regressions and the
+// pinned Python runtime tests. Separate presses with neutral frames.
+const ABILITY_PHASES: &[InputPhase] = &[
+    ("ability 1", 8, 127, 0x08),
+    ("ability 1 release", 24, 0, 0),
+    ("ability 2", 8, 0, 0x10),
+    ("ability 2 release", 24, 0, 0),
+    ("quick melee", 1, 0, 0x800),
+    ("melee release", 48, 0, 0),
+    ("reload", 1, 0, 0x400),
+    ("reload release", 64, 0, 0),
+    ("ultimate input", 1, 0, 0x20),
+    ("ultimate release", 32, 0, 0),
+];
 
 fn observe_prepared_actor_input(
     scene: &mut PreparedScene,
     hero: u64,
     observation: &mut InputObservation,
+    extra_phases: &[InputPhase],
 ) -> Result<(), (&'static str, u32, &'static str)> {
-    use crate::commands::{FIRE, SECONDARY};
     use crate::game_instance::TeamMemberCounts;
 
     let viewer = PlayerAppearance {
@@ -291,6 +324,7 @@ fn observe_prepared_actor_input(
     let owner_full = owner_baseline(&world);
     observation.owner_full_ack = owner_full.is_some();
     let Some(owner_full) = owner_full.filter(|_| delivered) else {
+        observation.script_fault = world.owner_script_fault.take();
         return Err((
             "possession",
             tick,
@@ -298,14 +332,7 @@ fn observe_prepared_actor_input(
         ));
     };
 
-    for (phase, frames, forward, buttons) in [
-        ("idle", 4, 0, 0),
-        ("movement", 8, 127, 0),
-        ("primary", 24, 0, FIRE),
-        ("primary release", 8, 0, 0),
-        ("secondary", 24, 0, SECONDARY),
-        ("settle", 32, 0, 0),
-    ] {
+    for &(phase, frames, forward, buttons) in WEAPON_PHASES.iter().chain(extra_phases) {
         for _ in 0..frames {
             tick += 1;
             scene.simulation_mut().prepare_spatial_frame(tick).unwrap();
@@ -330,6 +357,7 @@ fn observe_prepared_actor_input(
                 .filter(|actor| actor.runtime.is_some() && actor.frame == tick)
                 .filter(|actor| actor.mover.pose().frame == Some(tick));
             if actor.is_none() || body_script_frame(&world) != Some(tick) {
+                observation.script_fault = world.owner_script_fault.take();
                 return Err((phase, tick, "runtime or posed frame lost after input"));
             }
             let simulation = scene.simulation_mut();
@@ -352,12 +380,14 @@ fn observe_prepared_actor_input(
                     .player_body(id)
                     .is_none_or(|actor| actor.runtime.is_none())
             {
+                observation.script_fault = world.owner_script_fault.take();
                 return Err((phase, tick, "runtime lost during owner egress"));
             }
             observation.owner_delta_ack |=
                 owner_baseline(&world).is_some_and(|last| last > owner_full);
             observation.completed_frames += 1;
         }
+        observation.completed_phases.push(phase);
     }
     if !observation.owner_delta_ack {
         return Err(("owner delta", tick, "pending acknowledgement"));
@@ -378,7 +408,7 @@ fn prepared_practice_catalog_observes_input_survival_and_owner_egress() {
         total += 1;
         let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
         let mut observation = InputObservation::default();
-        let result = observe_prepared_actor_input(&mut scene, hero.guid, &mut observation);
+        let result = observe_prepared_actor_input(&mut scene, hero.guid, &mut observation, &[]);
         admitted += usize::from(observation.admitted);
         completed += usize::from(result.is_ok());
         if hero.guid == SOLDIER {
@@ -407,4 +437,94 @@ fn prepared_practice_catalog_observes_input_survival_and_owner_egress() {
         soldier_passed,
         "expected both weapon outputs from the reference control"
     );
+}
+
+fn script_fault_record(fault: OwnerScriptFault) -> Json {
+    let diagnostics = match fault
+        .error
+        .get_ref()
+        .and_then(|error| error.downcast_ref::<SnapshotError>())
+    {
+        Some(SnapshotError::Incomplete { diagnostics, .. }) => diagnostics
+            .iter()
+            .map(|diagnostic| {
+                json!({
+                    "graph": diagnostic.site.graph,
+                    "node": diagnostic.site.node,
+                    "issue": format!("{:?}", diagnostic.issue),
+                })
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    json!({
+        "step": fault.step.map_or_else(|| "owner egress".to_owned(), |step| format!("{step:?}")),
+        "entity": fault.id.entity,
+        "generation": fault.id.generation,
+        "frame": fault.frame,
+        "kind": format!("{:?}", fault.error.kind()),
+        "message": fault.error.to_string(),
+        "diagnostics": diagnostics,
+    })
+}
+
+#[test]
+#[ignore = "requires a prepared Practice Range pack and a private report path"]
+fn prepared_practice_actor_input_matrix() {
+    use std::{env, fs::File, path::PathBuf};
+
+    let Some(path) = env::var_os("ORPHEUS_ACTOR_INPUT_REPORT").map(PathBuf::from) else {
+        return;
+    };
+    assert!(!path.try_exists().unwrap(), "input report must be new");
+    let runtime = env::var_os("ORPHEUS_RUNTIME_DIR").unwrap();
+    let assets = SceneAssets::load(runtime).unwrap();
+    let mut rows = Vec::new();
+    for hero in assets.heroes().heroes() {
+        let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
+        let mut observation = InputObservation::default();
+        let result =
+            observe_prepared_actor_input(&mut scene, hero.guid, &mut observation, ABILITY_PHASES);
+        let failure = result.err().map(
+            |(phase, frame, reason)| json!({"phase": phase, "frame": frame, "reason": reason}),
+        );
+        rows.push(json!({
+            "hero": hero.name,
+            "admitted": observation.admitted,
+            "owner_full_ack": observation.owner_full_ack,
+            "owner_delta_ack": observation.owner_delta_ack,
+            "completed_frames": observation.completed_frames,
+            "completed_phases": observation.completed_phases,
+            "hitscan": observation.hitscan,
+            "launches": observation.launches,
+            "failure": failure,
+            "script_fault": observation.script_fault.map(script_fault_record),
+        }));
+    }
+    let schedule: Vec<_> = WEAPON_PHASES
+        .iter()
+        .chain(ABILITY_PHASES)
+        .map(|(phase, frames, forward, buttons)| {
+            json!({
+                "phase": phase,
+                "frames": frames,
+                "forward": forward,
+                "buttons": buttons,
+            })
+        })
+        .collect();
+    let report = json!({
+        "schema_version": 1,
+        "source_revision": env::var("ORPHEUS_ACTOR_INPUT_REVISION").ok(),
+        "schedule": schedule,
+        "actors": rows,
+    });
+    let file = File::options()
+        .create_new(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    serde_json::to_writer_pretty(file, &report).unwrap();
+    let actors = report["actors"].as_array().unwrap();
+    assert_eq!(actors.len(), 32, "expected the full prepared catalog");
 }
