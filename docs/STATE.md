@@ -190,6 +190,21 @@ Practice Range attachment, and **47** blocking sites. The #72 replay
 matched all 476 observation sites across 900 frames. Original ability
 mappings and client zoom acceptance remain open.
 
+At `3c87fd49`, the held-input contract passed automatic registration,
+held and idle ownership, cancellation of sibling starts queued during
+release, and rejection of buffered presses from a previous button binding.
+Both listener forms passed the same native held-aim scenario, including
+owner-only status, observer bytes, movement cleanup, and body replacement.
+
+Formatting and both Clippy lanes passed. The locked all-target workspace
+suites passed **729** default tests and **736** Inspector tests, with
+135 opt-in tests skipped per lane. Two separately selected prepared
+startup runs produced identical reports. Against the same 104319 inputs,
+the matrix matched the preceding baseline apart from the source revision
+at **11 of 32** independent starts, **one** ordinary attachment, and **47**
+blocking sites. The #72 replay matched all 476 sites across 900 frames.
+The original ability mappings and client zoom still require acceptance.
+
 Seven actor probes have one blocking site each. Mercy's tag query needs
 the tagged placement inventory and live actor tags. Orisa and Sigma
 still hit persistent message registration. Baptiste cannot read a
