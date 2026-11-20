@@ -583,6 +583,10 @@ the enclosing operand. Without a fallback, the evaluator retains the
 caller's initial value. Wrappers still consume work and nesting budget.
 Ordinary unknown operands continue to produce diagnostics.
 
+In an assignment or subscript binding, a fallback can supply a config
+group. The selector flattens the selected group's values in authored
+order. An entry with no fallback contributes no value inside a group.
+
 ## Read an entity's position or direction
 
 Use `EntityPosition` or `EntityDirection` as the `$` tag of an authored

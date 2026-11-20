@@ -12,7 +12,7 @@ use crate::{
 };
 
 pub(crate) const EPSILON: f64 = 1.192_092_895_507_812_5e-5;
-const MAX_CONFIG_DEPTH: usize = 64;
+pub(crate) const MAX_CONFIG_DEPTH: usize = 64;
 pub const MAX_EXPRESSION_STEPS: usize = 4096;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -799,6 +799,20 @@ mod helpers;
 use evaluator::Evaluator;
 use helpers::*;
 pub use helpers::{excluded_tags_admit, native_fields, native_shape, target_tag_config};
+
+/// Locate a config group reached directly or through explicit server fallbacks.
+pub(crate) fn assignment_group_source(mut config: &Json) -> Option<(&Json, usize)> {
+    for wrapper_depth in 0..MAX_CONFIG_DEPTH {
+        match class(config) {
+            Some("STU_06610EBC") if native_fields(config, &["m_configVars"]) => {
+                return Some((child(config, "m_configVars"), wrapper_depth));
+            }
+            Some("ClientOnly") => config = client_only_fallback(config).ok().flatten()?,
+            _ => break,
+        }
+    }
+    None
+}
 
 #[cfg(test)]
 mod tests;

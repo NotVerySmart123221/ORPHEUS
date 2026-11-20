@@ -516,11 +516,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 }
             };
             let config = field(item, "m_value");
-            let value = if script_expr::native_shape(config, "STU_06610EBC", Some("m_configVars")) {
-                self.assignment_group(id, node, config)?
-            } else {
-                self.evaluate(id, node, config, None)
-            };
+            let value = self.assignment_value(id, node, config, Value::Null)?;
             let Some(value) = value else {
                 return Ok(None);
             };

@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
+- Kept config groups in their assignment context when an authored client-only wrapper supplies a server fallback. SetVar and subscript bindings share selection and flattening. An original graph reproduced both direct and nested group failures before the fix. The StateScript suite passed with 188 tests and 13 prepared-runtime tests skipped.
+
 - Added bounded operand class identifiers to private actor startup diagnostics. Distinct classes at one node now remain distinct in the report. Other error text stays outside the report.
 
 - Preserved typed owner startup failures from scene preparation through snapshot projection and encoding. The private startup matrix now distinguishes those stages and reports bounded diagnostic sites. Existing room admission and error messages are preserved. At `0ddb271e`, two prepared runs produced identical reports. All 23 rejected bootstrap probes reached projection with blocking initialization diagnostics. The overlapping categories included unsupported configs in 21 actors, unsupported states in nine, and registration rejections in eight. The synthetic factory test, 28 projection tests, all-targets Clippy with script coverage, and the #72 900-frame regression passed. Three other projection tests require separate prepared inputs.

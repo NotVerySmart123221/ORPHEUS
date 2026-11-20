@@ -4,6 +4,19 @@ pub(super) fn class(config: &Json) -> Option<&str> {
     config.get("$")?.as_str()
 }
 
+pub(super) fn client_only_fallback(config: &Json) -> Result<Option<&Json>, EvalError> {
+    let fields = config
+        .as_object()
+        .filter(|fields| {
+            fields.contains_key("value")
+                && fields
+                    .keys()
+                    .all(|key| matches!(key.as_str(), "$" | "value" | "server_fallback"))
+        })
+        .ok_or(EvalError::MalformedConfig("invalid client-only operand"))?;
+    Ok(fields.get("server_fallback"))
+}
+
 pub fn native_shape(config: &Json, expected: &str, operand: Option<&str>) -> bool {
     class(config) == Some(expected) && native_fields(config, operand.as_slice())
 }

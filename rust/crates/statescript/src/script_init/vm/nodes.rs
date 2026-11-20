@@ -805,6 +805,20 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         }
     }
 
+    pub(super) fn assignment_value(
+        &mut self,
+        id: u16,
+        node: &Node,
+        config: &Json,
+        initial: Value,
+    ) -> Result<Option<Value>, InitFault> {
+        if script_expr::assignment_group_source(config).is_some() {
+            self.assignment_group(id, node, config)
+        } else {
+            Ok(self.evaluate_at_with_initial(self.site(id, node), config, None, initial))
+        }
+    }
+
     pub(in crate::script_init) fn assignment_group(
         &mut self,
         id: u16,
@@ -814,8 +828,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let mut pending = vec![(config, 0)];
         let mut values = Vec::new();
         while let Some((config, depth)) = pending.pop() {
-            self.spend("assignment config group")?;
-            if depth >= 64 {
+            let group = script_expr::assignment_group_source(config);
+            let wrappers = group.map_or(0, |(_, wrappers)| wrappers);
+            for _ in 0..=wrappers {
+                self.spend("assignment config group")?;
+            }
+            let depth = depth + wrappers;
+            if depth >= script_expr::MAX_CONFIG_DEPTH {
                 self.report(
                     self.site(id, node),
                     Issue::Expression(script_expr::EvalError::NestingExceeded),
@@ -825,8 +844,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             if config.is_null() {
                 continue;
             }
-            if script_expr::native_shape(config, "STU_06610EBC", Some("m_configVars")) {
-                let configs = field(config, "m_configVars");
+            if let Some((configs, _)) = group {
                 if configs.is_null() {
                     continue;
                 }
@@ -849,7 +867,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             let mut items = vec![(value, depth)];
             while let Some((value, depth)) = items.pop() {
                 self.spend("assignment value array")?;
-                if depth >= 64 {
+                if depth >= script_expr::MAX_CONFIG_DEPTH {
                     self.report(
                         self.site(id, node),
                         Issue::Expression(script_expr::EvalError::NestingExceeded),
@@ -875,11 +893,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
     ) -> Result<bool, InitFault> {
         let config = field(fields, "m_value");
         let site = self.site(id, node);
-        let value = if script_expr::native_shape(config, "STU_06610EBC", Some("m_configVars")) {
-            self.assignment_group(id, node, config)?
-        } else {
-            self.evaluate_at_with_initial(site, config, None, Value::Integer(0))
-        };
+        let value = self.assignment_value(id, node, config, Value::Integer(0))?;
         let Some(value) = value else { return Ok(false) };
         let destination = match script_expr::destination(field(fields, "m_out_Var")) {
             Ok(Some(target)) => target,

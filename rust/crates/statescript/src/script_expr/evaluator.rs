@@ -323,17 +323,9 @@ impl Evaluator {
                     if depth >= MAX_CONFIG_DEPTH {
                         return Err(EvalError::NestingExceeded);
                     }
-                    let fields = config
-                        .as_object()
-                        .filter(|fields| {
-                            fields.contains_key("value")
-                                && fields.keys().all(|key| {
-                                    matches!(key.as_str(), "$" | "value" | "server_fallback")
-                                })
-                        })
-                        .ok_or(EvalError::MalformedConfig("invalid client-only operand"))?;
+                    let fallback = client_only_fallback(config)?;
                     self.charge()?;
-                    fields.get("server_fallback")
+                    fallback
                 }
                 Some("STU_06610EBC") if scalar => {
                     if depth >= MAX_CONFIG_DEPTH {

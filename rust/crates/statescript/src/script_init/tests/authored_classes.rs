@@ -134,6 +134,133 @@ fn authored_class_aliases_apply_across_graphs_without_network_slots() {
 }
 
 #[test]
+fn authored_client_only_fallback_preserves_assignment_group_context() {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Expected {
+        Array(Vec<i64>),
+        Integer(i64),
+    }
+
+    #[derive(Deserialize)]
+    struct Case {
+        name: String,
+        destination: u32,
+        value: Json,
+        expected: Expected,
+        #[serde(default)]
+        bind_subscript: bool,
+    }
+
+    #[derive(Deserialize)]
+    struct AssignmentContract {
+        schema_version: u8,
+        case_id: String,
+        evidence: String,
+        input: Vec<Case>,
+    }
+
+    let contract: AssignmentContract = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/script-assignment-client-fallback-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+    assert_eq!(
+        contract.case_id,
+        "script-assignment-client-fallback.synthetic.v1"
+    );
+    assert_eq!(contract.evidence, "synthetic-rust");
+
+    let mut links: Vec<_> = (1..=u16::try_from(contract.input.len()).unwrap())
+        .map(|position| (position, "m_inPlug"))
+        .collect();
+    let subscript_position = u16::try_from(links.len() + 1).unwrap();
+    links.push((subscript_position, "m_beginPlug"));
+    let entry = node(
+        0,
+        "STUStatescriptEntry",
+        None,
+        json!({"m_outPlug":plug(&links, &[])}),
+    );
+    let mut nodes = vec![entry];
+    for (&(position, _), case) in links.iter().zip(&contract.input) {
+        nodes.push(node(
+            position,
+            "STUStatescriptActionSetVar",
+            None,
+            json!({"m_value":case.value, "m_out_Var":var(case.destination, true)}),
+        ));
+    }
+
+    let child_graph = 95;
+    let child_asset = 0x0580_0000_0000_0000_u64 | u64::from(child_graph);
+    let bindings: Vec<_> = contract
+        .input
+        .iter()
+        .filter(|case| case.bind_subscript)
+        .map(|case| json!({"m_out_Var":var(case.destination, false),"m_value":case.value}))
+        .collect();
+    nodes.push(node(
+        subscript_position,
+        "STUStatescriptStateSubScript",
+        Some(0),
+        json!({
+            "m_36F7B64C":{"m_36F7B64C":{"m_C974E369":{"m_graph": format!("0x{child_asset:016X}")}}},
+            "m_89402D74":bindings
+        }),
+    ));
+    let graph_id = 93;
+    let graphs = store(vec![
+        graph(graph_id, nodes, json!([subscript_position]), json!([0])),
+        graph(child_graph, Vec::new(), json!([]), json!([])),
+    ]);
+    let component = Component::start(
+        Arc::new(graphs),
+        90,
+        Variables::new(),
+        vec![Root::new(1, graph_id)],
+        0,
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let snapshot = component.snapshot().unwrap();
+    assert!(
+        snapshot.diagnostics.is_empty(),
+        "{:?}",
+        snapshot.diagnostics
+    );
+    let StateKind::SubScript { child: Some(child) } = snapshot.instances[&1].states[&0].kind else {
+        panic!("subscript with a wrapped group binding must start");
+    };
+    let instance = &snapshot.instances[&child];
+    assert_eq!(instance.graph, child_graph);
+    for case in contract.input {
+        let expected = match case.expected {
+            Expected::Array(values) => {
+                Value::Array(values.into_iter().map(Value::Integer).collect())
+            }
+            Expected::Integer(value) => Value::Integer(value),
+        };
+        assert_eq!(
+            snapshot.variables.get(&case.destination),
+            Some(&expected),
+            "{}",
+            case.name
+        );
+        if case.bind_subscript {
+            assert_eq!(
+                instance.variables.get(&case.destination),
+                Some(&expected),
+                "subscript: {}",
+                case.name
+            );
+        }
+    }
+}
+
+#[test]
 fn authored_observer_samples_radius_once_per_frame_until_aborted() {
     use std::cell::Cell;
 
