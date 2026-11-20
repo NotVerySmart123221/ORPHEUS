@@ -89,7 +89,8 @@ fn health_amount(
         Value::Entity(entity) if valid_entity(*entity) => {
             context.body_health(*entity, kind, maximum)
         }
-        Value::Null if matches!(dynamic(target), Ok(Some(variable)) if variable.id != 0) => {
+        // A target slot can be reset before it has been bound to an entity.
+        Value::Null | Value::Integer(0) if matches!(dynamic(target), Ok(Some(variable)) if variable.id != 0) => {
             Some(0.0)
         }
         _ => None,

@@ -41,6 +41,8 @@ The `9485d72e` matrix cleared one frame-wait registration diagnostic for Wreckin
 
 The `c2e75f7c` matrix cleared one ordinary health query diagnostic for Moira. Both same-pack runs reported **51 blocking sites**, **10 of 32** independent passes, and **1 of 32** ordinary Practice Range script attachments. Two selected-pool query diagnostics still need investigation. The #72 capture matched across all 476 observed sites.
 
+At `eff202e3`, the loader routed an inherited base state through the class metadata path at arbitrary placements. The same-pack reports retained 51 blockers and 10 of 32 independent passes. The #72 capture matched across all 476 observed sites.
+
 | Workflow | Python reference | Rust implementation | Open client or parity gap |
 | --- | --- | --- | --- |
 | **Login, Profiles & Lobby** | Battle.net/JAM auth, profiles, settings (`22200`–`22204`), queues, Windows launcher + TLS relay. | Native BNet/JAM lobby, `profile-settings-v1` (CI verified), encrypted UDP seat handoff. | Standalone Rust launcher & public client connection flow open. |

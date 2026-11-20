@@ -6,6 +6,7 @@
   "input": {
     "target_variable": 7,
     "unbound_entity": 0,
+    "unbound_integer": 0,
     "unavailable_entity": 31,
     "invalid_pool_selector": false,
     "queries": [

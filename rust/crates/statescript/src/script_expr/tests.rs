@@ -972,6 +972,7 @@ fn body_health_queries_return_zero_only_for_explicit_unbound_targets() {
     let expected = &fixture["expected"];
     let target_variable = u32::try_from(input["target_variable"].as_u64().unwrap()).unwrap();
     let unbound = u32::try_from(input["unbound_entity"].as_u64().unwrap()).unwrap();
+    let unbound_integer = input["unbound_integer"].as_i64().unwrap();
     let unavailable = u32::try_from(input["unavailable_entity"].as_u64().unwrap()).unwrap();
     let unbound_value = Value::Float(expected["unbound_result"].as_f64().unwrap());
     for query_case in input["queries"].as_array().unwrap() {
@@ -991,7 +992,11 @@ fn body_health_queries_return_zero_only_for_explicit_unbound_targets() {
             target: Value::Null,
             reads: Vec::new(),
         };
-        for target in [Value::Null, Value::Entity(unbound)] {
+        for target in [
+            Value::Null,
+            Value::Entity(unbound),
+            Value::Integer(unbound_integer),
+        ] {
             host.target = target;
             assert_eq!(
                 evaluate(&query, &mut host),
@@ -1007,6 +1012,8 @@ fn body_health_queries_return_zero_only_for_explicit_unbound_targets() {
 
         let unsupported = Err(EvalError::UnsupportedConfig(class.into()));
         host.target = Value::Bool(false);
+        assert_eq!(evaluate(&query, &mut host), unsupported);
+        host.target = Value::Integer(i64::from(unavailable));
         assert_eq!(evaluate(&query, &mut host), unsupported);
         let mut missing_target = query.clone();
         missing_target.as_object_mut().unwrap().remove("m_entity");

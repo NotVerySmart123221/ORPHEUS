@@ -24,7 +24,7 @@ The Rust-only [room cue fixture](../fixtures/behavior/script-room-cue-v1.json) c
 
 The Rust-only [health action fixture](../fixtures/behavior/script-health-change-v1.json) checks signed health request admission, continuation, and rejection diagnostics. Room tests cover player and bot settlement, stale body identity, and death and health updates.
 
-The Rust-only [health query target fixture](../fixtures/behavior/script-health-target-v1.json) checks current and maximum queries for ordinary health and selected pools. An unbound target yields zero without a host read. Missing or malformed operands and bound targets with unavailable vitals retain their diagnostics.
+The Rust-only [health query target fixture](../fixtures/behavior/script-health-target-v1.json) checks current and maximum queries for ordinary health and selected pools. An unbound target yields zero without a host read, including an integer-zero reset in a direct target slot. Missing or malformed operands and bound targets with unavailable vitals retain their diagnostics.
 
 The Rust-only [button lock fixture](../fixtures/behavior/script-button-lock-v1.json) exercises scoped input suppression and release through the production VM. The native room integration also starts a timed lock through a directed message.
 

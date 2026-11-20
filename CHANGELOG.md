@@ -6,7 +6,9 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-20
 
-- Removed a three-placement guard for an inherited base state. The loader records the verified class through the same metadata path for tagged and legacy bundles. The synthetic lifecycle contract reproduced the rejection at a new placement and covers abort, exit, client-only exclusion, and an unrelated unsupported class.
+- Recognized an explicit integer-zero reset in a direct health query target slot. A boolean or nonzero integer remains a type error. The synthetic test reproduced the integer reset failure before the fix.
+
+- Removed a three-placement guard for an inherited base state. The loader records the verified class through the same metadata path for tagged and legacy bundles. The synthetic lifecycle contract reproduced the rejection at a new placement and covers abort, exit, client-only exclusion, and an unrelated unsupported class. Two same-pack runs at `eff202e3` retained 51 blockers and 10 of 32 independent passes. The #72 capture matched at all 476 observation sites. Formatting, the locked workspace check, Clippy with script coverage, and the two library suites passed with 199 StateScript tests and 360 native tests.
 
 - Unified target resolution for ordinary and selected-pool health expressions. Explicitly unbound targets return zero without a host lookup. Malformed operands and bound entities with unavailable vitals still report an error. The synthetic contract reproduced the startup diagnostic before the fix. Two same-pack runs at `c2e75f7c` removed one Moira diagnostic and reported 51 blocking sites. Independent startup remained at 10 of 32 and Practice Range admission at 1 of 32. The #72 capture matched across 476 observed sites. The StateScript and native library suites with script coverage passed with 198 and 360 tests respectively.
 
