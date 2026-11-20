@@ -1217,7 +1217,11 @@ impl World for EnemyWorld<'_> {
     }
 
     fn body_health(&self, site: Site, kind: Option<PoolKind>, maximum: bool) -> Option<f64> {
-        (site.entity == self.binding.body).then(|| self.vitals.amount(kind, maximum))
+        (site.entity == self.binding.body).then(|| match kind {
+            None if maximum => self.vitals.maximum(),
+            None => self.vitals.total(),
+            Some(_) => self.vitals.amount(kind, maximum),
+        })
     }
     fn add_health_pool(
         &mut self,
@@ -1230,6 +1234,29 @@ impl World for EnemyWorld<'_> {
             .then(|| self.vitals.add_pool(kind, maximum, current))
             .flatten()
     }
+    fn add_temporary_shield(
+        &mut self,
+        site: Site,
+        identifier: u64,
+        amount: f64,
+        stacked: bool,
+    ) -> Option<u32> {
+        if site.entity != self.binding.body {
+            return None;
+        }
+        self.vitals
+            .add_temporary_shield(identifier, amount, stacked)
+    }
+
+    fn temporary_shield_current(&self, site: Site, identifier: u64) -> Option<f64> {
+        (site.entity == self.binding.body).then(|| self.vitals.temporary_shield_current(identifier))
+    }
+
+    fn drain_temporary_shield(&mut self, site: Site, identifier: u64, amount: f64) -> Option<f64> {
+        (site.entity == self.binding.body)
+            .then(|| self.vitals.drain_temporary_shield(identifier, amount))
+    }
+
     fn health_pool_current(&self, site: Site, pool: u32) -> Option<f64> {
         (site.entity == self.binding.body)
             .then(|| self.vitals.pool_current(pool))

@@ -606,7 +606,11 @@ impl World for BodyWorld {
         if !self.is_player_site(site) || (kind.is_some() && !self.pool_types_known) {
             return None;
         }
-        let amount = self.vitals.amount(kind, maximum);
+        let amount = match kind {
+            None if maximum => self.vitals.maximum(),
+            None => self.vitals.total(),
+            Some(_) => self.vitals.amount(kind, maximum),
+        };
         (amount.is_finite() && amount >= 0.0).then_some(amount)
     }
 
@@ -673,6 +677,28 @@ impl World for BodyWorld {
             return None;
         }
         self.vitals.add_pool(kind, maximum, current)
+    }
+
+    fn add_temporary_shield(
+        &mut self,
+        site: Site,
+        identifier: u64,
+        amount: f64,
+        stacked: bool,
+    ) -> Option<u32> {
+        if !self.is_player_site(site) {
+            return None;
+        }
+        self.vitals
+            .add_temporary_shield(identifier, amount, stacked)
+    }
+
+    fn temporary_shield_current(&self, site: Site, identifier: u64) -> Option<f64> {
+        (self.is_player_site(site)).then(|| self.vitals.temporary_shield_current(identifier))
+    }
+
+    fn drain_temporary_shield(&mut self, site: Site, identifier: u64, amount: f64) -> Option<f64> {
+        (self.is_player_site(site)).then(|| self.vitals.drain_temporary_shield(identifier, amount))
     }
 
     fn health_pool_current(&self, site: Site, pool: u32) -> Option<f64> {

@@ -59,6 +59,11 @@ The [static model protection fixture](../fixtures/behavior/script-static-model-p
 covers authored slot validation, host admission, and restoration after the last state retires.
 The [self shield recharge fixture](../fixtures/behavior/script-self-shield-recharge-v1.json)
 covers field-based admission, ticking, rate changes, and retirement.
+The [named shield fixture](../fixtures/behavior/script-named-shield-v1.json)
+exercises the owner query, lifecycle cleanup, exhaustion of a played
+grant and periodic decay with a changing authored rate. Native Vitals
+and charge tests compare pool-row aggregation and distinguish decay
+from damage that contributes a named-pool loss.
 The [immediate self-damage fixture](../fixtures/behavior/script-immediate-self-damage-v1.json)
 checks admission at invented positions, native integer rounding, one-shot
 execution, the different death rules, and rejection of unreviewed modifiers.

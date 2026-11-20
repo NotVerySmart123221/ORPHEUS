@@ -566,6 +566,7 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             | StateKind::PlacementSelector { .. }
             | StateKind::MoveTo { .. }
             | StateKind::ShieldRecharge
+            | StateKind::NamedShieldDecay
             | StateKind::ExplosionContact
             | StateKind::DeadeyeEffects
             | StateKind::WitchStaffEffect

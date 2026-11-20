@@ -17,6 +17,7 @@ mod local_command;
 mod local_message;
 mod logical_button_lifecycle;
 mod movement_edges;
+mod named_shield;
 mod observation_sample;
 mod observer_eye_position;
 mod parent_owned_state;
