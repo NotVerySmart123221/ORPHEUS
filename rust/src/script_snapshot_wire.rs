@@ -13,7 +13,7 @@ use crate::bits::{BitError, BitWriter};
 use crate::script_codecs::{Codec, CodecTable, PayloadError, PayloadMode, StatePayload};
 use crate::script_expr::Variable;
 use crate::script_graph::{Graph, GraphStore};
-use crate::script_init::{ChasePayload, Snapshot, StackBinding, StateKind};
+use crate::script_init::{ChasePayload, ShotEvent, Snapshot, StackBinding, StateKind};
 use crate::script_stream::StreamError;
 use crate::script_wire::{self, Bindings, Value, ValueEncoding, Variables, WireError};
 
@@ -190,6 +190,58 @@ impl ProjectedSnapshot {
             .map(|volley| volley.identity)
     }
 
+    pub(crate) fn freeze_volley(&self, event: ShotEvent) -> Option<FrozenVolley> {
+        let instance = self.instances.get(&event.instance)?;
+        let state = instance.states.get(&event.raw_state)?;
+        let identity = state.volley?.identity;
+        if self.entity != event.entity
+            || self.view != View::Observer
+            || instance.graph != event.graph
+            || identity != (event.activation, event.activation_ms)
+        {
+            return None;
+        }
+        let Value::Integer(count) = state.payload.get("volleys")? else {
+            return None;
+        };
+        Some(FrozenVolley {
+            event,
+            parent: instance.parent,
+            state: state.clone(),
+            count: u16::try_from(*count).ok()?,
+        })
+    }
+
+    pub(crate) fn retain_volley(&mut self, volley: &FrozenVolley) {
+        if self.entity != volley.event.entity {
+            return;
+        }
+        if let Some(instance) = self
+            .instances
+            .get_mut(&volley.event.instance)
+            .filter(|instance| {
+                instance.graph == volley.event.graph && instance.parent == volley.parent
+            })
+        {
+            instance
+                .states
+                .insert(volley.event.raw_state, volley.state.clone());
+        }
+    }
+
+    pub(crate) fn has_volley(&self, volley: &FrozenVolley) -> bool {
+        let event = volley.event;
+        self.entity == event.entity
+            && self
+                .instances
+                .get(&event.instance)
+                .filter(|instance| {
+                    instance.graph == event.graph && instance.parent == volley.parent
+                })
+                .and_then(|instance| instance.states.get(&event.raw_state))
+                .is_some_and(|state| state == &volley.state)
+    }
+
     #[cfg(feature = "inspector")]
     pub(crate) fn trace_owner_volley_delta(
         &self,
@@ -253,6 +305,14 @@ impl ProjectedSnapshot {
                 .collect(),
         )
     }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FrozenVolley {
+    pub(crate) event: ShotEvent,
+    pub(crate) count: u16,
+    parent: Option<(u16, u16)>,
+    state: ProjectedState,
 }
 
 #[derive(Clone, Debug, PartialEq)]

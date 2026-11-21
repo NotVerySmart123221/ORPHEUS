@@ -220,23 +220,16 @@ fn prepared_firing_placement_drives_the_stock_weapon_graph() {
         }
         held_ticks += u32::from(held);
         released_after_holding |= held_ticks > 0 && !held;
-        for projectile in script.take_projectiles(tick, bot) {
-            assert_eq!(projectile.source, bot.entity);
-            assert_eq!(projectile.team, bot.spawn.team);
-            projectiles += 1;
-            if !projected_volley {
-                let projection = script.projection().unwrap();
-                let projected = projection
-                    .encoder
-                    .project(projection.snapshot, View::Observer)
-                    .unwrap();
-                projected_volley = projection.snapshot.instances.iter().any(|(&id, instance)| {
-                    instance.states.iter().any(|(&slot, state)| {
-                        matches!(state.kind, script_init::StateKind::WeaponVolley { .. })
-                            && projected.volley_identity(id, slot)
-                                == Some((state.activation, state.start_ms))
-                    })
-                });
+        for batch in script.take_projectiles(tick, bot) {
+            if let Some(presentation) = batch.presentation {
+                assert_eq!(presentation.volley.event.entity, bot.entity);
+                assert_eq!(presentation.launched, tick);
+                projected_volley = true;
+            }
+            for projectile in batch.flights {
+                assert_eq!(projectile.source, bot.entity);
+                assert_eq!(projectile.team, bot.spawn.team);
+                projectiles += 1;
             }
         }
     }

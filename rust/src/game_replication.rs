@@ -308,6 +308,7 @@ pub(crate) struct WorldDelivery {
     projectile_destroys: HashMap<u32, (BodyId, ProjectileToken)>,
     biotic_views: BTreeMap<u32, BioticView>,
     scene_views: BTreeMap<u32, BodyStream<ProjectedSnapshot>>,
+    observed_projectiles: observed_projectiles::ObservedProjectiles,
     bot_chunk_waited: bool,
     gate: Option<u32>,
     next_biotic_view: u32,
@@ -315,6 +316,7 @@ pub(crate) struct WorldDelivery {
 
 mod body;
 mod delivery;
+mod observed_projectiles;
 
 pub(crate) use body::validate_body_baselines;
 use body::{BioticView, BodyScript, InputQueue};

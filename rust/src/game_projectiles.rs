@@ -30,7 +30,7 @@ const UNREPORTED_TICKS: u32 = 32;
 const IMPACT_RELEASE_MARGIN: u32 = 2;
 const RELEASE_MARGIN: u32 = 6;
 const RELEASE_AHEAD: u32 = 4096;
-const DELIVERY_GRACE: u32 = 64;
+pub(crate) const DELIVERY_GRACE: u32 = 64;
 const MAX_PROJECTILES: usize = 256;
 
 #[derive(Clone, Debug, Default)]

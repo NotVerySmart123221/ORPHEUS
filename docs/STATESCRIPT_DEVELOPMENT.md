@@ -103,6 +103,16 @@ observer snapshot. For weapon effects, an instant volley can already
 be off when the server captures the frame. Its activation identity
 remains available for the observer's projectile launch record.
 
+For authored predicted projectiles, observer delivery retains the exact
+volley activation until the launch is acknowledged. It creates the
+visible projectile entities after the source baseline is acknowledged,
+then sends the channel 2 launch after both those creates and the
+matching volley projection are acknowledged. Interrupted delivery
+retries the same record and entity IDs. The room's flight completion
+drives retirement, allowing the acknowledged launch time to elapse on
+the observer. The source, flight definition, and shot timing come from
+the authored volley and shared simulation.
+
 ## Supply model hardpoint membership
 
 An external graph bundle can include `model_hardpoints` in a body entry.

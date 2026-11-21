@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Deliver authored remote projectile launches after the observer acknowledges the source volley and projectile entities. Retry the same launch on loss and keep retirement tied to the authoritative flight. A synthetic loss replay and a prepared 104319 Practice Range firing probe passed. Original-client visual acceptance remains pending.
+
 - Discover stock-bot weapon placement roots from declared map scripts and resolve inputs from body slot bindings. The synthetic contract uses a different graph and a secondary input and checks duplicate, missing, client-only, and unbound declarations. Passed 469 server library tests and four prepared 104319 probes for the roster, patrol, respawn, and projectile paths.
 
 - Deliver the authored reset to replacement stock bots before publishing them. The prepared 104319 probes verify the spawn animation in the first observer frame, the exact firing volley identity, damage to both actor types, and the existing death and nameplate lifecycle. The 468 server library tests passed. Original-client animation acceptance remains pending.

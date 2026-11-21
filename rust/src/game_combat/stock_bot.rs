@@ -11,12 +11,14 @@ use std::{
 
 use serde_json::Value as Json;
 
+use super::observed_projectiles::{ObservedShot, StockShotBatch};
 use crate::{
     commands::Command,
     game_bots::Bot,
+    game_projectiles::predicted_sync,
     mover::sample_movement_flags,
     script_codecs::CodecTable,
-    script_enemy::{EnemyProjectile, projectile_pattern},
+    script_enemy::projectile_pattern,
     script_expr::{EngineSetting, EntityRelation, is_zeroed_owner_selector, native_shape},
     script_graph::{GraphStore, graph_asset_index},
     script_init::{
@@ -25,7 +27,7 @@ use crate::{
         World,
     },
     script_runtime::{FRAME_MS, held_button_mask},
-    script_snapshot_wire::{SceneProjection, SnapshotEncoder},
+    script_snapshot_wire::{SceneProjection, SnapshotEncoder, View},
     script_wire::{Value, Variables},
     vitals::{Death, PoolKind, Vitals},
     world::GAME_MODE_ENTITY,
@@ -606,7 +608,7 @@ impl StockBotScript {
         self.check_projection(result);
     }
 
-    pub(super) fn take_projectiles(&mut self, tick: u32, bot: &Bot) -> Vec<EnemyProjectile> {
+    pub(super) fn take_projectiles(&mut self, tick: u32, bot: &Bot) -> Vec<StockShotBatch> {
         let shots = self.component.take_shots().unwrap_or_default();
         if self.faulted || bot.dead || bot.is_stunned(tick) {
             return Vec::new();
@@ -615,6 +617,7 @@ impl StockBotScript {
         let origin = [x, y + super::eye_height(bot.spawn.hero, false), z];
         let forward = self.world.forward;
         let mut projectiles = Vec::new();
+        let mut projected = None;
         for shot in shots {
             let Some(node) = self.component.shot_node(&shot) else {
                 continue;
@@ -623,10 +626,41 @@ impl StockBotScript {
                 self.component
                     .evaluate_shot_config(&shot, value, &mut self.world)
             };
-            if let Some(pattern) =
+            let Some(pattern) =
                 projectile_pattern(&node.fields, forward, &shot, node.pos, &mut evaluate)
-            {
-                projectiles.extend(pattern.launch(bot.entity, bot.spawn.team, origin, tick));
+            else {
+                continue;
+            };
+            let presentation = pattern
+                .definition_and_lifetime()
+                .filter(|_| {
+                    node.field("m_49CBA3BC").is_none_or(|value| {
+                        value.is_null() || value.as_array().is_some_and(Vec::is_empty)
+                    }) && predicted_sync(node, &mut evaluate).unwrap_or(false)
+                })
+                .and_then(|(definition, lifetime)| {
+                    let snapshot = projected
+                        .get_or_insert_with(|| {
+                            let projection = self.projection()?;
+                            projection
+                                .encoder
+                                .project(projection.snapshot, View::Observer)
+                                .ok()
+                        })
+                        .as_ref()?;
+                    let volley = snapshot.freeze_volley(shot)?;
+                    Some(ObservedShot::new(
+                        volley, definition, origin, forward, tick, lifetime,
+                    ))
+                });
+            let flights: Vec<_> = pattern
+                .launch(bot.entity, bot.spawn.team, origin, tick)
+                .collect();
+            if !flights.is_empty() {
+                projectiles.push(StockShotBatch {
+                    flights,
+                    presentation,
+                });
             }
         }
         projectiles

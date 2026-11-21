@@ -111,6 +111,10 @@ pub(crate) struct ProjectilePattern {
 }
 
 impl ProjectilePattern {
+    pub(crate) fn definition_and_lifetime(&self) -> Option<(u64, f64)> {
+        Some((self.ballistics.definition?, self.ballistics.lifetime))
+    }
+
     pub(crate) fn launch(
         self,
         source: u32,

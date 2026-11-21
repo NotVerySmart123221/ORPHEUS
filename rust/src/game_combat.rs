@@ -261,6 +261,7 @@ mod environment;
 mod health;
 mod health_events;
 mod movement;
+mod observed_projectiles;
 mod player;
 mod script_requests;
 mod stock_bot;
@@ -273,6 +274,7 @@ pub(crate) use encounter::{EncounterPhase, GateDamageStage, GateHealth};
 use enemy::{BotState, EnemyState};
 use health::HealthEffect;
 use health_events::{HealthDamageEvidence, HealthEventContext, SampledBody};
+pub(crate) use observed_projectiles::{ObservedProjectileEvent, ObservedShot};
 pub(crate) use player::{PlayerBodyEvent, PlayerBodyHandle, PlayerBodyState, PlayerDeath};
 use script_requests::{PlayerRoomCue, RoomScriptTarget};
 pub(crate) use script_requests::{RoomScriptRequest, RoomScriptRequests};
@@ -559,6 +561,7 @@ pub(crate) struct RoomSimulation {
     // Handle lists preserve launch order within the worker's ordered peer turns.
     projectiles: HashMap<u32, FlightBatch>,
     enemy_projectiles: Vec<Entity>,
+    projectile_reports: observed_projectiles::RoomProjectileReports,
     witch_staff_links: IndexMap<u32, (u32, u16)>,
     #[cfg(any(test, feature = "inspector"))]
     debug_rays: Arc<crate::game_debug::DebugRayHistory>,
@@ -809,7 +812,7 @@ impl RoomSimulation {
             .is_some_and(|state| state.bot.dead)
     }
 
-    fn advance_stock_bots(&mut self, tick: u32) -> Vec<crate::script_enemy::EnemyProjectile> {
+    fn advance_stock_bots(&mut self, tick: u32) -> Vec<observed_projectiles::StockShotBatch> {
         let mut launches = Vec::new();
         let entities: Vec<_> = self.by_wire.values().copied().collect();
         for entity in entities {
@@ -935,6 +938,7 @@ impl RoomSimulation {
             encounter_entity: None,
             projectiles: HashMap::new(),
             enemy_projectiles: Vec::new(),
+            projectile_reports: Default::default(),
             witch_staff_links: IndexMap::new(),
             #[cfg(any(test, feature = "inspector"))]
             debug_rays: Arc::default(),
@@ -2216,8 +2220,8 @@ impl RoomSimulation {
             self.set_junkenstein_defenders(Arc::clone(&defenders));
             self.set_player_defenders(defenders);
         }
-        let mut launched = self.advance_stock_bots(tick);
-        if !launched.is_empty() {
+        let stock_launches = self.advance_stock_bots(tick);
+        if !stock_launches.is_empty() {
             self.activate_combat();
         }
         if !self.combat_active {
@@ -2231,7 +2235,7 @@ impl RoomSimulation {
         let has_roster = self.player_targets_active
             || !self.players_by_wire.is_empty()
             || self.external_targets.is_some()
-            || !launched.is_empty()
+            || !stock_launches.is_empty()
             || !self.enemy_projectiles.is_empty();
         let states = self.checked_states()?;
         let roster =
@@ -2263,6 +2267,7 @@ impl RoomSimulation {
                 )
             });
         let mut retired = Vec::new();
+        let mut launched = Vec::new();
         let mut enemy_damage = Vec::new();
         #[cfg(any(test, feature = "inspector"))]
         let mut recorded_rays = Vec::new();
@@ -2616,6 +2621,7 @@ impl RoomSimulation {
             tick,
             &mut enemy_damage,
         );
+        self.spawn_stock_shots(stock_launches);
         self.enemy_projectiles.extend(
             launched
                 .into_iter()
@@ -2788,6 +2794,7 @@ impl RoomSimulation {
                 }
                 Err(_) => {}
             }
+            self.complete_observed_projectile(handle, tick);
             self.world.despawn(handle);
         }
         self.enemy_projectiles.extend(
@@ -2900,6 +2907,7 @@ impl RoomSimulation {
         for entity in self.enemy_projectiles.drain(..) {
             self.world.despawn(entity);
         }
+        self.projectile_reports = Default::default();
         self.player_generations.clear();
         self.latest_wire_generations.clear();
         self.next_bot = BOT_ENTITY;
