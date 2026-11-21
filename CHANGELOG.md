@@ -6,7 +6,7 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
-- Drive authored firing placements through the stock bot's private StateScript root and body-defined weapon inputs. Route the emitted projectiles to the existing room flight and damage settlement. A synthetic state lifecycle test, 468 server library tests, and prepared 104319 probes for projectile launch and bot nameplate respawn passed. Client-visible projectile delivery and in-room damage acceptance remain open.
+- Drive authored firing placements through the stock bot's private StateScript root and body-defined weapon inputs. Route the emitted projectiles to the existing room flight and damage settlement. A synthetic state lifecycle test, 468 server library tests, and prepared 104319 probes for projectile launch, damage to both actor types, and bot nameplate respawn passed. Client-visible projectile delivery remains open.
 
 ### 2026-11-21
 

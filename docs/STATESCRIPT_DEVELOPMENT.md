@@ -87,10 +87,11 @@ archives can contain identical graph indices in several map folders.
 Select the matching listings before importing. The bot starts the
 placement graph privately and uses the entity definition's weapon-slot
 bindings to feed the body's ordinary logical-button dispatcher. The
-headless probe checks press, release, and projectile flight admission.
+headless probes check press, release, and projectile flight admission.
 Flight uses the room's existing hostile-target and collision queries.
-Client presentation and damage to a live bot or player have separate
-acceptance checks.
+A controlled room fixture verifies damage to a live bot and a player
+while a same-team target remains unharmed. Client presentation remains
+a separate acceptance check.
 The earlier spawn-reset and button lifecycle are documented in the
 [Python bot host](https://github.com/leafall903/ORPHEUS/blob/299b44111fc3e3dddcc5a691859b7a6c3ac661a6/src/ow174/game/script/bot.py).
 
