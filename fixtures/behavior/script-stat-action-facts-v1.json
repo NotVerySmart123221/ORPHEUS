@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "case_id": "script-stat-action-facts.synthetic.v1",
+  "source": {
+    "basis": "Invented stat assets and graph locations. A caller-bound time check observes the authored continuation."
+  },
+  "evidence": "synthetic-rust",
+  "input": [
+    {
+      "name": "single stat with dormant amount and a caller-controlled continuation",
+      "graph": 61001,
+      "player_stats_available": false,
+      "linked": true,
+      "fields": {
+        "m_stat": "0x086000000000B091",
+        "m_amount": {
+          "$": "STU_919FD47C",
+          "m_configVars": [{"$": "fixture.unavailable_stat_amount"}],
+          "m_expression": {"m_opcodes": [14, 0, 0]}
+        }
+      },
+      "expected_admission": true,
+      "expected_transition": true
+    },
+    {
+      "name": "stat list forwards the caller",
+      "graph": 61002,
+      "player_stats_available": false,
+      "linked": true,
+      "fields": {
+        "m_stats": ["0x086000000000B091", "0x086000000000B092"],
+        "m_amount": {"$": "STUConfigVarInt", "m_value": 5}
+      },
+      "expected_admission": true,
+      "expected_transition": true
+    },
+    {
+      "name": "empty continuation leaves the caller active",
+      "graph": 61003,
+      "player_stats_available": false,
+      "linked": false,
+      "fields": {
+        "m_stat": "0x086000000000B091",
+        "m_amount": {"$": "STUConfigVarDynamic", "m_identifier": 171, "m_60DB8F99": 0}
+      },
+      "expected_admission": true,
+      "expected_transition": false
+    },
+    {
+      "name": "present player stats require the actual action",
+      "graph": 61004,
+      "player_stats_available": true,
+      "linked": true,
+      "fields": {
+        "m_stat": "0x086000000000B091",
+        "m_amount": {"$": "STUConfigVarInt", "m_value": 5}
+      },
+      "expected_admission": false,
+      "expected_transition": false
+    },
+    {
+      "name": "unknown player stat availability",
+      "graph": 61005,
+      "player_stats_available": null,
+      "linked": true,
+      "fields": {
+        "m_stat": "0x086000000000B091",
+        "m_amount": {"$": "STUConfigVarInt", "m_value": 5}
+      },
+      "expected_admission": false,
+      "expected_transition": false
+    },
+    {
+      "name": "invalid stat asset type",
+      "graph": 61006,
+      "player_stats_available": false,
+      "linked": true,
+      "fields": {
+        "m_stat": "0x0D8000000000B091",
+        "m_amount": {"$": "STUConfigVarInt", "m_value": 5}
+      },
+      "expected_admission": false,
+      "expected_transition": false
+    },
+    {
+      "name": "unverified target selector",
+      "graph": 61007,
+      "player_stats_available": false,
+      "linked": true,
+      "fields": {
+        "m_stat": "0x086000000000B091",
+        "m_amount": {"$": "STUConfigVarInt", "m_value": 5},
+        "m_targets": {"$": "STUConfigVarDynamic", "m_identifier": 172, "m_60DB8F99": 0}
+      },
+      "expected_admission": false,
+      "expected_transition": false
+    },
+    {
+      "name": "a dynamic target is dormant while the service is absent",
+      "graph": 61009,
+      "player_stats_available": null,
+      "player_stats_service_available": false,
+      "linked": true,
+      "fields": {
+        "m_stats": ["0x086000000000B091", "0x086000000000B093"],
+        "m_amount": {"$": "STUConfigVarInt", "m_value": 4},
+        "m_targets": {"$": "STUConfigVarDynamic", "m_identifier": 172, "m_60DB8F99": 0}
+      },
+      "expected_admission": true,
+      "expected_transition": true
+    },
+    {
+      "name": "owner record absence cannot prove that a dynamic target has no service",
+      "graph": 61010,
+      "player_stats_available": false,
+      "player_stats_service_available": true,
+      "linked": true,
+      "fields": {
+        "m_stat": "0x086000000000B091",
+        "m_amount": {"$": "STUConfigVarInt", "m_value": 4},
+        "m_targets": {"$": "STUConfigVarDynamic", "m_identifier": 172, "m_60DB8F99": 0}
+      },
+      "expected_admission": false,
+      "expected_transition": false
+    },
+    {
+      "name": "conflicting stat selectors",
+      "graph": 61008,
+      "player_stats_available": false,
+      "linked": true,
+      "fields": {
+        "m_stat": "0x086000000000B091",
+        "m_stats": ["0x086000000000B092"],
+        "m_amount": {"$": "STUConfigVarInt", "m_value": 5}
+      },
+      "expected_admission": false,
+      "expected_transition": false
+    }
+  ]
+}

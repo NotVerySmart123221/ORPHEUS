@@ -19,11 +19,11 @@ use super::super::{
         is_elapsed_wait, is_entry, is_horizontal_velocity_clamp, is_literal_frame_wait,
         is_message_recipient_set, is_named_shield_decay, is_networked_for_code_synced,
         is_owner_movement_sampler, is_parent_owned_timed_graph, is_projected_self_message,
-        is_self_shield_recharge, is_self_stat_timer, is_self_target, is_static_map_explosion,
-        is_vertical_velocity_impulse, is_wave_health_pool, living_body_array_shape,
-        named_temporary_shield, parent_owned_graph_duration, participant_filter,
-        persistent_message, placement_collection_tag, pool_number, raw_indices, registered_state,
-        source_key, static_target_operand, stored,
+        is_self_shield_recharge, is_self_stat_timer, is_self_target, is_stat_action,
+        is_static_map_explosion, is_vertical_velocity_impulse, is_wave_health_pool,
+        living_body_array_shape, named_temporary_shield, parent_owned_graph_duration,
+        participant_filter, persistent_message, placement_collection_tag, pool_number, raw_indices,
+        registered_state, source_key, static_target_operand, stored,
     },
     types::{InitFault, Issue, SpawnSearch, SpawnSearchKey, State, StateKind},
     world::{
@@ -77,7 +77,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)
             }
             _ if node.declares_branch_action() => {
-                let Some(value) = self.evaluate(id, node, field(&node.fields, "m_condition"), caller)
+                let Some(value) =
+                    self.evaluate(id, node, field(&node.fields, "m_condition"), caller)
                 else {
                     return Ok(false);
                 };
@@ -115,7 +116,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     self.report(site, Issue::UnsupportedField("swept displacement source"));
                     return Ok(false);
                 }
-                let Some(delta) = self.evaluate(id, node, field(&node.fields, "delta"), caller) else {
+                let Some(delta) = self.evaluate(id, node, field(&node.fields, "delta"), caller)
+                else {
                     return Ok(false);
                 };
                 let displacement = match delta {
@@ -132,7 +134,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     self.report(site, Issue::UnsupportedField("swept displacement frame"));
                     return Ok(false);
                 };
-                match self.world.queue_swept_displacement(site, frame, displacement) {
+                match self
+                    .world
+                    .queue_swept_displacement(site, frame, displacement)
+                {
                     Some(true) => {
                         self.follow(id, node, "m_outPlug", caller, depth)?;
                         Ok(true)
@@ -160,9 +165,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     _ => None,
                 };
                 let Some(relocation) = relocation else {
-                    self.report(site, Issue::Expression(EvalError::MalformedConfig(
-                        "expected a finite float32-representable relocation destination",
-                    )));
+                    self.report(
+                        site,
+                        Issue::Expression(EvalError::MalformedConfig(
+                            "expected a finite float32-representable relocation destination",
+                        )),
+                    );
                     return Ok(false);
                 };
                 let Some(frame) = self.machine.frame.checked_add(1) else {
@@ -196,7 +204,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     _ => {
                         self.report(
                             site,
-                            Issue::Expression(EvalError::MalformedConfig("expected a bound health change target")),
+                            Issue::Expression(EvalError::MalformedConfig(
+                                "expected a bound health change target",
+                            )),
                         );
                         return Ok(false);
                     }
@@ -211,12 +221,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     _ => {
                         self.report(
                             site,
-                            Issue::Expression(EvalError::MalformedConfig("expected a finite nonzero health change delta")),
+                            Issue::Expression(EvalError::MalformedConfig(
+                                "expected a finite nonzero health change delta",
+                            )),
                         );
                         return Ok(false);
                     }
                 };
-                if !self.expired_health_target(entity)
+                if !self.expired_health_event_body(entity)
                     && !self.world.queue_health_change(site, entity, delta)
                 {
                     self.report(site, Issue::UnsupportedField("health change request"));
@@ -272,11 +284,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
-            "STU_147B34C6" if registration.permits((self.graph(id).index, node.pos) == (0x180a, 22)) => {
+            "STU_147B34C6"
+                if registration.permits((self.graph(id).index, node.pos) == (0x180a, 22)) =>
+            {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
-            "STU_88DE7AD3" if registration.permits((self.graph(id).index, node.pos) == (0x0c8c, 72)) => {
+            "STU_88DE7AD3"
+                if registration.permits((self.graph(id).index, node.pos) == (0x0c8c, 72)) =>
+            {
                 // In 104319 this base action forwards the authored phase handoff.
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
@@ -400,18 +416,18 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         (self.graph(id).index, node.pos),
                         (0x01c7, 74) | (0x0257, 32) | (0x01c6, 37 | 38)
                     )) && script_expr::native_shape(
-                    field(&node.fields, "m_3E3E203A"),
-                    "STU_B5A0CAF0",
-                    None,
-                ) && asset_guid(field(field(&node.fields, "m_effect"), "m_effect"))
-                    == Some(match self.graph(id).index {
-                        0x01c7 => 0x0300_0000_0000_1ba9,
-                        0x01c6 if node.pos == 37 => 0x0300_0000_0000_03e0,
-                        0x01c6 => 0x0300_0000_0000_05a8,
-                        _ => 0x0300_0000_0000_330f,
-                    })
-                    && field(field(&node.fields, "m_effect"), "m_resourceKey").is_null()
-                    && field(&node.fields, "m_dataFlow").is_null()) =>
+                        field(&node.fields, "m_3E3E203A"),
+                        "STU_B5A0CAF0",
+                        None,
+                    ) && asset_guid(field(field(&node.fields, "m_effect"), "m_effect"))
+                        == Some(match self.graph(id).index {
+                            0x01c7 => 0x0300_0000_0000_1ba9,
+                            0x01c6 if node.pos == 37 => 0x0300_0000_0000_03e0,
+                            0x01c6 => 0x0300_0000_0000_05a8,
+                            _ => 0x0300_0000_0000_330f,
+                        })
+                        && field(field(&node.fields, "m_effect"), "m_resourceKey").is_null()
+                        && field(&node.fields, "m_dataFlow").is_null()) =>
             {
                 // Preserve the graph continuation without a server-side
                 // effect entity or a graph value to replicate.
@@ -480,7 +496,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
-            "STU_C43F9944" if registration.permits((self.graph(id).index, node.pos) == (0x180a, 28)) => {
+            "STU_C43F9944"
+                if registration.permits((self.graph(id).index, node.pos) == (0x180a, 28)) =>
+            {
                 let site = self.site(id, node);
                 let message = POST_MATCH_COMPLETE;
                 let delivered = if node.game_message_id() == Some(message)
@@ -516,8 +534,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             "STU_100EF8C2"
-                if registration.permits(self.graph(id).index == 0x1188
-                    && matches!(node.pos, 58 | 59))
+                if registration
+                    .permits(self.graph(id).index == 0x1188 && matches!(node.pos, 58 | 59))
                     && node.is_action()
                     && node.is_networked()
                     && node
@@ -537,8 +555,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             "STU_100EF8C2"
-                if registration.permits(self.graph(id).index == 0x0019
-                    && matches!(node.pos, 48 | 50))
+                if registration
+                    .permits(self.graph(id).index == 0x0019 && matches!(node.pos, 48 | 50))
                     && is_self_target(node, "m_targets")
                     && node
                         .field("m_gameMessage.m_gameMessage")
@@ -576,7 +594,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             // These placements resolve to the 104319 base action.
-            "STU_0FC6DAEA" if registration.permits(self.graph(id).index == 0x0ca5 && matches!(node.pos, 66..=69)) => {
+            "STU_0FC6DAEA"
+                if registration
+                    .permits(self.graph(id).index == 0x0ca5 && matches!(node.pos, 66..=69)) =>
+            {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
@@ -618,18 +639,18 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
-            "STU_CEBDAF17"
-                if ((registration.permits(self.graph(id).index == 0x0b8b
-                    && matches!(node.pos, 50 | 51 | 74))
-                    && node.server_only)
-                    || (registration.permits(self.graph(id).index == 0x0043
-                        && matches!(node.pos, 1 | 40 | 53..=55))
-                        && node.is_action()))
-                    && node.remote < 0
-                    && is_self_target(node, "m_targets") =>
-            {
-                // These player stat continuations preserve the caller and
-                // report whether the output took a transition.
+            "STU_CEBDAF17" if registration.shape(is_stat_action(node)) => {
+                let site = self.site(id, node);
+                let stats_available = if is_self_target(node, "m_targets") {
+                    self.world.player_stats_available(site)
+                } else {
+                    self.world.player_stats_service_available(site)
+                };
+                if stats_available != Some(false) {
+                    self.report(site, Issue::UnsupportedAction(node.class.clone()));
+                    return Ok(false);
+                }
+                // A missing stat service leaves the operands dormant.
                 self.follow(id, node, "m_outPlug", caller, depth)
             }
             "STU_43B63AD0"
@@ -675,31 +696,45 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             "STU_FF3471E9" if registration.shape(is_vertical_velocity_impulse(node)) => {
                 let rows = array_field(&node.fields, "m_BC5E91CF");
-                let Some(reset) = self.evaluate(id, node, field(&rows[0], "m_9B7A63EA"), caller) else {
+                let Some(reset) = self.evaluate(id, node, field(&rows[0], "m_9B7A63EA"), caller)
+                else {
                     return Ok(false);
                 };
-                let Some(impulse) = self.evaluate(id, node, field(&rows[1], "m_9B7A63EA"), caller) else {
+                let Some(impulse) = self.evaluate(id, node, field(&rows[1], "m_9B7A63EA"), caller)
+                else {
                     return Ok(false);
                 };
                 let site = self.site(id, node);
                 let (Some(vertical), Value::Vector(delta)) = (pool_number(reset), impulse) else {
-                    self.report(site, Issue::Expression(EvalError::MalformedConfig("velocity impulse operands")));
+                    self.report(
+                        site,
+                        Issue::Expression(EvalError::MalformedConfig("velocity impulse operands")),
+                    );
                     return Ok(false);
                 };
                 if !(vertical as f32).is_finite()
                     || !delta.iter().all(|&axis| (axis as f32).is_finite())
                     || !(vertical as f32 + delta[1] as f32).is_finite()
                 {
-                    self.report(site, Issue::Expression(EvalError::MalformedConfig("nonfinite velocity impulse")));
+                    self.report(
+                        site,
+                        Issue::Expression(EvalError::MalformedConfig("nonfinite velocity impulse")),
+                    );
                     return Ok(false);
                 }
-                if !self.world.apply_velocity_impulse(site, self.machine.frame, vertical, delta) {
+                if !self
+                    .world
+                    .apply_velocity_impulse(site, self.machine.frame, vertical, delta)
+                {
                     self.report(site, Issue::UnsupportedField("velocity impulse service"));
                     return Ok(false);
                 }
                 self.follow(id, node, "m_outPlug", caller, depth)
             }
-            "STU_FF3471E9" if registration.permits(self.graph(id).index == 0x01f0 && matches!(node.pos, 8 | 11 | 17)) => {
+            "STU_FF3471E9"
+                if registration
+                    .permits(self.graph(id).index == 0x01f0 && matches!(node.pos, 8 | 11 | 17)) =>
+            {
                 let rows = array_field(&node.fields, "m_BC5E91CF");
                 let [row] = rows else { return Ok(false) };
                 let cap = node.pos == 17;
@@ -747,16 +782,6 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     && field(&node.fields, "m_93CDFD2F").as_u64() == Some(1) =>
             {
                 // Pinned Python Roll fallback; the native service remains unverified.
-                self.follow(id, node, "m_outPlug", caller, depth)?;
-                Ok(true)
-            }
-            "STU_CEBDAF17"
-                if registration.permits(matches!(
-                    (self.graph(id).index, node.pos),
-                    (0x0079, 22) | (0x157c, 44 | 134 | 137 | 148..=150 | 153..=155 | 192 | 193 | 196)
-                )) =>
-            {
-                // The healer is a scene NPC with no player stats record.
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }

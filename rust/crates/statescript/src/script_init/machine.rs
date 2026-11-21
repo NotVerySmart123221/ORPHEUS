@@ -30,6 +30,7 @@ use super::{
 #[derive(Clone, Copy)]
 enum MessageDestination {
     Ordinary(Option<u16>, u64),
+    SettledDamage(u16, u64),
     Room(u64),
     Host(HostEventKind),
 }
@@ -37,7 +38,9 @@ enum MessageDestination {
 impl MessageDestination {
     fn topic(self) -> EntryTopic {
         match self {
-            Self::Ordinary(_, message) | Self::Room(message) => EntryTopic::Message(message),
+            Self::Ordinary(_, message) | Self::SettledDamage(_, message) | Self::Room(message) => {
+                EntryTopic::Message(message)
+            }
             Self::Host(kind) => EntryTopic::Host(kind),
         }
     }
@@ -209,6 +212,7 @@ pub(super) enum Event {
         sender: Option<u32>,
         parameters: Arc<Variables>,
         health_context: HostHealthContext,
+        settled_damage: bool,
     },
 }
 
@@ -525,6 +529,24 @@ impl Machine {
         )
     }
 
+    pub(super) fn queue_settled_damage_entries(
+        &mut self,
+        graphs: &GraphStore,
+        instance: u16,
+        message: u64,
+        parameters: Variables,
+        health_context: HostHealthContext,
+    ) -> Result<usize, InitFault> {
+        self.queue_message_entries(
+            graphs,
+            MessageDestination::SettledDamage(instance, message),
+            None,
+            parameters,
+            self.now_ms,
+            health_context,
+        )
+    }
+
     pub(super) fn queue_local_game_message(
         &mut self,
         graphs: &GraphStore,
@@ -592,8 +614,11 @@ impl Machine {
         }
         let mut entries = Vec::new();
         for (&id, item) in &self.snapshot.instances {
-            if matches!(destination, MessageDestination::Ordinary(Some(recipient), _) if recipient != id)
-            {
+            if matches!(
+                destination,
+                MessageDestination::Ordinary(Some(recipient), _)
+                    | MessageDestination::SettledDamage(recipient, _) if recipient != id
+            ) {
                 continue;
             }
             let graph = graphs.graph(item.graph).expect("registered graph");
@@ -605,7 +630,8 @@ impl Machine {
                         node.declares_room_message_entry()
                             || node.accepts_directed_numeric_message(&parameters)
                     }
-                    MessageDestination::Ordinary(_, _) => {
+                    MessageDestination::Ordinary(_, _)
+                    | MessageDestination::SettledDamage(_, _) => {
                         !node.declares_room_message_entry()
                             && (node.is_message_entry()
                                 || node.state.is_some_and(|raw| {
@@ -632,6 +658,7 @@ impl Machine {
                     sender,
                     parameters: Arc::clone(&parameters),
                     health_context: health_context.clone(),
+                    settled_damage: matches!(destination, MessageDestination::SettledDamage(_, _)),
                 },
             )?;
         }
