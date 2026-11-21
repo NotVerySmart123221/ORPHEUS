@@ -795,6 +795,7 @@ impl RoomSimulation {
                     &catalog,
                     &state.bot,
                     crate::game_clock::FIRST_TICK,
+                    stock_bot::BodyEntry::Initial,
                 );
             }
         }
@@ -2851,8 +2852,12 @@ impl RoomSimulation {
             }
             let mut next_state = BotState::new(fresh, Some(tick));
             if let Some(catalog) = &self.stock_bots {
-                next_state.stock_script =
-                    stock_bot::StockBotScript::start(catalog, &next_state.bot, tick);
+                next_state.stock_script = stock_bot::StockBotScript::start(
+                    catalog,
+                    &next_state.bot,
+                    tick,
+                    stock_bot::BodyEntry::Respawn,
+                );
             }
             let entity = self.world.spawn(next_state).id();
             self.by_wire

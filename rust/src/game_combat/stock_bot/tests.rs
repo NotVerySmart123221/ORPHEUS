@@ -4,6 +4,55 @@ use super::*;
 use crate::{game_bots::BotCatalog, game_combat::RoomSimulation, script_snapshot_wire::View};
 
 #[test]
+#[ignore = "requires a prepared 104319 Practice Range pack"]
+fn prepared_bot_respawn_projects_its_authored_animation_in_the_first_frame() {
+    let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let data = runtime.join("data");
+    let catalog = StockBotCatalog {
+        graphs: Arc::new(GraphStore::load(data.join("game_graphs_174.json.gz")).unwrap()),
+        codecs: Arc::new(CodecTable::load(data.join("statescript_codecs_174.json")).unwrap()),
+        mode: crate::game_content::PRACTICE_RANGE_MODE,
+    };
+    let bots = BotCatalog::load(data.join("ai_spawners_174.json"))
+        .unwrap()
+        .make(crate::game_content::PRACTICE_RANGE_MAP, |_| {
+            Default::default()
+        });
+    let bot = bots.iter().find(|bot| bot.spawn.firing).unwrap();
+    let replacement = bot.respawned(bot.entity + 100, 300);
+    let script = StockBotScript::start(&catalog, &replacement, 292, BodyEntry::Respawn).unwrap();
+    let snapshot = script.component.snapshot().unwrap();
+    let projection = script
+        .projection()
+        .unwrap_or_else(|| panic!("{:?}", snapshot.diagnostics));
+    assert_eq!(projection.snapshot.entity, replacement.entity);
+    let (&instance_id, instance) = snapshot
+        .instances
+        .iter()
+        .find(|(_, instance)| instance.graph == 0x0ba8)
+        .unwrap();
+    let active: Vec<_> = instance
+        .states
+        .iter()
+        .filter_map(|(&slot, state)| {
+            (state.active && state.kind == script_init::StateKind::Anim).then_some(slot)
+        })
+        .collect();
+    assert_eq!(active.len(), 1, "{:?}", snapshot.diagnostics);
+    let projected = projection
+        .encoder
+        .project(projection.snapshot, View::Observer)
+        .unwrap();
+    assert!(
+        projected
+            .instance_states(instance_id)
+            .unwrap()
+            .contains(&active[0])
+    );
+    projection.encoder.full(&projected).unwrap();
+}
+
+#[test]
 #[ignore = "requires a prepared 104319 Practice Range pack with firing graph state metadata"]
 fn prepared_firing_placement_drives_the_stock_weapon_graph() {
     let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
@@ -20,10 +69,11 @@ fn prepared_firing_placement_drives_the_stock_weapon_graph() {
         });
     let bot = bots.iter().find(|bot| bot.spawn.firing).unwrap();
     let start = 100;
-    let mut script = StockBotScript::start(&catalog, bot, start).unwrap();
+    let mut script = StockBotScript::start(&catalog, bot, start, BodyEntry::Initial).unwrap();
     let mut held_ticks = 0;
     let mut released_after_holding = false;
     let mut projectiles = 0;
+    let mut projected_volley = false;
     let mut first_held_weapon_state = None;
     for tick in start + 1..=start + 800 {
         script.advance(tick, bot);
@@ -51,6 +101,20 @@ fn prepared_firing_placement_drives_the_stock_weapon_graph() {
             assert_eq!(projectile.source, bot.entity);
             assert_eq!(projectile.team, bot.spawn.team);
             projectiles += 1;
+            if !projected_volley {
+                let projection = script.projection().unwrap();
+                let projected = projection
+                    .encoder
+                    .project(projection.snapshot, View::Observer)
+                    .unwrap();
+                projected_volley = projection.snapshot.instances.iter().any(|(&id, instance)| {
+                    instance.states.iter().any(|(&slot, state)| {
+                        matches!(state.kind, script_init::StateKind::WeaponVolley { .. })
+                            && projected.volley_identity(id, slot)
+                                == Some((state.activation, state.start_ms))
+                    })
+                });
+            }
         }
     }
     let snapshot = script.component.snapshot().unwrap();
@@ -61,6 +125,12 @@ fn prepared_firing_placement_drives_the_stock_weapon_graph() {
         projectiles > 0,
         "{first_held_weapon_state:?}; {:?}",
         snapshot.diagnostics,
+    );
+    // A single-shot volley can already be off. Its activation still
+    // must be projected so the observer can associate the launch.
+    assert!(
+        projected_volley,
+        "the observer never received the volley identity"
     );
 }
 

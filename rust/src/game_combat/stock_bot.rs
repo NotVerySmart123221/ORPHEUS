@@ -36,7 +36,7 @@ mod tests;
 
 const HUD_HEALTH: u32 = 1732;
 const DIED_MESSAGE: u64 = 0x0240_0000_0000_003e;
-const PLACEMENT_RESET: u64 = 0x0240_0000_0000_0013;
+const RESET_MESSAGE: u64 = 0x0240_0000_0000_0013;
 const YAW_UNITS: f64 = 65_536.0;
 
 #[derive(Clone)]
@@ -372,8 +372,19 @@ pub(crate) struct StockBotScript {
     faulted: bool,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum BodyEntry {
+    Initial,
+    Respawn,
+}
+
 impl StockBotScript {
-    pub(super) fn start(catalog: &StockBotCatalog, bot: &Bot, tick: u32) -> Option<Self> {
+    pub(super) fn start(
+        catalog: &StockBotCatalog,
+        bot: &Bot,
+        tick: u32,
+        entry: BodyEntry,
+    ) -> Option<Self> {
         let entity_body = catalog.graphs.entity_body(bot.spawn.body)?;
         let mut roots = match script_init::body_roots(entity_body) {
             Ok(roots) => roots,
@@ -456,14 +467,27 @@ impl StockBotScript {
                     .then_some(id)
             })
         });
-        let result = if let Some(id) = placement {
-            script
-                .component
-                .queue_message(id, PLACEMENT_RESET, Variables::new())
-                .and_then(|_| script.component.run_now(&mut script.world))
-        } else {
-            Ok(())
+        let queued = match entry {
+            // The replacement's body, including its private placement
+            // behavior, receives the authored reset before publication.
+            BodyEntry::Respawn => script.component.queue_entity_message_from(
+                bot.entity,
+                RESET_MESSAGE,
+                Variables::new(),
+            ),
+            BodyEntry::Initial => placement.map_or(Ok(0), |instance| {
+                script
+                    .component
+                    .queue_message(instance, RESET_MESSAGE, Variables::new())
+            }),
         };
+        let result = queued.and_then(|count| {
+            if count == 0 {
+                Ok(())
+            } else {
+                script.component.run_now(&mut script.world)
+            }
+        });
         script.check_projection(result);
         Some(script)
     }

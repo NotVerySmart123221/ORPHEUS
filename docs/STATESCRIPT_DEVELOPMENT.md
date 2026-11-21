@@ -95,6 +95,13 @@ a separate acceptance check.
 The earlier spawn-reset and button lifecycle are documented in the
 [Python bot host](https://github.com/leafall903/ORPHEUS/blob/299b44111fc3e3dddcc5a691859b7a6c3ac661a6/src/ow174/game/script/bot.py).
 
+Replacement stock bots receive their authored reset on the new body
+before observer publication. The prepared probe checks that the
+spawn animation is present in the replacement's first encoded
+observer snapshot. For weapon effects, an instant volley can already
+be off when the server captures the frame. Its activation identity
+remains available for the observer's projectile launch record.
+
 ## Supply model hardpoint membership
 
 An external graph bundle can include `model_hardpoints` in a body entry.
