@@ -2357,6 +2357,7 @@ fn admitted_owner_projectile_preserves_gravity_and_expiry_blast() {
                         falloff: None,
                     },
                     rings: vec![(3.0, 1.0)],
+                    self_damage_scale: 0.0,
                 }),
             },
             origin: [0.0, 1.55, 0.0],

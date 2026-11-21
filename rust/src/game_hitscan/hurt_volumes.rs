@@ -268,7 +268,7 @@ mod tests {
             )
             .unwrap();
             let impact = flight
-                .advance_combat(1, &[(1, target)], |_, _, _| Ok(None))
+                .advance_combat(1, &[(1, target)], None, |_, _, _| Ok(None))
                 .unwrap()
                 .map(|end| end.impacts[0]);
             assert_eq!(impact.is_some(), critical.is_some(), "{}", case["name"]);

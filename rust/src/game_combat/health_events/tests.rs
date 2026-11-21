@@ -228,6 +228,30 @@ fn admitted_health_request_cannot_credit_a_replacement_source() {
 }
 
 #[test]
+fn self_impact_updates_health_without_shooter_hit_or_elimination_feedback() {
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    let player = spawn_player(&mut room, 1);
+    let health =
+        |room: &RoomSimulation| room.player_body(player).unwrap().vitals().unwrap().total();
+    let starting = health(&room);
+    let context = FIXTURE_CONTEXT;
+    for amount in [1.0, starting] {
+        let impact = fixture_impact(player.entity, amount);
+        assert!(
+            room.apply_player_impact(player.entity, context.tick, context, &impact)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(room.take_scripted_health()[0].entity, player.entity);
+    }
+    assert_eq!(health(&room), 0.0);
+    let [death]: [_; 1] = room.take_player_deaths().try_into().ok().unwrap();
+    assert_eq!(death.body, player);
+    assert_eq!(death.source, player.entity);
+    assert!(!death.killed_by);
+}
+
+#[test]
 fn native_room_health_events_keep_actual_deltas_and_hit_tag_availability_in_order() {
     let Contract { input, expected } = contract();
     let bots = fixture_bots();

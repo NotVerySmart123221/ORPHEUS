@@ -42,6 +42,8 @@ The Rust-only [stock bot script isolation fixture](../fixtures/behavior/stock-bo
 
 The Rust-only [combat hurt volumes fixture](../fixtures/behavior/combat-hurt-volumes-v1.json) checks head and body classification, lateral contact, open space, and wall occlusion. Hitscan and projectiles use the same combat shape. Bodies without an optional hurt profile keep the compatibility proxy.
 
+The Rust-only [projectile self-splash fixture](../fixtures/behavior/projectile-self-splash-v1.json) covers the authored scale, visibility checks, and absent configuration. The owner can take splash without blocking their own projectile. A room regression covers health and death feedback.
+
 The Rust-only [unposed owner volley fixture](../fixtures/behavior/owner-unposed-volley-v1.json) checks that a due round with no pose is skipped at its authored time and a later posed round in the same volley still fires and spends ammunition.
 
 The Rust-only [staged nameplate fixture](../fixtures/behavior/npc-nameplate-staged-admission-v1.json) checks admission after the mode and bot body acknowledgments, exactly retried introduction, and lifetime protection for a bot that died before admission.

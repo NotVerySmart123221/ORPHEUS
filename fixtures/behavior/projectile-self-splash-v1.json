@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "case_id": "projectile-self-splash-v1",
+  "input": {
+    "projectile_speed": 80.0,
+    "blast_damage": 64.0,
+    "blast_radius": 2.0,
+    "self_damage_scale": 0.25
+  },
+  "expected": {
+    "owner_damage": 16.0,
+    "enemy_damage": 64.0
+  }
+}

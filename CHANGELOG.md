@@ -4,6 +4,10 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ## Unreleased
 
+### 2026-11-22
+
+- Apply the optional authored self-damage scale to the shooter's projectile splash. Reuse the normal splash range, falloff, occlusion and player health settlement. Self-damage does not create an enemy hit or elimination notice. Original-client acceptance is pending.
+
 ### 2026-11-21
 
 - Resume the world frame at the final game-channel message bit. Keep intermediate message headers and standalone lobby messages byte-aligned. This fixes the framing defect associated with the `0xD697D0` client crash signature. The Inspector workspace run passed 920 tests. The original-client retest outcome has not been recorded. [Reference investigation](https://github.com/leafall903/ORPHEUS/blob/5d86bcb2/docs/MCCREE_COMBAT.txt#L1007-L1027)

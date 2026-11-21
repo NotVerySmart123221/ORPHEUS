@@ -1003,13 +1003,17 @@ impl RoomSimulation {
             return Ok(None);
         };
         self.scripted_health.push(health.clone());
+        let self_hit = source == id.entity;
         if killed {
             self.player_deaths.push(PlayerDeath {
                 owner,
                 body: id,
                 source,
-                killed_by: true,
+                killed_by: !self_hit,
             });
+        }
+        if self_hit {
+            return Ok(None);
         }
         Ok(Some(BotHit {
             damage: AppliedDamage {

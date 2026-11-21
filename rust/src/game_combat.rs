@@ -1922,6 +1922,11 @@ impl RoomSimulation {
                 queries.free_for_all(),
                 &mut candidates,
             );
+            // The shooter can receive splash but never blocks its own flight.
+            let shooter = self
+                .player_body(owner)
+                .filter(|state| state.alive())
+                .map(|state| (owner.entity, state.target_pose().into()));
             let (token, stun, hit_effect, result) = {
                 let mut active = self
                     .world
@@ -1930,6 +1935,7 @@ impl RoomSimulation {
                 let result = active.flight.advance_combat(
                     context.tick,
                     &candidates,
+                    shooter,
                     |origin, direction, reach| queries.hitscan_wall(origin, direction, reach),
                 );
                 (active.token, active.stun, active.hit_effect, result)

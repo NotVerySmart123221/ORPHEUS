@@ -35,6 +35,7 @@ pub struct ProjectileBallistics {
 pub struct Blast {
     pub hit: HitDefinition,
     pub rings: Vec<(f64, f64)>,
+    pub self_damage_scale: f64,
 }
 
 impl ProjectileBallistics {
@@ -99,7 +100,16 @@ impl ProjectileBallistics {
                 }
             }
             rings.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
-            Some(Blast { hit, rings })
+            let scale = authored_number(config.get("m_8A3E3883"), 0.0, &mut evaluate)?;
+            Some(Blast {
+                hit,
+                rings,
+                self_damage_scale: if scale.is_finite() {
+                    scale.max(0.0)
+                } else {
+                    0.0
+                },
+            })
         } else {
             None
         };
@@ -214,13 +224,14 @@ impl ProjectileFlight {
         targets: &[(u32, TargetPose)],
         wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
     ) -> Result<Option<FlightEnd>, IndexError> {
-        self.advance_combat(tick, targets, wall)
+        self.advance_combat(tick, targets, None, wall)
     }
 
     pub(crate) fn advance_combat<T: Copy + Into<HurtPose>>(
         &mut self,
         tick: u32,
         targets: &[(u32, T)],
+        shooter: Option<(u32, HurtPose)>,
         mut wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
     ) -> Result<Option<FlightEnd>, IndexError> {
         if self.ended {
@@ -241,14 +252,15 @@ impl ProjectileFlight {
                 if speed > EPSILON {
                     self.direction = velocity.map(|axis| axis / speed);
                 }
-                end = self.advance_segment(duration, speed, targets, &mut wall)?;
+                end = self.advance_segment(duration, speed, targets, shooter, &mut wall)?;
                 if end.is_some() {
                     break;
                 }
             }
         } else {
             let duration = (f64::from(elapsed) * seconds).min(self.remaining);
-            end = self.advance_segment(duration, self.ballistics.speed, targets, &mut wall)?;
+            end =
+                self.advance_segment(duration, self.ballistics.speed, targets, shooter, &mut wall)?;
         }
         self.last_tick = Some(tick);
         Ok(end)
@@ -259,6 +271,7 @@ impl ProjectileFlight {
         duration: f64,
         speed: f64,
         targets: &[(u32, T)],
+        shooter: Option<(u32, HurtPose)>,
         mut wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
     ) -> Result<Option<FlightEnd>, IndexError> {
         let reach = speed * duration;
@@ -287,7 +300,7 @@ impl ProjectileFlight {
             self.remaining -= duration;
             if self.remaining <= 0.0 {
                 let impacts = if self.expiry_blast {
-                    self.splash(self.position, self.position, targets, &mut wall)?
+                    self.splash(self.position, self.position, targets, shooter, &mut wall)?
                 } else {
                     Vec::new()
                 };
@@ -324,7 +337,7 @@ impl ProjectileFlight {
         } else {
             point
         };
-        impacts.extend(self.splash(point, origin, targets, &mut wall)?);
+        impacts.extend(self.splash(point, origin, targets, shooter, &mut wall)?);
         self.position = point;
         if speed > EPSILON {
             self.travelled += distance / speed;
@@ -337,6 +350,7 @@ impl ProjectileFlight {
         point: Vec3,
         origin: Vec3,
         targets: &[(u32, T)],
+        shooter: Option<(u32, HurtPose)>,
         mut wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
     ) -> Result<Vec<Impact>, IndexError> {
         let mut impacts = Vec::new();
@@ -346,12 +360,18 @@ impl ProjectileFlight {
             .as_ref()
             .filter(|blast| blast.hit.amount > 0.0)
         {
-            for &(entity, pose) in targets {
-                let Some(surface) = pose.into().nearest_surface(point, origin) else {
+            let targets = targets
+                .iter()
+                .map(|&(entity, pose)| (entity, pose.into(), 1.0));
+            let shooter = shooter
+                .filter(|_| blast.self_damage_scale > 0.0)
+                .map(|(entity, pose)| (entity, pose, blast.self_damage_scale));
+            for (entity, pose, scale) in targets.chain(shooter) {
+                let Some(surface) = pose.nearest_surface(point, origin) else {
                     continue;
                 };
-                let damage = blast.hit.amount * blast.multiplier(surface.distance);
-                if damage <= 0.0 {
+                let damage = blast.hit.amount * blast.multiplier(surface.distance) * scale;
+                if !damage.is_finite() || damage <= 0.0 {
                     continue;
                 }
                 let reach = surface.sight_reach;
@@ -464,6 +484,7 @@ mod tests {
                     ..hit
                 },
                 rings: vec![(1.0, 1.0), (3.0, 0.5)],
+                self_damage_scale: 0.0,
             }),
         }
     }
@@ -656,6 +677,64 @@ mod tests {
         assert_eq!((end.point[2], end.travelled), (0.5, 0.01));
         assert!(end.impacts.is_empty());
         assert!(end.expired);
+    }
+
+    #[test]
+    fn authored_self_splash_reuses_damage_falloff_and_occlusion_without_blocking_the_flight() {
+        let fixture: Json = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/projectile-self-splash-v1.json"
+        ))
+        .unwrap();
+        let input = &fixture["input"];
+        let expected = &fixture["expected"];
+        let mut fields = serde_json::json!({
+            "m_projectileSpeed": input["projectile_speed"],
+            "m_D2D11CE9": {
+                "m_8A3E3883": input["self_damage_scale"],
+                "m_modifyHealth": { "m_amount": input["blast_damage"] },
+                "m_0D30E40C": [{ "m_radius": input["blast_radius"], "m_B399CACB": 1.0 }]
+            }
+        });
+        let shooter = (1, target(0.0, 0.0).into());
+        let targets = [(2, target(1.2, 0.75))];
+        let fire = |fields: &Json, obstructed: bool| {
+            let profile = ProjectileBallistics::from_fields(fields, |config| {
+                Ok(config.as_f64().map_or(Value::Null, Value::Float))
+            })
+            .unwrap()
+            .unwrap();
+            let mut flight =
+                ProjectileFlight::new(profile, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], None).unwrap();
+            flight
+                .advance_combat(1, &targets, Some(shooter), |_, direction, reach| {
+                    if direction == [0.0, 0.0, 1.0] && reach >= 0.75 {
+                        Ok(Some(0.75))
+                    } else if obstructed && direction[2] < -0.9 {
+                        Ok(Some(reach / 2.0))
+                    } else {
+                        Ok(None)
+                    }
+                })
+                .unwrap()
+                .unwrap()
+        };
+        let hit = fire(&fields, false);
+        assert_eq!(hit.point, [0.0, 1.0, 0.75]);
+        assert_eq!(hit.contact, None);
+        assert_eq!(
+            hit.impacts
+                .iter()
+                .map(|hit| (hit.entity, hit.damage))
+                .collect::<Vec<_>>(),
+            [
+                (2, expected["enemy_damage"].as_f64().unwrap()),
+                (1, expected["owner_damage"].as_f64().unwrap())
+            ],
+        );
+        let obscured = fire(&fields, true);
+        assert_eq!(obscured.impacts, hit.impacts[..1]);
+        fields["m_D2D11CE9"]["m_8A3E3883"] = Json::Null;
+        assert_eq!(fire(&fields, false).impacts, hit.impacts[..1]);
     }
 
     #[test]
