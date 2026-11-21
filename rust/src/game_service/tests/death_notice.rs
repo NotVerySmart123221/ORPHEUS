@@ -85,6 +85,131 @@ fn kill_body(scene: &mut PreparedScene, body: BodyId, damage: f64) -> PlayerDeat
 }
 
 #[test]
+fn bot_hit_feedback_waits_for_possession_and_keeps_its_shooter_generation() {
+    use crate::{
+        game_combat::AppliedDamage,
+        script_entity_state::EntityScriptState,
+        script_init::{HealthTargetFacts, HitTags},
+        world::{Create, Operation, health},
+    };
+
+    let contract: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/combat-feedback-owner-body-v1.json"
+    ))
+    .unwrap();
+    let input = &contract["input"];
+    let expected = &contract["expected"];
+    let first_hero = input["heroes"][0].as_u64().unwrap();
+    let next_hero = input["heroes"][1].as_u64().unwrap();
+    let target = u32::try_from(input["target"].as_u64().unwrap()).unwrap();
+    let amount = input["lethal_damage"].as_f64().unwrap();
+    let catalog = HeroCatalog::from_json(
+        &serde_json::json!({
+            format!("{first_hero:#018x}"): {
+                "name": "First fixture hero", "class": "Damage", "body": "0x0400000000000001",
+            },
+            format!("{next_hero:#018x}"): {
+                "name": "Second fixture hero", "class": "Damage", "body": "0x0400000000000001",
+            },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut scene = PreparedScene::fixture_for_owner_admission(catalog);
+    let owner = player_entity(0);
+    let card = PlayerCard::default();
+    let viewer = PlayerAppearance {
+        entity: owner,
+        slot: 0,
+        team: 0,
+        card: &card,
+    };
+    let mut peer = Peer::new(owner);
+    peer.world.start(&scene, &viewer, FIRST_TICK).unwrap();
+    peer.world.create_bot(EntityUpdate {
+        entity: target,
+        operation: Some(Operation::Create(Box::new(Create::new(1, Vec::new())))),
+        ..EntityUpdate::default()
+    });
+    let mut sequence = 0;
+    while !peer.world.identity_ready(target) || !peer.world.mode_ready() {
+        assert!(sequence < 8, "fixture baseline did not arrive");
+        peer.world.present(&scene, FIRST_TICK).unwrap();
+        acknowledge_world_frame(&mut peer, &mut sequence);
+    }
+
+    let hit = |shooter: BodyId| BotHit {
+        damage: AppliedDamage {
+            source: shooter.entity,
+            amount,
+            named_pool_losses: Vec::new(),
+            tags: HitTags::EMPTY,
+            target_facts: HealthTargetFacts {
+                target,
+                filter_flags: None,
+                room_status: None,
+                tags: Default::default(),
+                script_state: EntityScriptState::Absent,
+            },
+        },
+        notices: [
+            Some(CombatNotice::Hit {
+                target,
+                dealt: amount,
+                critical: false,
+                killed: true,
+                shot_frame: FIRST_TICK,
+            }),
+            Some(CombatNotice::Elimination {
+                killer: shooter.entity,
+                victim: target,
+            }),
+        ],
+        health: EntityUpdate {
+            entity: target,
+            operation: Some(Operation::Update(vec![health(
+                0.0,
+                amount as f32,
+                0.0,
+                0.0,
+            )])),
+            ..EntityUpdate::default()
+        },
+    };
+    // Only the envelope is needed to exercise reliable admission.
+    let schemas = Schemas::from_json(r#"{"8F89E0DF":{"25001":[],"25005":[]}}"#).unwrap();
+    let stale = pick_body(&mut peer, &mut scene, &viewer, first_hero);
+    peer.bot_hit(hit(stale));
+    peer.flush_combat(&schemas, Duration::ZERO, None).unwrap();
+    assert_eq!(
+        peer.pending_combat_notices().count() as u64,
+        expected["pending_before_possession"].as_u64().unwrap(),
+    );
+    assert!(!peer.egress.has_queued_reliable());
+
+    let live = pick_body(&mut peer, &mut scene, &viewer, next_hero);
+    peer.flush_combat(&schemas, Duration::ZERO, None).unwrap();
+    assert_eq!(
+        peer.pending_combat_notices().count() as u64,
+        expected["pending_after_replacement"].as_u64().unwrap(),
+    );
+    assert!(!peer.egress.has_queued_reliable());
+    assert!(peer.world.health_pending(target));
+
+    peer.bot_hit(hit(live));
+    while !peer.world.owner_body_ready(live) {
+        assert!(sequence < 16, "replacement possession did not arrive");
+        acknowledge_world_frame(&mut peer, &mut sequence);
+    }
+    peer.flush_combat(&schemas, Duration::ZERO, None).unwrap();
+    assert_eq!(peer.pending_combat_notices().count(), 0);
+    acknowledge_world_frame(&mut peer, &mut sequence);
+    let acknowledged = u32::try_from(expected["reliable_notices"].as_u64().unwrap()).unwrap();
+    assert!(peer.egress.delivered_through(acknowledged - 1));
+    assert!(!peer.egress.delivered_through(acknowledged));
+}
+
+#[test]
 fn death_notice_is_scoped_to_the_active_body_generation_until_reliable_admission() {
     #[derive(Deserialize)]
     struct Contract {

@@ -6,6 +6,12 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-21
 
+- Hold reliable hit and elimination feedback until the shooter's body and possession are acknowledged. Discard pending feedback when that body generation is replaced. Damage and target health updates continue through the ordinary simulation.
+
+- Set the client gameplay defaults for kill feed display and tips when the profile has no saved gameplay block. Keep saved options, including an explicit disabled kill feed. Based on the [client-tested settings research](https://github.com/leafall903/ORPHEUS/blob/5d86bcb2/docs/research/kill-feed.md).
+
+- Validated these changes with 478 public server and profile tests, three prepared 104319 probes, and the Rust 1.85.0 workspace check.
+
 - Add opt-in Inspector diagnostics for projectile launch, impact, and delivery, and for the creation and delivery of replacement Practice Range bots. These records can be collected independently of the high-frequency owner-volley trace.
 
 - Handle the stock bot death selector with the shared owner operand check. A blocking public diagnostic stops that bot's script projection while the room continues to simulate it. The prepared Practice Range regression now checks each of the first ten corpse frames and the replacement.

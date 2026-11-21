@@ -46,6 +46,10 @@ The Rust-only [unposed owner volley fixture](../fixtures/behavior/owner-unposed-
 
 The Rust-only [staged nameplate fixture](../fixtures/behavior/npc-nameplate-staged-admission-v1.json) checks admission after the mode and bot body acknowledgments, exactly retried introduction, and lifetime protection for a bot that died before admission.
 
+The Rust-only [combat feedback fixture](../fixtures/behavior/combat-feedback-owner-body-v1.json) checks reliable hit and elimination admission after shooter possession, replacement of the shooter before acknowledgment, and independent target health delivery.
+
+The Rust-only [gameplay defaults fixture](../fixtures/behavior/profile-gameplay-defaults-v1.json) checks login settings with an unsaved, null, or explicitly saved gameplay block. The shared profile fixture continues to exercise the pinned Python baseline.
+
 The Rust-only [NPC script packet fixture](../fixtures/behavior/npc-script-packet-isolation-v1.json) checks that a peer sends reliable messages and NPC script chunks separately, retries a lost chunk, and retains its pending turn after a transport error. Other scene-script chunks can still share a datagram with reliable messages. The scheduling rule follows the [Python implementation and client observation](https://github.com/leafall903/ORPHEUS/commit/858e54dfa43e0e19abd59b07efa548b8270038f0).
 
 The Rust-only [ordinary health pool placement fixture](../fixtures/behavior/script-base-health-pool-placement-v1.json) exercises the same health pool shape at two positions through the VM and Vitals. It covers registration, remaining health on exit, cleanup, and rejection of an unsupported shape.

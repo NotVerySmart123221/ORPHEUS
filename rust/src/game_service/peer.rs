@@ -41,6 +41,7 @@ struct PendingCombatNotice {
 
 enum CombatAudience {
     Legacy,
+    Shooter(BodyId),
     Victim(BodyId),
     Authored(AuthoredCueIdentity),
 }
@@ -59,7 +60,9 @@ impl PendingCombatNotice {
                 }
                 _ => true,
             },
-            CombatAudience::Victim(victim) => body == Some(*victim),
+            CombatAudience::Shooter(recipient) | CombatAudience::Victim(recipient) => {
+                body == Some(*recipient)
+            }
             CombatAudience::Authored(cue) => {
                 let CombatNotice::Voice {
                     anchor, listener, ..
@@ -142,8 +145,14 @@ impl Peer {
 
     pub(super) fn bot_hit(&mut self, hit: BotHit) {
         self.world.queue_health(hit.health);
-        for notice in hit.notices.into_iter().flatten() {
-            self.queue_combat_notice(notice);
+        if let Some(body) = self
+            .world
+            .active_body_id()
+            .filter(|body| body.entity == hit.damage.source)
+        {
+            for notice in hit.notices.into_iter().flatten() {
+                self.queue_notice(notice, CombatAudience::Shooter(body));
+            }
         }
     }
 
@@ -247,9 +256,10 @@ impl Peer {
                 self.combat_ui.notices.push_back(pending);
                 continue;
             }
-            if notice
-                .required_identity()
-                .is_some_and(|entity| !self.world.identity_ready(entity))
+            if matches!(&pending.audience, CombatAudience::Shooter(body) if !self.world.owner_body_ready(*body))
+                || notice
+                    .required_identity()
+                    .is_some_and(|entity| !self.world.identity_ready(entity))
                 || (notice.needs_mode_ui() && !self.world.mode_ready())
             {
                 self.combat_ui.notices.push_back(pending);

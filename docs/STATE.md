@@ -39,7 +39,22 @@ frame and the bot's parent script. This follows the delivery sequence
 recorded in the [client-tested nameplate research](https://github.com/leafall903/ORPHEUS/blob/5d86bcb2/docs/research/bot-nameplates-and-hit-feedback.md).
 The prepared encrypted replay checks this ordering and drops the first
 nonlethal hit notice before validating the retry and decreased bot health.
-Original-client rendering after the change is still open.
+The subsequent original-client session on #176 still showed missing overhead
+names and health bars.
+
+That session reproduced the client access violation tracked in
+[#121](https://github.com/leafall903/ORPHEUS/issues/121). A local capture
+identified a client read from near-null memory after a lethal projectile
+impact following a body change. The triggering update remains unconfirmed.
+Separately, headless coverage exercises an early-feedback race at body
+replacement. Hit and elimination notices now wait for the shooter's
+acknowledged possession and expire if their shooter is replaced before
+reliable admission.
+
+For profiles without saved gameplay options, the lobby now sends the default
+kill feed and tips flags from the [client-tested settings research](https://github.com/leafall903/ORPHEUS/blob/5d86bcb2/docs/research/kill-feed.md).
+The Rust wire check covers saved options as well. Original-client kill feed
+rendering after the lobby change remains open.
 
 A local combat calibration replay used six playtest rays against the
 prepared scene and distinguished head hits, body hits and a miss. The

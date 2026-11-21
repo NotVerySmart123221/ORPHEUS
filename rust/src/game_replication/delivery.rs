@@ -162,6 +162,10 @@ impl WorldDelivery {
         self.world_started() && self.created.contains(&entity)
     }
 
+    pub(crate) fn owner_body_ready(&self, id: BodyId) -> bool {
+        self.bound == Some(id) && self.identity_ready(id.entity)
+    }
+
     pub(crate) fn track_entity_notice(&mut self, entity: u32, ordinal: u32) {
         self.entity_notice_ordinals.insert(entity, ordinal);
     }
@@ -665,9 +669,7 @@ impl WorldDelivery {
                     {
                         return None;
                     }
-                    Delivery::ProjectileConfirm { id, .. }
-                        if self.bound != Some(id) || !self.created.contains(&id.entity) =>
-                    {
+                    Delivery::ProjectileConfirm { id, .. } if !self.owner_body_ready(id) => {
                         // Even a fallback confirmation needs an acknowledged owner lease.
                         return None;
                     }

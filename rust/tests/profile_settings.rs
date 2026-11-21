@@ -30,7 +30,9 @@ fn test_schemas() -> Schemas {
                 {"type":2,"off":5,"count":0,"array":false}
             ]},
             {"type":14,"off":288,"count":0,"array":false,"fields":[
-                {"type":2,"off":0,"count":0,"array":false}
+                {"type":2,"off":0,"count":0,"array":false},
+                {"type":0,"off":4,"count":0,"array":false},
+                {"type":0,"off":7,"count":0,"array":false}
             ]},
             {"type":14,"off":304,"count":0,"array":true,"fields":[
                 {"type":1,"off":0,"count":0,"array":false},
@@ -91,7 +93,8 @@ fn settings_cases_survive_save_and_reload() {
         );
 
         let mut built = settings(&schemas, &reloaded).unwrap();
-        // Normalize schemas.empty() defaults for +0x78 / +0x120 when not saved, matching Python.
+        // This cross-language fixture pins the older Python baseline. The
+        // newer gameplay defaults have their own contract below.
         for empty_block in [0x78u32, 0x120u32] {
             let key = format!("+0x{empty_block:X}");
             if !reloaded.settings.contains_key(&key) {
@@ -102,6 +105,29 @@ fn settings_cases_survive_save_and_reload() {
         assert_eq!(
             actual_20802, expected["message_20802"],
             "{name}: 20802 mismatch"
+        );
+    }
+}
+
+#[test]
+fn gameplay_defaults_preserve_saved_options() {
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../fixtures/behavior/profile-gameplay-defaults-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(contract["schema_version"], 1);
+    let schemas = test_schemas();
+    for case in contract["cases"].as_array().unwrap() {
+        let profile = Profile::from_json(json!({"settings": case["settings"]})).unwrap();
+        let message = settings(&schemas, &profile).unwrap();
+        let bytes = schemas.encode(0x1a98_79a4, 20802, &message).unwrap();
+        let decoded = schemas.decode(0x1a98_79a4, 20802, &bytes, true).unwrap();
+        let gameplay = &decoded[&0x120];
+        assert_eq!(
+            gameplay,
+            &Value::Struct(restore_fields(case["expected"].as_object().unwrap().clone()).unwrap()),
+            "{}",
+            case["name"],
         );
     }
 }
