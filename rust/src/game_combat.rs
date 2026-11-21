@@ -808,7 +808,8 @@ impl RoomSimulation {
             .is_some_and(|state| state.bot.dead)
     }
 
-    fn advance_stock_bots(&mut self, tick: u32) {
+    fn advance_stock_bots(&mut self, tick: u32) -> Vec<crate::script_enemy::EnemyProjectile> {
+        let mut launches = Vec::new();
         let entities: Vec<_> = self.by_wire.values().copied().collect();
         for entity in entities {
             let state = self
@@ -818,8 +819,10 @@ impl RoomSimulation {
                 .into_inner();
             if let Some(script) = state.stock_script.as_mut() {
                 script.advance(tick, &state.bot);
+                launches.extend(script.take_projectiles(tick, &state.bot));
             }
         }
+        launches
     }
 
     pub(crate) fn enemy_projections(
@@ -2212,18 +2215,23 @@ impl RoomSimulation {
             self.set_junkenstein_defenders(Arc::clone(&defenders));
             self.set_player_defenders(defenders);
         }
+        let mut launched = self.advance_stock_bots(tick);
+        if !launched.is_empty() {
+            self.activate_combat();
+        }
         if !self.combat_active {
             self.collect_local_health_events();
             self.settle_authored_requests(tick, now)?;
             self.settle_environment(tick, now)?;
             self.flush_health_events();
-            self.advance_stock_bots(tick);
             return self.respawn_due(tick, now);
         }
         let external_and_players = self.collect_player_enemy_targets();
         let has_roster = self.player_targets_active
             || !self.players_by_wire.is_empty()
-            || self.external_targets.is_some();
+            || self.external_targets.is_some()
+            || !launched.is_empty()
+            || !self.enemy_projectiles.is_empty();
         let states = self.checked_states()?;
         let roster =
             has_roster.then(|| {
@@ -2255,7 +2263,6 @@ impl RoomSimulation {
             });
         let mut retired = Vec::new();
         let mut enemy_damage = Vec::new();
-        let mut launched = Vec::new();
         #[cfg(any(test, feature = "inspector"))]
         let mut recorded_rays = Vec::new();
         let witch_present = states
@@ -2647,7 +2654,6 @@ impl RoomSimulation {
             self.collect_local_health_events();
         }
         self.settle_environment(tick, now)?;
-        self.advance_stock_bots(tick);
         let replacements = self.respawn_due(tick, now);
         self.record_poses(queries, tick)?;
         let replacements = replacements?;

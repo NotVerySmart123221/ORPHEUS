@@ -1064,6 +1064,18 @@ impl Component {
         self.machine.owner_dead = dead;
     }
 
+    /// Weapon slots held by active self-targeted AI fire states.
+    pub fn ai_fire_slots(&self) -> impl Iterator<Item = i64> + '_ {
+        self.snapshot()
+            .into_iter()
+            .flat_map(|snapshot| snapshot.instances.values())
+            .flat_map(|instance| instance.states.values())
+            .filter_map(|state| match state.kind {
+                StateKind::AiWeaponFire(slot) if state.active && !state.ending => slot,
+                _ => None,
+            })
+    }
+
     pub fn command_buttons(&self) -> u32 {
         self.machine.command_buttons
     }

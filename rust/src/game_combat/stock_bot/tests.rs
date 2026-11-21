@@ -4,6 +4,67 @@ use super::*;
 use crate::{game_bots::BotCatalog, game_combat::RoomSimulation, script_snapshot_wire::View};
 
 #[test]
+#[ignore = "requires a prepared 104319 Practice Range pack with firing graph state metadata"]
+fn prepared_firing_placement_drives_the_stock_weapon_graph() {
+    let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let data = runtime.join("data");
+    let catalog = StockBotCatalog {
+        graphs: Arc::new(GraphStore::load(data.join("game_graphs_174.json.gz")).unwrap()),
+        codecs: Arc::new(CodecTable::load(data.join("statescript_codecs_174.json")).unwrap()),
+        mode: crate::game_content::PRACTICE_RANGE_MODE,
+    };
+    let bots = BotCatalog::load(data.join("ai_spawners_174.json"))
+        .unwrap()
+        .make(crate::game_content::PRACTICE_RANGE_MAP, |_| {
+            Default::default()
+        });
+    let bot = bots.iter().find(|bot| bot.spawn.firing).unwrap();
+    let start = 100;
+    let mut script = StockBotScript::start(&catalog, bot, start).unwrap();
+    let mut held_ticks = 0;
+    let mut released_after_holding = false;
+    let mut projectiles = 0;
+    let mut first_held_weapon_state = None;
+    for tick in start + 1..=start + 800 {
+        script.advance(tick, bot);
+        let held = script.component.command_buttons() & crate::commands::FIRE != 0;
+        if held && first_held_weapon_state.is_none() {
+            first_held_weapon_state = script.component.snapshot().map(|snapshot| {
+                let active = snapshot
+                    .instances
+                    .values()
+                    .find(|instance| instance.graph == 0x0ba3)
+                    .map(|instance| {
+                        instance
+                            .states
+                            .iter()
+                            .filter_map(|(&slot, state)| state.active.then_some((slot, state.kind)))
+                            .collect::<Vec<_>>()
+                    });
+                let variables = [31, 1216].map(|id| snapshot.variables.get(&id).cloned());
+                (active, variables)
+            });
+        }
+        held_ticks += u32::from(held);
+        released_after_holding |= held_ticks > 0 && !held;
+        for projectile in script.take_projectiles(tick, bot) {
+            assert_eq!(projectile.source, bot.entity);
+            assert_eq!(projectile.team, bot.spawn.team);
+            projectiles += 1;
+        }
+    }
+    let snapshot = script.component.snapshot().unwrap();
+    assert!(!script.faulted, "{:?}", snapshot.diagnostics);
+    assert!(held_ticks > 0, "{:?}", snapshot.diagnostics);
+    assert!(released_after_holding);
+    assert!(
+        projectiles > 0,
+        "{first_held_weapon_state:?}; {:?}",
+        snapshot.diagnostics,
+    );
+}
+
+#[test]
 fn unsupported_public_stock_bot_script_does_not_remove_room_bot_or_peer_projection() {
     let fixture: Json = serde_json::from_str(include_str!(
         "../../../../fixtures/behavior/stock-bot-script-isolation-v1.json"

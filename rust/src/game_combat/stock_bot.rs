@@ -12,17 +12,19 @@ use std::{
 use serde_json::Value as Json;
 
 use crate::{
-    game_bots::Bot,
+    commands::Command,
+    game_bots::{Bot, FIRING_PLACEMENT_GRAPH},
     mover::sample_movement_flags,
     script_codecs::CodecTable,
+    script_enemy::{EnemyProjectile, projectile_pattern},
     script_expr::{EngineSetting, EntityRelation, is_zeroed_owner_selector, native_shape},
     script_graph::GraphStore,
     script_init::{
         self, AiControlOverride, AiWeaponOverride, Component, HUD_MAX_HEALTH, InitFault, Issue,
-        MAX_INIT_WORK, MovementSample, OWNER_HEALTH, Site, TargetTagEffect, TargetTagEffects,
+        MAX_INIT_WORK, MovementSample, OWNER_HEALTH, Root, Site, TargetTagEffect, TargetTagEffects,
         World,
     },
-    script_runtime::FRAME_MS,
+    script_runtime::{FRAME_MS, held_button_mask},
     script_snapshot_wire::{SceneProjection, SnapshotEncoder},
     script_wire::{Value, Variables},
     vitals::{Death, PoolKind, Vitals},
@@ -34,6 +36,7 @@ mod tests;
 
 const HUD_HEALTH: u32 = 1732;
 const DIED_MESSAGE: u64 = 0x0240_0000_0000_003e;
+const PLACEMENT_RESET: u64 = 0x0240_0000_0000_0013;
 const YAW_UNITS: f64 = 65_536.0;
 
 #[derive(Clone)]
@@ -58,6 +61,7 @@ pub(super) struct StockBotWorld {
     target_tag_effects: TargetTagEffects,
     display_names: HashMap<Site, u64>,
     ai_control_overrides: BTreeMap<(u16, u16), AiControlOverride>,
+    firing_placement: bool,
 }
 
 impl StockBotWorld {
@@ -266,6 +270,13 @@ impl World for StockBotWorld {
             return None;
         }
         match relation {
+            EntityRelation::PossessedBody
+                if entity == self.entity
+                    && self.firing_placement
+                    && site.graph == FIRING_PLACEMENT_GRAPH =>
+            {
+                Some(self.entity)
+            }
             EntityRelation::OwningController
             | EntityRelation::CurrentPossessor
             | EntityRelation::AiControlEntity
@@ -278,6 +289,11 @@ impl World for StockBotWorld {
             }
             _ => None,
         }
+    }
+
+    fn selects_ai_behavior(&mut self, site: Site) -> Option<bool> {
+        (site.entity == self.entity)
+            .then_some(self.firing_placement && site.graph == FIRING_PLACEMENT_GRAPH)
     }
 
     fn ai_control_override(
@@ -352,13 +368,14 @@ pub(crate) struct StockBotScript {
     graphs: Arc<GraphStore>,
     codecs: Arc<CodecTable>,
     frame: u32,
+    weapon_inputs: BTreeMap<i64, u32>,
     faulted: bool,
 }
 
 impl StockBotScript {
     pub(super) fn start(catalog: &StockBotCatalog, bot: &Bot, tick: u32) -> Option<Self> {
         let entity_body = catalog.graphs.entity_body(bot.spawn.body)?;
-        let roots = match script_init::body_roots(entity_body) {
+        let mut roots = match script_init::body_roots(entity_body) {
             Ok(roots) => roots,
             Err(error) => {
                 eprintln!("stock bot {:08X} roots unavailable: {error}", bot.entity);
@@ -373,6 +390,21 @@ impl StockBotScript {
             (HUD_HEALTH, Value::Float(bot.spawn.health)),
             (HUD_MAX_HEALTH, Value::Float(bot.spawn.health)),
         ]);
+        let weapon_inputs = entity_body
+            .ai_weapon_buttons
+            .iter()
+            .filter_map(|(slot, button)| {
+                let slot = slot.parse::<i64>().ok()?;
+                let button = u8::try_from(button.as_u64()?).ok()?;
+                Some((slot, held_button_mask(button)?))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let firing_placement = bot.spawn.firing
+            && !weapon_inputs.is_empty()
+            && catalog.graphs.graph(FIRING_PLACEMENT_GRAPH).is_some();
+        if firing_placement {
+            roots.push(Root::server_only(FIRING_PLACEMENT_GRAPH));
+        }
         let mut world = StockBotWorld {
             graphs: Arc::clone(&catalog.graphs),
             mode: catalog.mode,
@@ -392,6 +424,7 @@ impl StockBotScript {
             target_tag_effects: TargetTagEffects::default(),
             display_names: HashMap::new(),
             ai_control_overrides: BTreeMap::new(),
+            firing_placement,
         };
         let component = match Component::start_with_public_schema(
             Arc::clone(&catalog.graphs),
@@ -414,9 +447,24 @@ impl StockBotScript {
             graphs: Arc::clone(&catalog.graphs),
             codecs: Arc::clone(&catalog.codecs),
             frame: tick,
+            weapon_inputs,
             faulted: false,
         };
-        script.check_projection(Ok(()));
+        let placement = script.component.snapshot().and_then(|snapshot| {
+            snapshot.instances.iter().find_map(|(&id, instance)| {
+                (instance.graph == FIRING_PLACEMENT_GRAPH && instance.is_server_only())
+                    .then_some(id)
+            })
+        });
+        let result = if let Some(id) = placement {
+            script
+                .component
+                .queue_message(id, PLACEMENT_RESET, Variables::new())
+                .and_then(|_| script.component.run_now(&mut script.world))
+        } else {
+            Ok(())
+        };
+        script.check_projection(result);
         Some(script)
     }
 
@@ -491,8 +539,52 @@ impl StockBotScript {
             return;
         }
         self.frame = tick;
-        let result = self.component.advance_frame(tick, &mut self.world);
+        let result = if self.world.firing_placement && !bot.dead {
+            let buttons = if bot.is_stunned(tick) {
+                0
+            } else {
+                self.component
+                    .ai_fire_slots()
+                    .filter_map(|slot| self.weapon_inputs.get(&slot))
+                    .fold(0, |buttons, mask| buttons | mask)
+            };
+            let command = Command {
+                frame: tick,
+                yaw: bot.yaw.round_ties_even() as i32,
+                buttons,
+                ..Command::default()
+            };
+            self.component.advance_command(command, &mut self.world)
+        } else {
+            self.component.advance_frame(tick, &mut self.world)
+        };
         self.check_projection(result);
+    }
+
+    pub(super) fn take_projectiles(&mut self, tick: u32, bot: &Bot) -> Vec<EnemyProjectile> {
+        let shots = self.component.take_shots().unwrap_or_default();
+        if self.faulted || bot.dead || bot.is_stunned(tick) {
+            return Vec::new();
+        }
+        let [x, y, z] = bot.position;
+        let origin = [x, y + super::eye_height(bot.spawn.hero, false), z];
+        let forward = self.world.forward;
+        let mut projectiles = Vec::new();
+        for shot in shots {
+            let Some(node) = self.component.shot_node(&shot) else {
+                continue;
+            };
+            let mut evaluate = |value: &Json| {
+                self.component
+                    .evaluate_shot_config(&shot, value, &mut self.world)
+            };
+            if let Some(pattern) =
+                projectile_pattern(&node.fields, forward, &shot, node.pos, &mut evaluate)
+            {
+                projectiles.extend(pattern.launch(bot.entity, bot.spawn.team, origin, tick));
+            }
+        }
+        projectiles
     }
 
     fn check_projection(&mut self, result: Result<(), InitFault>) {

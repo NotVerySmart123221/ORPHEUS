@@ -1255,7 +1255,7 @@ fn damage_tags<'a>(
         })
 }
 
-fn projectile_pattern(
+pub(crate) fn projectile_pattern(
     fields: &Json,
     forward: [f64; 3],
     shot: &script_init::ShotEvent,

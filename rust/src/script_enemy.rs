@@ -257,6 +257,7 @@ pub(crate) struct EnemyWorld<'a> {
 }
 
 mod policy;
+pub(crate) use policy::projectile_pattern;
 mod world;
 
 #[cfg(test)]

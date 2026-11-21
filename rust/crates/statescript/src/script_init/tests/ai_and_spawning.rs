@@ -2,6 +2,67 @@ use super::*;
 use crate::script_runtime::PoolKind;
 
 #[test]
+fn ai_weapon_fire_exposes_only_active_self_targeted_slots() {
+    let fixture: Json = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/ai-weapon-fire-slot-v1.json"
+    )))
+    .unwrap();
+    assert_eq!(fixture["case_id"], "ai-weapon-fire-slot-v1");
+    for row in fixture["input"].as_array().unwrap() {
+        let target = if row["self_target"] == true {
+            json!({"$": "STU_B5A0CAF0"})
+        } else {
+            var(51, true)
+        };
+        let graphs = Arc::new(store(vec![graph(
+            301,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({"m_outPlug": plug(&[(1, "m_beginPlug")], &[])}),
+                ),
+                node(
+                    1,
+                    "STU_D7F9E1C3",
+                    Some(0),
+                    json!({
+                        "m_14EDDDA7": target,
+                        "m_20BCEE62": {"$": "STUConfigVarBool", "m_value": row["enabled"]},
+                        "m_A60150E2": {"$": "STUConfigVarInt", "m_value": row["slot"]}
+                    }),
+                ),
+            ],
+            json!([1]),
+            json!([0]),
+        )]));
+        let mut world = ReferenceWorld;
+        let mut body = Component::start(
+            graphs,
+            0xa100_0010,
+            Variables::from([(51, Value::Entity(0xa100_0011))]),
+            vec![Root::new(1, 301)],
+            20,
+            &mut world,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        assert_eq!(
+            json!(body.ai_fire_slots().collect::<Vec<_>>()),
+            row["held_slots"],
+            "{row}"
+        );
+        body.debug_end_state(1, 0, &mut world).unwrap();
+        assert_eq!(
+            json!(body.ai_fire_slots().collect::<Vec<_>>()),
+            fixture["expected_after_exit"]
+        );
+    }
+}
+
+#[test]
 fn ai_behavior_inputs_update_from_variables_and_native_reads_and_clean_up() {
     #[derive(Default)]
     struct BehaviorWorld {

@@ -81,6 +81,19 @@ workspace.
 python scripts/build_runtime_state_metadata.py --graph-bundle path/to/game_graphs_174.json.gz --evidence path/to/classification.zip --output path/to/new/game_graphs_174.json.gz
 ```
 
+For the Practice Range firing probe, use an evidence directory with one
+listing each for placement graph `0B92` and weapon graph `0BA3`. Map
+archives can contain identical graph indices in several map folders.
+Select the matching listings before importing. The bot starts the
+placement graph privately and uses the entity definition's weapon-slot
+bindings to feed the body's ordinary logical-button dispatcher. The
+headless probe checks press, release, and projectile flight admission.
+Flight uses the room's existing hostile-target and collision queries.
+Client presentation and damage to a live bot or player have separate
+acceptance checks.
+The earlier spawn-reset and button lifecycle are documented in the
+[Python bot host](https://github.com/leafall903/ORPHEUS/blob/299b44111fc3e3dddcc5a691859b7a6c3ac661a6/src/ow174/game/script/bot.py).
+
 ## Supply model hardpoint membership
 
 An external graph bundle can include `model_hardpoints` in a body entry.

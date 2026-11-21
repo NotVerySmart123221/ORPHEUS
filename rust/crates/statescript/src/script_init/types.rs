@@ -42,6 +42,7 @@ pub enum StateKind {
         record: Option<AiBehaviorRequest>,
     },
     AiControlSetting,
+    AiWeaponFire(Option<i64>),
     AiControlOverride {
         record: Option<AiControlOverride>,
     },

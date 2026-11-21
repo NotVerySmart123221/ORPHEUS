@@ -1516,6 +1516,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::CinematicTimeScale { boundary_frame: 0 }
             }
             "STU_91EF24A9" => StateKind::AiCandidate { selected: false },
+            "STU_D7F9E1C3" if field(&node.fields, "m_234135C3").is_null() => {
+                StateKind::AiWeaponFire(None)
+            }
             "STUStatescriptStateLogicalButton" => StateKind::LogicalButton { down: false },
             "STU_E4A30BCF" => StateKind::ButtonBlock(None),
             _ if button_lock.is_some() => StateKind::ButtonBlock(None),
@@ -1893,6 +1896,22 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     self.report(site, Issue::UnsupportedField("AI behavior selection"));
                 }
             }
+            StateKind::AiWeaponFire(_) if !self.machine.owner_dead => {
+                let target = self.evaluate(id, node, field(&node.fields, "m_14EDDDA7"), None);
+                let enabled = self.evaluate(id, node, field(&node.fields, "m_20BCEE62"), None);
+                let slot = self.evaluate(id, node, field(&node.fields, "m_A60150E2"), None);
+                if let (
+                    Some(Value::Entity(target)),
+                    Some(Value::Bool(true)),
+                    Some(Value::Integer(slot)),
+                ) = (target, enabled, slot)
+                {
+                    if target == self.machine.snapshot.entity && slot >= 0 {
+                        self.state_mut(key).expect("active AI weapon fire").kind =
+                            StateKind::AiWeaponFire(Some(slot));
+                    }
+                }
+            }
             StateKind::LogicalButton { .. } => self.enter_button(key, node, depth)?,
             StateKind::ButtonBlock(_) => {
                 let button = button_lock
@@ -2025,7 +2044,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             | StateKind::ClientPulse { .. }
             | StateKind::EmptyTargets
             | StateKind::ActiveQuery
-            | StateKind::RollMovementParameter => (),
+            | StateKind::RollMovementParameter
+            | StateKind::AiWeaponFire(_) => (),
         }
         self.follow(id, node, "m_onBeginPlug", Some(key), depth)?;
         self.follow(id, node, "m_subgraphPlug", Some(key), depth)?;

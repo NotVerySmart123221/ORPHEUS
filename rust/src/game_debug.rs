@@ -606,6 +606,7 @@ fn state_kind_summary(kind: StateKind) -> (&'static str, Option<u8>) {
         StateKind::WaitFrames { .. } => ("WaitFrames", None),
         StateKind::CinematicTimeScale { .. } => ("CinematicTimeScale", None),
         StateKind::AiCandidate { .. } => ("AiCandidate", None),
+        StateKind::AiWeaponFire(_) => ("AiWeaponFire", None),
         StateKind::LogicalButton { .. } => ("LogicalButton", None),
         StateKind::ButtonBlock(_) => ("ButtonBlock", None),
         StateKind::Stack { .. } => ("Stack", None),

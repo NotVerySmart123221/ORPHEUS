@@ -4,6 +4,10 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ## Unreleased
 
+### 2026-11-22
+
+- Drive authored firing placements through the stock bot's private StateScript root and body-defined weapon inputs. Route the emitted projectiles to the existing room flight and damage settlement. A synthetic state lifecycle test, 468 server library tests, and prepared 104319 probes for projectile launch and bot nameplate respawn passed. Client-visible projectile delivery and in-room damage acceptance remain open.
+
 ### 2026-11-21
 
 - Resume the world frame at the final game-channel message bit. Keep intermediate message headers and standalone lobby messages byte-aligned. This fixes the framing defect associated with the `0xD697D0` client crash signature. The Inspector workspace run passed 920 tests. The original-client retest outcome has not been recorded. [Reference investigation](https://github.com/leafall903/ORPHEUS/blob/5d86bcb2/docs/MCCREE_COMBAT.txt#L1007-L1027)

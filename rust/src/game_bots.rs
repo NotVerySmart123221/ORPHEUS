@@ -37,6 +37,7 @@ pub const BOT_RECORD_DELAY: u32 = 8;
 
 const PATROL: u64 = 0x0580_0000_0000_0b8e;
 const FIRING: u64 = 0x0580_0000_0000_0b92;
+pub(crate) const FIRING_PLACEMENT_GRAPH: u32 = (FIRING & 0xffff) as u32;
 const ARRIVED: f64 = 0.05;
 const MAX_DETOUR_SAMPLES: usize = 64;
 const STEP_UP: f64 = 0.6;
