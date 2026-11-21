@@ -139,7 +139,7 @@ impl PlayerBodyState {
             .and_then(Vitals::take_cumulative_update)
     }
 
-    fn native_filter_flags(&self) -> Option<u64> {
+    pub(super) fn native_filter_flags(&self) -> Option<u64> {
         crate::match_scene::team_bit(self.team)
             .ok()
             .map(|team| 1 | team | if self.alive() { 0 } else { 0x10 })

@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Drive unconditional projectile gravity, launch lift and expiry detonation from authored volley and blast fields. Allow damage-free direct contact when the same volley declares splash or a knockback ring. The merged Inspector server and StateScript suites passed 769 public tests. Three prepared tests verified the stock quick melee damage and knockback request, owner and observer projection, and stock Helix and Particle Cannon force expressions. Original-client rendering and movement remain unverified.
+
 - Resolve one-shot contact damage and knockback from the linked target volume and damage state. Match structured filters and bindings, read the static ray category from local graph data, and share the projectile visibility and force code. Capture the target generation before room settlement.
 
 - Read the authored source knockback switch and scale separately from self damage. Keep the outer force ring exclusive and interpolate its two channels at single precision. Skip shooter pose queries on flights without self effects. The force arithmetic follows the [104319 Python reference](https://github.com/leafall903/ORPHEUS/commit/426e4e139635a8d11b8dd037c6f96b8bd3ced6cd). The Inspector server suite passed 481 tests. With local mode rules, the stock Helix and Particle Cannon expression probe and the synthetic projectile loopback passed. The stock loopback stopped during setup before its first shot.

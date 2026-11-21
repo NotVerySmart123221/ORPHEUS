@@ -44,6 +44,7 @@ pub struct Blast {
     pub self_damage_scale: f64,
     pub self_knockback_scale: f32,
     pub knockback: Option<Knockback>,
+    pub detonate_on_expiry: bool,
 }
 
 impl ProjectileBallistics {
@@ -131,6 +132,11 @@ impl ProjectileBallistics {
                     0.0
                 },
                 knockback: Knockback::from_authored(&config["m_modifyHealth"], &mut evaluate),
+                detonate_on_expiry: config
+                    .get("m_EEB99E41")
+                    .filter(|value| !value.is_null())
+                    .and_then(|value| evaluate(value).ok())
+                    .is_some_and(|value| crate::script_expr::truthy(&value)),
             })
         } else {
             None
@@ -219,6 +225,10 @@ impl ProjectileFlight {
         {
             return None;
         }
+        let expiry_blast = ballistics
+            .blast
+            .as_ref()
+            .is_some_and(|blast| blast.detonate_on_expiry);
         Some(Self {
             remaining: ballistics.lifetime,
             ballistics,
@@ -228,14 +238,9 @@ impl ProjectileFlight {
             last_tick: fired_at,
             ended: false,
             direct_falloff: false,
-            expiry_blast: false,
+            expiry_blast,
             gravity: None,
         })
-    }
-
-    pub(crate) fn with_expiry_blast(mut self, enabled: bool) -> Self {
-        self.expiry_blast = enabled;
-        self
     }
 
     pub(crate) fn with_direct_falloff(mut self) -> Self {
@@ -537,6 +542,7 @@ mod tests {
                 self_damage_scale: 0.0,
                 self_knockback_scale: 0.0,
                 knockback: None,
+                detonate_on_expiry: false,
             }),
         }
     }
@@ -599,22 +605,47 @@ mod tests {
 
     #[test]
     fn expiry_blast_uses_splash_radius_occlusion_and_once_only_retirement() {
+        let fixture: Json = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/projectile-expiry-v1.json"
+        ))
+        .unwrap();
+        let input = &fixture["input"];
+        let expected = &fixture["expected"];
+        let range = input["range"].as_f64().unwrap();
+        let speed = input["speed"].as_f64().unwrap();
+        let splash_damage = input["splash_damage"].as_f64().unwrap();
         for enabled in [false, true] {
             for blocked in [false, true] {
-                let mut data = helix();
-                data.speed = 30.0;
-                data.lifetime = 7.0 / 30.0;
-                data.direct = None;
-                let blast = data.blast.as_mut().unwrap();
-                blast.hit.amount = 25.0;
-                blast.rings = vec![(3.0, 1.0)];
-                let direction = lifted_direction([0.0, 0.0, 1.0], 0.05).unwrap();
+                let fields = serde_json::json!({
+                    "m_projectileSpeed": speed,
+                    "m_projectileLifetime": range / speed,
+                    "m_projectileMotions":[{"$":"STU_E1A5B579","m_599AB8D7":input["gravity"]}],
+                    "m_D2D11CE9": {
+                        "$": "STU_4AA6CA44",
+                        "m_modifyHealth": {"m_amount": splash_damage},
+                        "m_0D30E40C": [{"m_radius": input["splash_radius"], "m_B399CACB": 1.0}],
+                        "m_EEB99E41": {"$": "STUConfigVarBool", "m_value": enabled},
+                    },
+                });
+                let evaluate = |value: &Json| {
+                    crate::script_expr::evaluate(value, &mut crate::script_expr::EmptyContext)
+                };
+                let data = ProjectileBallistics::from_fields(&fields, evaluate)
+                    .unwrap()
+                    .unwrap();
+                let gravity = authored_gravity(&fields, evaluate).unwrap();
+                let direction =
+                    lifted_direction([0.0, 0.0, 1.0], input["lift"].as_f64().unwrap()).unwrap();
                 let mut flight = ProjectileFlight::new(data, [0.0, 1.55, 0.0], direction, Some(0))
                     .unwrap()
-                    .with_gravity(20.0)
-                    .with_expiry_blast(enabled);
+                    .with_gravity(gravity);
                 // The target is off the flight axis but inside the range-end blast.
-                let targets = [(1, target(2.0, 7.0)), (2, target(5.0, 7.0))];
+                let visible = expected["visible_target"].as_u64().unwrap() as u32;
+                let out_of_range = expected["out_of_range_target"].as_u64().unwrap() as u32;
+                let targets = [
+                    (visible, target(2.0, range)),
+                    (out_of_range, target(5.0, range)),
+                ];
                 let end = (1..=30)
                     .find_map(|tick| {
                         flight
@@ -625,8 +656,9 @@ mod tests {
                     })
                     .expect("range expiry");
                 assert!(end.expired);
+                assert_eq!(end.impact, enabled);
                 assert!(end.point[1] < 1.55);
-                assert!((end.point[2] - direction[2] * 7.0).abs() < 1e-6);
+                assert!((end.point[2] - direction[2] * range).abs() < 1e-6);
                 let hits: Vec<_> = end
                     .impacts
                     .iter()
@@ -635,7 +667,7 @@ mod tests {
                 assert_eq!(
                     hits,
                     if enabled && !blocked {
-                        vec![(1, 25.0)]
+                        vec![(visible, splash_damage)]
                     } else {
                         vec![]
                     }

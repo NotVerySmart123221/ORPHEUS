@@ -376,11 +376,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                 }
                 let speed = node.field("m_projectileSpeed").unwrap_or(&Json::Null);
                 if !speed.is_null() && to_float(&evaluate(speed).ok()?) != 0.0 {
-                    // Admit only the known unconditional gravity path for Flashbang;
-                    // other projectile motion/aim configurations remain unsupported.
-                    let gravity = flashbang
-                        .then(|| authored_gravity(&node.fields, &mut evaluate))
-                        .flatten();
+                    let gravity = authored_gravity(&node.fields, &mut evaluate);
                     if !node.is_networked()
                         || !local_prediction(node)
                         || !predicted_sync(node, &mut evaluate).ok()?
@@ -402,33 +398,27 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                         ProjectileBallistics::from_authored(node, &mut evaluate).ok()??;
                     let definition = ballistics.definition?;
                     self.leases.entity(definition, shot.frame, 0)?;
-                    if !ballistics.direct.is_some_and(|hit| hit.amount > 0.0)
-                        && !ballistics
+                    if ballistics.direct.is_some_and(|hit| hit.amount < 0.0)
+                        || ballistics
                             .blast
                             .as_ref()
-                            .is_some_and(|blast| blast.hit.amount > 0.0)
+                            .is_some_and(|blast| blast.hit.amount < 0.0)
                     {
                         return None;
                     }
-                    // Preserve the existing rejection of unsupported mixed
-                    // payloads outside the verified Flashbang zero-direct case.
-                    if !flashbang
-                        && (ballistics.direct.is_some_and(|hit| hit.amount <= 0.0)
-                            || ballistics
-                                .blast
-                                .as_ref()
-                                .is_some_and(|blast| blast.hit.amount <= 0.0))
+                    if !ballistics.direct.is_some_and(|hit| hit.amount > 0.0)
+                        && !ballistics.blast.as_ref().is_some_and(|blast| {
+                            blast.hit.amount > 0.0 || blast.knockback.is_some()
+                        })
                     {
                         return None;
                     }
                     let mut direction = aim_direction(&command);
-                    if flashbang {
-                        let lift = authored_number(
-                            node.field("m_5EC1EB38.m_22CE7F30"),
-                            0.0,
-                            &mut evaluate,
-                        )
-                        .ok()?;
+                    if let Some(lift) = node
+                        .field("m_5EC1EB38.m_22CE7F30")
+                        .filter(|lift| !lift.is_null())
+                    {
+                        let lift = to_float(&evaluate(lift).ok()?);
                         direction = lifted_direction(direction, lift)?;
                     }
                     let stun = if flashbang {
@@ -449,8 +439,6 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                         origin,
                         direction,
                         gravity,
-                        // Scoped reconstruction shared with Python e1128509.
-                        expiry_blast: flashbang && gravity.is_some(),
                     })));
                 }
                 let hit = HitDefinition::from_authored_with_critical(

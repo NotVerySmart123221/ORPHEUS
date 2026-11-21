@@ -2360,12 +2360,12 @@ fn admitted_owner_projectile_preserves_gravity_and_expiry_blast() {
                     self_damage_scale: 0.0,
                     self_knockback_scale: 0.0,
                     knockback: None,
+                    detonate_on_expiry: true,
                 }),
             },
             origin: [0.0, 1.55, 0.0],
             direction: lifted_direction([0.0, 0.0, 1.0], 0.05).unwrap(),
             gravity: Some(20.0),
-            expiry_blast: true,
         },
         launches,
     );
@@ -2429,7 +2429,6 @@ fn room_flight_outcomes_release_only_the_current_owner_alias() {
             PosedProjectile {
                 stun: None,
                 gravity: None,
-                expiry_blast: false,
                 shot: ShotEvent {
                     entity: id.entity,
                     instance: 1,
@@ -3256,7 +3255,6 @@ fn fixture_projectile_flight(
     let posed = PosedProjectile {
         stun: None,
         gravity: None,
-        expiry_blast: false,
         shot: ShotEvent {
             entity: owner.entity,
             instance: 1,

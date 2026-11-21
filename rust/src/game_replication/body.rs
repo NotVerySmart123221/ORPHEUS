@@ -256,7 +256,6 @@ impl BodyScript {
         } else {
             flight
         };
-        let flight = flight.with_expiry_blast(projectile.expiry_blast);
         if let Some(token) = projectiles.admit(projectile.shot, definition, bound) {
             #[cfg(feature = "inspector")]
             crate::owner_trace::playtest(format_args!(

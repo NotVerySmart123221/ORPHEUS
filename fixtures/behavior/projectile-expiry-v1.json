@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "case_id": "projectile-expiry-v1",
+  "input": {
+    "speed": 30.0,
+    "range": 7.0,
+    "gravity": 20.0,
+    "lift": 0.05,
+    "splash_radius": 3.0,
+    "splash_damage": 25.0
+  },
+  "expected": {
+    "visible_target": 1,
+    "out_of_range_target": 2
+  }
+}

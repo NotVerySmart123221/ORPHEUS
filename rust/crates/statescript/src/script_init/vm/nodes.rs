@@ -1685,14 +1685,20 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             "STUStatescriptStateCosmeticEntity" => StateKind::CosmeticEntity,
             "STUStatescriptStateChaseVar" => StateKind::ChaseVar,
             "STU_77E13026"
-                if registration.permits((self.graph(id).index, node.pos) == (0x0043, 60)) =>
-            {
-                StateKind::Plain
-            }
-            "STU_77E13026"
                 if registration.permits((self.graph(id).index, node.pos) == (0x180a, 42)) =>
             {
                 StateKind::PhaseScriptList
+            }
+            "STU_77E13026"
+                if registration.shape(
+                    node.remote >= 0
+                        && ["m_814F8EC3", "m_3DC6FAAA"].into_iter().all(|name| {
+                            script_expr::lvalue(field(&node.fields, name))
+                                .is_ok_and(|variable| variable.is_some())
+                        }),
+                ) =>
+            {
+                StateKind::Plain
             }
             "STU_CB4905E9"
                 if registration.permits((self.graph(id).index, node.pos) == (0x180a, 41)) =>

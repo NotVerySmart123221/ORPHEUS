@@ -308,6 +308,7 @@ mod tests {
                                 self_damage_scale: 0.0,
                                 self_knockback_scale: 0.0,
                                 knockback: None,
+                                detonate_on_expiry: false,
                             }),
                         },
                         [0.0, 1.0, 0.0],

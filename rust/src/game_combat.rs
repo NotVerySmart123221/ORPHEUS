@@ -220,7 +220,6 @@ impl Stun {
 pub(crate) struct PosedProjectile {
     pub stun: Option<Stun>,
     pub gravity: Option<f32>,
-    pub expiry_blast: bool,
     pub shot: ShotEvent,
     pub ballistics: ProjectileBallistics,
     pub origin: [f64; 3],
