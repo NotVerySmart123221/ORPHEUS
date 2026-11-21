@@ -51,6 +51,15 @@ replacement. Hit and elimination notices now wait for the shooter's
 acknowledged possession and expire if their shooter is replaced before
 reliable admission.
 
+A second original-client session hit the previously documented
+`Overwatch.exe+0xD697D0` access violation. It occurred without an observed
+body change, after a hitscan kill. The Rust game channel now preserves the
+exact end bit of its final JAM message so the receiver resumes at the
+correct world header. Synthetic regressions cover the packet boundary and
+the byte alignment of intermediate messages. The live retest outcome remains
+unrecorded, and the earlier `0xB41104` crash investigation remains open.
+[Reference investigation](https://github.com/leafall903/ORPHEUS/blob/5d86bcb2/docs/MCCREE_COMBAT.txt#L1007-L1027)
+
 For profiles without saved gameplay options, the lobby now sends the default
 kill feed and tips flags from the [client-tested settings research](https://github.com/leafall903/ORPHEUS/blob/5d86bcb2/docs/research/kill-feed.md).
 The Rust wire check covers saved options as well. Original-client kill feed
