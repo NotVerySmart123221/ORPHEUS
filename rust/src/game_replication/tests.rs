@@ -2733,7 +2733,9 @@ fn retirement_waits_for_the_reliable_notice_across_retransmission() {
             .insert(id.entity, (id.generation, Lifetime::Live));
         world.created.insert(id.entity);
     }
-    let notice = egress.queue_reliable(vec![0x42]).unwrap();
+    let notice = egress
+        .queue_reliable(crate::game_messages::EncodedMessage::from_bytes(vec![0x42]))
+        .unwrap();
     world.track_entity_notice(body.entity, notice);
 
     world.retire_body(body);

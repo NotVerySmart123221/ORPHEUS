@@ -236,9 +236,9 @@ mod tests {
                 instance.update(members[2].entity),
             ];
             for (message, (length, digest)) in messages.into_iter().zip(expected) {
-                let bytes = encode(&schemas, message.id, &message.fields).unwrap();
-                assert_eq!(bytes.len(), length);
-                assert_eq!(format!("{:x}", Sha256::digest(bytes)), digest);
+                let encoded = encode(&schemas, message.id, &message.fields).unwrap();
+                assert_eq!(encoded.as_bytes().len(), length);
+                assert_eq!(format!("{:x}", Sha256::digest(encoded.as_bytes())), digest);
             }
         }
     }

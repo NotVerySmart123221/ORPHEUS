@@ -307,6 +307,16 @@ impl<'a> BitReader<'a> {
         }
     }
 
+    /// Borrow the remaining bytes from an aligned position, including a
+    /// partial trailing byte when `limit` is not a multiple of 8.
+    pub fn aligned_bytes_up_to_limit(&self) -> Option<&'a [u8]> {
+        if self.position % 8 == 0 {
+            Some(&self.data[self.position / 8..self.limit.div_ceil(8)])
+        } else {
+            None
+        }
+    }
+
     pub fn advance(&mut self, width: usize) -> Result<(), BitError> {
         ensure_remaining(width, self.left())?;
         self.position += width;

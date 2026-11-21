@@ -3,9 +3,10 @@
 use std::{borrow::Borrow, collections::VecDeque, error::Error, fmt, mem};
 
 use crate::game_link::delivery;
+use crate::game_messages::EncodedMessage;
 use crate::world::{EntityUpdate, FrameCandidates, SelectedFrame, WorldError, select_frame};
 
-type Reliable = (u32, Vec<u8>);
+type Reliable = (u32, EncodedMessage);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OrdinalExhausted;
@@ -90,7 +91,7 @@ struct InFlight<T> {
 pub struct GameEgress<T> {
     next_reliable: u64,
     reliable: VecDeque<Reliable>,
-    unreliable: VecDeque<Vec<u8>>,
+    unreliable: VecDeque<EncodedMessage>,
     in_flight: VecDeque<InFlight<T>>,
 }
 
@@ -106,14 +107,14 @@ impl<T> Default for GameEgress<T> {
 }
 
 impl<T> GameEgress<T> {
-    pub fn queue_reliable(&mut self, message: Vec<u8>) -> Result<u32, OrdinalExhausted> {
+    pub fn queue_reliable(&mut self, message: EncodedMessage) -> Result<u32, OrdinalExhausted> {
         let ordinal = u32::try_from(self.next_reliable).map_err(|_| OrdinalExhausted)?;
         self.reliable.push_back((ordinal, message));
         self.next_reliable += 1;
         Ok(ordinal)
     }
 
-    pub fn queue_unreliable(&mut self, message: Vec<u8>) {
+    pub fn queue_unreliable(&mut self, message: EncodedMessage) {
         self.unreliable.push_back(message);
     }
 
@@ -296,10 +297,10 @@ mod tests {
     #[test]
     fn transport_failure_retains_message_and_record_candidates() {
         let mut egress = GameEgress::default();
-        let reliable = MESSAGE.to_vec();
-        let original = reliable.as_ptr();
+        let reliable = EncodedMessage::from_bytes(MESSAGE.to_vec());
+        let original = reliable.as_bytes().as_ptr();
         egress.queue_reliable(reliable).unwrap();
-        egress.queue_unreliable(MESSAGE.to_vec());
+        egress.queue_unreliable(EncodedMessage::from_bytes(MESSAGE.to_vec()));
         let queued = [destroy(1)];
         let mut sequence = 0;
         let mut attempted = None;
@@ -318,7 +319,7 @@ mod tests {
             Err(SendError::Transport(std::io::ErrorKind::WouldBlock))
         ));
         assert!(egress.in_flight.is_empty());
-        assert_eq!(egress.reliable[0].1.as_ptr(), original);
+        assert_eq!(egress.reliable[0].1.as_bytes().as_ptr(), original);
         assert_eq!(egress.unreliable.len(), 1);
 
         let sent = egress
@@ -336,7 +337,10 @@ mod tests {
         assert_eq!(sent.records, [RecordSource::Queued(0)]);
         assert!(egress.reliable.is_empty());
         assert!(egress.unreliable.is_empty());
-        assert_eq!(egress.in_flight[0].reliable[0].1.as_ptr(), original);
+        assert_eq!(
+            egress.in_flight[0].reliable[0].1.as_bytes().as_ptr(),
+            original
+        );
     }
 
     #[test]
@@ -345,10 +349,10 @@ mod tests {
         struct Token(u32);
 
         let mut egress = GameEgress::default();
-        let first = MESSAGE.to_vec();
-        let original = first.as_ptr();
+        let first = EncodedMessage::from_bytes(MESSAGE.to_vec());
+        let original = first.as_bytes().as_ptr();
         assert_eq!(egress.queue_reliable(first).unwrap(), 0);
-        egress.queue_unreliable(MESSAGE.to_vec());
+        egress.queue_unreliable(EncodedMessage::from_bytes(MESSAGE.to_vec()));
         egress
             .send_frame(
                 frame_records(&[destroy(1)], &[]),
@@ -357,7 +361,9 @@ mod tests {
                 |_| Ok::<_, ()>(10),
             )
             .unwrap();
-        let ownership = egress.queue_reliable(MESSAGE.to_vec()).unwrap();
+        let ownership = egress
+            .queue_reliable(EncodedMessage::from_bytes(MESSAGE.to_vec()))
+            .unwrap();
         assert_eq!(ownership, 1);
         egress
             .send_frame(
@@ -367,7 +373,12 @@ mod tests {
                 |_| Ok::<_, ()>(11),
             )
             .unwrap();
-        assert_eq!(egress.queue_reliable(MESSAGE.to_vec()).unwrap(), 2);
+        assert_eq!(
+            egress
+                .queue_reliable(EncodedMessage::from_bytes(MESSAGE.to_vec()))
+                .unwrap(),
+            2
+        );
 
         let report = egress.acknowledge(12, 1);
         assert_eq!(report.requeued_reliable, 1);
@@ -388,7 +399,7 @@ mod tests {
         );
         assert_eq!(egress.oldest_pending_reliable(), 0);
         assert!(!egress.delivered_through(ownership));
-        assert_eq!(egress.reliable[0].1.as_ptr(), original);
+        assert_eq!(egress.reliable[0].1.as_bytes().as_ptr(), original);
         assert!(egress.unreliable.is_empty());
         assert!(egress.acknowledge(12, 1).packets.is_empty());
         assert_eq!(egress.reliable.len(), 2);
@@ -465,8 +476,10 @@ mod tests {
     #[test]
     fn an_unsendable_oldest_reliable_never_reaches_transport() {
         let mut egress = GameEgress::<()>::default();
-        egress.queue_reliable(vec![0; MAX_PAYLOAD]).unwrap();
-        egress.queue_unreliable(MESSAGE.to_vec());
+        egress
+            .queue_reliable(EncodedMessage::from_bytes(vec![0; MAX_PAYLOAD]))
+            .unwrap();
+        egress.queue_unreliable(EncodedMessage::from_bytes(MESSAGE.to_vec()));
         let result = egress.send_frame(
             frame_records(&[destroy(1)], &[]),
             |_| 0,
@@ -486,9 +499,11 @@ mod tests {
     fn reliable_only_fits_the_message_prefix_and_leaves_other_candidates() {
         let mut egress = GameEgress::<RecordSource>::default();
         for _ in 0..2 {
-            egress.queue_reliable(vec![0; MAX_PAYLOAD * 3 / 4]).unwrap();
+            egress
+                .queue_reliable(EncodedMessage::from_bytes(vec![0; MAX_PAYLOAD * 3 / 4]))
+                .unwrap();
         }
-        egress.queue_unreliable(MESSAGE.to_vec());
+        egress.queue_unreliable(EncodedMessage::from_bytes(MESSAGE.to_vec()));
         let queued = [destroy(1)];
         let records = FrameRecords {
             reliable_only: true,
@@ -578,9 +593,12 @@ mod tests {
             next_reliable: u64::from(u32::MAX),
             ..GameEgress::default()
         };
-        assert_eq!(egress.queue_reliable(MESSAGE.to_vec()), Ok(u32::MAX));
         assert_eq!(
-            egress.queue_reliable(MESSAGE.to_vec()),
+            egress.queue_reliable(EncodedMessage::from_bytes(MESSAGE.to_vec())),
+            Ok(u32::MAX)
+        );
+        assert_eq!(
+            egress.queue_reliable(EncodedMessage::from_bytes(MESSAGE.to_vec())),
             Err(OrdinalExhausted)
         );
         assert_eq!(egress.reliable.len(), 1);

@@ -4,7 +4,7 @@
 //! notice exposes the identity a recipient must know before it is queued.
 
 use crate::{
-    game_messages::{self, ChannelError},
+    game_messages::{self, ChannelError, EncodedMessage},
     jam_codec::{Fields, Schemas, Value},
 };
 
@@ -71,7 +71,7 @@ impl CombatNotice {
             .filter(|&entity| entity != 0 && entity != u32::MAX)
     }
 
-    pub fn encode(self, schemas: &Schemas) -> Result<Vec<u8>, ChannelError> {
+    pub fn encode(self, schemas: &Schemas) -> Result<EncodedMessage, ChannelError> {
         let entity = |id: u32| Value::Struct(Fields::from([(0, Value::Unsigned(u64::from(id)))]));
         let (id, fields) = match self {
             Self::Hit {
@@ -151,7 +151,7 @@ mod tests {
         const TARGET: u32 = 0xa004_0010;
         let root = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
         let schemas = Schemas::load(root.join("data/game_schemas_174.json")).unwrap();
-        let cases: [(CombatNotice, Option<u32>, &[u8]); 4] = [
+        let cases: [(CombatNotice, Option<u32>, &[u8], usize); 4] = [
             (
                 CombatNotice::Hit {
                     target: TARGET,
@@ -162,6 +162,7 @@ mod tests {
                 },
                 Some(TARGET),
                 b"\x02\x01\x10\x00\x04\xa0\x0c\x00\x00\x00\x03\x12\x04\x00\x00",
+                120,
             ),
             (
                 CombatNotice::Elimination {
@@ -170,6 +171,7 @@ mod tests {
                 },
                 Some(TARGET),
                 b"\x02\x05\x00\x00\x00\x00\x00\x00\x00\x00\x01\x01\x00\xa0\x10\x00\x04\xa0\x00\x00",
+                153,
             ),
             (
                 CombatNotice::Death {
@@ -178,6 +180,7 @@ mod tests {
                 },
                 Some(KILLER),
                 b"\x02\x04\x02\x01\x01\x00\xa0",
+                56,
             ),
             (
                 CombatNotice::Death {
@@ -186,12 +189,54 @@ mod tests {
                 },
                 None,
                 b"\x02\x04\x00\x10\x00\x04\xa0",
+                56,
             ),
         ];
-        for (notice, identity, expected) in cases {
+        for (notice, identity, expected, expected_bits) in cases {
             assert_eq!(notice.required_identity(), identity);
-            assert_eq!(notice.encode(&schemas).unwrap(), expected);
+            let encoded = notice.encode(&schemas).unwrap();
+            assert_eq!(encoded.as_bytes(), expected);
+            assert_eq!(encoded.bit_len(), expected_bits);
         }
+    }
+
+    #[test]
+    #[ignore = "requires the separately prepared 104319 game schemas"]
+    fn elimination_frame_resumes_at_exact_bit() {
+        use crate::{
+            bits::BitReader,
+            game_messages::read_channel,
+            world::{EntityUpdate, Operation, frame},
+        };
+
+        let root = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+        let schemas = Schemas::load(root.join("data/game_schemas_174.json")).unwrap();
+        let elim = CombatNotice::Elimination {
+            killer: 0xa000_0101,
+            victim: 0xc000_1005,
+        }
+        .encode(&schemas)
+        .unwrap();
+        assert_eq!(elim.bit_len(), 153);
+        let destroy = EntityUpdate {
+            entity: 0xc000_1005,
+            operation: Some(Operation::Destroy),
+            ..EntityUpdate::default()
+        };
+        let payload = frame(6906, 6905, &[(0, elim)], &[], &[&destroy]).unwrap();
+        let mut reader = BitReader::new(&payload);
+        assert_eq!(reader.var_a().unwrap(), 6906);
+        let channel = read_channel(&mut reader, &schemas).unwrap();
+        assert_eq!(channel.reliable.len(), 1);
+        assert_eq!(channel.reliable[0].message.id, ELIMINATION);
+        assert_eq!(reader.position(), 217);
+        assert_eq!(reader.var_a().unwrap(), 6905);
+        assert_eq!(reader.bits(4).unwrap(), 0);
+        assert!(!reader.bit().unwrap());
+        assert!(reader.bit().unwrap());
+        assert!(!reader.bit().unwrap());
+        assert_eq!(reader.bits(7).unwrap(), 1);
+        assert_eq!(reader.entity_id().unwrap(), Some(0xc000_1005));
     }
 
     #[test]
@@ -223,9 +268,10 @@ mod tests {
             };
             assert_eq!(notice.required_identity(), Some(anchor));
             assert!(!notice.needs_mode_ui());
-            let encoded: String = notice
-                .encode(&schemas)
-                .unwrap()
+            let encoded = notice.encode(&schemas).unwrap();
+            assert_eq!(encoded.bit_len(), 336);
+            let encoded: String = encoded
+                .as_bytes()
                 .iter()
                 .map(|byte| format!("{byte:02x}"))
                 .collect();
