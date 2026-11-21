@@ -270,7 +270,7 @@ fn enemy_observer_waits_for_identity_and_retries_the_exact_baseline() {
 }
 
 #[test]
-fn bot_practice_nameplates_wait_for_mode_ready_and_skip_new_dead_corpses() {
+fn bot_practice_nameplates_wait_for_mode_and_body_acknowledgments() {
     use crate::{
         script_codecs::CodecTable,
         script_graph::GraphStore,
@@ -278,6 +278,13 @@ fn bot_practice_nameplates_wait_for_mode_ready_and_skip_new_dead_corpses() {
         script_wire::Variables,
     };
 
+    let contract: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/npc-nameplate-staged-admission-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(contract["schema_version"], 1);
+    assert_eq!(contract["case_id"], "npc-nameplate-staged-admission-v1");
+    let expected = |key: &str| contract["expected"][key].as_bool().unwrap();
     let mk_graph = |index: u32| {
         serde_json::json!({
             "index": index,
@@ -346,6 +353,7 @@ fn bot_practice_nameplates_wait_for_mode_ready_and_skip_new_dead_corpses() {
 
     let live_entity = 0x8000_0001;
     let dead_entity = 0x8000_0002;
+    let later_live_entity = 0x8000_0003;
     let live_script = Component::start(
         Arc::clone(&graphs),
         live_entity,
@@ -366,6 +374,15 @@ fn bot_practice_nameplates_wait_for_mode_ready_and_skip_new_dead_corpses() {
         MAX_INIT_WORK,
     )
     .unwrap();
+    let with_parent = |script: &Component| {
+        let mut snapshot = script.snapshot().unwrap().clone();
+        snapshot.instances.get_mut(&2).unwrap().parent = Some((1, 0));
+        snapshot
+    };
+    let live = with_parent(&live_script);
+    let dead = with_parent(&dead_script);
+    let mut later_live = live.clone();
+    later_live.entity = later_live_entity;
 
     let mut world = WorldDelivery::new(OWNER);
     world.started = Some(1000);
@@ -374,6 +391,7 @@ fn bot_practice_nameplates_wait_for_mode_ready_and_skip_new_dead_corpses() {
     // Live bot before mode_ready(): 0x0D24 is stripped from its initial observer baseline.
     world.create_bot(bot_create(live_entity));
     world.create_bot(bot_create(dead_entity));
+    world.create_bot(bot_create(later_live_entity));
     let creates: Vec<_> = world.ready().iter().map(|r| r.tracked()).collect();
     world.sent(&eligible(&world));
     for record in creates {
@@ -381,16 +399,14 @@ fn bot_practice_nameplates_wait_for_mode_ready_and_skip_new_dead_corpses() {
     }
 
     let encoder = SnapshotEncoder::new(&graphs, &codecs);
-    let full = encoder
-        .project(live_script.snapshot().unwrap(), View::Observer)
-        .unwrap();
+    let full = encoder.project(&live, View::Observer).unwrap();
     assert!(full.has_graph(0x0c18));
     assert!(full.has_graph(0x0d24));
 
     world
         .present_scene_script_with_dead(
             SceneProjection {
-                snapshot: live_script.snapshot().unwrap(),
+                snapshot: &live,
                 encoder: SnapshotEncoder::new(&graphs, &codecs),
             },
             false,
@@ -411,7 +427,7 @@ fn bot_practice_nameplates_wait_for_mode_ready_and_skip_new_dead_corpses() {
     world
         .present_scene_script_with_dead(
             SceneProjection {
-                snapshot: live_script.snapshot().unwrap(),
+                snapshot: &live,
                 encoder: SnapshotEncoder::new(&graphs, &codecs),
             },
             false,
@@ -423,11 +439,75 @@ fn bot_practice_nameplates_wait_for_mode_ready_and_skip_new_dead_corpses() {
     let (_, live_after) = world.scene_views[&live_entity].base().unwrap();
     assert!(live_after.has_graph(0x0d24));
 
+    // Mode was ready before this bot's first script frame. Its parent still
+    // needs an ACK before the nameplate can use that baseline.
+    let present = |world: &mut WorldDelivery, snapshot: &crate::script_init::Snapshot| {
+        world
+            .present_scene_script_with_dead(
+                SceneProjection {
+                    snapshot,
+                    encoder: SnapshotEncoder::new(&graphs, &codecs),
+                },
+                false,
+            )
+            .unwrap();
+    };
+    present(&mut world, &later_live);
+    let parent_full = world.ready()[0].tracked();
+    world.sent(&eligible(&world));
+    present(&mut world, &later_live);
+    assert!(world.ready().is_empty());
+    world.acknowledge(outcome(parent_full, true), Duration::ZERO);
+    let (_, later_base) = world.scene_views[&later_live_entity].base().unwrap();
+    assert!(later_base.has_graph(0x0c18));
+    assert_eq!(
+        later_base.has_graph(0x0d24),
+        expected("parent_baseline_has_nameplate")
+    );
+
+    let unrelated = u32::try_from(
+        contract["input"]["concurrent_entity_variable"]
+            .as_u64()
+            .unwrap(),
+    )
+    .unwrap();
+    later_live
+        .variables
+        .insert(unrelated, crate::script_wire::Value::Bool(true));
+    present(&mut world, &later_live);
+    let nameplate = world.ready()[0].tracked();
+    world.sent(&eligible(&world));
+    if contract["input"]["lost_introduction"].as_bool().unwrap() {
+        world.acknowledge(outcome(Arc::clone(&nameplate), false), Duration::ZERO);
+        assert!(Arc::ptr_eq(&nameplate, &world.ready()[0].tracked()));
+        world.sent(&eligible(&world));
+    }
+    world.acknowledge(outcome(nameplate, true), Duration::ZERO);
+    let (_, staged) = world.scene_views[&later_live_entity].base().unwrap();
+    assert_eq!(
+        staged.has_graph(0x0d24),
+        expected("introduction_has_nameplate")
+    );
+    assert_eq!(
+        staged.entity_variables().contains_key(&unrelated),
+        expected("introduction_has_concurrent_entity_variable")
+    );
+
+    present(&mut world, &later_live);
+    let changes = world.ready()[0].tracked();
+    world.sent(&eligible(&world));
+    world.acknowledge(outcome(changes, true), Duration::ZERO);
+    let (_, caught_up) = world.scene_views[&later_live_entity].base().unwrap();
+    assert_eq!(
+        caught_up.entity_variables().contains_key(&unrelated),
+        expected("following_delta_has_concurrent_entity_variable")
+    );
+
     // An already-dead bot without a prior 0x0D24 never gets one even after mode_ready().
     world
         .present_scene_script_with_dead(
             SceneProjection {
-                snapshot: dead_script.snapshot().unwrap(),
+                snapshot: &dead,
                 encoder: SnapshotEncoder::new(&graphs, &codecs),
             },
             true,
@@ -438,7 +518,10 @@ fn bot_practice_nameplates_wait_for_mode_ready_and_skip_new_dead_corpses() {
     world.acknowledge(outcome(dead_base_record, true), Duration::ZERO);
     let (_, dead_base) = world.scene_views[&dead_entity].base().unwrap();
     assert!(dead_base.has_graph(0x0c18));
-    assert!(!dead_base.has_graph(0x0d24));
+    assert_eq!(
+        dead_base.has_graph(0x0d24),
+        expected("dead_baseline_has_nameplate")
+    );
 }
 
 #[test]

@@ -114,8 +114,11 @@ the elapsed clock and ammo through a gap within the same volley.
 
 To collect evidence for an intermittent animation failure, run an Inspector
 build with `ORPHEUS_TRACE_OWNER_VOLLEYS=1` set in the server environment.
-Correlate the `owner-volley` rows in the server log by body and command
-frame. Input rows include edges and unposed gap boundaries. Shot rows carry
+Set `ORPHEUS_OWNER_TRACE_FILE` to keep the trace in a separate file. The
+server otherwise writes the trace to stderr. The bounded trace queue
+reports how many rows were dropped if the output falls behind.
+Correlate the `owner-volley` rows by body and command frame. Input rows include
+button edges, held-button throttle changes, and unposed gap boundaries. Shot rows carry
 their authored frame and corresponding pose frame when available. Delta
 rows show the sent activation, its active flag, and explicitly written
 ammunition. Delivery rows show whether the transport acknowledged each

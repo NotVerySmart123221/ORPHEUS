@@ -85,6 +85,8 @@ pub mod mover_modifiers;
 mod mover_posture;
 pub mod mover_settings;
 pub mod npc_catalog;
+#[cfg(feature = "inspector")]
+mod owner_trace;
 mod patrol_script;
 pub mod projectile_flight;
 pub mod projectile_wire;

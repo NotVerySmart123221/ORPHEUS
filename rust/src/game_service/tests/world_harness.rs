@@ -13,6 +13,8 @@ pub enum PreparedFixture {
 }
 
 pub fn exercise_prepared_world(fixture: PreparedFixture) {
+    use std::collections::HashMap;
+
     use crate::{
         accounts::Accounts,
         catalog::ItemDb,
@@ -278,6 +280,8 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
     let mut mode_ack_sent = false;
     let mut controller = false;
     let mut moving_bot = false;
+    let mut npc_full_parents = HashMap::new();
+    let mut acknowledged_npc_baselines = HashSet::new();
     let mut target_nameplate = !matches!(fixture, PreparedFixture::StockNameplate);
     loop {
         let frame = client.receive();
@@ -316,8 +320,30 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
                     assert!(
                         scripted_bots && (BOT_ENTITY..BOT_ENTITY + 15).contains(&record.entity)
                     );
-                    if observer_introduces_graph(&script, 0x0d24) {
+                    let descriptions = observer_descriptors(&script);
+                    if script.first == 0 {
+                        assert!(
+                            !descriptions.iter().any(|entry| entry.graph == 0x0d24),
+                            "nameplate was included in the parent baseline"
+                        );
+                        npc_full_parents.insert(
+                            record.entity,
+                            descriptions
+                                .into_iter()
+                                .map(|entry| (entry.id, entry.graph))
+                                .collect::<HashMap<_, _>>(),
+                        );
+                    } else if let Some(nameplate) =
+                        descriptions.iter().find(|entry| entry.graph == 0x0d24)
+                    {
                         assert!(mode_ack_sent, "nameplate arrived before mode frame ACK");
+                        assert!(
+                            acknowledged_npc_baselines.contains(&record.entity),
+                            "nameplate arrived before the body script full-frame ACK"
+                        );
+                        let (parent, state) = nameplate.parent.expect("body-owned nameplate");
+                        assert_eq!(npc_full_parents[&record.entity].get(&parent), Some(&0x0c18));
+                        assert_eq!(state, 3);
                         target_nameplate |= record.entity == target;
                     }
                 }
@@ -332,6 +358,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
         }
         client.send(ACK, Vec::new());
         acknowledged_creates.extend(&creates);
+        acknowledged_npc_baselines.extend(npc_full_parents.keys().copied());
         mode_ack_sent = mode;
         if retried_all_creates && mode && controller && moving_bot && target_nameplate {
             break;
@@ -420,25 +447,36 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
     server.stop().unwrap();
 }
 
-fn observer_introduces_graph(script: &ReceivedChunk, wanted: u32) -> bool {
+struct ObserverDescriptor {
+    id: u32,
+    graph: u32,
+    parent: Option<(u32, u32)>,
+}
+
+fn observer_descriptors(script: &ReceivedChunk) -> Vec<ObserverDescriptor> {
     let mut reader = script.bits();
     assert_eq!(reader.bits(2).unwrap(), 0, "observer frame header");
-    while reader.w_u16().unwrap() != 0 {
+    let mut descriptions = Vec::new();
+    let mut id = 0;
+    loop {
+        let offset = reader.w_u16().unwrap();
+        if offset == 0 {
+            break;
+        }
+        id += u32::from(offset);
         if script.first != 0 && (reader.bit().unwrap() || !reader.bit().unwrap()) {
             continue;
         }
         let graph = reader.bits(16).unwrap() as u32;
         assert_eq!(reader.bits(2).unwrap(), 0);
-        if reader.bit().unwrap() {
-            reader.w_var().unwrap();
-            reader.w_var().unwrap();
-        }
+        let parent = reader
+            .bit()
+            .unwrap()
+            .then(|| (reader.w_var().unwrap(), reader.w_var().unwrap()));
         assert!(!reader.bit().unwrap(), "unexpected descriptor references");
-        if graph == wanted {
-            return true;
-        }
+        descriptions.push(ObserverDescriptor { id, graph, parent });
     }
-    false
+    descriptions
 }
 
 pub fn send_game_message(

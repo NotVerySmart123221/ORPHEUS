@@ -467,6 +467,8 @@ impl GameService {
             worker
                 .join()
                 .map_err(|_| io::Error::other("game worker panicked"))??;
+            #[cfg(feature = "inspector")]
+            crate::owner_trace::flush_after_stop();
         }
         Ok(())
     }

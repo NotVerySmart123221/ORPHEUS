@@ -1720,17 +1720,28 @@ impl RoomSimulation {
             &visible,
             &mut candidates,
         );
+        #[cfg(any(test, feature = "inspector"))]
+        let mut blocking_wall = None;
         let Some(impact) = ray.resolve_combat(candidates, |origin, direction, reach| {
-            queries.hitscan_wall(origin, direction, reach)
+            let wall = queries.hitscan_wall(origin, direction, reach)?;
+            #[cfg(any(test, feature = "inspector"))]
+            {
+                blocking_wall = wall.filter(|distance| *distance < reach);
+            }
+            Ok(wall)
         })?
         else {
             #[cfg(any(test, feature = "inspector"))]
             {
-                let (hit, end) = match queries
-                    .hitscan_wall(ray.origin, ray.direction, ray.reach)
-                    .ok()
-                    .flatten()
-                {
+                // An occluder already found before the actor is the first
+                // wall along the full ray as well.
+                let wall = blocking_wall.or_else(|| {
+                    queries
+                        .hitscan_wall(ray.origin, ray.direction, ray.reach)
+                        .ok()
+                        .flatten()
+                });
+                let (hit, end) = match wall {
                     Some(distance) => (
                         "world",
                         crate::static_ray::along(ray.origin, ray.direction, distance),

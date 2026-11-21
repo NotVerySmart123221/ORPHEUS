@@ -61,6 +61,8 @@ pub(super) fn run(
     {
         state.debug_control_enabled = options.debug_control;
     }
+    #[cfg(feature = "inspector")]
+    crate::owner_trace::enabled();
     if ready.send(Ok(())).is_err() {
         return Ok(());
     }
@@ -71,11 +73,17 @@ pub(super) fn run(
     let mut buffer = [0; 65_536];
     let mut socket_ready = false;
     while !stopping.load(Ordering::Acquire) {
+        let measure_turn = state.timing.is_some() && state.world_started();
+        let request_start = measure_turn.then(Instant::now);
         let mut handled = 0;
         for request in requests.try_iter().take(RECEIVE_BATCH) {
             state.handle_request(request, start.elapsed())?;
             handled += 1;
         }
+        let requests_work = request_start
+            .filter(|_| handled != 0)
+            .map(|at| at.elapsed());
+        let receive_start = (measure_turn && socket_ready).then(Instant::now);
         if socket_ready {
             for _ in 0..RECEIVE_BATCH {
                 match socket.recv_from(&mut buffer) {
@@ -100,7 +108,14 @@ pub(super) fn run(
                 }
             }
         }
+        let receive_work = receive_start.map(|at| at.elapsed());
+        let input_before = state.timing.as_ref().map(|timing| timing.input_budget.used);
+        let input_start = measure_turn.then(Instant::now);
         let input_ready = state.advance_input(start.elapsed())?;
+        if let (Some(timing), Some(at)) = (&mut state.timing, input_start) {
+            let input_work = (input_before != Some(timing.input_budget.used)).then(|| at.elapsed());
+            timing.record_turn_work(requests_work, receive_work, input_work);
+        }
         let now = start.elapsed();
         if now >= due {
             let scheduled = due;
@@ -125,6 +140,11 @@ pub(super) fn run(
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) => return Err(error),
+        }
+        if measure_turn && !timeout.is_zero() {
+            if let Some(timing) = &mut state.timing {
+                timing.record_poll_lateness(start.elapsed().saturating_sub(due));
+            }
         }
     }
     Ok(())

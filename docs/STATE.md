@@ -27,12 +27,19 @@ corpse through those frames and admits the replacement on schedule. A
 synthetic regression also checks that a bot with a blocking diagnostic
 cannot interrupt a healthy peer bot's projection.
 
+The original 104319 client completed the 2026-11-21 follow-up session
+without returning to the lobby on a training bot kill. The session
+lasted about 331 seconds and exited without a room fault or crash dialog.
+
 The room's initial mode frame includes the authored nameplate inputs. The
-prepared check decodes those variables from the wire. An encrypted 104319
-loopback check receives a bot's nameplate graph after acknowledging the mode
-frame. It drops the first nonlethal hit notice and verifies the retried
-target, damage and shot frame alongside the decreased bot health. The
-original client still needs to verify that this data drives the visible bar.
+prepared check decodes those variables from the wire. The follow-up client
+session still lacked overhead bars. The native server now stages the
+nameplate as a separate delta after acknowledgments for both the mode
+frame and the bot's parent script. This follows the delivery sequence
+recorded in the [client-tested nameplate research](https://github.com/leafall903/ORPHEUS/blob/5d86bcb2/docs/research/bot-nameplates-and-hit-feedback.md).
+The prepared encrypted replay checks this ordering and drops the first
+nonlethal hit notice before validating the retry and decreased bot health.
+Original-client rendering after the change is still open.
 
 A local combat calibration replay used six playtest rays against the
 prepared scene and distinguished head hits, body hits and a miss. The
@@ -42,9 +49,23 @@ alignment and other bodies still require their own evidence.
 The 104319 owner replay exposed a due rifle round that spent ammunition
 at a synthetic gap boundary without producing a posed shot. The owner
 clock now skips such rounds and preserves ordinary ammunition cost when a
-posed command resumes. Saved playtest logs did not include owner deltas
-or command boundaries. An opt-in [owner volley trace](OWNER_DELIVERY_TEST.md#observe-a-short-weapon-volley)
-can correlate these events with the next live animation observation.
+posed command resumes. The follow-up [owner volley trace](OWNER_DELIVERY_TEST.md#observe-a-short-weapon-volley)
+recorded no unposed boundary and no lost owner reports. It did not
+establish what the client rendered for every shot.
+
+The follow-up timing capture accumulated 8,819 missed ticks. Misses
+began well before the first recorded shot and continued during intervals
+with an unchanged ray sample. It also ran with synchronous owner traces
+enabled. The trace now uses a bounded background writer, and worker
+timing separates work before the tick from timed poll wake lateness.
+A controlled original-client performance comparison remains open.
+
+Prepared Sprint coverage now includes the button sequence observed in
+that session, with sustained forward input, and controls at the authored
+throttle threshold. The server activates Sprint and produces the
+expected speed modifier and HUD value in that replay. The session trace
+did not record the throttle or matching ability state. The next trace
+can distinguish the player's input from server activation and delivery.
 
 ## Shared StateScript integration
 

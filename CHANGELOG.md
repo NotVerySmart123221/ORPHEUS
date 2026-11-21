@@ -18,6 +18,14 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Verify Practice Range nameplate ordering and nonlethal hit delivery over encrypted loopback with the prepared 104319 pack, including the first hit notice dropped and retried.
 
+- Stage training bot nameplates separately after the receiver acknowledges both the mode frame and the bot's parent script. The encrypted replay checks the staged attachment and matching hit delivery.
+
+- Queue opt-in owner traces for a bounded background writer, record throttle changes while a button is held, and expose receive, input, request, and poll timing separately from simulation ticks. Reuse the hit query's first wall blocker for the Inspector instead of casting the ray twice.
+
+- Replay the observed Practice Range Sprint button mask with sustained forward input and control cases around the authored throttle gate. Client acceptance and a controlled performance retest remain open.
+
+- Validated the follow-up with 472 Inspector library tests, seven prepared 104319 server probes, the isolated Sprint graph replay, Rust 1.85.0, and strict Inspector library Clippy.
+
 ### 2026-11-20
 
 - Register the existing horizontal velocity cap contract in public Rust checks.

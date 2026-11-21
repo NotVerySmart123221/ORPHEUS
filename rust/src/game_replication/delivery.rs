@@ -426,12 +426,12 @@ impl WorldDelivery {
                         #[cfg(feature = "inspector")]
                         if let Some(arrived) = delivery
                             .owner_report
-                            .filter(|_| owner_volley_trace_enabled())
+                            .filter(|_| crate::owner_trace::enabled())
                         {
-                            eprintln!(
+                            crate::owner_trace::record(format_args!(
                                 "owner-volley delivery body={:08x} chunk={last} arrived={arrived}",
                                 script.id.entity
-                            );
+                            ));
                         }
                         if let Some((projectiles, arrived)) =
                             script.projectiles.as_mut().zip(delivery.owner_report)
@@ -1034,16 +1034,8 @@ impl WorldDelivery {
         {
             return Ok(());
         }
-        // Client 0x0D24 nameplates read mode variables from 0CB6, so hold them
-        // until mode_ready() and never add a new nameplate to an already-dead bot.
-        let strip_nameplate = self.bots.contains_key(&entity)
-            && (!self.mode_ready()
-                || (bot_dead
-                    && !self
-                        .scene_views
-                        .get(&entity)
-                        .and_then(|stream| stream.base())
-                        .is_some_and(|(_, base)| base.has_graph(0x0d24))));
+        let bot = self.bots.contains_key(&entity);
+        let can_introduce = self.mode_ready() && !bot_dead;
         let stream = self
             .scene_views
             .entry(entity)
@@ -1059,8 +1051,8 @@ impl WorldDelivery {
             let mut snapshot = encoder
                 .project_next(projection.snapshot, base)
                 .map_err(invalid)?;
-            if strip_nameplate {
-                snapshot.strip_practice_nameplates();
+            if bot {
+                snapshot.stage_practice_nameplates(Some(base), can_introduce);
             }
             encoder
                 .queue_delta(stream, &snapshot, DeltaKind::Observer { resend: true }, 16)
@@ -1069,8 +1061,8 @@ impl WorldDelivery {
             let mut snapshot = encoder
                 .project(projection.snapshot, View::Observer)
                 .map_err(invalid)?;
-            if strip_nameplate {
-                snapshot.strip_practice_nameplates();
+            if bot {
+                snapshot.stage_practice_nameplates(None, false);
             }
             Some(encoder.queue_full(stream, &snapshot).map_err(invalid)?)
         };
