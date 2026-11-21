@@ -50,13 +50,8 @@ impl RoomSimulation {
                 HealthEffect::Heal(_) => (0.0, false, None),
             };
             if delta != 0.0 {
-                let health = state.vitals.component();
-                state.vitals.clear_changed();
-                self.scripted_health.push(EntityUpdate {
-                    entity: wire,
-                    operation: Some(Operation::Update(vec![health])),
-                    ..Default::default()
-                });
+                let update = super::bot_health_update(state, killed);
+                self.scripted_health.push(update);
                 self.record_health_applied(
                     source.killer,
                     wire,

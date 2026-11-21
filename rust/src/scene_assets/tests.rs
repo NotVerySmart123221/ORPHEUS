@@ -1359,6 +1359,7 @@ fn practice_range_stock_bots_drive_overhead_nameplates_through_death_and_respawn
     tick += 1;
     scene.simulation_mut().kill_bot_for_test(target, tick, now);
     let death_frame = tick;
+    let mut saw_kill_feed_pulse = false;
     for _ in 0..10 {
         tick += 1;
         now += crate::game_clock::TICK_PERIOD;
@@ -1381,6 +1382,26 @@ fn practice_range_stock_bots_drive_overhead_nameplates_through_death_and_respawn
                     tick - death_frame
                 )
             });
+        if let Some(parent) = projection
+            .snapshot
+            .instances
+            .values()
+            .find(|instance| instance.graph == 0x0c18)
+        {
+            if parent.states.get(&8).is_some_and(|state| {
+                state.active
+                    && matches!(
+                        state.kind,
+                        crate::script_init::StateKind::ClientPulse { count: 1, .. }
+                    )
+            }) {
+                assert_eq!(
+                    parent.variables.get(&392).unwrap(),
+                    &crate::script_wire::Value::Entity(0xa000_0100)
+                );
+                saw_kill_feed_pulse = true;
+            }
+        }
         projection
             .encoder
             .project(projection.snapshot, View::Observer)
@@ -1391,6 +1412,10 @@ fn practice_range_stock_bots_drive_overhead_nameplates_through_death_and_respawn
                 )
             });
     }
+    assert!(
+        saw_kill_feed_pulse,
+        "killed stock bot must activate 0x0C18 state 8 kill-feed pulser and killer #392"
+    );
 
     now += Duration::from_secs(4);
     scene.step_bots(tick + 240, &patrol).unwrap();

@@ -122,12 +122,6 @@ impl State {
         let patrol_generation = self.patrol_reload_generation;
         let schemas = Arc::clone(&self.schemas);
         let prepared = guard_room(&mut room, RoomStage::Admission, |room| {
-            let initial = room.message(0, true)?;
-            let bytes = encode(&schemas, initial.id, &initial.fields)?;
-            let payload = frame(u32::MAX, u32::MAX, &[(0, bytes)], &[], &[])?;
-            if payload.len() > MAX_PAYLOAD {
-                return Err(invalid("match roster exceeds the game datagram budget").into());
-            }
             if let Some(WorldStart { mut scene, card }) = world {
                 let patrol = match preloaded {
                     Some(patrol) => patrol,
@@ -136,12 +130,23 @@ impl State {
                 scene
                     .simulation_mut()
                     .set_team_member_counts(room.team_member_counts());
+                scene
+                    .simulation_mut()
+                    .seat_bots(&room.map, room.players.len());
                 room.world = Some(RoomWorld {
                     scene,
                     card,
                     patrol,
                     patrol_generation,
                 });
+            }
+            for initial in std::iter::once(true).chain(room.world.is_some().then_some(false)) {
+                let roster = room.message(0, initial)?;
+                let bytes = encode(&schemas, roster.id, &roster.fields)?;
+                let payload = frame(u32::MAX, u32::MAX, &[(0, bytes)], &[], &[])?;
+                if payload.len() > MAX_PAYLOAD {
+                    return Err(invalid("match roster exceeds the game datagram budget").into());
+                }
             }
             Ok(())
         });

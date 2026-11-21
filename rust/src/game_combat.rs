@@ -255,6 +255,16 @@ pub(crate) struct BotReplacement {
     pub created: EntityUpdate,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SeatedBotInfo {
+    pub slot: u8,
+    pub controller: u32,
+    pub body: u32,
+    pub hero: u64,
+    pub team: u8,
+    pub name: String,
+}
+
 mod encounter;
 mod enemy;
 mod environment;
@@ -799,6 +809,56 @@ impl RoomSimulation {
             }
         }
         self.stock_bots = Some(catalog);
+    }
+
+    pub(crate) fn seat_bots(&mut self, map: &crate::game_content::GameMap, player_count: usize) {
+        if map.free_for_all {
+            return;
+        }
+        let first = map
+            .team_sizes
+            .iter()
+            .map(|&count| usize::from(count))
+            .sum::<usize>()
+            .max(player_count);
+        let entities: Vec<_> = self.by_wire.values().copied().collect();
+        let mut offset = 0usize;
+        for entity in entities {
+            let state = self
+                .world
+                .get_mut::<BotState>(entity)
+                .expect("live bot handle")
+                .into_inner();
+            if state.enemy.is_some() {
+                continue;
+            }
+            let seat = first.saturating_add(offset);
+            offset += 1;
+            state.bot.slot = (seat < crate::game_instance::PARTICIPANTS)
+                .then(|| u8::try_from(seat).expect("participant slot fits in u8"));
+        }
+    }
+
+    pub(crate) fn seated_bots(&self) -> Vec<SeatedBotInfo> {
+        self.by_wire
+            .values()
+            .filter_map(|&entity| {
+                let state = self.world.get::<BotState>(entity)?;
+                if state.enemy.is_some() {
+                    return None;
+                }
+                let slot = state.bot.slot?;
+                let controller = state.bot.controller()?;
+                Some(SeatedBotInfo {
+                    slot,
+                    controller,
+                    body: state.bot.entity,
+                    hero: state.bot.spawn.hero,
+                    team: state.bot.spawn.team,
+                    name: state.bot.spawn.name.clone(),
+                })
+            })
+            .collect()
     }
 
     pub(crate) fn is_bot_dead(&self, wire: u32) -> bool {
@@ -2093,12 +2153,7 @@ impl RoomSimulation {
             return Ok(None);
         };
         let entity = state.bot.entity;
-        let health = EntityUpdate {
-            entity,
-            operation: Some(Operation::Update(vec![state.vitals.component()])),
-            ..EntityUpdate::default()
-        };
-        state.vitals.clear_changed();
+        let health = bot_health_update(state, result.killed);
         let hit = BotHit {
             damage: AppliedDamage {
                 source,
@@ -2914,6 +2969,21 @@ impl RoomSimulation {
             self.debug_rays.clear();
         }
         self.debug_assert_encounter_invariants();
+    }
+}
+
+fn bot_health_update(state: &mut BotState, killed: bool) -> EntityUpdate {
+    let mut components = vec![state.vitals.component()];
+    state.vitals.clear_changed();
+    if killed {
+        if let Ok(filter) = crate::match_scene::bot_filter_component(state.bot.spawn.team, true) {
+            components.push(filter);
+        }
+    }
+    EntityUpdate {
+        entity: state.bot.entity,
+        operation: Some(Operation::Update(components)),
+        ..EntityUpdate::default()
     }
 }
 
