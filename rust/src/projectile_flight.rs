@@ -6,8 +6,11 @@
 
 use serde_json::Value as Json;
 
-mod knockback;
-pub use knockback::Knockback;
+pub use crate::script_init::Knockback;
+
+#[cfg(test)]
+#[path = "projectile_flight/knockback.rs"]
+mod knockback_tests;
 
 use crate::{
     collision_index::IndexError,
@@ -429,17 +432,7 @@ impl ProjectileFlight {
                 if damage == 0.0 && impulse.is_none() {
                     continue;
                 }
-                let reach = surface.sight_reach;
-                if reach > EPSILON
-                    && wall(
-                        origin,
-                        surface
-                            .from_axis
-                            .map(|value| -value / surface.axis_distance),
-                        reach,
-                    )?
-                    .is_some_and(|hit| hit + EPSILON < reach)
-                {
+                if !surface.visible(|direction, reach| wall(origin, direction, reach))? {
                     continue;
                 }
                 impacts.push(Impact {

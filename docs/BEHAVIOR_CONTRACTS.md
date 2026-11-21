@@ -48,6 +48,8 @@ The Rust-only [combat knockback fixture](../fixtures/behavior/combat-knockback-v
 
 The prepared knockback probe evaluates the stock Helix and Particle Cannon profiles with the active mode's actor rules. Some projectile coefficients reference mode rules instead of storing literal values. A pack missing those rules can resolve the coefficients to zero. Use the [mode and actor rules preparation guide](STATESCRIPT_DEVELOPMENT.md#set-mode-and-actor-rules) when preparing the local graph data. The profile probe exercises expression evaluation independently of stock body admission and client movement.
 
+The Rust-only [contact combat fixture](../fixtures/behavior/script-contact-combat-v1.json) runs a linked target volume and damage state at two synthetic graph placements. It checks one settlement per activation and confirms that the same force ring evaluator used by projectiles can reject an impulse without suppressing damage. The room regression checks teammate exclusion, static occlusion, and generation-bound damage and impulse admission.
+
 The Rust-only [projectile delivery fixture](../fixtures/behavior/projectile-alias-release-v1.json) covers staggered acknowledgments for two predictions of one shot. A confirmed prediction is released when the authoritative impact is due. A later acknowledgment can release its own prediction without repeating the first release. Natural expiry has a separate headless check.
 
 The Rust-only [unposed owner volley fixture](../fixtures/behavior/owner-unposed-volley-v1.json) checks that a due round with no pose is skipped at its authored time and a later posed round in the same volley still fires and spends ammunition.

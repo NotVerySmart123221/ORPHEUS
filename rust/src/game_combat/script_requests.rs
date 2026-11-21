@@ -21,6 +21,7 @@ pub(super) struct RoomScriptTarget {
     pub(super) candidate_index: usize,
     pub(super) angles: [i32; 2],
     pub(super) eye_position: Option<Vec3>,
+    pub(super) filter_flags: Option<u64>,
     pub(super) health: bool,
     pub(super) messages: bool,
     pub(super) cue_listener: bool,
@@ -36,7 +37,7 @@ impl RoomScriptRequest {
     fn for_target(frame: &RoomSpatialFrame, wire: u32, effect: ScriptEffect) -> Option<Self> {
         let target = frame.script_targets.get(&wire)?;
         let supported = match &effect {
-            ScriptEffect::Health(_) => target.health,
+            ScriptEffect::Health(_) | ScriptEffect::Contact { .. } => target.health,
             ScriptEffect::Message(_) => target.messages,
             ScriptEffect::Cue(_, _) => target.cue_listener,
         };
@@ -50,6 +51,7 @@ impl RoomScriptRequest {
 
 enum ScriptEffect {
     Health(HealthEffect),
+    Contact { damage: f64, impulse: Option<Vec3> },
     Message(RoomMessage),
     Cue(RoomCue, Entity),
 }
@@ -79,24 +81,56 @@ impl RoomScriptRequests {
         frame: &RoomSpatialFrame,
         changes: &[(u32, f64)],
     ) -> bool {
-        if changes.is_empty() {
-            return true;
+        self.queue_batch(
+            frame,
+            changes.iter().map(|&(wire, delta)| {
+                Some((wire, ScriptEffect::Health(HealthEffect::from_delta(delta)?)))
+            }),
+        )
+    }
+
+    pub(crate) fn queue_contact_damage(
+        &mut self,
+        frame: &RoomSpatialFrame,
+        damage: f64,
+        changes: &[(u32, Option<Vec3>)],
+    ) -> bool {
+        if !damage.is_finite() || damage < 0.0 {
+            return false;
         }
+        self.queue_batch(
+            frame,
+            changes.iter().map(|&(wire, impulse)| {
+                let valid = impulse
+                    .is_some_and(|delta| crate::mover::VelocityChange::Impulse(delta).valid());
+                (if impulse.is_some() {
+                    valid
+                } else {
+                    damage > 0.0
+                })
+                .then_some((wire, ScriptEffect::Contact { damage, impulse }))
+            }),
+        )
+    }
+
+    fn queue_batch(
+        &mut self,
+        frame: &RoomSpatialFrame,
+        changes: impl ExactSizeIterator<Item = Option<(u32, ScriptEffect)>>,
+    ) -> bool {
         if changes.len() > MAX_BODY_SCRIPT_REQUESTS.saturating_sub(self.0.len()) {
             return false;
         }
         let mut targets = HashSet::with_capacity(changes.len());
         let mut staged = Vec::with_capacity(changes.len());
-        for &(wire, delta) in changes {
+        for change in changes {
+            let Some((wire, effect)) = change else {
+                return false;
+            };
             if !targets.insert(wire) {
                 return false;
             }
-            let Some(effect) = HealthEffect::from_delta(delta) else {
-                return false;
-            };
-            let Some(request) =
-                RoomScriptRequest::for_target(frame, wire, ScriptEffect::Health(effect))
-            else {
+            let Some(request) = RoomScriptRequest::for_target(frame, wire, effect) else {
                 return false;
             };
             staged.push(request);
@@ -220,18 +254,22 @@ impl RoomSimulation {
         {
             return Ok(());
         }
+        let death = Death {
+            time: now.as_secs_f64(),
+            frame: tick,
+            killer: source.wire,
+        };
         match request.effect {
             ScriptEffect::Health(effect) => {
-                self.settle_health(
-                    request.wire,
-                    effect,
-                    Death {
-                        time: now.as_secs_f64(),
-                        frame: tick,
-                        killer: source.wire,
-                    },
-                    now,
-                )?;
+                self.settle_health(request.wire, effect, death, now)?;
+            }
+            ScriptEffect::Contact { damage, impulse } => {
+                if damage > 0.0 {
+                    self.settle_health(request.wire, HealthEffect::Damage(damage), death, now)?;
+                }
+                if let Some(delta) = impulse {
+                    self.queue_combat_impulse(request.wire, tick, delta)?;
+                }
             }
             ScriptEffect::Message(message) => {
                 self.route_room_message(request.entity, source.wire, message);
@@ -447,6 +485,7 @@ mod tests {
             candidate_index,
             angles: [0; 2],
             eye_position: None,
+            filter_flags: None,
             health,
             messages,
             cue_listener: health,

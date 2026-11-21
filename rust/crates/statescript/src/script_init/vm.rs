@@ -38,6 +38,7 @@ use super::{
     world::{HostHealthContext, PlayScript, RoomCue, RoomMessage, Site, World},
 };
 
+mod contact_combat;
 mod effects;
 mod nodes;
 mod target_tracking;

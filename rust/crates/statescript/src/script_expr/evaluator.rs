@@ -1469,9 +1469,10 @@ impl Evaluator {
         if !filter_shape(filter) {
             return Err(unsupported());
         }
-        let entity = match self.config(child(config, "m_entity"), context, depth)? {
-            Value::Entity(entity) => entity,
-            Value::Null => return Ok(Value::Bool(false)),
+        let operand = self.config(child(config, "m_entity"), context, depth)?;
+        let entity = match first_scalar(&operand) {
+            Some(Value::Entity(entity)) => *entity,
+            Some(Value::Null) | None => return Ok(Value::Bool(false)),
             _ => return Err(unsupported()),
         };
         if !valid_entity(entity) || context.entity_exists(entity) == Some(false) {

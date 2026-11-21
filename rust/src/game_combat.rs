@@ -21,7 +21,9 @@ use crate::{
     game_bots::{BOT_ENTITY, BOT_RECORD_DELAY, BOT_RESPAWN_TIME, Bot},
     game_combat_messages::CombatNotice,
     game_heroes::SOLDIER,
-    game_hitscan::{HitDefinition, HitscanShot, Impact, TargetHistory, TargetPose, ViewFrame},
+    game_hitscan::{
+        HitDefinition, HitscanShot, HurtPose, Impact, TargetHistory, TargetPose, ViewFrame,
+    },
     game_projectiles::ProjectileToken,
     game_replication::BodyId,
     junkenstein_messages::DefenderMessage,
@@ -332,6 +334,10 @@ impl RoomSpatialFrame {
         self.actor_sample(entity)?.1.eye_position
     }
 
+    pub(crate) fn actor_filter_flags(&self, entity: u32) -> Option<u64> {
+        self.actor_sample(entity)?.1.filter_flags
+    }
+
     /// Opaque room-local identity from the same frozen actor admission as queries.
     pub(crate) fn actor_identity(&self, entity: u32) -> Option<u64> {
         Some(self.actor_sample(entity)?.1.entity.to_bits())
@@ -349,6 +355,57 @@ impl RoomSpatialFrame {
 
     pub(crate) fn line_clear(&self, origin: Vec3, target: Vec3) -> Option<bool> {
         self.ground.segment_clear(origin, target, MOVER_CATEGORY)
+    }
+
+    pub(crate) fn hostile_contact_targets(
+        &self,
+        source: u32,
+        centre: Vec3,
+        origin: Vec3,
+        radius: f64,
+        category: u16,
+    ) -> Option<Vec<crate::script_init::ContactTarget>> {
+        let source = self.actor_sample(source)?.0;
+        let capsules = self.actor_capsules.as_ref()?;
+        if !centre.into_iter().chain(origin).all(f64::is_finite)
+            || !radius.is_finite()
+            || radius <= 0.0
+        {
+            return None;
+        }
+        let mut targets = Vec::new();
+        for candidate in &self.candidates {
+            if candidate.entity == source.entity
+                || source.team.is_some_and(|team| candidate.team == Some(team))
+                || !self.script_targets.get(&candidate.entity)?.health
+            {
+                continue;
+            }
+            let pose = *capsules.get(&candidate.entity)?;
+            let surface = HurtPose::from(pose).nearest_surface(centre, origin)?;
+            if surface.distance > radius {
+                continue;
+            }
+            if !surface
+                .visible(|direction, reach| {
+                    self.ground
+                        .checked_cast_ray(origin, direction, reach, category)
+                        .map(|hit| hit.map(|hit| hit.distance))
+                        .ok_or(())
+                })
+                .ok()?
+            {
+                continue;
+            }
+            if targets.len() == script_requests::MAX_BODY_SCRIPT_REQUESTS {
+                return None;
+            }
+            targets.push(crate::script_init::ContactTarget {
+                entity: candidate.entity,
+                feet: pose.feet,
+            });
+        }
+        Some(targets)
     }
 
     pub(crate) fn ray_cast(
@@ -1022,6 +1079,7 @@ impl RoomSimulation {
                         candidate_index: candidates.len(),
                         angles: [pose.yaw, pose.pitch],
                         eye_position: None,
+                        filter_flags: state.native_filter_flags(),
                         health: true,
                         messages: state.enemy.as_ref().is_some_and(|enemy| {
                             enemy.fault.is_none() && !enemy.scripts.retirement_requested
@@ -1073,6 +1131,7 @@ impl RoomSimulation {
                         candidate_index: candidates.len(),
                         angles: [pose.yaw, pose.pitch],
                         eye_position: state.script_eye_position(),
+                        filter_flags: state.native_filter_flags(),
                         health: state.vitals().is_some(),
                         messages: state.runtime.is_some(),
                         cue_listener: true,

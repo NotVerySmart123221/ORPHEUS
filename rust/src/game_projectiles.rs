@@ -4,6 +4,8 @@
 //! datagram that carried an owner frame. Cumulative script acknowledgements
 //! alone do not confirm a projectile.
 
+pub(crate) use crate::script_expr::authored_number;
+
 use std::{collections::HashSet, io};
 
 use indexmap::IndexMap;
@@ -12,7 +14,7 @@ use serde_json::Value as Json;
 use crate::{
     game_clock::MAX_LEASE_FRAME,
     projectile_wire,
-    script_expr::{EvalError, to_float},
+    script_expr::EvalError,
     script_graph::{GraphStore, Node, asset_guid},
     script_init::{ShotEvent, Snapshot},
     script_wire::Value,
@@ -155,22 +157,6 @@ pub fn predicted_sync(
     }
     Ok(field("m_projectileLifetime", 0.0)? >= 1.19e-5
         && field("m_numProjectilesPerShot", 1.0)? <= 7.0)
-}
-
-pub(crate) fn authored_number(
-    config: Option<&Json>,
-    default: f64,
-    evaluate: &mut impl FnMut(&Json) -> Result<Value, EvalError>,
-) -> Result<f64, EvalError> {
-    let Some(config) = config.filter(|value| !value.is_null()) else {
-        return Ok(default);
-    };
-    let value = evaluate(config)?;
-    Ok(if value == Value::Null {
-        default
-    } else {
-        to_float(&value)
-    })
 }
 
 fn projectile_definitions(value: &Json, out: &mut Vec<u64>) {

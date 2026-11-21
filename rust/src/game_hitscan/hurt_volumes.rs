@@ -107,9 +107,24 @@ impl HurtPose {
 
 pub(crate) struct Surface {
     pub distance: f64,
-    pub axis_distance: f64,
-    pub from_axis: Vec3,
-    pub sight_reach: f64,
+    axis_distance: f64,
+    from_axis: Vec3,
+    sight_reach: f64,
+}
+
+impl Surface {
+    pub(crate) fn visible<E>(
+        &self,
+        cast: impl FnOnce(Vec3, f64) -> Result<Option<f64>, E>,
+    ) -> Result<bool, E> {
+        const EPSILON: f64 = 1e-9;
+        let reach = self.sight_reach;
+        if reach <= EPSILON {
+            return Ok(true);
+        }
+        let toward = self.from_axis.map(|axis| -axis / self.axis_distance);
+        Ok(cast(toward, reach)?.is_none_or(|hit| hit + EPSILON >= reach))
+    }
 }
 
 struct Capsule {

@@ -326,13 +326,17 @@ impl EnemyState {
 }
 
 impl BotState {
+    pub(super) fn native_filter_flags(&self) -> Option<u64> {
+        crate::match_scene::team_bit(self.bot.spawn.team)
+            .ok()
+            .map(|team| 1 | team | if self.bot.dead { 0x10 } else { 0 })
+    }
+
     pub(super) fn health_target_facts(&self) -> crate::script_init::HealthTargetFacts {
         crate::script_init::HealthTargetFacts {
             target: self.bot.entity,
             room_status: None,
-            filter_flags: crate::match_scene::team_bit(self.bot.spawn.team)
-                .ok()
-                .map(|team| 1 | team | if self.bot.dead { 0x10 } else { 0 }),
+            filter_flags: self.native_filter_flags(),
             tags: self.enemy.as_ref().map_or_else(Default::default, |enemy| {
                 enemy.scripts.target_tags(&enemy.graphs, &enemy.binding)
             }),

@@ -195,6 +195,7 @@ pub fn player_entity_variables(body: &Body, health: f64, maximum_health: f64) ->
     ])
 }
 
+mod knockback;
 mod machine;
 mod shapes;
 #[cfg(test)]
@@ -204,17 +205,19 @@ mod vm;
 mod voice;
 mod world;
 
+pub use knockback::Knockback;
 pub use types::{
     AbilityCooldown, ChasePayload, Diagnostic, InitFault, Instance, Issue, NodeObservations,
     PendingTimer, RandomCheckpoint, ShotEvent, Snapshot, SpawnSearch, SpawnSearchKey, StackBinding,
     State, StateKind,
 };
 pub use world::{
-    AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, CreationKind,
-    EmptyWorld, EntityCreation, HealthTargetFacts, HitTags, HostEvent, HostHealthContext,
-    LandingSelection, MovementSample, NamedPoolLoss, PlayScript, Relocation, RoomBodyIdentity,
-    RoomCue, RoomEntityStatus, RoomMessage, ScriptedMotion, Site, SweptDisplacement,
-    TargetTagEffect, TargetTagEffects, TargetTagSnapshot, World, named_pool_records,
+    AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, ContactTarget,
+    ContactVolume, CreationKind, EmptyWorld, EntityCreation, HealthTargetFacts, HitTags, HostEvent,
+    HostHealthContext, LandingSelection, MovementSample, NamedPoolLoss, PlayScript, Relocation,
+    RoomBodyIdentity, RoomCue, RoomEntityStatus, RoomMessage, ScriptedMotion, Site,
+    SweptDisplacement, TargetTagEffect, TargetTagEffects, TargetTagSnapshot, World,
+    named_pool_records,
 };
 
 use machine::{Event, Machine, Startup, StateKey, VarKey};
