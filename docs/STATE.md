@@ -28,8 +28,11 @@ synthetic regression also checks that a bot with a blocking diagnostic
 cannot interrupt a healthy peer bot's projection.
 
 The room's initial mode frame includes the authored nameplate inputs. The
-prepared check decodes those variables from the wire. The client still
-needs to verify visual health bars and hit-notice timing.
+prepared check decodes those variables from the wire. An encrypted 104319
+loopback check receives a bot's nameplate graph after acknowledging the mode
+frame. It drops the first nonlethal hit notice and verifies the retried
+target, damage and shot frame alongside the decreased bot health. The
+original client still needs to verify that this data drives the visible bar.
 
 A local combat calibration replay used six playtest rays against the
 prepared scene and distinguished head hits, body hits and a miss. The

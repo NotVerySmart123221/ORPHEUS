@@ -4,6 +4,7 @@ use super::*;
 pub enum PreparedFixture {
     Stock,
     StockOwner,
+    StockNameplate,
     StockProjectile,
     StockBiotic,
     Owner,
@@ -36,6 +37,16 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
     let lobby = Schemas::load(data.join("schemas_174.json")).unwrap();
     let assets = SceneAssets::load(runtime).unwrap();
     let scripted_bots = assets.graphs().entity_body(0x0400_0000_0000_143e).is_some();
+    let mode_variables: crate::script_wire::Variables = assets
+        .graphs()
+        .mode_variables(PRACTICE_RANGE_MODE)
+        .into_iter()
+        .flatten()
+        .map(|(&id, &value)| (id, value.into()))
+        .collect();
+    let expected_mode = crate::match_scene::mode_ui(assets.graphs(), &mode_variables).unwrap();
+    let target = BOT_ENTITY + 1;
+    let mut nameplate_target_health = None;
     let collection = Collection::new(
         &RetailTemplates::load(data.join("retail_templates.json")).unwrap(),
         Arc::new(ItemDb::load(&data).unwrap()),
@@ -83,11 +94,24 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
         (&assets, &collection),
         |map| {
             let mut scene = assets.prepare(map)?;
-            if matches!(fixture, PreparedFixture::StockOwner) {
-                assert!(!scripted_bots);
+            if matches!(
+                fixture,
+                PreparedFixture::StockOwner | PreparedFixture::StockNameplate
+            ) {
+                if matches!(fixture, PreparedFixture::StockNameplate) {
+                    assert!(scripted_bots);
+                    assert_eq!(
+                        mode_variables.get(&9539),
+                        Some(&crate::script_wire::Value::Bool(true))
+                    );
+                } else {
+                    assert!(!scripted_bots);
+                }
                 let [x, y, z] = scene.map().spawn_point(0, 0).unwrap().0;
                 let (bots, _) = scene.bot_simulation();
-                bots.body_mut(BOT_ENTITY + 1).unwrap().position = [x - 4.0, y, z];
+                let bot = bots.body_mut(target).unwrap();
+                bot.position = [x - 4.0, y, z];
+                nameplate_target_health = Some(bot.spawn.health);
             }
             if matches!(
                 fixture,
@@ -118,6 +142,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
                 fixture,
                 PreparedFixture::Stock
                     | PreparedFixture::StockOwner
+                    | PreparedFixture::StockNameplate
                     | PreparedFixture::StockProjectile
                     | PreparedFixture::StockBiotic
             ) {
@@ -168,7 +193,12 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
             Ok(true)
         },
     );
-    if scripted_bots && !matches!(fixture, PreparedFixture::Stock) {
+    if scripted_bots
+        && !matches!(
+            fixture,
+            PreparedFixture::Stock | PreparedFixture::StockNameplate
+        )
+    {
         assert_eq!(result.err().unwrap().kind(), io::ErrorKind::Unsupported);
         assert!(outgoing.is_empty());
         return;
@@ -242,62 +272,75 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
         assert!(Instant::now() < deadline, "waiting for first world creates");
     };
     let mut creates = HashSet::new();
+    let mut acknowledged_creates = HashSet::<u32>::new();
+    let mut retried_all_creates = false;
+    let mut mode = false;
+    let mut mode_ack_sent = false;
+    let mut controller = false;
+    let mut moving_bot = false;
+    let mut target_nameplate = !matches!(fixture, PreparedFixture::StockNameplate);
     loop {
         let frame = client.receive();
         assert!(client.window.accept(frame.seq));
-        let records = world_records(&schemas, &frame);
-        assert!(records.iter().all(|record| record.script.is_none()));
-        for record in records.iter().filter(|record| record.is_create()) {
-            assert!(creates.insert(record.entity));
-        }
-        if lost.iter().all(|id| creates.contains(id)) {
-            break;
-        }
-        client.send(ACK, Vec::new());
-        assert!(Instant::now() < deadline, "waiting for baseline retransmit");
-    }
-    assert_eq!(creates.len(), 21);
-
-    // Even after the retransmission, the script stays behind its create ACK.
-    let withheld = client.receive();
-    assert!(client.window.accept(withheld.seq));
-    assert!(
-        world_records(&schemas, &withheld)
-            .iter()
-            .all(|record| record.script.is_none())
-    );
-    client.send(ACK, Vec::new());
-
-    let mut mode = false;
-    let mut controller = false;
-    let mut moving_bot = false;
-    while !(mode && controller && moving_bot) && Instant::now() < deadline {
-        let frame = client.receive();
-        assert!(client.window.accept(frame.seq));
         for record in world_records(&schemas, &frame) {
-            assert!(!record.is_create());
+            if record.is_create() {
+                assert!(!retried_all_creates);
+                assert!(creates.insert(record.entity));
+            }
             if record.movement {
                 assert!((BOT_ENTITY..BOT_ENTITY + 15).contains(&record.entity));
-                assert!(creates.contains(&record.entity));
+                assert!(acknowledged_creates.contains(&record.entity));
                 moving_bot = true;
             }
             if let Some(script) = record.script {
-                assert_eq!((script.first, script.span), (0, 1));
+                assert!(
+                    acknowledged_creates.contains(&record.entity),
+                    "script arrived before the create ACK for {:08x}",
+                    record.entity
+                );
                 if record.entity == GAME_MODE_ENTITY {
-                    assert_eq!(script.data, [0x08, 0x5b, 0x06, 0x00, 0x0c]);
+                    assert_eq!((script.first, script.span), (0, 1));
+                    assert_eq!(script.width, expected_mode.bit_len());
+                    assert_eq!(script.data, expected_mode.as_bytes());
+                    if mode_variables.is_empty() {
+                        assert_eq!(script.data, [0x08, 0x5b, 0x06, 0x00, 0x0c]);
+                    }
                     mode = true;
-                } else {
-                    assert_eq!(record.entity, CONTROLLER);
+                } else if record.entity == CONTROLLER {
+                    assert_eq!((script.first, script.span), (0, 1));
                     let mut bits = script.bits();
                     assert_eq!(bits.bits(3).unwrap(), 2);
                     assert!(bits.w_var().unwrap() >= crate::game_clock::FIRST_TICK);
                     controller = true;
+                } else {
+                    assert!(
+                        scripted_bots && (BOT_ENTITY..BOT_ENTITY + 15).contains(&record.entity)
+                    );
+                    if observer_introduces_graph(&script, 0x0d24) {
+                        assert!(mode_ack_sent, "nameplate arrived before mode frame ACK");
+                        target_nameplate |= record.entity == target;
+                    }
                 }
             }
         }
+        if !retried_all_creates && lost.iter().all(|id| creates.contains(id)) {
+            assert_eq!(creates.len(), 21);
+            retried_all_creates = true;
+            // Receive one more datagram before acknowledging these creates.
+            // It may carry scripts only for entities acknowledged earlier.
+            continue;
+        }
         client.send(ACK, Vec::new());
+        acknowledged_creates.extend(&creates);
+        mode_ack_sent = mode;
+        if retried_all_creates && mode && controller && moving_bot && target_nameplate {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "waiting for world and script baselines"
+        );
     }
-    assert!(mode && controller && moving_bot);
     match fixture {
         PreparedFixture::Owner => {
             exercise_owner_vm(&mut client, &schemas, true);
@@ -305,6 +348,16 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
         PreparedFixture::StockOwner => {
             let frame = exercise_owner_vm(&mut client, &schemas, false);
             exercise_stock_rifle(&mut client, &schemas, frame + 1, BOT_ENTITY + 1);
+        }
+        PreparedFixture::StockNameplate => {
+            let frame = pick_soldier_for_weapon(&mut client, &schemas);
+            exercise_stock_nameplate_hit(
+                &mut client,
+                &schemas,
+                frame,
+                target,
+                nameplate_target_health.unwrap(),
+            );
         }
         PreparedFixture::Combat => {
             exercise_combat(&mut client, &schemas, BOT_ENTITY + 1, BOT_ENTITY + 15)
@@ -365,6 +418,27 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
         }
     }
     server.stop().unwrap();
+}
+
+fn observer_introduces_graph(script: &ReceivedChunk, wanted: u32) -> bool {
+    let mut reader = script.bits();
+    assert_eq!(reader.bits(2).unwrap(), 0, "observer frame header");
+    while reader.w_u16().unwrap() != 0 {
+        if script.first != 0 && (reader.bit().unwrap() || !reader.bit().unwrap()) {
+            continue;
+        }
+        let graph = reader.bits(16).unwrap() as u32;
+        assert_eq!(reader.bits(2).unwrap(), 0);
+        if reader.bit().unwrap() {
+            reader.w_var().unwrap();
+            reader.w_var().unwrap();
+        }
+        assert!(!reader.bit().unwrap(), "unexpected descriptor references");
+        if graph == wanted {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn send_game_message(
@@ -727,6 +801,82 @@ pub fn exercise_stock_rifle(client: &mut Client, schemas: &Schemas, frame: u32, 
     }
 }
 
+fn exercise_stock_nameplate_hit(
+    client: &mut Client,
+    schemas: &Schemas,
+    first: u32,
+    target: u32,
+    initial_health: f64,
+) {
+    let frame = wait_for_stock_weapon(client, schemas, first);
+    let fire = crate::commands::FIRE;
+    client.send(ACK, command_batch(frame, 1, -16384, fire, false));
+    client.send(ACK, command_batch(frame + 1, 1, -16384, 0, false));
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let (mut lost, mut seen_damage, mut seen_health) = (None, None, None);
+    while seen_damage.is_none() || seen_health.is_none() {
+        let packet = client.receive();
+        let reliable = messages(schemas, &packet);
+        if lost.is_none() {
+            if let Some(hit) = reliable.iter().find(|item| item.message.id == 25001) {
+                lost = Some((hit.sequence, hit.message.fields.clone()));
+                continue;
+            }
+        }
+        let tick = BitReader::new(&packet.payload).var_a().unwrap();
+        for item in reliable {
+            assert_ne!(
+                item.message.id, 25005,
+                "one rifle shot should leave this bot alive"
+            );
+            if item.message.id != 25001 {
+                continue;
+            }
+            let (ordinal, fields) = lost.as_ref().unwrap();
+            assert_eq!((&item.sequence, &item.message.fields), (ordinal, fields));
+            assert_eq!(fields[&0x84], Value::Unsigned(u64::from(frame)));
+            assert!(
+                crate::game_clock::TICK_PERIOD * tick.abs_diff(frame) < Duration::from_secs(5),
+                "hit notice frame {frame} is outside the recency window at tick {tick}"
+            );
+            let Value::Struct(impact) = &fields[&0x78] else {
+                panic!("missing hit body");
+            };
+            assert_eq!(
+                impact[&0],
+                Value::Struct(Fields::from([(0, Value::Unsigned(u64::from(target)))]))
+            );
+            let Value::Unsigned(amount) = impact[&4] else {
+                panic!("missing hit damage");
+            };
+            assert!(amount > 0);
+            let Value::Unsigned(flags) = impact[&8] else {
+                panic!("missing hit flags");
+            };
+            assert_eq!(flags & 2, 0);
+            seen_damage = Some(amount);
+        }
+        for record in world_records(schemas, &packet) {
+            if record.entity == target && record.operation == Some(2) {
+                if let Some(health) = record.base_health {
+                    let health = f64::from(health);
+                    assert!((0.0..initial_health).contains(&health) && health != 0.0);
+                    seen_health = Some(health);
+                }
+            }
+        }
+        assert!(client.window.accept(packet.seq));
+        client.send(ACK, Vec::new());
+        assert!(
+            Instant::now() < deadline,
+            "waiting for nonlethal health update and retransmitted hit notice"
+        );
+    }
+    let actual_damage = initial_health - seen_health.unwrap();
+    assert_eq!(actual_damage.round_ties_even() as u64, seen_damage.unwrap());
+}
+
 pub fn exercise_owner_vm(client: &mut Client, schemas: &Schemas, forward: bool) -> u32 {
     use crate::{game_heroes::SOLDIER, game_parameters::PICK_HERO};
 
@@ -931,15 +1081,34 @@ pub fn exercise_hero_selection(
     let tick = BitReader::new(&retry.payload).var_a().unwrap();
     let first_input = tick + 32;
     let mut newest = first_input + 4;
+    let mut controller_end = 2; // The controller full frame just acknowledged.
+    let observe_controller_ack = |records: &[WorldRecord], end: &mut u32| {
+        for script in records
+            .iter()
+            .filter(|record| record.entity == OWNER)
+            .filter_map(|record| record.script.as_ref())
+            .filter(|script| script.first != 0)
+        {
+            let mut bits = script.bits();
+            assert_eq!(bits.bits(3).unwrap(), 2);
+            let expected = crate::script_wire::owner_ack(bits.w_var().unwrap()).unwrap();
+            assert_eq!(script.width, expected.bit_len());
+            assert_eq!(script.data, expected.as_bytes());
+            assert!(script.first <= *end + 1);
+            *end = (*end).max(script.first + script.span);
+        }
+    };
     // The acknowledged stock body has an owner VM, so its own movement
     // records are owner corrections, as from Python's correction.own_record.
     let mut corrected = false;
-    let mut await_input = |client: &mut Client, expected| {
+    let mut await_input = |client: &mut Client, expected, controller_end: &mut u32| {
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             let packet = client.receive();
             assert!(client.window.accept(packet.seq));
-            corrected |= world_records(schemas, &packet)
+            let records = world_records(schemas, &packet);
+            observe_controller_ack(&records, controller_end);
+            corrected |= records
                 .iter()
                 .any(|record| record.entity == FIRST && record.movement);
             if input_ack(schemas, &packet) == expected {
@@ -953,12 +1122,13 @@ pub fn exercise_hero_selection(
         }
     };
     client.send(ACK, input_batch(first_input, 5, -31010));
-    await_input(client, newest);
+    await_input(client, newest, &mut controller_end);
     client.send(ACK, input_batch(newest + 2_000, 1, -31010));
     for _ in 0..2 {
         let packet = client.receive();
         assert!(client.window.accept(packet.seq));
         assert_eq!(input_ack(schemas, &packet), newest);
+        observe_controller_ack(&world_records(schemas, &packet), &mut controller_end);
         client.send(ACK, Vec::new());
     }
     newest += 48;
@@ -966,7 +1136,7 @@ pub fn exercise_hero_selection(
     for _ in 0..=RECEIVE_BATCH {
         client.send(ACK, recoverable.clone());
     }
-    await_input(client, newest);
+    await_input(client, newest, &mut controller_end);
     // Only the tagged stock pack completes owner VM startup.
     let soldier = assets.heroes().get(SOLDIER).unwrap();
     let attached = assets.graphs().bodies()[&soldier.body]
@@ -983,13 +1153,26 @@ pub fn exercise_hero_selection(
         let packet = client.receive();
         assert!(client.window.accept(packet.seq));
         let records = world_records(schemas, &packet);
+        observe_controller_ack(&records, &mut controller_end);
         let changes: Vec<_> = describe(&records)
             .into_iter()
             .filter(|(entity, operation, _)| *entity != FIRST || operation.is_some())
             .collect();
         if !changes.is_empty() {
-            assert_eq!(changes, [(OWNER, None, Some(3))]);
-            break verify_controller(&records, SOLDIER, true);
+            let [(entity, operation, span)] = changes.as_slice() else {
+                panic!("unexpected records while reopening hero selection: {changes:?}");
+            };
+            assert_eq!((*entity, *operation), (OWNER, None));
+            let script = records
+                .iter()
+                .find(|record| record.entity == OWNER)
+                .and_then(|record| record.script.as_ref())
+                .expect("controller chunk while reopening hero selection");
+            if script.first == 0 {
+                assert!(span.unwrap() > controller_end);
+                controller_end = span.unwrap();
+                break verify_controller(&records, SOLDIER, true);
+            }
         }
         client.send(ACK, Vec::new());
         assert!(
@@ -1011,13 +1194,20 @@ pub fn exercise_hero_selection(
     };
     send(client, ordinal, PICK_HERO, next_hero.to_le_bytes().to_vec());
     let (swap, records) = next_body_frame(client, SECOND);
+    let swap_script = records
+        .iter()
+        .find(|record| record.entity == OWNER && record.script.is_some())
+        .and_then(|record| record.script.as_ref())
+        .expect("hero replacement controller frame");
+    assert_eq!(swap_script.first, 0);
+    assert!(swap_script.span > controller_end);
     assert_eq!(
         describe(&records),
         [
             (SECOND, Some(1), None),
             (OWNER, Some(2), None),
             (FIRST, Some(3), None),
-            (OWNER, None, Some(4))
+            (OWNER, None, Some(swap_script.span))
         ],
     );
     assert!(verify_controller(&records, next_hero, false) > reopen_cmfd);

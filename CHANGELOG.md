@@ -16,6 +16,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Validated the Practice Range fixes with 914 local workspace tests with Inspector, six prepared 104319 probes, and the Rust 1.85.0 workspace check.
 
+- Verify Practice Range nameplate ordering and nonlethal hit delivery over encrypted loopback with the prepared 104319 pack, including the first hit notice dropped and retried.
+
 ### 2026-11-20
 
 - Register the existing horizontal velocity cap contract in public Rust checks.
