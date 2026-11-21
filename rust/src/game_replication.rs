@@ -320,5 +320,13 @@ pub(crate) use body::validate_body_baselines;
 use body::{BioticView, BodyScript, InputQueue};
 use delivery::{BotLifetime, Delivery, Lifetime};
 
+#[cfg(feature = "inspector")]
+pub(crate) fn owner_volley_trace_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("ORPHEUS_TRACE_OWNER_VOLLEYS").is_some_and(|value| value == "1")
+    })
+}
+
 #[cfg(test)]
 pub(crate) mod tests;

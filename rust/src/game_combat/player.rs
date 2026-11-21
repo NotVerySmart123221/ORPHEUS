@@ -11,7 +11,7 @@ use crate::{
         eligible_target, eye_height, script_eye_position,
     },
     game_combat_messages::CombatNotice,
-    game_hitscan::{Impact, TargetHistory, TargetPose, ViewFrame},
+    game_hitscan::{HurtPose, Impact, TargetHistory, TargetPose, ViewFrame},
     game_instance::TeamMemberCounts,
     game_projectiles::ProjectileToken,
     game_replication::{BodyId, OwnerBodyRuntime, OwnerRoomActivity},
@@ -907,7 +907,7 @@ impl RoomSimulation {
         free_for_all: bool,
         view: ViewFrame,
         visible: &impl Fn(u32) -> bool,
-        candidates: &mut Vec<(u32, TargetPose)>,
+        candidates: &mut Vec<(u32, HurtPose)>,
     ) {
         for &entity in self.players_by_wire.values() {
             let Some(state) = self.world.get::<PlayerBodyState>(entity) else {
@@ -925,7 +925,7 @@ impl RoomSimulation {
                 continue;
             }
             if let Some(pose) = state.history.at(view, state.target_pose()) {
-                candidates.push((state.id.entity, pose));
+                candidates.push((state.id.entity, pose.into()));
             }
         }
     }
@@ -935,7 +935,7 @@ impl RoomSimulation {
         source: u32,
         team: u8,
         free_for_all: bool,
-        candidates: &mut Vec<(u32, TargetPose)>,
+        candidates: &mut Vec<(u32, HurtPose)>,
     ) {
         for &entity in self.players_by_wire.values() {
             let Some(state) = self.world.get::<PlayerBodyState>(entity) else {
@@ -949,7 +949,7 @@ impl RoomSimulation {
                 team,
                 free_for_all,
             ) {
-                candidates.push((state.id.entity, state.target_pose()));
+                candidates.push((state.id.entity, state.target_pose().into()));
             }
         }
     }

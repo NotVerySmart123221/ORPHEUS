@@ -90,3 +90,34 @@ This test is ignored in the public CI test run. The combined-check scripts
 `scripts/check_combined_rust.sh` and `scripts/check_combined_rust.ps1` also run
 the full ignored library suite when supplied a runtime; that suite has other
 asset requirements and is not equivalent to the exact command above.
+
+## Observe a short weapon volley
+
+With a prepared target-tagged Practice Range runtime, run:
+
+```sh
+cargo test --locked -p orpheus --lib stock_practice_owner_rifle_batched_tap_delivers_terminal_ammo -- --ignored
+```
+
+The probe submits adjacent press and release commands in one input batch.
+It checks the posed shot and the acknowledged owner projection after the
+batch. An inactive volley and lower ammunition in the final projection are
+compatible with an earlier shot on the batch's press frame. The probe
+cannot verify first-person animation, which the client draws locally.
+
+The prepared `stock_practice_owner_gap_does_not_charge_for_an_unposed_rifle_round`
+probe covers the next rifle round falling exactly on a missing command
+frame. It checks that the skipped round spends no ammunition and that a
+subsequent posed press fires and spends one round. The public synthetic
+`a_volley_skips_unposed_rounds_and_bills_the_next_posed_round` test checks
+the elapsed clock and ammo through a gap within the same volley.
+
+To collect evidence for an intermittent animation failure, run an Inspector
+build with `ORPHEUS_TRACE_OWNER_VOLLEYS=1` set in the server environment.
+Correlate the `owner-volley` rows in the server log by body and command
+frame. Input rows include edges and unposed gap boundaries. Shot rows carry
+their authored frame and corresponding pose frame when available. Delta
+rows show the sent activation, its active flag, and explicitly written
+ammunition. Delivery rows show whether the transport acknowledged each
+chunk. Record when the animation fails so the relevant rows can be matched
+to the same tap.

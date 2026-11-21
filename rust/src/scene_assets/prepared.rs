@@ -15,6 +15,7 @@ pub struct PreparedScene {
     pub(super) simulation: RoomSimulation,
     pub(super) scripted_bots: usize,
     pub(super) movers: Arc<MoverCatalog>,
+    pub(super) hurt_volumes: Arc<HurtVolumeCatalog>,
     pub(super) heroes: Arc<HeroCatalog>,
     pub(super) pools: Arc<PoolCatalog>,
     pub(crate) owner_body_factory: Option<Arc<OwnerBodyFactory>>,
@@ -72,6 +73,7 @@ impl PreparedScene {
             simulation: RoomSimulation::new(bots).unwrap(),
             scripted_bots: 0,
             movers: Arc::new(MoverCatalog::default()),
+            hurt_volumes: Arc::new(HurtVolumeCatalog::default()),
             heroes: Arc::new(HeroCatalog::default()),
             pools: Arc::new(PoolCatalog::default()),
             owner_body_factory: None,
@@ -450,7 +452,8 @@ impl PreparedScene {
                 &self.movers,
                 &self.ground,
                 self.contacts.as_ref(),
-            ),
+            )
+            .with_hurt_volumes(&self.hurt_volumes),
         )
     }
 

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "case_id": "mode-presentation.authored-variables.v1",
+  "evidence": "synthetic-rust",
+  "client_acceptance": "pending",
+  "version": 1,
+  "graphs": [],
+  "bodies": {},
+  "missing": [],
+  "mode_variables": {
+    "0x0230000000000FFE": {
+      "17": true,
+      "18": false,
+      "33": 3,
+      "44": "0x0D80000000000FFE"
+    },
+    "0x0230000000000FFD": {
+      "17": false
+    }
+  }
+}

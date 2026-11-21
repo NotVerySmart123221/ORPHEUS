@@ -19,6 +19,30 @@ The [pinned Python → Rust parity matrix](https://github.com/leafall903/ORPHEUS
 
 ---
 
+## Practice Range playtest follow-up
+
+The prepared 104319 regression reproduced a public StateScript diagnostic
+several frames after a training bot died. The room now keeps projecting the
+corpse through those frames and admits the replacement on schedule. A
+synthetic regression also checks that a bot with a blocking diagnostic
+cannot interrupt a healthy peer bot's projection.
+
+The room's initial mode frame includes the authored nameplate inputs. The
+prepared check decodes those variables from the wire. The client still
+needs to verify visual health bars and hit-notice timing.
+
+A local combat calibration replay used six playtest rays against the
+prepared scene and distinguished head hits, body hits and a miss. The
+calibration is a measured standing proxy. Animated volumes, live visual
+alignment and other bodies still require their own evidence.
+
+The 104319 owner replay exposed a due rifle round that spent ammunition
+at a synthetic gap boundary without producing a posed shot. The owner
+clock now skips such rounds and preserves ordinary ammunition cost when a
+posed command resumes. Saved playtest logs did not include owner deltas
+or command boundaries. An opt-in [owner volley trace](OWNER_DELIVERY_TEST.md#observe-a-short-weapon-volley)
+can correlate these events with the next live animation observation.
+
 ## Shared StateScript integration
 
 

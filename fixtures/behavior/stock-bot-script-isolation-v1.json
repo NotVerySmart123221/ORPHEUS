@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "case_id": "stock-bot-script-isolation-v1",
+  "evidence": "rust-headless-synthetic",
+  "input": [
+    {
+      "selector": {
+        "$": "STU_ED45C5E8",
+        "m_owner": { "$": "STU_B5A0CAF0" },
+        "m_range": { "$": "STUConfigVarFloat", "m_value": 0 },
+        "m_flag": { "$": "STUConfigVarBool", "m_value": 0 }
+      },
+      "projects": true
+    },
+    {
+      "selector": {
+        "$": "STU_ED45C5E8",
+        "m_owner": { "$": "STU_B5A0CAF0" },
+        "m_range": { "$": "STUConfigVarFloat", "m_value": 2 },
+        "m_flag": { "$": "STUConfigVarBool", "m_value": 0 }
+      },
+      "projects": false
+    }
+  ]
+}

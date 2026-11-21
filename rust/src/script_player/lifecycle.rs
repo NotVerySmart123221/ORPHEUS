@@ -231,6 +231,23 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                 "the owner VM frame is outside the command sequence",
             ));
         }
+        #[cfg(feature = "inspector")]
+        if step != BodyStep::UnposedTimer
+            && (step == BodyStep::UnposedBoundary
+                || command.buttons != self.component.command_buttons()
+                || command.action != 0)
+            && crate::game_replication::owner_volley_trace_enabled()
+        {
+            eprintln!(
+                "owner-volley input body={:08x} previous={} frame={} step={step:?} buttons={:#x}->{:#x} action={}",
+                self.world.entity,
+                self.frame,
+                command.frame,
+                self.component.command_buttons(),
+                command.buttons,
+                command.action
+            );
+        }
         let pose = mover.pose();
         self.world.position = pose.position;
         self.world.eye_position = script_eye_position(self.world.hero, mover);
@@ -238,15 +255,21 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         if step == BodyStep::Posed {
             self.world.movement = pose;
         }
-        if step == BodyStep::UnposedTimer {
-            self.component
-                .advance_frame(command.frame, &mut self.world)
-                .map_err(unsupported)?;
-        } else {
+        if step == BodyStep::Posed {
             self.world.throttles = [command.right, command.forward];
             self.component
                 .advance_command(command, &mut self.world)
                 .map_err(unsupported)?;
+        } else {
+            let boundary = step == BodyStep::UnposedBoundary;
+            if boundary {
+                self.world.throttles = [0; 2];
+            }
+            self.component
+                .advance_unposed(command.frame, boundary, &mut self.world)
+                .map_err(unsupported)?;
+        }
+        if step != BodyStep::UnposedTimer {
             self.modifiers = self
                 .component
                 .movement_modifiers(&mut self.world)
@@ -284,6 +307,22 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
 
     fn take_shots(&mut self, command: Option<Command>, mover: &Mover) -> Vec<PosedShot> {
         let shots = self.component.take_shots().unwrap_or_default();
+        #[cfg(feature = "inspector")]
+        if !shots.is_empty() && crate::game_replication::owner_volley_trace_enabled() {
+            let pose_frame = command.map(|command| command.frame);
+            for shot in &shots {
+                eprintln!(
+                    "owner-volley vm-shot body={:08x} shot_frame={} pose_frame={pose_frame:?} instance={} state={} counter={} start_ms={} ordinal={}",
+                    shot.entity,
+                    shot.frame,
+                    shot.instance,
+                    shot.raw_state,
+                    shot.activation,
+                    shot.activation_ms,
+                    shot.ordinal
+                );
+            }
+        }
         let Some(command) = command else {
             return Vec::new();
         };

@@ -8,6 +8,7 @@ pub(crate) struct BotQueries<'a> {
     movers: &'a MoverCatalog,
     ground: &'a CollisionScene,
     contacts: Option<&'a Arc<ContactWorld>>,
+    hurt_volumes: Option<&'a HurtVolumeCatalog>,
 }
 
 impl<'a> BotQueries<'a> {
@@ -22,7 +23,13 @@ impl<'a> BotQueries<'a> {
             movers,
             ground,
             contacts,
+            hurt_volumes: None,
         }
+    }
+
+    pub(crate) fn with_hurt_volumes(mut self, volumes: &'a HurtVolumeCatalog) -> Self {
+        self.hurt_volumes = Some(volumes);
+        self
     }
 
     pub(crate) fn free_for_all(&self) -> bool {
@@ -129,6 +136,15 @@ impl<'a> BotQueries<'a> {
             radius: settings.stand_radius,
             eye: crate::game_combat::eye_height(bot.spawn.hero, false),
         }
+    }
+
+    pub(crate) fn hurt_pose(
+        &self,
+        body: u64,
+        pose: crate::game_hitscan::TargetPose,
+    ) -> crate::game_hitscan::HurtPose {
+        self.hurt_volumes
+            .map_or_else(|| pose.into(), |volumes| volumes.pose(body, pose))
     }
 
     pub(crate) fn hitscan_wall(

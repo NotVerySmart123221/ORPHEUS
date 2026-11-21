@@ -423,6 +423,16 @@ impl WorldDelivery {
                         } else {
                             script.stream.lost(last)
                         };
+                        #[cfg(feature = "inspector")]
+                        if let Some(arrived) = delivery
+                            .owner_report
+                            .filter(|_| owner_volley_trace_enabled())
+                        {
+                            eprintln!(
+                                "owner-volley delivery body={:08x} chunk={last} arrived={arrived}",
+                                script.id.entity
+                            );
+                        }
                         if let Some((projectiles, arrived)) =
                             script.projectiles.as_mut().zip(delivery.owner_report)
                         {

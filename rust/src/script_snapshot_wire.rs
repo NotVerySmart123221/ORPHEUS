@@ -154,6 +154,47 @@ impl ProjectedSnapshot {
             .map(|volley| volley.identity)
     }
 
+    #[cfg(feature = "inspector")]
+    pub(crate) fn trace_owner_volley_delta(
+        &self,
+        chunk: u32,
+        frame: u32,
+        changes: &BTreeSet<crate::script_stream::ChangeKey>,
+    ) {
+        use crate::script_expr::Scope;
+        use crate::script_stream::ChangeKey;
+
+        for (&id, instance) in &self.instances {
+            for (&raw, state) in &instance.states {
+                let Some(volley) = state.volley else {
+                    continue;
+                };
+                let sent_state = changes.contains(&ChangeKey::State(id, raw));
+                let written_ammo = volley.ammo.and_then(|(variable, _)| {
+                    let (owner, variables) = match variable.scope {
+                        Scope::Entity => (0, &self.variables.values),
+                        Scope::Instance => (id, &instance.variables.values),
+                    };
+                    if !changes.contains(&ChangeKey::Variable(owner, variable.id)) {
+                        return None;
+                    }
+                    match variables.get(&variable.id) {
+                        Some(Value::Integer(ammo)) => Some(*ammo),
+                        _ => None,
+                    }
+                });
+                if sent_state || written_ammo.is_some() {
+                    let (counter, start_ms) = volley.identity;
+                    let introduced = changes.contains(&ChangeKey::VolleyIntroduction(id, raw));
+                    eprintln!(
+                        "owner-volley delta body={:08x} chunk={chunk} frame={frame} instance={id} state={raw} sent_state={sent_state} active={} counter={counter} start_ms={start_ms} introduced={introduced} written_ammo={written_ammo:?}",
+                        self.entity, state.active
+                    );
+                }
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn entity_variables(&self) -> &Variables {
         &self.variables.values

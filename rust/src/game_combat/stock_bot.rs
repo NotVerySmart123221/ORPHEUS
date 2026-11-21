@@ -15,11 +15,12 @@ use crate::{
     game_bots::Bot,
     mover::sample_movement_flags,
     script_codecs::CodecTable,
-    script_expr::{EngineSetting, EntityRelation, native_shape},
+    script_expr::{EngineSetting, EntityRelation, is_zeroed_owner_selector, native_shape},
     script_graph::GraphStore,
     script_init::{
-        self, AiControlOverride, AiWeaponOverride, Component, HUD_MAX_HEALTH, MAX_INIT_WORK,
-        MovementSample, OWNER_HEALTH, Site, TargetTagEffect, TargetTagEffects, World,
+        self, AiControlOverride, AiWeaponOverride, Component, HUD_MAX_HEALTH, InitFault, Issue,
+        MAX_INIT_WORK, MovementSample, OWNER_HEALTH, Site, TargetTagEffect, TargetTagEffects,
+        World,
     },
     script_runtime::FRAME_MS,
     script_snapshot_wire::{SceneProjection, SnapshotEncoder},
@@ -27,6 +28,9 @@ use crate::{
     vitals::{Death, PoolKind, Vitals},
     world::GAME_MODE_ENTITY,
 };
+
+#[cfg(test)]
+mod tests;
 
 const HUD_HEALTH: u32 = 1732;
 const DIED_MESSAGE: u64 = 0x0240_0000_0000_003e;
@@ -336,6 +340,7 @@ impl World for StockBotWorld {
                 Some(Value::Bool(false))
             }
             "STU_295D117D" => Some(Value::Null),
+            "STU_ED45C5E8" if is_zeroed_owner_selector(config) => Some(Value::Null),
             _ => None,
         }
     }
@@ -347,7 +352,7 @@ pub(crate) struct StockBotScript {
     graphs: Arc<GraphStore>,
     codecs: Arc<CodecTable>,
     frame: u32,
-    fault: Option<String>,
+    faulted: bool,
 }
 
 impl StockBotScript {
@@ -403,26 +408,20 @@ impl StockBotScript {
                 return None;
             }
         };
-        if let Some(snapshot) = component.snapshot() {
-            if !snapshot.diagnostics.is_empty() {
-                eprintln!(
-                    "stock bot {:08X} startup diagnostics: {:?}",
-                    bot.entity, snapshot.diagnostics
-                );
-            }
-        }
-        Some(Self {
+        let mut script = Self {
             component,
             world,
             graphs: Arc::clone(&catalog.graphs),
             codecs: Arc::clone(&catalog.codecs),
             frame: tick,
-            fault: None,
-        })
+            faulted: false,
+        };
+        script.check_projection(Ok(()));
+        Some(script)
     }
 
     pub(super) fn on_damage(&mut self, remaining_health: f64, source: Death) {
-        if self.fault.is_some() {
+        if self.faulted {
             return;
         }
         let current = self.world.vitals.total();
@@ -430,36 +429,39 @@ impl StockBotScript {
             self.world.vitals.damage(current - remaining_health, source);
         }
         let health = Value::Float(remaining_health);
-        let _ = self
+        let result = self
             .component
-            .set_entity_variable(OWNER_HEALTH, health.clone(), &mut self.world);
-        let _ = self
-            .component
-            .set_entity_variable(HUD_HEALTH, health, &mut self.world);
+            .set_entity_variable(OWNER_HEALTH, health.clone(), &mut self.world)
+            .and_then(|()| {
+                self.component
+                    .set_entity_variable(HUD_HEALTH, health, &mut self.world)
+            });
+        self.check_projection(result);
     }
 
     pub(super) fn on_death(&mut self, source: Death, critical: bool, loadout: Option<u64>) {
-        if self.fault.is_some() || self.world.dead {
+        if self.faulted || self.world.dead {
             return;
         }
         self.world.dead = true;
         self.component.set_owner_dead(true);
         let next_frame = source.frame.max(self.frame + 1);
         if let Err(error) = self.component.advance_frame(next_frame, &mut self.world) {
-            self.fault = Some(error.to_string());
+            self.stop_script(error);
             return;
         }
         self.frame = next_frame;
-        if let Err(error) =
-            self.component
-                .set_entity_variable(OWNER_HEALTH, Value::Float(0.0), &mut self.world)
-        {
-            self.fault = Some(error.to_string());
+        let death_health = self
+            .component
+            .set_entity_variable(OWNER_HEALTH, Value::Float(0.0), &mut self.world)
+            .and_then(|()| {
+                self.component
+                    .set_entity_variable(HUD_HEALTH, Value::Float(0.0), &mut self.world)
+            });
+        if let Err(error) = death_health {
+            self.stop_script(error);
             return;
         }
-        let _ = self
-            .component
-            .set_entity_variable(HUD_HEALTH, Value::Float(0.0), &mut self.world);
         let parameters = Variables::from([
             (0x12, Value::Entity(source.killer)),
             (0x95, Value::Bool(critical)),
@@ -477,30 +479,50 @@ impl StockBotScript {
             self.component
                 .queue_entity_message_from(source.killer, DIED_MESSAGE, parameters)
         };
-        if let Err(error) = queued {
-            self.fault = Some(error.to_string());
-            return;
-        }
-        if let Err(error) = self.component.run_now(&mut self.world) {
-            self.fault = Some(error.to_string());
-        }
+        let result = queued.and_then(|_| self.component.run_now(&mut self.world));
+        self.check_projection(result);
     }
 
     pub(super) fn advance(&mut self, tick: u32, bot: &Bot) {
         self.world.position = bot.position;
         self.world.forward = forward_from_yaw(bot.yaw);
         self.world.movement = sample_bot_movement(bot, tick);
-        if self.fault.is_some() || tick <= self.frame {
+        if self.faulted || tick <= self.frame {
             return;
         }
         self.frame = tick;
-        if let Err(error) = self.component.advance_frame(tick, &mut self.world) {
-            self.fault = Some(error.to_string());
+        let result = self.component.advance_frame(tick, &mut self.world);
+        self.check_projection(result);
+    }
+
+    fn check_projection(&mut self, result: Result<(), InitFault>) {
+        if let Err(error) = result {
+            self.stop_script(error);
+            return;
+        }
+        let diagnostic = self.component.snapshot().and_then(|snapshot| {
+            snapshot.diagnostics.iter().find(|diagnostic| {
+                !diagnostic.server_only && diagnostic.issue != Issue::ObservationUnavailable
+            })
+        });
+        if let Some(diagnostic) = diagnostic {
+            self.stop_script(format!(
+                "{:04X}:{:?}: {:?}",
+                diagnostic.site.graph, diagnostic.site.node, diagnostic.issue
+            ));
         }
     }
 
+    fn stop_script(&mut self, reason: impl std::fmt::Display) {
+        eprintln!(
+            "stock bot {:08X} script stopped: {reason}",
+            self.world.entity
+        );
+        self.faulted = true;
+    }
+
     pub(super) fn projection(&self) -> Option<SceneProjection<'_>> {
-        if self.fault.is_some() {
+        if self.faulted {
             return None;
         }
         Some(SceneProjection {

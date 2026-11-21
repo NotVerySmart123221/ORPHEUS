@@ -78,3 +78,14 @@ See the [mode profile schema](../docs/STATESCRIPT_DEVELOPMENT.md#set-mode-and-ac
 | `data/resource_keys_174.json` | Content keys for event resources |
 | `data/lobby_state_blob.key` | Exact 64-byte lobby handshake signing key |
 | `data/junkenstein/junkenstein-npcs.json` | Explicit NPC definitions required for Junkenstein enemy tests/runs |
+| `data/combat_hurt_volumes.json` | Optional local measurements of standing bot combat regions, packed and hashed when present |
+
+The combat calibration file has `version: 1` and a `bodies` object keyed
+by body-definition ID. Each record contains a `body` capsule and an optional
+`head` capsule. Each capsule specifies `lower` and `upper` axis endpoints
+in metres above the feet and a positive `radius` in metres. Equal endpoints
+make a sphere. This calibration adjusts player hitscan and projectile contact
+against the listed bot bodies. Movement contacts, healing and navigation keep
+their own geometry. Bodies without a calibration keep the existing
+compatibility proxy. Use local measurements for the intended body and build.
+See the [synthetic schema example](../fixtures/behavior/combat-hurt-volumes-v1.json).

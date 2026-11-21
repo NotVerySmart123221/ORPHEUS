@@ -43,6 +43,7 @@ pub const MATCH_RUNTIME_DATA: &[&str] = &[
 pub const BNET_DESCRIPTORS: &str = "bnet/descriptors.pb";
 pub const JUNKENSTEIN_MAP_WORLD: &str = "data/junkenstein/junkenstein-map-world.json";
 pub const JUNKENSTEIN_NPCS: &str = "data/junkenstein/junkenstein-npcs.json";
+pub const COMBAT_HURT_VOLUMES: &str = "data/combat_hurt_volumes.json";
 const PRACTICE_COLLISION: &str = "collision/0688.col";
 const SIGNING_INPUT: &str = "data/lobby_state_blob.key";
 const CONTENT_KEY_TABLE: &str = "data/resource_keys_174.json";
@@ -260,6 +261,10 @@ fn inputs(
         if inputs.contains_key("collision/06C9.col") && input.is_file() {
             inputs.insert(name.into(), input);
         }
+    }
+    let hurt_volumes = source.join(COMBAT_HURT_VOLUMES);
+    if hurt_volumes.is_file() {
+        inputs.insert(COMBAT_HURT_VOLUMES.into(), hurt_volumes);
     }
 
     let missing: Vec<_> = inputs
@@ -653,6 +658,10 @@ mod tests {
         let fixture = Fixture::new();
         let source = fixture.source();
         fixture.write("graphs.json.gz", b"synthetic replacement graphs");
+        fixture.write(
+            &format!("source/{COMBAT_HURT_VOLUMES}"),
+            br#"{"version":1,"bodies":{}}"#,
+        );
         let destination = fixture.root.join("new/pack");
         let output = prepare(
             &source,
@@ -682,7 +691,7 @@ mod tests {
         let entries = manifest["sha256"].as_object().unwrap();
         assert_eq!(
             entries.len(),
-            LOBBY_RUNTIME_DATA.len() + MATCH_RUNTIME_DATA.len() + 3
+            LOBBY_RUNTIME_DATA.len() + MATCH_RUNTIME_DATA.len() + 4
         );
         for (name, hash) in entries {
             let copied = fs::read(output.join(name)).unwrap();

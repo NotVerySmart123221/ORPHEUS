@@ -1709,7 +1709,7 @@ impl RoomSimulation {
                 continue;
             }
             if let Some(pose) = state.history.at(view, queries.target(bot)) {
-                candidates.push((bot.entity, pose));
+                candidates.push((bot.entity, queries.hurt_pose(bot.spawn.body, pose)));
             }
         }
         self.push_player_hitscan_candidates(
@@ -1720,7 +1720,7 @@ impl RoomSimulation {
             &visible,
             &mut candidates,
         );
-        let Some(impact) = ray.resolve(candidates, |origin, direction, reach| {
+        let Some(impact) = ray.resolve_combat(candidates, |origin, direction, reach| {
             queries.hitscan_wall(origin, direction, reach)
         })?
         else {
@@ -1901,7 +1901,8 @@ impl RoomSimulation {
             for state in self.states() {
                 let bot = &state?.bot;
                 if eligible_bot(bot, owner.entity, context.team, queries.free_for_all()) {
-                    candidates.push((bot.entity, queries.target(bot)));
+                    let pose = queries.hurt_pose(bot.spawn.body, queries.target(bot));
+                    candidates.push((bot.entity, pose));
                 }
             }
             self.push_player_projectile_candidates(
@@ -1915,12 +1916,11 @@ impl RoomSimulation {
                     .world
                     .get_mut::<AdmittedFlight>(entity)
                     .ok_or(CombatError::MissingFlight { connection, entity })?;
-                let result =
-                    active
-                        .flight
-                        .advance(context.tick, &candidates, |origin, direction, reach| {
-                            queries.hitscan_wall(origin, direction, reach)
-                        });
+                let result = active.flight.advance_combat(
+                    context.tick,
+                    &candidates,
+                    |origin, direction, reach| queries.hitscan_wall(origin, direction, reach),
+                );
                 (active.token, active.stun, active.hit_effect, result)
             };
             match result {

@@ -4,6 +4,18 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ## Unreleased
 
+### 2026-11-21
+
+- Handle the stock bot death selector with the shared owner operand check. A blocking public diagnostic stops that bot's script projection while the room continues to simulate it. The prepared Practice Range regression now checks each of the first ten corpse frames and the replacement.
+
+- Publish authored mode values in the initial mode presentation frame. A prepared Practice Range wire check verifies the flags used by the training bot nameplate, including explicit false values. Original-client visibility remains pending.
+
+- Load optional body-keyed combat hurt profiles. Hitscan and projectiles use the sampled combat shape, with a distinct head region for hitscan criticals. Movement keeps its own collision capsule. Exact animated hurt volumes and original-client acceptance remain pending.
+
+- Skip due weapon rounds during owner command gaps when there is no shot pose. Preserve the authored volley clock and charge ammunition for the next posed round as usual. Add opt-in Inspector tracing for command edges, shots, sent owner deltas, and delivery outcomes. First-person animation remains an original-client check.
+
+- Validated the Practice Range fixes with 914 local workspace tests with Inspector, six prepared 104319 probes, and the Rust 1.85.0 workspace check.
+
 ### 2026-11-20
 
 - Register the existing horizontal velocity cap contract in public Rust checks.

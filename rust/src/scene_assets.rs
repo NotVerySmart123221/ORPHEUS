@@ -30,6 +30,7 @@ use crate::{
     },
     game_controller::Controller,
     game_heroes::{CASSIDY, Hero, HeroCatalog},
+    game_hitscan::HurtVolumeCatalog,
     game_instance::RETAIL_QUANTA,
     game_pools::PoolCatalog,
     game_replication::{OwnerBodyRuntime, OwnerRoomActivity},
@@ -42,10 +43,10 @@ use crate::{
     mover_ground::NOT_GROUND,
     mover_settings::MoverCatalog,
     patrol_script::PatrolScript,
-    runtime::JUNKENSTEIN_MAP_WORLD,
+    runtime::{COMBAT_HURT_VOLUMES, JUNKENSTEIN_MAP_WORLD},
     script_codecs::CodecTable,
     script_expr::native_shape,
-    script_graph::{GraphStore, ModeValue, asset_guid},
+    script_graph::{GraphStore, asset_guid},
     script_init::{self, Root},
     script_player::{OwnerBodyPreparationError, OwnerBodySetup, OwnerBodySpawn, PlayerBodyFactory},
     script_wire::{Value, Variables},
@@ -78,6 +79,16 @@ fn mover_category(map: &GameMap, team: u8) -> u16 {
 
 fn is_practice_range(map: &GameMap) -> bool {
     map.map_guid == PRACTICE_RANGE_MAP && map.mode_guid == PRACTICE_RANGE_MODE
+}
+
+fn authored_mode_variables(graphs: &GraphStore, mode: u64) -> Option<Variables> {
+    Some(
+        graphs
+            .mode_variables(mode)?
+            .iter()
+            .map(|(&id, &value)| (id, Value::from(value)))
+            .collect(),
+    )
 }
 
 fn ground_height(
@@ -154,6 +165,7 @@ pub struct SceneAssets {
     practice_owner_body: OnceLock<Option<Arc<OwnerBodyFactory>>>,
     bots: BotCatalog,
     movers: Arc<MoverCatalog>,
+    hurt_volumes: Arc<HurtVolumeCatalog>,
     stats: StatsCatalog,
     heroes: Arc<HeroCatalog>,
     pools: Arc<PoolCatalog>,
@@ -202,6 +214,7 @@ impl SceneAssets {
             practice_owner_body: OnceLock::new(),
             bots: BotCatalog::load(data.join("ai_spawners_174.json"))?,
             movers: Arc::new(MoverCatalog::load(data.join("game_movers_174.json"))?),
+            hurt_volumes: Arc::new(HurtVolumeCatalog::load(&runtime.join(COMBAT_HURT_VOLUMES))?),
             stats: StatsCatalog::load(data.join("game_stats_174.json"))?,
             heroes: Arc::new(HeroCatalog::load(data.join("game_heroes_174.json"))?),
             pools,
@@ -262,21 +275,8 @@ impl SceneAssets {
             .cloned()
             .unwrap_or_default();
         let (shared, encounter) = self.encounter_roots(card.mode)?;
-        let variables = self
-            .graphs
-            .mode_variables(card.mode)
+        let mut variables = authored_mode_variables(&self.graphs, card.mode)
             .ok_or_else(|| invalid("Junkenstein mode variables are missing"))?;
-        let mut variables: Variables = variables
-            .iter()
-            .map(|(&key, &value)| {
-                let value = match value {
-                    ModeValue::Bool(value) => Value::Bool(value),
-                    ModeValue::Integer(value) => Value::Integer(value),
-                    ModeValue::Asset(value) => Value::Asset(value),
-                };
-                (key, value)
-            })
-            .collect();
         if let Some(challenge) = card.challenge {
             variables.insert(challenge, Value::Bool(true));
             if challenge == 0x7d62 {
@@ -466,7 +466,9 @@ impl SceneAssets {
                     .map(|(_, encounter)| encounter)
             })
             .transpose()?;
-        let mode_ui = mode_presentation(&self.graphs, &Variables::new(), encounter)?;
+        // Client presenters can read the room mode entity's authored variables.
+        let variables = authored_mode_variables(&self.graphs, map.mode_guid).unwrap_or_default();
+        let mode_ui = mode_presentation(&self.graphs, &variables, encounter)?;
         let initial_board =
             self.stats
                 .component(&PlayerStats::default(), map.mode_guid, None, None);
@@ -518,6 +520,7 @@ impl SceneAssets {
             simulation,
             scripted_bots,
             movers: Arc::clone(&self.movers),
+            hurt_volumes: Arc::clone(&self.hurt_volumes),
             heroes: Arc::clone(&self.heroes),
             pools: Arc::clone(&self.pools),
             owner_body_factory: None,
