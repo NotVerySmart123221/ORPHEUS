@@ -273,8 +273,12 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
         client.send(ACK, Vec::new());
         assert!(Instant::now() < deadline, "waiting for first world creates");
     };
+    let expected_bot_controllers: Vec<u32> = (1..=15)
+        .map(|slot| crate::game_bots::BOT_CONTROLLER_BASE | (slot << 8))
+        .collect();
     let mut creates = HashSet::new();
     let mut acknowledged_creates = HashSet::<u32>::new();
+    let mut bot_possessions = HashMap::new();
     let mut retried_all_creates = false;
     let mut mode = false;
     let mut mode_ack_sent = false;
@@ -290,6 +294,20 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
             if record.is_create() {
                 assert!(!retried_all_creates);
                 assert!(creates.insert(record.entity));
+            }
+            if let Some(body) = record.possessed_body {
+                if record.entity != CONTROLLER {
+                    assert!(
+                        acknowledged_creates.contains(&record.entity),
+                        "possession arrived before bot controller create ACK for {:08x}",
+                        record.entity
+                    );
+                    assert!(
+                        acknowledged_creates.contains(&body),
+                        "possession arrived before bot body create ACK for {body:08x}",
+                    );
+                    bot_possessions.insert(record.entity, body);
+                }
             }
             if record.movement {
                 assert!((BOT_ENTITY..BOT_ENTITY + 15).contains(&record.entity));
@@ -349,8 +367,11 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
                 }
             }
         }
-        if !retried_all_creates && lost.iter().all(|id| creates.contains(id)) {
-            assert_eq!(creates.len(), 21);
+        if !retried_all_creates && creates.len() == 36 && lost.iter().all(|id| creates.contains(id))
+        {
+            for &id in &expected_bot_controllers {
+                assert!(creates.contains(&id), "missing bot controller {id:08x}");
+            }
             retried_all_creates = true;
             // Receive one more datagram before acknowledging these creates.
             // It may carry scripts only for entities acknowledged earlier.
@@ -360,7 +381,16 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
         acknowledged_creates.extend(&creates);
         acknowledged_npc_baselines.extend(npc_full_parents.keys().copied());
         mode_ack_sent = mode;
-        if retried_all_creates && mode && controller && moving_bot && target_nameplate {
+        if retried_all_creates
+            && mode
+            && controller
+            && moving_bot
+            && target_nameplate
+            && bot_possessions.len() == 15
+        {
+            let possessed_bodies: HashSet<_> = bot_possessions.values().copied().collect();
+            let expected_bodies: HashSet<_> = (BOT_ENTITY..BOT_ENTITY + 15).collect();
+            assert_eq!(possessed_bodies, expected_bodies);
             break;
         }
         assert!(
