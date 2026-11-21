@@ -63,6 +63,7 @@ pub mod lobby_celebrations;
 pub mod lobby_clock;
 mod lobby_gallery;
 pub mod lobby_login;
+mod lobby_lootbox;
 pub mod lobby_menu;
 pub mod lobby_mode_rules;
 pub mod lobby_party;

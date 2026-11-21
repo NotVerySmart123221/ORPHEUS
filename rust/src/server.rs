@@ -28,7 +28,9 @@ use crate::{
     lobby_celebrations::Celebrations,
     lobby_gallery::EquipRequest,
     lobby_login::SIGNED_IN_ELSEWHERE,
+    lobby_lootbox::{LootBoxEngine, OpenBoxRequest, PurchaseRequest},
     lobby_menu::{MenuHero, extra_preload_themes},
+    lobby_mode_rules::{CareerProfileRequest, owl_live_reply, player_names_reply},
     lobby_player_messages::SettingsRequest,
     lobby_practice::{self, SoloPracticeHandoff},
     lobby_presence::{PRO_ACCOUNT_BITS, Presence},
@@ -128,6 +130,7 @@ impl Server {
         let ranked = Ranked::new(&templates)?;
         let arcade = Arcade::load(data.join("arcade_cards_174.json"), &templates)?;
         let celebrations = Celebrations::load(&data, &templates)?;
+        let lootbox = LootBoxEngine::new(&collection);
         let extra_skins = extra_preload_themes(&items).collect();
         let mut assets = SceneAssets::load(&config.runtime)?;
         if let Some(path) = &config.junkenstein_validation {
@@ -256,6 +259,7 @@ impl Server {
             schemas,
             templates,
             collection,
+            lootbox,
             presence,
             ranked,
             arcade,
@@ -406,6 +410,7 @@ struct Lobby {
     schemas: Schemas,
     templates: RetailTemplates,
     collection: Collection,
+    lootbox: LootBoxEngine,
     presence: Presence,
     ranked: Ranked,
     arcade: Arcade,
@@ -552,6 +557,50 @@ impl Lobby {
                         session.send(&message)?;
                     }
                 }
+                continue;
+            }
+            if let Some(open_box) = OpenBoxRequest::read(&request) {
+                for message in self
+                    .lootbox
+                    .open_box(&login, &self.collection, open_box.box_id)?
+                {
+                    session.send(&message)?;
+                }
+                continue;
+            }
+            if let Some(purchase) = PurchaseRequest::read(&request) {
+                for message in self
+                    .lootbox
+                    .purchase(&login, &self.collection, purchase.guid)?
+                {
+                    session.send(&message)?;
+                }
+                continue;
+            }
+            if let Some(career) = CareerProfileRequest::read(&request) {
+                let now_secs = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(io::Error::other)?
+                    .as_secs();
+                let cards = {
+                    let profile = login.account.profile();
+                    self.arcade
+                        .state(&profile, self.ranked.season(&profile), now_secs)?
+                        .competitive_cards
+                };
+                for message in
+                    career.reply(&login, &self.collection, &self.ranked, &cards, now_secs)?
+                {
+                    session.send(&message)?;
+                }
+                continue;
+            }
+            if let Some(reply) = player_names_reply(&request, &self.accounts)? {
+                session.send(&reply)?;
+                continue;
+            }
+            if let Some(reply) = owl_live_reply(&request) {
+                session.send(&reply)?;
                 continue;
             }
             let arcade = lobby_practice::arcade_queue(&request).and_then(|(card, key)| {

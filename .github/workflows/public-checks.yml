@@ -151,7 +151,7 @@ jobs:
 
   rust-portable-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6.0.2
         with:
@@ -160,9 +160,12 @@ jobs:
         run: rustup toolchain install stable --profile minimal
       - uses: Swatinem/rust-cache@v2.9.3
         with:
+          shared-key: linux-workspace
           save-if: ${{ github.ref == 'refs/heads/rust' }}
-      - name: Run portable crate regressions
-        run: cargo +stable test --locked --all-targets -p orpheus-collision -p orpheus-golden-trace -p orpheus-runtime -p orpheus-statescript -p orpheus-wire
+      - name: Check default workspace build on Linux
+        run: cargo +stable check --locked --workspace --all-targets
+      - name: Run full workspace regressions with inspector on Linux
+        run: cargo +stable test --locked --workspace --all-targets --features inspector
 
   shared-behavior-contracts:
     runs-on: windows-latest
