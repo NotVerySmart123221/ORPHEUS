@@ -277,9 +277,27 @@ impl Room {
                 ranked: player.info.ranked,
             })
             .collect();
+        let seated = if initial {
+            Vec::new()
+        } else {
+            self.world
+                .as_ref()
+                .map(|world| world.scene.simulation().seated_bots())
+                .unwrap_or_default()
+        };
+        let bots: Vec<_> = seated
+            .iter()
+            .map(|bot| crate::game_instance::SeatedBot {
+                slot: bot.slot,
+                controller: bot.controller,
+                name: &bot.name,
+                team: bot.team,
+            })
+            .collect();
         let instance = Instance {
             map: &self.map,
             members: &members,
+            bots: &bots,
         };
         let player = self
             .players

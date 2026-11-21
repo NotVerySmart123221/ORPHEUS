@@ -10,9 +10,9 @@ The [pinned Python → Rust parity matrix](https://github.com/leafall903/ORPHEUS
 
 | Lane / Suite | Scope Verified in CI (`.github/workflows/public-checks.yml`) |
 | --- | --- |
-| **Portable crates (Linux)** | `orpheus-wire`, `orpheus-collision`, `orpheus-runtime`, and `orpheus-statescript` compile and pass isolated tests without server/ECS deps (`cargo test --locked --all-targets -p orpheus-collision -p orpheus-runtime -p orpheus-statescript -p orpheus-wire`). |
-| **Root workspace (`default` / `inspector`)** | `rustfmt --check`, zero-warning `clippy`, root library `438` (`319` public / `119` `#[ignore]`) tests in `default`, `444` (`325` public / `119` `#[ignore]`) tests in `--features inspector`, and `orpheus-statescript` `144` (`131` public / `13` `#[ignore]`) tests, plus MSRV `1.85.0` check. Workspace members and integration targets bring public totals to `571` / `577`; the synthetic action benchmark also validates both workloads in test mode. |
-| **Cross-language contracts (`shared-behavior-contracts`)** | Checks out pinned `main` (`python-reference`) and verifies identical outputs across `jam-framing-v1.json`, `world-queries-v1.json`, and `profile-settings-v1.json`, `12` public Python tests, and `38` exact StateScript VM contracts on `rust`. |
+| **Linux workspace** | Default-feature workspace check and full Inspector-feature workspace tests. |
+| **Windows workspace** | Default and Inspector workspace tests and Clippy, one formatting check, and a separate Rust 1.85.0 compatibility check. Named shared contract results are verified from the workspace test output. |
+| **Cross-language contracts** | Runs the pinned Python consumers against the Rust checkout's fixtures. The Windows workspace jobs cover the Rust consumers, including JAM framing, strict World queries, and profile settings. |
 | **C++ gallery preview policy** | `scripts/check_gallery_preview_policy.py` compiles `relay/gallery_preview_policy.h` and checks `18` resource-selection + `6` owned-tree pruning cases against `gallery-preview-policy-v1.json`. |
 
 [#61](https://github.com/leafall903/ORPHEUS/issues/61) is complete. [#79](https://github.com/leafall903/ORPHEUS/issues/79) records the four Rust consumers and [#80](https://github.com/leafall903/ORPHEUS/issues/80) records the Python StateScript consumers.
@@ -56,8 +56,10 @@ A second original-client session hit the previously documented
 body change, after a hitscan kill. The Rust game channel now preserves the
 exact end bit of its final JAM message so the receiver resumes at the
 correct world header. Synthetic regressions cover the packet boundary and
-the byte alignment of intermediate messages. The live retest outcome remains
-unrecorded, and the earlier `0xB41104` crash investigation remains open.
+the byte alignment of intermediate messages. On 2026-11-22, the maintainer
+confirmed the crash was fixed after testing the original client. Issue #121
+was closed on that result. The exact session parameters and the cause of the
+earlier `0xB41104` fault were not established by the retest report.
 [Reference investigation](https://github.com/leafall903/ORPHEUS/blob/5d86bcb2/docs/MCCREE_COMBAT.txt#L1007-L1027)
 
 For profiles without saved gameplay options, the lobby now sends the default
@@ -812,5 +814,4 @@ Headless offline regressions against pinned Python `e1128509` and prepared 10431
 | Issue | Scope |
 | --- | --- |
 | [#70](https://github.com/leafall903/ORPHEUS/issues/70) | Clean up transitional contract scripts, legacy prototypes, and stale branches. |
-| [#121](https://github.com/leafall903/ORPHEUS/issues/121) | Diagnose and fix the 104319 client access violation (`0xC0000005`) during sustained Soldier Practice Range play. |
 | [#131](https://github.com/leafall903/ORPHEUS/issues/131) | Complete the private verified Soldier gameplay trace comparison on the ARM64 runner and reconcile remaining RNG setup/parity items (`golden_python_room.py` now aligns `owner_component_start_frame = 1047` and `setup_delivery_ticks = 50`). |

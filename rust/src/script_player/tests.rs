@@ -241,33 +241,7 @@ fn owner_engine_settings_follow_the_authored_mode_table() {
 }
 
 #[test]
-fn owner_reports_absent_combat_accumulator_only_for_valid_own_body() {
-    let (factory, spawn) = fixture_body_factory();
-    let mut runtime = factory.start(spawn).unwrap();
-    let world = &mut runtime.world;
-    let site = Site {
-        entity: spawn.entity,
-        instance: 1,
-        graph: 42,
-        node: Some(7),
-    };
-    assert_eq!(world.local_combat_context_available(site), Some(false));
-    for entity in [spawn.controller, spawn.entity + 1, 0] {
-        assert_eq!(
-            world.local_combat_context_available(Site { entity, ..site }),
-            None
-        );
-    }
-
-    world.entity = 0;
-    assert_eq!(
-        world.local_combat_context_available(Site { entity: 0, ..site }),
-        None
-    );
-}
-
-#[test]
-fn owner_reports_absent_presentation_contexts_only_for_valid_own_body() {
+fn owner_reports_absent_host_contexts_only_for_valid_own_body() {
     let (factory, spawn) = fixture_body_factory();
     let mut runtime = factory.start(spawn).unwrap();
     let world = &mut runtime.world;
@@ -289,6 +263,7 @@ fn owner_reports_absent_presentation_contexts_only_for_valid_own_body() {
             (0, None),
         ] {
             let site = Site { entity, ..site };
+            assert_eq!(world.local_combat_context_available(site), expected);
             assert_eq!(world.spatial_binding_owner_available(site), expected);
             assert_eq!(world.outline_context_available(site), expected);
             assert_eq!(world.voice_context(site), expected);
@@ -297,6 +272,7 @@ fn owner_reports_absent_presentation_contexts_only_for_valid_own_body() {
 
     world.entity = 0;
     let invalid = Site { entity: 0, ..site };
+    assert_eq!(world.local_combat_context_available(invalid), None);
     assert_eq!(world.spatial_binding_owner_available(invalid), None);
     assert_eq!(world.outline_context_available(invalid), None);
     assert_eq!(world.voice_context(invalid), None);

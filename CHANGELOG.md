@@ -7,12 +7,17 @@ This log records tested changes and their acceptance status. Entries are grouped
 ### 2026-11-22
 
 - Deliver authored remote projectile launches after the observer acknowledges the source volley and projectile entities. Retry the same launch on loss and keep retirement tied to the authoritative flight. A synthetic loss replay and a prepared 104319 Practice Range firing probe passed. Original-client visual acceptance remains pending.
+- Verify remote projectile delivery on top of the seated bot controller changes from PR #178. Passed 471 server library tests and four prepared 104319 probes for firing, damage, respawn animation, and nameplate lifecycle.
 
 - Discover stock-bot weapon placement roots from declared map scripts and resolve inputs from body slot bindings. The synthetic contract uses a different graph and a secondary input and checks duplicate, missing, client-only, and unbound declarations. Passed 469 server library tests and four prepared 104319 probes for the roster, patrol, respawn, and projectile paths.
 
 - Deliver the authored reset to replacement stock bots before publishing them. The prepared 104319 probes verify the spawn animation in the first observer frame, the exact firing volley identity, damage to both actor types, and the existing death and nameplate lifecycle. The 468 server library tests passed. Original-client animation acceptance remains pending.
 
 - Drive authored firing placements through the stock bot's private StateScript root and body-defined weapon inputs. Route the emitted projectiles to the existing room flight and damage settlement. A synthetic state lifecycle test, 468 server library tests, and prepared 104319 probes for projectile launch, damage to both actor types, and bot nameplate respawn passed. Client-visible projectile delivery remains open.
+
+- Deduplicated protected Rust CI runs. Required PR checks still cover Windows default and Inspector, Linux, the minimum Rust version, Python behavior contracts, and C++ preview policy. The Windows workspace runs now prove that named contracts passed from their existing test output. Automatic post-merge checks are limited to workflow and build-input changes.
+- Combined the owner-host capability checks into one test with the same valid, foreign, and unbound actor cases.
+- Closed #121 after the maintainer confirmed the Practice Range client crash was fixed in an original-client retest.
 
 ### 2026-11-21
 

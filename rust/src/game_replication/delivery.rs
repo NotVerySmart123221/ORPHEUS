@@ -17,6 +17,10 @@ pub(super) enum Delivery {
         revision: u64,
     },
     BotDestroy,
+    BotControllerCreate,
+    BotPossession {
+        body: u32,
+    },
     RemotePlayerCreate(BodyId),
     RemotePlayerDestroy(BodyId),
     CreateBody(BodyId),
@@ -70,6 +74,7 @@ impl WorldDelivery {
             queued: Vec::new(),
             created: HashSet::new(),
             bots: HashMap::new(),
+            bot_controllers: HashMap::new(),
             health_updates: HashMap::new(),
             health_revision: 0,
             entity_notice_ordinals: HashMap::new(),
@@ -116,6 +121,7 @@ impl WorldDelivery {
         self.queued.clear();
         self.created.clear();
         self.bots.clear();
+        self.bot_controllers.clear();
         self.remote_players.clear();
         self.health_updates.clear();
         self.started = None;
@@ -344,6 +350,17 @@ impl WorldDelivery {
                 self.bots.get(&entity),
                 Some(BotLifetime::Retiring | BotLifetime::RetiringEnemy)
             ),
+            Delivery::BotControllerCreate => self
+                .bot_controllers
+                .get(&entity)
+                .is_some_and(|state| !state.created),
+            Delivery::BotPossession { body } => {
+                self.tracks_current_bot(body)
+                    && self
+                        .bot_controllers
+                        .get(&entity)
+                        .is_some_and(|state| state.possessed == Some(body))
+            }
             Delivery::RemotePlayerCreate(id) => {
                 matches!(
                     self.remote_players.get(&id.entity),
@@ -493,6 +510,13 @@ impl WorldDelivery {
                         self.created.remove(&record.update.entity);
                         self.scene_views.remove(&record.update.entity);
                     }
+                    (true, Delivery::BotControllerCreate) => {
+                        self.created.insert(record.update.entity);
+                        if let Some(state) = self.bot_controllers.get_mut(&record.update.entity) {
+                            state.created = true;
+                        }
+                    }
+                    (true, Delivery::BotPossession { .. }) => {}
                     (true, Delivery::RemotePlayerCreate(id)) => {
                         self.created.insert(id.entity);
                         if let Some(stream) = self.scene_views.get_mut(&id.entity) {
@@ -654,6 +678,12 @@ impl WorldDelivery {
                     }
                     Delivery::BotCreate { after: Some(old) }
                         if self.bots.contains_key(&old) && !destroyed.contains(&old) =>
+                    {
+                        return None;
+                    }
+                    Delivery::BotPossession { body }
+                        if !self.identity_ready(record.update.entity)
+                            || !self.identity_ready(body) =>
                     {
                         return None;
                     }
@@ -1081,6 +1111,37 @@ impl WorldDelivery {
             self.present_scene_script(projection)?;
         }
         self.advance_observed_projectiles(tick)
+    }
+
+    pub(crate) fn present_bot_controllers(&mut self, scene: &PreparedScene) -> io::Result<()> {
+        if !self.world_started() {
+            return Ok(());
+        }
+        for bot in scene.simulation().seated_bots() {
+            let Some(&state) = self.bot_controllers.get(&bot.controller) else {
+                self.bot_controllers
+                    .insert(bot.controller, BotControllerState::default());
+                self.push(Record {
+                    update: bot_controller_create(bot.controller, bot.slot, bot.team)?,
+                    delivery: Delivery::BotControllerCreate,
+                });
+                continue;
+            };
+            if state.created
+                && self.created.contains(&bot.body)
+                && self.tracks_current_bot(bot.body)
+                && state.possessed != Some(bot.body)
+            {
+                if let Some(entry) = self.bot_controllers.get_mut(&bot.controller) {
+                    entry.possessed = Some(bot.body);
+                }
+                self.push(Record {
+                    update: bot_controller_possession(bot.controller, bot.body, bot.hero),
+                    delivery: Delivery::BotPossession { body: bot.body },
+                });
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn present_scene_script(
