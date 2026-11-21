@@ -245,7 +245,7 @@ The graphs (`0x0CE0` -> `0x0D03` model) and codec table are synthetic, so no run
 
 ## Cross-Language CI (`shared-behavior-contracts`)
 
-In [`.github/workflows/public-checks.yml`](../.github/workflows/public-checks.yml), the `shared-behavior-contracts` job checks out the pinned Python `main` reference alongside this `rust` checkout and feeds **`rust`'s own `fixtures/behavior/` files** to both implementations:
+In [`.github/workflows/public-checks.yml`](../.github/workflows/public-checks.yml), the `shared-behavior-contracts` job checks the pinned Python reference against **`rust`'s own `fixtures/behavior/` files**. The Rust workspace jobs run the Rust consumers and check their reported results. To run the consumers directly:
 
 ```powershell
 # Python consumer side (run from a main checkout with ORPHEUS_BEHAVIOR_FIXTURES pointed at rust)
@@ -302,9 +302,9 @@ Mirrored under `fixtures/behavior/` so `rust` maintains a strict superset of `ma
 | `room-isolation-v1.json` | Encrypted worker room fault/panic retirement while sibling rooms stay live (`encrypted_worker_satisfies_room_recovery_contract`) |
 | `junkenstein-validation-v1.json` | Normal Cassidy validation overrides (`--junkenstein-validation`) & post-AI immunity damage routing |
 
-### 4. StateScript VM, Combat & Junkenstein Contracts (`38` Exact CI Checks + Remaining Helper Scripts)
+### 4. StateScript VM, Combat & Junkenstein Contracts
 
-Checked individually by `--exact` test name in `.github/workflows/public-checks.yml` (the `main`-compatible subset was ported back to `main` under [#61](https://github.com/leafall903/ORPHEUS/issues/61) in `tests/public/test_statescript_*.py`, retiring 19 superseded `scripts/check_*_contract.py` helpers; only `check_body_field_contract.py` and `check_spatial_owner_absence_contract.py` remain here pending Draft [#32](https://github.com/leafall903/ORPHEUS/pull/32)):
+The Windows CI jobs require these named contracts to pass in the full workspace run. The `main`-compatible subset moved to `tests/public/test_statescript_*.py` under [#61](https://github.com/leafall903/ORPHEUS/issues/61), retiring 19 standalone verifiers. The body-field and spatial-owner-absence Python helpers remain available for the pinned research revision.
 
 - **Portable VM core (`-p orpheus-statescript`, `script_init::tests::*`):** `shared_unkeyed_array_contract`, `shared_corpse_retirement_contract`, `shared_contains_condition_contract`, `shared_voice_lifecycle_contract`, `shared_nested_destination_contract`, `shared_unbound_loadout_action_contract`, `shared_foreign_notification_contract`, `shared_spatial_owner_absence_contract`, `shared_ability_press_window_contract`, `shared_stack_admission_contract`.
 - **Portable expressions & foreign reads (`-p orpheus-statescript`, `script_expr::tests::*`, `script_entity_state::tests::*`):** `shared_engine_setting_contract`, `shared_foreign_component_contract`, `shared_velocity_contract`, `shared_total_health_contract`, `shared_hostile_filter_contract`, `shared_combat_target_contract`, `shared_ally_filter_contract`, `shared_native_filter_tag_clauses`, `shared_body_field_contract`, `shared_body_angle_contract`, `shared_flashbang_filter_admission_contract`, `shared_absent_target_filter_contract`.

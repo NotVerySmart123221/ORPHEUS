@@ -4,6 +4,12 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ## Unreleased
 
+### 2026-11-22
+
+- Deduplicated protected Rust CI runs. Required PR checks still cover Windows default and Inspector, Linux, the minimum Rust version, Python behavior contracts, and C++ preview policy. The Windows workspace runs now prove that named contracts passed from their existing test output. Automatic post-merge checks are limited to workflow and build-input changes.
+- Combined the owner-host capability checks into one test with the same valid, foreign, and unbound actor cases.
+- Closed #121 after the maintainer confirmed the Practice Range client crash was fixed in an original-client retest.
+
 ### 2026-11-21
 
 - Resume the world frame at the final game-channel message bit. Keep intermediate message headers and standalone lobby messages byte-aligned. This fixes the framing defect associated with the `0xD697D0` client crash signature. The Inspector workspace run passed 920 tests. The original-client retest outcome has not been recorded. [Reference investigation](https://github.com/leafall903/ORPHEUS/blob/5d86bcb2/docs/MCCREE_COMBAT.txt#L1007-L1027)
