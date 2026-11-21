@@ -8,19 +8,182 @@ use std::io;
 use indexmap::IndexMap;
 
 use crate::{
-    accounts::Profile,
+    accounts::{Accounts, Profile},
     catalog::ItemDb,
+    collection::Collection,
     jam_codec::{
         Fields,
-        Value::{self, Array, Float64, Struct, Unsigned},
+        Value::{self, Array, Blob, Bool, Float64, Signed, Struct, Unsigned},
     },
     lobby_menu::explicit_hero,
-    lobby_ranked::{Queue, Season, wins_of},
-    retail_templates::RetailTemplates,
+    lobby_player_messages::{SOCIAL_OUT, endorsement, summary},
+    lobby_ranked::{LeaderboardPlaces, Queue, Ranked, Season, wins_of},
+    lobby_session::PreparedLogin,
+    lobby_transport::LobbyMessage,
+    retail_templates::{LOBBY, RetailTemplates},
 };
 
 pub const MODE_RULES: u32 = 0xb9dc_a497;
 pub const RULES: u32 = 27202;
+pub(crate) const PROFILES: u32 = 0xd555_0262;
+pub(crate) const NAME_QUERY: u32 = 0x46dc_9706;
+pub(crate) const NAME_REPLY: u32 = 0x981d_6a52;
+pub(crate) const OWL_POLL: u32 = 0xeb45_ad29;
+pub(crate) const OWL_LIVE: u32 = 0x713d_7589;
+pub(crate) const CAREER_PROFILE_REQ: u32 = 22206;
+pub(crate) const FULL_PROFILE: u32 = 20807;
+pub(crate) const PROFILE_STATUS: u32 = 39001;
+pub(crate) const PROFILE_SUMMARY: u32 = 39002;
+pub(crate) const NAME_QUERY_REQ: u32 = 58202;
+pub(crate) const NAME_QUERY_RES: u32 = 58301;
+pub(crate) const OWL_POLL_REQ: u32 = 42600;
+pub(crate) const OWL_LIVE_RES: u32 = 43200;
+
+pub(crate) struct CareerProfileRequest {
+    request_id: Fields,
+    target: Fields,
+}
+
+impl CareerProfileRequest {
+    pub(crate) fn read((crc, id, fields): &LobbyMessage) -> Option<Self> {
+        if (*crc, *id) != (SOCIAL_OUT, CAREER_PROFILE_REQ) {
+            return None;
+        }
+        let Struct(target) = fields.get(&0x88)? else {
+            return None;
+        };
+        let request_id = match fields.get(&0x78) {
+            Some(Struct(id)) => id.clone(),
+            _ => target.clone(),
+        };
+        Some(Self {
+            request_id,
+            target: target.clone(),
+        })
+    }
+
+    pub(crate) fn reply(
+        &self,
+        login: &PreparedLogin,
+        collection: &Collection,
+        ranked: &Ranked,
+        competitive_cards: &[u64],
+        wall_time: u64,
+    ) -> io::Result<Vec<LobbyMessage>> {
+        let target_lo = self
+            .target
+            .get(&0x0)
+            .and_then(|value| match value {
+                Unsigned(id) => u32::try_from(*id).ok(),
+                _ => None,
+            })
+            .unwrap_or(0);
+        if target_lo != login.identity.account_lo {
+            return Ok(vec![(
+                PROFILES,
+                PROFILE_STATUS,
+                Fields::from([(0x78, Struct(self.target.clone())), (0x88, Unsigned(1))]),
+            )]);
+        }
+
+        let profile = login.account.profile();
+        let season = ranked.season(&profile);
+        let stats = Array(career_stats(
+            &profile,
+            collection.heroes(),
+            collection.items(),
+            season,
+        )?);
+        let progression = collection.progression(&profile)?;
+        let prog_body = progression
+            .get(&0x78)
+            .cloned()
+            .unwrap_or_else(|| Struct(Fields::new()));
+        let catalog = collection.hero_catalog(&profile)?;
+        let catalog_entries = catalog
+            .get(&0x80)
+            .cloned()
+            .unwrap_or_else(|| Array(Vec::new()));
+        let cards = ranked
+            .cards(&profile, competitive_cards, &LeaderboardPlaces::new())?
+            .into_iter()
+            .map(Struct)
+            .collect();
+        let body = Fields::from([
+            (0x00, prog_body),
+            (0x80, catalog_entries),
+            (0x98, Struct(Fields::from([(0x00, Array(cards))]))),
+            (0xb0, stats.clone()),
+            (0xc8, stats),
+            (0xe0, Struct(endorsement(profile.endorsement_level))),
+            (0x100, Struct(login.identity.account())),
+            (0x110, Array(Vec::new())),
+            (0x128, Signed(0)),
+            (0x12c, Signed(0)),
+            (0x130, Bool(false)),
+            (0x138, Value::String(profile.player_name.clone())),
+            (0x160, Value::String(String::new())),
+        ]);
+        let full = Fields::from([
+            (0x78, Struct(self.request_id.clone())),
+            (0x88, Bool(false)),
+            (0x90, Struct(body)),
+            (0x218, Blob(Vec::new())),
+        ]);
+        let portrait_frame = collection.portrait_frame(&profile);
+        let summary_msg = summary(&profile, login.identity, portrait_frame, wall_time);
+        Ok(vec![
+            (LOBBY, FULL_PROFILE, full),
+            (PROFILES, PROFILE_SUMMARY, summary_msg),
+        ])
+    }
+}
+
+pub(crate) fn player_names_reply(
+    (crc, id, fields): &LobbyMessage,
+    accounts: &Accounts,
+) -> io::Result<Option<LobbyMessage>> {
+    if (*crc, *id) != (NAME_QUERY, NAME_QUERY_REQ) {
+        return Ok(None);
+    }
+    let Some(Array(ids)) = fields.get(&0x78) else {
+        return Ok(None);
+    };
+    let mut names = Vec::with_capacity(ids.len());
+    for entry in ids {
+        let Struct(player_id) = entry else {
+            continue;
+        };
+        let account_lo = match player_id.get(&0x0) {
+            Some(Unsigned(v)) => u32::try_from(*v).unwrap_or(0),
+            _ => 0,
+        };
+        let name = accounts.by_id(account_lo)?.map_or_else(
+            || format!("Player{}", account_lo & 0xffff),
+            |acc| acc.name.clone(),
+        );
+        names.push(Struct(Fields::from([
+            (0x00, entry.clone()),
+            (0x10, Signed(0)),
+            (0x18, Value::String(name)),
+        ])));
+    }
+    Ok(Some((
+        NAME_REPLY,
+        NAME_QUERY_RES,
+        Fields::from([(0x78, Array(names))]),
+    )))
+}
+
+pub(crate) fn owl_live_reply((crc, id, _): &LobbyMessage) -> Option<LobbyMessage> {
+    ((*crc, *id) == (OWL_POLL, OWL_POLL_REQ)).then(|| {
+        (
+            OWL_LIVE,
+            OWL_LIVE_RES,
+            Fields::from([(0x78, Bool(true)), (0x80, Array(Vec::new()))]),
+        )
+    })
+}
 
 const TIME_PLAYED: u64 = 0x0860_0000_0000_0021;
 const MATCHES_WON: u64 = 0x0860_0000_0000_0039;
@@ -269,5 +432,96 @@ mod tests {
             assert_eq!(body.len(), length);
             assert_eq!(format!("{:x}", Sha256::digest(body)), digest);
         }
+    }
+
+    #[test]
+    fn career_profile_names_and_owl_replies_encode_with_schemas() {
+        let Ok(runtime) = std::env::var("ORPHEUS_RUNTIME_DIR") else {
+            return;
+        };
+        let data = PathBuf::from(runtime).join("data");
+        let schemas = Schemas::load(data.join("schemas_174.json")).unwrap();
+        let templates = RetailTemplates::load(data.join("retail_templates.json")).unwrap();
+        let items = Arc::new(ItemDb::load(&data).unwrap());
+        let collection = Collection::new(&templates, items).unwrap();
+        let ranked = Ranked::new(&templates).unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let accounts = Accounts::new(dir.path(), dir.path().join("missing.json")).unwrap();
+        let account = accounts.get("ProfileTester").unwrap();
+        let identity = crate::lobby_login::Identity::for_account(account.account_lo);
+        let login = PreparedLogin {
+            account,
+            identity,
+            tournament: false,
+        };
+
+        let self_req = CareerProfileRequest::read(&(
+            SOCIAL_OUT,
+            CAREER_PROFILE_REQ,
+            Fields::from([
+                (0x78, Struct(identity.account())),
+                (0x88, Struct(identity.account())),
+            ]),
+        ))
+        .unwrap();
+        let self_msgs = self_req
+            .reply(&login, &collection, &ranked, &[], 1_700_000_000)
+            .unwrap();
+        assert_eq!(self_msgs.len(), 2);
+        assert_eq!(self_msgs[0].0, LOBBY);
+        assert_eq!(self_msgs[0].1, FULL_PROFILE);
+        assert_eq!(self_msgs[1].0, PROFILES);
+        assert_eq!(self_msgs[1].1, PROFILE_SUMMARY);
+        for (crc, id, fields) in &self_msgs {
+            schemas.encode(*crc, *id, fields).unwrap();
+        }
+
+        let foreign_account = crate::lobby_login::Identity::for_account(identity.account_lo + 1);
+        let foreign_req = CareerProfileRequest::read(&(
+            SOCIAL_OUT,
+            CAREER_PROFILE_REQ,
+            Fields::from([
+                (0x78, Struct(foreign_account.account())),
+                (0x88, Struct(foreign_account.account())),
+            ]),
+        ))
+        .unwrap();
+        let foreign_msgs = foreign_req
+            .reply(&login, &collection, &ranked, &[], 1_700_000_000)
+            .unwrap();
+        assert_eq!(foreign_msgs.len(), 1);
+        assert_eq!(foreign_msgs[0].0, PROFILES);
+        assert_eq!(foreign_msgs[0].1, PROFILE_STATUS);
+        schemas
+            .encode(foreign_msgs[0].0, foreign_msgs[0].1, &foreign_msgs[0].2)
+            .unwrap();
+
+        let names_msg = player_names_reply(
+            &(
+                NAME_QUERY,
+                NAME_QUERY_REQ,
+                Fields::from([(
+                    0x78,
+                    Array(vec![
+                        Struct(identity.account()),
+                        Struct(foreign_account.account()),
+                    ]),
+                )]),
+            ),
+            &accounts,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(names_msg.0, NAME_REPLY);
+        assert_eq!(names_msg.1, NAME_QUERY_RES);
+        schemas
+            .encode(names_msg.0, names_msg.1, &names_msg.2)
+            .unwrap();
+
+        let owl_msg = owl_live_reply(&(OWL_POLL, OWL_POLL_REQ, Fields::new())).unwrap();
+        assert_eq!(owl_msg.0, OWL_LIVE);
+        assert_eq!(owl_msg.1, OWL_LIVE_RES);
+        schemas.encode(owl_msg.0, owl_msg.1, &owl_msg.2).unwrap();
     }
 }

@@ -2198,6 +2198,7 @@ pub(super) fn flight_fixture(owner: BodyId, speed: f64) -> AdmittedFlight {
         ProjectileBallistics {
             speed,
             lifetime: 0.04,
+            radius: 0.0,
             definition: Some(definition),
             direct: None,
             blast: None,
@@ -2263,6 +2264,7 @@ fn projectile_stun_applies_only_to_surviving_hits_and_expires_exclusively() {
             ProjectileBallistics {
                 speed: 100.0,
                 lifetime: 1.0,
+                radius: 0.0,
                 definition: None,
                 direct: Some(HitDefinition {
                     tags: crate::game_hitscan::DamageTags::EMPTY,

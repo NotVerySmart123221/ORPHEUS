@@ -367,6 +367,7 @@ pub(super) struct InstanceContext<'a, W> {
     pub(super) parameters: Option<&'a Variables>,
     pub(super) health_target_facts: Option<&'a HealthTargetFacts>,
     pub(super) observed_sample: Option<&'a ObservedSample>,
+    pub(super) settled_damage: bool,
     pub(super) watcher: Option<StateKey>,
     pub(super) read_native: bool,
     pub(super) read_clock: bool,
@@ -389,10 +390,13 @@ pub(super) const CLIENT_AGREED_NATIVES: [&str; 9] = [
 ];
 
 impl<W: World> InstanceContext<'_, W> {
+    fn immediate_health_target(&self) -> Option<&HealthTargetFacts> {
+        self.health_target_facts.filter(|_| self.watcher.is_none())
+    }
+
     fn settled_target(&self, entity: u32) -> Option<&HealthTargetFacts> {
-        self.health_target_facts.filter(|facts| {
-            self.watcher.is_none() && entity != self.site.entity && facts.target == entity
-        })
+        self.immediate_health_target()
+            .filter(|facts| entity != self.site.entity && facts.target == entity)
     }
 
     pub(super) fn read(&mut self, key: VarKey) -> Value {
@@ -674,7 +678,15 @@ impl<W: World> Context for InstanceContext<'_, W> {
 
     fn scene_filter_policy(&mut self, filter: &Json) -> Option<script_expr::SceneFilterPolicy> {
         self.read_native = true;
-        self.world.scene_filter_policy(self.site, filter)
+        match self
+            .immediate_health_target()
+            .filter(|_| self.settled_damage)
+        {
+            Some(facts) => self
+                .world
+                .settled_scene_filter_policy(self.site, filter, facts),
+            None => self.world.scene_filter_policy(self.site, filter),
+        }
     }
     fn entity_filter_flags(&mut self, entity: u32) -> Option<u64> {
         self.read_native = true;
@@ -685,8 +697,17 @@ impl<W: World> Context for InstanceContext<'_, W> {
     }
     fn entities_hostile(&mut self, source: u32, target: u32, option: bool) -> Option<bool> {
         self.read_native = true;
-        self.world
-            .entities_hostile(self.site, source, target, option)
+        match self
+            .immediate_health_target()
+            .filter(|facts| self.settled_damage && facts.target == target)
+        {
+            Some(facts) => self
+                .world
+                .settled_entities_hostile(self.site, source, facts, option),
+            None => self
+                .world
+                .entities_hostile(self.site, source, target, option),
+        }
     }
 
     fn body_on_fire(&mut self, entity: u32) -> Option<OnFire> {

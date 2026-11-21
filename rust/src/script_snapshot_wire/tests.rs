@@ -2723,6 +2723,8 @@ fn quick_melee_hit_list_projects_empty_hits_payload() {
                     None,
                     json!({
                         "m_targets":{"$":"STU_B5A0CAF0","m_EE729DCB":0},
+                        "m_stat":"0x0860000000000001",
+                        "m_amount":{"$":"STUConfigVarInt","m_value":1},
                         "m_outPlug":{"$":"Plug","links":[[11,"m_beginPlug"]],"m_FF3DAF1E":[]}
                     }),
                 );
@@ -2757,12 +2759,26 @@ fn quick_melee_hit_list_projects_empty_hits_payload() {
         .unwrap(),
     )
     .unwrap();
+    struct NoStatsWorld;
+    impl crate::script_init::World for NoStatsWorld {
+        fn entity_variable(&mut self, _entity: u32, _id: u32) -> Option<crate::script_wire::Value> {
+            None
+        }
+
+        fn position(&mut self, _entity: u32) -> Option<[f64; 3]> {
+            None
+        }
+
+        fn player_stats_available(&self, _site: Site) -> Option<bool> {
+            Some(false)
+        }
+    }
     let snapshot = initialize(
         &graphs,
         ENTITY,
         Variables::new(),
         vec![Root::new(1, 0x0043)],
-        &mut EmptyWorld,
+        &mut NoStatsWorld,
         MAX_INIT_WORK,
     )
     .unwrap();

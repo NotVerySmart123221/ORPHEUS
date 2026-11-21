@@ -119,9 +119,13 @@ impl PreparedScene {
         self.scripted_bots
     }
 
+    pub(crate) fn bot_scripts_ready(&self) -> bool {
+        self.scripted_bots == 0 || is_practice_range(&self.map)
+    }
+
     pub(crate) fn movement_ready(&self) -> bool {
         (is_practice_range(&self.map) || self.map.is_junkenstein())
-            && self.scripted_bots == 0
+            && self.bot_scripts_ready()
             && self.contacts.is_some()
     }
 

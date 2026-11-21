@@ -489,6 +489,17 @@ impl SceneAssets {
         if contacts.is_some() {
             simulation.enable_movement_contacts(map.free_for_all, Arc::clone(&self.movers));
         }
+        if let Some(codecs) = self
+            .codecs
+            .as_ref()
+            .filter(|_| is_practice_range(&map) && scripted_bots > 0)
+        {
+            simulation.enable_stock_bot_scripts(
+                Arc::clone(&self.graphs),
+                Arc::clone(codecs),
+                map.mode_guid,
+            );
+        }
         if let Some(gate) = junkenstein_gate {
             simulation
                 .register_junkenstein_gate(gate, Arc::clone(&junkenstein_anchors))
@@ -511,7 +522,7 @@ impl SceneAssets {
             pools: Arc::clone(&self.pools),
             owner_body_factory: None,
         };
-        if is_practice_range(scene.map()) && scripted_bots == 0 {
+        if is_practice_range(scene.map()) {
             scene.owner_body_factory = self
                 .practice_owner_body
                 .get_or_init(|| self.compile_practice_factories(&scene))

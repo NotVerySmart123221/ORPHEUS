@@ -309,7 +309,15 @@ impl WorldDelivery {
     fn current(&self, record: &Record) -> bool {
         let entity = record.update.entity;
         match record.delivery {
-            Delivery::Baseline | Delivery::Script { close: false, .. } => true,
+            Delivery::Baseline => true,
+            Delivery::Script {
+                last,
+                close: false,
+                resend: false,
+            } if entity == self.owner => {
+                !self.controller.data_in_flight() && last > self.controller.delivered()
+            }
+            Delivery::Script { close: false, .. } => true,
             Delivery::BotCreate { .. } => {
                 self.bots.get(&entity) == Some(&BotLifetime::Live)
                     || (self.bots.get(&entity) == Some(&BotLifetime::RetiringEnemy)
@@ -957,12 +965,36 @@ impl WorldDelivery {
         Ok(())
     }
 
+    pub(crate) fn advance_controller_ack(&mut self, now: Duration) -> io::Result<()> {
+        let newest = self
+            .input
+            .processed
+            .filter(|&frame| frame > self.controller.command_frame());
+        let Some(chunk) = self.controller.owner_ack(now, newest).map_err(invalid)? else {
+            return Ok(());
+        };
+        self.queued.retain(|record| {
+            !(record.update.entity == self.owner
+                && matches!(
+                    record.delivery,
+                    Delivery::Script {
+                        close: false,
+                        resend: false,
+                        ..
+                    }
+                ))
+        });
+        self.push(Record::script(chunk, false));
+        Ok(())
+    }
+
     pub(crate) fn present_scene_scripts(&mut self, scene: &PreparedScene) -> io::Result<()> {
         if let Some(projection) = scene.simulation().gate_projection() {
             self.present_scene_script(projection)?;
         }
         for projection in scene.enemy_projections().map_err(io::Error::other)? {
-            self.present_scene_script(projection)?;
+            let dead = scene.simulation().is_bot_dead(projection.snapshot.entity);
+            self.present_scene_script_with_dead(projection, dead)?;
         }
         for projection in scene.simulation().player_projections(self.owner) {
             self.present_scene_script(projection)?;
@@ -974,6 +1006,14 @@ impl WorldDelivery {
         &mut self,
         projection: crate::script_snapshot_wire::SceneProjection<'_>,
     ) -> io::Result<()> {
+        self.present_scene_script_with_dead(projection, false)
+    }
+
+    pub(super) fn present_scene_script_with_dead(
+        &mut self,
+        projection: crate::script_snapshot_wire::SceneProjection<'_>,
+        bot_dead: bool,
+    ) -> io::Result<()> {
         let entity = projection.snapshot.entity;
         if self.gate != Some(entity)
             && self.bots.get(&entity) != Some(&BotLifetime::Live)
@@ -984,6 +1024,16 @@ impl WorldDelivery {
         {
             return Ok(());
         }
+        // Client 0x0D24 nameplates read mode variables from 0CB6, so hold them
+        // until mode_ready() and never add a new nameplate to an already-dead bot.
+        let strip_nameplate = self.bots.contains_key(&entity)
+            && (!self.mode_ready()
+                || (bot_dead
+                    && !self
+                        .scene_views
+                        .get(&entity)
+                        .and_then(|stream| stream.base())
+                        .is_some_and(|(_, base)| base.has_graph(0x0d24))));
         let stream = self
             .scene_views
             .entry(entity)
@@ -996,16 +1046,22 @@ impl WorldDelivery {
         }
         let encoder = projection.encoder;
         let chunk = if let Some((_, base)) = stream.base() {
-            let snapshot = encoder
+            let mut snapshot = encoder
                 .project_next(projection.snapshot, base)
                 .map_err(invalid)?;
+            if strip_nameplate {
+                snapshot.strip_practice_nameplates();
+            }
             encoder
                 .queue_delta(stream, &snapshot, DeltaKind::Observer { resend: true }, 16)
                 .map_err(invalid)?
         } else {
-            let snapshot = encoder
+            let mut snapshot = encoder
                 .project(projection.snapshot, View::Observer)
                 .map_err(invalid)?;
+            if strip_nameplate {
+                snapshot.strip_practice_nameplates();
+            }
             Some(encoder.queue_full(stream, &snapshot).map_err(invalid)?)
         };
         if let Some(chunk) = chunk {

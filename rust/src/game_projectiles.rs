@@ -27,6 +27,7 @@ const PREDICTED_ID: u32 = 0xa000_0000;
 const ID_LIMIT: u32 = 0x2000_0000;
 const REPORT_WINDOW: u32 = 64;
 const UNREPORTED_TICKS: u32 = 32;
+const IMPACT_RELEASE_MARGIN: u32 = 2;
 const RELEASE_MARGIN: u32 = 6;
 const RELEASE_AHEAD: u32 = 4096;
 const DELIVERY_GRACE: u32 = 64;
@@ -377,15 +378,12 @@ impl OwnerProjectiles {
             return;
         };
         if pending.release_at.is_none() {
-            let start = pending
-                .reports
-                .values()
-                .find(|report| report.arrived != Some(false))
-                .map_or(pending.shot.frame, |report| report.frame);
             pending.release_at = Some(
-                start
+                pending
+                    .shot
+                    .frame
                     .saturating_add(travelled_ticks)
-                    .saturating_add(RELEASE_MARGIN)
+                    .saturating_add(IMPACT_RELEASE_MARGIN)
                     .max(tick),
             );
         }
@@ -673,9 +671,9 @@ mod tests {
                 definition: HELIX
             }]
         );
-        assert!(tracker.advance(frame + 8 + DELIVERY_GRACE - 1).is_empty());
+        assert!(tracker.advance(frame + 4 + DELIVERY_GRACE - 1).is_empty());
         assert_eq!(
-            tracker.advance(frame + 8 + DELIVERY_GRACE),
+            tracker.advance(frame + 4 + DELIVERY_GRACE),
             [ProjectileDelivery::Destroy {
                 token,
                 entity,
@@ -685,5 +683,49 @@ mod tests {
         tracker.create_arrived(token, entity);
         assert!(!tracker.confirmation_current(token, entity));
         assert!(tracker.retire().is_empty());
+    }
+
+    #[test]
+    fn confirmed_impact_releases_without_delaying_for_later_owner_report_frame() {
+        let frame = 1000;
+        let shot = shot(frame);
+        let leases = ProjectileLeases::new(0, frame, [HELIX]).unwrap();
+        let original = leases.entity(HELIX, frame, 0).unwrap();
+        let alias = leases.entity(HELIX, frame + 6, 0).unwrap();
+        let mut tracker = OwnerProjectiles::new(BODY, leases);
+        let token = tracker.admit(shot, HELIX, 80).unwrap();
+        let identity = |instance, state| {
+            (instance == shot.instance && state == shot.raw_state)
+                .then_some((shot.activation, shot.activation_ms))
+        };
+        tracker.owner_sent(2, frame + 6, identity, |_, _| true);
+        tracker.owner_arrival(2, true);
+        assert_eq!(
+            tracker.advance(frame + 6).len(),
+            2,
+            "confirm both original and alias"
+        );
+        tracker.create_arrived(token, original);
+        tracker.create_arrived(token, alias);
+        tracker.flight_ended(token, 5, frame + 7);
+
+        let due = frame + 5 + IMPACT_RELEASE_MARGIN;
+        assert_eq!(due, frame + 7);
+        let explosion_frame = Some(due + RELEASE_AHEAD);
+        assert_eq!(
+            tracker.advance(due),
+            [
+                ProjectileDelivery::Destroy {
+                    token,
+                    entity: original,
+                    explosion_frame
+                },
+                ProjectileDelivery::Destroy {
+                    token,
+                    entity: alias,
+                    explosion_frame
+                },
+            ]
+        );
     }
 }

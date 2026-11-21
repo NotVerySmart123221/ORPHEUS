@@ -993,6 +993,7 @@ impl State {
                                 .map(|state| state.hero);
                             world.scene.try_step_encounter(room_tick, encounter_hero)?;
                             peer.world.queue_encounter_presentation(&world.scene)?;
+                            peer.world.advance_controller_ack(room_now)?;
                         }
                         let activity = world.scene.owner_room_activity();
                         if let Some(body_id) = peer.world.active_body_id() {

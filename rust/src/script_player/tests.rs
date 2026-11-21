@@ -22,6 +22,8 @@ use crate::{
     world::GAME_MODE_ENTITY,
 };
 
+mod charge_receiver;
+
 #[test]
 #[ignore = "requires separately prepared 104319 Junkenstein runtime"]
 fn castle_summoner_deadeye_sightlines_follow_real_collision() {
@@ -318,6 +320,177 @@ fn cassidy_junkenstein_rules_enable_fan_without_changing_other_hero_defaults() {
 }
 
 #[test]
+fn declared_compatibility_charge_uses_its_mode_root_and_room_activity() {
+    use crate::{
+        game_combat::AppliedDamage, game_hitscan::DamageTags,
+        script_entity_state::EntityScriptState, script_init::HealthTargetFacts, vitals::Death,
+    };
+
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-charge-compatibility-v1.json"
+    ))
+    .unwrap();
+    let input = &contract["input"];
+    let codecs = Arc::new(
+        CodecTable::from_json(
+            r#"{"classes":{"ABCDEF01":{"name":"STUStatescriptStateSubScript",
+                "codec":"subscript","stec":true,"status":"VERIFIED","layout":[
+                    {"op":"if","c":"H","then":[{"op":"w_u16","f":"child"}],"else":[]}
+                ]}}}"#,
+        )
+        .unwrap(),
+    );
+    let hero = Hero {
+        guid: 0x02e0_0000_0000_af12,
+        name: "Fixture".into(),
+        role: "Damage".into(),
+        body: 0x0400_0000_0000_af12,
+    };
+    let (_, spawn) = fixture_body_factory();
+    let start = |bundle: &Json, mode, room_activity| {
+        let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(bundle).unwrap()).unwrap());
+        let setup = OwnerBodySetup {
+            room_activity: Some(room_activity),
+            ..OwnerBodySetup::default()
+        };
+        PlayerBodyFactory::prepare(
+            Arc::clone(&graphs),
+            Arc::clone(&codecs),
+            mode,
+            &hero,
+            None,
+            false,
+            (spawn, setup.clone()),
+        )
+        .unwrap()
+        .start_runtime(spawn, setup)
+        .unwrap()
+    };
+    let current = |runtime: &PlayerBodyRuntime, variable| {
+        runtime
+            .snapshot()
+            .unwrap()
+            .variables
+            .get(&variable)
+            .cloned()
+    };
+    let marker = |runtime: &PlayerBodyRuntime| current(runtime, 714);
+    let admission = |runtime: &PlayerBodyRuntime| current(runtime, 713);
+    let phase = |runtime: &mut PlayerBodyRuntime, activity: OwnerRoomActivity| {
+        runtime.set_room_activity(activity);
+        runtime
+            .set_encounter_active(activity.encounter_active())
+            .unwrap();
+    };
+    let damage = AppliedDamage {
+        source: spawn.entity,
+        amount: input["damage"].as_f64().unwrap(),
+        named_pool_losses: Vec::new(),
+        tags: DamageTags::EMPTY,
+        target_facts: HealthTargetFacts {
+            target: spawn.entity + 1,
+            room_status: None,
+            filter_flags: None,
+            tags: Default::default(),
+            script_state: EntityScriptState::Unavailable,
+        },
+    };
+    let opened = contract["expected"]["open_marker"]
+        .as_f64()
+        .map(Value::Float);
+    let closed = contract["expected"]["closed_marker"]
+        .as_f64()
+        .map(Value::Float);
+    let inactive = OwnerRoomActivity::Encounter { active: false };
+    let configured = 0x0230_0000_0000_af10;
+    let mut runtime = start(&input["bundle"], configured, inactive);
+    assert_eq!(admission(&runtime), Some(Value::Bool(false)));
+    runtime.receive_applied_damage(damage.clone()).unwrap();
+    assert_eq!(marker(&runtime), closed);
+
+    phase(&mut runtime, OwnerRoomActivity::Regular);
+    assert_eq!(admission(&runtime), Some(Value::Bool(true)));
+    runtime.receive_applied_damage(damage.clone()).unwrap();
+    assert_eq!(marker(&runtime), opened);
+
+    phase(&mut runtime, inactive);
+    assert_eq!(admission(&runtime), Some(Value::Bool(false)));
+    let mut larger = damage.clone();
+    larger.amount = 5.5;
+    runtime.receive_applied_damage(larger.clone()).unwrap();
+    assert_eq!(marker(&runtime), opened);
+
+    phase(&mut runtime, OwnerRoomActivity::Encounter { active: true });
+    runtime.receive_applied_damage(larger).unwrap();
+    assert_eq!(marker(&runtime), Some(Value::Float(5.5)));
+    assert!(runtime.snapshot().unwrap().diagnostics.is_empty());
+    assert!(
+        runtime
+            .receive_damage(
+                10_000.0,
+                Death {
+                    time: 0.0,
+                    frame: spawn.frame,
+                    killer: damage.target_facts.target,
+                },
+            )
+            .killed
+    );
+    assert_eq!(admission(&runtime), Some(Value::Bool(false)));
+
+    let mut other_mode = start(
+        &input["bundle"],
+        0x0230_0000_0000_af12,
+        OwnerRoomActivity::Regular,
+    );
+    assert!(admission(&other_mode).is_none());
+    other_mode.receive_applied_damage(damage.clone()).unwrap();
+    assert_eq!(marker(&other_mode), closed);
+
+    let mount = &input["nested_mount"];
+    let mut nested = input["bundle"].clone();
+    nested["graphs"]
+        .as_array_mut()
+        .unwrap()
+        .push(mount["graph"].clone());
+    let body = &mut nested["bodies"]["0x040000000000AF12"];
+    body["graphs"][0]["graph"] = mount["graph"]["index"].clone();
+    body["charge_compatibility"]["parent"] = mount["parent"].clone();
+    let mut runtime = start(&nested, configured, OwnerRoomActivity::Regular);
+    let child_binding = |runtime: &PlayerBodyRuntime| {
+        runtime
+            .snapshot()
+            .unwrap()
+            .instances
+            .iter()
+            .find_map(|(&id, instance)| (instance.parent == Some((1, 0))).then_some(id))
+    };
+    let original_child = child_binding(&runtime).unwrap();
+    runtime.receive_applied_damage(damage.clone()).unwrap();
+    assert_eq!(marker(&runtime), opened);
+    runtime
+        .component
+        .debug_end_state(1, 0, &mut runtime.world)
+        .unwrap();
+    assert!(child_binding(&runtime).is_none());
+    let mut after_remount = damage;
+    after_remount.amount = 7.5;
+    runtime
+        .receive_applied_damage(after_remount.clone())
+        .unwrap();
+    assert_eq!(marker(&runtime), opened);
+
+    runtime
+        .component
+        .begin_state(1, 0, &mut runtime.world)
+        .unwrap();
+    assert_ne!(child_binding(&runtime).unwrap(), original_child);
+    runtime.receive_applied_damage(after_remount).unwrap();
+    assert_eq!(marker(&runtime), Some(Value::Float(7.5)));
+    assert!(runtime.snapshot().unwrap().diagnostics.is_empty());
+}
+
+#[test]
 fn charge_admission_preserves_profile_scope_and_requires_a_live_instance_for_credit() {
     use crate::{
         game_combat::AppliedDamage,
@@ -577,6 +750,8 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
                     hit_tags: Some(hit_tags),
                 },
                 HostHealthContext {
+                    named_pool_losses: None,
+                    source_body: None,
                     target_body: None,
                     target_facts: Some(Arc::new(HealthTargetFacts {
                         target: spawn.entity + 1,
@@ -2937,8 +3112,6 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
         deadeye_scene: DeadeyeScene::default(),
         velocity_changes: Vec::new(),
         scripted_motion: None,
-        damage_credit: None,
-        uses_authored_charge: false,
     };
     let mut component = Component::start(
         graphs,
@@ -3366,8 +3539,6 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             deadeye_scene: DeadeyeScene::default(),
             velocity_changes: Vec::new(),
             scripted_motion: None,
-            damage_credit: None,
-            uses_authored_charge: false,
         };
         let component = Component::start(
             Arc::clone(&graphs),

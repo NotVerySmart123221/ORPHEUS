@@ -51,7 +51,8 @@
                   {"m_B5051BCE": "0x0000000000000002", "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 21, "m_60DB8F99": false}},
                   {"m_B5051BCE": "0x0000000000000003", "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 22, "m_60DB8F99": false}},
                   {"m_B5051BCE": "0x0000000000000004", "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 23, "m_60DB8F99": false}},
-                  {"m_B5051BCE": "0x0000000000000005", "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 27, "m_60DB8F99": false}}
+                  {"m_B5051BCE": "0x0000000000000005", "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 27, "m_60DB8F99": false}},
+                  {"m_B5051BCE": "0x0000000000000006", "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 28, "m_60DB8F99": false}}
                 ],
                 "m_outPlug": {"$": "Plug", "links": [[3, "m_inPlug"]], "m_FF3DAF1E": []}
               }
@@ -79,12 +80,12 @@
     "target": 702,
     "unrelated": 703,
     "events": [
-      {"name": "settled damage carries ordered tags to the target listener", "recipient": "target", "source": 701, "target": 702, "delta": -12.5, "killed": true, "hit_tags": [808, 807, 808]},
-      {"name": "settled damage carries ordered tags to the source listener", "recipient": "source", "source": 701, "target": 702, "delta": -12.5, "killed": true, "hit_tags": [808, 807, 808]},
+      {"name": "settled damage carries ordered tags to the target listener", "recipient": "target", "source": 701, "target": 702, "delta": -12.5, "killed": true, "hit_tags": [808, 807, 808], "named_pool_losses": [[972777519512056881, 3.25], [972777519512056882, 1.75]]},
+      {"name": "settled damage carries ordered tags to the source listener", "recipient": "source", "source": 701, "target": 702, "delta": -12.5, "killed": true, "hit_tags": [808, 807, 808], "named_pool_losses": [[972777519512056881, 3.25], [972777519512056882, 1.75]]},
       {"name": "no subscription on unrelated actor", "recipient": "unrelated", "source": 701, "target": 702, "delta": -12.5, "killed": true},
       {"name": "no subscription without the graph", "recipient": "without_listener", "source": 701, "target": 702, "delta": -12.5, "killed": true},
       {"name": "absent source and unknown tags clear the previous bindings", "recipient": "target", "source": null, "target": 702, "delta": 4.75, "killed": false},
-      {"name": "a self event with known empty tags is delivered once", "recipient": "target", "source": 702, "target": 702, "delta": -1.5, "killed": false, "hit_tags": []},
+      {"name": "a self event with known empty tags is delivered once", "recipient": "target", "source": 702, "target": 702, "delta": -1.5, "killed": false, "hit_tags": [], "named_pool_losses": []},
       {"name": "zero source is invalid", "recipient": "target", "source": 0, "target": 702, "delta": -5, "killed": false},
       {"name": "zero target is invalid even at the source", "recipient": "source", "source": 701, "target": 0, "delta": -5, "killed": false},
       {"name": "zero delta is invalid", "recipient": "target", "source": 701, "target": 702, "delta": 0, "killed": false},
@@ -96,7 +97,7 @@
   "expected": {
     "ordinary_variable": 25,
     "room_variable": 26,
-    "host_variables": [20, 21, 22, 23, 24, 27],
+    "host_variables": [20, 21, 22, 23, 24, 27, 28],
     "target_tag_query": {
       "settled_match": true,
       "ordinary_match": false,
@@ -105,17 +106,28 @@
       "retired_alive_match": false,
       "unavailable_fact_diagnostics": 5
     },
+    "settled_damage_query": {
+      "sampled": [9, false, true, true],
+      "ordinary": [11, true, false, false],
+      "host_event": [9, false, true, false],
+      "absent": [null, false, true, true],
+      "unavailable_diagnostics": 4
+    },
     "target_generation_relay": {
       "stable": [-2.5, -2.5, -1.75],
       "replaced_with_ordinary_deliveries": [0.75, 1.25, -1.75]
     },
+    "source_generation_relay": {
+      "stable": [-2.5, -2.5, -1.75],
+      "replaced_with_ordinary_deliveries": [0.75, 1.25, -1.75]
+    },
     "deliveries": [
-      [701, 702, -12.5, true, [808, 807, 808]],
-      [701, 702, -12.5, true, [808, 807, 808]],
+      [701, 702, -12.5, true, [808, 807, 808], [[972777519512056881, 3.25], [972777519512056882, 1.75]]],
+      [701, 702, -12.5, true, [808, 807, 808], [[972777519512056881, 3.25], [972777519512056882, 1.75]]],
       null,
       null,
-      [null, 702, 4.75, false, null],
-      [702, 702, -1.5, false, []],
+      [null, 702, 4.75, false, null, null],
+      [702, 702, -1.5, false, [], []],
       null,
       null,
       null,

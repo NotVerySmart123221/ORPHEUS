@@ -327,7 +327,7 @@ impl Peer {
             bot_scripts_ready: room
                 .world
                 .as_ref()
-                .is_some_and(|world| world.scene.scripted_bots() == 0),
+                .is_some_and(|world| world.scene.bot_scripts_ready()),
         };
         while let Some(step) = self.loading.take_due(now, ready) {
             match step {

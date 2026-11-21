@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "case_id": "script-charge-compatibility.synthetic.v1",
+  "source": {"basis": "Invented modes, ability and message topic with typed damage bindings. The alternate parent mounts the same receiver as a subscript."},
+  "evidence": "synthetic-rust",
+  "input": {
+    "bundle": {
+      "version": 1,
+      "graphs": [
+        {
+          "index": 621,
+          "items": 3,
+          "header": {"m_nodesBitCount": 2, "m_statesBitCount": 2, "m_remoteSyncNodesBitCount": 2, "m_syncVarsBitCount": 2},
+          "fields": {},
+          "containers": {},
+          "unknown_nodes": [],
+          "states": [],
+          "entries": [0],
+          "remote": [],
+          "sync_vars": [],
+          "nodes": [
+            {
+              "pos": 0, "uid": 0, "rid": 0, "remote": -1, "state": null,
+              "class": "STUStatescriptEntryGameMessage", "client_only": false, "server_only": true,
+              "fields": {
+                "m_gameMessage": {"$": "STUConfigVarGameMessage", "m_gameMessage": "0x024000000000CA80"},
+                "m_params": [
+                  {"$": "STU_EF930FD7", "m_B5051BCE": "0x0A40000000000013", "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 81, "m_60DB8F99": 0}},
+                  {"$": "STU_EF930FD7", "m_B5051BCE": "0x0A40000000000015", "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 82, "m_60DB8F99": 0}},
+                  {"$": "STU_EF930FD7", "m_B5051BCE": "0x0A4000000000003D", "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 83, "m_60DB8F99": 0}},
+                  {"$": "STU_EF930FD7", "m_B5051BCE": "0x0A40000000000624", "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 84, "m_60DB8F99": 0}}
+                ],
+                "m_outPlug": {"$": "STUStatescriptOutputPlug", "links": [[1, "m_inPlug"]]}
+              }
+            },
+            {
+              "pos": 1, "uid": 1, "rid": 1, "remote": -1, "state": null,
+              "class": "STU_3387AB5D", "client_only": false, "server_only": true,
+              "fields": {
+                "m_condition": {"$": "STUConfigVarDynamic", "m_identifier": 713, "m_60DB8F99": 1},
+                "m_truePlug": {"$": "STUStatescriptOutputPlug", "links": [[2, "m_inPlug"]]},
+                "m_falsePlug": {"$": "STUStatescriptOutputPlug", "links": []}
+              }
+            },
+            {
+              "pos": 2, "uid": 2, "rid": 2, "remote": -1, "state": null,
+              "class": "STUStatescriptActionSetVar", "client_only": false, "server_only": true,
+              "fields": {
+                "m_ADEB6E05": 1,
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 714, "m_60DB8F99": 1},
+                "m_value": {"$": "STUConfigVarDynamic", "m_identifier": 81, "m_60DB8F99": 0}
+              }
+            }
+          ]
+        },
+        {
+          "index": 622,
+          "items": 1,
+          "header": {"m_nodesBitCount": 1, "m_statesBitCount": 1, "m_remoteSyncNodesBitCount": 1, "m_syncVarsBitCount": 1},
+          "fields": {},
+          "containers": {},
+          "unknown_nodes": [],
+          "states": [0],
+          "entries": [],
+          "remote": [],
+          "sync_vars": [],
+          "nodes": [
+            {
+              "pos": 0, "uid": 0, "rid": 0, "remote": -1, "state": 0,
+              "class": "STUStatescriptStateAbility", "client_only": false, "server_only": true,
+              "fields": {"m_2BBEEAB8": 1}
+            }
+          ]
+        }
+      ],
+      "bodies": {
+        "0x040000000000AF12": {
+          "hero": "0x02E000000000AF12",
+          "name": "Charge compatibility fixture",
+          "graphs": [{"graph": 621, "m_75408640": 0}],
+          "manager": null,
+          "weapons": [],
+          "charge_compatibility": {
+            "modes": ["0x023000000000AF10", "0x023000000000AF11"],
+            "receiver_graph": "0x058000000000026D",
+            "admission_variable": 713,
+            "damage_message": "0x024000000000CA80",
+            "inhibit": {"graph": "0x058000000000026E", "state": 0}
+          }
+        }
+      },
+      "missing": []
+    },
+    "damage": 3.5,
+    "nested_mount": {
+      "parent": {"graph": "0x0580000000000270", "state": 0},
+      "graph": {
+        "index": 624,
+        "items": 2,
+        "header": {"m_nodesBitCount": 2, "m_statesBitCount": 1, "m_remoteSyncNodesBitCount": 1, "m_syncVarsBitCount": 1},
+        "fields": {},
+        "containers": {},
+        "unknown_nodes": [],
+        "states": [1],
+        "entries": [0],
+        "remote": [],
+        "sync_vars": [],
+        "nodes": [
+          {
+            "pos": 0, "uid": 0, "rid": 0, "remote": -1, "state": null,
+            "class": "STUStatescriptEntry", "client_only": false, "server_only": true,
+            "fields": {"m_outPlug": {"$": "STUStatescriptOutputPlug", "links": [[1, "m_beginPlug"]]}}
+          },
+          {
+            "pos": 1, "uid": 1, "rid": 1, "remote": -1, "state": 0,
+            "class": "STUStatescriptStateSubScript", "client_only": false, "server_only": false,
+            "fields": {
+              "m_2BBEEAB8": 1,
+              "m_36F7B64C": {
+                "$": "STU_6DF07EE5",
+                "m_EE729DCB": 0,
+                "m_36F7B64C": {
+                  "$": "STU_29C4C486",
+                  "m_17BB822A": null,
+                  "m_75408640": 0,
+                  "m_C974E369": {"$": "STU_105E1BCC", "m_EE729DCB": 0, "m_graph": "0x058000000000026D", "m_resourceKey": null},
+                  "m_CB2634D7": null
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "expected": {
+    "closed_marker": null,
+    "open_marker": 3.5
+  }
+}

@@ -168,7 +168,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
             Ok(true)
         },
     );
-    if scripted_bots {
+    if scripted_bots && !matches!(fixture, PreparedFixture::Stock) {
         assert_eq!(result.err().unwrap().kind(), io::ErrorKind::Unsupported);
         assert!(outgoing.is_empty());
         return;

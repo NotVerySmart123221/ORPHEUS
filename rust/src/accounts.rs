@@ -24,7 +24,7 @@ pub const BOT_NAME: &str = "Bot";
 const UNLOCKS_RESET_MARKER: &str = "unlocks_reset_v2";
 
 // The type order determines the IDs in new profiles.
-const BOX_TYPES: [(i32, &str, u64); 11] = [
+pub(crate) const BOX_TYPES: [(i32, &str, u64); 11] = [
     (0, "Standard", 50),
     (1, "Summer Games", 10),
     (2, "Halloween Terror", 10),

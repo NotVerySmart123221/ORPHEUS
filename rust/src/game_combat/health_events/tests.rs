@@ -5,8 +5,8 @@ use super::{BotState, HitTags, HostEvent, PlayerBodyState, RoomSimulation};
 use crate::{
     contact_world::ContactWorld,
     game_combat::{
-        HealthEffect,
-        tests::{FIXTURE_CONTEXT, fixture_bots, fixture_impact},
+        HealthEffect, RoomScriptRequests,
+        tests::{FIXTURE_CONTEXT, fixture_bots, fixture_ground, fixture_impact},
     },
     game_heroes::SOLDIER,
     game_replication::BodyId,
@@ -16,7 +16,7 @@ use crate::{
     script_init::{HealthTargetFacts, OWNER_HEALTH},
     script_player::fixture_body_factory,
     script_wire::Value,
-    vitals::Death,
+    vitals::{Death, NamedPoolLoss},
 };
 
 #[derive(Deserialize)]
@@ -34,6 +34,17 @@ struct Input {
     unavailable_target_tag: u64,
     generic_healing: f64,
     generic_damage: f64,
+    named_damage: NamedDamage,
+}
+
+#[derive(Deserialize)]
+struct NamedDamage {
+    grants: Vec<(u64, f64)>,
+    weapon_damage: f64,
+    scripted_damage: f64,
+    heal: f64,
+    ordinary_damage: f64,
+    expected_losses: Vec<Option<Vec<(u64, f64)>>>,
 }
 
 #[derive(Deserialize)]
@@ -41,6 +52,8 @@ struct Expected {
     ordered_outcomes: Vec<Outcome>,
     bot_health: f64,
     player_health: f64,
+    health_after_stale_request: f64,
+    health_after_current_dead_source_request: f64,
     replacement: Replacement,
 }
 
@@ -139,6 +152,82 @@ fn spawn_player(room: &mut RoomSimulation, generation: u64) -> BodyId {
 }
 
 #[test]
+fn admitted_health_request_cannot_credit_a_replacement_source() {
+    let Contract { input, expected } = contract();
+    let bots = fixture_bots();
+    let source = bots[0].entity;
+    let target = bots[1].entity;
+    let mut room = RoomSimulation::new(bots).unwrap();
+    room.enable_host_health_events();
+    room.enable_spatial_queries(
+        false,
+        Arc::new(fixture_ground()),
+        crate::script_graph::RoomSpatialNeeds::Queries,
+    );
+    let tick = FIXTURE_CONTEXT.tick;
+    let now = FIXTURE_CONTEXT.now;
+    room.prepare_spatial_frame(tick).unwrap();
+    let queue_damage = |room: &RoomSimulation| {
+        let mut requests = RoomScriptRequests::default();
+        let frame = &room.spatial_frame.as_ref().unwrap().1;
+        assert!(requests.queue_health(frame, target, -input.generic_damage));
+        requests.take().pop().unwrap()
+    };
+    let previous = room.sample_health_body(source).unwrap();
+    let stale = queue_damage(&room);
+    let body = room
+        .world
+        .entity_mut(previous.entity)
+        .take::<BotState>()
+        .unwrap();
+    assert!(room.world.despawn(previous.entity));
+    let replacement = room.world.spawn(body).id();
+    assert_ne!(replacement, previous.entity);
+    assert_eq!(
+        room.by_wire.insert(source, replacement),
+        Some(previous.entity)
+    );
+
+    room.settle_script_request(stale, previous, tick, now)
+        .unwrap();
+    assert!(room.health_events.pending.is_empty());
+    assert!(room.take_scripted_health().is_empty());
+    assert_eq!(
+        room.body_healths().unwrap()[&target],
+        expected.health_after_stale_request
+    );
+
+    let current = room.sample_health_body(source).unwrap();
+    let queued_before_death = queue_damage(&room);
+    let dealer = Death {
+        killer: target,
+        frame: tick,
+        time: now.as_secs_f64(),
+    };
+    room.settle_health(
+        source,
+        HealthEffect::Damage(input.bot_lethal_impact),
+        dealer,
+        now,
+    )
+    .unwrap();
+    assert!(room.observed_bot_death(source).unwrap().is_some());
+    room.flush_health_events();
+
+    room.settle_script_request(queued_before_death, current, tick, now)
+        .unwrap();
+    assert_eq!(
+        room.body_healths().unwrap()[&target],
+        expected.health_after_current_dead_source_request
+    );
+    let change = room.health_events.pending.pop_front().unwrap();
+    assert!(change.source == Some(current));
+    assert_eq!(change.target.wire, target);
+    assert_eq!(change.delta, -input.generic_damage);
+    assert!(room.health_events.pending.is_empty());
+}
+
+#[test]
 fn native_room_health_events_keep_actual_deltas_and_hit_tag_availability_in_order() {
     let Contract { input, expected } = contract();
     let bots = fixture_bots();
@@ -215,6 +304,12 @@ fn native_room_health_events_keep_actual_deltas_and_hit_tag_availability_in_orde
     let changes = std::mem::take(&mut room.health_events.pending);
     assert_eq!(changes.len(), expected.ordered_outcomes.len());
     for (change, outcome) in changes.into_iter().zip(expected.ordered_outcomes) {
+        // Every damage on this fixture's ordinary pools reports a known empty
+        // list. Healing has no damage-loss records.
+        assert_eq!(
+            change.named_pool_losses.as_deref(),
+            (outcome.delta < 0.0).then_some(&[][..])
+        );
         let (target, impact_facts) = match outcome.target {
             Target::Bot => (bot, &bot_hit.damage.target_facts),
             Target::Player => (player.entity, &player_hit.damage.target_facts),
@@ -259,6 +354,62 @@ fn native_room_health_events_keep_actual_deltas_and_hit_tag_availability_in_orde
         player.runtime.as_ref().unwrap().vitals().unwrap().total(),
         expected.player_health
     );
+}
+
+#[test]
+fn room_events_carry_actual_named_shield_losses_for_weapon_and_direct_damage() {
+    let input = contract().input.named_damage;
+    let bots = fixture_bots();
+    let source = bots[0].entity;
+    let target = bots[1].entity;
+    let mut room = RoomSimulation::new(bots).unwrap();
+    room.enable_host_health_events();
+    let bot = room.state_mut(target).unwrap().unwrap();
+    for &(identifier, amount) in &input.grants {
+        assert!(
+            bot.vitals
+                .add_temporary_shield(identifier, amount, true)
+                .is_some()
+        );
+    }
+    let impact = fixture_impact(target, input.weapon_damage);
+    let hit = room
+        .apply_bot_impact(source, FIXTURE_CONTEXT.tick, FIXTURE_CONTEXT, &impact)
+        .unwrap()
+        .unwrap();
+    let dealer = Death {
+        killer: source,
+        frame: FIXTURE_CONTEXT.tick,
+        time: FIXTURE_CONTEXT.now.as_secs_f64(),
+    };
+    for effect in [
+        HealthEffect::Damage(input.scripted_damage),
+        HealthEffect::Heal(input.heal),
+        HealthEffect::Damage(input.ordinary_damage),
+    ] {
+        assert!(
+            room.settle_health(target, effect, dealer, FIXTURE_CONTEXT.now)
+                .unwrap()
+        );
+    }
+
+    assert_eq!(
+        room.health_events.pending.len(),
+        input.expected_losses.len()
+    );
+    assert_eq!(
+        room.health_events.pending[0].named_pool_losses.as_deref(),
+        Some(hit.damage.named_pool_losses.as_slice())
+    );
+    for (change, expected) in room.health_events.pending.iter().zip(input.expected_losses) {
+        let expected = expected.map(|losses| {
+            losses
+                .into_iter()
+                .map(|(identifier, amount)| NamedPoolLoss { identifier, amount })
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(change.named_pool_losses.as_deref(), expected.as_deref());
+    }
 }
 
 #[test]
@@ -361,7 +512,7 @@ fn settled_health_facts_stay_with_the_original_target_generation() {
 }
 
 #[test]
-fn lethal_impact_notifies_source_with_settled_room_status_after_target_retirement() {
+fn lethal_health_change_notifies_source_with_settled_status_after_target_retirement() {
     use std::{io, sync::Mutex};
 
     use crate::{
@@ -427,10 +578,11 @@ fn lethal_impact_notifies_source_with_settled_room_status_after_target_retiremen
     let Contract { input, expected } = contract();
     let ground = Arc::new(fixture_ground());
     let movers = MoverCatalog::default();
-    for (room_mode, expected_status) in [
-        (Some(false), Some((Some(1), false))),
-        (Some(true), Some((None, false))),
-        (None, None),
+    for (room_mode, expected_status, weapon_impact) in [
+        (Some(false), Some((Some(1), false)), true),
+        (Some(true), Some((None, false)), true),
+        (None, None, true),
+        (Some(false), Some((Some(1), false)), false),
     ] {
         let bots = fixture_bots();
         let target = bots[0].entity;
@@ -454,15 +606,31 @@ fn lethal_impact_notifies_source_with_settled_room_status_after_target_retiremen
         room.enable_host_health_events();
         room.prepare_spatial_frame(FIXTURE_CONTEXT.tick).unwrap();
 
-        let impact = fixture_impact(target, input.bot_lethal_impact);
-        room.apply_bot_impact(
-            source.entity,
-            FIXTURE_CONTEXT.tick,
-            FIXTURE_CONTEXT,
-            &impact,
-        )
-        .unwrap()
-        .unwrap();
+        if weapon_impact {
+            let impact = fixture_impact(target, input.bot_lethal_impact);
+            room.apply_bot_impact(
+                source.entity,
+                FIXTURE_CONTEXT.tick,
+                FIXTURE_CONTEXT,
+                &impact,
+            )
+            .unwrap()
+            .unwrap();
+        } else {
+            assert!(
+                room.settle_health(
+                    target,
+                    HealthEffect::Damage(input.bot_lethal_impact),
+                    Death {
+                        killer: source.entity,
+                        frame: FIXTURE_CONTEXT.tick,
+                        time: FIXTURE_CONTEXT.now.as_secs_f64(),
+                    },
+                    FIXTURE_CONTEXT.now,
+                )
+                .unwrap()
+            );
+        }
         assert!(notification.lock().unwrap().is_none());
 
         let queries = BotQueries::new(room_mode.unwrap_or(false), &movers, &ground, None);
@@ -496,7 +664,7 @@ fn lethal_impact_notifies_source_with_settled_room_status_after_target_retiremen
                 target,
                 delta: expected.replacement.lethal_delta,
                 killed: true,
-                hit_tags: Some(HitTags::EMPTY),
+                hit_tags: weapon_impact.then_some(HitTags::EMPTY),
             }
         );
         let facts = facts.unwrap();

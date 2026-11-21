@@ -94,6 +94,56 @@ impl ProjectedSnapshot {
         self
     }
 
+    pub(crate) fn has_graph(&self, graph: u32) -> bool {
+        self.instances
+            .values()
+            .any(|instance| instance.graph == graph)
+    }
+
+    /// Omit Practice Range `0x0D24` nameplate subgraphs (and any descendants)
+    /// from an observer projection until the game mode entity is ready.
+    pub(crate) fn strip_practice_nameplates(&mut self) {
+        const PRACTICE_NAMEPLATE: u32 = 0x0d24;
+        let mut removed = BTreeSet::new();
+        for (&id, instance) in &self.instances {
+            if instance.graph == PRACTICE_NAMEPLATE {
+                removed.insert(id);
+            }
+        }
+        if removed.is_empty() {
+            return;
+        }
+        loop {
+            let mut grew = false;
+            for (&id, instance) in &self.instances {
+                if !removed.contains(&id)
+                    && instance
+                        .parent
+                        .is_some_and(|(parent, _)| removed.contains(&parent))
+                {
+                    removed.insert(id);
+                    grew = true;
+                }
+            }
+            if !grew {
+                break;
+            }
+        }
+        self.instances.retain(|id, _| !removed.contains(id));
+        for instance in self.instances.values_mut() {
+            for state in instance.states.values_mut() {
+                if state
+                    .link
+                    .is_some_and(|link| removed.contains(&link.instance))
+                {
+                    state.link = None;
+                }
+            }
+        }
+        self.callouts
+            .retain(|callout| !removed.contains(&callout.instance));
+    }
+
     /// The activation counter and absolute start in milliseconds from this frame.
     pub fn volley_identity(&self, instance: u16, state: u16) -> Option<(u16, u64)> {
         self.instances
