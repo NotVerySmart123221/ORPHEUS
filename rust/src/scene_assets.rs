@@ -489,9 +489,10 @@ impl SceneAssets {
         if contacts.is_some() {
             simulation.enable_movement_contacts(map.free_for_all, Arc::clone(&self.movers));
         }
-        if let Some(codecs) = &self.codecs
-            && is_practice_range(&map)
-            && scripted_bots > 0
+        if let Some(codecs) = self
+            .codecs
+            .as_ref()
+            .filter(|_| is_practice_range(&map) && scripted_bots > 0)
         {
             simulation.enable_stock_bot_scripts(
                 Arc::clone(&self.graphs),
