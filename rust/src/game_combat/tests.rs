@@ -2371,7 +2371,7 @@ fn projectile_flights_keep_peer_generation_and_report_terminal_outcomes() {
     assert!(hits.is_empty());
     assert!(matches!(
         outcomes.as_slice(),
-        [FlightOutcome::Ended { token: observed, travelled }]
+        [FlightOutcome::Ended { token: observed, travelled, impact: false }]
             if *observed == token && (*travelled - 0.04).abs() < 1e-12
     ));
     assert!(

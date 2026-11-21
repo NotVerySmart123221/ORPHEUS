@@ -289,6 +289,7 @@ pub(crate) enum FlightOutcome {
     Ended {
         token: ProjectileToken,
         travelled: f64,
+        impact: bool,
     },
     Failed(ProjectileToken),
 }
@@ -2024,6 +2025,7 @@ impl RoomSimulation {
                     outcomes.push(FlightOutcome::Ended {
                         token,
                         travelled: end.travelled,
+                        impact: end.impact,
                     });
                 }
                 // A query exceeding the bounded ray budget cancels only this

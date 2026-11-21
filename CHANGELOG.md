@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Release each confirmed predicted projectile at the authoritative contact deadline, even when a related prediction is still awaiting acknowledgment. Unconfirmed predictions retain bounded retry and cleanup. Natural expiry without an authored blast sends destruction without an impact state. Original-client impact rendering remains pending.
+
 - Apply the optional authored self-damage scale to the shooter's projectile splash. Reuse the normal splash range, falloff, occlusion and player health settlement. Self-damage does not create an enemy hit or elimination notice. Original-client acceptance is pending.
 
 ### 2026-11-21

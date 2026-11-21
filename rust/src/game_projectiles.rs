@@ -212,9 +212,16 @@ struct PendingProjectile {
     definition: u64,
     bound: u32,
     reports: IndexMap<u32, OwnerReport>,
-    creates: IndexMap<u32, bool>,
+    creates: IndexMap<u32, Confirmation>,
     created_at: Option<u32>,
-    release_at: Option<u32>,
+    release_at: Option<(u32, bool)>,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Confirmation {
+    Pending,
+    Arrived,
+    Released,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -345,8 +352,8 @@ impl OwnerProjectiles {
             .iter_mut()
             .find(|pending| pending.token == token)
         {
-            if let Some(arrived) = pending.creates.get_mut(&entity) {
-                *arrived = true;
+            if let Some(state @ Confirmation::Pending) = pending.creates.get_mut(&entity) {
+                *state = Confirmation::Arrived;
             }
         }
     }
@@ -360,16 +367,26 @@ impl OwnerProjectiles {
             .find(|pending| pending.token == token)
             .into_iter()
             .flat_map(|pending| pending.creates.iter())
-            .filter_map(|(&entity, &arrived)| arrived.then_some(entity))
+            .filter_map(|(&entity, &state)| (state == Confirmation::Arrived).then_some(entity))
     }
 
     pub fn confirmation_current(&self, token: ProjectileToken, entity: u32) -> bool {
-        self.pending
-            .iter()
-            .any(|pending| pending.token == token && pending.creates.contains_key(&entity))
+        self.pending.iter().any(|pending| {
+            pending.token == token
+                && pending
+                    .creates
+                    .get(&entity)
+                    .is_some_and(|&state| state != Confirmation::Released)
+        })
     }
 
-    pub fn flight_ended(&mut self, token: ProjectileToken, travelled_ticks: u32, tick: u32) {
+    pub fn flight_ended(
+        &mut self,
+        token: ProjectileToken,
+        travelled_ticks: u32,
+        tick: u32,
+        impact: bool,
+    ) {
         let Some(pending) = self
             .pending
             .iter_mut()
@@ -378,14 +395,15 @@ impl OwnerProjectiles {
             return;
         };
         if pending.release_at.is_none() {
-            pending.release_at = Some(
+            pending.release_at = Some((
                 pending
                     .shot
                     .frame
                     .saturating_add(travelled_ticks)
                     .saturating_add(IMPACT_RELEASE_MARGIN)
                     .max(tick),
-            );
+                impact,
+            ));
         }
     }
 
@@ -395,15 +413,21 @@ impl OwnerProjectiles {
             pending
                 .reports
                 .retain(|_, report| report.arrived != Some(false));
-            let due = pending.release_at.or_else(|| {
+            let release = pending.release_at.or_else(|| {
                 pending.created_at.map(|created| {
-                    created
-                        .saturating_add(pending.bound)
-                        .saturating_add(RELEASE_MARGIN)
+                    (
+                        created
+                            .saturating_add(pending.bound)
+                            .saturating_add(RELEASE_MARGIN),
+                        true,
+                    )
                 })
             });
-            if due.is_some_and(|due| tick >= due.saturating_add(DELIVERY_GRACE)) {
-                retire(pending, &mut self.occupied, Some(tick), &mut out);
+            let impact_frame = release
+                .filter(|&(_, impact)| impact)
+                .map(|_| tick.saturating_add(RELEASE_AHEAD));
+            if release.is_some_and(|(due, _)| tick >= due.saturating_add(DELIVERY_GRACE)) {
+                retire(pending, &mut self.occupied, impact_frame, &mut out);
                 return false;
             }
             let reports = pending
@@ -425,7 +449,7 @@ impl OwnerProjectiles {
                         continue;
                     };
                     if self.occupied.insert(entity) {
-                        pending.creates.insert(entity, false);
+                        pending.creates.insert(entity, Confirmation::Pending);
                         pending.created_at.get_or_insert(tick);
                         out.push(ProjectileDelivery::Confirm {
                             token: pending.token,
@@ -435,12 +459,28 @@ impl OwnerProjectiles {
                     }
                 }
             }
-            if due.is_some_and(|due| tick >= due)
-                && !pending.creates.is_empty()
-                && pending.creates.values().all(|&arrived| arrived)
-            {
-                retire(pending, &mut self.occupied, Some(tick), &mut out);
-                return false;
+            if release.is_some_and(|(due, _)| tick >= due) {
+                // Each alias has its own create receipt. A missing alias
+                // must not hold a confirmed prediction past the impact.
+                for (&entity, state) in &mut pending.creates {
+                    if *state == Confirmation::Arrived {
+                        out.push(ProjectileDelivery::Destroy {
+                            token: pending.token,
+                            entity,
+                            explosion_frame: impact_frame,
+                        });
+                        *state = Confirmation::Released;
+                    }
+                }
+                if !pending.creates.is_empty()
+                    && pending
+                        .creates
+                        .values()
+                        .all(|&state| state == Confirmation::Released)
+                {
+                    retire(pending, &mut self.occupied, None, &mut out);
+                    return false;
+                }
             }
             true
         });
@@ -471,18 +511,18 @@ impl OwnerProjectiles {
 fn retire(
     pending: &PendingProjectile,
     occupied: &mut HashSet<u32>,
-    tick: Option<u32>,
+    impact_frame: Option<u32>,
     out: &mut Vec<ProjectileDelivery>,
 ) {
-    for (&entity, &arrived) in &pending.creates {
+    for (&entity, &state) in &pending.creates {
         occupied.remove(&entity);
-        out.push(ProjectileDelivery::Destroy {
-            token: pending.token,
-            entity,
-            explosion_frame: tick
-                .filter(|_| arrived)
-                .map(|tick| tick.saturating_add(RELEASE_AHEAD)),
-        });
+        if state != Confirmation::Released {
+            out.push(ProjectileDelivery::Destroy {
+                token: pending.token,
+                entity,
+                explosion_frame: impact_frame.filter(|_| state == Confirmation::Arrived),
+            });
+        }
     }
 }
 
@@ -586,8 +626,15 @@ mod tests {
     }
 
     #[test]
-    fn only_a_delivered_owner_introduction_confirms_an_alias_and_release_waits_for_creates() {
-        let frame = 1000;
+    fn each_prediction_releases_at_its_own_confirmation_after_contact() {
+        let contract: Json = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/projectile-alias-release-v1.json"
+        ))
+        .unwrap();
+        let input = &contract["input"];
+        let expected = &contract["expected"];
+        let read = |row: &Json, key| u32::try_from(row[key].as_u64().unwrap()).unwrap();
+        let frame = read(input, "shot_frame");
         let shot = shot(frame);
         let leases = ProjectileLeases::new(0, frame, [CANISTER, VISOR, HELIX]).unwrap();
         let original = leases.entity(HELIX, frame, 0).unwrap();
@@ -621,29 +668,34 @@ mod tests {
                 },
             ]
         );
-        tracker.flight_ended(token, 2, frame + 5);
+        let impact_at = read(input, "contact_tick");
+        tracker.flight_ended(token, 2, impact_at, true);
         tracker.create_arrived(token, original);
-        assert!(tracker.advance(frame + 12).is_empty());
+        let original_at = read(expected, "first_release_tick");
+        assert_eq!(
+            tracker.advance(original_at),
+            [ProjectileDelivery::Destroy {
+                token,
+                entity: original,
+                explosion_frame: Some(original_at + RELEASE_AHEAD),
+            }]
+        );
+        tracker.create_arrived(token, original);
+        assert!(!tracker.confirmation_current(token, original));
+        assert!(tracker.advance(original_at + 1).is_empty());
         assert!(tracker.confirmation_current(token, alias));
         tracker.create_arrived(token, alias);
-        let explosion_frame = Some(frame + 13 + RELEASE_AHEAD);
+        let alias_at = read(expected, "second_release_tick");
         assert_eq!(
-            tracker.advance(frame + 13),
-            [
-                ProjectileDelivery::Destroy {
-                    token,
-                    entity: original,
-                    explosion_frame
-                },
-                ProjectileDelivery::Destroy {
-                    token,
-                    entity: alias,
-                    explosion_frame
-                },
-            ]
+            tracker.advance(alias_at),
+            [ProjectileDelivery::Destroy {
+                token,
+                entity: alias,
+                explosion_frame: Some(alias_at + RELEASE_AHEAD),
+            }]
         );
-        assert!(!tracker.confirmation_current(token, original));
-        assert!(tracker.advance(frame + 14).is_empty());
+        assert!(!tracker.confirmation_current(token, alias));
+        assert!(tracker.advance(alias_at + 1).is_empty());
     }
 
     #[test]
@@ -661,7 +713,7 @@ mod tests {
             |_, _| true,
         );
         tracker.owner_arrival(2, false);
-        tracker.flight_ended(token, 2, frame + 2);
+        tracker.flight_ended(token, 2, frame + 2, true);
         assert!(tracker.advance(frame + UNREPORTED_TICKS - 1).is_empty());
         assert_eq!(
             tracker.advance(frame + UNREPORTED_TICKS),
@@ -707,7 +759,7 @@ mod tests {
         );
         tracker.create_arrived(token, original);
         tracker.create_arrived(token, alias);
-        tracker.flight_ended(token, 5, frame + 7);
+        tracker.flight_ended(token, 5, frame + 7, true);
 
         let due = frame + 5 + IMPACT_RELEASE_MARGIN;
         assert_eq!(due, frame + 7);
@@ -727,5 +779,35 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn confirmed_natural_expiry_destroys_without_impact_state() {
+        let frame = 1000;
+        let leases = ProjectileLeases::new(0, frame, [HELIX]).unwrap();
+        let entity = leases.entity(HELIX, frame, 0).unwrap();
+        let mut tracker = OwnerProjectiles::new(BODY, leases);
+        let shot = shot(frame);
+        let token = tracker.admit(shot, HELIX, 80).unwrap();
+        tracker.owner_sent(
+            1,
+            frame,
+            |_, _| Some((shot.activation, shot.activation_ms)),
+            |_, _| true,
+        );
+        tracker.owner_arrival(1, true);
+        assert_eq!(tracker.advance(frame).len(), 1);
+        tracker.create_arrived(token, entity);
+        tracker.flight_ended(token, 4, frame + 4, false);
+        let due = frame + 4 + IMPACT_RELEASE_MARGIN;
+        assert_eq!(
+            tracker.advance(due),
+            [ProjectileDelivery::Destroy {
+                token,
+                entity,
+                explosion_frame: None,
+            }]
+        );
+        assert!(tracker.advance(due + 1).is_empty());
     }
 }

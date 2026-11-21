@@ -2486,6 +2486,7 @@ fn room_flight_outcomes_release_only_the_current_owner_alias() {
             FlightOutcome::Ended {
                 token,
                 travelled: 34.25 * TICK_PERIOD.as_secs_f64(),
+                impact: true,
             }
         } else {
             FlightOutcome::Failed(token)

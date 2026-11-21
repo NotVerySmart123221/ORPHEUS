@@ -44,6 +44,8 @@ The Rust-only [combat hurt volumes fixture](../fixtures/behavior/combat-hurt-vol
 
 The Rust-only [projectile self-splash fixture](../fixtures/behavior/projectile-self-splash-v1.json) covers the authored scale, visibility checks, and absent configuration. The owner can take splash without blocking their own projectile. A room regression covers health and death feedback.
 
+The Rust-only [projectile delivery fixture](../fixtures/behavior/projectile-alias-release-v1.json) covers staggered acknowledgments for two predictions of one shot. A confirmed prediction is released when the authoritative impact is due. A later acknowledgment can release its own prediction without repeating the first release. Natural expiry has a separate headless check.
+
 The Rust-only [unposed owner volley fixture](../fixtures/behavior/owner-unposed-volley-v1.json) checks that a due round with no pose is skipped at its authored time and a later posed round in the same volley still fires and spends ammunition.
 
 The Rust-only [staged nameplate fixture](../fixtures/behavior/npc-nameplate-staged-admission-v1.json) checks admission after the mode and bot body acknowledgments, exactly retried introduction, and lifetime protection for a bot that died before admission.

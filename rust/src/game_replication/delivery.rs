@@ -1540,9 +1540,13 @@ impl WorldDelivery {
         let mut deliveries = Vec::new();
         for outcome in outcomes {
             match outcome {
-                FlightOutcome::Ended { token, travelled } => {
+                FlightOutcome::Ended {
+                    token,
+                    travelled,
+                    impact,
+                } => {
                     let travelled = (travelled / TICK_PERIOD.as_secs_f64()).ceil() as u32;
-                    projectiles.flight_ended(token, travelled, tick);
+                    projectiles.flight_ended(token, travelled, tick, impact);
                 }
                 FlightOutcome::Failed(token) => projectiles.cancel(token, &mut deliveries),
             }

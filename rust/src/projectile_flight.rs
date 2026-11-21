@@ -165,6 +165,7 @@ pub struct FlightEnd {
     pub travelled: f64,
     pub impacts: Vec<Impact>,
     pub expired: bool,
+    pub impact: bool,
 }
 
 impl ProjectileFlight {
@@ -408,6 +409,7 @@ impl ProjectileFlight {
             travelled: self.travelled,
             impacts,
             expired,
+            impact: !expired || self.expiry_blast,
         }
     }
 }
@@ -677,6 +679,7 @@ mod tests {
         assert_eq!((end.point[2], end.travelled), (0.5, 0.01));
         assert!(end.impacts.is_empty());
         assert!(end.expired);
+        assert!(!end.impact);
     }
 
     #[test]
