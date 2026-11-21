@@ -152,3 +152,67 @@ fn only_identified_committed_records_produce_ordered_owner_effects() {
         ]]
     );
 }
+
+#[test]
+fn controller_owner_ack_waits_for_data_and_supersedes_unsent_acks() {
+    let mut world = WorldDelivery::new(OWNER);
+    world.started = Some(FIRST_TICK);
+    world
+        .controller
+        .full_owner(FIRST_TICK, |_| Ok(crate::bits::BitWriter::new()))
+        .unwrap();
+    world.input.processed = Some(FIRST_TICK + 10);
+
+    // Held back while initial controller data is still in flight.
+    world
+        .advance_controller_ack(Duration::from_millis(100))
+        .unwrap();
+    assert!(world.queued.is_empty());
+
+    assert!(world.controller.arrived(1));
+    world
+        .advance_controller_ack(Duration::from_millis(150))
+        .unwrap();
+    assert!(world.queued.is_empty());
+
+    world
+        .advance_controller_ack(Duration::from_millis(200))
+        .unwrap();
+    assert_eq!(world.controller.command_frame(), FIRST_TICK + 10);
+    assert_eq!(
+        world
+            .queued
+            .iter()
+            .filter_map(|record| match record.delivery {
+                Delivery::Script {
+                    last,
+                    close: false,
+                    resend: false,
+                } if record.update.entity == OWNER => Some(last),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        [2]
+    );
+
+    world.input.processed = Some(FIRST_TICK + 20);
+    world
+        .advance_controller_ack(Duration::from_millis(300))
+        .unwrap();
+    assert_eq!(world.controller.command_frame(), FIRST_TICK + 20);
+    assert_eq!(
+        world
+            .queued
+            .iter()
+            .filter_map(|record| match record.delivery {
+                Delivery::Script {
+                    last,
+                    close: false,
+                    resend: false,
+                } if record.update.entity == OWNER => Some(last),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        [3]
+    );
+}

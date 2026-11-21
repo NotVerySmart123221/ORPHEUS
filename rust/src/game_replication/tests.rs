@@ -270,6 +270,178 @@ fn enemy_observer_waits_for_identity_and_retries_the_exact_baseline() {
 }
 
 #[test]
+fn bot_practice_nameplates_wait_for_mode_ready_and_skip_new_dead_corpses() {
+    use crate::{
+        script_codecs::CodecTable,
+        script_graph::GraphStore,
+        script_snapshot_wire::{FIXTURE_CODECS, SceneProjection, View},
+        script_wire::Variables,
+    };
+
+    let mk_graph = |index: u32| {
+        serde_json::json!({
+            "index": index,
+            "items": 2,
+            "nodes": [
+                {
+                    "pos": 0,
+                    "class": "STUStatescriptEntry",
+                    "uid": 0,
+                    "rid": 0,
+                    "remote": -1,
+                    "state": null,
+                    "client_only": false,
+                    "server_only": false,
+                    "fields": {
+                        "m_2BBEEAB8": false,
+                        "m_ADEB6E05": false,
+                        "m_outPlug": { "$": "Plug", "links": [[1, "m_beginPlug"]], "m_FF3DAF1E": [] }
+                    }
+                },
+                {
+                    "pos": 1,
+                    "class": "STUStatescriptState",
+                    "uid": 1,
+                    "rid": 1,
+                    "remote": 0,
+                    "state": 0,
+                    "client_only": false,
+                    "server_only": false,
+                    "fields": {
+                        "m_2BBEEAB8": true,
+                        "m_ADEB6E05": false
+                    }
+                }
+            ],
+            "states": [1],
+            "entries": [0],
+            "remote": [1],
+            "sync_vars": [],
+            "containers": {},
+            "unknown_nodes": [],
+            "fields": { "m_9CEC6985": ["0x0D800000000001A4"] },
+            "header": {
+                "m_nodesBitCount": 4,
+                "m_statesBitCount": 4,
+                "m_remoteSyncNodesBitCount": 4,
+                "m_syncVarsBitCount": 4
+            }
+        })
+    };
+    let bundle = serde_json::json!({
+        "version": 1,
+        "missing": [],
+        "graphs": [mk_graph(0x0c18), mk_graph(0x0d24)],
+        "bodies": {}
+    });
+    let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    let codecs = CodecTable::from_json(FIXTURE_CODECS).unwrap();
+    let bot_create = |entity| crate::world::EntityUpdate {
+        entity,
+        operation: Some(crate::world::Operation::Create(Box::new(
+            crate::world::Create::new(1, vec![]),
+        ))),
+        ..Default::default()
+    };
+
+    let live_entity = 0x8000_0001;
+    let dead_entity = 0x8000_0002;
+    let live_script = Component::start(
+        Arc::clone(&graphs),
+        live_entity,
+        Variables::new(),
+        vec![Root::new(1, 0x0c18), Root::new(2, 0x0d24)],
+        1000,
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let dead_script = Component::start(
+        Arc::clone(&graphs),
+        dead_entity,
+        Variables::new(),
+        vec![Root::new(1, 0x0c18), Root::new(2, 0x0d24)],
+        1000,
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+
+    let mut world = WorldDelivery::new(OWNER);
+    world.started = Some(1000);
+    assert!(!world.mode_ready());
+
+    // Live bot before mode_ready(): 0x0D24 is stripped from its initial observer baseline.
+    world.create_bot(bot_create(live_entity));
+    world.create_bot(bot_create(dead_entity));
+    let creates: Vec<_> = world.ready().iter().map(|r| r.tracked()).collect();
+    world.sent(&eligible(&world));
+    for record in creates {
+        world.acknowledge(outcome(record, true), Duration::ZERO);
+    }
+
+    let encoder = SnapshotEncoder::new(&graphs, &codecs);
+    let full = encoder
+        .project(live_script.snapshot().unwrap(), View::Observer)
+        .unwrap();
+    assert!(full.has_graph(0x0c18));
+    assert!(full.has_graph(0x0d24));
+
+    world
+        .present_scene_script_with_dead(
+            SceneProjection {
+                snapshot: live_script.snapshot().unwrap(),
+                encoder: SnapshotEncoder::new(&graphs, &codecs),
+            },
+            false,
+        )
+        .unwrap();
+    let live_base_record = world.ready()[0].tracked();
+    world.sent(&eligible(&world));
+    world.acknowledge(outcome(live_base_record, true), Duration::ZERO);
+    let (_, live_base) = world.scene_views[&live_entity].base().unwrap();
+    assert!(live_base.has_graph(0x0c18));
+    assert!(!live_base.has_graph(0x0d24));
+
+    // Once mode_ready() flips true, live bot receives 0x0D24 via observer delta.
+    let mode_chunk = world.mode.full(&crate::bits::BitWriter::new()).unwrap();
+    assert!(world.mode.arrived(mode_chunk.last));
+    assert!(world.mode_ready());
+
+    world
+        .present_scene_script_with_dead(
+            SceneProjection {
+                snapshot: live_script.snapshot().unwrap(),
+                encoder: SnapshotEncoder::new(&graphs, &codecs),
+            },
+            false,
+        )
+        .unwrap();
+    let live_delta_record = world.ready()[0].tracked();
+    world.sent(&eligible(&world));
+    world.acknowledge(outcome(live_delta_record, true), Duration::ZERO);
+    let (_, live_after) = world.scene_views[&live_entity].base().unwrap();
+    assert!(live_after.has_graph(0x0d24));
+
+    // An already-dead bot without a prior 0x0D24 never gets one even after mode_ready().
+    world
+        .present_scene_script_with_dead(
+            SceneProjection {
+                snapshot: dead_script.snapshot().unwrap(),
+                encoder: SnapshotEncoder::new(&graphs, &codecs),
+            },
+            true,
+        )
+        .unwrap();
+    let dead_base_record = world.ready()[0].tracked();
+    world.sent(&eligible(&world));
+    world.acknowledge(outcome(dead_base_record, true), Duration::ZERO);
+    let (_, dead_base) = world.scene_views[&dead_entity].base().unwrap();
+    assert!(dead_base.has_graph(0x0c18));
+    assert!(!dead_base.has_graph(0x0d24));
+}
+
+#[test]
 fn gate_voice_anchor_waits_for_the_placeable_acknowledgment() {
     let mut world = WorldDelivery::new(OWNER);
     world.started = Some(1001);
@@ -2090,6 +2262,7 @@ fn admitted_owner_projectile_preserves_gravity_and_expiry_blast() {
             ballistics: ProjectileBallistics {
                 speed: 30.0,
                 lifetime: 7.0 / 30.0,
+                radius: 0.0,
                 definition: Some(DEFINITION),
                 direct: None,
                 blast: Some(Blast {
@@ -2185,6 +2358,7 @@ fn room_flight_outcomes_release_only_the_current_owner_alias() {
                 ballistics: ProjectileBallistics {
                     speed: 1.0,
                     lifetime: 2.0,
+                    radius: 0.0,
                     definition: Some(DEFINITION),
                     direct: None,
                     blast: None,
@@ -2227,7 +2401,7 @@ fn room_flight_outcomes_release_only_the_current_owner_alias() {
         let finished = if completed {
             FlightOutcome::Ended {
                 token,
-                travelled: 30.25 * TICK_PERIOD.as_secs_f64(),
+                travelled: 34.25 * TICK_PERIOD.as_secs_f64(),
             }
         } else {
             FlightOutcome::Failed(token)
@@ -3008,6 +3182,7 @@ fn fixture_projectile_flight(
         ballistics: ProjectileBallistics {
             speed,
             lifetime: 1.0,
+            radius: 0.0,
             definition: Some(definition),
             direct: damage.map(|amount| HitDefinition {
                 tags: DamageTags::EMPTY,

@@ -296,6 +296,7 @@ mod tests {
                         ProjectileBallistics {
                             speed: 50.0,
                             lifetime: 2.0,
+                            radius: 0.0,
                             definition: None,
                             direct: Some(hit),
                             blast: Some(Blast {

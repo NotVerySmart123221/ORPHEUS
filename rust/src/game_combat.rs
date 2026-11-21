@@ -263,6 +263,7 @@ mod health_events;
 mod movement;
 mod player;
 mod script_requests;
+mod stock_bot;
 pub(crate) use encounter::{
     ENCOUNTER_INSTANCE, EncounterRegistration, EncounterWorld, GateState, GateWorld,
 };
@@ -552,6 +553,7 @@ pub(crate) struct RoomSimulation {
     mode_voice_set: Option<u64>,
     mode_boss_pause: bool,
     spawn_anchors: Option<Arc<crate::scene_assets::SpawnAnchors>>,
+    stock_bots: Option<stock_bot::StockBotCatalog>,
     gate_handle: Option<GateHandle>,
     encounter_entity: Option<Entity>,
     // Handle lists preserve launch order within the worker's ordered peer turns.
@@ -694,6 +696,7 @@ impl RoomSimulation {
             vitals,
             history: TargetHistory::new(None),
             respawn_at: None,
+            stock_script: None,
             enemy: Some(EnemyState {
                 scripts,
                 binding,
@@ -770,19 +773,73 @@ impl RoomSimulation {
             .collect()
     }
 
+    pub(crate) fn enable_stock_bot_scripts(
+        &mut self,
+        graphs: Arc<crate::script_graph::GraphStore>,
+        codecs: Arc<crate::script_codecs::CodecTable>,
+        mode: u64,
+    ) {
+        let catalog = stock_bot::StockBotCatalog {
+            graphs,
+            codecs,
+            mode,
+        };
+        let entities: Vec<_> = self.by_wire.values().copied().collect();
+        for entity in entities {
+            let mut state = self
+                .world
+                .get_mut::<BotState>(entity)
+                .expect("live bot handle");
+            if state.enemy.is_none() && state.stock_script.is_none() {
+                state.stock_script = stock_bot::StockBotScript::start(
+                    &catalog,
+                    &state.bot,
+                    crate::game_clock::FIRST_TICK,
+                );
+            }
+        }
+        self.stock_bots = Some(catalog);
+    }
+
+    pub(crate) fn is_bot_dead(&self, wire: u32) -> bool {
+        self.by_wire
+            .get(&wire)
+            .and_then(|&entity| self.world.get::<BotState>(entity))
+            .is_some_and(|state| state.bot.dead)
+    }
+
+    fn advance_stock_bots(&mut self, tick: u32) {
+        let entities: Vec<_> = self.by_wire.values().copied().collect();
+        for entity in entities {
+            let state = self
+                .world
+                .get_mut::<BotState>(entity)
+                .expect("live bot handle")
+                .into_inner();
+            if let Some(script) = state.stock_script.as_mut() {
+                script.advance(tick, &state.bot);
+            }
+        }
+    }
+
     pub(crate) fn enemy_projections(
         &self,
     ) -> Result<impl Iterator<Item = crate::script_snapshot_wire::SceneProjection<'_>>, CombatError>
     {
         Ok(self.checked_states()?.into_iter().filter_map(|state| {
-            let enemy = state.enemy.as_ref().filter(|enemy| enemy.fault.is_none())?;
-            Some(crate::script_snapshot_wire::SceneProjection {
-                snapshot: enemy.scripts.body.snapshot()?,
-                encoder: crate::script_snapshot_wire::SnapshotEncoder::new(
-                    &enemy.graphs,
-                    &enemy.codecs,
-                ),
-            })
+            if let Some(enemy) = state.enemy.as_ref().filter(|enemy| enemy.fault.is_none()) {
+                return Some(crate::script_snapshot_wire::SceneProjection {
+                    snapshot: enemy.scripts.body.snapshot()?,
+                    encoder: crate::script_snapshot_wire::SnapshotEncoder::new(
+                        &enemy.graphs,
+                        &enemy.codecs,
+                    ),
+                });
+            }
+            state
+                .stock_script
+                .as_ref()
+                .and_then(stock_bot::StockBotScript::projection)
         }))
     }
 
@@ -869,6 +926,7 @@ impl RoomSimulation {
             mode_voice_set: None,
             mode_boss_pause: false,
             spawn_anchors: None,
+            stock_bots: None,
             gate_handle: None,
             encounter_entity: None,
             projectiles: HashMap::new(),
@@ -2068,8 +2126,14 @@ impl RoomSimulation {
             return None;
         }
         let result = state.vitals.damage(amount, source);
+        if let Some(script) = &mut state.stock_script {
+            script.on_damage(state.vitals.total(), source);
+        }
         if result.killed {
             state.bot.died(source.frame);
+            if let Some(script) = &mut state.stock_script {
+                script.on_death(source, critical, loadout);
+            }
             if let Some(enemy) = &mut state.enemy {
                 if let Err(error) = enemy.scripts.queue_death(source, critical, loadout) {
                     enemy.halt(&mut state.bot, format!("enemy death input: {error}"));
@@ -2104,6 +2168,7 @@ impl RoomSimulation {
             self.settle_authored_requests(tick, now)?;
             self.settle_environment(tick, now)?;
             self.flush_health_events();
+            self.advance_stock_bots(tick);
             return self.respawn_due(tick, now);
         }
         let external_and_players = self.collect_player_enemy_targets();
@@ -2533,6 +2598,7 @@ impl RoomSimulation {
             self.collect_local_health_events();
         }
         self.settle_environment(tick, now)?;
+        self.advance_stock_bots(tick);
         let replacements = self.respawn_due(tick, now);
         self.record_poses(queries, tick)?;
         let replacements = replacements?;
@@ -2728,7 +2794,12 @@ impl RoomSimulation {
                     entity: previous,
                 });
             }
-            let entity = self.world.spawn(BotState::new(fresh, Some(tick))).id();
+            let mut next_state = BotState::new(fresh, Some(tick));
+            if let Some(catalog) = &self.stock_bots {
+                next_state.stock_script =
+                    stock_bot::StockBotScript::start(catalog, &next_state.bot, tick);
+            }
+            let entity = self.world.spawn(next_state).id();
             self.by_wire
                 .replace_index(slot, fresh_wire)
                 .map_err(|_| CombatError::BotIdInUse(fresh_wire))?;

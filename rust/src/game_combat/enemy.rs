@@ -26,6 +26,7 @@ pub(super) struct BotState {
     pub(super) history: TargetHistory,
     pub(super) respawn_at: Option<Duration>,
     pub(super) enemy: Option<EnemyState>,
+    pub(super) stock_script: Option<super::stock_bot::StockBotScript>,
 }
 
 pub(super) struct EnemyState {
@@ -356,6 +357,7 @@ impl BotState {
             history: TargetHistory::new(replacement),
             respawn_at: None,
             enemy: None,
+            stock_script: None,
         }
     }
 }

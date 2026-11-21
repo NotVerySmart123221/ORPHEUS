@@ -1288,3 +1288,85 @@ fn prepared_practice_range_and_kings_row_navigation_queries_route_around_walls_a
         ));
     }
 }
+
+#[test]
+#[ignore = "requires a prepared 104319 Practice Range pack"]
+fn practice_range_stock_bots_drive_overhead_nameplates_through_death_and_respawn() {
+    use std::time::Duration;
+
+    use crate::script_snapshot_wire::View;
+
+    let runtime = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let assets = SceneAssets::load(runtime).unwrap();
+    let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
+    assert!(scene.movement_ready());
+    if scene.scripted_bots() == 0 {
+        return;
+    }
+
+    let initial: Vec<(u32, usize)> = scene
+        .enemy_projections()
+        .unwrap()
+        .map(|projection| {
+            let projected = projection
+                .encoder
+                .project(projection.snapshot, View::Observer)
+                .unwrap();
+            assert!(
+                projected.has_graph(0x0c18) && projected.has_graph(0x0d24),
+                "bot {:08X} missing 0x0C18/0x0D24 nameplate",
+                projection.snapshot.entity
+            );
+            (
+                projection.snapshot.entity,
+                projection.snapshot.diagnostics.len(),
+            )
+        })
+        .collect();
+    assert_eq!(initial.len(), 15);
+    assert!(initial.iter().all(|&(_, diagnostics)| diagnostics == 0));
+
+    let patrol = PatrolScript::load().unwrap();
+    let mut tick = crate::game_clock::FIRST_TICK + 1;
+    let mut now = Duration::from_secs(1);
+    scene.step_bots(tick, &patrol).unwrap();
+    {
+        let (simulation, queries) = scene.bot_simulation();
+        assert!(
+            simulation
+                .finish_tick(&queries, tick, now)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    // Killing a stock bot updates its script cleanly and respawn creates a fresh bot with 0x0D24.
+    let target = initial[0].0;
+    scene
+        .simulation_mut()
+        .kill_bot_for_test(target, tick + 1, now);
+    tick += 1;
+    now += Duration::from_secs(4);
+    scene.step_bots(tick + 240, &patrol).unwrap();
+    let replacements = {
+        let (simulation, queries) = scene.bot_simulation();
+        simulation.finish_tick(&queries, tick + 240, now).unwrap()
+    };
+    assert_eq!(replacements.len(), 1);
+    let fresh_entity = replacements[0].created.entity;
+    assert_ne!(fresh_entity, target);
+
+    let fresh_projected = scene
+        .enemy_projections()
+        .unwrap()
+        .find(|projection| projection.snapshot.entity == fresh_entity)
+        .map(|projection| {
+            projection
+                .encoder
+                .project(projection.snapshot, View::Observer)
+                .unwrap()
+        })
+        .expect("respawned bot script projection");
+    assert!(fresh_projected.has_graph(0x0c18));
+    assert!(fresh_projected.has_graph(0x0d24));
+}

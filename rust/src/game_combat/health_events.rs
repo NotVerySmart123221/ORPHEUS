@@ -341,7 +341,7 @@ mod tests {
                 assert_eq!(entry.source.map(|body| body.wire), Some(source));
                 assert_eq!(entry.target.wire, target);
                 assert_eq!(entry.hit_tags, None);
-                assert_eq!(entry.target_facts.is_some(), entry.delta > 0.0);
+                assert!(entry.target_facts.is_some());
                 (entry.delta, entry.killed)
             });
             assert_eq!(actual, expected);

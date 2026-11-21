@@ -25,6 +25,7 @@ const IMPACT_RAY_OFFSET: f64 = 1e-4;
 pub struct ProjectileBallistics {
     pub speed: f64,
     pub lifetime: f64,
+    pub radius: f64,
     pub definition: Option<u64>,
     pub direct: Option<HitDefinition>,
     pub blast: Option<Blast>,
@@ -75,6 +76,12 @@ impl ProjectileBallistics {
             },
             None => None,
         };
+        let radius = authored_number(field("m_6396149F.m_57DAE1B5"), 0.0, &mut evaluate)?;
+        let radius = if radius.is_finite() && radius > 0.0 {
+            radius
+        } else {
+            0.0
+        };
         let direct = HitDefinition::from_authored(
             field("m_6396149F").unwrap_or(&Json::Null),
             &mut evaluate,
@@ -99,6 +106,7 @@ impl ProjectileBallistics {
         Ok(Some(Self {
             speed,
             lifetime,
+            radius,
             definition,
             direct,
             blast,
@@ -246,9 +254,14 @@ impl ProjectileFlight {
         let mut closest = None;
         for &(entity, target) in targets {
             let [a, b] = target.segment();
-            if let Some(distance) =
-                capsule_entry_distance(self.position, self.direction, reach, a, b, target.radius)
-            {
+            if let Some(distance) = capsule_entry_distance(
+                self.position,
+                self.direction,
+                reach,
+                a,
+                b,
+                target.radius + self.ballistics.radius,
+            ) {
                 if closest.is_none_or(|(best, _)| distance < best) {
                     closest = Some((distance, Some(entity)));
                 }
@@ -432,6 +445,7 @@ mod tests {
         ProjectileBallistics {
             speed: 50.0,
             lifetime: 2.0,
+            radius: 0.0,
             definition: Some(0x0400_0000_0000_072c),
             direct: Some(hit),
             blast: Some(Blast {
@@ -633,5 +647,51 @@ mod tests {
         assert_eq!((end.point[2], end.travelled), (0.5, 0.01));
         assert!(end.impacts.is_empty());
         assert!(end.expired);
+    }
+
+    #[test]
+    fn projectile_radius_expands_actor_hit_envelope_without_inflating_wall_rays() {
+        let fields = serde_json::json!({
+            "m_projectileSpeed": 50.0,
+            "m_projectileLifetime": 2.0,
+            "m_6396149F": {
+                "m_57DAE1B5": 0.2,
+                "m_modifyHealth": {
+                    "m_amount": 40.0
+                }
+            }
+        });
+        let authored = ProjectileBallistics::from_fields(&fields, |config| {
+            Ok(config.as_f64().map_or(Value::Null, Value::Float))
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(authored.radius, 0.2);
+
+        // Target capsule radius 0.5 at x = 0.6: zero-radius ray misses, 0.2m projectile hits.
+        let targets = [(1, target(0.6, 1.5))];
+        let zero_radius = ProjectileBallistics {
+            radius: 0.0,
+            ..authored.clone()
+        };
+        let mut missed =
+            ProjectileFlight::new(zero_radius, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], Some(100))
+                .unwrap();
+        assert!(
+            missed
+                .advance(103, &targets, |_, _, _| Ok(None))
+                .unwrap()
+                .is_none()
+        );
+
+        let mut grazed =
+            ProjectileFlight::new(authored, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], Some(100)).unwrap();
+        let end = grazed
+            .advance(103, &targets, |_, _, _| Ok(None))
+            .unwrap()
+            .unwrap();
+        assert!(!end.expired);
+        assert_eq!(end.impacts.len(), 1);
+        assert_eq!((end.impacts[0].entity, end.impacts[0].damage), (1, 40.0));
     }
 }

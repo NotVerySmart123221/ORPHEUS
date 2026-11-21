@@ -98,14 +98,14 @@ fn charge_compatibility_loads_one_public_root_with_an_optional_inhibit() {
     let contract = fixture();
     let graphs = Arc::new(load(&contract.input.bundle).unwrap());
     let definition = &graphs.bodies()[&BODY];
-    let profile = definition.charge_compatibility.as_ref().unwrap();
-    assert_eq!(profile.modes.len(), MODES.len());
-    assert!(MODES.iter().all(|mode| profile.modes.contains(mode)));
-    assert_eq!(profile.receiver_graph, RECEIVER);
-    assert_eq!(profile.admission_variable, ADMISSION);
-    assert_eq!(profile.damage_message, DAMAGE);
-    assert!(profile.parent.is_none());
-    let inhibit = profile.inhibit.as_ref().unwrap();
+    let compatibility = definition.charge_compatibility.as_ref().unwrap();
+    assert_eq!(compatibility.modes.len(), MODES.len());
+    assert!(MODES.iter().all(|mode| compatibility.modes.contains(mode)));
+    assert_eq!(compatibility.receiver_graph, RECEIVER);
+    assert_eq!(compatibility.admission_variable, ADMISSION);
+    assert_eq!(compatibility.damage_message, DAMAGE);
+    assert!(compatibility.parent.is_none());
+    let inhibit = compatibility.inhibit.as_ref().unwrap();
     assert_eq!((inhibit.graph, inhibit.state), (INHIBIT, 0));
 
     let roots = player_roots(definition, &graphs).unwrap();
@@ -275,7 +275,7 @@ fn charge_compatibility_rejects_mismatched_or_duplicate_child_mounts() {
     wide_child["graphs"][2]["nodes"][1]["fields"]["m_36F7B64C"]["m_36F7B64C"]["m_C974E369"]["m_graph"] =
         wide_asset.clone();
     profile(&mut wide_child)["receiver_graph"] = wide_asset;
-    let error = load(&wide_child).err().expect("wide receiver rejected");
+    let error = load(&wide_child).expect_err("wide receiver rejected");
     assert!(
         error.to_string().contains("SubScript index range"),
         "{error}"
