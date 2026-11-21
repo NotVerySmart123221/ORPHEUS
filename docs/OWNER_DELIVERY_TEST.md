@@ -1,5 +1,22 @@
 # Prepared owner delivery observation
 
+## Targeted Practice Range playtest capture
+
+With an Inspector build, set `ORPHEUS_PLAYTEST_CAPTURE_FILE` to a writable
+local path. Check for `playtest capture=ready` before starting the client.
+Leave `ORPHEUS_TRACE_OWNER_VOLLEYS` unset to keep the per-command and
+owner-delta trace disabled.
+
+Compare projectile launch and termination by flight token, then check the
+contact and impact records. Compare replacement bots by the retired and new
+entity IDs. The `sent`, `ack` and `lost` records identify the datagram
+carrying each replacement operation. An ACK confirms packet receipt.
+Check the original client separately for on-screen appearance.
+
+Keep local captures out of Git. The bounded writer reports any dropped rows.
+
+## Owner loss and arrival
+
 Run the opt-in test with a prepared target-tagged 104319 Practice Range runtime
 that does not contain bot VM graphs:
 

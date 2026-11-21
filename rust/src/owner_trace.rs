@@ -1,6 +1,7 @@
 //! Bounded opt-in diagnostics. The match worker never writes trace output.
 
 use std::{
+    ffi::OsString,
     fmt,
     io::{self, BufWriter, Write},
     sync::{
@@ -15,6 +16,7 @@ use std::{
 const CAPACITY: usize = 512;
 const FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 static TRACE: OnceLock<Option<Trace>> = OnceLock::new();
+static PLAYTEST: OnceLock<Option<Trace>> = OnceLock::new();
 
 enum Entry {
     Line(String),
@@ -27,26 +29,25 @@ struct Trace {
 }
 
 impl Trace {
-    fn start() -> io::Result<Self> {
-        let output: Box<dyn Write + Send> =
-            if let Some(path) = std::env::var_os("ORPHEUS_OWNER_TRACE_FILE") {
-                Box::new(
-                    std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(path)?,
-                )
-            } else {
-                Box::new(io::stderr())
-            };
+    fn start(path: Option<OsString>, label: &'static str) -> io::Result<Self> {
+        let output: Box<dyn Write + Send> = if let Some(path) = path {
+            Box::new(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)?,
+            )
+        } else {
+            Box::new(io::stderr())
+        };
         let (sender, receiver) = mpsc::sync_channel(CAPACITY);
         let dropped = Arc::new(AtomicU64::new(0));
         let counter = Arc::clone(&dropped);
         thread::Builder::new()
-            .name("orpheus-owner-trace".into())
+            .name(format!("orpheus-{label}-trace"))
             .spawn(move || {
-                if let Err(error) = write_trace(output, receiver, &counter) {
-                    eprintln!("owner trace output stopped: {error}");
+                if let Err(error) = write_trace(output, receiver, &counter, label) {
+                    eprintln!("{label} trace output stopped: {error}");
                 }
             })?;
         Ok(Self { sender, dropped })
@@ -68,7 +69,7 @@ pub(crate) fn enabled() -> bool {
             if !std::env::var_os("ORPHEUS_TRACE_OWNER_VOLLEYS").is_some_and(|value| value == "1") {
                 return None;
             }
-            match Trace::start() {
+            match Trace::start(std::env::var_os("ORPHEUS_OWNER_TRACE_FILE"), "owner-volley") {
                 Ok(trace) => Some(trace),
                 Err(error) => {
                     eprintln!("owner trace output unavailable: {error}");
@@ -85,9 +86,39 @@ pub(crate) fn record(line: fmt::Arguments<'_>) {
     }
 }
 
+pub(crate) fn start_playtest_capture() {
+    PLAYTEST.get_or_init(|| {
+        let path = std::env::var_os("ORPHEUS_PLAYTEST_CAPTURE_FILE")?;
+        match Trace::start(Some(path), "playtest") {
+            Ok(trace) => {
+                trace.record("playtest capture=ready".into());
+                Some(trace)
+            }
+            Err(error) => {
+                eprintln!("playtest capture unavailable: {error}");
+                None
+            }
+        }
+    });
+}
+
+pub(crate) fn playtest(line: fmt::Arguments<'_>) {
+    if let Some(Some(trace)) = PLAYTEST.get() {
+        trace.record(line.to_string());
+    }
+}
+
+pub(crate) fn playtest_enabled() -> bool {
+    PLAYTEST.get().is_some_and(Option::is_some)
+}
+
 /// Allow a bounded flush after the match worker has already stopped.
 pub(crate) fn flush_after_stop() {
-    if let Some(Some(trace)) = TRACE.get() {
+    for trace in [TRACE.get(), PLAYTEST.get()]
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
         let (reply, done) = mpsc::sync_channel(1);
         if trace.sender.try_send(Entry::Flush(reply)).is_ok() {
             let _ = done.recv_timeout(2 * FLUSH_INTERVAL);
@@ -95,7 +126,12 @@ pub(crate) fn flush_after_stop() {
     }
 }
 
-fn write_trace(output: impl Write, input: Receiver<Entry>, dropped: &AtomicU64) -> io::Result<()> {
+fn write_trace(
+    output: impl Write,
+    input: Receiver<Entry>,
+    dropped: &AtomicU64,
+    label: &str,
+) -> io::Result<()> {
     let mut writer = BufWriter::new(output);
     let mut due = Instant::now() + FLUSH_INTERVAL;
     loop {
@@ -111,7 +147,7 @@ fn write_trace(output: impl Write, input: Receiver<Entry>, dropped: &AtomicU64) 
         if stopped || flush.is_some() || Instant::now() >= due {
             let dropped = dropped.swap(0, Ordering::Relaxed);
             if dropped != 0 {
-                writeln!(writer, "owner-volley trace dropped={dropped}")?;
+                writeln!(writer, "{label} trace dropped={dropped}")?;
             }
             writer.flush()?;
             due = Instant::now() + FLUSH_INTERVAL;
@@ -142,7 +178,7 @@ mod tests {
         drop(trace);
 
         let mut output = Vec::new();
-        write_trace(&mut output, receiver, &dropped).unwrap();
+        write_trace(&mut output, receiver, &dropped, "owner-volley").unwrap();
         assert_eq!(output, b"first line\nowner-volley trace dropped=1\n");
     }
 }

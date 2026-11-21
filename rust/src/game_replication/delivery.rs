@@ -269,6 +269,13 @@ impl WorldDelivery {
         if !self.tracks_current_bot(old) || self.bots.contains_key(&new) {
             return;
         }
+        #[cfg(feature = "inspector")]
+        if let Some(Operation::Create(create)) = &replacement.created.operation {
+            crate::owner_trace::playtest(format_args!(
+                "bot-respawn event=queued owner={:08x} old={old:08x} new={new:08x} spawn={:?}",
+                self.owner, create.position
+            ));
+        }
         self.bots.insert(old, BotLifetime::Retiring);
         self.bots.insert(new, BotLifetime::Live);
         self.created.remove(&old);
@@ -400,6 +407,14 @@ impl WorldDelivery {
             for record in packet.records {
                 if !self.current(&record) {
                     continue;
+                }
+                #[cfg(feature = "inspector")]
+                if crate::owner_trace::playtest_enabled() {
+                    self.trace_playtest_delivery(
+                        &record,
+                        packet.sequence,
+                        if packet.arrived { "ack" } else { "lost" },
+                    );
                 }
                 match (packet.arrived, record.delivery) {
                     (arrived, Delivery::SceneScript { last }) => {
@@ -538,6 +553,36 @@ impl WorldDelivery {
             retry.append(&mut self.queued);
             self.queued = retry;
             self.remove_stale();
+        }
+    }
+
+    #[cfg(feature = "inspector")]
+    fn trace_playtest_delivery(&self, record: &Record, sequence: u32, event: &str) {
+        let entity = record.update.entity;
+        match record.delivery {
+            Delivery::BotCreate { after: Some(old) } => {
+                crate::owner_trace::playtest(format_args!(
+                    "bot-respawn event={event} owner={:08x} packet={sequence} record=create old={old:08x} new={entity:08x}",
+                    self.owner
+                ));
+            }
+            Delivery::BotDestroy => crate::owner_trace::playtest(format_args!(
+                "bot-respawn event={event} owner={:08x} packet={sequence} record=destroy old={entity:08x}",
+                self.owner
+            )),
+            Delivery::ProjectileConfirm { id, token }
+            | Delivery::ProjectileDestroy { id, token } => {
+                let operation = if matches!(record.delivery, Delivery::ProjectileConfirm { .. }) {
+                    "confirm"
+                } else {
+                    "destroy"
+                };
+                crate::owner_trace::playtest(format_args!(
+                    "projectile event={event} owner={:08x} packet={sequence} record={operation} token={token:?} entity={entity:08x}",
+                    id.entity
+                ));
+            }
+            _ => {}
         }
     }
 
@@ -762,6 +807,12 @@ impl WorldDelivery {
             send,
         )?;
         let indexes = Self::sent_indices(&queued, &sent.records);
+        #[cfg(feature = "inspector")]
+        if crate::owner_trace::playtest_enabled() {
+            for &index in &indexes {
+                self.trace_playtest_delivery(&self.queued[index], sent.sequence, "sent");
+            }
+        }
         self.sent(&indexes);
         if !reliable_only {
             self.bot_chunk_waited = contention && !bot_turn;

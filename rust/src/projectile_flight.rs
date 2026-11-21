@@ -150,6 +150,8 @@ pub struct ProjectileFlight {
 #[derive(Debug, PartialEq)]
 pub struct FlightEnd {
     pub point: Vec3,
+    /// The directly contacted actor, if the flight ended against one.
+    pub contact: Option<u32>,
     pub travelled: f64,
     pub impacts: Vec<Impact>,
     pub expired: bool,
@@ -289,7 +291,7 @@ impl ProjectileFlight {
                 } else {
                     Vec::new()
                 };
-                return Ok(Some(self.finish(impacts, true)));
+                return Ok(Some(self.finish(impacts, true, None)));
             }
             return Ok(None);
         };
@@ -327,7 +329,7 @@ impl ProjectileFlight {
         if speed > EPSILON {
             self.travelled += distance / speed;
         }
-        Ok(Some(self.finish(impacts, false)))
+        Ok(Some(self.finish(impacts, false, target)))
     }
 
     fn splash<T: Copy + Into<HurtPose>>(
@@ -378,10 +380,11 @@ impl ProjectileFlight {
         Ok(impacts)
     }
 
-    fn finish(&mut self, impacts: Vec<Impact>, expired: bool) -> FlightEnd {
+    fn finish(&mut self, impacts: Vec<Impact>, expired: bool, contact: Option<u32>) -> FlightEnd {
         self.ended = true;
         FlightEnd {
             point: self.position,
+            contact,
             travelled: self.travelled,
             impacts,
             expired,

@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-21
 
+- Add opt-in Inspector diagnostics for projectile launch, impact, and delivery, and for the creation and delivery of replacement Practice Range bots. These records can be collected independently of the high-frequency owner-volley trace.
+
 - Handle the stock bot death selector with the shared owner operand check. A blocking public diagnostic stops that bot's script projection while the room continues to simulate it. The prepared Practice Range regression now checks each of the first ten corpse frames and the replacement.
 
 - Publish authored mode values in the initial mode presentation frame. A prepared Practice Range wire check verifies the flags used by the training bot nameplate, including explicit false values. Original-client visibility remains pending.

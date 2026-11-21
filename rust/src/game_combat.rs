@@ -1940,7 +1940,35 @@ impl RoomSimulation {
                     continue;
                 }
                 Ok(Some(end)) => {
+                    #[cfg(feature = "inspector")]
+                    {
+                        let surface = if end.expired {
+                            "expiry"
+                        } else if end.contact.is_some() {
+                            "actor"
+                        } else {
+                            "world"
+                        };
+                        crate::owner_trace::playtest(format_args!(
+                            "projectile event=ended peer={connection} owner={:08x} token={token:?} tick={} surface={surface} contact={:?} point={:?} travelled_s={} impacts={}",
+                            owner.entity,
+                            context.tick,
+                            end.contact,
+                            end.point,
+                            end.travelled,
+                            end.impacts.len()
+                        ));
+                    }
                     for impact in &end.impacts {
+                        #[cfg(feature = "inspector")]
+                        crate::owner_trace::playtest(format_args!(
+                            "projectile event=impact peer={connection} owner={:08x} token={token:?} tick={} target={:08x} raw_damage={} distance={}",
+                            owner.entity,
+                            context.tick,
+                            impact.entity,
+                            impact.damage,
+                            impact.distance
+                        ));
                         if self.players_by_wire.contains_key(&impact.entity) {
                             if let Some(hit) = self.apply_player_impact(
                                 owner.entity,
@@ -1994,8 +2022,18 @@ impl RoomSimulation {
                 }
                 // A query exceeding the bounded ray budget cancels only this
                 // flight. Broken geometry and ECS ownership are room faults.
-                Err(IndexError::RayTraversalLimit) => outcomes.push(FlightOutcome::Failed(token)),
-                Err(error) => return Err(error.into()),
+                Err(error) => {
+                    #[cfg(feature = "inspector")]
+                    crate::owner_trace::playtest(format_args!(
+                        "projectile event=failed peer={connection} owner={:08x} token={token:?} tick={} reason={error:?}",
+                        owner.entity, context.tick
+                    ));
+                    if matches!(error, IndexError::RayTraversalLimit) {
+                        outcomes.push(FlightOutcome::Failed(token));
+                    } else {
+                        return Err(error.into());
+                    }
+                }
             }
             if !self.world.despawn(entity) {
                 return Err(CombatError::MissingFlight { connection, entity });
@@ -2819,6 +2857,11 @@ impl RoomSimulation {
                 .get_index_mut(slot)
                 .ok_or(CombatError::MissingBotSlot(slot))?
                 .1 = entity;
+            #[cfg(feature = "inspector")]
+            crate::owner_trace::playtest(format_args!(
+                "bot-respawn event=created tick={tick} old={:08x} new={fresh_wire:08x}",
+                replacement.retired
+            ));
             replacements.push(replacement);
         }
         self.next_bot = next_bot;

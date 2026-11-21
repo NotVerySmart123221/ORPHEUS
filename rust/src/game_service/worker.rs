@@ -62,7 +62,10 @@ pub(super) fn run(
         state.debug_control_enabled = options.debug_control;
     }
     #[cfg(feature = "inspector")]
-    crate::owner_trace::enabled();
+    {
+        crate::owner_trace::enabled();
+        crate::owner_trace::start_playtest_capture();
+    }
     if ready.send(Ok(())).is_err() {
         return Ok(());
     }
