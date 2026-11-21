@@ -84,10 +84,11 @@ python scripts/build_runtime_state_metadata.py --graph-bundle path/to/game_graph
 For the Practice Range firing probe, use an evidence directory with one
 listing each for placement graph `0B92` and weapon graph `0BA3`. Map
 archives can contain identical graph indices in several map folders.
-Select the matching listings before importing. The bot starts the
-placement graph privately and uses the entity definition's weapon-slot
-bindings to feed the body's ordinary logical-button dispatcher. The
-headless probes check press, release, and projectile flight admission.
+Select the matching listings before importing. Each bot reads its
+placement roots from the map spawner. The server privately mounts roots
+with a supported weapon input state when the body supplies a usable
+slot binding. The body's ordinary logical-button dispatcher receives the
+input. The headless probes check press, release, and projectile flight admission.
 Flight uses the room's existing hostile-target and collision queries.
 A controlled room fixture verifies damage to a live bot and a player
 while a same-team target remains unharmed. Client presentation remains

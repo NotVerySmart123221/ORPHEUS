@@ -1516,9 +1516,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::CinematicTimeScale { boundary_frame: 0 }
             }
             "STU_91EF24A9" => StateKind::AiCandidate { selected: false },
-            "STU_D7F9E1C3" if field(&node.fields, "m_234135C3").is_null() => {
-                StateKind::AiWeaponFire(None)
-            }
+            _ if node.is_ai_weapon_fire() => StateKind::AiWeaponFire(None),
             "STUStatescriptStateLogicalButton" => StateKind::LogicalButton { down: false },
             "STU_E4A30BCF" => StateKind::ButtonBlock(None),
             _ if button_lock.is_some() => StateKind::ButtonBlock(None),

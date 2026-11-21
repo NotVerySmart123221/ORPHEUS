@@ -13,12 +13,12 @@ use serde_json::Value as Json;
 
 use crate::{
     commands::Command,
-    game_bots::{Bot, FIRING_PLACEMENT_GRAPH},
+    game_bots::Bot,
     mover::sample_movement_flags,
     script_codecs::CodecTable,
     script_enemy::{EnemyProjectile, projectile_pattern},
     script_expr::{EngineSetting, EntityRelation, is_zeroed_owner_selector, native_shape},
-    script_graph::GraphStore,
+    script_graph::{GraphStore, graph_asset_index},
     script_init::{
         self, AiControlOverride, AiWeaponOverride, Component, HUD_MAX_HEALTH, InitFault, Issue,
         MAX_INIT_WORK, MovementSample, OWNER_HEALTH, Root, Site, TargetTagEffect, TargetTagEffects,
@@ -61,7 +61,7 @@ pub(super) struct StockBotWorld {
     target_tag_effects: TargetTagEffects,
     display_names: HashMap<Site, u64>,
     ai_control_overrides: BTreeMap<(u16, u16), AiControlOverride>,
-    firing_placement: bool,
+    placement_graphs: Vec<u32>,
 }
 
 impl StockBotWorld {
@@ -271,9 +271,7 @@ impl World for StockBotWorld {
         }
         match relation {
             EntityRelation::PossessedBody
-                if entity == self.entity
-                    && self.firing_placement
-                    && site.graph == FIRING_PLACEMENT_GRAPH =>
+                if entity == self.entity && self.placement_graphs.contains(&site.graph) =>
             {
                 Some(self.entity)
             }
@@ -292,8 +290,7 @@ impl World for StockBotWorld {
     }
 
     fn selects_ai_behavior(&mut self, site: Site) -> Option<bool> {
-        (site.entity == self.entity)
-            .then_some(self.firing_placement && site.graph == FIRING_PLACEMENT_GRAPH)
+        (site.entity == self.entity).then(|| self.placement_graphs.contains(&site.graph))
     }
 
     fn ai_control_override(
@@ -410,11 +407,25 @@ impl StockBotScript {
                 Some((slot, held_button_mask(button)?))
             })
             .collect::<BTreeMap<_, _>>();
-        let firing_placement = bot.spawn.firing
-            && !weapon_inputs.is_empty()
-            && catalog.graphs.graph(FIRING_PLACEMENT_GRAPH).is_some();
-        if firing_placement {
-            roots.push(Root::server_only(FIRING_PLACEMENT_GRAPH));
+        let mut placement_graphs = Vec::new();
+        if !weapon_inputs.is_empty() {
+            for index in bot
+                .spawn
+                .placement_graphs
+                .iter()
+                .copied()
+                .filter_map(graph_asset_index)
+            {
+                if !roots.iter().any(|root| root.graph == index)
+                    && catalog
+                        .graphs
+                        .graph(index)
+                        .is_some_and(|graph| graph.drives_ai_weapon_input())
+                {
+                    roots.push(Root::server_only(index));
+                    placement_graphs.push(index);
+                }
+            }
         }
         let mut world = StockBotWorld {
             graphs: Arc::clone(&catalog.graphs),
@@ -435,7 +446,7 @@ impl StockBotScript {
             target_tag_effects: TargetTagEffects::default(),
             display_names: HashMap::new(),
             ai_control_overrides: BTreeMap::new(),
-            firing_placement,
+            placement_graphs,
         };
         let component = match Component::start_with_public_schema(
             Arc::clone(&catalog.graphs),
@@ -461,12 +472,6 @@ impl StockBotScript {
             weapon_inputs,
             faulted: false,
         };
-        let placement = script.component.snapshot().and_then(|snapshot| {
-            snapshot.instances.iter().find_map(|(&id, instance)| {
-                (instance.graph == FIRING_PLACEMENT_GRAPH && instance.is_server_only())
-                    .then_some(id)
-            })
-        });
         let queued = match entry {
             // The replacement's body, including its private placement
             // behavior, receives the authored reset before publication.
@@ -475,11 +480,27 @@ impl StockBotScript {
                 RESET_MESSAGE,
                 Variables::new(),
             ),
-            BodyEntry::Initial => placement.map_or(Ok(0), |instance| {
-                script
+            BodyEntry::Initial => {
+                let placements = script
                     .component
-                    .queue_message(instance, RESET_MESSAGE, Variables::new())
-            }),
+                    .snapshot()
+                    .into_iter()
+                    .flat_map(|snapshot| {
+                        snapshot.instances.iter().filter_map(|(&id, instance)| {
+                            (instance.is_server_only()
+                                && instance.parent.is_none()
+                                && script.world.placement_graphs.contains(&instance.graph))
+                            .then_some(id)
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                placements.into_iter().try_fold(0, |total, id| {
+                    script
+                        .component
+                        .queue_message(id, RESET_MESSAGE, Variables::new())
+                        .map(|queued| total + queued)
+                })
+            }
         };
         let result = queued.and_then(|count| {
             if count == 0 {
@@ -563,7 +584,7 @@ impl StockBotScript {
             return;
         }
         self.frame = tick;
-        let result = if self.world.firing_placement && !bot.dead {
+        let result = if !self.world.placement_graphs.is_empty() && !bot.dead {
             let buttons = if bot.is_stunned(tick) {
                 0
             } else {

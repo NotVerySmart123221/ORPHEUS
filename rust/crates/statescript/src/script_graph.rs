@@ -132,6 +132,12 @@ impl Node {
         self.state_behavior.is_some() || self.fields.get("m_2BBEEAB8").is_some_and(truthy)
     }
 
+    pub(crate) fn is_ai_weapon_fire(&self) -> bool {
+        self.class == "STU_D7F9E1C3"
+            && self.field("m_234135C3").is_none_or(Value::is_null)
+            && self.runs_on_server()
+    }
+
     /// Whether authored metadata opts this node into the ordinary state lifecycle.
     pub fn declares_plain_state(&self) -> bool {
         matches!(self.state_behavior, Some(StateBehavior::Plain))
@@ -1133,6 +1139,15 @@ impl Graph {
         self.node((*self.states.get(index)?)?)
     }
 
+    /// Whether this graph contains a supported server-side weapon input state.
+    pub fn drives_ai_weapon_input(&self) -> bool {
+        self.states
+            .iter()
+            .flatten()
+            .filter_map(|&position| self.node(position))
+            .any(Node::is_ai_weapon_fire)
+    }
+
     pub fn remote_node(&self, index: usize) -> Option<&Node> {
         self.node((*self.remote_nodes.get(index)?)?)
     }
@@ -1286,11 +1301,17 @@ fn optional_graph_index<'de, D: serde::Deserializer<'de>>(
     Option::<Value>::deserialize(deserializer)?
         .map(|value| {
             asset_guid(&value)
-                .filter(|guid| guid >> 48 == GRAPH_TYPE)
-                .and_then(|guid| u32::try_from(guid & 0x0000_ffff_ffff_ffff).ok())
+                .and_then(graph_asset_index)
                 .ok_or_else(|| serde::de::Error::custom("invalid StateScript graph GUID"))
         })
         .transpose()
+}
+
+/// Resolve an authored StateScript resource to the graph bundle's index.
+pub fn graph_asset_index(guid: u64) -> Option<u32> {
+    (guid >> 48 == GRAPH_TYPE)
+        .then(|| u32::try_from(guid & 0x0000_ffff_ffff_ffff).ok())
+        .flatten()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

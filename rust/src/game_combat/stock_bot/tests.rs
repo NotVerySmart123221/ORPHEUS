@@ -4,6 +4,99 @@ use super::*;
 use crate::{game_bots::BotCatalog, game_combat::RoomSimulation, script_snapshot_wire::View};
 
 #[test]
+fn stock_bot_weapon_placement_uses_map_graphs_and_body_slot_bindings() {
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/stock-bot-weapon-placement-v1.json"
+    ))
+    .unwrap();
+    let input = &fixture["input"];
+    let bot_catalog = BotCatalog::from_json(
+        &json!({
+            "heroes": {
+                "0x01":{"name":"Fixture bot","body":"0x11","health":100},
+                "0x02":{"name":"Fixture unarmed","body":"0x12","health":100}
+            },
+            "maps": {"0x03":{"hints":{},"spawners":[
+                {"hero":"0x01","team":1,"position":[0,0,0],"rotation":[0,0,0,1],
+                 "graphs":input["graphs"]},
+                {"hero":"0x02","team":1,"position":[1,0,0],"rotation":[0,0,0,1],
+                 "graphs":input["graphs"]}
+            ]}}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let bots = bot_catalog.make(3, |_| Default::default());
+    let graph = |index, class, client_only| {
+        json!({
+            "index": index, "items": 2, "entries": [0], "states": [1], "remote": [],
+            "sync_vars": [], "containers": {}, "unknown_nodes": [], "fields": {},
+            "header": {"m_nodesBitCount": 2, "m_statesBitCount": 2,
+                "m_remoteSyncNodesBitCount": 2, "m_syncVarsBitCount": 2},
+            "nodes": [
+                {"pos": 0, "rid": 0, "uid": 0, "remote": -1, "class": "STUStatescriptEntry",
+                 "state": null, "server_only": false, "client_only": false,
+                 "fields": {"m_outPlug": {"$":"Plug", "links":[[1, "m_beginPlug"]]}}},
+                {"pos": 1, "rid": 1, "uid": 1, "remote": -1, "class":class,
+                 "state": 0, "server_only": false, "client_only":client_only,
+                 "fields": {"m_2BBEEAB8":1,
+                   "m_14EDDDA7":{"$":"STU_B5A0CAF0"},
+                   "m_20BCEE62":{"$":"STUConfigVarBool","m_value":true},
+                   "m_A60150E2":{"$":"STUConfigVarInt","m_value":input["slot"]}
+                 }}
+            ]
+        })
+    };
+    let slot = input["slot"].as_u64().unwrap().to_string();
+    let catalog = StockBotCatalog {
+        graphs: Arc::new(
+            GraphStore::from_json(
+                &serde_json::to_vec(&json!({
+                    "version": 1, "missing": [], "bodies": {},
+                    "entities":{
+                        "0x11":{"name":"Fixture bot","graphs":[],"weapons":[],
+                            "ai_weapon_buttons":{(slot):input["logical_button"]}},
+                        "0x12":{"name":"Fixture unarmed","graphs":[],"weapons":[]}
+                    },
+                    "graphs":[
+                        graph(0x0611, "STU_D7F9E1C3", false),
+                        graph(0x0612, "STUStatescriptState", false),
+                        graph(0x0613, "STU_D7F9E1C3", false),
+                        graph(0x0614, "STU_D7F9E1C3", true)
+                    ]
+                }))
+                .unwrap(),
+            )
+            .unwrap(),
+        ),
+        codecs: Arc::new(CodecTable::from_json(r#"{"classes":{}}"#).unwrap()),
+        mode: 1,
+    };
+    assert_eq!(bots.len(), 2);
+    let mut armed = StockBotScript::start(&catalog, &bots[0], 100, BodyEntry::Initial).unwrap();
+    let roots: Vec<_> = armed
+        .component
+        .snapshot()
+        .unwrap()
+        .instances
+        .values()
+        .map(|root| {
+            assert!(root.is_server_only());
+            root.graph
+        })
+        .collect();
+    assert_eq!(json!(roots), fixture["expected"]["server_roots"]);
+    armed.advance(101, &bots[0]);
+    assert_eq!(
+        json!(armed.component.command_buttons()),
+        fixture["expected"]["command_buttons"]
+    );
+
+    let unarmed = StockBotScript::start(&catalog, &bots[1], 100, BodyEntry::Initial).unwrap();
+    assert!(unarmed.component.snapshot().unwrap().instances.is_empty());
+}
+
+#[test]
 #[ignore = "requires a prepared 104319 Practice Range pack"]
 fn prepared_bot_respawn_projects_its_authored_animation_in_the_first_frame() {
     let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
@@ -18,7 +111,22 @@ fn prepared_bot_respawn_projects_its_authored_animation_in_the_first_frame() {
         .make(crate::game_content::PRACTICE_RANGE_MAP, |_| {
             Default::default()
         });
-    let bot = bots.iter().find(|bot| bot.spawn.firing).unwrap();
+    let bot = bots
+        .iter()
+        .find(|bot| {
+            bot.spawn
+                .placement_graphs
+                .iter()
+                .copied()
+                .filter_map(graph_asset_index)
+                .any(|index| {
+                    catalog
+                        .graphs
+                        .graph(index)
+                        .is_some_and(|graph| graph.drives_ai_weapon_input())
+                })
+        })
+        .unwrap();
     let replacement = bot.respawned(bot.entity + 100, 300);
     let script = StockBotScript::start(&catalog, &replacement, 292, BodyEntry::Respawn).unwrap();
     let snapshot = script.component.snapshot().unwrap();
@@ -67,7 +175,22 @@ fn prepared_firing_placement_drives_the_stock_weapon_graph() {
         .make(crate::game_content::PRACTICE_RANGE_MAP, |_| {
             Default::default()
         });
-    let bot = bots.iter().find(|bot| bot.spawn.firing).unwrap();
+    let bot = bots
+        .iter()
+        .find(|bot| {
+            bot.spawn
+                .placement_graphs
+                .iter()
+                .copied()
+                .filter_map(graph_asset_index)
+                .any(|index| {
+                    catalog
+                        .graphs
+                        .graph(index)
+                        .is_some_and(|graph| graph.drives_ai_weapon_input())
+                })
+        })
+        .unwrap();
     let start = 100;
     let mut script = StockBotScript::start(&catalog, bot, start, BodyEntry::Initial).unwrap();
     let mut held_ticks = 0;
