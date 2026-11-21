@@ -340,6 +340,7 @@ fn prepared_practice_debug_view_contains_real_collision_layers() {
 fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
     use crate::commands::Command;
     use crate::game_replication::BodyStep;
+    use crate::mover_modifiers::SPEED_SLOT;
     use crate::script_init::{Snapshot, StateKind};
     use crate::script_snapshot_wire::identity_test_reader::IdentityReader;
     use crate::script_snapshot_wire::{View, uncertain_polled_switch};
@@ -491,8 +492,11 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
             let (forward, buttons) = match t {
                 188..=281 | 520..=540 | 600..=640 => (0, 1),
                 300 => (0, 0x400),
-                700 => (127, 8),
-                701..=760 => (127, 0),
+                // Match the observed two-frame combined mask and the
+                // subsequent held Shift before forward-only movement.
+                700..=701 => (127, 0x2008),
+                702..=709 => (127, 0x8),
+                710..=760 => (127, 0),
                 _ => (0, 0),
             };
             let command = Command {
@@ -540,8 +544,8 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
             let sprint = &snapshot.instances[&sprint_id];
             assert_eq!(sprint.graph, 0x0255);
             let (flags, hud) = match t {
-                700 => (5, Some(1)),
-                701..=760 => (1, Some(1)),
+                700..=709 => (5, Some(1)),
+                710..=760 => (1, Some(1)),
                 761.. => (0, Some(0)),
                 _ => (0, None),
             };
@@ -549,6 +553,17 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
                 (sprint.states[&1].kind, int(sprint.variables.get(&699))),
                 (StateKind::Ability { flags }, hud),
                 "{t}"
+            );
+            let speed_modifier = runtime
+                .movement_modifiers()
+                .expect("complete owner movement state")
+                .iter()
+                .find(|(key, value)| key.instance == sprint_id && value.index == SPEED_SLOT)
+                .map(|(_, value)| value);
+            assert_eq!(
+                speed_modifier.is_some_and(|modifier| modifier.apply(1.0) > 1.0),
+                (700..=760).contains(&t),
+                "Sprint speed modifier at {t}"
             );
             let excluded = uncertain(snapshot);
             let encoder = runtime.encoder();

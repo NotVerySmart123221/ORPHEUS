@@ -729,8 +729,8 @@ pub(super) fn isolated_soldier_sprint_ability_matches_the_authored_toggle_and_mo
     )
     .unwrap();
     let rows = [
-        (1030, 0, 8, 0, None),
-        (1031, 63, 8, 0, None),
+        (1030, 0, 0x2008, 0, None),
+        (1031, 63, 0x2008, 0, None),
         (1032, 64, 8, 0, None),
         (1033, 64, 8, 5, Some(1)),
         (1034, 127, 0, 1, Some(1)),
@@ -741,6 +741,15 @@ pub(super) fn isolated_soldier_sprint_ability_matches_the_authored_toggle_and_mo
         (1039, 63, 0, 0, Some(0)),
         (1040, 127, 0, 0, Some(0)),
         (1041, 127, 9, 0, Some(0)),
+        // Release the measured Shift mask before crossing the throttle
+        // threshold. Forward input alone must not restart Sprint.
+        (1042, 0, 0, 0, Some(0)),
+        (1043, 0, 0x2008, 0, Some(0)),
+        (1044, 0, 0x2008, 0, Some(0)),
+        (1045, 63, 0x8, 0, Some(0)),
+        (1046, 63, 0, 0, Some(0)),
+        (1047, 127, 0, 0, Some(0)),
+        (1048, 127, 0, 0, Some(0)),
     ];
     for (frame, forward, buttons, flags, hud) in rows {
         world.forward = forward;

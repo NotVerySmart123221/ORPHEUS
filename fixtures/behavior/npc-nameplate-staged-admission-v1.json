@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "case_id": "npc-nameplate-staged-admission-v1",
+  "evidence": "rust-synthetic",
+  "input": {
+    "lost_introduction": true,
+    "concurrent_entity_variable": 12345
+  },
+  "expected": {
+    "parent_baseline_has_nameplate": false,
+    "introduction_has_nameplate": true,
+    "introduction_has_concurrent_entity_variable": false,
+    "following_delta_has_concurrent_entity_variable": true,
+    "dead_baseline_has_nameplate": false
+  }
+}

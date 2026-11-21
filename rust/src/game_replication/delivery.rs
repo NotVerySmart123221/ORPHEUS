@@ -162,6 +162,10 @@ impl WorldDelivery {
         self.world_started() && self.created.contains(&entity)
     }
 
+    pub(crate) fn owner_body_ready(&self, id: BodyId) -> bool {
+        self.bound == Some(id) && self.identity_ready(id.entity)
+    }
+
     pub(crate) fn track_entity_notice(&mut self, entity: u32, ordinal: u32) {
         self.entity_notice_ordinals.insert(entity, ordinal);
     }
@@ -268,6 +272,13 @@ impl WorldDelivery {
         let new = replacement.created.entity;
         if !self.tracks_current_bot(old) || self.bots.contains_key(&new) {
             return;
+        }
+        #[cfg(feature = "inspector")]
+        if let Some(Operation::Create(create)) = &replacement.created.operation {
+            crate::owner_trace::playtest(format_args!(
+                "bot-respawn event=queued owner={:08x} old={old:08x} new={new:08x} spawn={:?}",
+                self.owner, create.position
+            ));
         }
         self.bots.insert(old, BotLifetime::Retiring);
         self.bots.insert(new, BotLifetime::Live);
@@ -401,6 +412,14 @@ impl WorldDelivery {
                 if !self.current(&record) {
                     continue;
                 }
+                #[cfg(feature = "inspector")]
+                if crate::owner_trace::playtest_enabled() {
+                    self.trace_playtest_delivery(
+                        &record,
+                        packet.sequence,
+                        if packet.arrived { "ack" } else { "lost" },
+                    );
+                }
                 match (packet.arrived, record.delivery) {
                     (arrived, Delivery::SceneScript { last }) => {
                         let stream = self
@@ -426,12 +445,12 @@ impl WorldDelivery {
                         #[cfg(feature = "inspector")]
                         if let Some(arrived) = delivery
                             .owner_report
-                            .filter(|_| owner_volley_trace_enabled())
+                            .filter(|_| crate::owner_trace::enabled())
                         {
-                            eprintln!(
+                            crate::owner_trace::record(format_args!(
                                 "owner-volley delivery body={:08x} chunk={last} arrived={arrived}",
                                 script.id.entity
-                            );
+                            ));
                         }
                         if let Some((projectiles, arrived)) =
                             script.projectiles.as_mut().zip(delivery.owner_report)
@@ -541,6 +560,36 @@ impl WorldDelivery {
         }
     }
 
+    #[cfg(feature = "inspector")]
+    fn trace_playtest_delivery(&self, record: &Record, sequence: u32, event: &str) {
+        let entity = record.update.entity;
+        match record.delivery {
+            Delivery::BotCreate { after: Some(old) } => {
+                crate::owner_trace::playtest(format_args!(
+                    "bot-respawn event={event} owner={:08x} packet={sequence} record=create old={old:08x} new={entity:08x}",
+                    self.owner
+                ));
+            }
+            Delivery::BotDestroy => crate::owner_trace::playtest(format_args!(
+                "bot-respawn event={event} owner={:08x} packet={sequence} record=destroy old={entity:08x}",
+                self.owner
+            )),
+            Delivery::ProjectileConfirm { id, token }
+            | Delivery::ProjectileDestroy { id, token } => {
+                let operation = if matches!(record.delivery, Delivery::ProjectileConfirm { .. }) {
+                    "confirm"
+                } else {
+                    "destroy"
+                };
+                crate::owner_trace::playtest(format_args!(
+                    "projectile event={event} owner={:08x} packet={sequence} record={operation} token={token:?} entity={entity:08x}",
+                    id.entity
+                ));
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn remove_stale(&mut self) {
         let mut queued = std::mem::take(&mut self.queued);
         queued.retain(|record| self.current(record));
@@ -620,9 +669,7 @@ impl WorldDelivery {
                     {
                         return None;
                     }
-                    Delivery::ProjectileConfirm { id, .. }
-                        if self.bound != Some(id) || !self.created.contains(&id.entity) =>
-                    {
+                    Delivery::ProjectileConfirm { id, .. } if !self.owner_body_ready(id) => {
                         // Even a fallback confirmation needs an acknowledged owner lease.
                         return None;
                     }
@@ -762,6 +809,12 @@ impl WorldDelivery {
             send,
         )?;
         let indexes = Self::sent_indices(&queued, &sent.records);
+        #[cfg(feature = "inspector")]
+        if crate::owner_trace::playtest_enabled() {
+            for &index in &indexes {
+                self.trace_playtest_delivery(&self.queued[index], sent.sequence, "sent");
+            }
+        }
         self.sent(&indexes);
         if !reliable_only {
             self.bot_chunk_waited = contention && !bot_turn;
@@ -1034,16 +1087,8 @@ impl WorldDelivery {
         {
             return Ok(());
         }
-        // Client 0x0D24 nameplates read mode variables from 0CB6, so hold them
-        // until mode_ready() and never add a new nameplate to an already-dead bot.
-        let strip_nameplate = self.bots.contains_key(&entity)
-            && (!self.mode_ready()
-                || (bot_dead
-                    && !self
-                        .scene_views
-                        .get(&entity)
-                        .and_then(|stream| stream.base())
-                        .is_some_and(|(_, base)| base.has_graph(0x0d24))));
+        let bot = self.bots.contains_key(&entity);
+        let can_introduce = self.mode_ready() && !bot_dead;
         let stream = self
             .scene_views
             .entry(entity)
@@ -1059,8 +1104,8 @@ impl WorldDelivery {
             let mut snapshot = encoder
                 .project_next(projection.snapshot, base)
                 .map_err(invalid)?;
-            if strip_nameplate {
-                snapshot.strip_practice_nameplates();
+            if bot {
+                snapshot.stage_practice_nameplates(Some(base), can_introduce);
             }
             encoder
                 .queue_delta(stream, &snapshot, DeltaKind::Observer { resend: true }, 16)
@@ -1069,8 +1114,8 @@ impl WorldDelivery {
             let mut snapshot = encoder
                 .project(projection.snapshot, View::Observer)
                 .map_err(invalid)?;
-            if strip_nameplate {
-                snapshot.strip_practice_nameplates();
+            if bot {
+                snapshot.stage_practice_nameplates(None, false);
             }
             Some(encoder.queue_full(stream, &snapshot).map_err(invalid)?)
         };

@@ -94,54 +94,90 @@ impl ProjectedSnapshot {
         self
     }
 
+    #[cfg(test)]
     pub(crate) fn has_graph(&self, graph: u32) -> bool {
         self.instances
             .values()
             .any(|instance| instance.graph == graph)
     }
 
-    /// Omit Practice Range `0x0D24` nameplate subgraphs (and any descendants)
-    /// from an observer projection until the game mode entity is ready.
-    pub(crate) fn strip_practice_nameplates(&mut self) {
+    /// Introduce a Practice Range nameplate after the viewer has acknowledged
+    /// both the mode HUD and its body-script parent. The introducing delta
+    /// changes only the deferred subtree.
+    pub(crate) fn stage_practice_nameplates(&mut self, base: Option<&Self>, can_introduce: bool) {
         const PRACTICE_NAMEPLATE: u32 = 0x0d24;
-        let mut removed = BTreeSet::new();
-        for (&id, instance) in &self.instances {
-            if instance.graph == PRACTICE_NAMEPLATE {
-                removed.insert(id);
-            }
-        }
-        if removed.is_empty() {
+        let mut unseen: BTreeSet<_> = self
+            .instances
+            .iter()
+            .filter_map(|(&id, instance)| {
+                (instance.graph == PRACTICE_NAMEPLATE
+                    && base.is_none_or(|base| !base.instances.contains_key(&id)))
+                .then_some(id)
+            })
+            .collect();
+        if unseen.is_empty() {
             return;
         }
-        loop {
-            let mut grew = false;
-            for (&id, instance) in &self.instances {
-                if !removed.contains(&id)
-                    && instance
-                        .parent
-                        .is_some_and(|(parent, _)| removed.contains(&parent))
-                {
-                    removed.insert(id);
-                    grew = true;
+        if let Some(base) = base.filter(|_| can_introduce) {
+            let mut ready: BTreeSet<_> = unseen
+                .iter()
+                .copied()
+                .filter(|id| {
+                    let Some((parent, _)) = self.instances[id].parent else {
+                        return false;
+                    };
+                    base.instances
+                        .get(&parent)
+                        .zip(self.instances.get(&parent))
+                        .is_some_and(|(previous, current)| {
+                            previous.graph == current.graph && previous.parent == current.parent
+                        })
+                })
+                .collect();
+            if !ready.is_empty() {
+                self.extend_descendants(&mut ready);
+                let mut introduction = base.clone();
+                for id in ready {
+                    if let Some(instance) = self.instances.remove(&id) {
+                        introduction.instances.insert(id, instance);
+                    }
                 }
-            }
-            if !grew {
-                break;
+                introduction.callouts.clear();
+                *self = introduction;
+                return;
             }
         }
-        self.instances.retain(|id, _| !removed.contains(id));
+        self.extend_descendants(&mut unseen);
+        self.instances.retain(|id, _| !unseen.contains(id));
         for instance in self.instances.values_mut() {
             for state in instance.states.values_mut() {
                 if state
                     .link
-                    .is_some_and(|link| removed.contains(&link.instance))
+                    .is_some_and(|link| unseen.contains(&link.instance))
                 {
                     state.link = None;
                 }
             }
         }
         self.callouts
-            .retain(|callout| !removed.contains(&callout.instance));
+            .retain(|callout| !unseen.contains(&callout.instance));
+    }
+
+    fn extend_descendants(&self, selected: &mut BTreeSet<u16>) {
+        loop {
+            let mut changed = false;
+            for (&id, instance) in &self.instances {
+                if instance
+                    .parent
+                    .is_some_and(|(parent, _)| selected.contains(&parent))
+                {
+                    changed |= selected.insert(id);
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
     }
 
     /// The activation counter and absolute start in milliseconds from this frame.
@@ -186,10 +222,10 @@ impl ProjectedSnapshot {
                 if sent_state || written_ammo.is_some() {
                     let (counter, start_ms) = volley.identity;
                     let introduced = changes.contains(&ChangeKey::VolleyIntroduction(id, raw));
-                    eprintln!(
+                    crate::owner_trace::record(format_args!(
                         "owner-volley delta body={:08x} chunk={chunk} frame={frame} instance={id} state={raw} sent_state={sent_state} active={} counter={counter} start_ms={start_ms} introduced={introduced} written_ammo={written_ammo:?}",
                         self.entity, state.active
-                    );
+                    ));
                 }
             }
         }

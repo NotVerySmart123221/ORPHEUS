@@ -7,7 +7,7 @@ use std::{borrow::Borrow, error::Error, fmt};
 
 use crate::bits::{BitError, BitWriter};
 use crate::game_link::{HEADER_SIZE, MAX_DATAGRAM};
-use crate::game_messages::{ChannelError, MAX_PER_KIND, write_channel};
+use crate::game_messages::{ChannelError, EncodedMessage, MAX_PER_KIND, write_channel};
 pub use orpheus_statescript::script_runtime::{
     ARMOUR_POOL, GAME_MODE_ENTITY, HEALTH_POOL, MAX_MOVEMENT_AXIS, MOVEMENT_AXIS_BITS,
     POSITION_UNITS, SHIELDS_POOL,
@@ -725,8 +725,8 @@ fn write_entity(out: &mut BitWriter, item: &EntityUpdate, tick: u32) -> Result<(
 pub fn frame(
     tick: u32,
     ack: u32,
-    reliable: &[(u32, Vec<u8>)],
-    unreliable: &[Vec<u8>],
+    reliable: &[(u32, EncodedMessage)],
+    unreliable: &[EncodedMessage],
     entities: &[&EntityUpdate],
 ) -> Result<Vec<u8>, WorldError> {
     if entities.len() > MAX_ENTITY_RECORDS {
@@ -749,8 +749,8 @@ pub fn frame(
 
 pub struct FrameCandidates<'a, Queued = EntityUpdate> {
     pub tick: u32,
-    pub reliable: &'a [(u32, Vec<u8>)],
-    pub unreliable: &'a [Vec<u8>],
+    pub reliable: &'a [(u32, EncodedMessage)],
+    pub unreliable: &'a [EncodedMessage],
     pub queued: &'a [Queued],
     pub movements: &'a [EntityUpdate],
     /// The final movement, if present, corrects the owner.
@@ -799,16 +799,17 @@ pub fn select_frame<'a, Queued: Borrow<EntityUpdate>>(
             .take(MAX_ENTITY_RECORDS)
             .collect()
     };
-    let encode =
-        |reliable: &[(u32, Vec<u8>)], unreliable: &[Vec<u8>], records: &[&EntityUpdate]| {
-            frame(
-                tick,
-                ack_for_records(records),
-                reliable,
-                unreliable,
-                records,
-            )
-        };
+    let encode = |reliable: &[(u32, EncodedMessage)],
+                  unreliable: &[EncodedMessage],
+                  records: &[&EntityUpdate]| {
+        frame(
+            tick,
+            ack_for_records(records),
+            reliable,
+            unreliable,
+            records,
+        )
+    };
     let mut payload = encode(reliable, unreliable, &entities)?;
     if payload.len() > MAX_PAYLOAD {
         if !unreliable.is_empty() || !entities.is_empty() {
@@ -1146,8 +1147,8 @@ mod tests {
         let payload = frame(
             0x1234_5678,
             0x0004_0001,
-            &[(7, vec![0, 2, 0xab])],
-            &[vec![2, 1, 0xcd]],
+            &[(7, EncodedMessage::from_bytes(vec![0, 2, 0xab]))],
+            &[EncodedMessage::from_bytes(vec![2, 1, 0xcd])],
             &[&create, &update, &destroy, &chunk_only, &empty],
         )
         .unwrap();
@@ -1168,8 +1169,14 @@ mod tests {
 
     #[test]
     fn budget_reuses_trimmed_space_and_only_displaces_remote_movement() {
-        let reliable = [(1, vec![0; 720]), (2, vec![0; 700])];
-        let unreliable = [vec![0; 300], vec![0; 200]];
+        let reliable = [
+            (1, EncodedMessage::from_bytes(vec![0; 720])),
+            (2, EncodedMessage::from_bytes(vec![0; 700])),
+        ];
+        let unreliable = [
+            EncodedMessage::from_bytes(vec![0; 300]),
+            EncodedMessage::from_bytes(vec![0; 200]),
+        ];
         let queued = [entity(0x8000_0077, Operation::Placeable(0x77))];
         let mut chunk = BitWriter::new();
         chunk.raw(&[0; 180]);
@@ -1275,7 +1282,7 @@ mod tests {
 
     #[test]
     fn rejects_over_budget_oldest_records_and_malformed_components() {
-        let reliable = [(1, vec![0; MAX_PAYLOAD])];
+        let reliable = [(1, EncodedMessage::from_bytes(vec![0; MAX_PAYLOAD]))];
         let oversized = [entity(
             0x8000_0077,
             Operation::Update(vec![component(
@@ -1327,5 +1334,65 @@ mod tests {
             frame(0, 0, &[], &[], &[&oversized]),
             Err(WorldError::EntityRecordTooLong)
         ));
+    }
+
+    #[test]
+    fn bool_ending_reliable_notice_resumes_world_header_at_exact_bit() {
+        use crate::game_messages::{encode, read_channel};
+        use crate::jam_codec::{Fields, Schemas, Value};
+
+        // Matches the 104319 25005 layout whose trailing Bool (+0x89) caused the
+        // captured post-kill misalignment at frame 6906 when byte-padded to bit 224.
+        let schemas = Schemas::from_json(
+            r#"{
+                "8F89E0DF": {
+                    "25005": [
+                        {"type":8,"off":120,"count":0,"array":false},
+                        {"type":14,"off":128,"count":0,"array":false,"fields":[
+                            {"type":6,"off":0,"count":0,"array":false}
+                        ]},
+                        {"type":14,"off":132,"count":0,"array":false,"fields":[
+                            {"type":6,"off":0,"count":0,"array":false}
+                        ]},
+                        {"type":2,"off":136,"count":0,"array":false},
+                        {"type":0,"off":137,"count":0,"array":false}
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+        let entity_field =
+            |id: u32| Value::Struct(Fields::from([(0, Value::Unsigned(u64::from(id)))]));
+        let elim = encode(
+            &schemas,
+            25005,
+            &Fields::from([
+                (0x78, Value::Unsigned(0)),
+                (0x80, entity_field(0xa000_0101)),
+                (0x84, entity_field(0xc000_1005)),
+                (0x88, Value::Unsigned(0)),
+                (0x89, Value::Bool(true)),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(elim.bit_len(), 153);
+
+        let destroy = entity(0xc000_1005, Operation::Destroy);
+        let payload = frame(6906, 6905, &[(0, elim)], &[], &[&destroy]).unwrap();
+
+        let mut reader = BitReader::new(&payload);
+        assert_eq!(reader.var_a().unwrap(), 6906);
+        let channel = read_channel(&mut reader, &schemas).unwrap();
+        assert_eq!(channel.reliable[0].message.fields[&0x89], Value::Bool(true));
+        // var_a(6906) = 20 bits + 9 channel header bits aligned to bit 32
+        // + 32 seq bits + 153 msg bits = bit 217.
+        assert_eq!(reader.position(), 217);
+        assert_eq!(reader.var_a().unwrap(), 6905);
+        assert_eq!(reader.bits(4).unwrap(), 0);
+        assert!(!reader.bit().unwrap());
+        assert!(reader.bit().unwrap());
+        assert!(!reader.bit().unwrap());
+        assert_eq!(reader.bits(7).unwrap(), 1);
+        assert_eq!(reader.entity_id().unwrap(), Some(0xc000_1005));
     }
 }

@@ -232,21 +232,25 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
             ));
         }
         #[cfg(feature = "inspector")]
-        if step != BodyStep::UnposedTimer
-            && (step == BodyStep::UnposedBoundary
-                || command.buttons != self.component.command_buttons()
-                || command.action != 0)
-            && crate::game_replication::owner_volley_trace_enabled()
-        {
-            eprintln!(
-                "owner-volley input body={:08x} previous={} frame={} step={step:?} buttons={:#x}->{:#x} action={}",
-                self.world.entity,
-                self.frame,
-                command.frame,
-                self.component.command_buttons(),
-                command.buttons,
-                command.action
-            );
+        if step != BodyStep::UnposedTimer && crate::owner_trace::enabled() {
+            let buttons = self.component.command_buttons();
+            let throttle = [command.right, command.forward];
+            if step == BodyStep::UnposedBoundary
+                || command.buttons != buttons
+                || command.action != 0
+                || (command.buttons != 0 && throttle != self.world.throttles)
+            {
+                crate::owner_trace::record(format_args!(
+                    "owner-volley input body={:08x} previous={} frame={} step={step:?} buttons={buttons:#x}->{:#x} action={} right={} forward={}",
+                    self.world.entity,
+                    self.frame,
+                    command.frame,
+                    command.buttons,
+                    command.action,
+                    command.right,
+                    command.forward
+                ));
+            }
         }
         let pose = mover.pose();
         self.world.position = pose.position;
@@ -308,10 +312,10 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
     fn take_shots(&mut self, command: Option<Command>, mover: &Mover) -> Vec<PosedShot> {
         let shots = self.component.take_shots().unwrap_or_default();
         #[cfg(feature = "inspector")]
-        if !shots.is_empty() && crate::game_replication::owner_volley_trace_enabled() {
+        if !shots.is_empty() && crate::owner_trace::enabled() {
             let pose_frame = command.map(|command| command.frame);
             for shot in &shots {
-                eprintln!(
+                crate::owner_trace::record(format_args!(
                     "owner-volley vm-shot body={:08x} shot_frame={} pose_frame={pose_frame:?} instance={} state={} counter={} start_ms={} ordinal={}",
                     shot.entity,
                     shot.frame,
@@ -320,7 +324,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                     shot.activation,
                     shot.activation_ms,
                     shot.ordinal
-                );
+                ));
             }
         }
         let Some(command) = command else {

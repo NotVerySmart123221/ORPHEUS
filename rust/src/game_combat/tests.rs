@@ -3075,28 +3075,44 @@ fn debug_physics_records_hitscan_rays_and_enforces_ring_cap() {
         .is_none()
     );
 
+    // 4) Find an actor behind the wall, then report the wall as the endpoint.
+    room.body_mut(target).unwrap().position = [11.0, 0.0, 0.0];
+    assert!(
+        room.hitscan(
+            &queries,
+            make_shot(13, [0.0, 1.0, 0.0], [1.0, 0.0, 0.0], 50.0),
+            ShotContext { tick: 13, ..ctx },
+            |entity| entity == target,
+        )
+        .unwrap()
+        .is_none()
+    );
+
     let overlay = room.debug_physics().unwrap().unwrap();
     assert!(!overlay.truncated.rays);
-    assert_eq!(overlay.rays.len(), 3);
+    assert_eq!(overlay.rays.len(), 4);
     assert_eq!(overlay.rays[0].hit, "actor");
     assert_eq!(overlay.rays[0].target, Some(target));
     assert_eq!(overlay.rays[1].hit, "world");
     assert!((overlay.rays[1].end[0] - 10.0).abs() < 1e-6);
     assert_eq!(overlay.rays[2].hit, "none");
     assert_eq!(overlay.rays[2].end, [-25.0, 1.0, 0.0]);
+    assert_eq!(overlay.rays[3].hit, "world");
+    assert!((overlay.rays[3].end[0] - 10.0).abs() < 1e-6);
+    assert_eq!(overlay.rays[3].target, None);
     assert!(overlay.rays.iter().all(|ray| ray.script.is_none()));
 
     room.enable_spatial_queries(false, Arc::new(fixture_ground()), RoomSpatialNeeds::Queries);
-    let captured = room.capture_spatial_frame(13).unwrap().unwrap();
+    let captured = room.capture_spatial_frame(14).unwrap().unwrap();
     captured
-        .ray_cast(SCRIPT_RAY_SITE, 14, [-2.0, 0.5, 0.25], [1.0, 0.0, 0.0], 1.0)
+        .ray_cast(SCRIPT_RAY_SITE, 15, [-2.0, 0.5, 0.25], [1.0, 0.0, 0.0], 1.0)
         .unwrap()
         .unwrap();
     let shared = room.debug_physics().unwrap().unwrap();
-    assert_eq!(shared.rays.len(), 4);
-    assert_eq!(shared.rays[3].kind, "script_static");
-    assert_eq!(shared.rays[3].tick, 13);
-    assert_eq!(shared.rays[3].script.unwrap().vm_frame, 14);
+    assert_eq!(shared.rays.len(), 5);
+    assert_eq!(shared.rays[4].kind, "script_static");
+    assert_eq!(shared.rays[4].tick, 14);
+    assert_eq!(shared.rays[4].script.unwrap().vm_frame, 15);
     assert!(
         serde_json::to_value(shared.rays[0])
             .unwrap()

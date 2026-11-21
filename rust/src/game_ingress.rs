@@ -375,7 +375,7 @@ mod tests {
         for stamp in [111_u64, 222, 333, 444] {
             expected.extend(stamp.to_le_bytes());
         }
-        assert_eq!(bytes, expected);
+        assert_eq!(bytes.as_bytes(), expected);
         let defaults = pong(&Fields::new(), 1, 2).unwrap();
         assert_eq!(defaults.fields[&0x78], Value::Unsigned(0));
         assert_eq!(
@@ -429,7 +429,12 @@ mod tests {
             0, 6, 3, 0, 0, 0, 4, 0, 0, 0, 111, 0, 0, 0, 0, 0, 0, 0, 222, 0, 0, 0, 0, 0, 0, 0, 0x4d,
             1, 0, 0, 0, 0, 0, 0, 0xbc, 1, 0, 0, 0, 0, 0, 0,
         ];
-        assert_eq!(encode(&schemas, reply.id, &reply.fields).unwrap(), expected);
+        assert_eq!(
+            encode(&schemas, reply.id, &reply.fields)
+                .unwrap()
+                .as_bytes(),
+            expected
+        );
     }
 
     #[test]

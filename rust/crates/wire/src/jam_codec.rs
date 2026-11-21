@@ -283,8 +283,20 @@ impl Schemas {
         Ok(fields)
     }
 
-    /// Decodes fields at a byte position and returns their end for back-to-back game messages.
+    /// Decodes fields at a byte position and returns their end byte position.
     pub fn read(
+        &self,
+        crc: u32,
+        id: u32,
+        data: &[u8],
+        pos: usize,
+    ) -> Result<(Fields, usize), CodecError> {
+        let (fields, end_bit) = self.read_bit_end(crc, id, data, pos)?;
+        Ok((fields, end_bit.div_ceil(8)))
+    }
+
+    /// Decodes fields at a byte position and returns their exact ending bit offset in `data`.
+    pub fn read_bit_end(
         &self,
         crc: u32,
         id: u32,
@@ -301,16 +313,28 @@ impl Schemas {
             byte: 0,
         };
         let fields = decoder.fields(self.fields(crc, id)?)?;
-        Ok((fields, decoder.pos))
+        let end_bit = decoder.pos * 8 - usize::from(8 - decoder.bit);
+        Ok((fields, end_bit))
     }
 
     pub fn encode(&self, crc: u32, id: u32, value: &Fields) -> Result<Vec<u8>, CodecError> {
+        self.encode_bits(crc, id, value).map(|(data, _)| data)
+    }
+
+    /// Encodes fields and returns both the byte-padded storage buffer and the exact bit length.
+    pub fn encode_bits(
+        &self,
+        crc: u32,
+        id: u32,
+        value: &Fields,
+    ) -> Result<(Vec<u8>, usize), CodecError> {
         let mut encoder = Encoder {
             data: Vec::new(),
             bit: 8,
         };
         encoder.fields(self.fields(crc, id)?, Some(value))?;
-        Ok(encoder.data)
+        let bit_len = encoder.data.len() * 8 - usize::from(8 - encoder.bit);
+        Ok((encoder.data, bit_len))
     }
 
     /// Builds a template containing the schema defaults for every field.
@@ -781,6 +805,92 @@ mod tests {
             schemas.decode(CRC, 12, b"Player", true),
             Err(CodecError::UnterminatedString)
         ));
+    }
+
+    #[test]
+    fn encode_bits_and_read_bit_end_track_trailing_bool_boundaries() {
+        let empty = synthetic("[]");
+        assert_eq!(
+            empty.encode_bits(CRC, 12, &Fields::new()).unwrap(),
+            (vec![], 0)
+        );
+        assert_eq!(
+            empty.read_bit_end(CRC, 12, &[0xaa, 0xbb], 2).unwrap(),
+            (Fields::new(), 16)
+        );
+
+        for (count, expected_bits) in [(1, 1), (7, 7), (8, 8), (9, 9)] {
+            let schemas = synthetic(&format!(
+                r#"[{{"type":0,"off":1,"count":{count},"array":false}}]"#
+            ));
+            let value = if count == 1 {
+                Value::Bool(true)
+            } else {
+                Value::Array((0..count).map(|i| Value::Bool(i % 2 == 0)).collect())
+            };
+            let values = Fields::from([(1, value)]);
+            let (body, bit_len) = schemas.encode_bits(CRC, 12, &values).unwrap();
+            assert_eq!(bit_len, expected_bits);
+            assert_eq!(body.len(), expected_bits.div_ceil(8));
+            let padded = [vec![0xff], body].concat();
+            let (decoded, end_bit) = schemas.read_bit_end(CRC, 12, &padded, 1).unwrap();
+            assert_eq!(end_bit, 8 + expected_bits);
+            assert_eq!(decoded, values);
+        }
+
+        let bool_then_scalar = synthetic(
+            r#"[
+            {"type":0,"off":1,"count":0,"array":false},
+            {"type":1,"off":2,"count":0,"array":false}
+        ]"#,
+        );
+        let values = Fields::from([(1, Value::Bool(true)), (2, Value::Unsigned(0x42))]);
+        let (body, bit_len) = bool_then_scalar.encode_bits(CRC, 12, &values).unwrap();
+        assert_eq!(body, [1, 0x42]);
+        assert_eq!(bit_len, 16);
+        assert_eq!(
+            bool_then_scalar.read_bit_end(CRC, 12, &body, 0).unwrap(),
+            (values, 16)
+        );
+
+        let struct_ending_in_bool = synthetic(
+            r#"[
+            {"type":14,"off":1,"count":0,"array":false,"fields":[
+                {"type":6,"off":0,"count":0,"array":false},
+                {"type":0,"off":4,"count":0,"array":false}
+            ]}
+        ]"#,
+        );
+        let values = Fields::from([(
+            1,
+            Value::Struct(Fields::from([
+                (0, Value::Unsigned(0x1234_5678)),
+                (4, Value::Bool(true)),
+            ])),
+        )]);
+        let (body, bit_len) = struct_ending_in_bool.encode_bits(CRC, 12, &values).unwrap();
+        assert_eq!(body, [0x78, 0x56, 0x34, 0x12, 1]);
+        assert_eq!(bit_len, 33);
+        assert_eq!(
+            struct_ending_in_bool
+                .read_bit_end(CRC, 12, &body, 0)
+                .unwrap(),
+            (values, 33)
+        );
+
+        let counted_bools = synthetic(r#"[{"type":0,"off":1,"count":-1,"array":true}]"#);
+        for (len, expected_bits) in [(0, 32), (1, 33), (9, 41)] {
+            let values = Fields::from([(
+                1,
+                Value::Array((0..len).map(|i| Value::Bool(i % 2 == 0)).collect()),
+            )]);
+            let (body, bit_len) = counted_bools.encode_bits(CRC, 12, &values).unwrap();
+            assert_eq!(bit_len, expected_bits);
+            assert_eq!(
+                counted_bools.read_bit_end(CRC, 12, &body, 0).unwrap(),
+                (values, expected_bits)
+            );
+        }
     }
 
     #[test]

@@ -199,6 +199,11 @@ pub fn settings(schemas: &Schemas, profile: &Profile) -> io::Result<Fields> {
     if !saved.contains_key("+0x108") {
         settings_block(&mut fields, 0x108)?.insert(4, Bool(true));
     }
+    if saved.get("+0x120").is_none_or(serde_json::Value::is_null) {
+        let gameplay = settings_block(&mut fields, 0x120)?;
+        gameplay.insert(4, Bool(true)); // Kill feed display.
+        gameplay.insert(7, Bool(true)); // Gameplay tips.
+    }
     Ok(fields)
 }
 
@@ -341,6 +346,10 @@ mod tests {
                 {"type":14,"off":269,"count":0,"array":false,"fields":[
                     {"type":0,"off":0,"count":0,"array":false},
                     {"type":2,"off":5,"count":0,"array":false}
+                ]},
+                {"type":14,"off":288,"count":0,"array":false,"fields":[
+                    {"type":0,"off":4,"count":0,"array":false},
+                    {"type":0,"off":7,"count":0,"array":false}
                 ]}
             ]}}"#,
         )
@@ -424,6 +433,10 @@ mod tests {
         };
         let now = 1_800_000_000;
         let frame = 0x0250_0000_0000_02aa;
+        // The historical Python baseline used zeroed gameplay settings.
+        profile
+            .settings
+            .insert("+0x120".into(), json!({"+0x4": false, "+0x7": false}));
         let mut messages = vec![
             (IN_CONNECT, 20500, hello(&profile, identity)),
             (
@@ -444,6 +457,7 @@ mod tests {
         profile.settings = serde_json::from_value(json!({
             "+0x108": {"+0x0": true},
             "+0x10D": {"+0x0": false, "+0x5": 2},
+            "+0x120": {"+0x4": false, "+0x7": false},
             "+0x130": [{"+0x0": u64::MAX, "+0x8": 0xe0b03a}]
         }))
         .unwrap();

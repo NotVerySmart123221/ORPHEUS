@@ -87,6 +87,35 @@ pub struct Channel {
     pub unreliable: Vec<Message>,
 }
 
+/// An encoded game-link message carrying its exact wire bit length.
+///
+/// Scalar fields and subsequent message headers align to a byte boundary,
+/// while the channel ends immediately after the final message's last bit.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EncodedMessage {
+    bytes: Vec<u8>,
+    bit_len: usize,
+}
+
+impl EncodedMessage {
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        let bit_len = bytes.len() * 8;
+        Self { bytes, bit_len }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn bit_len(&self) -> usize {
+        self.bit_len
+    }
+
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
 /// Resolve the wire index, CRC and offset. The highest eligible base wins
 /// where protocol ID ranges overlap.
 pub fn locate(id: u32) -> Result<(u8, u32, u8), ChannelError> {
@@ -100,21 +129,24 @@ pub fn locate(id: u32) -> Result<(u8, u32, u8), ChannelError> {
 }
 
 /// Encode a game message without the channel envelope or reliable sequence.
-pub fn encode(schemas: &Schemas, id: u32, fields: &Fields) -> Result<Vec<u8>, ChannelError> {
+pub fn encode(schemas: &Schemas, id: u32, fields: &Fields) -> Result<EncodedMessage, ChannelError> {
     let (index, crc, offset) = locate(id)?;
-    let body = schemas.encode(crc, id, fields)?;
-    let mut message = Vec::with_capacity(2 + body.len());
-    message.extend([index, offset]);
-    message.extend(body);
-    Ok(message)
+    let (body, body_bits) = schemas.encode_bits(crc, id, fields)?;
+    let mut bytes = Vec::with_capacity(2 + body.len());
+    bytes.extend([index, offset]);
+    bytes.extend(body);
+    Ok(EncodedMessage {
+        bytes,
+        bit_len: 16 + body_bits,
+    })
 }
 
 /// Write pre-encoded messages in caller order. Reliable sequences are assigned
 /// by the caller, and loss recovery belongs to the session.
 pub fn write_channel(
     bits: &mut BitWriter,
-    reliable: &[(u32, Vec<u8>)],
-    unreliable: &[Vec<u8>],
+    reliable: &[(u32, EncodedMessage)],
+    unreliable: &[EncodedMessage],
 ) -> Result<(), ChannelError> {
     if reliable.is_empty() && unreliable.is_empty() {
         bits.bit(false);
@@ -127,12 +159,24 @@ pub fn write_channel(
     bits.bits(reliable.len() as u64, 4)?;
     bits.bits(unreliable.len() as u64, 4)?;
     bits.align();
+    let total = reliable.len() + unreliable.len();
+    let mut written = 0;
     for (sequence, message) in reliable {
+        written += 1;
         bits.raw(&sequence.to_le_bytes());
-        bits.raw(message);
+        if written == total {
+            bits.raw_bits(message.as_bytes(), message.bit_len())?;
+        } else {
+            bits.raw(message.as_bytes());
+        }
     }
     for message in unreliable {
-        bits.raw(message);
+        written += 1;
+        if written == total {
+            bits.raw_bits(message.as_bytes(), message.bit_len())?;
+        } else {
+            bits.raw(message.as_bytes());
+        }
     }
     Ok(())
 }
@@ -154,32 +198,35 @@ pub fn read_channel(
 
     reader.align();
     let data = reader
-        .aligned_bytes()
+        .aligned_bytes_up_to_limit()
         .ok_or(ChannelError::TruncatedMessageHeader)?;
     let mut channel = Channel {
         reliable: Vec::with_capacity(reliable_count),
         unreliable: Vec::with_capacity(unreliable_count),
     };
     let mut position = 0;
+    let mut end_bit = 0;
     for _ in 0..reliable_count {
         let sequence = data
             .get(position..position + 4)
             .ok_or(ChannelError::TruncatedSequence)?;
         let sequence = u32::from_le_bytes(sequence.try_into().unwrap());
-        let (message, end) = read_message(schemas, data, position + 4)?;
+        let (message, end) = read_message_bit_end(schemas, data, position + 4)?;
         channel.reliable.push(ReliableMessage { sequence, message });
-        position = end;
+        end_bit = end;
+        position = end.div_ceil(8);
     }
     for _ in 0..unreliable_count {
-        let (message, end) = read_message(schemas, data, position)?;
+        let (message, end) = read_message_bit_end(schemas, data, position)?;
         channel.unreliable.push(message);
-        position = end;
+        end_bit = end;
+        position = end.div_ceil(8);
     }
-    reader.advance(position * 8)?;
+    reader.advance(end_bit)?;
     Ok(channel)
 }
 
-fn read_message(
+fn read_message_bit_end(
     schemas: &Schemas,
     data: &[u8],
     position: usize,
@@ -192,7 +239,7 @@ fn read_message(
         .get(usize::from(index))
         .ok_or(ChannelError::UnknownProtocol(index))?;
     let id = first + u32::from(header[1]);
-    let (fields, end) = schemas.read(crc, id, data, position + 2)?;
+    let (fields, end) = schemas.read_bit_end(crc, id, data, position + 2)?;
     Ok((Message { id, fields }, end))
 }
 
@@ -309,9 +356,71 @@ mod tests {
     }
 
     #[test]
+    fn preserves_bool_ending_channel_bit_boundaries() {
+        let schemas = fixture_schemas();
+        let title = Fields::from([(0x78, Value::String("A".into())), (0xa0, Value::Bool(true))]);
+        let encoded = encode(&schemas, 20320, &title).unwrap();
+        assert_eq!(encoded.as_bytes(), &[0, 20, b'A', 0, 1]);
+        // 2-byte header + 2-byte C string "A\0" + 1 trailing Bool bit = 33 bits.
+        assert_eq!(encoded.bit_len(), 33);
+
+        // Final reliable message ends mid-byte: following bits resume immediately.
+        let mut bits = BitWriter::new();
+        write_channel(&mut bits, &[(7, encoded.clone())], &[]).unwrap();
+        assert_eq!(bits.bit_len(), 16 + 32 + 33);
+        bits.bits(0x2b, 6).unwrap();
+        assert_eq!(bits.bit_len(), 87);
+
+        let mut reader = BitReader::with_range(bits.as_bytes(), 0, bits.bit_len()).unwrap();
+        let channel = read_channel(&mut reader, &schemas).unwrap();
+        assert_eq!(channel.reliable.len(), 1);
+        assert_eq!(channel.reliable[0].message.fields, title);
+        assert_eq!(reader.position(), 81);
+        assert_eq!(reader.bits(6).unwrap(), 0x2b);
+        assert_eq!(reader.left(), 0);
+
+        // Final unreliable message ends mid-byte as well.
+        let mut bits = BitWriter::new();
+        write_channel(&mut bits, &[], std::slice::from_ref(&encoded)).unwrap();
+        assert_eq!(bits.bit_len(), 16 + 33);
+        bits.bits(0x19, 5).unwrap();
+        let mut reader = BitReader::with_range(bits.as_bytes(), 0, bits.bit_len()).unwrap();
+        let channel = read_channel(&mut reader, &schemas).unwrap();
+        assert_eq!(channel.unreliable.len(), 1);
+        assert_eq!(channel.unreliable[0].fields, title);
+        assert_eq!(reader.position(), 49);
+        assert_eq!(reader.bits(5).unwrap(), 0x19);
+        assert_eq!(reader.left(), 0);
+
+        // Two consecutive Bool-ending messages: the first aligns to the next byte
+        // for the second message's header, and the second resumes at its final bit.
+        let second = Fields::from([
+            (0x78, Value::String("B".into())),
+            (0xa0, Value::Bool(false)),
+        ]);
+        let encoded_second = encode(&schemas, 20320, &second).unwrap();
+        let mut bits = BitWriter::new();
+        write_channel(
+            &mut bits,
+            &[(1, encoded)],
+            std::slice::from_ref(&encoded_second),
+        )
+        .unwrap();
+        assert_eq!(bits.bit_len(), 16 + 32 + 40 + 33);
+        bits.bits(0x3a, 6).unwrap();
+        let mut reader = BitReader::with_range(bits.as_bytes(), 0, bits.bit_len()).unwrap();
+        let channel = read_channel(&mut reader, &schemas).unwrap();
+        assert_eq!(channel.reliable[0].message.fields, title);
+        assert_eq!(channel.unreliable[0].fields, second);
+        assert_eq!(reader.position(), 121);
+        assert_eq!(reader.bits(6).unwrap(), 0x3a);
+        assert_eq!(reader.left(), 0);
+    }
+
+    #[test]
     fn rejects_excess_counts_and_malformed_messages() {
         let mut writer = BitWriter::new();
-        let overflow = vec![vec![]; MAX_PER_KIND + 1];
+        let overflow = vec![EncodedMessage::from_bytes(Vec::new()); MAX_PER_KIND + 1];
         assert!(matches!(
             write_channel(&mut writer, &[], &overflow),
             Err(ChannelError::TooManyMessages)

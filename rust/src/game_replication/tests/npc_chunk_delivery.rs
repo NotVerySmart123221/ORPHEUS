@@ -46,7 +46,7 @@ fn npc_script_chunks_and_reliable_messages_advance_on_separate_frames() {
     let placeable_chunk = ready[1].tracked();
 
     let mut egress = GameEgress::default();
-    let message = vec![1, 2];
+    let message = crate::game_messages::EncodedMessage::from_bytes(vec![1, 2]);
     let frames = input["frames"].as_array().unwrap();
     let expected_frames = contract["expected"]["frames"].as_array().unwrap();
     assert_eq!(frames.len(), expected_frames.len());

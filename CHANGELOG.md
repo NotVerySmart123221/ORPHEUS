@@ -6,6 +6,16 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-21
 
+- Resume the world frame at the final game-channel message bit. Keep intermediate message headers and standalone lobby messages byte-aligned. This fixes the framing defect associated with the `0xD697D0` client crash signature. The Inspector workspace run passed 920 tests. The original-client retest outcome has not been recorded. [Reference investigation](https://github.com/leafall903/ORPHEUS/blob/5d86bcb2/docs/MCCREE_COMBAT.txt#L1007-L1027)
+
+- Hold reliable hit and elimination feedback until the shooter's body and possession are acknowledged. Discard pending feedback when that body generation is replaced. Damage and target health updates continue through the ordinary simulation.
+
+- Set the client gameplay defaults for kill feed display and tips when the profile has no saved gameplay block. Keep saved options, including an explicit disabled kill feed. Based on the [client-tested settings research](https://github.com/leafall903/ORPHEUS/blob/5d86bcb2/docs/research/kill-feed.md).
+
+- Validated these changes with 478 public server and profile tests, three prepared 104319 probes, and the Rust 1.85.0 workspace check.
+
+- Add opt-in Inspector diagnostics for projectile launch, impact, and delivery, and for the creation and delivery of replacement Practice Range bots. These records can be collected independently of the high-frequency owner-volley trace.
+
 - Handle the stock bot death selector with the shared owner operand check. A blocking public diagnostic stops that bot's script projection while the room continues to simulate it. The prepared Practice Range regression now checks each of the first ten corpse frames and the replacement.
 
 - Publish authored mode values in the initial mode presentation frame. A prepared Practice Range wire check verifies the flags used by the training bot nameplate, including explicit false values. Original-client visibility remains pending.
@@ -17,6 +27,14 @@ This log records tested changes and their acceptance status. Entries are grouped
 - Validated the Practice Range fixes with 914 local workspace tests with Inspector, six prepared 104319 probes, and the Rust 1.85.0 workspace check.
 
 - Verify Practice Range nameplate ordering and nonlethal hit delivery over encrypted loopback with the prepared 104319 pack, including the first hit notice dropped and retried.
+
+- Stage training bot nameplates separately after the receiver acknowledges both the mode frame and the bot's parent script. The encrypted replay checks the staged attachment and matching hit delivery.
+
+- Queue opt-in owner traces for a bounded background writer, record throttle changes while a button is held, and expose receive, input, request, and poll timing separately from simulation ticks. Reuse the hit query's first wall blocker for the Inspector instead of casting the ray twice.
+
+- Replay the observed Practice Range Sprint button mask with sustained forward input and control cases around the authored throttle gate. Client acceptance and a controlled performance retest remain open.
+
+- Validated the follow-up with 472 Inspector library tests, seven prepared 104319 server probes, the isolated Sprint graph replay, Rust 1.85.0, and strict Inspector library Clippy.
 
 ### 2026-11-20
 
