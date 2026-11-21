@@ -6,6 +6,9 @@
 
 use serde_json::Value as Json;
 
+mod knockback;
+pub use knockback::Knockback;
+
 use crate::{
     collision_index::IndexError,
     game_clock::TICK_PERIOD,
@@ -36,6 +39,7 @@ pub struct Blast {
     pub hit: HitDefinition,
     pub rings: Vec<(f64, f64)>,
     pub self_damage_scale: f64,
+    pub knockback: Option<Knockback>,
 }
 
 impl ProjectileBallistics {
@@ -109,6 +113,7 @@ impl ProjectileBallistics {
                 } else {
                     0.0
                 },
+                knockback: Knockback::from_authored(&config["m_modifyHealth"], &mut evaluate),
             })
         } else {
             None
@@ -326,6 +331,7 @@ impl ProjectileFlight {
                 },
                 critical: false,
                 loadout: direct.loadout,
+                impulse: None,
             });
         }
         // Cast from the approach side when the projectile hit the map.
@@ -355,24 +361,28 @@ impl ProjectileFlight {
         mut wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
     ) -> Result<Vec<Impact>, IndexError> {
         let mut impacts = Vec::new();
-        if let Some(blast) = self
-            .ballistics
-            .blast
-            .as_ref()
-            .filter(|blast| blast.hit.amount > 0.0)
-        {
+        if let Some(blast) = self.ballistics.blast.as_ref() {
             let targets = targets
                 .iter()
                 .map(|&(entity, pose)| (entity, pose.into(), 1.0));
             let shooter = shooter
-                .filter(|_| blast.self_damage_scale > 0.0)
+                .filter(|_| blast.self_damage_scale > 0.0 || blast.knockback.is_some())
                 .map(|(entity, pose)| (entity, pose, blast.self_damage_scale));
             for (entity, pose, scale) in targets.chain(shooter) {
                 let Some(surface) = pose.nearest_surface(point, origin) else {
                     continue;
                 };
-                let damage = blast.hit.amount * blast.multiplier(surface.distance) * scale;
-                if !damage.is_finite() || damage <= 0.0 {
+                let falloff = blast.multiplier(surface.distance);
+                let damage = blast.hit.amount * falloff * scale;
+                let damage = if damage.is_finite() {
+                    damage.max(0.0)
+                } else {
+                    0.0
+                };
+                let impulse = blast.knockback.as_ref().and_then(|knockback| {
+                    knockback.delta(point, pose.feet(), surface.distance, falloff > 0.0)
+                });
+                if damage == 0.0 && impulse.is_none() {
                     continue;
                 }
                 let reach = surface.sight_reach;
@@ -395,6 +405,7 @@ impl ProjectileFlight {
                     damage,
                     critical: false,
                     loadout: blast.hit.loadout,
+                    impulse,
                 });
             }
         }
@@ -487,6 +498,7 @@ mod tests {
                 },
                 rings: vec![(1.0, 1.0), (3.0, 0.5)],
                 self_damage_scale: 0.0,
+                knockback: None,
             }),
         }
     }
@@ -738,6 +750,13 @@ mod tests {
         assert_eq!(obscured.impacts, hit.impacts[..1]);
         fields["m_D2D11CE9"]["m_8A3E3883"] = Json::Null;
         assert_eq!(fire(&fields, false).impacts, hit.impacts[..1]);
+
+        fields["m_D2D11CE9"]["m_modifyHealth"]["m_10399AE7"] = serde_json::json!(4.0);
+        let impulse_only = fire(&fields, false);
+        assert_eq!(impulse_only.impacts[1].entity, shooter.0);
+        assert_eq!(impulse_only.impacts[1].damage, 0.0);
+        assert_eq!(impulse_only.impacts[1].impulse, Some([0.0, 4.0, 0.0]));
+        assert_eq!(fire(&fields, true).impacts.len(), 1);
     }
 
     #[test]

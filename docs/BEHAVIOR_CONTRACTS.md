@@ -44,6 +44,8 @@ The Rust-only [combat hurt volumes fixture](../fixtures/behavior/combat-hurt-vol
 
 The Rust-only [projectile self-splash fixture](../fixtures/behavior/projectile-self-splash-v1.json) covers the authored scale, visibility checks, and absent configuration. The owner can take splash without blocking their own projectile. A room regression covers health and death feedback.
 
+The Rust-only [combat knockback fixture](../fixtures/behavior/combat-knockback-v1.json) exercises authored ring order, range, and the horizontal and upward channels independently of damage. Companion tests cover occluded and zero-damage self impulses, a stationary bot's movement, and owner correction with and without an active script. The remaining ring field and original-client movement are still unverified.
+
 The Rust-only [projectile delivery fixture](../fixtures/behavior/projectile-alias-release-v1.json) covers staggered acknowledgments for two predictions of one shot. A confirmed prediction is released when the authoritative impact is due. A later acknowledgment can release its own prediction without repeating the first release. Natural expiry has a separate headless check.
 
 The Rust-only [unposed owner volley fixture](../fixtures/behavior/owner-unposed-volley-v1.json) checks that a due round with no pose is skipped at its authored time and a later posed round in the same volley still fires and spends ammunition.

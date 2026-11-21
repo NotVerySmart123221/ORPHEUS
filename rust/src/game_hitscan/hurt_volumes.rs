@@ -25,6 +25,10 @@ impl From<TargetPose> for HurtPose {
 }
 
 impl HurtPose {
+    pub(crate) fn feet(self) -> Vec3 {
+        self.movement.feet
+    }
+
     fn capsules(self) -> impl Iterator<Item = (Capsule, bool)> {
         let [x, y, z] = self.movement.feet;
         let world = |shape: LocalCapsule, head| {

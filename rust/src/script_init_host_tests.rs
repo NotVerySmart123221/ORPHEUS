@@ -306,6 +306,7 @@ mod tests {
                                 },
                                 rings: vec![(1.0, 1.0)],
                                 self_damage_scale: 0.0,
+                                knockback: None,
                             }),
                         },
                         [0.0, 1.0, 0.0],

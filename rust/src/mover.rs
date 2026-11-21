@@ -29,6 +29,7 @@ const EPSILON: f64 = 1.1754943508222875e-36;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum VelocityChange {
     Delta([f64; 3]),
+    Impulse([f64; 3]),
     HorizontalCap(f64),
     VerticalImpulse { vertical: f64, delta: [f64; 3] },
 }
@@ -40,6 +41,14 @@ impl VelocityChange {
             Self::Delta(delta) => {
                 for (axis, delta) in velocity.iter_mut().zip(delta) {
                     *axis = f64::from((*axis as f32) + delta as f32);
+                }
+            }
+            Self::Impulse(delta) => {
+                let mut next = *velocity;
+                Self::Delta(delta).apply(&mut next);
+                if next.iter().all(|axis| axis.is_finite()) {
+                    *velocity = next;
+                    return delta[1] > 0.0 && next[1] > 0.0;
                 }
             }
             Self::HorizontalCap(cap) => {
@@ -65,7 +74,9 @@ impl VelocityChange {
 
     pub(crate) fn valid(self) -> bool {
         match self {
-            Self::Delta(delta) => delta.iter().all(|value| (*value as f32).is_finite()),
+            Self::Delta(delta) | Self::Impulse(delta) => {
+                delta.iter().all(|value| (*value as f32).is_finite())
+            }
             Self::HorizontalCap(cap) => (cap as f32).is_finite() && cap >= 0.0,
             Self::VerticalImpulse { vertical, delta } => {
                 (vertical as f32).is_finite()
@@ -254,6 +265,12 @@ impl Mover {
 
     /// Drop script work that has not reached a pose on this body.
     pub(crate) fn clear_pending_script_motion(&mut self) {
+        self.velocity_changes
+            .retain(|(_, change)| matches!(change, VelocityChange::Impulse(_)));
+        self.scripted_motion = None;
+    }
+
+    pub(crate) fn clear_pending_motion(&mut self) {
         self.velocity_changes.clear();
         self.scripted_motion = None;
     }
@@ -365,7 +382,10 @@ impl Mover {
         let mut launched = false;
         self.velocity_changes.retain(|&(frame, change)| {
             if frame <= command.frame {
+                let before = self.pose.velocity;
                 launched |= change.apply(&mut self.pose.velocity);
+                scripted_motion_changed |=
+                    matches!(change, VelocityChange::Impulse(_)) && self.pose.velocity != before;
                 false
             } else {
                 true

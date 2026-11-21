@@ -169,7 +169,7 @@ impl BodyScript {
             .vitals()
             .is_some_and(|vitals| vitals.death().is_some())
         {
-            mover.clear_pending_script_motion();
+            mover.clear_pending_motion();
         } else {
             for (frame, change) in velocity_changes {
                 mover.queue_velocity_change(frame, change);

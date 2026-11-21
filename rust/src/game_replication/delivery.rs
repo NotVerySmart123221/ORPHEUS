@@ -1680,11 +1680,7 @@ impl WorldDelivery {
         let team = state.team;
         let previously_processed = self.input.processed;
         let script = &mut self.body_script;
-        let mut detached_motion = self
-            .detached_motion
-            .as_mut()
-            .filter(|(owner, _)| *owner == id)
-            .map(|(_, history)| history);
+        let detached_motion = &mut self.detached_motion;
         let PlayerBodyState {
             mover,
             runtime,
@@ -1733,7 +1729,25 @@ impl WorldDelivery {
                     .map_or_else(Vec::new, |frame| frame.blockers(id.entity, team))
             },
             |mover, command| {
-                if let Some(history) = detached_motion.as_deref_mut() {
+                if script.is_none() && frame_us != 0 && mover.scripted_motion_at(command.frame) {
+                    if detached_motion
+                        .as_ref()
+                        .is_some_and(|(owner, _)| *owner != id)
+                    {
+                        *detached_motion = None;
+                    }
+                    let (_, history) = detached_motion.get_or_insert_with(|| {
+                        (
+                            id,
+                            CorrectionHistory::new(id.entity, id.generation)
+                                .with_processed_at_spawn(previously_processed),
+                        )
+                    });
+                    history.swept_motion(command.frame, frame_us);
+                }
+                if let Some((_, history)) =
+                    detached_motion.as_mut().filter(|(owner, _)| *owner == id)
+                {
                     history.record(mover.pose());
                 }
                 if let Some(script) = script.as_mut() {

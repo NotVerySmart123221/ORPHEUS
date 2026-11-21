@@ -12,6 +12,7 @@ use crate::{
         BossPursuit, BossTarget, GateApproach, JUNKRAT, REAPER, ROADHOG, ReaperExit, SUMMONER,
         WITCH,
     },
+    mover::VelocityChange,
     scene_assets::BotQueries,
     static_ray::norm,
     vitals::Vitals,
@@ -43,9 +44,15 @@ pub(super) struct EnemyState {
 }
 
 impl EnemyState {
+    pub(super) fn queue_active_mover_change(&mut self, frame: u32, change: VelocityChange) -> bool {
+        self.reaper_exit
+            .as_mut()
+            .is_some_and(|exit| exit.queue_velocity_change(frame, change))
+    }
+
     pub(super) fn halt(&mut self, bot: &mut Bot, error: String) {
         self.scripts.clear_pending_script_motion();
-        bot.clear_velocity_changes();
+        bot.clear_script_velocity_changes();
         self.fault = Some(error);
     }
 

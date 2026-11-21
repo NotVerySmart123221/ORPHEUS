@@ -273,7 +273,7 @@ impl PlayerBodyState {
                 .map_or_else(Damage::default, |vitals| vitals.damage(amount, source))
         };
         if result.killed {
-            self.mover.clear_pending_script_motion();
+            self.mover.clear_pending_motion();
         }
         result
     }
