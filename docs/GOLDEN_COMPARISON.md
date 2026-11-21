@@ -28,6 +28,19 @@ The result stays `incompatible` with exit code 2, including when the
 recorded fields agree. The diagnostic does not establish random-stream
 equivalence or behavior outside that recording.
 
+## Run the archived Python comparison manually
+
+The archived Python server comparison tool tests can run locally or through
+**Public source checks → Run workflow** with **Run the archived Python server comparison tool tests** enabled.
+
+```sh
+python -B -m unittest scripts.tests.test_compare_actor_startup scripts.tests.test_golden_inputs
+```
+
+For a paired server recording, run the command below locally with a prepared
+runtime and a private schedule. The Rust wire reader checks have their own
+[verification path](OWNER_DELIVERY_TEST.md#receiver-semantic-convergence).
+
 ## Record the same session twice on each server
 
 Use a prepared 104319 runtime and a private canonical input schedule. The Python reference checkout must match the revision pinned by the adapter. Select a Python interpreter with the reference project's dependencies installed. Both adapter checkouts must contain the replay observers.

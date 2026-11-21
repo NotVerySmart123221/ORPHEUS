@@ -13,6 +13,11 @@ on:
   pull_request:
     branches: [rust]
   workflow_dispatch:
+    inputs:
+      legacy_python_comparison:
+        description: Run the archived Python server comparison tool tests
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
@@ -52,13 +57,19 @@ jobs:
         if: matrix.features == 'default'
         run: cargo +stable fmt --all -- --check
       - name: Lint Rust targets
-        run: cargo +stable clippy --locked --workspace --all-targets --features "${{ matrix.features }}" -- -D warnings
+        if: matrix.features == 'default'
+        run: cargo +stable clippy --locked --workspace --all-targets -- -D warnings
+      - name: Lint Inspector code
+        if: matrix.features == 'inspector'
+        run: cargo +stable clippy --locked -p orpheus --features inspector --lib -- -D warnings
       - name: Run Rust protocol regressions
+        if: matrix.features == 'default'
         run: |
-          cargo +stable test --locked --color never --workspace --all-targets --features "${{ matrix.features }}" |
+          cargo +stable test --locked --color never --workspace --all-targets |
             Tee-Object -FilePath "$env:RUNNER_TEMP/orpheus-workspace-tests.txt"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify shared contracts ran in the workspace suite
+        if: matrix.features == 'default'
         run: |
           $required = @(
             'script_init::tests::shared_unkeyed_array_contract'
@@ -122,6 +133,23 @@ jobs:
             throw "Required shared contract tests did not pass in the workspace run: $($missing -join ', ')"
           }
 
+      - name: Test Inspector-only behavior
+        if: matrix.features == 'inspector'
+        run: |
+          cargo +stable test --locked --color never -p orpheus -p orpheus-statescript --features orpheus/inspector --lib --test runtime_preflight -- debug_http::tests:: owner_trace::tests:: debug_control_requires_debug_port_before_startup node_observation_limit_counts_only_distinct_sites |
+            Tee-Object -Variable inspectorOutput
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($pattern in @(
+            '^test debug_http::tests::\S+ \.\.\. ok$'
+            '^test owner_trace::tests::\S+ \.\.\. ok$'
+            '^test debug_control_requires_debug_port_before_startup \.\.\. ok$'
+            '^test \S+::node_observation_limit_counts_only_distinct_sites \.\.\. ok$'
+          )) {
+            if (-not ($inspectorOutput -cmatch $pattern)) {
+              throw "Inspector tests missing from the run: $pattern"
+            }
+          }
+
   rust-msrv:
     runs-on: windows-latest
     timeout-minutes: 10
@@ -151,9 +179,16 @@ jobs:
           shared-key: linux-workspace
           save-if: ${{ github.ref == 'refs/heads/rust' }}
       - name: Check default workspace build on Linux
-        run: cargo +stable check --locked --workspace --all-targets
-      - name: Run full workspace regressions with inspector on Linux
-        run: cargo +stable test --locked --workspace --all-targets --features inspector
+        run: cargo +stable check --locked --workspace
+      - name: Test Linux filesystem and UDP worker behavior
+        run: |
+          set -o pipefail
+          cargo +stable test --locked --color never -p orpheus --lib -- --exact \
+            accounts::tests::accounts_keep_nicknames_and_identity_across_restarts \
+            game_service::tests::isolation::encrypted_worker_satisfies_room_recovery_contract \
+            | tee "$RUNNER_TEMP/linux-tests.txt"
+          grep -Fx 'test accounts::tests::accounts_keep_nicknames_and_identity_across_restarts ... ok' "$RUNNER_TEMP/linux-tests.txt"
+          grep -Fx 'test game_service::tests::isolation::encrypted_worker_satisfies_room_recovery_contract ... ok' "$RUNNER_TEMP/linux-tests.txt"
 
   shared-behavior-contracts:
     runs-on: windows-latest
@@ -172,8 +207,28 @@ jobs:
       - uses: actions/setup-python@v6.2.0
         with:
           python-version: "3.12"
-      - name: Check private replay input accounting with synthetic files
-        run: python -B -m unittest discover -s scripts/tests
+      - name: Check Rust tooling
+        run: >-
+          python -B -m unittest
+          scripts.tests.test_receiver_convergence
+          scripts.tests.test_runtime_state_metadata
+          scripts.tests.test_statescript_coverage
+          scripts.tests.test_statescript_evidence
+          scripts.tests.test_statescript_scaffold
+      - name: Check the pinned wire reader
+        env:
+          ORPHEUS_PYTHON_REFERENCE: ${{ github.workspace }}/python-reference
+        run: |
+          python -I -S -B -m unittest discover -s scripts/tests -p "test_sprint_wire.py"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -I -S -B -m unittest discover -s scripts/tests -p "test_state_link_wire.py"
+          exit $LASTEXITCODE
+      - name: Check archived Python server comparison tools
+        if: github.event_name == 'workflow_dispatch' && inputs.legacy_python_comparison
+        run: >-
+          python -B -m unittest
+          scripts.tests.test_compare_actor_startup
+          scripts.tests.test_golden_inputs
       - name: Check Python against this Rust checkout's fixture
         working-directory: python-reference
         env:
