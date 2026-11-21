@@ -1924,10 +1924,17 @@ impl RoomSimulation {
                 &mut candidates,
             );
             // The shooter can receive splash but never blocks its own flight.
-            let shooter = self
-                .player_body(owner)
-                .filter(|state| state.alive())
-                .map(|state| (owner.entity, state.target_pose().into()));
+            let shooter = if self
+                .world
+                .get::<AdmittedFlight>(entity)
+                .is_some_and(|active| active.flight.affects_shooter())
+            {
+                self.player_body(owner)
+                    .filter(|state| state.alive())
+                    .map(|state| (owner.entity, state.target_pose().into()))
+            } else {
+                None
+            };
             let (token, stun, hit_effect, result) = {
                 let mut active = self
                     .world
@@ -2758,17 +2765,20 @@ impl RoomSimulation {
                 .world
                 .get::<EnemyProjectile>(handle)
                 .expect("live enemy projectile");
-            let shooter_pose = self
-                .by_wire
-                .get(&seed.source)
-                .and_then(|&body| self.world.get::<BotState>(body))
-                .filter(|state| !state.bot.dead && state.vitals.death().is_none())
-                .map(|state| {
-                    (
-                        seed.source,
-                        queries.hurt_pose(state.bot.spawn.body, queries.target(&state.bot)),
-                    )
-                });
+            let shooter_pose = if seed.flight.affects_shooter() {
+                self.by_wire
+                    .get(&seed.source)
+                    .and_then(|&body| self.world.get::<BotState>(body))
+                    .filter(|state| !state.bot.dead && state.vitals.death().is_none())
+                    .map(|state| {
+                        (
+                            seed.source,
+                            queries.hurt_pose(state.bot.spawn.body, queries.target(&state.bot)),
+                        )
+                    })
+            } else {
+                None
+            };
             let mut projectile = self
                 .world
                 .get_mut::<EnemyProjectile>(handle)

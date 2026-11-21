@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Read the authored source knockback switch and scale separately from self damage. Keep the outer force ring exclusive and interpolate its two channels at single precision. Skip shooter pose queries on flights without self effects. The force arithmetic follows the [104319 Python reference](https://github.com/leafall903/ORPHEUS/commit/426e4e139635a8d11b8dd037c6f96b8bd3ced6cd). The Inspector server suite passed 481 tests. With local mode rules, the stock Helix and Particle Cannon expression probe and the synthetic projectile loopback passed. The stock loopback stopped during setup before its first shot.
+
 - Apply authored blast knockback to players and bots through collision-aware movement. Resolve the known horizontal and upward ring multipliers independently from damage falloff so a self launch can occur without self damage. Owner movement corrections use the input frame that applies the impulse, including bodies with no active owner script. The Inspector server suite passed 481 tests, and the prepared synthetic Helix loopback passed. Original-client movement and the remaining ring field are unverified.
 
 - Release each confirmed predicted projectile at the authoritative contact deadline, even when a related prediction is still awaiting acknowledgment. Unconfirmed predictions retain bounded retry and cleanup. Natural expiry without an authored blast sends destruction without an impact state. Original-client impact rendering remains pending.

@@ -39,6 +39,7 @@ pub struct Blast {
     pub hit: HitDefinition,
     pub rings: Vec<(f64, f64)>,
     pub self_damage_scale: f64,
+    pub self_knockback_scale: f32,
     pub knockback: Option<Knockback>,
 }
 
@@ -105,11 +106,24 @@ impl ProjectileBallistics {
             }
             rings.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
             let scale = authored_number(config.get("m_8A3E3883"), 0.0, &mut evaluate)?;
+            let self_knockback = &config["m_49F60FB8"];
+            let self_knockback_scale = if self_knockback.as_bool() == Some(true)
+                || self_knockback.as_u64() == Some(1)
+            {
+                authored_number(config.get("m_2FE97560"), 0.0, &mut evaluate).unwrap_or(0.0) as f32
+            } else {
+                0.0
+            };
             Some(Blast {
                 hit,
                 rings,
                 self_damage_scale: if scale.is_finite() {
                     scale.max(0.0)
+                } else {
+                    0.0
+                },
+                self_knockback_scale: if self_knockback_scale.is_finite() {
+                    self_knockback_scale.max(0.0)
                 } else {
                     0.0
                 },
@@ -130,6 +144,11 @@ impl ProjectileBallistics {
 }
 
 impl Blast {
+    fn affects_shooter(&self) -> bool {
+        (self.knockback.is_some() && self.self_knockback_scale > 0.0)
+            || (self.hit.amount > 0.0 && self.self_damage_scale > 0.0)
+    }
+
     fn multiplier(&self, distance: f64) -> f64 {
         let Some(&(mut previous, mut scalar)) = self.rings.first() else {
             return 0.0;
@@ -174,6 +193,13 @@ pub struct FlightEnd {
 }
 
 impl ProjectileFlight {
+    pub(crate) fn affects_shooter(&self) -> bool {
+        self.ballistics
+            .blast
+            .as_ref()
+            .is_some_and(Blast::affects_shooter)
+    }
+
     pub fn new(
         ballistics: ProjectileBallistics,
         position: Vec3,
@@ -361,26 +387,44 @@ impl ProjectileFlight {
         mut wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
     ) -> Result<Vec<Impact>, IndexError> {
         let mut impacts = Vec::new();
-        if let Some(blast) = self.ballistics.blast.as_ref() {
+        if let Some(blast) = self
+            .ballistics
+            .blast
+            .as_ref()
+            .filter(|blast| blast.hit.amount > 0.0 || blast.knockback.is_some())
+        {
             let targets = targets
                 .iter()
-                .map(|&(entity, pose)| (entity, pose.into(), 1.0));
+                .map(|&(entity, pose)| (entity, pose.into(), 1.0, 1.0));
             let shooter = shooter
-                .filter(|_| blast.self_damage_scale > 0.0 || blast.knockback.is_some())
-                .map(|(entity, pose)| (entity, pose, blast.self_damage_scale));
-            for (entity, pose, scale) in targets.chain(shooter) {
+                .filter(|_| blast.affects_shooter())
+                .map(|(entity, pose)| {
+                    (
+                        entity,
+                        pose,
+                        blast.self_damage_scale,
+                        blast.self_knockback_scale,
+                    )
+                });
+            for (entity, pose, damage_scale, knockback_scale) in targets.chain(shooter) {
                 let Some(surface) = pose.nearest_surface(point, origin) else {
                     continue;
                 };
                 let falloff = blast.multiplier(surface.distance);
-                let damage = blast.hit.amount * falloff * scale;
+                let damage = blast.hit.amount * falloff * damage_scale;
                 let damage = if damage.is_finite() {
                     damage.max(0.0)
                 } else {
                     0.0
                 };
                 let impulse = blast.knockback.as_ref().and_then(|knockback| {
-                    knockback.delta(point, pose.feet(), surface.distance, falloff > 0.0)
+                    knockback.delta(
+                        point,
+                        pose.feet(),
+                        surface.distance,
+                        falloff > 0.0,
+                        knockback_scale,
+                    )
                 });
                 if damage == 0.0 && impulse.is_none() {
                     continue;
@@ -498,6 +542,7 @@ mod tests {
                 },
                 rings: vec![(1.0, 1.0), (3.0, 0.5)],
                 self_damage_scale: 0.0,
+                self_knockback_scale: 0.0,
                 knockback: None,
             }),
         }
@@ -752,10 +797,13 @@ mod tests {
         assert_eq!(fire(&fields, false).impacts, hit.impacts[..1]);
 
         fields["m_D2D11CE9"]["m_modifyHealth"]["m_10399AE7"] = serde_json::json!(4.0);
+        assert_eq!(fire(&fields, false).impacts.len(), 1);
+        fields["m_D2D11CE9"]["m_49F60FB8"] = serde_json::json!(1);
+        fields["m_D2D11CE9"]["m_2FE97560"] = serde_json::json!(0.5);
         let impulse_only = fire(&fields, false);
         assert_eq!(impulse_only.impacts[1].entity, shooter.0);
         assert_eq!(impulse_only.impacts[1].damage, 0.0);
-        assert_eq!(impulse_only.impacts[1].impulse, Some([0.0, 4.0, 0.0]));
+        assert_eq!(impulse_only.impacts[1].impulse, Some([0.0, 2.0, 0.0]));
         assert_eq!(fire(&fields, true).impacts.len(), 1);
     }
 

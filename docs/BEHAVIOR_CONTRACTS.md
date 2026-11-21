@@ -44,7 +44,9 @@ The Rust-only [combat hurt volumes fixture](../fixtures/behavior/combat-hurt-vol
 
 The Rust-only [projectile self-splash fixture](../fixtures/behavior/projectile-self-splash-v1.json) covers the authored scale, visibility checks, and absent configuration. The owner can take splash without blocking their own projectile. A room regression covers health and death feedback.
 
-The Rust-only [combat knockback fixture](../fixtures/behavior/combat-knockback-v1.json) exercises authored ring order, range, and the horizontal and upward channels independently of damage. Companion tests cover occluded and zero-damage self impulses, a stationary bot's movement, and owner correction with and without an active script. The remaining ring field and original-client movement are still unverified.
+The Rust-only [combat knockback fixture](../fixtures/behavior/combat-knockback-v1.json) exercises authored ring order, an exclusive outer radius, and the horizontal and upward channels independently of damage. Companion tests cover the authored self-impulse switch and scale, occluded and zero-damage self impulses, a stationary bot's movement, and owner correction with and without an active script. The remaining ring field and original-client movement are still unverified.
+
+The prepared knockback probe evaluates the stock Helix and Particle Cannon profiles with the active mode's actor rules. Some projectile coefficients reference mode rules instead of storing literal values. A pack missing those rules can resolve the coefficients to zero. Use the [mode and actor rules preparation guide](STATESCRIPT_DEVELOPMENT.md#set-mode-and-actor-rules) when preparing the local graph data. The profile probe exercises expression evaluation independently of stock body admission and client movement.
 
 The Rust-only [projectile delivery fixture](../fixtures/behavior/projectile-alias-release-v1.json) covers staggered acknowledgments for two predictions of one shot. A confirmed prediction is released when the authoritative impact is due. A later acknowledgment can release its own prediction without repeating the first release. Natural expiry has a separate headless check.
 
