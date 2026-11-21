@@ -373,6 +373,7 @@ impl Peer {
                 .as_ref()
                 .ok_or(RoomError::Invariant("started scene scripts have no world"))?;
             self.world.present_scene_scripts(&world.scene)?;
+            self.world.present_bot_controllers(&world.scene)?;
         }
         Ok(())
     }

@@ -210,6 +210,7 @@ pub struct WorldRecord {
     pub script: Option<ReceivedChunk>,
     pub projectile_release: Option<u32>,
     pub base_health: Option<f32>,
+    pub possessed_body: Option<u32>,
 }
 
 #[derive(Eq, PartialEq)]
@@ -290,6 +291,7 @@ pub fn world_records(schemas: &Schemas, packet: &Packet) -> Vec<WorldRecord> {
                 script: None,
                 projectile_release: None,
                 base_health: None,
+                possessed_body: None,
             };
             assert!(reader.bit().unwrap());
             if !reader.bit().unwrap() {
@@ -353,12 +355,21 @@ pub fn world_records(schemas: &Schemas, packet: &Packet) -> Vec<WorldRecord> {
                         }
                     } else if operation == 2 {
                         let mut components = reader;
-                        if components.bits(8).unwrap() == 1 && components.bits(8).unwrap() == 51 {
+                        let count = components.bits(8).unwrap();
+                        let index = components.bits(8).unwrap();
+                        if count == 1 && index == 51 {
                             components.align();
                             if components.bits(8).unwrap() == 7 && components.bits(56).unwrap() == 1
                             {
                                 components.advance(64).unwrap(); // ID and maximum
                                 record.base_health = Some(components.f32().unwrap());
+                            }
+                        } else if index == 44 {
+                            components.align();
+                            if components.bits(8).unwrap() == 1
+                                && (components.bits(8).unwrap() & 1) != 0
+                            {
+                                record.possessed_body = Some(components.bits(32).unwrap() as u32);
                             }
                         }
                     }

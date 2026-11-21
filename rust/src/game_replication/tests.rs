@@ -4107,3 +4107,142 @@ fn body_replacement_rejects_stale_generation_mutations() {
     assert!(!simulation.retire_player_body(id2));
     assert!(simulation.player_body(id2).is_none());
 }
+
+#[test]
+fn present_bot_controllers_sequences_creation_possession_and_respawn() {
+    use crate::{
+        game_bots::{BOT_CONTROLLER_BASE, BOT_ENTITY, Bot},
+        game_combat::BotReplacement,
+        match_scene::bot_create,
+        scene_assets::PreparedScene,
+        world::{ComponentValue, Create, Operation, PLAYER_PATH, WITH_PARTICIPANT},
+    };
+
+    let mut scene = PreparedScene::fixture_for_bots(vec![Bot::fixture_walker([0.0, 0.0, 10.0])]);
+    scene
+        .simulation_mut()
+        .seat_bots(&GameMap::practice_range(), 1);
+    let seated = scene.simulation().seated_bots();
+    assert_eq!(seated.len(), 1);
+    let controller = seated[0].controller;
+    assert_eq!(controller, BOT_CONTROLLER_BASE | 0x100);
+    assert_eq!(seated[0].slot, 1);
+    assert_eq!(seated[0].body, BOT_ENTITY);
+
+    let mut world = WorldDelivery::new(OWNER);
+    world.started = Some(FIRST_TICK);
+    world.create_bot(bot_create(scene.bots().unwrap().next().unwrap(), None).unwrap());
+    world.present_bot_controllers(&scene).unwrap();
+
+    // First queue holds BotCreate (with HERO_BIT) and BotControllerCreate (no PLAYER_PATH).
+    let initial: Vec<_> = world.ready().iter().map(|ready| ready.tracked()).collect();
+    assert_eq!(initial.len(), 2);
+    assert_eq!(initial[0].update.entity, BOT_ENTITY);
+    assert_eq!(initial[1].update.entity, controller);
+    let Some(Operation::Create(ctrl_create)) = &initial[1].update.operation else {
+        panic!("expected controller create");
+    };
+    assert_ne!(ctrl_create.flags & WITH_PARTICIPANT, 0);
+    assert_eq!(ctrl_create.flags & PLAYER_PATH, 0);
+    let slot_component = ctrl_create
+        .components
+        .iter()
+        .find(|component| component.index == 74)
+        .expect("controller component 74");
+    assert_eq!(slot_component.fields[2], Some(ComponentValue::I8(1)));
+    world.sent(&eligible(&world));
+
+    // If BotControllerCreate is lost while BotCreate arrives, retry creates without possessing.
+    world.acknowledge(outcome(Arc::clone(&initial[0]), true), Duration::ZERO);
+    world.acknowledge(outcome(Arc::clone(&initial[1]), false), Duration::ZERO);
+    world.present_bot_controllers(&scene).unwrap();
+    let retry: Vec<_> = world.ready().iter().map(|ready| ready.tracked()).collect();
+    assert_eq!(retry.len(), 1);
+    assert_eq!(retry[0].update.entity, controller);
+    assert!(matches!(
+        retry[0].update.operation,
+        Some(Operation::Create(_))
+    ));
+    world.sent(&eligible(&world));
+    world.acknowledge(outcome(Arc::clone(&retry[0]), true), Duration::ZERO);
+
+    // Once both controller and body creates are acknowledged, 44/75 possession is queued.
+    world.present_bot_controllers(&scene).unwrap();
+    let possess: Vec<_> = world.ready().iter().map(|ready| ready.tracked()).collect();
+    assert_eq!(possess.len(), 1);
+    assert_eq!(possess[0].update.entity, controller);
+    let Some(Operation::Update(components)) = &possess[0].update.operation else {
+        panic!("expected controller possession update");
+    };
+    assert_eq!(components.len(), 2);
+    assert_eq!(components[0].index, 44);
+    assert_eq!(
+        components[0].fields,
+        vec![Some(ComponentValue::Entity(BOT_ENTITY)); 3]
+    );
+    assert_eq!(components[1].index, 75);
+    assert_eq!(
+        components[1].fields[0],
+        Some(ComponentValue::Id(seated[0].hero))
+    );
+    world.sent(&eligible(&world));
+    world.acknowledge(outcome(Arc::clone(&possess[0]), true), Duration::ZERO);
+
+    // Respawning replaces the bot body ID while reusing the same seated controller.
+    let mut respawned_bot = scene
+        .bots()
+        .unwrap()
+        .next()
+        .unwrap()
+        .respawned(BOT_ENTITY + 1, FIRST_TICK);
+    assert_eq!(respawned_bot.slot, Some(1));
+    assert_eq!(respawned_bot.controller(), Some(controller));
+    scene
+        .simulation_mut()
+        .kill_bot_for_test(BOT_ENTITY, FIRST_TICK + 1, Duration::from_secs(1));
+    let replacements = {
+        let (simulation, queries) = scene.bot_simulation();
+        simulation
+            .finish_tick(
+                &queries,
+                FIRST_TICK + 200,
+                Duration::from_secs(1) + crate::game_bots::BOT_RESPAWN_TIME,
+            )
+            .unwrap()
+    };
+    assert_eq!(replacements.len(), 1);
+    let fresh_entity = replacements[0].created.entity;
+    assert_eq!(fresh_entity, BOT_ENTITY + 1);
+    respawned_bot.entity = fresh_entity;
+
+    world.replace_bot(BotReplacement {
+        retired: BOT_ENTITY,
+        created: replacements[0].created.clone(),
+    });
+    // Possession waits until the respawned bot's create is acknowledged.
+    world.present_bot_controllers(&scene).unwrap();
+    let respawn_records: Vec<_> = world.ready().iter().map(|ready| ready.tracked()).collect();
+    assert_eq!(respawn_records.len(), 2);
+    assert!(
+        respawn_records
+            .iter()
+            .all(|r| r.update.entity != controller)
+    );
+    world.sent(&eligible(&world));
+    for record in respawn_records {
+        world.acknowledge(outcome(record, true), Duration::ZERO);
+    }
+
+    world.present_bot_controllers(&scene).unwrap();
+    let repossess: Vec<_> = world.ready().iter().map(|ready| ready.tracked()).collect();
+    assert_eq!(repossess.len(), 1);
+    assert_eq!(repossess[0].update.entity, controller);
+    let Some(Operation::Update(components)) = &repossess[0].update.operation else {
+        panic!("expected re-possession update after bot respawn");
+    };
+    assert_eq!(
+        components[0].fields,
+        vec![Some(ComponentValue::Entity(fresh_entity)); 3]
+    );
+    assert!(Create::new(1, vec![]).components.is_empty());
+}

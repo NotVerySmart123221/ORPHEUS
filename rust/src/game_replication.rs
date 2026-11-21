@@ -25,7 +25,9 @@ use crate::{
     game_messages::Message,
     game_parameters::{ClientGameMessage, HeroSelectRequest},
     game_projectiles::{OwnerProjectiles, ProjectileDelivery, ProjectileLeases, ProjectileToken},
-    match_scene::{PlayerAppearance, Possession, team_bit},
+    match_scene::{
+        PlayerAppearance, Possession, bot_controller_create, bot_controller_possession, team_bit,
+    },
     mover::Mover,
     mover_correction::CorrectionHistory,
     mover_kinematics::Poses,
@@ -86,6 +88,12 @@ struct Body {
     id: BodyId,
     hero: u64,
     skin: SkinTheme,
+}
+
+#[derive(Clone, Copy, Default)]
+struct BotControllerState {
+    created: bool,
+    possessed: Option<u32>,
 }
 
 /// A running owner VM and the authored data used to encode its snapshots.
@@ -277,6 +285,7 @@ pub(crate) struct WorldDelivery {
     queued: Vec<Arc<Record>>,
     created: HashSet<u32>,
     bots: HashMap<u32, BotLifetime>,
+    bot_controllers: HashMap<u32, BotControllerState>,
     health_updates: HashMap<u32, u64>,
     health_revision: u64,
     // These barriers belong to the peer's reliable stream and survive world clears.

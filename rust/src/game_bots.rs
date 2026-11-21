@@ -34,6 +34,7 @@ use crate::script_init::ScriptedMotion;
 use crate::world::{Movement, NO_INPUT};
 
 pub const BOT_ENTITY: u32 = 0xc000_1000;
+pub const BOT_CONTROLLER_BASE: u32 = 0xa000_8000;
 pub const DEAD_MOVEMENT_FLAG: u32 = 0x2000;
 pub const SETTLE_TICKS: u32 = 63;
 pub const BOT_RESPAWN_TIME: Duration = Duration::from_secs(3);
@@ -385,6 +386,7 @@ impl PatrolCollision {
 #[derive(Debug)]
 pub struct Bot {
     pub entity: u32,
+    pub slot: Option<u8>,
     pub spawn: Arc<BotSpawn>,
     pub position: [f64; 3],
     pub yaw: f64,
@@ -446,6 +448,13 @@ impl Bot {
         bot.records_from = Some(tick.saturating_add(BOT_RECORD_DELAY));
         bot
     }
+
+    /// Persistent controller entity ID for a seated bot across respawns.
+    pub fn controller(&self) -> Option<u32> {
+        self.slot
+            .map(|slot| 0xa000_0000 | ((0x80 + u32::from(slot)) << 8))
+    }
+
     fn new(entity: u32, spawn: Arc<BotSpawn>, walk: BotWalk) -> Self {
         let index = if spawn.route.is_empty() {
             0
@@ -454,6 +463,7 @@ impl Bot {
         };
         Self {
             entity,
+            slot: None,
             position: spawn.position,
             yaw: f64::from(spawn.yaw),
             pitch: 0,
@@ -1013,6 +1023,7 @@ impl Bot {
 
     pub fn respawned(&self, entity: u32, records_from: u32) -> Self {
         let mut fresh = Self::new(entity, Arc::clone(&self.spawn), self.walk);
+        fresh.slot = self.slot;
         fresh.collision = self.collision.as_ref().map(|collision| PatrolCollision {
             body: collision
                 .body
