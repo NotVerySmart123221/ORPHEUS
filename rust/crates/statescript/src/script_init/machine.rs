@@ -133,25 +133,33 @@ pub(super) struct Volley {
     pub(super) rate: f64,
     pub(super) spread: f64,
     pub(super) planned: u32,
+    // Index of the next due round, including rounds skipped without a pose.
     pub(super) reported: u32,
+    pub(super) unposed_rounds: u32,
     pub(super) outputs: [Option<VarKey>; 3],
 }
 
 impl Volley {
-    pub(super) fn ammo_at(&self, now_ms: u64) -> i64 {
+    fn ammo_at(&self, now_ms: u64, permit_shots: bool) -> i64 {
         let Some(elapsed) = now_ms.checked_sub(self.start_ms) else {
             return self.ammo0;
         };
-        let seconds = f64::from(elapsed as f32 * 0.001_f32);
-        let shots = ((seconds * self.rate) as f32).floor() as i64;
+        let due = if permit_shots {
+            let seconds = f64::from(elapsed as f32 * 0.001_f32);
+            let ordinal = ((seconds * self.rate) as f32).floor() as i64;
+            ordinal.saturating_add(1)
+        } else {
+            i64::from(self.reported)
+        };
+        let fired = due.saturating_sub(i64::from(self.unposed_rounds)).max(0);
         self.ammo0
-            .saturating_sub(self.per_shot.saturating_mul(shots.saturating_add(1)))
+            .saturating_sub(self.per_shot.saturating_mul(fired))
             .max(0)
     }
 
-    pub(super) fn output(&self, slot: u8, now_ms: u64) -> Value {
+    pub(super) fn output(&self, slot: u8, now_ms: u64, permit_shots: bool) -> Value {
         match slot {
-            0 => Value::Integer(self.ammo_at(now_ms)),
+            0 => Value::Integer(self.ammo_at(now_ms, permit_shots)),
             1 => Value::Float(self.rate),
             2 => Value::Float(self.spread),
             _ => unreachable!("weapon volley output slot"),
@@ -276,6 +284,7 @@ pub(super) struct Machine {
     pub(super) volleys: BTreeMap<StateKey, Volley>,
     pub(super) movement_modifiers: BTreeMap<ModifierKey, Modifier>,
     pub(super) shots: Vec<ShotEvent>,
+    pub(super) permit_weapon_shots: bool,
     pub(super) ability_presses: BTreeMap<StateKey, Vec<AbilityPress>>,
     next_public_id: u32,
     next_private_id: u32,
@@ -314,6 +323,7 @@ impl Clone for Machine {
             volleys: self.volleys.clone(),
             movement_modifiers: self.movement_modifiers.clone(),
             shots: self.shots.clone(),
+            permit_weapon_shots: self.permit_weapon_shots,
             ability_presses: self.ability_presses.clone(),
             next_public_id: self.next_public_id,
             next_private_id: self.next_private_id,
@@ -397,6 +407,7 @@ impl Machine {
             volleys: BTreeMap::new(),
             movement_modifiers: BTreeMap::new(),
             shots: Vec::new(),
+            permit_weapon_shots: true,
             ability_presses: BTreeMap::new(),
             next_public_id: 1,
             next_private_id: u32::from(u16::MAX),
@@ -698,7 +709,9 @@ impl Machine {
     pub(super) fn link_value(&self, entry: &VariableLink) -> Value {
         match &entry.output {
             LinkValue::Fixed(value) => value.clone(),
-            LinkValue::Volley(slot) => self.volleys[&entry.state].output(*slot, self.now_ms),
+            LinkValue::Volley(slot) => {
+                self.volleys[&entry.state].output(*slot, self.now_ms, self.permit_weapon_shots)
+            }
             LinkValue::Chase => self.snapshot.instances[&entry.state.instance].states
                 [&entry.state.raw]
                 .chase

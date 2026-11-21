@@ -21,6 +21,30 @@ pub fn native_shape(config: &Json, expected: &str, operand: Option<&str>) -> boo
     class(config) == Some(expected) && native_fields(config, operand.as_slice())
 }
 
+/// Recognize the owner selector form with one owner and only zero literals.
+pub fn is_zeroed_owner_selector(config: &Json) -> bool {
+    if class(config) != Some("STU_ED45C5E8") {
+        return false;
+    }
+    let mut owners = 0;
+    config.as_object().is_some_and(|fields| {
+        fields.iter().all(|(key, value)| match key.as_str() {
+            "$" => true,
+            "m_EE729DCB" => value.as_u64() == Some(0),
+            _ if native_shape(value, "STU_B5A0CAF0", None) => {
+                owners += 1;
+                true
+            }
+            _ => {
+                ["STUConfigVarBool", "STUConfigVarFloat"]
+                    .into_iter()
+                    .any(|class| native_shape(value, class, Some("m_value")))
+                    && value["m_value"].as_f64() == Some(0.0)
+            }
+        })
+    }) && owners == 1
+}
+
 pub(crate) fn native_entity_operand<'a>(config: &'a Json, expected: &str) -> Option<&'a Json> {
     config
         .get("m_entity")

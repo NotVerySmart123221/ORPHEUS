@@ -1865,6 +1865,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 spread,
                 planned,
                 reported: 0,
+                unposed_rounds: 0,
                 outputs,
             },
         );
@@ -1936,6 +1937,26 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let Some(volley) = self.machine.volleys.get_mut(&key) else {
             return Ok(());
         };
+        if !self.machine.permit_weapon_shots {
+            // Locate the first round past the new clock without walking an
+            // arbitrarily long, unposed interval one shot at a time.
+            let mut first = volley.reported;
+            let mut end = volley.planned;
+            while first < end {
+                let middle = first + (end - first) / 2;
+                let due = volley
+                    .start_ms
+                    .saturating_add(shot_delay(middle, volley.rate));
+                if due <= self.machine.now_ms {
+                    first = middle + 1;
+                } else {
+                    end = middle;
+                }
+            }
+            volley.unposed_rounds += first - volley.reported;
+            volley.reported = first;
+            return Ok(());
+        }
         while volley.reported < volley.planned {
             let time_ms = volley
                 .start_ms
@@ -1973,11 +1994,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         };
         let outputs = volley.outputs;
         let at = self.machine.now_ms.saturating_add(1);
-        let values = [
-            volley.output(0, at),
-            volley.output(1, at),
-            volley.output(2, at),
-        ];
+        let values =
+            [0, 1, 2].map(|slot| volley.output(slot, at, self.machine.permit_weapon_shots));
         for (target, value) in outputs.into_iter().zip(values) {
             if let Some(target) = target {
                 self.remove_link(key, target, Some(value), depth)?

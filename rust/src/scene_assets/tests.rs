@@ -2,6 +2,7 @@ use super::*;
 
 mod actor_startup;
 mod junkenstein;
+mod mode_presentation;
 #[cfg(feature = "inspector")]
 mod script_coverage;
 
@@ -79,6 +80,7 @@ fn practice_only_omits_owner_runtime_when_all_owner_content_is_absent() {
             practice_owner_body: OnceLock::new(),
             bots: BotCatalog::default(),
             movers: Arc::new(MoverCatalog::default()),
+            hurt_volumes: Arc::new(HurtVolumeCatalog::default()),
             stats: StatsCatalog::default(),
             heroes: Arc::clone(&heroes),
             pools: Arc::new(PoolCatalog::default()),
@@ -1300,9 +1302,6 @@ fn practice_range_stock_bots_drive_overhead_nameplates_through_death_and_respawn
     let assets = SceneAssets::load(runtime).unwrap();
     let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
     assert!(scene.movement_ready());
-    if scene.scripted_bots() == 0 {
-        return;
-    }
 
     let initial: Vec<(u32, usize)> = scene
         .enemy_projections()
@@ -1340,12 +1339,44 @@ fn practice_range_stock_bots_drive_overhead_nameplates_through_death_and_respawn
         );
     }
 
-    // Killing a stock bot updates its script cleanly and respawn creates a fresh bot with 0x0D24.
+    // Project the corpse while the delayed death handler is still running.
     let target = initial[0].0;
-    scene
-        .simulation_mut()
-        .kill_bot_for_test(target, tick + 1, now);
     tick += 1;
+    scene.simulation_mut().kill_bot_for_test(target, tick, now);
+    let death_frame = tick;
+    for _ in 0..10 {
+        tick += 1;
+        now += crate::game_clock::TICK_PERIOD;
+        scene.step_bots(tick, &patrol).unwrap();
+        let (simulation, queries) = scene.bot_simulation();
+        assert!(
+            simulation
+                .finish_tick(&queries, tick, now)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(simulation.is_bot_dead(target));
+        let projection = scene
+            .enemy_projections()
+            .unwrap()
+            .find(|projection| projection.snapshot.entity == target)
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing corpse projection at death + {}",
+                    tick - death_frame
+                )
+            });
+        projection
+            .encoder
+            .project(projection.snapshot, View::Observer)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "corpse projection at death + {}: {error}",
+                    tick - death_frame
+                )
+            });
+    }
+
     now += Duration::from_secs(4);
     scene.step_bots(tick + 240, &patrol).unwrap();
     let replacements = {

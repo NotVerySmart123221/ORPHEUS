@@ -232,6 +232,184 @@ fn stock_practice_owner_observes_processed_commands_and_rifle_state() {
     }
 }
 
+#[test]
+#[ignore = "requires the target-tagged 104319 Practice Range runtime"]
+fn stock_practice_owner_rifle_batched_tap_delivers_terminal_ammo() {
+    let runtime = std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap();
+    let assets = SceneAssets::load(runtime).unwrap();
+    let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
+    let mut world = WorldDelivery::new(OWNER);
+    let mut egress = GameEgress::default();
+    let mut tick = prepare_owner(&mut scene, &mut world, &mut egress);
+    let viewer = PlayerAppearance {
+        entity: OWNER,
+        slot: 0,
+        team: 0,
+        card: &PlayerCard::default(),
+    };
+    let id = world.active_body_id().unwrap();
+    assert!(deliver_until(
+        &mut world,
+        &mut scene,
+        &mut egress,
+        &mut tick,
+        |world| { world.body_script.as_ref().unwrap().stream.base().is_some() }
+    ));
+
+    for _ in 0..32 {
+        tick += 1;
+        world.queue_commands(
+            tick,
+            &[Command {
+                frame: tick,
+                ..Command::default()
+            }],
+        );
+        world
+            .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
+            .unwrap();
+        let (_, sent) = transmit(
+            &mut world,
+            Some(scene.simulation_mut()),
+            &mut egress,
+            tick,
+            tick - FIRST_TICK,
+        );
+        transport_outcome(&mut world, &mut egress, sent.sequence, true);
+    }
+
+    let press = tick + 1;
+    let release = press + 1;
+    world.queue_commands(
+        release,
+        &[
+            Command {
+                frame: press,
+                buttons: FIRE,
+                ..Command::default()
+            },
+            Command {
+                frame: release,
+                ..Command::default()
+            },
+        ],
+    );
+    assert_eq!(
+        world
+            .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
+            .unwrap(),
+        (2, false)
+    );
+    let actor = scene.simulation().player_body(id).unwrap();
+    let snapshot = actor.runtime.as_ref().unwrap().snapshot().unwrap();
+    let (&rifle_id, rifle) = snapshot
+        .instances
+        .iter()
+        .find(|(_, instance)| instance.graph == 0x0254 && instance.parent.is_none())
+        .unwrap();
+    assert_eq!(rifle_state(actor).0, 29);
+    assert!(!rifle.states[&10].active);
+    let shots = world.take_hitscan(scene.simulation_mut());
+    assert_eq!(shots.len(), 1);
+    assert_eq!(shots[0].shot_frame, press);
+
+    let (_, sent) = transmit(
+        &mut world,
+        Some(scene.simulation_mut()),
+        &mut egress,
+        release,
+        release - FIRST_TICK,
+    );
+    transport_outcome(&mut world, &mut egress, sent.sequence, true);
+    let stream = &world.body_script.as_ref().unwrap().stream;
+    assert_eq!(stream.command_frame(), release);
+    let (acknowledged, snapshot) = stream.base().unwrap();
+    assert_eq!(acknowledged, stream.last());
+    assert_eq!(
+        snapshot.instance_variables(rifle_id).unwrap()[&53],
+        ScriptValue::Integer(29)
+    );
+    assert_eq!(
+        snapshot.volley_identity(rifle_id, 10),
+        Some((1, u64::from(press) * FRAME_MS))
+    );
+}
+
+#[test]
+#[ignore = "requires the target-tagged 104319 Practice Range runtime"]
+fn stock_practice_owner_gap_does_not_charge_for_an_unposed_rifle_round() {
+    let runtime = std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap();
+    let assets = SceneAssets::load(runtime).unwrap();
+    let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
+    let mut world = WorldDelivery::new(OWNER);
+    let mut egress = GameEgress::default();
+    let tick = prepare_owner(&mut scene, &mut world, &mut egress);
+    let viewer = PlayerAppearance {
+        entity: OWNER,
+        slot: 0,
+        team: 0,
+        card: &PlayerCard::default(),
+    };
+    let id = world.active_body_id().unwrap();
+    let ammo = |scene: &PreparedScene| rifle_state(scene.simulation().player_body(id).unwrap()).0;
+    let press = tick + 40;
+    let last_pose = press + 124;
+    let mut posed_shots = 0;
+    for frame in tick..=last_pose {
+        world.queue_commands(
+            frame,
+            &[Command {
+                frame,
+                buttons: if frame >= press { FIRE } else { 0 },
+                ..Command::default()
+            }],
+        );
+        let (_, left) = world
+            .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 32)
+            .unwrap();
+        assert!(!left);
+        posed_shots += world.take_hitscan(scene.simulation_mut()).len();
+    }
+    // At 9 rounds per second, round 19 is due on the next frame, which
+    // this long gap cannot reconstruct. The neutral boundary releases FIRE
+    // without supplying an authoritative shot pose.
+    assert_eq!((posed_shots, ammo(&scene)), (18, 12));
+    let resume = last_pose + 65;
+    world.queue_commands(
+        resume,
+        &[Command {
+            frame: resume,
+            ..Command::default()
+        }],
+    );
+    let (_, left) = world
+        .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 128)
+        .unwrap();
+    assert!(!left);
+    assert_eq!(world.input.processed, Some(resume));
+    assert!(world.take_hitscan(scene.simulation_mut()).is_empty());
+    assert_eq!(ammo(&scene), 12);
+
+    let next_shot = resume + 1;
+    world.queue_commands(
+        next_shot,
+        &[Command {
+            frame: next_shot,
+            buttons: FIRE,
+            ..Command::default()
+        }],
+    );
+    let (_, left) = world
+        .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
+        .unwrap();
+    assert!(!left);
+    assert_eq!(world.input.processed, Some(next_shot));
+    let shots = world.take_hitscan(scene.simulation_mut());
+    assert_eq!(shots.len(), 1);
+    assert_eq!(shots[0].shot_frame, next_shot);
+    assert_eq!(ammo(&scene), 11);
+}
+
 #[derive(Default)]
 struct InputObservation {
     admitted: bool,

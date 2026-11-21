@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "case_id": "combat-hurt-volumes.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "input": {
+    "body": "0x040000000000ABC0",
+    "movement": { "feet": [0.0, 1.0, 6.0], "height": 2.0, "radius": 0.5, "eye": 1.5 },
+    "catalog": {
+      "version": 1,
+      "bodies": {
+        "0x040000000000ABC0": {
+          "body": { "lower": 0.65, "upper": 1.15, "radius": 0.65 },
+          "head": { "lower": 2.0, "upper": 2.0, "radius": 0.3 }
+        }
+      }
+    }
+  },
+  "cases": [
+    { "name": "head-above-mover", "origin": [0.2, 3.1, 0.0], "critical": true },
+    { "name": "chest-below-head", "origin": [0.2, 2.45, 0.0], "critical": false },
+    { "name": "side-outside-mover", "origin": [0.6, 2.18, 0.0], "critical": false },
+    { "name": "empty-space-beside-head", "origin": [0.5, 3.1, 0.0], "critical": null }
+  ]
+}

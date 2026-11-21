@@ -891,7 +891,9 @@ use evaluator::Evaluator;
 pub(crate) use helpers::named_shield_identifier;
 use helpers::*;
 pub(crate) use helpers::{client_only_fallback, native_entity_operand, native_target_tag_operand};
-pub use helpers::{excluded_tags_admit, native_fields, native_shape, target_tag_config};
+pub use helpers::{
+    excluded_tags_admit, is_zeroed_owner_selector, native_fields, native_shape, target_tag_config,
+};
 
 /// Locate a config group reached directly or through explicit server fallbacks.
 pub(crate) fn assignment_group_source(mut config: &Json) -> Option<(&Json, usize)> {

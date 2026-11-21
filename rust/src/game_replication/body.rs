@@ -325,23 +325,33 @@ impl BodyScript {
     }
 
     pub(super) fn sent(&mut self, last: u32) {
-        if let Some((report, projectiles)) = self.stream.sent(last).zip(self.projectiles.as_mut()) {
-            projectiles.owner_sent(
-                last,
-                report.command_frame,
-                |instance, raw| {
-                    report
-                        .changes
-                        .contains(&ChangeKey::State(instance, raw))
-                        .then(|| report.snapshot.volley_identity(instance, raw))
-                        .flatten()
-                },
-                |instance, raw| {
-                    report
-                        .changes
-                        .contains(&ChangeKey::VolleyIntroduction(instance, raw))
-                },
-            );
+        if let Some(report) = self.stream.sent(last) {
+            #[cfg(feature = "inspector")]
+            if owner_volley_trace_enabled() {
+                report.snapshot.trace_owner_volley_delta(
+                    last,
+                    report.command_frame,
+                    report.changes,
+                );
+            }
+            if let Some(projectiles) = self.projectiles.as_mut() {
+                projectiles.owner_sent(
+                    last,
+                    report.command_frame,
+                    |instance, raw| {
+                        report
+                            .changes
+                            .contains(&ChangeKey::State(instance, raw))
+                            .then(|| report.snapshot.volley_identity(instance, raw))
+                            .flatten()
+                    },
+                    |instance, raw| {
+                        report
+                            .changes
+                            .contains(&ChangeKey::VolleyIntroduction(instance, raw))
+                    },
+                );
+            }
         }
         if self.unsent_delta.is_some_and(|(queued, _)| queued == last) {
             self.unsent_delta = None;

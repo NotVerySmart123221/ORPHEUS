@@ -980,7 +980,7 @@ impl Component {
     }
 
     pub fn advance_frame(&mut self, frame: u32, world: &mut impl World) -> Result<(), InitFault> {
-        self.advance(frame, None, world)
+        self.advance(frame, None, true, world)
     }
 
     pub fn advance_command(
@@ -988,7 +988,22 @@ impl Component {
         command: Command,
         world: &mut impl World,
     ) -> Result<(), InitFault> {
-        self.advance(command.frame, Some(command), world)
+        self.advance(command.frame, Some(command), true, world)
+    }
+
+    /// Advance an owner's clock without a shot pose. The first gap frame
+    /// supplies a release, and the interior only advances authored timers.
+    pub fn advance_unposed(
+        &mut self,
+        frame: u32,
+        release_buttons: bool,
+        world: &mut impl World,
+    ) -> Result<(), InitFault> {
+        let command = release_buttons.then(|| Command {
+            frame,
+            ..Command::default()
+        });
+        self.advance(frame, command, false, world)
     }
 
     /// Interrupt through authored ability exit paths without treating a living
@@ -1057,6 +1072,7 @@ impl Component {
         &mut self,
         frame: u32,
         command: Option<Command>,
+        permit_shots: bool,
         world: &mut impl World,
     ) -> Result<(), InitFault> {
         if frame_start(frame) < self.machine.now_ms {
@@ -1065,7 +1081,10 @@ impl Component {
                 now_ms: self.machine.now_ms,
             });
         }
-        self.run(world, |vm| vm.advance_frame(frame, command))
+        self.run(world, |vm| {
+            vm.machine.permit_weapon_shots = permit_shots;
+            vm.advance_frame(frame, command)
+        })
     }
 
     #[doc(hidden)]

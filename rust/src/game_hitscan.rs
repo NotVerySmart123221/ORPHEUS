@@ -13,10 +13,13 @@ use crate::{
     commands::Command,
     script_expr::{EvalError, to_float},
     script_wire::Value,
-    static_ray::{Vec3, capsule_entry_distance},
+    static_ray::Vec3,
 };
 
+mod hurt_volumes;
+
 pub use crate::script_init::HitTags as DamageTags;
+pub(crate) use hurt_volumes::{HurtPose, HurtVolumeCatalog};
 
 pub const DEFAULT_REACH: f64 = 200.0;
 const HISTORY: usize = 64;
@@ -265,11 +268,19 @@ impl HitscanShot {
         }
     }
 
-    /// Find the first eligible capsule before any blocking map surface.
+    /// Find the first eligible hurt region before any blocking map surface.
     /// Iteration order breaks exact ties, as it does in the reference.
     pub fn resolve(
         &self,
         targets: impl IntoIterator<Item = (u32, TargetPose)>,
+        wall_distance: impl FnOnce(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
+    ) -> Result<Option<Impact>, IndexError> {
+        self.resolve_combat(targets, wall_distance)
+    }
+
+    pub(crate) fn resolve_combat(
+        &self,
+        targets: impl IntoIterator<Item = (u32, impl Into<HurtPose>)>,
         wall_distance: impl FnOnce(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
     ) -> Result<Option<Impact>, IndexError> {
         if !self.hit.amount.is_finite() || self.hit.amount <= 0.0 {
@@ -277,20 +288,20 @@ impl HitscanShot {
         }
         let mut nearest = None;
         for (entity, pose) in targets {
-            let [a, b] = pose.segment();
             let length = nearest.map_or(self.reach, |(distance, _, _)| distance);
-            if let Some(distance) =
-                capsule_entry_distance(self.origin, self.direction, length, a, b, pose.radius)
+            if let Some((distance, head)) =
+                pose.into()
+                    .contact(self.origin, self.direction, length, 0.0)
             {
                 if nearest.is_none() || distance < length {
-                    nearest = Some((distance, entity, pose));
+                    nearest = Some((distance, entity, head));
                     if distance == 0.0 {
                         break;
                     }
                 }
             }
         }
-        let Some((distance, entity, pose)) = nearest else {
+        let Some((distance, entity, head)) = nearest else {
             return Ok(None);
         };
         if distance > 0.0
@@ -299,8 +310,6 @@ impl HitscanShot {
         {
             return Ok(None);
         }
-        let impact_y = self.origin[1] + self.direction[1] * distance;
-        let head = impact_y >= pose.feet[1] + pose.eye - HEAD_BELOW_EYE;
         Ok(Some(Impact {
             tags: self.hit.tags,
             entity,

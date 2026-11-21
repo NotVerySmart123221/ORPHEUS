@@ -2944,6 +2944,114 @@ fn posed_volley_keeps_the_authored_shot_frame_and_drains_unposed_reports() {
 }
 
 #[test]
+fn a_volley_skips_unposed_rounds_and_bills_the_next_posed_round() {
+    use crate::{
+        script_expr::{Scope, Variable},
+        script_player::fixture_volley_factory,
+    };
+
+    #[derive(serde::Deserialize)]
+    struct Contract {
+        schema_version: u32,
+        magazine: i64,
+        maximum_rounds: u32,
+        shots_per_second: f64,
+        unposed_offset: u32,
+        resumed_offset: u32,
+        expected_ammunition: [i64; 3],
+        expected_shots: [usize; 3],
+    }
+    let contract: Contract = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/owner-unposed-volley-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(contract.schema_version, 1);
+
+    const AMMO: u32 = 147;
+    let mut factory = fixture_volley_factory(
+        20,
+        false,
+        serde_json::json!({
+            "m_A17BE89B":contract.maximum_rounds,
+            "m_numShotsPerSecond":contract.shots_per_second,
+            "m_FEC435C6":100,
+            "m_24E351A4":{"$":"STUConfigVarDynamic","m_identifier":AMMO},
+            "m_6396149F":{"m_modifyHealth":{"m_amount":10.0}},
+        }),
+    );
+    factory.roots[0]
+        .variables
+        .insert(AMMO, Value::Integer(contract.magazine));
+    let (_, spawn) = fixture_body_factory();
+    let mut runtime = factory.start(spawn).unwrap();
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        spawn.pose.position,
+        0,
+        0x18,
+    )
+    .unwrap();
+    let ammo = |runtime: &PlayerBodyRuntime| {
+        runtime.component.resolved_variable(
+            1,
+            Variable {
+                scope: Scope::Instance,
+                id: AMMO,
+            },
+        )
+    };
+    let fire = Command {
+        frame: spawn.frame + 1,
+        buttons: crate::commands::FIRE,
+        ..Command::default()
+    };
+    runtime.advance(fire, &mover, BodyStep::Posed).unwrap();
+    assert_eq!(
+        runtime.take_shots(Some(fire), &mover).len(),
+        contract.expected_shots[0]
+    );
+    assert_eq!(
+        ammo(&runtime),
+        Some(Value::Integer(contract.expected_ammunition[0]))
+    );
+
+    // Advance the authored clock across the second round, which has no
+    // usable pose. The volley survives to its scheduled third round.
+    let timer = Command {
+        frame: fire.frame + contract.unposed_offset,
+        ..Command::default()
+    };
+    runtime
+        .advance(timer, &mover, BodyStep::UnposedTimer)
+        .unwrap();
+    assert_eq!(
+        runtime.take_shots(None, &mover).len(),
+        contract.expected_shots[1]
+    );
+    assert_eq!(
+        ammo(&runtime),
+        Some(Value::Integer(contract.expected_ammunition[1]))
+    );
+
+    let resumed = Command {
+        frame: fire.frame + contract.resumed_offset,
+        ..fire
+    };
+    runtime.advance(resumed, &mover, BodyStep::Posed).unwrap();
+    let shots = runtime.take_shots(Some(resumed), &mover);
+    assert_eq!(shots.len(), contract.expected_shots[2]);
+    let [PosedShot::Hitscan(shot)] = shots.as_slice() else {
+        panic!("expected the last scheduled round with a valid pose");
+    };
+    assert_eq!(shot.shot_frame, resumed.frame);
+    assert_eq!(
+        ammo(&runtime),
+        Some(Value::Integer(contract.expected_ammunition[2]))
+    );
+}
+
+#[test]
 fn secondary_volley_uses_authored_projectile_and_owner_lease() {
     let factory = fixture_projectile_factory(40.0);
     let (_, mut spawn) = fixture_body_factory();

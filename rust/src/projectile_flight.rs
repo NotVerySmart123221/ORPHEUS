@@ -9,12 +9,12 @@ use serde_json::Value as Json;
 use crate::{
     collision_index::IndexError,
     game_clock::TICK_PERIOD,
-    game_hitscan::{HitDefinition, Impact, TargetPose},
+    game_hitscan::{HitDefinition, HurtPose, Impact, TargetPose},
     game_projectiles::authored_number,
     script_expr::EvalError,
     script_graph::Node,
     script_wire::Value,
-    static_ray::{Vec3, along, capsule_entry_distance, norm, segment_separation},
+    static_ray::{Vec3, along, norm},
 };
 
 const DEFAULT_LIFETIME: f64 = 5.0;
@@ -210,6 +210,15 @@ impl ProjectileFlight {
         &mut self,
         tick: u32,
         targets: &[(u32, TargetPose)],
+        wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
+    ) -> Result<Option<FlightEnd>, IndexError> {
+        self.advance_combat(tick, targets, wall)
+    }
+
+    pub(crate) fn advance_combat<T: Copy + Into<HurtPose>>(
+        &mut self,
+        tick: u32,
+        targets: &[(u32, T)],
         mut wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
     ) -> Result<Option<FlightEnd>, IndexError> {
         if self.ended {
@@ -243,25 +252,21 @@ impl ProjectileFlight {
         Ok(end)
     }
 
-    fn advance_segment(
+    fn advance_segment<T: Copy + Into<HurtPose>>(
         &mut self,
         duration: f64,
         speed: f64,
-        targets: &[(u32, TargetPose)],
+        targets: &[(u32, T)],
         mut wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
     ) -> Result<Option<FlightEnd>, IndexError> {
         let reach = speed * duration;
         let mut closest = None;
         for &(entity, target) in targets {
-            let [a, b] = target.segment();
-            if let Some(distance) = capsule_entry_distance(
-                self.position,
-                self.direction,
-                reach,
-                a,
-                b,
-                target.radius + self.ballistics.radius,
-            ) {
+            if let Some((distance, _)) =
+                target
+                    .into()
+                    .contact(self.position, self.direction, reach, self.ballistics.radius)
+            {
                 if closest.is_none_or(|(best, _)| distance < best) {
                     closest = Some((distance, Some(entity)));
                 }
@@ -325,11 +330,11 @@ impl ProjectileFlight {
         Ok(Some(self.finish(impacts, false)))
     }
 
-    fn splash(
+    fn splash<T: Copy + Into<HurtPose>>(
         &self,
         point: Vec3,
         origin: Vec3,
-        targets: &[(u32, TargetPose)],
+        targets: &[(u32, T)],
         mut wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
     ) -> Result<Vec<Impact>, IndexError> {
         let mut impacts = Vec::new();
@@ -340,19 +345,20 @@ impl ProjectileFlight {
             .filter(|blast| blast.hit.amount > 0.0)
         {
             for &(entity, pose) in targets {
-                let [a, b] = pose.segment();
-                let distance = (norm(segment_separation(point, a, b)) - pose.radius).max(0.0);
-                let damage = blast.hit.amount * blast.multiplier(distance);
+                let Some(surface) = pose.into().nearest_surface(point, origin) else {
+                    continue;
+                };
+                let damage = blast.hit.amount * blast.multiplier(surface.distance);
                 if damage <= 0.0 {
                     continue;
                 }
-                let separation = segment_separation(origin, a, b);
-                let axis_distance = norm(separation);
-                let reach = axis_distance - pose.radius;
+                let reach = surface.sight_reach;
                 if reach > EPSILON
                     && wall(
                         origin,
-                        separation.map(|value| -value / axis_distance),
+                        surface
+                            .from_axis
+                            .map(|value| -value / surface.axis_distance),
                         reach,
                     )?
                     .is_some_and(|hit| hit + EPSILON < reach)
@@ -362,7 +368,7 @@ impl ProjectileFlight {
                 impacts.push(Impact {
                     tags: blast.hit.tags,
                     entity,
-                    distance,
+                    distance: surface.distance,
                     damage,
                     critical: false,
                     loadout: blast.hit.loadout,

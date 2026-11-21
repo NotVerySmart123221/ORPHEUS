@@ -885,7 +885,9 @@ impl World for BodyWorld {
                 site.node,
                 config.get("$").and_then(Json::as_str),
             ) {
-                (DEADEYE_GRAPH, Some(84), Some("STU_ED45C5E8")) if is_owner_selector(config) => {
+                (DEADEYE_GRAPH, Some(84), Some("STU_ED45C5E8"))
+                    if crate::script_expr::is_zeroed_owner_selector(config) =>
+                {
                     return Some(Value::Null);
                 }
                 (DEADEYE_TARGET_EFFECT, Some(28), Some("STU_7C005F8F"))
@@ -1001,35 +1003,13 @@ impl World for BodyWorld {
             "STU_ED45C5E8"
                 if self.is_player_site(site)
                     && self.mode == PRACTICE_RANGE_MODE
-                    && is_owner_selector(config) =>
+                    && crate::script_expr::is_zeroed_owner_selector(config) =>
             {
                 Some(Value::Null)
             }
             _ => None,
         }
     }
-}
-
-/// Whether every operand of an entity selector is the owner or a zero
-/// literal, with exactly one owner operand.
-fn is_owner_selector(config: &Json) -> bool {
-    let mut owners = 0;
-    config.as_object().is_some_and(|fields| {
-        fields.iter().all(|(key, value)| match key.as_str() {
-            "$" => true,
-            "m_EE729DCB" => value.as_u64() == Some(0),
-            _ if native_shape(value, "STU_B5A0CAF0", None) => {
-                owners += 1;
-                true
-            }
-            _ => {
-                ["STUConfigVarBool", "STUConfigVarFloat"]
-                    .into_iter()
-                    .any(|class| native_shape(value, class, Some("m_value")))
-                    && value["m_value"].as_f64() == Some(0.0)
-            }
-        })
-    }) && owners == 1
 }
 
 impl BodyWorld {
