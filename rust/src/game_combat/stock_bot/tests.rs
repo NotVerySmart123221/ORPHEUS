@@ -415,24 +415,31 @@ fn prepared_firing_placement_drives_the_stock_weapon_graph() {
         .make(crate::game_content::PRACTICE_RANGE_MAP, |_| {
             Default::default()
         });
-    let bot = bots
-        .iter()
-        .find(|bot| {
-            bot.spawn
-                .placement_graphs
-                .iter()
-                .copied()
-                .filter_map(graph_asset_index)
-                .any(|index| {
-                    catalog
-                        .graphs
-                        .graph(index)
-                        .is_some_and(|graph| graph.drives_ai_weapon_input())
-                })
-        })
-        .unwrap();
+    let mut teams = std::collections::BTreeSet::new();
+    for bot in &bots {
+        if bot
+            .spawn
+            .placement_graphs
+            .iter()
+            .copied()
+            .filter_map(graph_asset_index)
+            .any(|index| {
+                catalog
+                    .graphs
+                    .graph(index)
+                    .is_some_and(|graph| graph.drives_ai_weapon_input())
+            })
+        {
+            check_stock_bot_firing(&catalog, bot);
+            teams.insert(bot.spawn.team);
+        }
+    }
+    assert_eq!(teams, std::collections::BTreeSet::from([0, 1]));
+}
+
+fn check_stock_bot_firing(catalog: &StockBotCatalog, bot: &Bot) {
     let start = 100;
-    let mut script = StockBotScript::start(&catalog, bot, start, BodyEntry::Initial).unwrap();
+    let mut script = StockBotScript::start(catalog, bot, start, BodyEntry::Initial).unwrap();
     let mut held_ticks = 0;
     let mut released_after_holding = false;
     let mut projectiles = 0;

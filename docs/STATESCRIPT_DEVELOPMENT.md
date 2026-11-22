@@ -113,6 +113,16 @@ drives retirement, allowing the acknowledged launch time to elapse on
 the observer. The source, flight definition, and shot timing come from
 the authored volley and shared simulation.
 
+The 104319 stock weapon graph also feeds a firing value to a client
+data-flow mapping from a stack scoped to the volley. On an observed
+single-shot activation, the value was true immediately before the
+volley's subgraph exited. The observer snapshot built after the VM tick
+contained the mapping and the volley identity, but omitted the value.
+The existing projectile receipt therefore covers launch delivery only.
+Preserve the authored presentation inputs through observer delivery
+without extending the authoritative volley or the lifetime of its stack
+claims. Verify the rendered attack separately on the original client.
+
 ## Supply model hardpoint membership
 
 An external graph bundle can include `model_hardpoints` in a body entry.
