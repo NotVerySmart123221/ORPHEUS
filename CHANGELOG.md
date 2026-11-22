@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Use the shipped Practice Range respawn delay when the local runtime has no override. Replace the dead body at its spawn point with fresh health through ordinary possession and ignore movement and attack input while the body is dead. Preserve local map environment rules during runtime packing. Log client closes and connection expiration reasons for later room-exit diagnostics. Passed 489 Rust library tests covering respawn scheduling, full health at spawn, and runtime packing. Original-client retest remains pending.
+
 - Resolve communication action textures from an optional local catalog keyed by full action GUID. The importer checks the build, asset types, and duplicate action keys. The importer checks passed. Rust regression and prepared client-data replay remain pending.
 
 - Queue authored localized callouts through the existing short frame-action encoder. Capture effective instance and entity variables at dispatch, retain the original stamp and values through a resend, and omit past callouts from new full baselines. Passed 766 public Rust library tests, the byte-exact short-action retry test, and the prepared 104319 probe for authored variable capture. Live wheel input remains disabled pending the remaining VM shapes and original-client verification.

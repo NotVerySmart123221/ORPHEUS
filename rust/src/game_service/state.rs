@@ -728,6 +728,7 @@ impl State {
             }
         }
         if received.closed {
+            eprintln!("game peer {connection:08X} closed by client");
             return self.retire(connection);
         }
         if received.admitted {
@@ -894,14 +895,18 @@ impl State {
                 (
                     expired.connection,
                     self.routes.get(&expired.connection).copied(),
+                    expired.reason,
                 )
             })
             .collect();
-        for (connection, owner) in expired {
+        for (connection, owner, reason) in expired {
             if owner.is_some_and(|id| !self.rooms.contains_key(&id))
                 && !self.routes.contains_key(&connection)
             {
                 continue; // An earlier fault in this sweep retired the whole room.
+            }
+            if !force {
+                eprintln!("game peer {connection:08X} expired: {reason:?}");
             }
             self.retire(connection)?;
         }

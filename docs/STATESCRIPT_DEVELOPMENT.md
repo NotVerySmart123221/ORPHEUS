@@ -798,14 +798,16 @@ Player death notices use the ordinary health path.
 Missing files and unlisted maps have no configured lethal volumes.
 
 `player_respawns` is optional. Each entry binds a mode GUID to a positive
-delay in milliseconds. An empty or omitted list leaves automatic player
-respawn disabled. An enabled room starts the delay on its simulation
+delay in milliseconds. The server includes a three-second Practice Range
+rule. Local entries override individual map and mode pairs. Other map and
+mode pairs require an explicit rule. An enabled room starts the delay on its simulation
 clock when it settles a player death. The deadline belongs to that body
 generation and retains the hero and skin. An already queued hero or
 skin selection gets processed first. Automatic replacement gives the
 old death notice up to the connection silence window to enter the reliable
-queue. It uses the ordinary body creation and possession path. Verified Practice Range regions and
-original-client respawn timing remain open.
+queue. It uses the ordinary body creation and possession path. Practice Range
+lethal regions and original-client respawn acceptance remain open. The shipped
+delay comes from the [pinned Practice Range timing reference](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/combat.py#L106).
 
 ## Use priorities for control effects
 
