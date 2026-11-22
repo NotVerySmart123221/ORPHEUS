@@ -1142,6 +1142,11 @@ pub trait World {
         false
     }
 
+    /// Speed for walking under this host's authored AI navigation.
+    fn ai_walk_speed(&self, _site: Site) -> Option<f64> {
+        None
+    }
+
     fn selects_ai_behavior(&mut self, _site: Site) -> Option<bool> {
         None
     }

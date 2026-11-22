@@ -42,14 +42,25 @@ impl<'a> BotQueries<'a> {
     }
 
     pub(crate) fn attach_objective_mover(&self, bot: &mut Bot) -> bool {
+        self.attach_bot_mover(bot, MOVER_CATEGORY)
+    }
+
+    pub(crate) fn attach_ai_walk_mover(&self, bot: &mut Bot) -> bool {
+        self.attach_bot_mover(
+            bot,
+            mover_category_for_team(self.free_for_all, bot.spawn.team),
+        )
+    }
+
+    fn attach_bot_mover(&self, bot: &mut Bot, category: u16) -> bool {
         let Some(contacts) = self.contacts else {
             return false;
         };
         bot.attach_collision(
             self.movers.for_body(Some(bot.spawn.body)),
             Arc::clone(contacts),
-            MOVER_CATEGORY,
-            ground_height(self.ground.triangles(), MOVER_CATEGORY),
+            category,
+            ground_height(self.ground.triangles(), category),
         );
         true
     }

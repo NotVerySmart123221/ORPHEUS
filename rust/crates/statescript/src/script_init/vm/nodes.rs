@@ -1494,6 +1494,32 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 sampled: false,
             },
             "STUStatescriptStateMoveTo" => StateKind::MoveTo { movement: None },
+            "STU_194D744E"
+                if field(&node.fields, "m_89AABA94").as_u64() == Some(0)
+                    && field(&node.fields, "m_293715CB").is_null()
+                    && self.world.ai_walk_speed(self.site(id, node)).is_some() =>
+            {
+                StateKind::MoveTo { movement: None }
+            }
+            "STU_ECAEE401"
+                if matches!(
+                    self.evaluate(id, node, field(&node.fields, "m_6F4283C8"), None),
+                    Some(Value::Integer(3))
+                ) && [
+                    "m_1B09389D",
+                    "m_3D5F729C",
+                    "m_80E8303C",
+                    "m_881FC2B2",
+                    "m_5D988756",
+                ]
+                .into_iter()
+                .all(|plug| node.links(plug).next().is_none())
+                    && self.world.ai_walk_speed(self.site(id, node)).is_some() =>
+            {
+                // This navigation group has no result edges. Its owning graph
+                // observes position and releases the movement child on exit.
+                StateKind::Plain
+            }
             "STU_54FEB21C"
                 if registration
                     .shape(is_parent_owned_timed_graph(node) || timed_graph_duration.is_some())

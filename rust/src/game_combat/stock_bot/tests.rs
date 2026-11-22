@@ -492,6 +492,150 @@ fn prepared_firing_placement_drives_the_stock_weapon_graph() {
 
 #[test]
 #[ignore = "requires a prepared 104319 Practice Range pack with firing graph state metadata"]
+fn prepared_stock_firing_bot_walks_back_after_displacement() {
+    use crate::{
+        contact_world::ContactWorld,
+        game_combat::{BotQueries, tests::fixture_ground},
+        mover_settings::MoverCatalog,
+    };
+
+    let data =
+        std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap()).join("data");
+    let graphs = Arc::new(GraphStore::load(data.join("game_graphs_174.json.gz")).unwrap());
+    let codecs = Arc::new(CodecTable::load(data.join("statescript_codecs_174.json")).unwrap());
+    let mut bot = BotCatalog::load(data.join("ai_spawners_174.json"))
+        .unwrap()
+        .make(crate::game_content::PRACTICE_RANGE_MAP, |_| {
+            Default::default()
+        })
+        .into_iter()
+        .find(|bot| {
+            bot.spawn
+                .placement_graphs
+                .iter()
+                .copied()
+                .filter_map(graph_asset_index)
+                .any(|index| {
+                    graphs
+                        .graph(index)
+                        .is_some_and(|graph| graph.drives_ai_weapon_input())
+                })
+        })
+        .unwrap();
+    let start = [0.0; 3];
+    bot.position = start;
+    let aim = bot.yaw;
+    let wire = bot.entity;
+    let mut room = RoomSimulation::new(vec![bot]).unwrap();
+    room.enable_stock_bot_scripts(graphs, codecs, crate::game_content::PRACTICE_RANGE_MODE);
+    let ground = fixture_ground();
+    let movers = MoverCatalog::default();
+    let contact = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+    let queries = BotQueries::new(false, &movers, &ground, Some(&contact));
+    let first_tick = 1000;
+    for tick in first_tick..first_tick + 200 {
+        room.advance_stock_bots(&queries, tick);
+    }
+    room.body_mut(wire).unwrap().position = [2.0, 0.0, 0.0];
+    let mut walked = false;
+    for tick in first_tick + 200..first_tick + 380 {
+        room.advance_stock_bots(&queries, tick);
+        let state = room.state_mut(wire).unwrap().unwrap();
+        let script = state.stock_script.as_ref().unwrap();
+        walked |= script.walk_request().is_some();
+        let close = state.bot.position[0].abs() < 0.4;
+        if walked && close && script.walk_request().is_none() {
+            assert_eq!(state.bot.yaw, aim);
+            assert!(
+                !script.faulted,
+                "{:?}",
+                script.component.snapshot().unwrap().diagnostics
+            );
+            return;
+        }
+    }
+    let state = room.state_mut(wire).unwrap().unwrap();
+    let script = state.stock_script.as_ref().unwrap();
+    panic!(
+        "walked={walked}, position={:?}, diagnostics={:?}",
+        state.bot.position,
+        script.component.snapshot().map(|s| &s.diagnostics)
+    );
+}
+
+#[test]
+#[ignore = "requires a prepared 104319 Practice Range pack with authored bot return"]
+fn prepared_stock_firing_bot_returns_after_room_knockback() {
+    use crate::{
+        game_clock::{FIRST_TICK, TICK_PERIOD},
+        game_content::GameMap,
+        patrol_script::PatrolScript,
+        scene_assets::SceneAssets,
+    };
+    use std::time::Duration;
+    let path = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let assets = SceneAssets::load(&path).unwrap();
+    let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
+    let patrol = PatrolScript::load().unwrap();
+    let target = scene
+        .simulation()
+        .checked_states()
+        .unwrap()
+        .into_iter()
+        .find(|state| {
+            state.bot.spawn.team == 1
+                && !state.bot.patrol_active()
+                && state
+                    .stock_script
+                    .as_ref()
+                    .is_some_and(|script| !script.world.placement_graphs.is_empty())
+        })
+        .expect("stock firing bot");
+    let wire = target.bot.entity;
+    let home = target.bot.position;
+    let distance = |position: [f64; 3]| (position[0] - home[0]).hypot(position[2] - home[2]);
+    let mut maximum: f64 = 0.0;
+    let mut walked = false;
+    for step in 1..=430 {
+        let tick = FIRST_TICK + step;
+        if step == 120 {
+            scene
+                .simulation_mut()
+                .queue_combat_impulse(wire, tick - 1, [4.0, 5.0, 0.0])
+                .unwrap();
+        }
+        scene.step_bots(tick, &patrol).unwrap();
+        let (room, queries) = scene.bot_simulation();
+        let now = TICK_PERIOD * step + Duration::from_secs(1);
+        room.finish_tick(&queries, tick, now).unwrap();
+        if step <= 120 {
+            continue;
+        }
+        let state = room.state_mut(wire).unwrap().unwrap();
+        let script = state.stock_script.as_ref().unwrap();
+        maximum = maximum.max(distance(state.bot.position));
+        walked |= script.walk_request().is_some();
+        if maximum > 0.6
+            && walked
+            && distance(state.bot.position) < 0.4
+            && script.walk_request().is_none()
+        {
+            assert!(!state.bot.has_combat_motion());
+            return;
+        }
+    }
+    let state = scene.simulation_mut().state_mut(wire).unwrap().unwrap();
+    let script = state.stock_script.as_ref().unwrap();
+    panic!(
+        "home={home:?}; position={:?}; max={maximum}; requested={walked}; current={:?}; diagnostics={:?}",
+        state.bot.position,
+        script.walk_request(),
+        script.component.snapshot().unwrap().diagnostics
+    );
+}
+
+#[test]
+#[ignore = "requires a prepared 104319 Practice Range pack with firing graph state metadata"]
 fn prepared_stock_bot_projectiles_damage_live_room_bodies() {
     use std::time::Duration;
 
