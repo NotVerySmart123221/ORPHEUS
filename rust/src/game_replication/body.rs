@@ -388,6 +388,10 @@ pub(super) enum InputWork {
         tick: u32,
         received: Duration,
     },
+    WheelAction {
+        body: BodyId,
+        action: ClientWheelAction,
+    },
     Skin {
         hero: u64,
         tick: u32,

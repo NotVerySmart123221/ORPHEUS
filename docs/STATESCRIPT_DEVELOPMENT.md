@@ -127,6 +127,25 @@ binding when the body is replaced. A synthetic example lives in the
 [owner model contract](../fixtures/behavior/owner-model-hardpoints-v1.json).
 Supply the enriched bundle through `prepare_server_runtime --game-graphs`.
 
+## Supply authored asset categories
+
+The optional graph bundle field `asset_categories` maps each asset GUID
+to a list of category records with `type` and `id` GUIDs. The evaluator
+matches the complete pair from the node operand. An absent catalog leaves
+the category query unavailable. For a supplied catalog, an asset without
+a matching pair returns false. Keep the extracted catalog in the private
+runtime bundle. The [wheel input contract](../fixtures/behavior/wheel-selection-ingress-v1.json)
+uses synthetic input and generation changes. The build-specific wire layout
+and category fields are documented in the [Python reference](https://github.com/leafall903/ORPHEUS/blob/499b9871b1ff9bf3d86715b7648626b18b154f0d/docs/COMMUNICATION_WHEEL.txt).
+Live owner input stays disabled while the reached `TrackTargets` shape
+is unsupported. The prepared probe runs the authored path and records
+the remaining diagnostic.
+
+Use `scripts/build_runtime_state_metadata.py --asset-categories` with a
+local JSON catalog containing `version: 1`, `build: 104319`, and the asset
+map under `assets`. Supply the resulting bundle through
+`prepare_server_runtime --game-graphs`.
+
 ## Build the private evidence reports
 
 Use the graph index, RID, state slot, and raw class as the verified

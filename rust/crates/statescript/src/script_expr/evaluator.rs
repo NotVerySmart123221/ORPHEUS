@@ -886,6 +886,30 @@ impl Evaluator {
             }
             "STU_B70476F3" => literal_asset(config, class, "m_548E5344", 0x0a90)
                 .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
+            "STU_4460419A" if native_fields(config, &["m_548E5344", "m_D929182B"]) => {
+                let category = child(config, "m_D929182B");
+                let pair = child(category, "m_value");
+                if !native_shape(category, "STU_A1353B54", Some("m_value"))
+                    || !native_fields(pair, &["m_type", "m_id"])
+                    || helpers::class(pair) != Some("STU_BCD1C634")
+                {
+                    return Err(EvalError::UnsupportedConfig(class.into()));
+                }
+                let category_id = resource(child(pair, "m_id")).filter(|&id| id != 0);
+                let category_kind = resource(child(pair, "m_type")).filter(|&kind| kind != 0);
+                let (Some(kind), Some(id)) = (category_kind, category_id) else {
+                    return Err(EvalError::MalformedConfig("asset category identifier"));
+                };
+                match self.config(child(config, "m_548E5344"), context, nested)? {
+                    Value::Null | Value::Asset(0) => Value::Bool(false),
+                    Value::Asset(asset) => Value::Bool(
+                        context
+                            .asset_has_category(asset, kind, id)
+                            .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
+                    ),
+                    _ => return Err(EvalError::MalformedConfig("asset category operand")),
+                }
+            }
             "STU_8556841E" => literal_asset(config, class, "m_entityDef", 0x0400)
                 .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
             "STUConfigVarBone" => literal_asset(config, class, "m_bone", 0x0880)

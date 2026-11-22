@@ -1677,6 +1677,8 @@ struct Bundle {
     authored_classes: Vec<AuthoredClass>,
     #[serde(default)]
     runtime_state_metadata: RuntimeStateMetadata,
+    #[serde(default)]
+    asset_categories: Option<BTreeMap<String, Vec<AssetCategoryRow>>>,
     graphs: Vec<Graph>,
     bodies: BTreeMap<String, Body>,
     #[serde(default)]
@@ -1690,6 +1692,13 @@ struct Bundle {
     #[serde(default)]
     junkenstein: EnemyCatalog,
     missing: Vec<u32>,
+}
+
+#[derive(Deserialize)]
+struct AssetCategoryRow {
+    id: String,
+    #[serde(rename = "type")]
+    kind: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
@@ -1785,6 +1794,7 @@ fn room_spatial_requirements(value: &Value) -> RoomSpatialRequirements {
 #[derive(Debug)]
 pub struct GraphStore {
     graphs: BTreeMap<u32, Graph>,
+    asset_categories: Option<BTreeMap<u64, BTreeSet<(u64, u64)>>>,
     projected_message_topics: BTreeSet<u64>,
     room_spatial_needs: RoomSpatialNeeds,
     uses_spatial_actor_rays: bool,
@@ -1820,6 +1830,31 @@ impl GraphStore {
         if bundle.version != 1 {
             return Err(invalid("unsupported state graph bundle version"));
         }
+        let asset_categories = bundle
+            .asset_categories
+            .map(|records| {
+                keyed_by_guid(records)?
+                    .into_iter()
+                    .map(|(asset, rows)| {
+                        if asset == 0 {
+                            return Err(invalid("zero asset in category metadata"));
+                        }
+                        let categories = rows
+                            .into_iter()
+                            .map(|row| {
+                                let parse = |value: &str| {
+                                    parse_guid(value)
+                                        .filter(|guid| *guid != 0)
+                                        .ok_or_else(|| invalid("invalid asset category identifier"))
+                                };
+                                Ok((parse(&row.kind)?, parse(&row.id)?))
+                            })
+                            .collect::<io::Result<BTreeSet<_>>>()?;
+                        Ok((asset, categories))
+                    })
+                    .collect::<io::Result<BTreeMap<_, _>>>()
+            })
+            .transpose()?;
         let mut authored_classes = BTreeMap::new();
         for AuthoredClass { class, behavior } in bundle.authored_classes {
             let valid_name = class.strip_prefix("authored.").is_some_and(|name| {
@@ -2009,6 +2044,7 @@ impl GraphStore {
             .any(|graph| graph.entry_handlers.contains_key(&health_topic));
         Ok(Self {
             graphs,
+            asset_categories,
             projected_message_topics,
             room_spatial_needs: room_spatial_requirements.needs,
             uses_spatial_actor_rays: room_spatial_requirements.actor_rays,
@@ -2030,6 +2066,21 @@ impl GraphStore {
             enemies: bundle.junkenstein.validate()?,
             missing: bundle.missing,
         })
+    }
+
+    /// Authored category pairs are keyed by the complete asset and identifier IDs.
+    pub(crate) fn asset_has_category(&self, asset: u64, kind: u64, id: u64) -> Option<bool> {
+        self.asset_categories.as_ref().map(|categories| {
+            categories
+                .get(&asset)
+                .is_some_and(|pairs| pairs.contains(&(kind, id)))
+        })
+    }
+
+    pub fn has_asset_category_data(&self) -> bool {
+        self.asset_categories
+            .as_ref()
+            .is_some_and(|rows| !rows.is_empty())
     }
 
     /// Whether any server graph uses the room's living body snapshot.

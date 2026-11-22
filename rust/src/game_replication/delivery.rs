@@ -1393,6 +1393,26 @@ impl WorldDelivery {
         }
     }
 
+    pub(crate) fn queue_wheel_action(&mut self, simulation: &RoomSimulation, message: &Message) {
+        let Some(body) = self
+            .active_body_id()
+            .filter(|&id| self.owner_body_ready(id))
+        else {
+            return;
+        };
+        if !simulation
+            .player_body(body)
+            .filter(|state| state.owner == self.owner && state.alive())
+            .and_then(|state| state.runtime.as_deref())
+            .is_some_and(OwnerBodyRuntime::wheel_actions_available)
+        {
+            return;
+        }
+        if let Some(action) = ClientWheelAction::read(message) {
+            self.input.push(InputWork::WheelAction { body, action });
+        }
+    }
+
     pub(crate) fn queue_skin(&mut self, hero: u64, tick: u32, received: Duration) {
         if self.can_handle_game_message() {
             self.input.push(InputWork::Skin {
@@ -1690,6 +1710,20 @@ impl WorldDelivery {
                     received,
                 } => {
                     self.game_message(scene, viewer, tick, received, quanta, &message)?;
+                    remaining -= 1;
+                }
+                InputWork::WheelAction { body, action } => {
+                    let runtime = self
+                        .active_body_id()
+                        .filter(|&active| active == body && self.owner_body_ready(active))
+                        .and_then(|id| scene.simulation_mut().player_body_mut(id))
+                        .filter(|state| state.owner == self.owner && state.alive())
+                        .and_then(|state| state.runtime.as_mut())
+                        .filter(|runtime| runtime.wheel_actions_available());
+                    if let Some(runtime) = runtime {
+                        // A full or halted VM queue rejects the request locally.
+                        let _ = runtime.queue_local_message(action.into_local_message());
+                    }
                     remaining -= 1;
                 }
                 InputWork::Skin {

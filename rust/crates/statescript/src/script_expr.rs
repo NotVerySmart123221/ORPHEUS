@@ -425,6 +425,10 @@ pub trait Context {
         None
     }
 
+    fn asset_has_category(&mut self, _asset: u64, _kind: u64, _id: u64) -> Option<bool> {
+        None
+    }
+
     fn related_entity(&mut self, _relation: EntityRelation, _entity: u32) -> Option<u32> {
         None
     }

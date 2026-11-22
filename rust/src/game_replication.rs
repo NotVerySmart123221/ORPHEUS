@@ -23,7 +23,7 @@ use crate::{
     game_egress::{DeliveryReport, FrameRecords, GameEgress, RecordSource, SendError, SentFrame},
     game_heroes::{CASSIDY, Hero, SOLDIER},
     game_messages::Message,
-    game_parameters::{ClientGameMessage, HeroSelectRequest},
+    game_parameters::{ClientGameMessage, ClientWheelAction, HeroSelectRequest},
     game_projectiles::{OwnerProjectiles, ProjectileDelivery, ProjectileLeases, ProjectileToken},
     match_scene::{
         PlayerAppearance, Possession, bot_controller_create, bot_controller_possession, team_bit,
@@ -125,6 +125,12 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
         _message: RoomMessage,
     ) -> Result<usize, InitFault> {
         Ok(0)
+    }
+    fn queue_local_message(&mut self, _message: RoomMessage) -> Result<usize, InitFault> {
+        Ok(0)
+    }
+    fn wheel_actions_available(&self) -> bool {
+        false
     }
     fn receive_host_event(
         &mut self,

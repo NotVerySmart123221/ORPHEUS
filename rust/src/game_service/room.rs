@@ -593,6 +593,14 @@ impl Room {
                             MessageKind::GameMessage if room.world.is_some() => {
                                 world.queue_game_message(tick, now, message);
                             }
+                            MessageKind::WheelAction => {
+                                if let Some(world_state) = &room.world {
+                                    world.queue_wheel_action(
+                                        world_state.scene.simulation(),
+                                        &message,
+                                    );
+                                }
+                            }
                             _ => (),
                         }
                     });

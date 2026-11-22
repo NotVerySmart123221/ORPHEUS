@@ -461,6 +461,7 @@ impl Component {
             .ok_or(EvalError::MalformedConfig("state source"))?;
         let mut context = InstanceContext {
             machine: &self.machine,
+            graphs: &self.graphs,
             world,
             site: Site {
                 entity: snapshot.entity,

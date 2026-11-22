@@ -8,6 +8,50 @@ use crate::script_graph::GraphStore;
 mod degree_trigonometry;
 mod entity_ray_cast;
 
+#[test]
+fn authored_asset_category_requires_the_exact_identifier_pair() {
+    struct CatalogContext(GraphStore);
+    impl Context for CatalogContext {
+        fn asset_has_category(&mut self, asset: u64, kind: u64, id: u64) -> Option<bool> {
+            self.0.asset_has_category(asset, kind, id)
+        }
+    }
+    let asset = "0x0A9000000000AAAA";
+    let kind = "0x0C8800000000BBBB";
+    let id = "0x0D8000000000CCCC";
+    let mut bundle = json!({"version":1, "graphs":[], "bodies":{}, "missing":[]});
+    let config = |selected, category_kind, category_id| {
+        json!({
+            "$":"STU_4460419A",
+            "m_548E5344":{"$":"STU_B70476F3", "m_548E5344":selected,"m_resourceKey":null},
+            "m_D929182B":{"$":"STU_A1353B54","m_value":{
+                "$":"STU_BCD1C634","m_type":category_kind,"m_id":category_id
+            }}
+        })
+    };
+    let load = |bundle: &Json| {
+        CatalogContext(GraphStore::from_json(&serde_json::to_vec(bundle).unwrap()).unwrap())
+    };
+    assert_eq!(
+        evaluate(&config(asset, kind, id), &mut load(&bundle)),
+        Err(EvalError::UnsupportedConfig("STU_4460419A".into()))
+    );
+    bundle["asset_categories"] = json!({asset: [{"type":kind,"id":id}]});
+    let mut context = load(&bundle);
+    assert_eq!(
+        evaluate(&config(asset, kind, id), &mut context),
+        Ok(Value::Bool(true))
+    );
+    assert_eq!(
+        evaluate(&config(asset, "0x0C8800000000BBAA", id), &mut context),
+        Ok(Value::Bool(false))
+    );
+    assert_eq!(
+        evaluate(&config("0x0A9000000000AAAB", kind, id), &mut context),
+        Ok(Value::Bool(false))
+    );
+}
+
 #[derive(Default)]
 struct Vars {
     instance: BTreeMap<u32, Value>,

@@ -2455,6 +2455,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
     ) -> Result<T, EvalError> {
         let mut context = InstanceContext {
             machine: self.machine,
+            graphs: self.graphs,
             world: self.world,
             site,
             reads: Vec::new(),
