@@ -158,11 +158,15 @@ exercises this interface with synthetic settings and geometry.
 
 The prepared `prepared_wheel_packet_bindings_reach_both_authored_handlers`
 probe compares the same selection with a missing room snapshot and with a
-frozen single-player snapshot. With the asset categories supplied, the
-single-player case passes the view query and reaches three open VM shapes.
-The diagnostics identify actions `STU_71FE9852` and `STU_7106C356` and
-expression `STU_7757D403`. The probe uses a local 104319 graph bundle
-with synthetic room geometry.
+frozen single-player snapshot. It uses a local 104319 graph bundle with
+synthetic room geometry. With the asset categories supplied, the solo
+case passes the view query and evaluates the selected action's localized
+parameter row. `STU_7757D403` evaluates each pair's value and key in authored
+order. Expression opcode 19 collects its stack pairs into an ordered
+integer-keyed parameter map. The VM still reports actions `STU_71FE9852`
+and `STU_7106C356`; client presentation and live wheel input remain open.
+The pair and opcode behavior follows the [pinned Python reference for pairs](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/script/play.py#L81-L93)
+and [expression maps](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/script/expr.py#L832-L835).
 
 Use `scripts/build_runtime_state_metadata.py --asset-categories` with a
 local JSON catalog containing `version: 1`, `build: 104319`, and the asset

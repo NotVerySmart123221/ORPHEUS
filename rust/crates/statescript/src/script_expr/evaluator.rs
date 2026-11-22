@@ -305,6 +305,37 @@ impl Evaluator {
         self.config_with_initial(config, context, depth, Value::Integer(0))
     }
 
+    fn authored_pairs(
+        &mut self,
+        config: &Json,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<Value, EvalError> {
+        let unsupported = || EvalError::UnsupportedConfig("STU_7757D403".into());
+        if !native_fields(config, &["m_configVars"]) {
+            return Err(unsupported());
+        }
+        let mut pairs = Vec::new();
+        for row in array_field(config, "m_configVars")? {
+            self.charge()?;
+            if class(row) != Some("STU_98DD1872") || !native_fields(row, &["m_key", "m_value"]) {
+                return Err(unsupported());
+            }
+            let value = self.scalar_config(child(row, "m_value"), context, depth, Value::Null)?;
+            let key = self
+                .scalar_config(child(row, "m_key"), context, depth, Value::Null)
+                .map_err(|error| match error {
+                    EvalError::UnsupportedConfig(_) => unsupported(),
+                    other => other,
+                })?;
+            if !matches!(key, Value::Asset(guid) if guid != 0) {
+                return Err(unsupported());
+            }
+            pairs.push((key, value));
+        }
+        Ok(Value::Map(pairs))
+    }
+
     pub(super) fn config(
         &mut self,
         config: &Json,
@@ -1033,7 +1064,7 @@ impl Evaluator {
             {
                 self.fold_array(config, context, nested)?
             }
-            "STU_7757D403" => literal_message_map(config)?,
+            "STU_7757D403" => self.authored_pairs(config, context, nested)?,
             "STU_B5A0CAF0" => context.owner(),
             "STU_25ECB55F" => {
                 let unsupported = || EvalError::UnsupportedConfig(class.into());
@@ -2364,6 +2395,18 @@ impl Evaluator {
                         _ => 0,
                     };
                     Value::Integer(length)
+                }
+                19 => {
+                    let start = stack
+                        .len()
+                        .checked_sub(usize::from(arg) * 2)
+                        .ok_or_else(|| malformed(pc, "expression stack underflow"))?;
+                    let mut items = stack.split_off(start).into_iter();
+                    let pairs = std::iter::from_fn(|| {
+                        let key = Value::Integer(to_int(&items.next()?, 0));
+                        Some((key, items.next()?))
+                    });
+                    Value::Map(pairs.collect())
                 }
                 20 => {
                     let start = stack

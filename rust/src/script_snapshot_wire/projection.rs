@@ -253,10 +253,8 @@ impl<'a> SnapshotEncoder<'a> {
                 }
                 None => base,
             };
-            // Python evaluates an authored `STU_7757D403` message table to None
-            // and never sends an unbound None (`script.driver` `_add_var`,
-            // `observers._add_vars`), so an unbound map is omitted like null.
-            // A bound map has no reference form and stays refused.
+            // Keep authored lookup tables and other unbound maps local to
+            // the VM. A bound map has no supported snapshot representation.
             if matches!(value, Value::Map(_) | Value::IdentifierMap(_)) {
                 if bindings.is_some() {
                     return Err(SnapshotError::UnsupportedMap { owner, variable });

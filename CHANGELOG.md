@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Evaluate StateScript asset-keyed pair tables with expression values and support ordered integer parameter maps from expression opcode 19. Passed 765 public Rust library tests. A prepared 104319 wheel replay verifies that the selected action resolves to its localized parameter row. Client callout delivery and live wheel input remain open.
+
 - Extend the prepared 104319 wheel probe to replay the same packet with and without a frozen single-player room. The authored handlers receive the selection in both cases. With a room, the query completes and the probe reaches three remaining unsupported action or expression shapes. Passed the prepared probe and 764 public Rust library tests. Live wheel input stays disabled.
 
 - Evaluate configured StateScript view queries from the frozen room snapshot. The host can prove an empty player search in a room with bots. With a local sight profile, it filters, ranks and checks static and actor occlusion in the same snapshot. Passed 764 Rust library tests and the prepared 104319 wheel packet binding probe. The public sight cases use synthetic settings. Native occupied-room sight profiles and live wheel behavior still need verification.

@@ -1218,6 +1218,62 @@ fn authored_message_map_looks_up_the_first_matching_key() {
 }
 
 #[test]
+fn authored_pairs_preserve_nested_parameter_maps_in_expression_order() {
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../../../fixtures/behavior/script-authored-pairs-v1.json"
+    ))
+    .unwrap();
+    let input = &fixture["input"];
+    let display_slot = input["display_slot"].as_u64().unwrap();
+    let style_slot = input["style_slot"].as_u64().unwrap();
+    let style = input["style"].as_i64().unwrap();
+    let display_text = crate::script_graph::asset_guid(&input["display_text"]).unwrap();
+    let params = expression(
+        json!([7, 0, 14, 0, 7, 1, 14, 1, 19, 2, 0]),
+        &[
+            variable(display_slot as u32, Scope::Instance),
+            variable(style_slot as u32, Scope::Instance),
+        ],
+        &[],
+        &[
+            json!({"$":"STUConfigVarUXDisplayText", "m_displayText":input["display_text"]}),
+            json!({"$":"STUConfigVarInt", "m_value":style}),
+        ],
+    );
+    let mut table = json!({
+        "$":"STU_7757D403",
+        "m_configVars":[{
+            "$":"STU_98DD1872",
+            "m_key":{"$":"STU_B70476F3", "m_548E5344":input["selection"]},
+            "m_value":params
+        }],
+    });
+    let mut context = Vars::default();
+    let selection = crate::script_graph::asset_guid(&input["selection"]).unwrap();
+    assert_eq!(
+        evaluate(&table, &mut context),
+        Ok(Value::Map(vec![(
+            Value::Asset(selection),
+            Value::Map(vec![
+                (
+                    Value::Integer(display_slot as i64),
+                    Value::Asset(display_text)
+                ),
+                (Value::Integer(style_slot as i64), Value::Integer(style))
+            ])
+        )]))
+    );
+    table["m_configVars"][0]["m_value"]["m_expression"]["m_opcodes"] = json!([19, 1, 0]);
+    assert!(matches!(
+        evaluate(&table, &mut context),
+        Err(EvalError::MalformedBytecode {
+            offset: 0,
+            reason: "expression stack underflow",
+        })
+    ));
+}
+
+#[test]
 fn fieldless_native_resource_evaluates_to_a_zero_asset() {
     let literal = json!({"$":"STU_ABB6C23E", "m_EE729DCB":0, "m_resourceKey":null});
     let mut context = Vars::default();
@@ -3308,11 +3364,11 @@ fn executes_only_the_selected_path_and_bounds_nested_expressions() {
 
 #[test]
 fn reports_unsupported_operations_instead_of_returning_a_guessed_null() {
-    let map = expression(json!([19, 0, 0]), &[], &[], &[]);
+    let unknown = expression(json!([255, 0]), &[], &[], &[]);
     assert_eq!(
-        evaluate(&map, &mut EmptyContext),
+        evaluate(&unknown, &mut EmptyContext),
         Err(EvalError::UnsupportedOpcode {
-            opcode: 19,
+            opcode: 255,
             offset: 0
         }),
     );

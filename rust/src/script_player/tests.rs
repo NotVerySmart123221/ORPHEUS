@@ -3325,6 +3325,19 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                 "{:?}",
                 snapshot.diagnostics
             );
+            if with_room {
+                let local_callout = snapshot
+                    .instances
+                    .values()
+                    .find(|instance| instance.graph == 0x0686)
+                    .and_then(|instance| instance.variables.get(&29861));
+                assert!(
+                    matches!(local_callout, Some(Value::Map(rows)) if rows.iter().any(
+                        |(key, value)| *key == Value::Asset(action) && matches!(value, Value::Map(parameters) if parameters.len() == 2)
+                    )),
+                    "{local_callout:?}"
+                );
+            }
         }
         for diagnostic in snapshot
             .diagnostics

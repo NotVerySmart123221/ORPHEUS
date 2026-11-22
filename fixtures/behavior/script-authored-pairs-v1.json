@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "case_id": "statescript.authored-pairs.v1",
+  "target_build": 104319,
+  "input": {
+    "selection": "0x0A9000000000A037",
+    "display_text": "0x0D8000000000B053",
+    "display_slot": 93,
+    "style_slot": 27,
+    "style": 6
+  }
+}
