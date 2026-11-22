@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "case_id": "statescript.asset-texture.v1",
+  "target_build": 104319,
+  "assets": {
+    "0x0A900000A1239031": "0x0C0000000000B610",
+    "0x0A900000B1239031": "0x0C0000000000B620"
+  },
+  "missing_action": "0x0A900000C1239031",
+  "invalid_action": "0x04000000A1239031"
+}

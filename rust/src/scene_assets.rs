@@ -14,6 +14,7 @@ pub use crate::game_combat::CombatError;
 
 use crate::{
     accounts::parse_guid,
+    actor_voice::ActorVoiceCatalog,
     bits::BitWriter,
     collision_cache::{chunk_guid, read_movement_cache},
     collision_index::TriangleIndex,
@@ -44,7 +45,7 @@ use crate::{
     mover_ground::NOT_GROUND,
     mover_settings::MoverCatalog,
     patrol_script::PatrolScript,
-    runtime::{COMBAT_HURT_VOLUMES, JUNKENSTEIN_MAP_WORLD},
+    runtime::{ACTOR_VOICE_CATALOG, COMBAT_HURT_VOLUMES, JUNKENSTEIN_MAP_WORLD, MAP_ENVIRONMENT},
     script_codecs::CodecTable,
     script_expr::native_shape,
     script_graph::{GraphStore, asset_guid},
@@ -167,6 +168,7 @@ pub struct SceneAssets {
     bots: BotCatalog,
     movers: Arc<MoverCatalog>,
     hurt_volumes: Arc<HurtVolumeCatalog>,
+    actor_voice: Option<Arc<ActorVoiceCatalog>>,
     combat_voice: Arc<CombatVoiceCatalog>,
     stats: StatsCatalog,
     heroes: Arc<HeroCatalog>,
@@ -210,13 +212,14 @@ impl SceneAssets {
             trace_contacts: false,
             junkenstein_validation: None,
             mode_props: read_mode_props(&data.join("collision_props_174.json"))?,
-            environment: EnvironmentCatalog::load(data.join("map_environment_174.json"))?,
+            environment: EnvironmentCatalog::load(runtime.join(MAP_ENVIRONMENT))?,
             graphs,
             codecs,
             practice_owner_body: OnceLock::new(),
             bots: BotCatalog::load(data.join("ai_spawners_174.json"))?,
             movers: Arc::new(MoverCatalog::load(data.join("game_movers_174.json"))?),
             hurt_volumes: Arc::new(HurtVolumeCatalog::load(&runtime.join(COMBAT_HURT_VOLUMES))?),
+            actor_voice: ActorVoiceCatalog::load(&runtime.join(ACTOR_VOICE_CATALOG))?.map(Arc::new),
             combat_voice: Arc::new(CombatVoiceCatalog::load(
                 data.join("combat_voice_174.json"),
             )?),
@@ -485,12 +488,15 @@ impl SceneAssets {
         if self.graphs.uses_host_health_events() {
             simulation.enable_host_health_events();
         }
-        if self.graphs.uses_room_spatial_frame() {
+        if self.graphs.uses_room_spatial_frame() || self.actor_voice.is_some() {
             simulation.enable_spatial_queries(
                 map.free_for_all,
                 Arc::clone(&ground),
                 self.graphs.room_spatial_needs(),
             );
+            if let Some(catalog) = &self.actor_voice {
+                simulation.enable_actor_voice(Arc::clone(catalog));
+            }
             if self.graphs.uses_spatial_actor_rays() {
                 simulation.enable_spatial_actor_rays(Arc::clone(&self.movers));
             }

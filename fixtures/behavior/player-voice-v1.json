@@ -47,6 +47,12 @@
       }
     }
   },
+  "rust_selection": {
+    "criterion": "0x0D80000000000AEB",
+    "unavailable_stimulus": "0x0EE000000000FFF1",
+    "alternate_line": "0x076000000000FFF2",
+    "stock_line": "0x076000000000FFF3"
+  },
   "expected": {
     "wheel_friendly": [
       ["0x0EE00000000001CF", "0x076000000000FF10"],

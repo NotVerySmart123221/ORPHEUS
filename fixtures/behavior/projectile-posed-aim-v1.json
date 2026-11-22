@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "case_id": "projectile-posed-aim-v1",
+  "cases": [
+    {
+      "name": "default single projectile",
+      "aim": null,
+      "launch": null,
+      "uses_pose": true
+    },
+    {
+      "name": "direct launch with first literal slot",
+      "aim": {
+        "$": "STUConfigVarInt",
+        "m_value": 0
+      },
+      "launch": {
+        "$": "STU_239B571E"
+      },
+      "uses_pose": true
+    },
+    {
+      "name": "direct launch with second literal slot",
+      "aim": {
+        "$": "STUConfigVarInt",
+        "m_value": 1
+      },
+      "launch": {
+        "$": "STU_239B571E"
+      },
+      "uses_pose": true
+    },
+    {
+      "name": "another slot has no posed source contract",
+      "aim": {
+        "$": "STUConfigVarInt",
+        "m_value": 2
+      },
+      "launch": {
+        "$": "STU_239B571E"
+      },
+      "uses_pose": false
+    },
+    {
+      "name": "dynamic aim unresolved",
+      "aim": {
+        "$": "STUConfigVarDynamic",
+        "m_identifier": 4
+      },
+      "launch": {
+        "$": "STU_239B571E"
+      },
+      "uses_pose": false
+    },
+    {
+      "name": "spread requires a different launch profile",
+      "aim": null,
+      "launch": {
+        "$": "STU_613BDDB0"
+      },
+      "uses_pose": false
+    }
+  ]
+}

@@ -6,6 +6,7 @@ use crate::bits::BitWriter;
 use crate::script_codecs::{Codec, CodecTable, PayloadError, PayloadMode, StatePayload};
 use crate::script_expr::{Scope, equal};
 use crate::script_graph::Graph;
+use crate::script_init::FrameAction;
 use crate::script_stream::{BodyStream, ChangeKey, DeltaKind, ScriptChunk, StreamError};
 use crate::script_wire::{self, Instance, Layout, Value, ValueEncoding, Variables, WireError};
 
@@ -300,6 +301,9 @@ impl<'a> SnapshotEncoder<'a> {
                 instance.events.clear();
             }
         }
+        if let Some(action) = baseline.callouts.last() {
+            baseline.callout = baseline.callout.max(action.callout.serial);
+        }
         baseline.callouts.clear();
         let chunk = stream.full(&payload, baseline)?;
         #[cfg(test)]
@@ -354,7 +358,7 @@ impl<'a> SnapshotEncoder<'a> {
             .checked_add(1)
             .ok_or(StreamError::ChunkExhausted)?;
         let mut delta = self.differences(base, snapshot, &touched, &known)?;
-        apply_callout(base, snapshot, &touched, next_chunk, &mut delta);
+        let action = apply_callout(base, snapshot, &touched, next_chunk, &mut delta);
         if view == View::Observer && delta.keys.is_empty() {
             return Ok(None);
         }
@@ -364,6 +368,9 @@ impl<'a> SnapshotEncoder<'a> {
             .map_or(base.callout, |(serial, ..)| serial)
             .max(delivered.callout);
         delta.seed_owner_ammo(&mut delivered);
+        if let Some(action) = action {
+            delta.seed_callout(snapshot, &mut delivered, action);
+        }
         let frame = self.delta_frame(snapshot, &delta, kind, frame_ms)?;
         #[cfg(test)]
         let written = if view == View::Owner {
@@ -824,20 +831,18 @@ pub(super) struct SnapshotDelta<'a> {
 }
 
 /// Choose the next action for this stream and retain its original stamp until ACK.
-fn apply_callout(
+fn apply_callout<'s>(
     base: &ProjectedSnapshot,
-    current: &ProjectedSnapshot,
+    current: &'s ProjectedSnapshot,
     touched: &BTreeSet<ChangeKey>,
     next_chunk: u32,
     delta: &mut SnapshotDelta<'_>,
-) {
-    let Some(callout) = current
+) -> Option<&'s FrameAction> {
+    let action = current
         .callouts
         .iter()
-        .find(|callout| callout.serial > base.callout)
-    else {
-        return;
-    };
+        .find(|action| action.callout.serial > base.callout)?;
+    let callout = action.callout;
     let stamp = touched
         .iter()
         .filter_map(|key| match *key {
@@ -848,9 +853,42 @@ fn apply_callout(
         .unwrap_or(next_chunk);
     delta.keys.insert(ChangeKey::Callout(callout.serial, stamp));
     delta.callout = Some((callout.serial, stamp, callout.instance, callout.position));
+    Some(action)
 }
 
-impl SnapshotDelta<'_> {
+impl<'s> SnapshotDelta<'s> {
+    fn seed_callout(
+        &mut self,
+        current: &'s ProjectedSnapshot,
+        delivered: &mut ProjectedSnapshot,
+        action: &FrameAction,
+    ) {
+        for (&(owner, variable), value) in &action.values {
+            let (wire, baseline) = if owner == 0 {
+                (&mut self.variables, &mut delivered.variables)
+            } else {
+                let Some((instance, baseline)) = current
+                    .instances
+                    .get(&owner)
+                    .zip(delivered.instances.get_mut(&owner))
+                else {
+                    continue;
+                };
+                let delta = self
+                    .instances
+                    .entry(owner)
+                    .or_insert_with(|| InstanceDelta {
+                        current: Some(instance),
+                        ..Default::default()
+                    });
+                (&mut delta.variables, &mut baseline.variables)
+            };
+            wire.seed_value(variable, value.clone());
+            baseline.seed_value(variable, value.clone());
+            self.keys.insert(ChangeKey::Variable(owner, variable));
+        }
+    }
+
     fn seed_owner_ammo(&mut self, delivered: &mut ProjectedSnapshot) {
         // StartFiring reads the unbound, pre-volley count once after applying
         // the frame. The acknowledged snapshot must match that wire value.
@@ -871,8 +909,8 @@ impl SnapshotDelta<'_> {
                         .variables,
                 )
             };
-            wire.seed_ammo(variable, ammo);
-            baseline.seed_ammo(variable, ammo);
+            wire.seed_value(variable, Value::Integer(ammo));
+            baseline.seed_value(variable, Value::Integer(ammo));
             self.keys.insert(ChangeKey::Variable(owner, variable));
         }
     }

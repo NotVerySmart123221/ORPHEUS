@@ -6,6 +6,10 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Use the shipped Practice Range respawn delay when the local runtime has no override. Replace the dead body at its spawn point with fresh health through ordinary possession and ignore movement and attack input while the body is dead. Preserve local map environment rules during runtime packing. Log client closes and connection expiration reasons for later room-exit diagnostics. Passed 489 Rust library tests covering respawn scheduling, full health at spawn, and runtime packing. Original-client retest remains pending.
+
+- Integrate practice projectile combat and stock bot interactions with the Rust combat audio updates. Use the same actor filter flags for view queries and combat, and route actor voice and mode announcer cues through their declared speakers.
+
 - Extend the opt-in Inspector playtest capture with combat settlement, reliable hit and voice admission, and acknowledgement of authored cues. The records show when a cue enters the send queue and whether the client acknowledges the reliable prefix. Audible playback remains a client check.
 
 - Keep delayed combat cues scoped to the listener bodies present at settlement. If an entity ID has been reused or retired, other selected listeners still receive the cue.
@@ -21,6 +25,64 @@ This log records tested changes and their acceptance status. Entries are grouped
 - Allow authored room cues to select the mode entity as their voice source while preserving the triggering actor and listener generation checks. Six focused VM, room, and peer tests passed. Mode-specific cue rules and original-client audio remain open.
 
 - Expose confirmed critical hits on the settled StateScript health event so authored cues can distinguish ordinary impacts, critical impacts, and damage without weapon classification. The binding uses the same settlement for players and bots. The 20 focused StateScript and room regressions passed. Original-client audio remains open.
+
+- Keep unresolved owner volley introductions eligible through the existing projectile delivery grace window. A late introduction can confirm and retire its own predicted ID after the original has already received its impact release. A dropped introduction admits no alias. The Inspector workspace passed 937 public tests. Both the stock and synthetic Helix encrypted loopback regressions passed. Original-client rendering remains unverified.
+
+- Sweep the projectile's authored terrain radius through the shared static contact world for player and NPC volleys. Keep direct actor contact and splash visibility on their own queries. A synthetic regression verifies the earlier contact and that the wall still blocks splash. The Inspector workspace passed 936 public tests. Four prepared 104319 regressions passed for Helix delivery, both self-launch cases, and quick melee. The radius sweep requires prepared contact geometry for the radius sweep. Original-client visuals remain unverified.
+
+- Evaluate static terrain rebound from the authored volley switch, count, normal restitution, and tangential coefficients. Player and NPC shots use the same sweep and preserve the remainder of the tick, distance budget, and closer actor contact. The Inspector workspace passed 935 public tests. Four prepared 104319 regressions passed for Helix impact and release, two projectile self-launch cases, and quick melee. Original-client rebound and impact visuals remain unverified.
+
+- Read typed impact-spawn resources from the authored volley, including its optional attached actor graph. Select the existing Biotic Field path from the authored canister and field definitions without depending on a particular hero or volley location. The Inspector workspace passed 934 public tests. Prepared tests verified the stock field cast, encrypted canister and field delivery, and both projectile self-launch regressions. A general landed actor host remains open.
+
+- Preserve map contact normals for both player and NPC projectile blasts. At a glancing impact, cast visibility rays from the incident side so a nearby wall blocks both splash damage and knockback. Preserve the actual impact point for damage falloff and flight retirement. The Inspector workspace passed 933 public tests and four prepared combat probes.
+
+- Evaluate the authored mode-0 creator-body selector through the StateScript host relationship lookup. Preserve explicit unbound entities and report unavailable or unsupported relationships. The Inspector workspace passed 932 public tests. A local prepared selector probe passed with and without a creator binding. Deployable actor admission, room-backed lookup, and the startup relation mode remain open.
+
+- Track authored projectile range separately from lifetime so falling and rising shots terminate at their actual travelled distance. Use the travelled distance for direct-hit falloff and keep the final partial sweep and optional expiry blast. The Inspector workspace passed 931 public tests and four prepared combat cases. Original-client range and impact timing remain open.
+
+- Extend the prepared encrypted ground-shot checks to Particle Cannon. Verify the confirmed projectile's impact retirement, self-damage across the owner health pools, upward movement, and an owner correction on a post-impact command frame. The Inspector workspace passed 931 public tests, and four prepared cases passed. Original-client visuals and movement remain open.
+
+- Admit direct single-shot projectiles that use either supported literal aim slot and the sampled command pose. Keep dynamic aim and spread configurations out of the straight-flight path. A prepared Practice Range replay verifies Zarya's secondary-fire launch and owner egress independently of the primary beam. The Inspector workspace passed 931 public tests, and the prepared replay and both Helix loopbacks passed. Impact and owner movement for Zarya remain open.
+
+- Evaluate projectile gravity in authored order for player and NPC volleys, including each gravity node's disable expression. The Inspector workspace passed 930 public tests. Three prepared 104319 cases verify an enemy impact and retirement after a dropped acknowledgement, self-splash health delivery and upward movement, and single-settlement melee knockback. The available catalogs lack Junkenstein spawn entries, so three NPC firing probes stopped during setup. Original-client projectile rendering and movement remain pending.
+
+- Drive unconditional projectile gravity, launch lift and expiry detonation from authored volley and blast fields. Allow damage-free direct contact when the same volley declares splash or a knockback ring. The merged Inspector server and StateScript suites passed 769 public tests. Three prepared tests verified the stock quick melee damage and knockback request, owner and observer projection, and stock Helix and Particle Cannon force expressions. Original-client rendering and movement remain unverified.
+
+- Resolve one-shot contact damage and knockback from the linked target volume and damage state. Match structured filters and bindings, read the static ray category from local graph data, and share the projectile visibility and force code. Capture the target generation before room settlement.
+
+- Read the authored source knockback switch and scale separately from self damage. Keep the outer force ring exclusive and interpolate its two channels at single precision. Skip shooter pose queries on flights without self effects. The force arithmetic follows the [104319 Python reference](https://github.com/leafall903/ORPHEUS/commit/426e4e139635a8d11b8dd037c6f96b8bd3ced6cd). The Inspector server suite passed 481 tests. With local mode rules, the stock Helix and Particle Cannon expression probe and the synthetic projectile loopback passed. The stock loopback stopped during setup before its first shot.
+
+- Apply authored blast knockback to players and bots through collision-aware movement. Resolve the known horizontal and upward ring multipliers independently from damage falloff so a self launch can occur without self damage. Owner movement corrections use the input frame that applies the impulse, including bodies with no active owner script. The Inspector server suite passed 481 tests, and the prepared synthetic Helix loopback passed. Original-client movement and the remaining ring field are unverified.
+
+- Release each confirmed predicted projectile at the authoritative contact deadline, even when a related prediction is still awaiting acknowledgment. Unconfirmed predictions retain bounded retry and cleanup. Natural expiry without an authored blast sends destruction without an impact state. Original-client impact rendering remains pending.
+
+- Apply the optional authored self-damage scale to the shooter's projectile splash. Reuse the normal splash range, falloff, occlusion and player health settlement. Self-damage does not create an enemy hit or elimination notice. Original-client acceptance is pending.
+- Resolve communication action textures from an optional local catalog keyed by full action GUID. The importer checks the build, asset types, and duplicate action keys. The importer checks passed. Rust regression and prepared client-data replay remain pending.
+
+- Queue authored localized callouts through the existing short frame-action encoder. Capture effective instance and entity variables at dispatch, retain the original stamp and values through a resend, and omit past callouts from new full baselines. Passed 766 public Rust library tests, the byte-exact short-action retry test, and the prepared 104319 probe for authored variable capture. Live wheel input remains disabled pending the remaining VM shapes and original-client verification.
+
+- Evaluate StateScript asset-keyed pair tables with expression values and support ordered integer parameter maps from expression opcode 19. Passed 765 public Rust library tests. A prepared 104319 wheel replay verifies that the selected action resolves to its localized parameter row. Client callout delivery and live wheel input remain open.
+
+- Extend the prepared 104319 wheel probe to replay the same packet with and without a frozen single-player room. The authored handlers receive the selection in both cases. With a room, the query completes and the probe reaches three remaining unsupported action or expression shapes. Passed the prepared probe and 764 public Rust library tests. Live wheel input stays disabled.
+
+- Evaluate configured StateScript view queries from the frozen room snapshot. The host can prove an empty player search in a room with bots. With a local sight profile, it filters, ranks and checks static and actor occlusion in the same snapshot. Passed 764 Rust library tests and the prepared 104319 wheel packet binding probe. The public sight cases use synthetic settings. Native occupied-room sight profiles and live wheel behavior still need verification.
+
+- Decode native view target trackers from their operand fields. The VM follows the declared sampling interval, writes ordered results, and distinguishes an unavailable room query from a completed empty search. The room can prove an empty search from its frozen actor snapshot. Passed 763 Rust library tests. The prepared 104319 wheel probe reached the room query and reported its unavailability without a spatial snapshot. Occupied-room collision profiles and ranking are still pending.
+
+- Resolve self-directed StateScript voice criteria through an optional local actor voice catalog. Use the speaker's current hero and skin voice set to select a playable line and submit it to the shared room cue queue for living allies and the speaker. Passed 771 Rust library tests and a probe of the local 104319 voice catalog. The wheel probe still reaches the unsupported `TrackTargets` state.
+
+- Route stock bot StateScript messages through the shared room queue. Deliver registered messages on the receiver's next VM frame and discard directed messages if the recipient dies before dispatch. Passed 759 Rust library tests and prepared 104319 probes for firing, damage, and respawn animation. The prepared wheel probe still reports the unsupported `TrackTargets` state.
+
+- Decode context-free communication wheel requests as body-local StateScript messages. The input regression covers reliable retries, possession, death, and replacement with the same wire ID. Resolve authored asset categories from private metadata through `STU_4460419A`. Passed 758 Rust library tests and the runtime metadata importer checks. A prepared 104319 probe bound the request in both authored receivers and reached an unsupported `TrackTargets` state. Live wheel input remains disabled pending the shared target tracking implementation.
+
+- Deliver authored remote projectile launches after the observer acknowledges the source volley and projectile entities. Retry the same launch on loss and keep retirement tied to the authoritative flight. A synthetic loss replay and a prepared 104319 Practice Range firing probe passed. Original-client visual acceptance remains pending.
+- Verify remote projectile delivery on top of the seated bot controller changes from PR #178. Passed 471 server library tests and four prepared 104319 probes for firing, damage, respawn animation, and nameplate lifecycle.
+
+- Discover stock-bot weapon placement roots from declared map scripts and resolve inputs from body slot bindings. The synthetic contract uses a different graph and a secondary input and checks duplicate, missing, client-only, and unbound declarations. Passed 469 server library tests and four prepared 104319 probes for the roster, patrol, respawn, and projectile paths.
+
+- Deliver the authored reset to replacement stock bots before publishing them. The prepared 104319 probes verify the spawn animation in the first observer frame, the exact firing volley identity, damage to both actor types, and the existing death and nameplate lifecycle. The 468 server library tests passed. Original-client animation acceptance remains pending.
+
+- Drive authored firing placements through the stock bot's private StateScript root and body-defined weapon inputs. Route the emitted projectiles to the existing room flight and damage settlement. A synthetic state lifecycle test, 468 server library tests, and prepared 104319 probes for projectile launch, damage to both actor types, and bot nameplate respawn passed. Client-visible projectile delivery remains open.
 
 - Run the full Rust suite once per PR in Windows default mode. Windows Inspector and Linux exercise their feature and platform checks. The archived Python server comparison tool tests run on demand, and the public checks exercise the pinned wire reader.
 

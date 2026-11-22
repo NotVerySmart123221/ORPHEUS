@@ -1,6 +1,68 @@
 use super::*;
 
 #[test]
+fn combat_impulse_uses_the_resolved_owner_pose_with_or_without_a_script() {
+    use crate::mover::VelocityChange;
+
+    let id = avatar(1, 1);
+    let start = 100;
+    let due = start + 1;
+    let card = PlayerCard::default();
+    let viewer = PlayerAppearance {
+        entity: OWNER,
+        slot: 0,
+        team: 0,
+        card: &card,
+    };
+    for scripted in [true, false] {
+        let mut scene = PreparedScene::fixture_for_bots(Vec::new());
+        let mut world = WorldDelivery::new(OWNER);
+        let mut egress = GameEgress::default();
+        world.started = Some(start);
+        world.input.processed = Some(start);
+        activate_script(&mut world, scene.simulation_mut(), id, 7, Arc::default());
+        if !scripted {
+            world.cancel_body_script(Some(scene.simulation_mut()));
+        }
+        world.acknowledge(
+            outcome(Arc::new(record(id.entity, Delivery::CreateBody(id))), true),
+            Duration::ZERO,
+        );
+        let mover = &mut scene.simulation_mut().player_body_mut(id).unwrap().mover;
+        let before = mover.pose();
+        mover.queue_velocity_change(due, VelocityChange::Impulse([3.0, 7.0, 0.0]));
+        world.queue_commands(
+            due,
+            &[Command {
+                frame: due,
+                ..Command::default()
+            }],
+        );
+        world
+            .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
+            .unwrap();
+        let pose = scene.simulation().player_body(id).unwrap().mover.pose();
+        assert_eq!(pose.frame, Some(due));
+        assert!(pose.position[0] > before.position[0] && pose.position[1] > before.position[1]);
+        assert!(pose.velocity[1] > 0.0);
+        let (_, sent) = transmit(
+            &mut world,
+            Some(scene.simulation_mut()),
+            &mut egress,
+            due,
+            0,
+        );
+        assert!(sent.records.contains(&RecordSource::Movement(0)));
+        let history = if let Some(script) = world.body_script.as_ref() {
+            script.corrections.as_ref().unwrap()
+        } else {
+            &world.detached_motion.as_ref().unwrap().1
+        };
+        assert_eq!(history.corrected(), Some(due));
+    }
+}
+
+#[test]
 fn posed_owner_fault_cancels_future_velocity_before_the_recovered_batch_continues() {
     use crate::mover::VelocityChange;
 

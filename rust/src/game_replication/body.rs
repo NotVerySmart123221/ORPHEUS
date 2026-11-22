@@ -169,7 +169,7 @@ impl BodyScript {
             .vitals()
             .is_some_and(|vitals| vitals.death().is_some())
         {
-            mover.clear_pending_script_motion();
+            mover.clear_pending_motion();
         } else {
             for (frame, change) in velocity_changes {
                 mover.queue_velocity_change(frame, change);
@@ -256,7 +256,6 @@ impl BodyScript {
         } else {
             flight
         };
-        let flight = flight.with_expiry_blast(projectile.expiry_blast);
         if let Some(token) = projectiles.admit(projectile.shot, definition, bound) {
             #[cfg(feature = "inspector")]
             crate::owner_trace::playtest(format_args!(
@@ -387,6 +386,10 @@ pub(super) enum InputWork {
         message: Message,
         tick: u32,
         received: Duration,
+    },
+    WheelAction {
+        body: BodyId,
+        action: ClientWheelAction,
     },
     Skin {
         hero: u64,

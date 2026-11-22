@@ -146,7 +146,7 @@ impl PlayerBodyState {
             .and_then(Vitals::take_cumulative_update)
     }
 
-    fn native_filter_flags(&self) -> Option<u64> {
+    pub(super) fn native_filter_flags(&self) -> Option<u64> {
         crate::match_scene::team_bit(self.team)
             .ok()
             .map(|team| 1 | team | if self.alive() { 0 } else { 0x10 })
@@ -280,7 +280,7 @@ impl PlayerBodyState {
                 .map_or_else(Damage::default, |vitals| vitals.damage(amount, source))
         };
         if result.killed {
-            self.mover.clear_pending_script_motion();
+            self.mover.clear_pending_motion();
         }
         result
     }
@@ -1018,14 +1018,18 @@ impl RoomSimulation {
             return Ok(None);
         };
         self.scripted_health.push(health.clone());
+        let self_hit = source == id.entity;
         if killed {
             self.player_deaths.push(PlayerDeath {
                 owner,
                 body: id,
                 source,
-                killed_by: true,
+                killed_by: !self_hit,
             });
             self.record_enemy_elimination(source, id.entity, victim_team, context.tick);
+        }
+        if self_hit {
+            return Ok(None);
         }
         Ok(Some(BotHit {
             damage: AppliedDamage {

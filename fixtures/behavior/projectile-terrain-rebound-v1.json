@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "case_id": "projectile-terrain-rebound-v1",
+  "input": {
+    "origin": [0.0, 1.0, 0.0],
+    "direction": [0.6, 0.0, 0.8],
+    "speed": 100.0,
+    "front_wall": 0.8,
+    "back_wall": -0.2,
+    "count": 1,
+    "normal_retention": 0.5,
+    "tangent_retention": 0.5,
+    "tangent_loss": 125.0
+  },
+  "expected": {
+    "after_first_tick": [0.774, 1.0, 0.559],
+    "elapsed_at_second_wall": 0.034975,
+    "short_range": 1.1
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "case_id": "statescript-creator-body-v1",
+  "cases": [
+    {"name":"known creator","entity":801,"creator":900,"selector":0,"result":900,"requests":[801]},
+    {"name":"explicitly unbound creator","entity":801,"creator":0,"selector":0,"result":0,"requests":[801]},
+    {"name":"unknown creator relation","entity":801,"creator":null,"selector":0,"result":null,"requests":[801]},
+    {"name":"self cannot be its creator","entity":801,"creator":801,"selector":0,"result":null,"requests":[801]},
+    {"name":"unbound subject","entity":0,"creator":900,"selector":0,"result":0,"requests":[]},
+    {"name":"reserved subject","entity":536870911,"creator":900,"selector":0,"result":null,"requests":[]},
+    {"name":"other relation modes are unresolved","entity":801,"creator":900,"selector":2,"result":null,"requests":[]},
+    {"name":"missing selector","entity":801,"creator":900,"result":null,"requests":[]},
+    {"name":"integer is not an entity","operand":801,"creator":900,"selector":0,"result":null,"requests":[]}
+  ]
+}

@@ -1,4 +1,5 @@
 use super::encode::write_mask;
+mod callouts;
 mod owner_instance_visibility;
 use super::*;
 use crate::script_expr::Scope;
@@ -2736,11 +2737,30 @@ fn quick_melee_hit_list_projects_empty_hits_payload() {
                 "STUStatescriptStateTrackTargets",
                 Some(0),
                 json!({
+                    "m_95FFC3C5":1,
+                    "m_8DCA77B6":{"$":"STU_B5A0CAF0"},
+                    "m_05BE62DD":{"$":"STUConfigVarVec3","m_value":{"X":0,"Y":1,"Z":1}},
+                    "m_D59188D5":{"$":"STU_21A13145","m_entity":{"$":"STU_B5A0CAF0"}},
+                    "m_radius":1,
+                    "m_8A2905A0":{"$":"STUConfigVarDynamic","m_identifier":30,"m_60DB8F99":0},
+                    "m_24A4AB8A":{"$":"STUConfigVarDynamic","m_identifier":31,"m_60DB8F99":0},
+                    "m_filter":{"$":"STUConfigVarFilter","m_84065FD1":64,"m_4EA686DB":20,"m_89831602":1},
+                    "m_3D667CE3":{"$":"STUConfigVarFilter","m_C1903771":{
+                        "$":"STU_20DB8AB5","m_C1903771":"0x06900000000000AA"
+                    }},
                     "m_subgraphPlug":{"$":"Plug","links":[[60,"m_beginPlug"]],"m_FF3DAF1E":[1]}
                 }),
             ),
             {
-                let mut hits = node(60, "STU_77E13026", Some(1), json!({}));
+                let mut hits = node(
+                    60,
+                    "STU_77E13026",
+                    Some(1),
+                    json!({
+                        "m_814F8EC3":{"$":"STUConfigVarDynamic","m_identifier":32,"m_60DB8F99":0},
+                        "m_3DC6FAAA":{"$":"STUConfigVarDynamic","m_identifier":33,"m_60DB8F99":0},
+                    }),
+                );
                 hits["remote"] = json!(0);
                 hits
             },

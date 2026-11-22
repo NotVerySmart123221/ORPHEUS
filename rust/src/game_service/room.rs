@@ -593,6 +593,14 @@ impl Room {
                             MessageKind::GameMessage if room.world.is_some() => {
                                 world.queue_game_message(tick, now, message);
                             }
+                            MessageKind::WheelAction => {
+                                if let Some(world_state) = &room.world {
+                                    world.queue_wheel_action(
+                                        world_state.scene.simulation(),
+                                        &message,
+                                    );
+                                }
+                            }
                             _ => (),
                         }
                     });
@@ -739,6 +747,7 @@ impl Room {
             deaths,
             observer_player_health,
             player_cues,
+            projectile_reports,
         ) = {
             let (bots, queries) = world.scene.bot_simulation();
             let sightings = bots.take_player_defender_sightings();
@@ -754,6 +763,7 @@ impl Room {
                 bots.take_player_deaths(),
                 bots.take_observer_player_health(),
                 bots.take_player_cues(),
+                bots.take_projectile_reports(),
             )
         };
         for death in deaths {
@@ -765,6 +775,15 @@ impl Room {
                             .schedule_player_respawn(death.body, now.saturating_add(delay));
                     }
                 }
+            }
+        }
+        if !projectile_reports.is_empty() {
+            for peer in self
+                .members
+                .values_mut()
+                .filter_map(|member| member.peer.as_mut())
+            {
+                peer.world.observe_projectiles(&projectile_reports);
             }
         }
         for cue in player_cues {

@@ -25,6 +25,10 @@ impl From<TargetPose> for HurtPose {
 }
 
 impl HurtPose {
+    pub(crate) fn feet(self) -> Vec3 {
+        self.movement.feet
+    }
+
     fn capsules(self) -> impl Iterator<Item = (Capsule, bool)> {
         let [x, y, z] = self.movement.feet;
         let world = |shape: LocalCapsule, head| {
@@ -103,9 +107,24 @@ impl HurtPose {
 
 pub(crate) struct Surface {
     pub distance: f64,
-    pub axis_distance: f64,
-    pub from_axis: Vec3,
-    pub sight_reach: f64,
+    axis_distance: f64,
+    from_axis: Vec3,
+    sight_reach: f64,
+}
+
+impl Surface {
+    pub(crate) fn visible<E>(
+        &self,
+        cast: impl FnOnce(Vec3, f64) -> Result<Option<f64>, E>,
+    ) -> Result<bool, E> {
+        const EPSILON: f64 = 1e-9;
+        let reach = self.sight_reach;
+        if reach <= EPSILON {
+            return Ok(true);
+        }
+        let toward = self.from_axis.map(|axis| -axis / self.axis_distance);
+        Ok(cast(toward, reach)?.is_none_or(|hit| hit + EPSILON >= reach))
+    }
 }
 
 struct Capsule {
@@ -257,6 +276,9 @@ mod tests {
                 ProjectileBallistics {
                     speed: 600.0,
                     lifetime: 0.5,
+                    max_distance: None,
+                    terrain_rebound: None,
+                    terrain_radius: 0.0,
                     radius: 0.0,
                     definition: None,
                     direct: Some(hit),
@@ -268,7 +290,7 @@ mod tests {
             )
             .unwrap();
             let impact = flight
-                .advance_combat(1, &[(1, target)], |_, _, _| Ok(None))
+                .advance_combat(1, &[(1, target)], None, |_, _, _, _| Ok(None))
                 .unwrap()
                 .map(|end| end.impacts[0]);
             assert_eq!(impact.is_some(), critical.is_some(), "{}", case["name"]);

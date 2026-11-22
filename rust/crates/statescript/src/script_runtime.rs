@@ -34,27 +34,35 @@ pub struct ButtonEdge {
     pub pressed: bool,
 }
 
+const INPUTS: [(u32, u8); 17] = [
+    (0x040, 11),
+    (0x080, 12),
+    (0x001, 20),
+    (0x002, 29),
+    (0x008, 35),
+    (0x010, 36),
+    (0x020, 37),
+    (0x004, 30),
+    (0x800, 31),
+    (0x400, 14),
+    (0x001, 111),
+    (0x002, 112),
+    (0x004, 113),
+    (0x008, 114),
+    (0x010, 110),
+    (0x020, 116),
+    (0x040, 115),
+];
+
+/// Input record mask that can hold this logical button.
+pub fn held_button_mask(button: u8) -> Option<u32> {
+    INPUTS
+        .iter()
+        .find_map(|&(mask, id)| (id == button).then_some(mask))
+}
+
 /// Logical edges in the client dispatcher order. Action bytes are pulses.
 pub fn button_edges(previous: u32, current: u32, action: u8) -> impl Iterator<Item = ButtonEdge> {
-    const INPUTS: [(u32, u8); 17] = [
-        (0x040, 11),
-        (0x080, 12),
-        (0x001, 20),
-        (0x002, 29),
-        (0x008, 35),
-        (0x010, 36),
-        (0x020, 37),
-        (0x004, 30),
-        (0x800, 31),
-        (0x400, 14),
-        (0x001, 111),
-        (0x002, 112),
-        (0x004, 113),
-        (0x008, 114),
-        (0x010, 110),
-        (0x020, 116),
-        (0x040, 115),
-    ];
     let pulse = match action {
         1..=5 => Some(14 + action),
         6..=7 => Some(15 + action),

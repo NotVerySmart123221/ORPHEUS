@@ -495,7 +495,7 @@ impl EnemyScripts {
         };
         let speed = crate::script_expr::to_float(&resolve(node.field("m_projectileSpeed")?).ok()?);
         let range = crate::script_expr::to_float(&resolve(node.field("m_FEC435C6")?).ok()?);
-        let gravity = authored_gravity(&node.fields, resolve)?;
+        let gravity = authored_gravity(&node.fields, resolve).ok()??;
         (speed.is_finite() && speed > 0.0 && range.is_finite() && range > 0.0).then_some(
             GrenadeArc {
                 speed,
@@ -608,17 +608,11 @@ impl EnemyScripts {
                 | (ZOMBARDIER, 0x0ca1, 14)
                 | (WITCH, 0x006d, 10)
                 | (SUMMONER, 0x157c, 85) => {
-                    let Some(mut pattern) =
+                    let Some(pattern) =
                         projectile_pattern(&node.fields, forward, &shot, node.pos, &mut evaluate)
                     else {
                         continue;
                     };
-                    if matches!(binding.hero, JUNKRAT | ZOMBARDIER) {
-                        let Some(gravity) = authored_gravity(&node.fields, &mut evaluate) else {
-                            continue;
-                        };
-                        pattern.gravity = Some(gravity);
-                    }
                     let mut projectiles = pattern.launch(binding.body, binding.team, origin, frame);
                     if (binding.hero, node.pos) == (ROADHOG, 29) {
                         let Some(mut projectile) = projectiles.next() else {
@@ -1255,7 +1249,7 @@ fn damage_tags<'a>(
         })
 }
 
-fn projectile_pattern(
+pub(crate) fn projectile_pattern(
     fields: &Json,
     forward: [f64; 3],
     shot: &script_init::ShotEvent,
@@ -1270,7 +1264,7 @@ fn projectile_pattern(
     };
     Some(ProjectilePattern {
         ballistics,
-        gravity: None,
+        gravity: authored_gravity(fields, &mut *evaluate).ok()?,
         directions,
         damage_tags: damage_tags(&fields["m_6396149F"], evaluate).collect(),
     })

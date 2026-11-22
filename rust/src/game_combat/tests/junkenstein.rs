@@ -889,7 +889,7 @@ pub(super) fn normal_encounter_first_reaper_finishes_intro_and_pursues_live_defe
             };
             admitted.push(AdmittedFlight {
                 token,
-                flight: flight.with_expiry_blast(projectile.expiry_blast),
+                flight,
                 stun: projectile.stun,
                 hit_effect: Some(crate::script_init::Site {
                     entity: projectile.shot.entity,
@@ -1463,6 +1463,9 @@ fn admitted_flashbang_hits_deliver_effects_to_all_boss_pairs() {
             ProjectileBallistics {
                 speed: 30.0,
                 lifetime: 1.0,
+                max_distance: None,
+                terrain_rebound: None,
+                terrain_radius: 0.0,
                 radius: 0.0,
                 definition: Some(0x0400_0000_0000_037d),
                 direct: Some(HitDefinition {

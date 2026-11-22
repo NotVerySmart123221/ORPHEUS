@@ -195,6 +195,7 @@ pub fn player_entity_variables(body: &Body, health: f64, maximum_health: f64) ->
     ])
 }
 
+mod knockback;
 mod machine;
 mod shapes;
 #[cfg(test)]
@@ -204,18 +205,19 @@ mod vm;
 mod voice;
 mod world;
 
+pub use knockback::Knockback;
 pub use types::{
-    AbilityCooldown, ChasePayload, Diagnostic, InitFault, Instance, Issue, NodeObservations,
-    PendingTimer, RandomCheckpoint, ShotEvent, Snapshot, SpawnSearch, SpawnSearchKey, StackBinding,
-    State, StateKind,
+    AbilityCooldown, ChasePayload, Diagnostic, FrameAction, FrameCallout, InitFault, Instance,
+    Issue, NodeObservations, PendingTimer, RandomCheckpoint, ShotEvent, Snapshot, SpawnSearch,
+    SpawnSearchKey, StackBinding, State, StateKind,
 };
 pub use world::{
-    AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, CreationKind,
-    EmptyWorld, EntityCreation, HealthTargetFacts, HitTags, HostEvent, HostHealthContext,
-    LandingSelection, MovementSample, NamedPoolLoss, PlayScript, Relocation, RoomBodyIdentity,
-    RoomCue, RoomCueSpeaker, RoomEntityStatus, RoomMessage, ScriptedMotion, Site,
-    SweptDisplacement, TargetTagEffect, TargetTagEffects, TargetTagSnapshot, World,
-    named_pool_records,
+    AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, ContactTarget,
+    ContactVolume, CreationKind, EmptyWorld, EntityCreation, HealthTargetFacts, HitTags, HostEvent,
+    HostHealthContext, LandingSelection, MovementSample, NamedPoolLoss, PlayScript, Relocation,
+    RoomBodyIdentity, RoomCue, RoomCueSpeaker, RoomEntityStatus, RoomMessage, ScriptedMotion, Site,
+    SweptDisplacement, TargetTagEffect, TargetTagEffects, TargetTagSnapshot, ViewSightProfile,
+    ViewTargetQuery, World, named_pool_records,
 };
 
 use machine::{Event, Machine, Startup, StateKey, VarKey};
@@ -462,6 +464,7 @@ impl Component {
             .ok_or(EvalError::MalformedConfig("state source"))?;
         let mut context = InstanceContext {
             machine: &self.machine,
+            graphs: &self.graphs,
             world,
             site: Site {
                 entity: snapshot.entity,
@@ -1064,6 +1067,18 @@ impl Component {
     pub fn set_owner_dead(&mut self, dead: bool) {
         self.machine.logical_buttons_need_resync |= dead && !self.machine.owner_dead;
         self.machine.owner_dead = dead;
+    }
+
+    /// Weapon slots held by active self-targeted AI fire states.
+    pub fn ai_fire_slots(&self) -> impl Iterator<Item = i64> + '_ {
+        self.snapshot()
+            .into_iter()
+            .flat_map(|snapshot| snapshot.instances.values())
+            .flat_map(|instance| instance.states.values())
+            .filter_map(|state| match state.kind {
+                StateKind::AiWeaponFire(slot) if state.active && !state.ending => slot,
+                _ => None,
+            })
     }
 
     pub fn command_buttons(&self) -> u32 {

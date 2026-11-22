@@ -79,6 +79,39 @@ posed command resumes. The follow-up [owner volley trace](OWNER_DELIVERY_TEST.md
 recorded no unposed boundary and no lost owner reports. It did not
 establish what the client rendered for every shot.
 
+Prepared 104319 encrypted loopback now exercises stock Helix against scripted
+training bots. It drops the first projectile acknowledgment and verifies
+impact, target health, and retirement. A ground shot verifies owner health
+on the wire and upward movement in the room simulation. A prepared stock
+quick-melee case verifies one damage and knockback settlement. First-person
+movement, impact rendering, and Particle Cannon and Junkrat self-launch in
+the original client remain open.
+
+A prepared Practice Range replay selects Zarya and fires a single ground shot
+before any primary input. Over encrypted loopback, the test verifies impact
+retirement for the confirmed projectile, 23.5 points of self-damage across
+the owner health pools, and a post-impact owner movement correction. The room
+reports an upward launch. The mixed-input matrix still stops on an
+unsupported primary `TrackRay` state. Original-client rendering and movement
+for Zarya remain open.
+
+A synthetic shot with gravity now expires at its authored flight distance.
+The range and lifetime can end independently. Original-client impact timing
+at that limit remains open. The local deployable graph probe resolves the
+mine definition and its linked actor graph. Standalone startup still requires
+room actor admission and health-pool services, along with additional
+StateScript state support. A local probe of the authored mode-0 creator
+selector returns the supplied creator body and reports unavailable when its
+host has no relationship. The actor's startup takes a separate mode-1
+relation, whose semantics remain open.
+
+The owner volley now decodes the impact-spawn entity and optional attached
+graph from the authored configuration. The existing Biotic Field path is
+selected by its canister and deployed entity definitions, including under
+a relocated graph on a different synthetic body. Its existing presentation
+and timing still use the legacy field host. The room does not yet start an
+arbitrary attached actor graph from a projectile.
+
 The follow-up timing capture accumulated 8,819 missed ticks. Misses
 began well before the first recorded shot and continued during intervals
 with an unchanged ray sample. It also ran with synchronous owner traces

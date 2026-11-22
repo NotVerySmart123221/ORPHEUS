@@ -15,15 +15,15 @@ use crate::{
     game_bots::BOT_RECORD_DELAY,
     game_clock::{MAX_LEASE_FRAME, SEND_EVERY, TICK_PERIOD},
     game_combat::{
-        AdmittedFlight, BIOTIC_CANISTER, BioticField, BotReplacement, CombatError, FlightOutcome,
-        HealingPulse, PlayerBodyState, PosedBioticField, PosedHitscan, PosedProjectile, PosedShot,
-        RoomSimulation,
+        AdmittedFlight, BIOTIC_CANISTER, BIOTIC_FIELD_ENTITY, BioticField, BotReplacement,
+        CombatError, FlightOutcome, HealingPulse, PlayerBodyState, PosedBioticField, PosedHitscan,
+        PosedProjectile, PosedShot, RoomSimulation,
     },
     game_controller::ControllerFrame,
     game_egress::{DeliveryReport, FrameRecords, GameEgress, RecordSource, SendError, SentFrame},
     game_heroes::{CASSIDY, Hero, SOLDIER},
     game_messages::Message,
-    game_parameters::{ClientGameMessage, HeroSelectRequest},
+    game_parameters::{ClientGameMessage, ClientWheelAction, HeroSelectRequest},
     game_projectiles::{OwnerProjectiles, ProjectileDelivery, ProjectileLeases, ProjectileToken},
     match_scene::{
         PlayerAppearance, Possession, bot_controller_create, bot_controller_possession, team_bit,
@@ -58,7 +58,6 @@ const MAX_PENDING_INPUT: usize = 256;
 const MAX_SCRIPT_TAIL: u32 = 256;
 const FIRST_BIOTIC_VIEW: u32 = 0xa008_0000;
 const END_BIOTIC_VIEW: u32 = 0xa00c_0000;
-const BIOTIC_FIELD_ENTITY: u64 = 0x0400_0000_0000_03dc;
 const KEEP_MOVEMENT_ROTATION: u32 = 0x0100_0000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -125,6 +124,12 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
         _message: RoomMessage,
     ) -> Result<usize, InitFault> {
         Ok(0)
+    }
+    fn queue_local_message(&mut self, _message: RoomMessage) -> Result<usize, InitFault> {
+        Ok(0)
+    }
+    fn wheel_actions_available(&self) -> bool {
+        false
     }
     fn receive_host_event(
         &mut self,
@@ -317,6 +322,7 @@ pub(crate) struct WorldDelivery {
     projectile_destroys: HashMap<u32, (BodyId, ProjectileToken)>,
     biotic_views: BTreeMap<u32, BioticView>,
     scene_views: BTreeMap<u32, BodyStream<ProjectedSnapshot>>,
+    observed_projectiles: observed_projectiles::ObservedProjectiles,
     bot_chunk_waited: bool,
     gate: Option<u32>,
     next_biotic_view: u32,
@@ -324,6 +330,7 @@ pub(crate) struct WorldDelivery {
 
 mod body;
 mod delivery;
+mod observed_projectiles;
 
 pub(crate) use body::validate_body_baselines;
 use body::{BioticView, BodyScript, InputQueue};
