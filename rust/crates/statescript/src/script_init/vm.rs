@@ -2289,17 +2289,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 targets.push(entity);
             }
         }
-        let Some((stimulus, line)) = node.room_cue_assets() else {
+        let Some(cue) = node.room_cue() else {
             return Ok(false);
         };
         if targets.is_empty() {
             return Ok(true);
         }
         self.spend("room cue admission")?;
-        if !self
-            .world
-            .queue_room_cue(site, &targets, RoomCue { stimulus, line })
-        {
+        if !self.world.queue_room_cue(site, &targets, cue) {
             self.report(site, Issue::UnsupportedField("room cue request"));
             return Ok(false);
         }

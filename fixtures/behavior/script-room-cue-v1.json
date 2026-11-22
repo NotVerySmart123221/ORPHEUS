@@ -107,6 +107,7 @@
       {"name": "team, radius and liveness use the room snapshot", "facts_available": true},
       {"name": "room facts are unavailable"},
       {"name": "direct input preserves first occurrences", "audience": [714, 702, 714]},
+      {"name": "a mode speaker preserves the selected audience", "audience": [714, 702], "mode_speaker": true},
       {"name": "empty direct input succeeds", "audience": []},
       {"name": "host rejects a well-formed command", "audience": [714], "reject": true},
       {"name": "malformed member invalidates the whole input", "audience": [714, "not-an-entity"]},
@@ -121,6 +122,7 @@
     "outputs": [
       {"attempted": [702, 714], "queued": [702, 714], "continued": true},
       {"continued": false},
+      {"attempted": [714, 702], "queued": [714, 702], "continued": true},
       {"attempted": [714, 702], "queued": [714, 702], "continued": true},
       {"continued": true},
       {"attempted": [714], "continued": false},

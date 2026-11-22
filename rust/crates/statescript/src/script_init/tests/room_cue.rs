@@ -34,6 +34,8 @@ struct Scenario {
     audience: Option<Vec<Json>>,
     audience_count: Option<u32>,
     #[serde(default)]
+    mode_speaker: bool,
+    #[serde(default)]
     reject: bool,
 }
 
@@ -51,7 +53,7 @@ struct Output {
     continued: bool,
 }
 
-type Submission = (Site, Vec<u32>, u64, u64);
+type Submission = (Site, Vec<u32>, RoomCue);
 
 struct CueWorld {
     speaker: u32,
@@ -81,7 +83,7 @@ impl World for CueWorld {
     }
 
     fn queue_room_cue(&mut self, site: Site, targets: &[u32], cue: RoomCue) -> bool {
-        let submission = (site, targets.to_vec(), cue.stimulus, cue.line);
+        let submission = (site, targets.to_vec(), cue);
         if !self.reject {
             self.queued.push(submission.clone());
         }
@@ -137,7 +139,9 @@ fn authored_room_cue_stages_only_a_valid_scoped_audience() {
         Arc::new(store)
     };
     let radius_graph = load(bundle);
-    let inline_graph = load(inline);
+    let inline_graph = load(inline.clone());
+    inline["graphs"][0]["nodes"][1]["fields"]["speaker"] = json!("mode");
+    let mode_graph = load(inline);
 
     for (scenario, expected) in scenarios.into_iter().zip(outputs) {
         let mut world = CueWorld {
@@ -190,7 +194,11 @@ fn authored_room_cue_stages_only_a_valid_scoped_audience() {
             Variables::from([(1, Value::Entity(speaker)), (CONTINUED, Value::Bool(false))]);
         let graphs = if let Some(audience) = audience {
             variables.insert(2, Value::Array(audience));
-            &inline_graph
+            if scenario.mode_speaker {
+                &mode_graph
+            } else {
+                &inline_graph
+            }
         } else {
             &radius_graph
         };
@@ -213,7 +221,21 @@ fn authored_room_cue_stages_only_a_valid_scoped_audience() {
         );
         component.run_now(&mut world).unwrap();
 
-        let submission = |audience| (site, audience, stimulus, line);
+        let submission = |audience| {
+            (
+                site,
+                audience,
+                RoomCue {
+                    stimulus,
+                    line,
+                    speaker: if scenario.mode_speaker {
+                        RoomCueSpeaker::Mode
+                    } else {
+                        RoomCueSpeaker::Actor
+                    },
+                },
+            )
+        };
         assert_eq!(
             world.attempts.as_slice(),
             expected.attempted.map(submission).as_slice(),
@@ -272,6 +294,7 @@ fn authored_cue_requires_a_settled_critical_impact() {
             "audience": var(1, true),
             "stimulus": "0x0000000000000031",
             "line": "0x0000000000000032",
+            "speaker": "mode",
             "m_outPlug": plug(&[], &[]),
         }),
     );
@@ -331,5 +354,12 @@ fn authored_cue_requires_a_settled_critical_impact() {
         assert_eq!(world.queued.len(), queued, "frame {frame}");
     }
     assert_eq!(world.queued[0].1, [speaker]);
-    assert_eq!((world.queued[0].2, world.queued[0].3), (0x31, 0x32));
+    assert_eq!(
+        world.queued[0].2,
+        RoomCue {
+            stimulus: 0x31,
+            line: 0x32,
+            speaker: RoomCueSpeaker::Mode,
+        }
+    );
 }

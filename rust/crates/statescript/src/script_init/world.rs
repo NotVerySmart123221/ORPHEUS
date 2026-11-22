@@ -116,6 +116,13 @@ impl RoomMessage {
 pub struct RoomCue {
     pub stimulus: u64,
     pub line: u64,
+    pub speaker: RoomCueSpeaker,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RoomCueSpeaker {
+    Actor,
+    Mode,
 }
 
 impl RoomCue {

@@ -1,11 +1,10 @@
 //! Per-peer delivery, loading readiness, and combat UI state.
 
-use bevy_ecs::entity::Entity;
-
 use super::*;
 use crate::{
     game_combat::{PlayerDeath, RoomSimulation},
     game_replication::BodyId,
+    script_init::RoomBodyIdentity,
 };
 
 const MAX_PENDING_COMBAT_NOTICES: usize = 256;
@@ -31,7 +30,7 @@ pub(super) struct CombatUi {
 
 struct AuthoredCueIdentity {
     listener: BodyId,
-    source: Entity,
+    source: RoomBodyIdentity,
 }
 
 struct PendingCombatNotice {
@@ -64,16 +63,13 @@ impl PendingCombatNotice {
                 body == Some(*recipient)
             }
             CombatAudience::Authored(cue) => {
-                let CombatNotice::Voice {
-                    anchor, listener, ..
-                } = self.notice
-                else {
+                let CombatNotice::Voice { listener, .. } = self.notice else {
                     return false;
                 };
                 body == Some(cue.listener)
                     && cue.listener.entity == listener
                     && simulation.is_some_and(|room| {
-                        room.room_cue_source_current(anchor, cue.source)
+                        room.room_cue_source_current(cue.source)
                             && room.room_cue_listener_current(owner, cue.listener)
                     })
             }
@@ -206,7 +202,7 @@ impl Peer {
     pub(super) fn queue_player_cue(
         &mut self,
         listener: BodyId,
-        source: Entity,
+        source: RoomBodyIdentity,
         notice: CombatNotice,
     ) {
         if self.combat_ui.notices.len() == MAX_PENDING_COMBAT_NOTICES {
@@ -400,7 +396,10 @@ mod tests {
             stimulus: 1,
             line: 2,
         };
-        let source = bevy_ecs::world::World::new().spawn_empty().id();
+        let source = RoomBodyIdentity {
+            wire: 0xc001_0000,
+            generation: bevy_ecs::world::World::new().spawn_empty().id().to_bits(),
+        };
         let mut peer = Peer::new(0xa001_0000);
         peer.queue_player_cue(listener, source, notice);
         peer.queue_combat_notice(notice);
@@ -493,14 +492,21 @@ mod tests {
             .unwrap();
 
         let notice = CombatNotice::Voice {
-            anchor: speaker,
-            speaker,
+            anchor: GAME_MODE_ENTITY,
+            speaker: GAME_MODE_ENTITY,
             listener: listener.entity,
             stimulus: 1,
             line: 2,
         };
         let mut peer = Peer::new(spawn.controller);
-        peer.queue_player_cue(listener, source.entity, notice);
+        peer.queue_player_cue(
+            listener,
+            RoomBodyIdentity {
+                wire: speaker,
+                generation: source.entity.to_bits(),
+            },
+            notice,
+        );
         peer.queue_combat_notice(notice);
         let eligibility = |room: &RoomSimulation| {
             let matches = |index: usize| {

@@ -38,7 +38,7 @@ impl SampledBody {
         Some(Self { wire, entity })
     }
 
-    fn identity(self) -> RoomBodyIdentity {
+    pub(super) fn identity(self) -> RoomBodyIdentity {
         RoomBodyIdentity {
             wire: self.wire,
             generation: self.entity.to_bits(),

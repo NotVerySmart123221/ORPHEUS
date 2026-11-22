@@ -850,14 +850,23 @@ audiences the room keeps current living player bodies and ignores other
 entities. The batch uses the sender's existing request budget. The action
 continues once the batch is accepted.
 
-The notice carries the sender as its anchor and speaker. Before reliable
-admission, the transport checks both body generations and the listener's
-liveness. It waits for both identity acknowledgements. Each player has at most one unacknowledged
-authored cue in reliable delivery. When the pending combat queue is full,
-a new cue is dropped. Cue identifiers describe resources supplied by the
-author.
+Omit `fields.speaker` or set it to `"actor"` to use the triggering actor
+as the voice source. Set it to `"mode"` to use the room's mode entity
+for a match announcement. The transport checks the triggering actor and
+listener generations and the listener's liveness. It waits for the
+listener and selected voice source to be acknowledged. Each player
+has at most one unacknowledged authored cue in reliable delivery.
+When the pending combat queue is full, a new cue is dropped.
+Cue identifiers describe resources supplied by the author.
 
 See the [synthetic room cue contract](../fixtures/behavior/script-room-cue-v1.json).
+
+The Python branch models match announcements as timeline transitions and
+delivers them through a per-listener reliable queue. Its mode speaker
+is independent of an actor anchor. The Python implementation covers
+round announcements. Timed elimination counts
+and their eligibility still need a separate contract.
+[Python match audio](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/match_audio.py)
 
 ## Request a health change
 

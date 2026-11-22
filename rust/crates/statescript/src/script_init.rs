@@ -213,8 +213,9 @@ pub use world::{
     AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, CreationKind,
     EmptyWorld, EntityCreation, HealthTargetFacts, HitTags, HostEvent, HostHealthContext,
     LandingSelection, MovementSample, NamedPoolLoss, PlayScript, Relocation, RoomBodyIdentity,
-    RoomCue, RoomEntityStatus, RoomMessage, ScriptedMotion, Site, SweptDisplacement,
-    TargetTagEffect, TargetTagEffects, TargetTagSnapshot, World, named_pool_records,
+    RoomCue, RoomCueSpeaker, RoomEntityStatus, RoomMessage, ScriptedMotion, Site,
+    SweptDisplacement, TargetTagEffect, TargetTagEffects, TargetTagSnapshot, World,
+    named_pool_records,
 };
 
 use machine::{Event, Machine, Startup, StateKey, VarKey};

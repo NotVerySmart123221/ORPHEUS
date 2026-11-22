@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Allow authored room cues to select the mode entity as their voice source while preserving the triggering actor and listener generation checks. Six focused VM, room, and peer tests passed. Mode-specific cue rules and original-client audio remain open.
+
 - Expose confirmed critical hits on the settled StateScript health event so authored cues can distinguish ordinary impacts, critical impacts, and damage without weapon classification. The binding uses the same settlement for players and bots. The 20 focused StateScript and room regressions passed. Original-client audio remains open.
 
 - Run the full Rust suite once per PR in Windows default mode. Windows Inspector and Linux exercise their feature and platform checks. The archived Python server comparison tool tests run on demand, and the public checks exercise the pinned wire reader.
