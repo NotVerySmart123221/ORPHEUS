@@ -4,5 +4,11 @@
   "evidence": "synthetic-rust",
   "impulse": [1.0, 0.0, 0.0],
   "arrival_ticks": [12, 24],
-  "max_travel_per_tick": 0.016
+  "max_travel_per_tick": 0.016,
+  "overlap": {
+    "blocker_offset": 0.15,
+    "impulse": [0.0, 7.0, 0.0],
+    "minimum_separation": 0.02,
+    "horizontal_tolerance": 0.001
+  }
 }

@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Clip NPC knockback against contact planes using the same velocity solver as player movement. Capsule separation can correct a bot's position without turning that correction into extra launch velocity. Passed 513 server library tests and the prepared 104319 repeated quick-melee and authored explosion impulse checks. Original-client knockback distance remains pending.
+
 - Integrate the first grounded NPC knockback step from the velocity at impact through ground braking, so a small authored impulse can move the bot before settling. Passed 512 native-server library tests and a prepared quick-melee regression with two in-range strikes against one bot and an out-of-range miss. Original-client knockback distance remains unverified.
 
 - Route physical contact hits such as quick melee through the ordinary attacker hit-notice delivery after actual health loss. Use the StateScript sample frame and settled damage, and omit feedback for impulse-only contact. Passed 511 native-server and 294 StateScript library tests, plus the prepared 104319 quick-melee damage and notice regression. Original-client verification remains pending.
