@@ -1540,6 +1540,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         self.machine
             .voice_poll
             .retain(|registered| *registered != key);
+        // A final shot can be due in the same tick that its authored
+        // subgraph (including the client presentation inputs) is torn down.
+        if matches!(kind, StateKind::WeaponVolley { .. }) {
+            self.report_volley(key)?;
+        }
         self.exit_subgraph(id, node, "m_subgraphPlug", depth + 1)?;
         match kind {
             StateKind::VoiceStimulus => {

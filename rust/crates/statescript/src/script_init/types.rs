@@ -610,3 +610,10 @@ pub struct ShotEvent {
     pub activation_ms: u64,
     pub ordinal: u32,
 }
+
+/// The authored presentation inputs sampled when an authoritative shot fires.
+#[derive(Clone, Debug)]
+pub struct ReportedShot {
+    pub event: ShotEvent,
+    pub presentation: Vec<(Variable, Value)>,
+}

@@ -208,8 +208,8 @@ mod world;
 pub use knockback::Knockback;
 pub use types::{
     AbilityCooldown, ChasePayload, Diagnostic, FrameAction, FrameCallout, InitFault, Instance,
-    Issue, NodeObservations, PendingTimer, RandomCheckpoint, ShotEvent, Snapshot, SpawnSearch,
-    SpawnSearchKey, StackBinding, State, StateKind,
+    Issue, NodeObservations, PendingTimer, RandomCheckpoint, ReportedShot, ShotEvent, Snapshot,
+    SpawnSearch, SpawnSearchKey, StackBinding, State, StateKind,
 };
 pub use world::{
     AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, ContactTarget,
@@ -415,6 +415,15 @@ impl Component {
 
     /// Consume reports only after the body graph path is ready for authority.
     pub fn take_shots(&mut self) -> Option<Vec<ShotEvent>> {
+        Some(
+            self.take_reported_shots()?
+                .into_iter()
+                .map(|shot| shot.event)
+                .collect(),
+        )
+    }
+
+    pub fn take_reported_shots(&mut self) -> Option<Vec<ReportedShot>> {
         let shots = std::mem::take(&mut self.machine.shots);
         self.snapshot()?.initialization_complete().then_some(shots)
     }
