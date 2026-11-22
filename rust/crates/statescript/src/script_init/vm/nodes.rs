@@ -790,6 +790,17 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
+            "STU_7106C356" => {
+                if !self.capture_callout(id, node) {
+                    self.report(
+                        self.site(id, node),
+                        Issue::UnsupportedField("callout action"),
+                    );
+                    return Ok(false);
+                }
+                self.follow(id, node, "m_outPlug", caller, depth)?;
+                Ok(true)
+            }
             "STU_D38D0035" | "STU_6E5C5F66" => {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)

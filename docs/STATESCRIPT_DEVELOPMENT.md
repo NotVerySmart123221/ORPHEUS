@@ -163,10 +163,17 @@ synthetic room geometry. With the asset categories supplied, the solo
 case passes the view query and evaluates the selected action's localized
 parameter row. `STU_7757D403` evaluates each pair's value and key in authored
 order. Expression opcode 19 collects its stack pairs into an ordered
-integer-keyed parameter map. The VM still reports actions `STU_71FE9852`
-and `STU_7106C356`; client presentation and live wheel input remain open.
+integer-keyed parameter map. A networked `STU_7106C356` uses the authored
+`m_BF5B22B7` scope rows to capture its effective variables. The owner
+and observer streams send the captured values with the short action.
+An unacknowledged action keeps its initial stamp and values when a later
+selection arrives. Full baselines omit prior callouts. The client retains
+its existing text rendering and audience checks. The prepared probe next
+reports action `STU_71FE9852` and icon lookup expression `STU_1ECB66A0`.
+Live wheel input and original-client presentation validation remain open.
 The pair and opcode behavior follows the [pinned Python reference for pairs](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/script/play.py#L81-L93)
 and [expression maps](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/script/expr.py#L832-L835).
+The synchronized variable capture follows the [pinned Python frame-action reference](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/script/driver.py#L781-L811).
 
 Use `scripts/build_runtime_state_metadata.py --asset-categories` with a
 local JSON catalog containing `version: 1`, `build: 104319`, and the asset

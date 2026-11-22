@@ -205,9 +205,9 @@ mod voice;
 mod world;
 
 pub use types::{
-    AbilityCooldown, ChasePayload, Diagnostic, InitFault, Instance, Issue, NodeObservations,
-    PendingTimer, RandomCheckpoint, ShotEvent, Snapshot, SpawnSearch, SpawnSearchKey, StackBinding,
-    State, StateKind,
+    AbilityCooldown, ChasePayload, Diagnostic, FrameAction, FrameCallout, InitFault, Instance,
+    Issue, NodeObservations, PendingTimer, RandomCheckpoint, ShotEvent, Snapshot, SpawnSearch,
+    SpawnSearchKey, StackBinding, State, StateKind,
 };
 pub use world::{
     AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, CreationKind,

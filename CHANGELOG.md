@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Queue authored localized callouts through the existing short frame-action encoder. Capture effective instance and entity variables at dispatch, retain the original stamp and values through a resend, and omit past callouts from new full baselines. Passed 766 public Rust library tests, the byte-exact short-action retry test, and the prepared 104319 probe for authored variable capture. Live wheel input remains disabled pending the remaining VM shapes and original-client verification.
+
 - Evaluate StateScript asset-keyed pair tables with expression values and support ordered integer parameter maps from expression opcode 19. Passed 765 public Rust library tests. A prepared 104319 wheel replay verifies that the selected action resolves to its localized parameter row. Client callout delivery and live wheel input remain open.
 
 - Extend the prepared 104319 wheel probe to replay the same packet with and without a frozen single-player room. The authored handlers receive the selection in both cases. With a room, the query completes and the probe reaches three remaining unsupported action or expression shapes. Passed the prepared probe and 764 public Rust library tests. Live wheel input stays disabled.

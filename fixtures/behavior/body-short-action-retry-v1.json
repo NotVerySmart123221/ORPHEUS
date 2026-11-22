@@ -12,6 +12,12 @@
   },
   "evidence": "synthetic-reference",
   "client_acceptance": "pending",
+  "capture": {
+    "instance_variable": 61,
+    "entity_variable": 92,
+    "first": [23, 41],
+    "second": [71, 18]
+  },
   "input": {
     "entity": 2147483649,
     "command_frame": 20,

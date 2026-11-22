@@ -13,7 +13,8 @@ use crate::bits::{BitError, BitWriter};
 use crate::script_codecs::{Codec, CodecTable, PayloadError, PayloadMode, StatePayload};
 use crate::script_expr::Variable;
 use crate::script_graph::{Graph, GraphStore};
-use crate::script_init::{ChasePayload, ShotEvent, Snapshot, StackBinding, StateKind};
+pub use crate::script_init::FrameCallout;
+use crate::script_init::{ChasePayload, FrameAction, ShotEvent, Snapshot, StackBinding, StateKind};
 use crate::script_stream::StreamError;
 use crate::script_wire::{self, Bindings, Value, ValueEncoding, Variables, WireError};
 
@@ -47,13 +48,6 @@ pub enum View {
     Observer,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FrameCallout {
-    pub serial: u32,
-    pub instance: u16,
-    pub position: u16,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectedSnapshot {
     pub(super) entity: u32,
@@ -62,7 +56,7 @@ pub struct ProjectedSnapshot {
     pub(super) variables: ProjectedVariables,
     pub(super) instances: BTreeMap<u16, ProjectedInstance>,
     pub(super) callout: u32,
-    pub(super) callouts: Vec<FrameCallout>,
+    pub(super) callouts: Vec<FrameAction>,
     pub(super) emit_events: bool,
 }
 
@@ -84,7 +78,10 @@ impl ProjectedSnapshot {
     }
 
     pub fn with_callout(mut self, callout: FrameCallout) -> Self {
-        self.callouts.push(callout);
+        self.callouts.push(FrameAction {
+            callout,
+            values: BTreeMap::new(),
+        });
         self
     }
 
@@ -160,7 +157,7 @@ impl ProjectedSnapshot {
             }
         }
         self.callouts
-            .retain(|callout| !unseen.contains(&callout.instance));
+            .retain(|action| !unseen.contains(&action.callout.instance));
     }
 
     fn extend_descendants(&self, selected: &mut BTreeSet<u16>) {
@@ -380,8 +377,8 @@ impl ProjectedVariables {
         )
     }
 
-    pub(super) fn seed_ammo(&mut self, variable: u32, ammo: i64) {
-        self.values.insert(variable, Value::Integer(ammo));
+    pub(super) fn seed_value(&mut self, variable: u32, value: Value) {
+        self.values.insert(variable, value);
         self.bindings.remove(&variable);
     }
 }

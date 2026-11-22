@@ -298,7 +298,7 @@ Mirrored under `fixtures/behavior/` so `rust` maintains a strict superset of `ma
 - **Verified by Python CI in `shared-behavior-contracts`** (Rust consumers tracked in [#61](https://github.com/leafall903/ORPHEUS/issues/61)):
   - `seismic-slam-wave-v1.json` (shockwave reach sampling & candidate dedup)
   - `seismic-slam-placement-v1.json` (airborne selector states & MoveTo handoff)
-  - `body-short-action-retry-v1.json` (short frame-action stamps, loss/retry & ACK retirement)
+  - `body-short-action-retry-v1.json` (short frame-action stamps, loss and ACK retirement, captured entity and instance variables after a later callout, and late observer admission)
   - `server-only-movement-v1.json` (channel-2 throttle mods & owner record tail window)
 - **Runtime-backed Python fixtures** (verified on `main` via `tests/runtime/`):
   - `player-voice-v1.json`, `wheel-emote-presentation-v1.json`, `wheel-emote-weapon-v1.json`

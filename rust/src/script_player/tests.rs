@@ -3337,6 +3337,17 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                     )),
                     "{local_callout:?}"
                 );
+                assert!(
+                    snapshot.frame_actions.iter().any(|action| {
+                        snapshot
+                            .instances
+                            .get(&action.callout.instance)
+                            .is_some_and(|instance| instance.graph == 0x0686)
+                            && action.values.len() == 2
+                    }),
+                    "{:?}",
+                    snapshot.frame_actions
+                );
             }
         }
         for diagnostic in snapshot

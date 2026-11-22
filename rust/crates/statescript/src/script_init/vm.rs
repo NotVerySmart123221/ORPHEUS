@@ -2250,6 +2250,60 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         Ok(true)
     }
 
+    fn capture_callout(&mut self, id: u16, node: &Node) -> bool {
+        use super::{FrameAction, FrameCallout};
+
+        const HISTORY: usize = 32;
+        let Some(remote) = usize::try_from(node.remote).ok() else {
+            return false;
+        };
+        if !node.is_action()
+            || !node.is_networked()
+            || self.machine.snapshot.instances[&id].is_server_only()
+            || self
+                .graph(id)
+                .remote_node(remote)
+                .is_none_or(|mapped| mapped.pos != node.pos)
+            || !matches!(
+                node.field("m_text").and_then(|text| text["$"].as_str()),
+                Some("STU_E7579408" | "STU_919FD47C" | "STUConfigVarExpression")
+            )
+        {
+            return false;
+        }
+        let Some(variables) = node.frame_action_variables() else {
+            return false;
+        };
+        let values = variables
+            .into_iter()
+            .map(|variable| {
+                let key = source_key(id, variable);
+                let owner = match key {
+                    VarKey::Entity(_) => 0,
+                    VarKey::Instance(instance, _) => instance,
+                };
+                ((owner, variable.id), self.machine.value(key, None))
+            })
+            .collect();
+        let history = &mut self.machine.snapshot.frame_actions;
+        let previous = history.back().map_or(0, |action| action.callout.serial);
+        let Some(serial) = previous.checked_add(1) else {
+            return false;
+        };
+        if history.len() == HISTORY {
+            history.pop_front();
+        }
+        history.push_back(FrameAction {
+            callout: FrameCallout {
+                serial,
+                instance: id,
+                position: node.pos,
+            },
+            values,
+        });
+        true
+    }
+
     fn play_actor_criterion(&mut self, id: u16, node: &Node) {
         let site = self.site(id, node);
         if self.machine.owner_dead || !self.world.actor_voice_available(site) {

@@ -392,6 +392,7 @@ impl Machine {
                 pending_timers: IndexMap::new(),
                 bindings: IndexMap::new(),
                 resolved_bindings: IndexMap::new(),
+                frame_actions: Default::default(),
                 diagnostics: Vec::new(),
                 #[cfg(feature = "node-observations")]
                 node_observations: Default::default(),

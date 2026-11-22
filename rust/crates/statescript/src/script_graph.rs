@@ -129,6 +129,34 @@ impl Node {
         !self.client_only && !self.server_only
     }
 
+    pub(crate) fn frame_action_variables(&self) -> Option<Vec<Variable>> {
+        let rows = self.fields.get("m_BF5B22B7").unwrap_or(&Value::Null);
+        if rows.is_null() {
+            return Some(Vec::new());
+        }
+        rows.as_array()?
+            .iter()
+            .map(|row| {
+                if row["$"] != "STUStatescriptRemoteSyncVar"
+                    || !native_fields(row, &["m_0D09D2D9", "m_56341592"])
+                {
+                    return None;
+                }
+                let guid = asset_guid(&row["m_0D09D2D9"])?;
+                let id = u32::from(guid as u16);
+                if guid >> 48 != 0x0d80 || id == 0 {
+                    return None;
+                }
+                let scope = match row["m_56341592"].as_u64()? {
+                    0 => Scope::Instance,
+                    1 => Scope::Entity,
+                    _ => return None,
+                };
+                Some(Variable { id, scope })
+            })
+            .collect()
+    }
+
     pub fn is_state(&self) -> bool {
         self.state_behavior.is_some() || self.fields.get("m_2BBEEAB8").is_some_and(truthy)
     }
