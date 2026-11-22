@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Track authored projectile range separately from lifetime so falling and rising shots terminate at their actual travelled distance. Use the travelled distance for direct-hit falloff and keep the final partial sweep and optional expiry blast. The Inspector workspace passed 931 public tests and four prepared combat cases. Original-client range and impact timing remain open.
+
 - Extend the prepared encrypted ground-shot checks to Particle Cannon. Verify the confirmed projectile's impact retirement, self-damage across the owner health pools, upward movement, and an owner correction on a post-impact command frame. The Inspector workspace passed 931 public tests, and four prepared cases passed. Original-client visuals and movement remain open.
 
 - Admit direct single-shot projectiles that use either supported literal aim slot and the sampled command pose. Keep dynamic aim and spread configurations out of the straight-flight path. A prepared Practice Range replay verifies Zarya's secondary-fire launch and owner egress independently of the primary beam. The Inspector workspace passed 931 public tests, and the prepared replay and both Helix loopbacks passed. Impact and owner movement for Zarya remain open.

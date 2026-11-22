@@ -1048,7 +1048,7 @@ fn normal_cassidy_flashbang_input_produces_authored_gravity_and_range_blast() {
     assert_eq!(launch.gravity, Some(20.0));
     assert!(launch.ballistics.blast.as_ref().unwrap().detonate_on_expiry);
     assert_eq!(launch.ballistics.speed, 30.0);
-    assert!((launch.ballistics.lifetime - 7.0 / 30.0).abs() < 1e-8);
+    assert_eq!(launch.ballistics.max_distance, Some(7.0));
     assert_eq!(launch.ballistics.definition, Some(0x0400_0000_0000_037d));
     let blast = launch.ballistics.blast.as_ref().unwrap();
     assert_eq!(blast.hit.amount, 25.0);

@@ -95,6 +95,12 @@ reports an upward launch. The mixed-input matrix still stops on an
 unsupported primary `TrackRay` state. Original-client rendering and movement
 for Zarya remain open.
 
+A synthetic shot with gravity now expires at its authored flight distance.
+The range and lifetime can end independently. Original-client impact timing
+at that limit remains open. The local deployable graph probe resolves the
+mine definition and its linked actor graph. Standalone startup still requires
+creator and health-pool services and additional StateScript state support.
+
 The follow-up timing capture accumulated 8,819 missed ticks. Misses
 began well before the first recorded shot and continued during intervals
 with an unchanged ray sample. It also ran with synchronous owner traces

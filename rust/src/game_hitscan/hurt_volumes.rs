@@ -276,6 +276,7 @@ mod tests {
                 ProjectileBallistics {
                     speed: 600.0,
                     lifetime: 0.5,
+                    max_distance: None,
                     radius: 0.0,
                     definition: None,
                     direct: Some(hit),

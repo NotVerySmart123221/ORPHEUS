@@ -31,6 +31,7 @@ const IMPACT_RAY_OFFSET: f64 = 1e-4;
 pub struct ProjectileBallistics {
     pub speed: f64,
     pub lifetime: f64,
+    pub max_distance: Option<f64>,
     pub radius: f64,
     pub definition: Option<u64>,
     pub direct: Option<HitDefinition>,
@@ -73,10 +74,7 @@ impl ProjectileBallistics {
             lifetime = DEFAULT_LIFETIME;
         }
         let reach = authored_number(field("m_FEC435C6"), 0.0, &mut evaluate)?;
-        if reach != 0.0 {
-            lifetime = lifetime.min(reach / speed);
-        }
-        if !lifetime.is_finite() || lifetime <= 0.0 {
+        if !lifetime.is_finite() || lifetime <= 0.0 || !reach.is_finite() || reach < 0.0 {
             return Ok(None);
         }
         let definition = match field("m_projectileEntity.m_entityDef") {
@@ -144,6 +142,7 @@ impl ProjectileBallistics {
         Ok(Some(Self {
             speed,
             lifetime,
+            max_distance: (reach > 0.0).then_some(reach),
             radius,
             definition,
             direct,
@@ -183,6 +182,7 @@ pub struct ProjectileFlight {
     direction: Vec3,
     remaining: f64,
     travelled: f64,
+    distance_travelled: f64,
     last_tick: Option<u32>,
     ended: bool,
     direct_falloff: bool,
@@ -220,6 +220,9 @@ impl ProjectileFlight {
             || !ballistics.lifetime.is_finite()
             || ballistics.lifetime <= 0.0
             || !(ballistics.speed * ballistics.lifetime).is_finite()
+            || ballistics
+                .max_distance
+                .is_some_and(|range| !range.is_finite() || range <= 0.0)
             || !position.into_iter().chain(direction).all(f64::is_finite)
             || (direction.iter().map(|value| value * value).sum::<f64>() - 1.0).abs() > 1e-6
         {
@@ -235,6 +238,7 @@ impl ProjectileFlight {
             position,
             direction,
             travelled: 0.0,
+            distance_travelled: 0.0,
             last_tick: fired_at,
             ended: false,
             direct_falloff: false,
@@ -314,7 +318,12 @@ impl ProjectileFlight {
         shooter: Option<(u32, HurtPose)>,
         mut wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
     ) -> Result<Option<FlightEnd>, IndexError> {
-        let reach = speed * duration;
+        let step = speed * duration;
+        let range_left = self
+            .ballistics
+            .max_distance
+            .map(|range| (range - self.distance_travelled).max(0.0));
+        let reach = range_left.map_or(step, |range| step.min(range));
         let mut closest = None;
         for &(entity, target) in targets {
             if let Some((distance, _)) =
@@ -336,9 +345,15 @@ impl ProjectileFlight {
         }
         let Some((distance, target)) = closest else {
             self.position = along(self.position, self.direction, reach);
-            self.travelled += duration;
-            self.remaining -= duration;
-            if self.remaining <= 0.0 {
+            let spent = if reach < step {
+                reach / speed
+            } else {
+                duration
+            };
+            self.travelled += spent;
+            self.distance_travelled += reach;
+            self.remaining -= spent;
+            if self.remaining <= 0.0 || range_left == Some(reach) {
                 let impacts = if self.expiry_blast {
                     self.splash(self.position, self.position, targets, shooter, &mut wall)?
                 } else {
@@ -359,7 +374,7 @@ impl ProjectileFlight {
                 entity,
                 distance,
                 damage: if self.direct_falloff {
-                    direct.damage_at(self.travelled * self.ballistics.speed + distance, false)
+                    direct.damage_at(self.distance_travelled + distance, false)
                 } else {
                     direct.amount
                 },
@@ -380,6 +395,7 @@ impl ProjectileFlight {
         };
         impacts.extend(self.splash(point, origin, targets, shooter, &mut wall)?);
         self.position = point;
+        self.distance_travelled += distance;
         if speed > EPSILON {
             self.travelled += distance / speed;
         }
@@ -585,6 +601,7 @@ mod tests {
         ProjectileBallistics {
             speed: 50.0,
             lifetime: 2.0,
+            max_distance: None,
             radius: 0.0,
             definition: Some(0x0400_0000_0000_072c),
             direct: Some(hit),
@@ -707,7 +724,8 @@ mod tests {
             for blocked in [false, true] {
                 let fields = serde_json::json!({
                     "m_projectileSpeed": speed,
-                    "m_projectileLifetime": range / speed,
+                    "m_projectileLifetime": 1.0,
+                    "m_FEC435C6": range,
                     "m_projectileMotions":[{"$":"STU_E1A5B579","m_599AB8D7":input["gravity"]}],
                     "m_D2D11CE9": {
                         "$": "STU_4AA6CA44",
@@ -747,7 +765,8 @@ mod tests {
                 assert!(end.expired);
                 assert_eq!(end.impact, enabled);
                 assert!(end.point[1] < 1.55);
-                assert!((end.point[2] - direction[2] * range).abs() < 1e-6);
+                assert!((flight.distance_travelled - range).abs() < 1e-9);
+                assert!((end.point[2] - expected["range_end_z"].as_f64().unwrap()).abs() < 1e-6);
                 let hits: Vec<_> = end
                     .impacts
                     .iter()
