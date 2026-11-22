@@ -399,19 +399,33 @@ impl RoomSimulation {
         let prev = self.hurt_voice_history.get(&speaker_wire).copied();
         let cooldown = self.combat_voice.hurt_cooldown_ticks();
         if !killed
-            && prev.is_some_and(|(last_frame, _)| {
-                frame >= last_frame && frame.saturating_sub(last_frame) < cooldown
-            })
+            && prev.is_some_and(|(last_frame, _)| frame.saturating_sub(last_frame) < cooldown)
         {
             return;
         }
         let pick = prev.map_or(0, |(_, count)| count);
-        let Some((stimulus, line)) = self.combat_voice.hurt_cue(is_bot, critical, killed, pick)
+        let body = if is_bot {
+            self.by_wire.get(&speaker_wire).and_then(|&entity| {
+                self.world
+                    .get::<BotState>(entity)
+                    .map(|state| state.bot.spawn.body)
+            })
+        } else {
+            self.players_by_wire.get(&speaker_wire).and_then(|&entity| {
+                self.world
+                    .get::<PlayerBodyState>(entity)
+                    .map(|state| state.body_template)
+            })
+        };
+        let Some((stimulus, line)) = self
+            .combat_voice
+            .hurt_cue(body, is_bot, critical, killed, pick)
         else {
             return;
         };
+        let last_frame = prev.map_or(frame, |(last, _)| last.max(frame));
         self.hurt_voice_history
-            .insert(speaker_wire, (frame, pick.wrapping_add(1)));
+            .insert(speaker_wire, (last_frame, pick.wrapping_add(1)));
         for (&listener_wire, &player_entity) in &self.players_by_wire {
             let Some(player) = self
                 .world

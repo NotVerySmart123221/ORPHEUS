@@ -6,6 +6,10 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Allow locally configured hurt and death voice cues to select the victim's body definition. Older damage frames no longer bypass or rewind the victim's hurt voice cooldown. Verified with the synthetic hurt and death delivery regression and the inspector-feature voice test group. Original-client playback remains unverified for this change.
+
+- Preserve the optional combat voice catalog and its manifest hash when preparing a runtime pack. This keeps locally configured announcer, hurt, and death cues available after repacking.
+
 - Add the Linux Proton runtime resolver (`orpheus_proton`) and handle-bound x64 Windows/Wine relay helper (`relay/owwfd_inject.cpp`, documented in `docs/PROTON_HELPER.md`). `orpheus_proton` resolves `WINEPREFIX`, `STEAM_COMPAT_TOOL_PATHS` (confirmed against the pathname column of `/proc/<pid>/maps`, rejecting relative paths), and Wine sync flags (`WINEFSYNC`, `WINEESYNC`, `WINE_NTSYNC`, `PROTON_ENABLE_NTSYNC`, `WINEFUTEX2`) from `--runtime-pid` without claiming Linux-to-Windows PID identity. Injection requires explicit `--win-pid`, `--creation-time`, and `--game-exe` (from `--list`) on a single retained Windows process handle, with opt-in `--start-worker` for relay DLLs that export `worker`. Verified with workspace Clippy/fmt, isolated Wine checks on Proton 10.0 and Proton 11.0 (including live PID-reuse rejection via `creation_time`), and live 104319 client login to the main menu across the four tested Valve Proton builds (Proton 10.0, Proton 11.0, Proton Experimental, and Proton Hotfix).
 
 - Add optional data-driven actor hurt and death voice cues (`hurt_cooldown_ticks` and `hurt` `minor`/`severe`/`death`/`bot_death` tables) to `CombatVoiceCatalog` and wire authoritative bot and player damage settlement in `RoomSimulation` to emit cooldown-gated hurt and lethal voice cues through the room cue queue.

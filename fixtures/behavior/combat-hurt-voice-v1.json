@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "case_id": "combat-hurt-voice.per-body-cooldown.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "input": {
+    "catalog": {
+      "hurt_cooldown_ticks": 4,
+      "hurt_by_body": {
+        "0x0400000000000002": {
+          "minor": {
+            "stimulus": "0x0EE0000000000003",
+            "lines": [
+              "0x0760000000000106"
+            ]
+          },
+          "severe": {
+            "stimulus": "0x0EE0000000000004",
+            "lines": [
+              "0x076000000000010B"
+            ]
+          },
+          "bot_death": {
+            "stimulus": "0x0EE0000000000001",
+            "lines": [
+              "0x076000000000019E"
+            ]
+          }
+        }
+      }
+    },
+    "frame_offsets": {
+      "first": 1,
+      "late": 0,
+      "follow_up": 3,
+      "critical": 5,
+      "lethal": 6
+    }
+  },
+  "expected": {
+    "first_line": 531424756029718790,
+    "late_and_follow_up_cues": 0,
+    "critical_line": 531424756029718795,
+    "lethal_line": 531424756029718942
+  }
+}

@@ -83,6 +83,15 @@ and mode respawn delays. Practice Range has a shipped three-second default.
 | `data/lobby_state_blob.key` | Exact 64-byte lobby handshake signing key |
 | `data/junkenstein/junkenstein-npcs.json` | Explicit NPC definitions required for Junkenstein enemy tests/runs |
 | `data/combat_hurt_volumes.json` | Optional local measurements of standing bot combat regions, packed and hashed when present |
+| `data/combat_voice_174.json` | Optional local multikill and actor hurt/death voice catalog, packed and hashed when present |
+
+To enable actor hurt and death voice cues, provide locally verified entries in
+`hurt.minor`, `hurt.severe`, `hurt.death`, or `hurt.bot_death` and a positive
+`hurt_cooldown_ticks`. Each entry specifies a `stimulus` and a nonempty list
+of `lines`. Prefer `hurt_by_body` to bind this same table to a specific body
+definition GUID. A matched body uses its own table. An unmatched body uses
+the optional shared `hurt` table when present. A catalog containing only
+`multikills` enables announcer cues.
 
 The combat calibration file has `version: 1` and a `bodies` object keyed
 by body-definition ID. Each record contains a `body` capsule and an optional
