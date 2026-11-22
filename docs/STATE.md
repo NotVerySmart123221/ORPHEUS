@@ -10,9 +10,9 @@ The [pinned Python → Rust parity matrix](https://github.com/leafall903/ORPHEUS
 
 | Lane / Suite | Scope Verified in CI (`.github/workflows/public-checks.yml`) |
 | --- | --- |
-| **Linux workspace** | Default-feature workspace check and full Inspector-feature workspace tests. |
-| **Windows workspace** | Default and Inspector workspace tests and Clippy, one formatting check, and a separate Rust 1.85.0 compatibility check. Named shared contract results are verified from the workspace test output. |
-| **Cross-language contracts** | Runs the pinned Python consumers against the Rust checkout's fixtures. The Windows workspace jobs cover the Rust consumers, including JAM framing, strict World queries, and profile settings. |
+| **Linux workspace** | Default-feature workspace build check, profile persistence on the Linux filesystem, and encrypted UDP room recovery on the Linux worker. |
+| **Windows workspace** | Full default workspace tests and Clippy, plus focused Inspector HTTP, owner trace, CLI and node-observation tests. Includes formatting and a separate Rust 1.85.0 check. Named shared contract results are verified from the default workspace test output. |
+| **Cross-language contracts** | Runs the pinned Python consumers against the Rust checkout's fixtures. The Windows default workspace job covers the Rust consumers, including JAM framing, strict World queries, and profile settings. The Python job also runs synthetic checks against the pinned wire reader. |
 | **C++ gallery preview policy** | `scripts/check_gallery_preview_policy.py` compiles `relay/gallery_preview_policy.h` and checks `18` resource-selection + `6` owned-tree pruning cases against `gallery-preview-policy-v1.json`. |
 
 [#61](https://github.com/leafall903/ORPHEUS/issues/61) is complete. [#79](https://github.com/leafall903/ORPHEUS/issues/79) records the four Rust consumers and [#80](https://github.com/leafall903/ORPHEUS/issues/80) records the Python StateScript consumers.

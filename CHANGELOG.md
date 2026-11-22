@@ -17,6 +17,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 - Drive authored firing placements through the stock bot's private StateScript root and body-defined weapon inputs. Route the emitted projectiles to the existing room flight and damage settlement. A synthetic state lifecycle test, 468 server library tests, and prepared 104319 probes for projectile launch, damage to both actor types, and bot nameplate respawn passed. Client-visible projectile delivery remains open.
 
+- Run the full Rust suite once per PR in Windows default mode. Windows Inspector and Linux exercise their feature and platform checks. The archived Python server comparison tool tests run on demand, and the public checks exercise the pinned wire reader.
+
 - Deduplicated protected Rust CI runs. Required PR checks still cover Windows default and Inspector, Linux, the minimum Rust version, Python behavior contracts, and C++ preview policy. The Windows workspace runs now prove that named contracts passed from their existing test output. Automatic post-merge checks are limited to workflow and build-input changes.
 - Combined the owner-host capability checks into one test with the same valid, foreign, and unbound actor cases.
 - Closed #121 after the maintainer confirmed the Practice Range client crash was fixed in an original-client retest.
