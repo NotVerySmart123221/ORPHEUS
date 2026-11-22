@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Decode native view target trackers from their operand fields. The VM follows the declared sampling interval, writes ordered results, and distinguishes an unavailable room query from a completed empty search. The room can prove an empty search from its frozen actor snapshot. Passed 763 Rust library tests. The prepared 104319 wheel probe reached the room query and reported its unavailability without a spatial snapshot. Occupied-room collision profiles and ranking are still pending.
+
 - Resolve self-directed StateScript voice criteria through an optional local actor voice catalog. Use the speaker's current hero and skin voice set to select a playable line and submit it to the shared room cue queue for living allies and the speaker. Passed 771 Rust library tests and a probe of the local 104319 voice catalog. The wheel probe still reaches the unsupported `TrackTargets` state.
 
 - Route stock bot StateScript messages through the shared room queue. Deliver registered messages on the receiver's next VM frame and discard directed messages if the recipient dies before dispatch. Passed 759 Rust library tests and prepared 104319 probes for firing, damage, and respawn animation. The prepared wheel probe still reports the unsupported `TrackTargets` state.

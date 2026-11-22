@@ -4,15 +4,101 @@ use std::collections::BTreeMap;
 
 use crate::{
     script_expr::{self, EvalError},
-    script_init::machine::ActorTargetGuard,
+    script_graph::Node,
+    script_init::{ViewTargetQuery, machine::ActorTargetGuard},
     script_wire::{Value, Variables},
 };
 
-use super::{InitFault, Issue, Startup, StateKey, StateKind, Vm, World, field};
+use super::super::shapes::pool_number;
+use super::{InitFault, Issue, Startup, StateKey, StateKind, Vm, World, field, source_key};
 
 const MAX_TRACKED_TARGETS: usize = 64;
 
 impl<W: World> Vm<'_, '_, '_, W> {
+    pub(super) fn sample_view_targets(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<bool, InitFault> {
+        let track = node.view_track().expect("registered view target shape");
+        let site = self.site(key.instance, node);
+        let frame = self.machine.frame;
+        let state = self.state_mut(key).expect("active view tracker");
+        let StateKind::ViewTargets { next_sample } = &mut state.kind else {
+            unreachable!("view tracker dispatcher");
+        };
+        let elapsed = frame.saturating_sub(*next_sample);
+        *next_sample = frame.saturating_add(track.period - elapsed % track.period);
+        let mut evaluate = |config| self.evaluate_at(site, config, None);
+        let (
+            Some(Value::Entity(source)),
+            Some(Value::Vector(offset)),
+            Some(range),
+            Some(aperture),
+            Some(Value::Integer(limit)),
+        ) = (
+            evaluate(track.origin),
+            evaluate(track.offset),
+            evaluate(track.range).and_then(pool_number),
+            evaluate(track.aperture).and_then(pool_number),
+            evaluate(track.limit),
+        )
+        else {
+            return Ok(false);
+        };
+        let Some(limit) = usize::try_from(limit)
+            .ok()
+            .filter(|limit| *limit <= MAX_TRACKED_TARGETS)
+        else {
+            self.report(site, Issue::UnsupportedField("view target limit"));
+            return Ok(false);
+        };
+        if source != site.entity
+            || !offset.into_iter().all(f64::is_finite)
+            || !range.is_finite()
+            || range <= 0.0
+            || !(0.0 < aperture && aperture < 180.0)
+        {
+            self.report(site, Issue::UnsupportedField("view target geometry"));
+            return Ok(false);
+        }
+        let query = ViewTargetQuery {
+            source,
+            offset,
+            range,
+            aperture,
+            limit,
+            profile: track.profile,
+            masks: track.masks,
+            ranking: track.ranking,
+        };
+        let Some(targets) = self.world.view_targets(site, &query) else {
+            self.report(
+                site,
+                Issue::UnsupportedField("view target query unavailable"),
+            );
+            return Ok(false);
+        };
+        if targets.len() > limit
+            || targets.iter().enumerate().any(|(index, &target)| {
+                target == source
+                    || !script_expr::valid_entity(target)
+                    || targets[..index].contains(&target)
+            })
+        {
+            self.report(site, Issue::UnsupportedField("view target results"));
+            return Ok(false);
+        }
+        self.write(
+            source_key(key.instance, track.output),
+            Value::Array(targets.iter().copied().map(Value::Entity).collect()),
+        )?;
+        self.state_mut(key)
+            .expect("active view tracker")
+            .tracked_targets = targets;
+        Ok(true)
+    }
+
     pub(super) fn sample_target_children(&mut self, key: StateKey) -> Result<(), InitFault> {
         let frame = self.machine.frame;
         let node = self

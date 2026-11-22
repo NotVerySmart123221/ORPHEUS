@@ -1566,6 +1566,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 };
                 self.client_pulse(id, count)
             }
+            "STUStatescriptStateTrackTargets"
+                if registration.shape(node.view_track().is_some()) =>
+            {
+                StateKind::ViewTargets {
+                    next_sample: self.machine.frame,
+                }
+            }
             // 0043:11 and 0257:11 use unimplemented client/world target tracking
             // in the Python reference (`world.tracked_targets` returns
             // NotImplemented / empty targets).
@@ -1789,6 +1796,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 }
             }
             StateKind::TrackedTargets => self.refresh_tracked_targets(key, node)?,
+            StateKind::ViewTargets { .. } => {
+                self.register_tick(key, self.machine.now_ms);
+                if !self.sample_view_targets(key, node)? {
+                    return Ok(());
+                }
+            }
             StateKind::DeadeyeEffects => self.refresh_deadeye_effects(key, node)?,
             StateKind::WitchStaffEffect | StateKind::WitchStaffHealing => {
                 self.register_tick(key, self.machine.now_ms)

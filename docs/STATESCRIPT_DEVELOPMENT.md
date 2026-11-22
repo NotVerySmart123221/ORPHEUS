@@ -137,9 +137,12 @@ a matching pair returns false. Keep the extracted catalog in the private
 runtime bundle. The [wheel input contract](../fixtures/behavior/wheel-selection-ingress-v1.json)
 uses synthetic input and generation changes. The build-specific wire layout
 and category fields are documented in the [Python reference](https://github.com/leafall903/ORPHEUS/blob/499b9871b1ff9bf3d86715b7648626b18b154f0d/docs/COMMUNICATION_WHEEL.txt).
-Live owner input stays disabled while the reached `TrackTargets` shape
-is unsupported. The prepared probe runs the authored path and records
-the remaining diagnostic.
+Live owner input stays disabled while target selection in occupied rooms
+is pending. The native `TrackTargets` view shape passes its origin, offset,
+radius, aperture, limit, filter masks, ranking and sight profile to the room.
+The host can prove an empty result when the frozen room has no other
+living actors. A missing or occupied snapshot without a visibility
+implementation reports query unavailability.
 
 Use `scripts/build_runtime_state_metadata.py --asset-categories` with a
 local JSON catalog containing `version: 1`, `build: 104319`, and the asset

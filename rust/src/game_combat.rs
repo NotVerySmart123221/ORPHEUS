@@ -336,6 +336,21 @@ impl RoomSpatialFrame {
         &self.candidates
     }
 
+    pub(crate) fn empty_view_targets(
+        &self,
+        query: &crate::script_init::ViewTargetQuery<'_>,
+    ) -> Option<Vec<u32>> {
+        self.actor_sample(query.source)?;
+        // Visibility and ranking cannot add a target when the frozen room
+        // contains none. Occupied scenes need the collision-profile query.
+        (query.limit == 0
+            || self
+                .candidates
+                .iter()
+                .all(|actor| actor.entity == query.source))
+        .then(Vec::new)
+    }
+
     pub(crate) fn actor_pose(&self, entity: u32) -> Option<(Vec3, [i32; 2])> {
         let (candidate, target) = self.actor_sample(entity)?;
         Some((candidate.position, target.angles))

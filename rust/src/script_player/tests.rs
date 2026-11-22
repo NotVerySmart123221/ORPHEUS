@@ -3264,6 +3264,14 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
             matches!(&diagnostic.issue, crate::script_init::Issue::Expression(crate::script_expr::EvalError::UnsupportedConfig(class))
                 if class == "STU_4460419A")
         }));
+        assert!(
+            snapshot.diagnostics.iter().any(|diagnostic| {
+                diagnostic.issue
+                    == crate::script_init::Issue::UnsupportedField("view target query unavailable")
+            }),
+            "{:?}",
+            snapshot.diagnostics
+        );
     }
     for diagnostic in snapshot
         .diagnostics

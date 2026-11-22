@@ -489,6 +489,17 @@ impl World for BodyWorld {
         Some(self.spatial_frame.as_deref()?.candidates())
     }
 
+    fn view_targets(
+        &self,
+        site: Site,
+        query: &crate::script_init::ViewTargetQuery<'_>,
+    ) -> Option<Vec<u32>> {
+        if !self.is_player_site(site) || query.source != site.entity {
+            return None;
+        }
+        self.spatial_frame.as_deref()?.empty_view_targets(query)
+    }
+
     fn room_entities(&self) -> Option<&BTreeMap<u32, RoomEntityFacts>> {
         self.spatial_frame.as_deref()?.entity_facts()
     }

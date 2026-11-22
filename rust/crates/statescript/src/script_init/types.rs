@@ -29,6 +29,9 @@ pub enum StateKind {
     RollMovementParameter,
     ExplosionContact,
     TrackedTargets,
+    ViewTargets {
+        next_sample: u32,
+    },
     DeadeyeEffects,
     WitchStaffEffect,
     WitchStaffHealing,

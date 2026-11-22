@@ -27,6 +27,7 @@ use crate::{
 };
 
 mod charge_compatibility;
+mod view_targets;
 
 use charge_compatibility::validate_charge_compatibility;
 pub use charge_compatibility::{ChargeCompatibility, ChargeStateBinding};
@@ -2030,6 +2031,7 @@ impl GraphStore {
                     || node.declares_room_cue_action()
                     || node.directed_numeric_parameter().is_some()
                     || node.tracks_room_actor_identity()
+                    || node.view_track().is_some()
                 {
                     requirements.needs = requirements.needs.max(RoomSpatialNeeds::Queries);
                 }

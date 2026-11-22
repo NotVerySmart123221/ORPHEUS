@@ -21,6 +21,19 @@ pub struct Site {
     pub node: Option<u16>,
 }
 
+/// The body, aperture, collision profile and ranking requested by a view tracker.
+#[derive(Debug)]
+pub struct ViewTargetQuery<'a> {
+    pub source: u32,
+    pub offset: [f64; 3],
+    pub range: f64,
+    pub aperture: f64,
+    pub limit: usize,
+    pub profile: u64,
+    pub masks: [u64; 3],
+    pub ranking: &'a Json,
+}
+
 /// Authoritative movement facts captured from a single owner pose.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MovementSample {
@@ -526,6 +539,11 @@ pub trait World {
         _radius: f64,
         _filter: &Json,
     ) -> Option<Vec<u32>> {
+        None
+    }
+
+    /// None leaves the view query unavailable. An empty list is a completed query.
+    fn view_targets(&self, _site: Site, _query: &ViewTargetQuery<'_>) -> Option<Vec<u32>> {
         None
     }
     fn witch_staff_targets(&self, _site: Site, _radius: f64) -> Option<Vec<u32>> {

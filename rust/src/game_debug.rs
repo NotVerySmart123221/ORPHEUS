@@ -571,6 +571,7 @@ fn state_kind_summary(kind: StateKind) -> (&'static str, Option<u8>) {
         StateKind::RollMovementParameter => ("RollMovementParameter", None),
         StateKind::ExplosionContact => ("ExplosionContact", None),
         StateKind::TrackedTargets => ("TrackedTargets", None),
+        StateKind::ViewTargets { .. } => ("ViewTargets", None),
         StateKind::DeadeyeEffects => ("DeadeyeEffects", None),
         StateKind::WitchStaffEffect => ("WitchStaffEffect", None),
         StateKind::WitchStaffHealing => ("WitchStaffHealing", None),
