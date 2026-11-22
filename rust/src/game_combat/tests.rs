@@ -2379,7 +2379,7 @@ pub(super) fn fixture_ground() -> crate::collision_scene::CollisionScene {
 }
 
 #[test]
-fn npc_projectiles_share_calibrated_body_contact_and_target_admission() {
+fn npc_weapons_share_calibrated_body_contact_and_target_admission() {
     use crate::{
         game_hitscan::{DamageTags, HurtVolumeCatalog},
         mover_settings::MoverCatalog,
@@ -2390,6 +2390,7 @@ fn npc_projectiles_share_calibrated_body_contact_and_target_admission() {
         height: f64,
         free_for_all: bool,
         expected_damage: Option<f64>,
+        expected_hitscan_damage: Option<f64>,
     }
     #[derive(serde::Deserialize)]
     struct Contract {
@@ -2410,6 +2411,27 @@ fn npc_projectiles_share_calibrated_body_contact_and_target_admission() {
         let queries =
             BotQueries::new(case.free_for_all, &movers, &ground, None).with_hurt_volumes(&volumes);
         let mut room = RoomSimulation::new(bots).unwrap();
+        let definition = HitDefinition {
+            tags: DamageTags::EMPTY,
+            amount: 10.0,
+            loadout: None,
+            critical: 2.0,
+            falloff: None,
+        };
+        let origin = [0.0, case.height, 0.0];
+        let direction = [1.0, 0.0, 0.0];
+        let hitscan = HitscanShot::with_direction(origin, direction, 8.0, definition);
+        let selected = room.npc_weapon_targets(&queries).unwrap();
+        let contacts = selected
+            .iter()
+            .filter_map(|candidate| candidate.hostile_to(source, 1, case.free_for_all));
+        let impact = hitscan
+            .resolve_combat(contacts, |o, d, r| queries.hitscan_wall(o, d, r))
+            .unwrap();
+        assert_eq!(
+            impact.map(|impact| (impact.entity, impact.damage)),
+            case.expected_hitscan_damage.map(|amount| (target, amount))
+        );
         let flight = ProjectileFlight::new(
             ProjectileBallistics {
                 speed: 200.0,
@@ -2419,17 +2441,11 @@ fn npc_projectiles_share_calibrated_body_contact_and_target_admission() {
                 terrain_radius: 0.0,
                 terrain_rebound: None,
                 definition: None,
-                direct: Some(HitDefinition {
-                    tags: DamageTags::EMPTY,
-                    amount: 10.0,
-                    loadout: None,
-                    critical: 2.0,
-                    falloff: None,
-                }),
+                direct: Some(definition),
                 blast: None,
             },
-            [0.0, case.height, 0.0],
-            [1.0, 0.0, 0.0],
+            origin,
+            direction,
             None,
         )
         .unwrap();

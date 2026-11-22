@@ -62,6 +62,8 @@ The Rust-only [stock bot script isolation fixture](../fixtures/behavior/stock-bo
 
 The Rust-only [combat hurt volumes fixture](../fixtures/behavior/combat-hurt-volumes-v1.json) checks head and body classification, lateral contact, open space, and wall occlusion. Hitscan and projectiles use the same combat shape. Bodies without an optional hurt profile keep the compatibility proxy.
 
+The Rust-only [NPC weapon targeting fixture](../fixtures/behavior/npc-projectile-targeting-v1.json) checks that both NPC hitscan and flight use the live room's body-specific combat volumes. It covers an exposed head above the movement capsule, empty space, and same-team admission in team and free-for-all modes. The firing body's own contact is excluded in both modes.
+
 The Rust-only [projectile self-splash fixture](../fixtures/behavior/projectile-self-splash-v1.json) covers the authored scale, visibility checks, and absent configuration. The owner can take splash without blocking their own projectile. A room regression covers health and death feedback.
 
 The Rust-only [combat knockback fixture](../fixtures/behavior/combat-knockback-v1.json) exercises authored ring order, an exclusive outer radius, and the horizontal and upward channels independently of damage. Companion tests cover the authored self-impulse switch and scale, occluded and zero-damage self impulses, a stationary bot's movement, and owner correction with and without an active script. The remaining ring field and original-client movement are still unverified.

@@ -12,8 +12,8 @@
     }
   },
   "cases": [
-    {"height": 3.25, "free_for_all": true, "expected_damage": 10.0},
-    {"height": 3.25, "free_for_all": false, "expected_damage": null},
-    {"height": 2.6, "free_for_all": true, "expected_damage": null}
+    {"height": 3.25, "free_for_all": true, "expected_damage": 10.0, "expected_hitscan_damage": 20.0},
+    {"height": 3.25, "free_for_all": false, "expected_damage": null, "expected_hitscan_damage": null},
+    {"height": 2.6, "free_for_all": true, "expected_damage": null, "expected_hitscan_damage": null}
   ]
 }

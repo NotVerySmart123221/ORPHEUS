@@ -1108,6 +1108,13 @@ it. Healing and VM-local changes without a sampled room frame leave
 it unavailable. Cue resources are supplied by authored content.
 [Synthetic timed elimination contract](../fixtures/behavior/script-timed-elimination-cues-v1.json)
 
+The 104319 hit-marker message updates the shooter's HUD. The damage
+feedback path uses the struck body's combat event for victim effects
+and audio. Keep speaker and recipient selection tied to the settled
+source or victim for each cue. A severe victim cue does not establish
+the shooter's native headshot sound. That sound still needs a verified
+104319 playback trigger.
+
 Weapon notifications carry the target's captured filter flags, target
 tags, and script variables. A room-settled health change from a distinct
 sampled source can carry the same facts after applying the signed pool

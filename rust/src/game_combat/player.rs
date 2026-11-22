@@ -941,17 +941,17 @@ impl RoomSimulation {
         }
     }
 
-    pub(super) fn extend_player_projectile_targets(
+    pub(super) fn extend_player_weapon_targets(
         &self,
         queries: &crate::scene_assets::BotQueries<'_>,
-        targets: &mut Vec<super::ProjectileTarget>,
+        targets: &mut Vec<super::WeaponTarget>,
     ) {
         targets.extend(
             self.players_by_wire
                 .values()
                 .filter_map(|&entity| self.world.get::<PlayerBodyState>(entity))
                 .filter(|state| state.alive())
-                .map(|state| super::ProjectileTarget {
+                .map(|state| super::WeaponTarget {
                     wire: state.id.entity,
                     team: state.team,
                     pose: queries.hurt_pose(state.body_template, state.target_pose()),

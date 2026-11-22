@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Route NPC hitscan through the same calibrated body volumes and team admission as projectiles. Preserve target sampling before NPC updates for hitscan and after movement for flight. Passed 513 inspector-enabled library tests and the prepared 104319 bot projectile probe. Client feedback and visuals remain pending.
+
 - Apply authored direct-hit damage falloff to player and NPC projectiles using distance travelled across simulation ticks. Missing falloff fields retain base damage. Passed 513 inspector-feature Rust library tests. Original-client verification remains pending.
 
 - Use the same live target admission and calibrated body volumes for player and NPC projectiles. NPC flights share a room target snapshot per simulation tick. Free-for-all projectiles exclude their shooter even when other actors share its team slot. Passed 512 inspector-feature Rust library tests, including a synthetic NPC projectile contact regression. Original-client verification remains pending.
