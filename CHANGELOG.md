@@ -4,6 +4,10 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ## Unreleased
 
+### 2026-11-22
+
+- Add the Linux Proton runtime resolver (`orpheus_proton`) and handle-bound x64 Windows/Wine relay helper (`relay/owwfd_inject.cpp`, documented in `docs/PROTON_HELPER.md`). `orpheus_proton` resolves `WINEPREFIX`, `STEAM_COMPAT_TOOL_PATHS` (confirmed against the pathname column of `/proc/<pid>/maps`, rejecting relative paths), and Wine sync flags (`WINEFSYNC`, `WINEESYNC`, `WINE_NTSYNC`, `PROTON_ENABLE_NTSYNC`, `WINEFUTEX2`) from `--runtime-pid` without claiming Linux-to-Windows PID identity. Injection requires explicit `--win-pid`, `--creation-time`, and `--game-exe` (from `--list`) on a single retained Windows process handle, with opt-in `--start-worker` for relay DLLs that export `worker`. Verified with workspace Clippy/fmt, isolated Wine checks on Proton 10.0 and Proton 11.0 (including live PID-reuse rejection via `creation_time`), and live 104319 client login to the main menu across the four tested Valve Proton builds (Proton 10.0, Proton 11.0, Proton Experimental, and Proton Hotfix).
+
 ### 2026-11-21
 
 - Handle the stock bot death selector with the shared owner operand check. A blocking public diagnostic stops that bot's script projection while the room continues to simulate it. The prepared Practice Range regression now checks each of the first ten corpse frames and the replacement.

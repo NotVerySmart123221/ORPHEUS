@@ -68,6 +68,10 @@ path = "rust/src/lib.rs"
 name = "orpheus_server"
 path = "rust/src/bin/orpheus_server.rs"
 
+[[bin]]
+name = "orpheus_proton"
+path = "rust/src/bin/orpheus_proton.rs"
+
 [[test]]
 name = "runtime_preflight"
 path = "rust/tests/runtime_preflight.rs"
