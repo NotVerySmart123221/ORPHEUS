@@ -153,9 +153,18 @@ impl<'a> BotQueries<'a> {
         direction: [f64; 3],
         reach: f64,
     ) -> Result<Option<f64>, crate::collision_index::IndexError> {
+        self.combat_wall(origin, direction, reach)
+            .map(|hit| hit.map(|hit| hit.distance))
+    }
+
+    pub(crate) fn combat_wall(
+        &self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        reach: f64,
+    ) -> Result<Option<crate::collision_index::RayHit>, crate::collision_index::IndexError> {
         self.ground
             .cast_ray(origin, direction, reach, MOVER_CATEGORY)
-            .map(|hit| hit.map(|hit| hit.distance))
     }
 
     pub(crate) fn summoner_beam_contacts(

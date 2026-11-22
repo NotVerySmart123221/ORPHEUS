@@ -2062,7 +2062,7 @@ impl RoomSimulation {
                     context.tick,
                     &candidates,
                     shooter,
-                    |origin, direction, reach| queries.hitscan_wall(origin, direction, reach),
+                    |origin, direction, reach| queries.combat_wall(origin, direction, reach),
                 );
                 (active.token, active.stun, active.hit_effect, result)
             };
@@ -2905,7 +2905,7 @@ impl RoomSimulation {
                 tick,
                 &targets,
                 shooter_pose,
-                |origin, direction, reach| queries.hitscan_wall(origin, direction, reach),
+                |origin, direction, reach| queries.combat_wall(origin, direction, reach),
             ) {
                 Ok(None) => {
                     self.enemy_projectiles.push(handle);

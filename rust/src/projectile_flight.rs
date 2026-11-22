@@ -13,19 +13,26 @@ pub use crate::script_init::Knockback;
 mod knockback_tests;
 
 use crate::{
-    collision_index::IndexError,
+    collision_index::{IndexError, RayHit},
     game_clock::TICK_PERIOD,
     game_hitscan::{HitDefinition, HurtPose, Impact, TargetPose},
     game_projectiles::authored_number,
     script_expr::EvalError,
     script_graph::Node,
     script_wire::Value,
-    static_ray::{Vec3, along, norm},
+    static_ray::{MIN_SURFACE_DISTANCE, Vec3, along, norm},
 };
 
 const DEFAULT_LIFETIME: f64 = 5.0;
 const EPSILON: f64 = 1e-9;
-const IMPACT_RAY_OFFSET: f64 = 1e-4;
+const DISTANCE_ONLY_RAY_OFFSET: f64 = 1e-4;
+const SURFACE_RAY_OFFSET: f64 = 2.0 * MIN_SURFACE_DISTANCE;
+
+#[derive(Clone, Copy)]
+struct WallContact {
+    distance: f64,
+    normal: Option<Vec3>,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectileBallistics {
@@ -266,9 +273,14 @@ impl ProjectileFlight {
         &mut self,
         tick: u32,
         targets: &[(u32, TargetPose)],
-        wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
+        mut wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
     ) -> Result<Option<FlightEnd>, IndexError> {
-        self.advance_combat(tick, targets, None, wall)
+        self.advance_with_wall(tick, targets, None, |origin, direction, reach| {
+            Ok(wall(origin, direction, reach)?.map(|distance| WallContact {
+                distance,
+                normal: None,
+            }))
+        })
     }
 
     pub(crate) fn advance_combat<T: Copy + Into<HurtPose>>(
@@ -276,7 +288,22 @@ impl ProjectileFlight {
         tick: u32,
         targets: &[(u32, T)],
         shooter: Option<(u32, HurtPose)>,
-        mut wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
+        mut wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<RayHit>, IndexError>,
+    ) -> Result<Option<FlightEnd>, IndexError> {
+        self.advance_with_wall(tick, targets, shooter, |origin, direction, reach| {
+            Ok(wall(origin, direction, reach)?.map(|hit| WallContact {
+                distance: hit.distance,
+                normal: Some(hit.normal),
+            }))
+        })
+    }
+
+    fn advance_with_wall<T: Copy + Into<HurtPose>>(
+        &mut self,
+        tick: u32,
+        targets: &[(u32, T)],
+        shooter: Option<(u32, HurtPose)>,
+        mut wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<WallContact>, IndexError>,
     ) -> Result<Option<FlightEnd>, IndexError> {
         if self.ended {
             return Ok(None);
@@ -316,7 +343,7 @@ impl ProjectileFlight {
         speed: f64,
         targets: &[(u32, T)],
         shooter: Option<(u32, HurtPose)>,
-        mut wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
+        mut wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<WallContact>, IndexError>,
     ) -> Result<Option<FlightEnd>, IndexError> {
         let step = speed * duration;
         let range_left = self
@@ -336,12 +363,12 @@ impl ProjectileFlight {
                 }
             }
         }
-        if let Some(distance) = wall(self.position, self.direction, reach)?
-            .filter(|distance| (0.0..=reach).contains(distance))
-        {
-            if closest.is_none_or(|(best, _)| distance < best) {
-                closest = Some((distance, None));
-            }
+        let wall_hit = wall(self.position, self.direction, reach)?.filter(|hit| {
+            (0.0..=reach).contains(&hit.distance)
+                && closest.is_none_or(|(best, _)| hit.distance < best)
+        });
+        if let Some(hit) = wall_hit {
+            closest = Some((hit.distance, None));
         }
         let Some((distance, target)) = closest else {
             self.position = along(self.position, self.direction, reach);
@@ -383,15 +410,19 @@ impl ProjectileFlight {
                 impulse: None,
             });
         }
-        // Cast from the approach side when the projectile hit the map.
-        let origin = if target.is_none() {
-            along(
+        let origin = match wall_hit {
+            // Offset perpendicular to the hit surface. At a glancing angle an
+            // offset along the shot can leave the blast origin inside the ray cutoff.
+            Some(WallContact {
+                normal: Some(normal),
+                ..
+            }) => along(point, normal, SURFACE_RAY_OFFSET),
+            Some(_) => along(
                 self.position,
                 self.direction,
-                (distance - IMPACT_RAY_OFFSET).max(0.0),
-            )
-        } else {
-            point
+                (distance - DISTANCE_ONLY_RAY_OFFSET).max(0.0),
+            ),
+            None => point,
         };
         impacts.extend(self.splash(point, origin, targets, shooter, &mut wall)?);
         self.position = point;
@@ -408,7 +439,7 @@ impl ProjectileFlight {
         origin: Vec3,
         targets: &[(u32, T)],
         shooter: Option<(u32, HurtPose)>,
-        mut wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
+        mut wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<WallContact>, IndexError>,
     ) -> Result<Vec<Impact>, IndexError> {
         let mut impacts = Vec::new();
         if let Some(blast) = self
@@ -453,7 +484,9 @@ impl ProjectileFlight {
                 if damage == 0.0 && impulse.is_none() {
                     continue;
                 }
-                if !surface.visible(|direction, reach| wall(origin, direction, reach))? {
+                if !surface.visible(|direction, reach| {
+                    wall(origin, direction, reach).map(|hit| hit.map(|hit| hit.distance))
+                })? {
                     continue;
                 }
                 impacts.push(Impact {
@@ -873,6 +906,76 @@ mod tests {
     }
 
     #[test]
+    fn glancing_impact_blocks_blast_damage_and_force_on_the_far_side() {
+        let fixture: Json = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/projectile-glancing-wall-v1.json"
+        ))
+        .unwrap();
+        let vertices = serde_json::from_value(fixture["wall"].clone()).unwrap();
+        let world = TriangleIndex::new([SceneTriangle {
+            vertices,
+            mask: 0x18,
+            surface: 0,
+        }])
+        .unwrap();
+        let input = &fixture["input"];
+        let incidence = input["incidence"].as_f64().unwrap();
+        let offset = input["start_offset"].as_f64().unwrap();
+        let target_offset = input["target_offset"].as_f64().unwrap();
+        let along_wall = (1.0 - incidence * incidence).sqrt();
+        let impact_z = along_wall * offset / incidence;
+        let fields = serde_json::json!({
+            "m_projectileSpeed": 50.0,
+            "m_D2D11CE9": {
+                "m_modifyHealth": {
+                    "m_amount": input["damage"],
+                    "m_E33EFEE1": input["horizontal_impulse"],
+                    "m_10399AE7": input["upward_impulse"],
+                },
+                "m_0D30E40C": [{"m_radius": 2.0, "m_B399CACB": 1.0}]
+            }
+        });
+        let profile = ProjectileBallistics::from_fields(&fields, |value| {
+            crate::script_expr::evaluate(value, &mut crate::script_expr::EmptyContext)
+        })
+        .unwrap()
+        .unwrap();
+        for side in [-1.0, 1.0] {
+            let mut flight = ProjectileFlight::new(
+                profile.clone(),
+                [side * offset, 1.0, 0.0],
+                [-side * incidence, 0.0, along_wall],
+                Some(0),
+            )
+            .unwrap();
+            let end = flight
+                .advance_combat(
+                    2,
+                    &[
+                        (1, target(side * target_offset, impact_z)),
+                        (2, target(-side * target_offset, impact_z)),
+                    ],
+                    None,
+                    |origin, direction, reach| world.cast_ray(origin, direction, reach, 0x18),
+                )
+                .unwrap()
+                .unwrap();
+            assert!(end.impact && !end.expired && end.contact.is_none());
+            assert!(end.point[0].abs() < 1e-12);
+            assert!((end.point[2] - impact_z).abs() < 1e-12);
+            let [near] = end.impacts.as_slice() else {
+                panic!("expected only the exposed target, got {:?}", end.impacts);
+            };
+            assert_eq!(near.entity, 1);
+            assert_eq!(near.damage, input["damage"].as_f64().unwrap());
+            let [x, y, z] = near.impulse.unwrap();
+            assert_eq!(x, side * input["horizontal_impulse"].as_f64().unwrap());
+            assert_eq!(y, input["upward_impulse"].as_f64().unwrap());
+            assert!(z.abs() < 1e-12, "unexpected impulse along the wall: {z}");
+        }
+    }
+
+    #[test]
     fn authored_self_splash_reuses_damage_falloff_and_occlusion_without_blocking_the_flight() {
         let fixture: Json = serde_json::from_str(include_str!(
             "../../fixtures/behavior/projectile-self-splash-v1.json"
@@ -899,11 +1002,17 @@ mod tests {
             let mut flight =
                 ProjectileFlight::new(profile, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], None).unwrap();
             flight
-                .advance_combat(1, &targets, Some(shooter), |_, direction, reach| {
+                .advance_with_wall(1, &targets, Some(shooter), |_, direction, reach| {
                     if direction == [0.0, 0.0, 1.0] && reach >= 0.75 {
-                        Ok(Some(0.75))
+                        Ok(Some(WallContact {
+                            distance: 0.75,
+                            normal: None,
+                        }))
                     } else if obstructed && direction[2] < -0.9 {
-                        Ok(Some(reach / 2.0))
+                        Ok(Some(WallContact {
+                            distance: reach / 2.0,
+                            normal: None,
+                        }))
                     } else {
                         Ok(None)
                     }
