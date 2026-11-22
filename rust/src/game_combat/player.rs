@@ -824,6 +824,9 @@ impl RoomSimulation {
                 frame: Some(source.frame),
             }),
         );
+        if !outcome.killed {
+            self.record_received_damage(owner, id, source.killer, outcome.dealt as f32);
+        }
         if let Some(error) = death_script_fault {
             eprintln!("player {entity:08X} death script stopped: {error}");
             self.retire_faulted_player_script(id);

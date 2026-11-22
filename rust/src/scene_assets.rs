@@ -495,6 +495,12 @@ impl SceneAssets {
         let mut simulation = RoomSimulation::new(bots).map_err(io::Error::other)?;
         simulation.set_free_for_all(map.free_for_all);
         simulation.set_combat_voice(Arc::clone(&self.combat_voice));
+        if cfg!(feature = "inspector")
+            && std::env::var_os("ORPHEUS_PLAYTEST_RECEIVED_DAMAGE")
+                .is_some_and(|value| value == "1")
+        {
+            simulation.enable_received_damage_feedback();
+        }
         simulation.set_environment(self.environment.for_map(map.map_guid));
         if self.graphs.uses_host_health_events() {
             simulation.enable_host_health_events();

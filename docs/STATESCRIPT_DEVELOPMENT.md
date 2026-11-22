@@ -1124,6 +1124,15 @@ source or victim for each cue. A severe victim cue does not establish
 the shooter's native headshot sound. That sound still needs a verified
 104319 playback trigger.
 
+For a received-damage client comparison, set
+`ORPHEUS_PLAYTEST_RECEIVED_DAMAGE=1` on an Inspector server using the prepared
+104319 runtime. Only positive, nonlethal loss from a distinct room actor queues
+the local damage event. The victim's active body and the source generation must
+still match when delivered. The test frame retains neutral direction vectors
+and flags. Compare the client response when an NPC hits the player with the
+response when the player hits the NPC. Verify directional indicators and
+audible cues independently.
+
 Weapon notifications carry the target's captured filter flags, target
 tags, and script variables. A room-settled health change from a distinct
 sampled source can carry the same facts after applying the signed pool

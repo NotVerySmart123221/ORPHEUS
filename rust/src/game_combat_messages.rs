@@ -8,6 +8,7 @@ use crate::{
     jam_codec::{Fields, Schemas, Value},
 };
 
+const RECEIVED_DAMAGE: u32 = 25000;
 const HIT: u32 = 25001;
 const DEATH: u32 = 25004;
 const ELIMINATION: u32 = 25005;
@@ -21,6 +22,11 @@ pub enum CombatNotice {
         critical: bool,
         killed: bool,
         shot_frame: u32,
+    },
+    DamageReceived {
+        source: u32,
+        victim: u32,
+        dealt: f32,
     },
     Death {
         source: u32,
@@ -47,6 +53,7 @@ impl CombatNotice {
     pub fn required_identity(self) -> Option<u32> {
         match self {
             Self::Hit { target, .. } => Some(target),
+            Self::DamageReceived { source, .. } => Some(source),
             Self::Death { source, killed_by } => killed_by.then_some(source),
             Self::Elimination { victim, .. } => Some(victim),
             Self::Voice { anchor, .. } => Some(anchor),
@@ -56,6 +63,7 @@ impl CombatNotice {
     pub(crate) fn referenced_entities(self) -> impl Iterator<Item = u32> {
         let references = match self {
             Self::Hit { target, .. } => [Some(target), None, None],
+            Self::DamageReceived { source, victim, .. } => [Some(source), Some(victim), None],
             Self::Death { source, killed_by } => [killed_by.then_some(source), None, None],
             Self::Elimination { killer, victim } => [Some(killer), Some(victim), None],
             Self::Voice {
@@ -100,6 +108,41 @@ impl CombatNotice {
                     (0x84, Value::Unsigned(u64::from(shot_frame))),
                 ]),
             ),
+            Self::DamageReceived {
+                source,
+                victim,
+                dealt,
+            } => {
+                // Retain the field shape of the tested nonlethal victim effect.
+                // Direction and flags stay neutral until independently verified.
+                let zero_vector = Value::Struct(Fields::from(
+                    [0, 4, 8].map(|offset| (offset, Value::Float32(0.0))),
+                ));
+                (
+                    RECEIVED_DAMAGE,
+                    Fields::from([
+                        (0x78, Value::Signed(1)),
+                        (0x7c, entity(source)),
+                        (0x80, entity(victim)),
+                        (0x84, zero_vector.clone()),
+                        (0x90, zero_vector.clone()),
+                        (0x9c, zero_vector),
+                        (0xa8, Value::Array(vec![Value::Unsigned(0); 3])),
+                        (0xc0, Value::Float32(dealt)),
+                        (0xc4, Value::Unsigned(0)),
+                        (0xc8, Value::Unsigned(0)),
+                        (0xca, Value::Unsigned(0)),
+                        (0xcc, Value::Float32(0.0)),
+                        (0xd0, Value::Bool(false)),
+                        (
+                            0xd8,
+                            Value::Array(vec![Value::Float32(dealt), Value::Float32(1.0)]),
+                        ),
+                        (0xf0, Value::Array(Vec::new())),
+                        (0x108, Value::Bool(false)),
+                    ]),
+                )
+            }
             Self::Death { source, killed_by } => (
                 DEATH,
                 Fields::from([

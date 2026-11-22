@@ -424,6 +424,35 @@ impl RoomSimulation {
             }));
     }
 
+    pub(super) fn record_received_damage(
+        &mut self,
+        owner: u32,
+        victim: BodyId,
+        source: u32,
+        dealt: f32,
+    ) {
+        if !self.received_damage_feedback
+            || victim.entity == source
+            || !dealt.is_finite()
+            || dealt <= 0.0
+        {
+            return;
+        }
+        let Some(source) = self.sample_health_body(source) else {
+            return;
+        };
+        self.player_cues.push(PlayerRoomCue {
+            owner,
+            listener: victim,
+            source: source.identity(),
+            notice: CombatNotice::DamageReceived {
+                source: source.wire,
+                victim: victim.entity,
+                dealt,
+            },
+        });
+    }
+
     pub(crate) fn room_cue_source_current(&self, source: RoomBodyIdentity) -> bool {
         self.sample_health_body(source.wire)
             .is_some_and(|body| body.identity() == source)

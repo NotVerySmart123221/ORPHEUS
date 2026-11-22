@@ -63,8 +63,10 @@ impl PendingCombatNotice {
                 body == Some(*recipient)
             }
             CombatAudience::Authored(cue) => {
-                let CombatNotice::Voice { listener, .. } = self.notice else {
-                    return false;
+                let listener = match self.notice {
+                    CombatNotice::Voice { listener, .. } => listener,
+                    CombatNotice::DamageReceived { victim, .. } => victim,
+                    _ => return false,
                 };
                 body == Some(cue.listener)
                     && cue.listener.entity == listener
@@ -303,6 +305,16 @@ impl Peer {
                     } => {
                         crate::owner_trace::playtest(format_args!(
                             "combat hit admitted owner={:08X} frame={shot_frame} target={target:08X} dealt={dealt} critical={critical} killed={killed} ordinal={ordinal}",
+                            self.world.owner(),
+                        ));
+                    }
+                    CombatNotice::DamageReceived {
+                        source,
+                        victim,
+                        dealt,
+                    } => {
+                        crate::owner_trace::playtest(format_args!(
+                            "received damage admitted owner={:08X} source={source:08X} victim={victim:08X} dealt={dealt} ordinal={ordinal}",
                             self.world.owner(),
                         ));
                     }

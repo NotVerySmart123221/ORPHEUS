@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Add an opt-in Inspector playtest for native received-damage feedback after a nonlethal player health loss. Route it only to the victim's current body and keep it separate from the shooter's hit notice. Keep direction vectors neutral pending client verification. The victim-only routing and wire payload passed the synthetic and prepared 104319 schema regressions.
+
 - Integrate the Practice Range combat changes and keep shared health settlement responsible for contact, NPC attribution, and settled impact metadata. Keep projectile distance falloff and critical scaling in the same calculation. Prepared 104319 probes cover NPC firing and projectile damage with the firing-graph runtime pack. Original-client animation and audio acceptance remain pending.
 
 - Allow locally configured hurt and death voice cues to select the victim's body definition. Older damage frames no longer bypass or rewind the victim's hurt voice cooldown. Verified with the synthetic hurt and death delivery regression and the inspector-feature voice test group. Original-client playback remains unverified for this change.

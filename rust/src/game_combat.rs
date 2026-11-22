@@ -627,6 +627,7 @@ pub(crate) struct RoomSimulation {
     team_member_counts: Option<crate::game_instance::TeamMemberCounts>,
     free_for_all: bool,
     combat_voice: Arc<crate::combat_voice::CombatVoiceCatalog>,
+    received_damage_feedback: bool,
     elimination_streaks: HashMap<u32, EliminationStreak>,
     hurt_voice_history: HashMap<u32, (u32, usize)>,
     spatial_queries: Option<RoomSpatialQueries>,
@@ -1081,6 +1082,7 @@ impl RoomSimulation {
             team_member_counts: None,
             free_for_all: false,
             combat_voice: Arc::default(),
+            received_damage_feedback: false,
             elimination_streaks: HashMap::new(),
             hurt_voice_history: HashMap::new(),
             spatial_queries: None,
@@ -1133,6 +1135,10 @@ impl RoomSimulation {
 
     pub(crate) fn set_free_for_all(&mut self, free_for_all: bool) {
         self.free_for_all = free_for_all;
+    }
+
+    pub(crate) fn enable_received_damage_feedback(&mut self) {
+        self.received_damage_feedback = true;
     }
 
     pub(crate) fn set_combat_voice(

@@ -357,6 +357,142 @@ fn received_damage_audio_follows_only_the_current_victim_connection() {
     );
 }
 
+#[test]
+fn native_received_damage_is_delivered_only_to_the_body_that_lost_health() {
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/received-damage-feedback-v1.json"
+    ))
+    .unwrap();
+    let damage = contract["input"]["damage"].as_f64().unwrap();
+    let schemas = Schemas::from_json(&contract["jam_schema"].to_string()).unwrap();
+    assert_native_received_damage(schemas, damage);
+}
+
+#[test]
+#[ignore = "requires the separately prepared 104319 game schemas"]
+fn prepared_native_received_damage_uses_the_104319_schema() {
+    let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let schemas = Schemas::load(runtime.join("data/game_schemas_174.json")).unwrap();
+    assert_native_received_damage(schemas, 9.0);
+}
+
+fn assert_native_received_damage(schemas: Schemas, damage: f64) {
+    let graph = feedback_graph(109, 207, CueTrigger::EliminationDealt);
+    let (mut room, [source, victim], mut sequence) = feedback_room(graph, [0, 1]);
+    let source_create = room
+        .world
+        .as_mut()
+        .unwrap()
+        .scene
+        .simulation_mut()
+        .take_player_events()
+        .into_iter()
+        .find_map(|event| match event {
+            crate::game_combat::PlayerBodyEvent::Created { id, update, .. } if id == source => {
+                Some(*update)
+            }
+            _ => None,
+        })
+        .expect("source observer create");
+    let tick = FIRST_TICK + 1;
+    apply_and_advance(&mut room, [source, victim], tick, damage);
+    for member in room.members.values() {
+        assert_eq!(
+            member
+                .peer
+                .as_ref()
+                .unwrap()
+                .pending_combat_notices()
+                .count(),
+            0
+        );
+    }
+
+    room.world
+        .as_mut()
+        .unwrap()
+        .scene
+        .simulation_mut()
+        .enable_received_damage_feedback();
+    apply_and_advance(&mut room, [source, victim], tick + 2, 0.0);
+    assert_eq!(
+        room.members[&2]
+            .peer
+            .as_ref()
+            .unwrap()
+            .pending_combat_notices()
+            .count(),
+        0
+    );
+    apply_and_advance(&mut room, [source, victim], tick + 4, damage);
+    assert_eq!(
+        room.members[&1]
+            .peer
+            .as_ref()
+            .unwrap()
+            .pending_combat_notices()
+            .count(),
+        0
+    );
+    let simulation = room.world.as_ref().unwrap().scene.simulation();
+    let peer = room.members.get_mut(&2).unwrap().peer.as_mut().unwrap();
+    assert_eq!(
+        peer.pending_combat_notices().copied().collect::<Vec<_>>(),
+        [CombatNotice::DamageReceived {
+            source: source.entity,
+            victim: victim.entity,
+            dealt: damage as f32,
+        }]
+    );
+    peer.flush_combat(&schemas, (tick + 4) * TICK_PERIOD, Some(simulation))
+        .unwrap();
+    assert!(!peer.egress.has_queued_reliable());
+    peer.world.create_remote_player(source, source_create);
+    while !peer.world.identity_ready(source.entity) || !peer.world.identity_ready(victim.entity) {
+        assert!(sequence[1] < 16);
+        acknowledge_world_frame(peer, &mut sequence[1]);
+    }
+    peer.flush_combat(&schemas, (tick + 5) * TICK_PERIOD, Some(simulation))
+        .unwrap();
+    peer.world
+        .send_frame(
+            tick + 5,
+            Vec::new(),
+            false,
+            None,
+            &mut peer.egress,
+            |payload| {
+                let mut reader = BitReader::new(&payload);
+                reader.var_a().unwrap();
+                let channel = read_channel(&mut reader, &schemas).unwrap();
+                let [event] = channel.reliable.as_slice() else {
+                    panic!("expected one victim feedback event");
+                };
+                assert_eq!(event.message.id, 25000);
+                assert_eq!(event.message.fields[&0x78], Value::Signed(1));
+                assert_eq!(
+                    event.message.fields[&0xa8],
+                    Value::Array(vec![Value::Unsigned(0); 3])
+                );
+                assert_eq!(event.message.fields[&0xc0], Value::Float32(damage as f32));
+                assert_eq!(
+                    event.message.fields[&0xd8],
+                    Value::Array(vec![Value::Float32(damage as f32), Value::Float32(1.0)])
+                );
+                for (offset, body) in [(0x7c, source), (0x80, victim)] {
+                    assert_eq!(
+                        event.message.fields[&offset],
+                        Value::Struct(Fields::from(
+                            [(0, Value::Unsigned(u64::from(body.entity))),]
+                        ))
+                    );
+                }
+                Ok::<_, io::Error>(sequence[1] + 1)
+            },
+        )
+        .unwrap();
+}
+
 fn assert_reliable_cue(
     room: &mut Room,
     connection: u32,
