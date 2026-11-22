@@ -7,6 +7,7 @@ const PROFILE: u64 = 0x0690_0000_0000_00aa;
 #[derive(Default)]
 struct ContactWorld {
     volume: std::cell::Cell<Option<ContactVolume>>,
+    source_frame: Option<u32>,
     damage: Vec<(u32, f64, Option<[f64; 3]>)>,
 }
 
@@ -49,10 +50,12 @@ impl World for ContactWorld {
     fn queue_contact_damage(
         &mut self,
         site: Site,
+        source_frame: u32,
         damage: f64,
         hits: &[(u32, Option<[f64; 3]>)],
     ) -> bool {
         assert_eq!(site.entity, OWNER);
+        self.source_frame = Some(source_frame);
         self.damage
             .extend(hits.iter().map(|&(id, impulse)| (id, damage, impulse)));
         true
@@ -140,7 +143,7 @@ fn authored_contact_damage_uses_the_linked_volume_once_per_activation() {
             OWNER,
             Variables::new(),
             vec![Root::listener(1, index, None)],
-            0,
+            input["start_frame"].as_u64().unwrap() as u32,
             &mut world,
             MAX_INIT_WORK,
         )
@@ -152,8 +155,16 @@ fn authored_contact_damage_uses_the_linked_volume_once_per_activation() {
         for _ in 0..2 {
             component.run(&mut world, |vm| vm.begin(key, 0)).unwrap();
         }
-        component.advance_frame(1, &mut world).unwrap();
+        let source_frame = input["start_frame"].as_u64().unwrap() as u32;
+        component
+            .advance_frame(source_frame + 1, &mut world)
+            .unwrap();
         let volume = world.volume.get().unwrap();
+        assert_eq!(world.source_frame, Some(volume.source_frame));
+        assert_eq!(
+            u64::from(volume.source_frame),
+            fixture["expected"]["source_frame"].as_u64().unwrap()
+        );
         assert_eq!(volume.profile, PROFILE);
         assert_eq!(volume.offset, offset);
         assert_eq!(volume.radius, input["radius"].as_f64().unwrap());

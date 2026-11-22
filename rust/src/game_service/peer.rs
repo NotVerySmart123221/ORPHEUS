@@ -147,9 +147,13 @@ impl Peer {
             .filter(|body| body.entity == hit.damage.source)
         {
             for notice in hit.notices.into_iter().flatten() {
-                self.queue_notice(notice, CombatAudience::Shooter(body));
+                self.queue_shooter_notice(body, notice);
             }
         }
+    }
+
+    pub(super) fn queue_shooter_notice(&mut self, body: BodyId, notice: CombatNotice) {
+        self.queue_notice(notice, CombatAudience::Shooter(body));
     }
 
     pub(super) fn queue_bot_replacement(&mut self, replacement: BotReplacement, expires: Duration) {

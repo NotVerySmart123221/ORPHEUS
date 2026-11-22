@@ -20,6 +20,7 @@ use crate::commands::Command;
 use crate::contact_body::CharacterBody;
 use crate::contact_cache::CapsulePose;
 use crate::contact_math::{add, sub};
+use crate::contact_solver::clip_velocity;
 use crate::contact_world::ContactWorld;
 use crate::game_clock::TICK_PERIOD;
 use crate::game_debug::ContactClip;
@@ -307,7 +308,7 @@ impl PatrolCollision {
         dt: f64,
         blockers: &[CapsulePose],
     ) -> [f64; 3] {
-        self.try_advance(tick, from, to, dt, blockers)
+        self.try_advance(tick, from, to, dt, blockers, None)
             .unwrap_or(from)
     }
 
@@ -318,6 +319,7 @@ impl PatrolCollision {
         to: [f64; 3],
         dt: f64,
         actor_capsules: &[CapsulePose],
+        velocity_after_contacts: Option<&mut [f64; 3]>,
     ) -> Result<[f64; 3], crate::contact_hull::HullContactError> {
         let start = standing_origin(from, self.lift);
         self.body.teleport(start);
@@ -332,6 +334,10 @@ impl PatrolCollision {
         };
         let after = match movement {
             Ok(moved) => {
+                if let Some(velocity) = velocity_after_contacts {
+                    *velocity = clip_velocity(velocity.map(|axis| axis as f32), moved.planes)
+                        .map(f64::from);
+                }
                 let after = if moved.position == add(start, delta) {
                     to
                 } else {
@@ -1104,19 +1110,20 @@ impl Bot {
             return true;
         }
         let mut velocity = self.velocity;
-        let mut active = self.combat_motion_tick.is_some() && velocity != [0.0; 3];
+        let continuing = self.combat_motion_tick.is_some() && velocity != [0.0; 3];
+        let mut applied_impulse = false;
         self.velocity_changes.retain(|&(due, change)| {
             if due <= tick && matches!(change, VelocityChange::Impulse(_)) {
                 let before = velocity;
                 change.apply(&mut velocity);
-                active |= before != velocity;
+                applied_impulse |= before != velocity;
                 false
             } else {
                 true
             }
         });
         self.combat_motion_tick = None;
-        if !active {
+        if !continuing && !applied_impulse {
             return false;
         }
         let blockers = self.movement_blocker_snapshot(tick);
@@ -1134,6 +1141,7 @@ impl Bot {
         } else {
             self.movement_flags |= IN_AIR;
         }
+        let starting_velocity = velocity;
         let velocity = VelocityStep {
             base: settings,
             settings,
@@ -1151,10 +1159,36 @@ impl Bot {
             self.velocity = [0.0; 3];
             return false;
         }
-        let to = std::array::from_fn(|axis| from[axis] + velocity[axis] * dt);
-        let after = collision.advance(tick, from, to, dt, blockers.as_deref().unwrap_or(&[]));
+        let mut travel_velocity = velocity;
+        let horizontal_impulse =
+            starting_velocity[0] != self.velocity[0] || starting_velocity[2] != self.velocity[2];
+        if horizontal_impulse && grounded {
+            // The impulse changes the starting velocity immediately. Ground
+            // friction can stop it by the end of the tick, after some travel.
+            for axis in [0, 2] {
+                travel_velocity[axis] = (starting_velocity[axis] + velocity[axis]) * 0.5;
+            }
+        }
+        let to = std::array::from_fn(|axis| from[axis] + travel_velocity[axis] * dt);
+        let mut velocity = velocity;
+        let after = match collision.try_advance(
+            tick,
+            from,
+            to,
+            dt,
+            blockers.as_deref().unwrap_or(&[]),
+            Some(&mut velocity),
+        ) {
+            Ok(after) => after,
+            Err(_) => {
+                velocity = [0.0; 3];
+                from
+            }
+        };
         self.position = after;
-        self.velocity = std::array::from_fn(|axis| (after[axis] - from[axis]) / dt);
+        // The solver may move an overlapping capsule sideways to separate it.
+        // That position correction must not create momentum for the next tick.
+        self.velocity = velocity;
         self.held = [0; 2];
         self.combat_motion_tick = Some(tick);
         self.last_tick = Some(tick);
@@ -1222,9 +1256,14 @@ impl Bot {
                 {
                     return false;
                 }
-                let Ok(after) =
-                    collision.try_advance(tick, from, to, TICK_PERIOD.as_secs_f64(), blockers)
-                else {
+                let Ok(after) = collision.try_advance(
+                    tick,
+                    from,
+                    to,
+                    TICK_PERIOD.as_secs_f64(),
+                    blockers,
+                    None,
+                ) else {
                     return false;
                 };
                 after
@@ -2297,4 +2336,87 @@ fn idle_bot_combat_impulse_uses_capsule_and_ticks_once() {
     assert!(bot.step_combat_motion(13, &settings, &mut floor));
     assert!(bot.position[1] > first[1]);
     assert!(bot.velocity_changes.is_empty());
+}
+
+#[test]
+fn grounded_bot_moves_once_per_small_horizontal_impulse() {
+    #[derive(Deserialize)]
+    struct Contract {
+        impulse: [f64; 3],
+        arrival_ticks: Vec<u32>,
+        max_travel_per_tick: f64,
+    }
+    let contract: Contract = serde_json::from_str(include_str!(
+        "../../fixtures/behavior/bot-grounded-impulse-v1.json"
+    ))
+    .unwrap();
+    let mut bot = tests::walker([0.0, 0.0, 10.0]);
+    let settings = MoverSettings::default();
+    let mut floor = |_, _, top, bottom| (bottom <= 0.0 && 0.0 <= top).then_some(0.0);
+    bot.attach_collision(
+        &settings,
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        0x08,
+        floor,
+    );
+    for tick in contract.arrival_ticks {
+        let old = bot.position;
+        bot.queue_velocity_changes(vec![(tick, VelocityChange::Impulse(contract.impulse))]);
+        assert!(bot.step_combat_motion(tick, &settings, &mut floor));
+        let next = bot.position;
+        assert!(next[0] > old[0] && next[0] - old[0] <= contract.max_travel_per_tick);
+        assert_eq!(bot.velocity, [0.0; 3]);
+        assert!(bot.step_combat_motion(tick, &settings, &mut floor));
+        assert!(!bot.step_combat_motion(tick + 1, &settings, &mut floor));
+        assert_eq!(bot.position, next);
+    }
+}
+
+#[test]
+fn bot_contact_separation_does_not_become_knockback_velocity() {
+    #[derive(Deserialize)]
+    struct Overlap {
+        blocker_offset: f32,
+        impulse: [f64; 3],
+        minimum_separation: f64,
+        horizontal_tolerance: f64,
+    }
+    let contract: serde_json::Value = serde_json::from_str(include_str!(
+        "../../fixtures/behavior/bot-grounded-impulse-v1.json"
+    ))
+    .unwrap();
+    let input: Overlap = serde_json::from_value(contract["overlap"].clone()).unwrap();
+    let mut bot = tests::walker([0.0, 0.0, 10.0]);
+    Arc::get_mut(&mut bot.spawn).unwrap().route.clear();
+    let settings = MoverSettings::default();
+    let mut floor = |_, _, top, bottom| (bottom <= 0.0 && 0.0 <= top).then_some(0.0);
+    bot.attach_collision(
+        &settings,
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        0x08,
+        floor,
+    );
+    let mut overlapping = bot.contact_capsule(&settings);
+    overlapping.position[0] += input.blocker_offset;
+    let start = bot.position;
+    bot.set_movement_blockers(12, vec![overlapping]);
+    bot.queue_velocity_changes(vec![(12, VelocityChange::Impulse(input.impulse))]);
+    assert!(bot.step_combat_motion(12, &settings, &mut floor));
+    assert!(
+        bot.position[0] < start[0] - input.minimum_separation,
+        "{:?}",
+        bot.position
+    );
+    assert!(
+        bot.velocity[0].abs() < input.horizontal_tolerance,
+        "{:?}",
+        bot.velocity
+    );
+    let displaced_x = bot.position[0];
+    assert!(bot.step_combat_motion(13, &settings, &mut floor));
+    assert!(
+        (bot.position[0] - displaced_x).abs() < input.horizontal_tolerance,
+        "{:?}",
+        bot.position
+    );
 }
