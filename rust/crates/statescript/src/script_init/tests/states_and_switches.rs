@@ -253,6 +253,7 @@ fn message_dispatch_rechecks_the_resolved_nodes_execution_scope() {
                     parameters: Arc::new(Variables::new()),
                     health_context: Default::default(),
                     settled_damage: false,
+                    room_directed: false,
                 },
             )
             .unwrap();

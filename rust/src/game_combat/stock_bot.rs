@@ -11,7 +11,10 @@ use std::{
 
 use serde_json::Value as Json;
 
-use super::observed_projectiles::{ObservedShot, StockShotBatch};
+use super::{
+    RoomScriptRequest, RoomScriptRequests, RoomSpatialFrame,
+    observed_projectiles::{ObservedShot, StockShotBatch},
+};
 use crate::{
     commands::Command,
     game_bots::Bot,
@@ -23,8 +26,8 @@ use crate::{
     script_graph::{GraphStore, graph_asset_index},
     script_init::{
         self, AiControlOverride, AiWeaponOverride, Component, HUD_MAX_HEALTH, InitFault, Issue,
-        MAX_INIT_WORK, MovementSample, OWNER_HEALTH, Root, Site, TargetTagEffect, TargetTagEffects,
-        World,
+        MAX_INIT_WORK, MovementSample, OWNER_HEALTH, RoomMessage, Root, Site, TargetTagEffect,
+        TargetTagEffects, World,
     },
     script_runtime::{FRAME_MS, held_button_mask},
     script_snapshot_wire::{SceneProjection, SnapshotEncoder, View},
@@ -64,6 +67,8 @@ pub(super) struct StockBotWorld {
     display_names: HashMap<Site, u64>,
     ai_control_overrides: BTreeMap<(u16, u16), AiControlOverride>,
     placement_graphs: Vec<u32>,
+    spatial_frame: Option<Arc<RoomSpatialFrame>>,
+    script_requests: RoomScriptRequests,
 }
 
 impl StockBotWorld {
@@ -73,6 +78,15 @@ impl StockBotWorld {
 }
 
 impl World for StockBotWorld {
+    fn queue_room_message(&mut self, site: Site, target: u32, message: RoomMessage) -> bool {
+        site.entity == self.entity
+            && !self.dead
+            && self
+                .spatial_frame
+                .as_deref()
+                .is_some_and(|frame| self.script_requests.queue_message(frame, target, message))
+    }
+
     fn entity_variable(&mut self, entity: u32, id: u32) -> Option<Value> {
         if entity == GAME_MODE_ENTITY {
             return self
@@ -449,6 +463,8 @@ impl StockBotScript {
             display_names: HashMap::new(),
             ai_control_overrides: BTreeMap::new(),
             placement_graphs,
+            spatial_frame: None,
+            script_requests: RoomScriptRequests::default(),
         };
         let component = match Component::start_with_public_schema(
             Arc::clone(&catalog.graphs),
@@ -576,6 +592,29 @@ impl StockBotScript {
         };
         let result = queued.and_then(|_| self.component.run_now(&mut self.world));
         self.check_projection(result);
+    }
+
+    pub(super) fn set_spatial_frame(&mut self, frame: Arc<RoomSpatialFrame>) {
+        self.world.spatial_frame = Some(frame);
+    }
+
+    pub(super) fn accepts_room_messages(&self) -> bool {
+        !self.faulted && !self.world.dead
+    }
+
+    pub(super) fn receive_room_message(&mut self, sender: u32, message: RoomMessage) {
+        if self.accepts_room_messages() {
+            let _ = self.component.queue_room_message_from(sender, message);
+        }
+    }
+
+    pub(super) fn take_script_requests(&mut self) -> Vec<RoomScriptRequest> {
+        let requests = self.world.script_requests.take();
+        if self.accepts_room_messages() {
+            requests
+        } else {
+            Vec::new()
+        }
     }
 
     pub(super) fn advance(&mut self, tick: u32, bot: &Bot) {

@@ -198,6 +198,12 @@ impl RoomSimulation {
                         batches.push((SampledBody { wire, entity }, requests));
                     }
                 }
+                if let Some(script) = &mut state.stock_script {
+                    let requests = script.take_script_requests();
+                    if !requests.is_empty() {
+                        batches.push((SampledBody { wire, entity }, requests));
+                    }
+                }
             }
         }
         for (source, requests) in batches {
@@ -307,6 +313,8 @@ impl RoomSimulation {
                     .filter(|enemy| enemy.fault.is_none() && !enemy.scripts.retirement_requested)
                 {
                     let _ = enemy.scripts.receive_room_message(source, message);
+                } else if let Some(script) = &mut state.stock_script {
+                    script.receive_room_message(source, message);
                 }
             }
         }

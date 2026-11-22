@@ -221,6 +221,7 @@ pub(super) enum Event {
         parameters: Arc<Variables>,
         health_context: HostHealthContext,
         settled_damage: bool,
+        room_directed: bool,
     },
 }
 
@@ -670,6 +671,7 @@ impl Machine {
                     parameters: Arc::clone(&parameters),
                     health_context: health_context.clone(),
                     settled_damage: matches!(destination, MessageDestination::SettledDamage(_, _)),
+                    room_directed: matches!(destination, MessageDestination::Room(_)),
                 },
             )?;
         }

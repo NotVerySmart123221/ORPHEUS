@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Route stock bot StateScript messages through the shared room queue. Deliver registered messages on the receiver's next VM frame and discard directed messages if the recipient dies before dispatch. Passed 759 Rust library tests and prepared 104319 probes for firing, damage, and respawn animation. The prepared wheel probe still reports the unsupported `TrackTargets` state.
+
 - Decode context-free communication wheel requests as body-local StateScript messages. The input regression covers reliable retries, possession, death, and replacement with the same wire ID. Resolve authored asset categories from private metadata through `STU_4460419A`. Passed 758 Rust library tests and the runtime metadata importer checks. A prepared 104319 probe bound the request in both authored receivers and reached an unsupported `TrackTargets` state. Live wheel input remains disabled pending the shared target tracking implementation.
 
 - Deliver authored remote projectile launches after the observer acknowledges the source volley and projectile entities. Retry the same launch on loss and keep retirement tied to the authoritative flight. A synthetic loss replay and a prepared 104319 Practice Range firing probe passed. Original-client visual acceptance remains pending.

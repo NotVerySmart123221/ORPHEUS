@@ -4,6 +4,116 @@ use super::*;
 use crate::{game_bots::BotCatalog, game_combat::RoomSimulation, script_snapshot_wire::View};
 
 #[test]
+fn stock_bot_room_messages_run_in_the_next_frame_and_expire_on_death() {
+    use std::time::Duration;
+
+    use crate::{
+        game_clock::FIRST_TICK,
+        game_combat::tests::{fixture_bots, fixture_ground},
+        mover_settings::MoverCatalog,
+        scene_assets::BotQueries,
+    };
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/script-room-message-v1.json"
+    ))
+    .unwrap();
+    let input = &fixture["input"];
+    let expected = &fixture["expected"];
+    let mut bundle = input["bundle"].clone();
+    bundle["entities"] = json!({
+        "0x02": {"name":"Test bot","weapons":[],"graphs":[
+            {"graph":input["source_graph"],"m_75408640":0},
+            {"graph":input["target_graph"],"m_75408640":0}
+        ]}
+    });
+    let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+    let codecs = Arc::new(CodecTable::from_json(r#"{"classes":{}}"#).unwrap());
+    let bots = fixture_bots();
+    let sender = bots[0].entity;
+    let receiver = bots[1].entity;
+    let fixture_vector: [f64; 3] = serde_json::from_value(input["vector"].clone()).unwrap();
+    let admitted = input["integer"].as_i64().unwrap();
+    let expired = fixture["stock_bot_lifecycle"]["payload_before_recipient_death"]
+        .as_i64()
+        .unwrap();
+    let ground = Arc::new(fixture_ground());
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, &ground, None);
+    let mut room = RoomSimulation::new(bots).unwrap();
+    room.enable_stock_bot_scripts(Arc::clone(&graphs), codecs, 0);
+    room.enable_spatial_queries(false, ground.clone(), graphs.room_spatial_needs());
+
+    let send = |room: &mut RoomSimulation, value| {
+        let mut state = room
+            .world
+            .get_mut::<super::super::BotState>(room.by_wire[&sender])
+            .unwrap();
+        let script = state.stock_script.as_mut().unwrap();
+        for (id, value) in [
+            (1, Value::Entity(receiver)),
+            (2, Value::Integer(value)),
+            (3, Value::Vector(fixture_vector)),
+        ] {
+            script
+                .component
+                .set_entity_variable(id, value, &mut script.world)
+                .unwrap();
+        }
+        assert_eq!(
+            script
+                .component
+                .queue_entity_message(input["trigger"].as_u64().unwrap(), Variables::new())
+                .unwrap(),
+            1
+        );
+    };
+    let received = |room: &RoomSimulation| {
+        let state = room
+            .world
+            .get::<super::super::BotState>(room.by_wire[&receiver])
+            .unwrap();
+        let script = state.stock_script.as_ref().unwrap();
+        let snapshot = script.component.snapshot().unwrap();
+        assert!(
+            snapshot.initialization_complete(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        snapshot.instances[&2].variables.clone()
+    };
+    let variable = |name: &str| u32::try_from(expected[name].as_u64().unwrap()).unwrap();
+    let integer = variable("integer_variable");
+
+    send(&mut room, admitted);
+    room.finish_tick(&queries, FIRST_TICK + 1, Duration::ZERO)
+        .unwrap();
+    assert!(!received(&room).contains_key(&integer));
+    room.finish_tick(&queries, FIRST_TICK + 2, Duration::ZERO)
+        .unwrap();
+    let vars = received(&room);
+    assert_eq!(vars.get(&integer), Some(&Value::Integer(admitted)));
+    assert_eq!(
+        vars.get(&variable("sender_variable")),
+        Some(&Value::Entity(sender))
+    );
+    assert_eq!(
+        vars.get(&variable("vector_variable")),
+        Some(&Value::Vector(fixture_vector))
+    );
+    assert!(!vars.contains_key(&variable("ordinary_variable")));
+
+    send(&mut room, expired);
+    room.finish_tick(&queries, FIRST_TICK + 3, Duration::ZERO)
+        .unwrap();
+    room.kill_bot_for_test(receiver, FIRST_TICK + 4, Duration::ZERO);
+    assert_eq!(
+        received(&room).get(&integer),
+        Some(&Value::Integer(admitted))
+    );
+}
+
+#[test]
 fn stock_bot_weapon_placement_uses_map_graphs_and_body_slot_bindings() {
     let fixture: Json = serde_json::from_str(include_str!(
         "../../../../fixtures/behavior/stock-bot-weapon-placement-v1.json"

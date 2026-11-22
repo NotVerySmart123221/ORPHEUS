@@ -1092,7 +1092,10 @@ impl RoomSimulation {
                         health: true,
                         messages: state.enemy.as_ref().is_some_and(|enemy| {
                             enemy.fault.is_none() && !enemy.scripts.retirement_requested
-                        }),
+                        }) || state
+                            .stock_script
+                            .as_ref()
+                            .is_some_and(|script| script.accepts_room_messages()),
                         cue_listener: false,
                     },
                 );
@@ -1216,6 +1219,9 @@ impl RoomSimulation {
             if let Some(mut state) = self.world.get_mut::<BotState>(entity) {
                 if let Some(enemy) = state.enemy.as_mut() {
                     enemy.binding.spatial_frame = Some(Arc::clone(&spatial));
+                }
+                if let Some(script) = state.stock_script.as_mut() {
+                    script.set_spatial_frame(Arc::clone(&spatial));
                 }
             }
         }

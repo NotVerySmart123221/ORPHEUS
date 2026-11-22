@@ -1260,7 +1260,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             parameters,
                             health_context,
                             settled_damage,
+                            room_directed,
                         } => {
+                            if room_directed && self.machine.owner_dead {
+                                continue;
+                            }
                             self.deliver(
                                 id,
                                 position,
