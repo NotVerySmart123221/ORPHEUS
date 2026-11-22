@@ -8,6 +8,8 @@ pub struct PreparedScene {
     #[cfg(any(test, feature = "inspector"))]
     pub(super) movement_cache: String,
     pub(super) ground: Arc<CollisionScene>,
+    pub(super) combat_rays: Arc<CollisionScene>,
+    pub(super) combat_sweeps: Option<Arc<ContactWorld>>,
     pub(super) contacts: Option<Arc<ContactWorld>>,
     pub(super) controller: Controller,
     pub(super) mode_ui: BitWriter,
@@ -90,6 +92,8 @@ impl PreparedScene {
             map: GameMap::practice_range(),
             #[cfg(any(test, feature = "inspector"))]
             movement_cache: String::new(),
+            combat_rays: Arc::clone(&ground),
+            combat_sweeps: None,
             ground,
             contacts: None,
             controller: Controller::fixture_for_test(),
@@ -460,7 +464,7 @@ impl PreparedScene {
         Ok(crate::script_player::DeadeyeScene {
             health: Some(self.simulation.body_healths()?),
             targets,
-            collision: Some(self.ground.clone()),
+            collision: Some(Arc::clone(&self.combat_rays)),
             view_subjects: self.simulation.boss_view_subjects()?,
         })
     }
@@ -481,6 +485,7 @@ impl PreparedScene {
                 &self.ground,
                 self.contacts.as_ref(),
             )
+            .with_combat_geometry(&self.combat_rays, self.combat_sweeps.as_ref())
             .with_hurt_volumes(&self.hurt_volumes),
         )
     }

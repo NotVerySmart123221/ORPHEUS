@@ -64,6 +64,8 @@ The Rust-only [stock bot script isolation fixture](../fixtures/behavior/stock-bo
 
 The prepared Practice Range return probe applies a room impulse and steps the real map collision and stock body VM. It verifies that the bot actually moves away, requests a return, and settles near its starting position before ending that request.
 
+The Rust-only [combat ray geometry fixture](../fixtures/behavior/map-combat-ray-geometry-v1.json) compares a closed movement proxy with detailed geometry that has an opening. Hitscan and narrow projectiles pass through the opening. Wide projectiles and shots aimed at solid bars still collide.
+
 The Rust-only [combat hurt volumes fixture](../fixtures/behavior/combat-hurt-volumes-v1.json) checks head and body classification, lateral contact, open space, and wall occlusion. Hitscan and projectiles use the same combat shape. Bodies without an optional hurt profile keep the compatibility proxy.
 
 The Rust-only [NPC weapon targeting fixture](../fixtures/behavior/npc-projectile-targeting-v1.json) checks that both NPC hitscan and flight use the live room's body-specific combat volumes. It covers an exposed head above the movement capsule, empty space, and same-team admission in team and free-for-all modes. The firing body's own contact is excluded in both modes.

@@ -12,6 +12,8 @@ pub(crate) struct BotQueries<'a> {
     free_for_all: bool,
     movers: &'a MoverCatalog,
     ground: &'a CollisionScene,
+    combat_rays: &'a CollisionScene,
+    combat_sweeps: Option<&'a Arc<ContactWorld>>,
     contacts: Option<&'a Arc<ContactWorld>>,
     hurt_volumes: Option<&'a HurtVolumeCatalog>,
 }
@@ -27,9 +29,21 @@ impl<'a> BotQueries<'a> {
             free_for_all,
             movers,
             ground,
+            combat_rays: ground,
+            combat_sweeps: contacts,
             contacts,
             hurt_volumes: None,
         }
+    }
+
+    pub(super) fn with_combat_geometry(
+        mut self,
+        rays: &'a CollisionScene,
+        sweeps: Option<&'a Arc<ContactWorld>>,
+    ) -> Self {
+        self.combat_rays = rays;
+        self.combat_sweeps = sweeps.or(self.combat_sweeps);
+        self
     }
 
     pub(crate) fn with_hurt_volumes(mut self, volumes: &'a HurtVolumeCatalog) -> Self {
@@ -179,11 +193,11 @@ impl<'a> BotQueries<'a> {
         direction: [f64; 3],
         reach: f64,
     ) -> Result<Option<crate::collision_index::RayHit>, crate::collision_index::IndexError> {
-        self.ground
+        self.combat_rays
             .cast_ray(origin, direction, reach, MOVER_CATEGORY)
     }
 
-    /// Sweep the authored terrain hull using the same scene as movement contacts.
+    /// Sweep the authored terrain hull through the prepared combat geometry.
     /// A zero-radius call is also used for point visibility from a blast.
     pub(crate) fn projectile_wall(
         &self,
@@ -195,7 +209,7 @@ impl<'a> BotQueries<'a> {
         if reach <= 0.0 {
             return Ok(None);
         }
-        if let Some(world) = self.contacts.filter(|_| radius > 0.0) {
+        if let Some(world) = self.combat_sweeps.filter(|_| radius > 0.0) {
             let start = origin.map(|axis| axis as f32);
             let end = along(origin, direction, reach).map(|axis| axis as f32);
             if !start.into_iter().chain(end).all(f32::is_finite) {
