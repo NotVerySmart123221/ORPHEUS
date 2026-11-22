@@ -46,6 +46,59 @@ fn spatial_candidates_capture_living_room_bodies_once_per_frame() {
     check_spatial_candidates_frame(true);
 }
 
+#[test]
+fn frozen_view_query_only_reports_empty_when_no_other_actor_can_match() {
+    use crate::{
+        contact_world::ContactWorld, mover::Mover, mover_settings::MoverSettings,
+        script_init::ViewTargetQuery,
+    };
+
+    let mut room = RoomSimulation::new(fixture_bots()).unwrap();
+    room.enable_spatial_queries(false, Arc::new(fixture_ground()), RoomSpatialNeeds::Queries);
+    let query = ViewTargetQuery {
+        source: 9,
+        offset: [0.0; 3],
+        range: 10.0,
+        aperture: 22.0,
+        limit: 4,
+        profile: 1,
+        masks: [1, 0, 16],
+        ranking: &serde_json::Value::Null,
+        sight: None,
+    };
+    let frame = FIXTURE_CONTEXT.tick;
+    let snapshot = room.capture_spatial_frame(frame).unwrap().unwrap();
+    assert_eq!(snapshot.empty_view_targets(&query), None);
+    for (entity, slot) in [(9, 0), (11, 1)] {
+        let mover = Mover::new(
+            MoverSettings::default(),
+            Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+            [4.0, 0.0, 2.0],
+            0,
+            0x08,
+        )
+        .unwrap();
+        room.spawn_player_body(PlayerBodyState::new(
+            BodyId {
+                entity,
+                generation: 1,
+            },
+            entity + 100,
+            slot,
+            0,
+            1,
+            mover,
+            None,
+            frame,
+            None,
+        ))
+        .unwrap();
+        let snapshot = room.capture_spatial_frame(frame).unwrap().unwrap();
+        let expected = (slot == 0).then(Vec::new);
+        assert_eq!(snapshot.empty_view_targets(&query), expected);
+    }
+}
+
 fn check_spatial_candidates_frame(free_for_all: bool) {
     use crate::{contact_world::ContactWorld, mover::Mover, mover_settings::MoverSettings};
 

@@ -42,6 +42,18 @@ The Rust-only [mode cue retry fixture](../fixtures/behavior/mode-cue-retry-v1.js
 
 The Rust-only [timed elimination fixture](../fixtures/behavior/script-timed-elimination-cues-v1.json) exercises an authored opponent filter, count window, and cue thresholds through the production VM. It checks same-frame eliminations, expiry, stale and missing settlement frames, and ineligible damage. Its policy and assets are synthetic.
 
+The [actor voice fixture](../fixtures/behavior/player-voice-v1.json) covers first-playable stimulus selection, skin overrides, and line variation. The Rust stock bot case runs an authored criteria action through the existing room cue queue and checks team and free-for-all audiences.
+
+The [directed room message fixture](../fixtures/behavior/script-room-message-v1.json) also runs through two stock bot VMs. The room test checks typed bindings, delivery on the next receiver frame, isolation from ordinary entries, and a recipient who dies after a message was admitted.
+
+The Rust-only [wheel selection fixture](../fixtures/behavior/wheel-selection-ingress-v1.json) covers typed client input, reliable ordering and retries, possession admission, and an actor replacement with the same wire ID. The prepared 104319 probe checks parameter binding in both authored receivers.
+
+The Rust-only [view tracker fixture](../fixtures/behavior/script-view-targets-v1.json) gives the same native field layout to two synthetic graph placements. It covers ordered output, periodic sampling, a successful empty result, and an unavailable room query. The room test uses a frozen actor snapshot and synthetic sight profiles to check range, aperture, ranking, result limits, and occlusion by walls and actors.
+
+The Rust-only [authored pairs fixture](../fixtures/behavior/script-authored-pairs-v1.json) exercises an asset-keyed table holding an expression-built parameter map. It checks ordered integer keys, typed display-text values, and rejection of malformed expression stacks. The prepared wheel probe checks that the selected action resolves to its own parameter row.
+
+The Rust-only [action texture fixture](../fixtures/behavior/script-asset-texture-v1.json) checks that keys with the same low 16 bits resolve independently. It distinguishes an absent catalog, a missing action in a supplied catalog, and an invalid asset kind.
+
 The Rust-only [health action fixture](../fixtures/behavior/script-health-change-v1.json) checks signed health request admission, continuation, and rejection diagnostics. Room tests cover player and bot settlement, stale body identity, and death and health updates.
 
 The Rust-only [scripted training bot respawn fixture](../fixtures/behavior/training-bot-scripted-respawn-v1.json) checks the ordinary replacement deadline even when authored damage is processed before room combat starts. The [bot respawn delivery fixture](../fixtures/behavior/training-bot-respawn-delivery-v1.json) covers successive replacements behind delayed health or identity acknowledgements, while independent bots continue through their own delivery order.
@@ -320,7 +332,7 @@ Mirrored under `fixtures/behavior/` so `rust` maintains a strict superset of `ma
 - **Verified by Python CI in `shared-behavior-contracts`** (Rust consumers tracked in [#61](https://github.com/leafall903/ORPHEUS/issues/61)):
   - `seismic-slam-wave-v1.json` (shockwave reach sampling & candidate dedup)
   - `seismic-slam-placement-v1.json` (airborne selector states & MoveTo handoff)
-  - `body-short-action-retry-v1.json` (short frame-action stamps, loss/retry & ACK retirement)
+  - `body-short-action-retry-v1.json` (short frame-action stamps, loss and ACK retirement, captured entity and instance variables after a later callout, and late observer admission)
   - `server-only-movement-v1.json` (channel-2 throttle mods & owner record tail window)
 - **Runtime-backed Python fixtures** (verified on `main` via `tests/runtime/`):
   - `player-voice-v1.json`, `wheel-emote-presentation-v1.json`, `wheel-emote-weapon-v1.json`

@@ -41,7 +41,6 @@ pub const BOT_RESPAWN_TIME: Duration = Duration::from_secs(3);
 pub const BOT_RECORD_DELAY: u32 = 8;
 
 const PATROL: u64 = 0x0580_0000_0000_0b8e;
-const FIRING: u64 = 0x0580_0000_0000_0b92;
 const ARRIVED: f64 = 0.05;
 const MAX_DETOUR_SAMPLES: usize = 64;
 const STEP_UP: f64 = 0.6;
@@ -87,7 +86,7 @@ pub struct BotSpawn {
     pub health: f64,
     pub position: [f64; 3],
     pub yaw: i32,
-    pub firing: bool,
+    pub(crate) placement_graphs: Vec<u64>,
     pub route: Vec<[f64; 3]>,
     initial_index: i64,
 }
@@ -121,14 +120,12 @@ impl BotCatalog {
                 if row.identifier.is_some() {
                     continue;
                 }
-                let mut patrol = false;
-                let mut firing = false;
-                for graph in row.graphs {
-                    let id = guid(&graph)?;
-                    patrol |= id == PATROL;
-                    firing |= id == FIRING;
-                }
-                let route = if patrol {
+                let placement_graphs = row
+                    .graphs
+                    .iter()
+                    .map(|graph| guid(graph))
+                    .collect::<io::Result<Vec<_>>>()?;
+                let route = if placement_graphs.contains(&PATROL) {
                     row.vars
                         .route
                         .iter()
@@ -147,7 +144,7 @@ impl BotCatalog {
                     health: hero.health,
                     position: row.position,
                     yaw: yaw_of(row.rotation),
-                    firing,
+                    placement_graphs,
                     route,
                     initial_index: row.vars.index,
                 }));
@@ -439,7 +436,7 @@ impl Bot {
                 health: definition.pools.total(),
                 position,
                 yaw: s16((yaw * 65536.0 / 360.0).round_ties_even()) as i32,
-                firing: false,
+                placement_graphs: Vec::new(),
                 route: Vec::new(),
                 initial_index: 0,
             }),
@@ -1405,7 +1402,7 @@ mod tests {
                 health: 200.0,
                 position: [0.0; 3],
                 yaw: 0,
-                firing: false,
+                placement_graphs: Vec::new(),
                 route: vec![[0.0; 3], target],
                 initial_index: 0,
             }),
@@ -1666,13 +1663,16 @@ mod tests {
         assert_eq!(bots[0].spawn.health, 200.0);
         assert_eq!(bots[0].position, [2.0, 3.0, 4.0]);
         assert_eq!(bots[0].yaw, 16384.0);
-        assert!(bots[0].spawn.firing);
+        assert_eq!(
+            bots[0].spawn.placement_graphs,
+            [PATROL, 0x0580_0000_0000_0b92]
+        );
         assert_eq!(
             bots[0].spawn.route,
             [[4.0, 5.0, 6.0], [1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
         );
         assert_eq!(bots[0].index, 2);
-        assert!(!bots[1].spawn.firing);
+        assert!(bots[1].spawn.placement_graphs.is_empty());
         assert!(bots[1].spawn.route.is_empty());
         assert!(catalog.make(0, |_| unreachable!()).is_empty());
     }
@@ -2229,7 +2229,10 @@ mod tests {
             roster.update([spawn.team]);
             roster.update((spawn.health as f32).to_le_bytes());
             roster.update(spawn.yaw.to_le_bytes());
-            roster.update([u8::from(spawn.firing)]);
+            // The pinned Python roster serialized its firing-placement marker.
+            roster.update([u8::from(
+                spawn.placement_graphs.contains(&0x0580_0000_0000_0b92),
+            )]);
             roster.update(u32::try_from(spawn.name.len()).unwrap().to_le_bytes());
             roster.update(spawn.name.as_bytes());
             for value in bot.position.into_iter().chain([

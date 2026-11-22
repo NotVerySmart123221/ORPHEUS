@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "case_id": "script-view-targets-v1",
+  "evidence": "synthetic-rust",
+  "source": "Supported field layout and period table from the view tracker research. Actor IDs, profile ID, placement and geometry are synthetic.",
+  "input": {
+    "owner": 9401,
+    "targets": [9403, 9402],
+    "field_shape": {
+      "m_0297060F": 1,
+      "m_08285CD6": 1,
+      "m_1C2A9945": 1,
+      "m_2BBEEAB8": 1,
+      "m_32AFE9AA": 1,
+      "m_43478CAD": 3,
+      "m_95FFC3C5": 1,
+      "m_E4A295CE": 1,
+      "m_DD792FF0": 2,
+      "m_05BE62DD": {"$":"STUConfigVarVec3","m_value":{"$":"teVec3","X":0,"Y":2,"Z":0}},
+      "m_8DCA77B6": {"$":"STU_B5A0CAF0"},
+      "m_radius": {"$":"STUConfigVarInt","m_value":23},
+      "m_A30B383E": {"$":"STUConfigVarInt","m_value":34},
+      "m_C39691D9": {"$":"STUConfigVarInt","m_value":2},
+      "m_8A2905A0": {"$":"STUConfigVarDynamic","m_identifier":64,"m_60DB8F99":0},
+      "m_filter": {"$":"STUConfigVarFilter","m_89831602":4,"m_84065FD1":1,"m_1E14CCA8":0,"m_4EA686DB":16},
+      "m_3D667CE3": {"$":"STUConfigVarFilter","m_C1903771":{"$":"STU_20DB8AB5","m_C1903771":"0x069000000000FF11"}},
+      "m_84E5DE4E": {"$":"STU_B61DA2A5","m_503F0304":[]}
+    }
+  },
+  "room": {
+    "source": 100,
+    "positions": [
+      [100, 0, [0, 0, 0]],
+      [30, 0, [0, 0, 8]],
+      [20, 0, [0.9, 0, 4]],
+      [40, 0, [8, 0, 2]],
+      [41, 0, [0, 0, -4]],
+      [42, 0, [0, 0, 30]]
+    ],
+    "blocker": [11, 1, [0, 0, 3]],
+    "ranking": {
+      "$": "STU_B61DA2A5",
+      "m_503F0304": [
+        {
+          "$": "STU_2399BBA2",
+          "m_84E5DE4E": {
+            "$": "STU_2FD4C482",
+            "m_ABC68B33": {"$": "STUConfigVarInt", "m_value": 0},
+            "m_2AFC083F": {"$": "STUConfigVarInt", "m_value": 1}
+          },
+          "m_weight": {"$": "STUConfigVarInt", "m_value": 1}
+        },
+        {
+          "$": "STU_2399BBA2",
+          "m_84E5DE4E": {
+            "$": "STU_AD7331B0",
+            "m_ABC68B33": {"$": "STUConfigVarInt", "m_value": 0},
+            "m_2AFC083F": {"$": "STUConfigVarInt", "m_value": 25}
+          },
+          "m_weight": {"$": "STUConfigVarFloat", "m_value": 0.02}
+        }
+      ]
+    },
+    "unblocked_order": [30, 20],
+    "blocked_order": [20]
+  },
+  "expected": {
+    "output_variable": 64,
+    "period_frames": 6,
+    "profile": "0x069000000000FF11",
+    "offset": [0, 2, 0],
+    "aperture": 34,
+    "range": 23,
+    "limit": 2
+  }
+}

@@ -36,6 +36,10 @@ pub(super) enum Delivery {
     SceneScript {
         last: u32,
     },
+    ObservedProjectile {
+        id: u64,
+        step: super::observed_projectiles::ProjectileDelivery,
+    },
     ProjectileConfirm {
         id: BodyId,
         token: ProjectileToken,
@@ -101,6 +105,7 @@ impl WorldDelivery {
             projectile_destroys: HashMap::new(),
             biotic_views: BTreeMap::new(),
             scene_views: BTreeMap::new(),
+            observed_projectiles: Default::default(),
             bot_chunk_waited: false,
             gate: None,
             next_biotic_view: FIRST_BIOTIC_VIEW,
@@ -134,6 +139,7 @@ impl WorldDelivery {
         self.projectile_destroys.clear();
         self.biotic_views.clear();
         self.scene_views.clear();
+        self.observed_projectiles = Default::default();
         self.bot_chunk_waited = false;
         self.gate = None;
         self.input.clear();
@@ -380,6 +386,11 @@ impl WorldDelivery {
                     })
             }
             Delivery::Health { revision } => self.health_updates.get(&entity) == Some(&revision),
+            Delivery::ObservedProjectile { id, step } => {
+                self.observed_projectiles.current(id, step)
+                    && (step != super::observed_projectiles::ProjectileDelivery::Launch
+                        || self.tracks_current_bot(entity))
+            }
             Delivery::Script {
                 last, close: true, ..
             } => last == self.controller.latest_data(),
@@ -523,6 +534,9 @@ impl WorldDelivery {
                     }
                     (true, Delivery::Health { .. }) => {
                         self.health_updates.remove(&record.update.entity);
+                    }
+                    (true, Delivery::ObservedProjectile { id, step }) => {
+                        self.observed_projectiles.arrived(id, step);
                     }
                     (true, Delivery::CreateBody(id)) => {
                         self.created.insert(id.entity);
@@ -1081,7 +1095,11 @@ impl WorldDelivery {
         Ok(())
     }
 
-    pub(crate) fn present_scene_scripts(&mut self, scene: &PreparedScene) -> io::Result<()> {
+    pub(crate) fn present_scene_scripts(
+        &mut self,
+        scene: &PreparedScene,
+        tick: u32,
+    ) -> io::Result<()> {
         if let Some(projection) = scene.simulation().gate_projection() {
             self.present_scene_script(projection)?;
         }
@@ -1092,7 +1110,7 @@ impl WorldDelivery {
         for projection in scene.simulation().player_projections(self.owner) {
             self.present_scene_script(projection)?;
         }
-        Ok(())
+        self.advance_observed_projectiles(tick)
     }
 
     pub(crate) fn present_bot_controllers(&mut self, scene: &PreparedScene) -> io::Result<()> {
@@ -1167,6 +1185,7 @@ impl WorldDelivery {
                 .map_err(invalid)?;
             if bot {
                 snapshot.stage_practice_nameplates(Some(base), can_introduce);
+                self.observed_projectiles.retain_volleys(&mut snapshot);
             }
             encoder
                 .queue_delta(stream, &snapshot, DeltaKind::Observer { resend: true }, 16)
@@ -1177,6 +1196,7 @@ impl WorldDelivery {
                 .map_err(invalid)?;
             if bot {
                 snapshot.stage_practice_nameplates(None, false);
+                self.observed_projectiles.retain_volleys(&mut snapshot);
             }
             Some(encoder.queue_full(stream, &snapshot).map_err(invalid)?)
         };
@@ -1370,6 +1390,26 @@ impl WorldDelivery {
                 tick,
                 received,
             });
+        }
+    }
+
+    pub(crate) fn queue_wheel_action(&mut self, simulation: &RoomSimulation, message: &Message) {
+        let Some(body) = self
+            .active_body_id()
+            .filter(|&id| self.owner_body_ready(id))
+        else {
+            return;
+        };
+        if !simulation
+            .player_body(body)
+            .filter(|state| state.owner == self.owner && state.alive())
+            .and_then(|state| state.runtime.as_deref())
+            .is_some_and(OwnerBodyRuntime::wheel_actions_available)
+        {
+            return;
+        }
+        if let Some(action) = ClientWheelAction::read(message) {
+            self.input.push(InputWork::WheelAction { body, action });
         }
     }
 
@@ -1674,6 +1714,20 @@ impl WorldDelivery {
                     received,
                 } => {
                     self.game_message(scene, viewer, tick, received, quanta, &message)?;
+                    remaining -= 1;
+                }
+                InputWork::WheelAction { body, action } => {
+                    let runtime = self
+                        .active_body_id()
+                        .filter(|&active| active == body && self.owner_body_ready(active))
+                        .and_then(|id| scene.simulation_mut().player_body_mut(id))
+                        .filter(|state| state.owner == self.owner && state.alive())
+                        .and_then(|state| state.runtime.as_mut())
+                        .filter(|runtime| runtime.wheel_actions_available());
+                    if let Some(runtime) = runtime {
+                        // A full or halted VM queue rejects the request locally.
+                        let _ = runtime.queue_local_message(action.into_local_message());
+                    }
                     remaining -= 1;
                 }
                 InputWork::Skin {

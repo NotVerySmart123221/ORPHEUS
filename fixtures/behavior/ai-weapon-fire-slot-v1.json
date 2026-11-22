@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "case_id": "ai-weapon-fire-slot-v1",
+  "evidence": "rust-headless-synthetic",
+  "input": [
+    { "self_target": true, "enabled": true, "slot": 2, "held_slots": [2] },
+    { "self_target": true, "enabled": false, "slot": 2, "held_slots": [] },
+    { "self_target": true, "enabled": true, "slot": -1, "held_slots": [] },
+    { "self_target": false, "enabled": true, "slot": 2, "held_slots": [] }
+  ],
+  "expected_after_exit": []
+}

@@ -28,6 +28,7 @@ use crate::{
 };
 
 mod charge_compatibility;
+mod view_targets;
 
 use charge_compatibility::validate_charge_compatibility;
 pub use charge_compatibility::{ChargeCompatibility, ChargeStateBinding};
@@ -129,8 +130,42 @@ impl Node {
         !self.client_only && !self.server_only
     }
 
+    pub(crate) fn frame_action_variables(&self) -> Option<Vec<Variable>> {
+        let rows = self.fields.get("m_BF5B22B7").unwrap_or(&Value::Null);
+        if rows.is_null() {
+            return Some(Vec::new());
+        }
+        rows.as_array()?
+            .iter()
+            .map(|row| {
+                if row["$"] != "STUStatescriptRemoteSyncVar"
+                    || !native_fields(row, &["m_0D09D2D9", "m_56341592"])
+                {
+                    return None;
+                }
+                let guid = asset_guid(&row["m_0D09D2D9"])?;
+                let id = u32::from(guid as u16);
+                if guid >> 48 != 0x0d80 || id == 0 {
+                    return None;
+                }
+                let scope = match row["m_56341592"].as_u64()? {
+                    0 => Scope::Instance,
+                    1 => Scope::Entity,
+                    _ => return None,
+                };
+                Some(Variable { id, scope })
+            })
+            .collect()
+    }
+
     pub fn is_state(&self) -> bool {
         self.state_behavior.is_some() || self.fields.get("m_2BBEEAB8").is_some_and(truthy)
+    }
+
+    pub(crate) fn is_ai_weapon_fire(&self) -> bool {
+        self.class == "STU_D7F9E1C3"
+            && self.field("m_234135C3").is_none_or(Value::is_null)
+            && self.runs_on_server()
     }
 
     /// Whether authored metadata opts this node into the ordinary state lifecycle.
@@ -1188,6 +1223,15 @@ impl Graph {
         self.node((*self.states.get(index)?)?)
     }
 
+    /// Whether this graph contains a supported server-side weapon input state.
+    pub fn drives_ai_weapon_input(&self) -> bool {
+        self.states
+            .iter()
+            .flatten()
+            .filter_map(|&position| self.node(position))
+            .any(Node::is_ai_weapon_fire)
+    }
+
     pub fn remote_node(&self, index: usize) -> Option<&Node> {
         self.node((*self.remote_nodes.get(index)?)?)
     }
@@ -1341,11 +1385,17 @@ fn optional_graph_index<'de, D: serde::Deserializer<'de>>(
     Option::<Value>::deserialize(deserializer)?
         .map(|value| {
             asset_guid(&value)
-                .filter(|guid| guid >> 48 == GRAPH_TYPE)
-                .and_then(|guid| u32::try_from(guid & 0x0000_ffff_ffff_ffff).ok())
+                .and_then(graph_asset_index)
                 .ok_or_else(|| serde::de::Error::custom("invalid StateScript graph GUID"))
         })
         .transpose()
+}
+
+/// Resolve an authored StateScript resource to the graph bundle's index.
+pub fn graph_asset_index(guid: u64) -> Option<u32> {
+    (guid >> 48 == GRAPH_TYPE)
+        .then(|| u32::try_from(guid & 0x0000_ffff_ffff_ffff).ok())
+        .flatten()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1711,6 +1761,12 @@ struct Bundle {
     authored_classes: Vec<AuthoredClass>,
     #[serde(default)]
     runtime_state_metadata: RuntimeStateMetadata,
+    #[serde(default)]
+    asset_categories: Option<BTreeMap<String, Vec<AssetCategoryRow>>>,
+    #[serde(default)]
+    asset_textures: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    view_sight_profiles: BTreeMap<String, crate::script_init::ViewSightProfile>,
     graphs: Vec<Graph>,
     bodies: BTreeMap<String, Body>,
     #[serde(default)]
@@ -1726,6 +1782,13 @@ struct Bundle {
     #[serde(default)]
     junkenstein: EnemyCatalog,
     missing: Vec<u32>,
+}
+
+#[derive(Deserialize)]
+struct AssetCategoryRow {
+    id: String,
+    #[serde(rename = "type")]
+    kind: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
@@ -1821,6 +1884,9 @@ fn room_spatial_requirements(value: &Value) -> RoomSpatialRequirements {
 #[derive(Debug)]
 pub struct GraphStore {
     graphs: BTreeMap<u32, Graph>,
+    asset_categories: Option<BTreeMap<u64, BTreeSet<(u64, u64)>>>,
+    asset_textures: Option<BTreeMap<u64, u64>>,
+    view_sight_profiles: BTreeMap<u64, crate::script_init::ViewSightProfile>,
     projected_message_topics: BTreeSet<u64>,
     room_spatial_needs: RoomSpatialNeeds,
     uses_spatial_actor_rays: bool,
@@ -1857,6 +1923,50 @@ impl GraphStore {
         if bundle.version != 1 {
             return Err(invalid("unsupported state graph bundle version"));
         }
+        let asset_categories = bundle
+            .asset_categories
+            .map(|records| {
+                keyed_by_guid(records)?
+                    .into_iter()
+                    .map(|(asset, rows)| {
+                        if asset == 0 {
+                            return Err(invalid("zero asset in category metadata"));
+                        }
+                        let categories = rows
+                            .into_iter()
+                            .map(|row| {
+                                let parse = |value: &str| {
+                                    parse_guid(value)
+                                        .filter(|guid| *guid != 0)
+                                        .ok_or_else(|| invalid("invalid asset category identifier"))
+                                };
+                                Ok((parse(&row.kind)?, parse(&row.id)?))
+                            })
+                            .collect::<io::Result<BTreeSet<_>>>()?;
+                        Ok((asset, categories))
+                    })
+                    .collect::<io::Result<BTreeMap<_, _>>>()
+            })
+            .transpose()?;
+        let asset_textures = bundle
+            .asset_textures
+            .map(|rows| {
+                keyed_by_guid(rows)?
+                    .into_iter()
+                    .map(|(action, texture)| {
+                        if !is_communication_action(action) {
+                            return Err(invalid(
+                                "invalid communication action key in texture catalog",
+                            ));
+                        }
+                        let texture = parse_guid(&texture)
+                            .filter(|&id| id >> 48 == 0x0c00 && id != 0x0c00_0000_0000_0000)
+                            .ok_or_else(|| invalid("invalid texture GUID in texture catalog"))?;
+                        Ok((action, texture))
+                    })
+                    .collect::<io::Result<BTreeMap<_, _>>>()
+            })
+            .transpose()?;
         let mut authored_classes = BTreeMap::new();
         for AuthoredClass { class, behavior } in bundle.authored_classes {
             let valid_name = class.strip_prefix("authored.").is_some_and(|name| {
@@ -2030,6 +2140,20 @@ impl GraphStore {
                 "static ray profile requires a collision profile GUID and a nonzero category",
             ));
         }
+        let view_sight_profiles = keyed_by_guid(bundle.view_sight_profiles)?;
+        for (&guid, profile) in &view_sight_profiles {
+            if guid >> 48 != 0x0690
+                || profile.static_mask == 0
+                || profile.samples.is_empty()
+                || profile.samples.len() > 8
+                || profile
+                    .samples
+                    .iter()
+                    .any(|height| !(0.0..=1.0).contains(height))
+            {
+                return Err(invalid(format!("invalid view sight profile {guid:016X}")));
+            }
+        }
         let room_spatial_requirements = graphs
             .values()
             .flat_map(|graph| &graph.nodes)
@@ -2043,11 +2167,16 @@ impl GraphStore {
                     requirements.needs = requirements.needs.max(RoomSpatialNeeds::Queries);
                     requirements.actor_rays = true;
                 }
+                let view_track = node.view_track();
+                requirements.actor_rays |= view_track
+                    .as_ref()
+                    .is_some_and(|track| view_sight_profiles.contains_key(&track.profile));
                 if node.declares_health_change_action()
                     || node.declares_room_message_action()
                     || node.declares_room_cue_action()
                     || node.directed_numeric_parameter().is_some()
                     || node.tracks_room_actor_identity()
+                    || view_track.is_some()
                 {
                     requirements.needs = requirements.needs.max(RoomSpatialNeeds::Queries);
                 }
@@ -2062,6 +2191,9 @@ impl GraphStore {
             .any(|graph| graph.entry_handlers.contains_key(&health_topic));
         Ok(Self {
             graphs,
+            asset_categories,
+            asset_textures,
+            view_sight_profiles,
             projected_message_topics,
             room_spatial_needs: room_spatial_requirements.needs,
             uses_spatial_actor_rays: room_spatial_requirements.actor_rays,
@@ -2084,6 +2216,35 @@ impl GraphStore {
             enemies: bundle.junkenstein.validate()?,
             missing: bundle.missing,
         })
+    }
+
+    /// Authored category pairs are keyed by the complete asset and identifier IDs.
+    pub(crate) fn asset_has_category(&self, asset: u64, kind: u64, id: u64) -> Option<bool> {
+        self.asset_categories.as_ref().map(|categories| {
+            categories
+                .get(&asset)
+                .is_some_and(|pairs| pairs.contains(&(kind, id)))
+        })
+    }
+
+    /// A configured lookup returns a typed miss when the action has no texture.
+    pub fn asset_texture(&self, action: u64) -> Option<u64> {
+        self.asset_textures
+            .as_ref()
+            .map(|textures| textures.get(&action).copied().unwrap_or(0))
+    }
+
+    pub(crate) fn view_sight_profile(
+        &self,
+        guid: u64,
+    ) -> Option<&crate::script_init::ViewSightProfile> {
+        self.view_sight_profiles.get(&guid)
+    }
+
+    pub fn has_asset_category_data(&self) -> bool {
+        self.asset_categories
+            .as_ref()
+            .is_some_and(|rows| !rows.is_empty())
     }
 
     /// Whether any server graph uses the room's living body snapshot.
@@ -2326,6 +2487,10 @@ fn collect_graphs(value: &Value, out: &mut BTreeSet<u64>) {
             }
         }
     }
+}
+
+pub(crate) fn is_communication_action(guid: u64) -> bool {
+    guid & !u64::from(u32::MAX) == 0x0a90_0000_0000_0000 && guid as u32 != 0
 }
 
 fn keyed_by_guid<T>(records: BTreeMap<String, T>) -> io::Result<BTreeMap<u64, T>> {

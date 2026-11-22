@@ -36,6 +36,7 @@ mod states_and_switches;
 mod static_model_protection;
 mod swept_displacement;
 mod vertical_velocity_impulse;
+mod view_targets;
 
 pub(super) use std::path::PathBuf;
 

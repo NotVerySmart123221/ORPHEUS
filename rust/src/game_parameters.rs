@@ -1,15 +1,67 @@
-//! ClientOutInstance game messages and the known hero-select parameter layouts.
+//! Client game messages and their typed request parameters.
 
 use crate::{
     game_heroes::{Hero, HeroCatalog},
     game_messages::Message,
     jam_codec::Value,
+    script_init::RoomMessage,
+    script_wire::{Value as ScriptValue, Variables},
 };
 
 pub const CLIENT_GAME_MESSAGE: u32 = 21616;
+pub(crate) const CLIENT_WHEEL_ACTION: u32 = 21608;
 pub const PICK_HERO: u64 = 0x0240_0000_0000_1361;
 pub const OPEN_OR_CLOSE: u64 = 0x0240_0000_0000_1360;
 const HERO_ASSET_TYPE: u16 = 0x02e0;
+const WHEEL_ACTION_PREFIX: u64 = 0x0a90_0000_0000_0000;
+const WHEEL_SELECTION: u64 = 0x0240_0000_0000_02a3;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ClientWheelAction {
+    action: u64,
+    confirmed: bool,
+}
+
+impl ClientWheelAction {
+    pub(crate) fn read(message: &Message) -> Option<Self> {
+        if message.id != CLIENT_WHEEL_ACTION {
+            return None;
+        }
+        let Value::Unsigned(action) = *message.fields.get(&0x78)? else {
+            return None;
+        };
+        let Value::Bool(confirmed) = *message.fields.get(&0x80)? else {
+            return None;
+        };
+        if action & !u64::from(u32::MAX) != WHEEL_ACTION_PREFIX || action == WHEEL_ACTION_PREFIX {
+            return None;
+        }
+        // Contextual targeting needs its own room validation. Accept only
+        // the context-free request while that path is unavailable.
+        match message.fields.get(&0x84) {
+            None => (),
+            Some(Value::Struct(marker))
+                if marker
+                    .get(&0)
+                    .is_none_or(|value| *value == Value::Unsigned(0)) =>
+            {
+                ()
+            }
+            _ => return None,
+        }
+        Some(Self { action, confirmed })
+    }
+
+    pub(crate) fn into_local_message(self) -> RoomMessage {
+        RoomMessage {
+            id: WHEEL_SELECTION,
+            parameters: Variables::from([
+                (0x08fc, ScriptValue::Asset(self.action)),
+                (0x03e1, ScriptValue::Bool(self.confirmed)),
+            ]),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClientGameMessage<'a> {

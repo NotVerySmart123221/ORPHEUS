@@ -13,7 +13,8 @@ use crate::bits::{BitError, BitWriter};
 use crate::script_codecs::{Codec, CodecTable, PayloadError, PayloadMode, StatePayload};
 use crate::script_expr::Variable;
 use crate::script_graph::{Graph, GraphStore};
-use crate::script_init::{ChasePayload, Snapshot, StackBinding, StateKind};
+pub use crate::script_init::FrameCallout;
+use crate::script_init::{ChasePayload, FrameAction, ShotEvent, Snapshot, StackBinding, StateKind};
 use crate::script_stream::StreamError;
 use crate::script_wire::{self, Bindings, Value, ValueEncoding, Variables, WireError};
 
@@ -47,13 +48,6 @@ pub enum View {
     Observer,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FrameCallout {
-    pub serial: u32,
-    pub instance: u16,
-    pub position: u16,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectedSnapshot {
     pub(super) entity: u32,
@@ -62,7 +56,7 @@ pub struct ProjectedSnapshot {
     pub(super) variables: ProjectedVariables,
     pub(super) instances: BTreeMap<u16, ProjectedInstance>,
     pub(super) callout: u32,
-    pub(super) callouts: Vec<FrameCallout>,
+    pub(super) callouts: Vec<FrameAction>,
     pub(super) emit_events: bool,
 }
 
@@ -84,7 +78,10 @@ impl ProjectedSnapshot {
     }
 
     pub fn with_callout(mut self, callout: FrameCallout) -> Self {
-        self.callouts.push(callout);
+        self.callouts.push(FrameAction {
+            callout,
+            values: BTreeMap::new(),
+        });
         self
     }
 
@@ -160,7 +157,7 @@ impl ProjectedSnapshot {
             }
         }
         self.callouts
-            .retain(|callout| !unseen.contains(&callout.instance));
+            .retain(|action| !unseen.contains(&action.callout.instance));
     }
 
     fn extend_descendants(&self, selected: &mut BTreeSet<u16>) {
@@ -188,6 +185,58 @@ impl ProjectedSnapshot {
             .get(&state)?
             .volley
             .map(|volley| volley.identity)
+    }
+
+    pub(crate) fn freeze_volley(&self, event: ShotEvent) -> Option<FrozenVolley> {
+        let instance = self.instances.get(&event.instance)?;
+        let state = instance.states.get(&event.raw_state)?;
+        let identity = state.volley?.identity;
+        if self.entity != event.entity
+            || self.view != View::Observer
+            || instance.graph != event.graph
+            || identity != (event.activation, event.activation_ms)
+        {
+            return None;
+        }
+        let Value::Integer(count) = state.payload.get("volleys")? else {
+            return None;
+        };
+        Some(FrozenVolley {
+            event,
+            parent: instance.parent,
+            state: state.clone(),
+            count: u16::try_from(*count).ok()?,
+        })
+    }
+
+    pub(crate) fn retain_volley(&mut self, volley: &FrozenVolley) {
+        if self.entity != volley.event.entity {
+            return;
+        }
+        if let Some(instance) = self
+            .instances
+            .get_mut(&volley.event.instance)
+            .filter(|instance| {
+                instance.graph == volley.event.graph && instance.parent == volley.parent
+            })
+        {
+            instance
+                .states
+                .insert(volley.event.raw_state, volley.state.clone());
+        }
+    }
+
+    pub(crate) fn has_volley(&self, volley: &FrozenVolley) -> bool {
+        let event = volley.event;
+        self.entity == event.entity
+            && self
+                .instances
+                .get(&event.instance)
+                .filter(|instance| {
+                    instance.graph == event.graph && instance.parent == volley.parent
+                })
+                .and_then(|instance| instance.states.get(&event.raw_state))
+                .is_some_and(|state| state == &volley.state)
     }
 
     #[cfg(feature = "inspector")]
@@ -255,6 +304,14 @@ impl ProjectedSnapshot {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct FrozenVolley {
+    pub(crate) event: ShotEvent,
+    pub(crate) count: u16,
+    parent: Option<(u16, u16)>,
+    state: ProjectedState,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct ProjectedInstance {
     pub(super) graph: u32,
@@ -320,8 +377,8 @@ impl ProjectedVariables {
         )
     }
 
-    pub(super) fn seed_ammo(&mut self, variable: u32, ammo: i64) {
-        self.values.insert(variable, Value::Integer(ammo));
+    pub(super) fn seed_value(&mut self, variable: u32, value: Value) {
+        self.values.insert(variable, value);
         self.bindings.remove(&variable);
     }
 }

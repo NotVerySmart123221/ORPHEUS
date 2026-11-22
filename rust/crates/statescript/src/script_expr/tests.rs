@@ -8,6 +8,97 @@ use crate::script_graph::GraphStore;
 mod degree_trigonometry;
 mod entity_ray_cast;
 
+struct CatalogContext(GraphStore);
+
+impl Context for CatalogContext {
+    fn asset_has_category(&mut self, asset: u64, kind: u64, id: u64) -> Option<bool> {
+        self.0.asset_has_category(asset, kind, id)
+    }
+
+    fn asset_texture(&mut self, action: u64) -> Option<u64> {
+        self.0.asset_texture(action)
+    }
+}
+
+#[test]
+fn authored_asset_category_requires_the_exact_identifier_pair() {
+    let asset = "0x0A9000000000AAAA";
+    let kind = "0x0C8800000000BBBB";
+    let id = "0x0D8000000000CCCC";
+    let mut bundle = json!({"version":1, "graphs":[], "bodies":{}, "missing":[]});
+    let config = |selected, category_kind, category_id| {
+        json!({
+            "$":"STU_4460419A",
+            "m_548E5344":{"$":"STU_B70476F3", "m_548E5344":selected,"m_resourceKey":null},
+            "m_D929182B":{"$":"STU_A1353B54","m_value":{
+                "$":"STU_BCD1C634","m_type":category_kind,"m_id":category_id
+            }}
+        })
+    };
+    let load = |bundle: &Json| {
+        CatalogContext(GraphStore::from_json(&serde_json::to_vec(bundle).unwrap()).unwrap())
+    };
+    assert_eq!(
+        evaluate(&config(asset, kind, id), &mut load(&bundle)),
+        Err(EvalError::UnsupportedConfig("STU_4460419A".into()))
+    );
+    bundle["asset_categories"] = json!({asset: [{"type":kind,"id":id}]});
+    let mut context = load(&bundle);
+    assert_eq!(
+        evaluate(&config(asset, kind, id), &mut context),
+        Ok(Value::Bool(true))
+    );
+    assert_eq!(
+        evaluate(&config(asset, "0x0C8800000000BBAA", id), &mut context),
+        Ok(Value::Bool(false))
+    );
+    assert_eq!(
+        evaluate(&config("0x0A9000000000AAAB", kind, id), &mut context),
+        Ok(Value::Bool(false))
+    );
+}
+
+#[test]
+fn authored_texture_lookup_distinguishes_exact_keys_misses_and_missing_data() {
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../../../fixtures/behavior/script-asset-texture-v1.json"
+    ))
+    .unwrap();
+    let mut bundle = json!({"version":1, "graphs":[], "bodies":{}, "missing":[]});
+    let config = |selected: &str| {
+        json!({
+            "$":"STU_1ECB66A0", "m_EE729DCB":0, "m_resourceKey":null,
+            "m_548E5344":{"$":"STUConfigVarIdentifier","m_identifier":selected}
+        })
+    };
+    let load = |bundle: &Json| {
+        GraphStore::from_json(&serde_json::to_vec(bundle).unwrap()).map(CatalogContext)
+    };
+    let assets = fixture["assets"].as_object().unwrap();
+    let (first, _) = assets.iter().next().unwrap();
+    assert_eq!(
+        evaluate(&config(first), &mut load(&bundle).unwrap()),
+        Err(EvalError::UnsupportedConfig("STU_1ECB66A0".into()))
+    );
+    bundle["asset_textures"] = fixture["assets"].clone();
+    let mut context = load(&bundle).unwrap();
+    for (action, texture) in assets {
+        let texture = crate::script_graph::asset_guid(texture).unwrap();
+        assert_eq!(
+            evaluate(&config(action), &mut context),
+            Ok(Value::Asset(texture))
+        );
+    }
+    for key in ["missing_action", "invalid_action"] {
+        assert_eq!(
+            evaluate(&config(fixture[key].as_str().unwrap()), &mut context),
+            Ok(Value::Asset(0))
+        );
+    }
+    bundle["asset_textures"][first] = fixture["invalid_action"].clone();
+    assert!(load(&bundle).is_err());
+}
+
 #[derive(Default)]
 struct Vars {
     instance: BTreeMap<u32, Value>,
@@ -1229,6 +1320,62 @@ fn authored_message_map_looks_up_the_first_matching_key() {
         Err(WireError::InvalidValue)
     );
     assert_eq!(bits.bit_len(), 0);
+}
+
+#[test]
+fn authored_pairs_preserve_nested_parameter_maps_in_expression_order() {
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../../../fixtures/behavior/script-authored-pairs-v1.json"
+    ))
+    .unwrap();
+    let input = &fixture["input"];
+    let display_slot = input["display_slot"].as_u64().unwrap();
+    let style_slot = input["style_slot"].as_u64().unwrap();
+    let style = input["style"].as_i64().unwrap();
+    let display_text = crate::script_graph::asset_guid(&input["display_text"]).unwrap();
+    let params = expression(
+        json!([7, 0, 14, 0, 7, 1, 14, 1, 19, 2, 0]),
+        &[
+            variable(display_slot as u32, Scope::Instance),
+            variable(style_slot as u32, Scope::Instance),
+        ],
+        &[],
+        &[
+            json!({"$":"STUConfigVarUXDisplayText", "m_displayText":input["display_text"]}),
+            json!({"$":"STUConfigVarInt", "m_value":style}),
+        ],
+    );
+    let mut table = json!({
+        "$":"STU_7757D403",
+        "m_configVars":[{
+            "$":"STU_98DD1872",
+            "m_key":{"$":"STU_B70476F3", "m_548E5344":input["selection"]},
+            "m_value":params
+        }],
+    });
+    let mut context = Vars::default();
+    let selection = crate::script_graph::asset_guid(&input["selection"]).unwrap();
+    assert_eq!(
+        evaluate(&table, &mut context),
+        Ok(Value::Map(vec![(
+            Value::Asset(selection),
+            Value::Map(vec![
+                (
+                    Value::Integer(display_slot as i64),
+                    Value::Asset(display_text)
+                ),
+                (Value::Integer(style_slot as i64), Value::Integer(style))
+            ])
+        )]))
+    );
+    table["m_configVars"][0]["m_value"]["m_expression"]["m_opcodes"] = json!([19, 1, 0]);
+    assert!(matches!(
+        evaluate(&table, &mut context),
+        Err(EvalError::MalformedBytecode {
+            offset: 0,
+            reason: "expression stack underflow",
+        })
+    ));
 }
 
 #[test]
@@ -3322,11 +3469,11 @@ fn executes_only_the_selected_path_and_bounds_nested_expressions() {
 
 #[test]
 fn reports_unsupported_operations_instead_of_returning_a_guessed_null() {
-    let map = expression(json!([19, 0, 0]), &[], &[], &[]);
+    let unknown = expression(json!([255, 0]), &[], &[], &[]);
     assert_eq!(
-        evaluate(&map, &mut EmptyContext),
+        evaluate(&unknown, &mut EmptyContext),
         Err(EvalError::UnsupportedOpcode {
-            opcode: 19,
+            opcode: 255,
             offset: 0
         }),
     );

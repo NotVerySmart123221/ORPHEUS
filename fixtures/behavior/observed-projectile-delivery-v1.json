@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "case_id": "observed-projectile-delivery-v1",
+  "evidence": "rust-headless-synthetic",
+  "input": {
+    "source": 3221229590,
+    "graph": 907,
+    "instance": 2,
+    "state": 3,
+    "activation": 5,
+    "launch": 120,
+    "flight_ticks": 6,
+    "count": 2
+  }
+}

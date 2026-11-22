@@ -177,6 +177,24 @@ impl<'a> SnapshotEncoder<'a> {
         } else {
             self.project_variables(snapshot, 0, &snapshot.variables, &entity_exclusions, view)?
         };
+        let mut callouts = Vec::new();
+        for action in &snapshot.frame_actions {
+            let id = action.callout.instance;
+            let Some(instance) = instances.get(&id) else {
+                continue;
+            };
+            let graph = self.graph(id, instance.graph)?;
+            let private = (view == View::Observer).then(|| graph.owner_only_instance_vars());
+            let mut action = action.clone();
+            action.values.retain(|&(owner, variable), _| {
+                if owner == 0 {
+                    !entity_exclusions.contains(&variable)
+                } else {
+                    owner == id && private.is_none_or(|vars| vars.binary_search(&variable).is_err())
+                }
+            });
+            callouts.push(action);
+        }
         Ok(ProjectedSnapshot {
             entity: snapshot.entity,
             view,
@@ -184,7 +202,7 @@ impl<'a> SnapshotEncoder<'a> {
             entity_exclusions,
             instances,
             callout: 0,
-            callouts: Vec::new(),
+            callouts,
             emit_events: true,
         })
     }
@@ -253,10 +271,8 @@ impl<'a> SnapshotEncoder<'a> {
                 }
                 None => base,
             };
-            // Python evaluates an authored `STU_7757D403` message table to None
-            // and never sends an unbound None (`script.driver` `_add_var`,
-            // `observers._add_vars`), so an unbound map is omitted like null.
-            // A bound map has no reference form and stays refused.
+            // Keep authored lookup tables and other unbound maps local to
+            // the VM. A bound map has no supported snapshot representation.
             if matches!(value, Value::Map(_) | Value::IdentifierMap(_)) {
                 if bindings.is_some() {
                     return Err(SnapshotError::UnsupportedMap { owner, variable });
@@ -585,6 +601,7 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             | StateKind::Wait
             | StateKind::WaitFrames { .. }
             | StateKind::AiCandidate { .. }
+            | StateKind::AiWeaponFire(_)
             | StateKind::MovementMod
             | StateKind::VoiceStimulus
             | StateKind::BossIntroVoice(_)

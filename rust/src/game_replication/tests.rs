@@ -31,6 +31,7 @@ mod owner_swept_motion;
 mod owner_synchronous_fault;
 mod player_respawn;
 pub(crate) mod practice_observation;
+mod wheel_input;
 
 fn pick_hero(entity: u32, hero: u64) -> Message {
     Message {
@@ -1248,6 +1249,14 @@ impl OwnerBodyRuntime for SyntheticOwner {
             .unwrap()
             .push((sender, message));
         Ok(1)
+    }
+
+    fn queue_local_message(&mut self, message: RoomMessage) -> Result<usize, InitFault> {
+        self.receive_room_message(self.component.snapshot().unwrap().entity, message)
+    }
+
+    fn wheel_actions_available(&self) -> bool {
+        true
     }
 
     fn take_script_requests(&mut self) -> Vec<crate::game_combat::RoomScriptRequest> {

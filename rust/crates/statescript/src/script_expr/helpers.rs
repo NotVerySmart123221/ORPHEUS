@@ -107,33 +107,6 @@ pub(super) fn literal_asset(
     (guid >> 48 == kind).then_some(Value::Asset(guid))
 }
 
-pub(super) fn literal_message_map(config: &Json) -> Result<Value, EvalError> {
-    let unsupported = || EvalError::UnsupportedConfig("STU_7757D403".into());
-    if !native_fields(config, &["m_configVars"]) {
-        return Err(unsupported());
-    }
-    let pairs = array_field(config, "m_configVars")?
-        .iter()
-        .map(|entry| {
-            if class(entry) != Some("STU_98DD1872") || !native_fields(entry, &["m_key", "m_value"])
-            {
-                return Err(unsupported());
-            }
-            let key = literal_asset(child(entry, "m_key"), "STU_B70476F3", "m_548E5344", 0x0a90)
-                .ok_or_else(unsupported)?;
-            let value = literal_asset(
-                child(entry, "m_value"),
-                "STUConfigVarGameMessage",
-                "m_gameMessage",
-                0x0240,
-            )
-            .ok_or_else(unsupported)?;
-            Ok((key, value))
-        })
-        .collect::<Result<_, _>>()?;
-    Ok(Value::Map(pairs))
-}
-
 pub(super) fn json_truthy(value: &Json) -> bool {
     match value {
         Json::Null => false,
@@ -361,6 +334,7 @@ pub(super) fn resource_field(class: &str) -> Option<&'static str> {
     match class {
         "STUConfigVarIdentifier" => Some("m_identifier"),
         "STUConfigVarGameMessage" => Some("m_gameMessage"),
+        "STUConfigVarUXDisplayText" => Some("m_displayText"),
         "STUConfigVarVoiceStimulus" => Some("m_voiceStimulus"),
         "STUConfigVarContactSet" => Some("m_contactSet"),
         "STUConfigVarEffect" => Some("m_effect"),

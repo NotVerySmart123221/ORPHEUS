@@ -504,8 +504,42 @@ impl World for BodyWorld {
             })
     }
 
+    fn actor_voice_available(&self, site: Site) -> bool {
+        self.is_player_site(site)
+            && self
+                .spatial_frame
+                .as_deref()
+                .is_some_and(|frame| frame.actor_voice_available(site.entity))
+    }
+
+    fn queue_actor_voice(
+        &mut self,
+        site: Site,
+        criterion: u64,
+        choose: &mut dyn FnMut(usize) -> usize,
+    ) {
+        if let Some((cue, listeners)) = self
+            .spatial_frame
+            .as_deref()
+            .and_then(|frame| frame.actor_voice_request(site.entity, criterion, choose))
+        {
+            self.queue_room_cue(site, &listeners, cue);
+        }
+    }
+
     fn spatial_candidates(&self) -> Option<&[crate::script_expr::SpatialCandidate]> {
         Some(self.spatial_frame.as_deref()?.candidates())
+    }
+
+    fn view_targets(
+        &self,
+        site: Site,
+        query: &crate::script_init::ViewTargetQuery<'_>,
+    ) -> Option<Vec<u32>> {
+        if !self.is_player_site(site) || query.source != site.entity {
+            return None;
+        }
+        self.spatial_frame.as_deref()?.view_targets(query)
     }
 
     fn room_entities(&self) -> Option<&BTreeMap<u32, RoomEntityFacts>> {

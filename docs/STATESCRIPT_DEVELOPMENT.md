@@ -81,6 +81,38 @@ workspace.
 python scripts/build_runtime_state_metadata.py --graph-bundle path/to/game_graphs_174.json.gz --evidence path/to/classification.zip --output path/to/new/game_graphs_174.json.gz
 ```
 
+For the Practice Range firing probe, use an evidence directory with one
+listing each for placement graph `0B92` and weapon graph `0BA3`. Map
+archives can contain identical graph indices in several map folders.
+Select the matching listings before importing. Each bot reads its
+placement roots from the map spawner. The server privately mounts roots
+with a supported weapon input state when the body supplies a usable
+slot binding. The body's ordinary logical-button dispatcher receives the
+input. The headless probes check press, release, and projectile flight admission.
+Flight uses the room's existing hostile-target and collision queries.
+A controlled room fixture verifies damage to a live bot and a player
+while a same-team target remains unharmed. Client presentation remains
+a separate acceptance check.
+The earlier spawn-reset and button lifecycle are documented in the
+[Python bot host](https://github.com/leafall903/ORPHEUS/blob/299b44111fc3e3dddcc5a691859b7a6c3ac661a6/src/ow174/game/script/bot.py).
+
+Replacement stock bots receive their authored reset on the new body
+before observer publication. The prepared probe checks that the
+spawn animation is present in the replacement's first encoded
+observer snapshot. For weapon effects, an instant volley can already
+be off when the server captures the frame. Its activation identity
+remains available for the observer's projectile launch record.
+
+For authored predicted projectiles, observer delivery retains the exact
+volley activation until the launch is acknowledged. It creates the
+visible projectile entities after the source baseline is acknowledged,
+then sends the channel 2 launch after both those creates and the
+matching volley projection are acknowledged. Interrupted delivery
+retries the same record and entity IDs. The room's flight completion
+drives retirement, allowing the acknowledged launch time to elapse on
+the observer. The source, flight definition, and shot timing come from
+the authored volley and shared simulation.
+
 ## Supply model hardpoint membership
 
 An external graph bundle can include `model_hardpoints` in a body entry.
@@ -94,6 +126,86 @@ The server reads membership for the current owner body and rebuilds the
 binding when the body is replaced. A synthetic example lives in the
 [owner model contract](../fixtures/behavior/owner-model-hardpoints-v1.json).
 Supply the enriched bundle through `prepare_server_runtime --game-graphs`.
+
+## Supply authored asset categories
+
+The optional graph bundle field `asset_categories` maps each asset GUID
+to a list of category records with `type` and `id` GUIDs. The evaluator
+matches the complete pair from the node operand. An absent catalog leaves
+the category query unavailable. For a supplied catalog, an asset without
+a matching pair returns false. Keep the extracted catalog in the private
+runtime bundle. The [wheel input contract](../fixtures/behavior/wheel-selection-ingress-v1.json)
+uses synthetic input and generation changes. The build-specific wire layout
+and category fields are documented in the [Python reference](https://github.com/leafall903/ORPHEUS/blob/499b9871b1ff9bf3d86715b7648626b18b154f0d/docs/COMMUNICATION_WHEEL.txt).
+Live owner wheel input stays disabled pending validation of the native sight
+profiles and the remaining wheel receivers. The `TrackTargets` view shape
+passes its origin, offset, radius, aperture, limit, filter masks, ranking and
+sight profile to the room. A frozen room with no other living player bodies
+returns an empty result. Bots may obstruct sight when the supplied profile
+includes them as blockers.
+
+For local validation, the optional graph bundle field `view_sight_profiles`
+maps sight-profile GUIDs to records with `static_mask`, `block_actor_flags`,
+and `samples`. The static mask selects collision categories. Actor flags
+select blockers from the room snapshot. Each sample is a fraction of a
+target's body height in the range 0 to 1, with up to eight samples per
+profile. The supplied actor flags describe the room's actor filter.
+The raw dynamic collision mask from a sight asset requires a separate
+receiver mapping before it can be used here. Missing profiles or required
+room facts leave occupied queries unavailable. The public
+[view target fixture](../fixtures/behavior/script-view-targets-v1.json)
+exercises this interface with synthetic settings and geometry.
+
+The prepared `prepared_wheel_packet_bindings_reach_both_authored_handlers`
+probe compares the same selection with a missing room snapshot and with a
+frozen single-player snapshot. It uses a local 104319 graph bundle with
+synthetic room geometry. With the asset categories supplied, the solo
+case passes the view query and evaluates the selected action's localized
+parameter row. `STU_7757D403` evaluates each pair's value and key in authored
+order. Expression opcode 19 collects its stack pairs into an ordered
+integer-keyed parameter map. A networked `STU_7106C356` uses the authored
+`m_BF5B22B7` scope rows to capture its effective variables. The owner
+and observer streams send the captured values with the short action.
+An unacknowledged action keeps its initial stamp and values when a later
+selection arrives. Full baselines omit prior callouts. The client retains
+its existing text rendering and audience checks. `STU_1ECB66A0` looks up
+the complete communication action GUID in the optional `asset_textures`
+catalog. A missing key in a supplied catalog returns a zero texture
+reference. If the catalog is absent, the VM reports the lookup as
+unavailable. Action `STU_71FE9852`, live wheel input and original-client
+presentation verification remain open.
+The pair and opcode behavior follows the [pinned Python reference for pairs](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/script/play.py#L81-L93)
+and [expression maps](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/script/expr.py#L832-L835).
+The synchronized variable capture follows the [pinned Python frame-action reference](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/script/driver.py#L781-L811).
+
+Use `scripts/build_runtime_state_metadata.py --asset-categories` with a
+local JSON catalog containing `version: 1`, `build: 104319`, and the asset
+map under `assets`. Supply the resulting bundle through
+`prepare_server_runtime --game-graphs`.
+
+Use `--asset-textures` on the same script to add a local action-to-texture
+catalog. It takes the same version and build and maps full action GUIDs
+to full texture GUIDs under `assets`. The public fixture uses synthetic
+keys. The native resource shape and offline checks are described in the
+[pinned wheel research](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/docs/COMMUNICATION_WHEEL.txt#L537-L543).
+
+## Supply actor voice criteria
+
+Place the optional catalog at `data/player_voice_174.json` in the private
+runtime source before preparing the server runtime. Its `criteria` map
+contains each criterion's ordered stimulus IDs. The `heroes` map identifies
+the base set, `skins` maps a skin's base sets to replacements, and `sets`
+maps each voice set to its stimulus and line lists. A criterion plays the
+first available stimulus in the selected set. A mapped skin replacement
+controls playback for that set. Missing entries leave the action silent.
+[Reference catalog extractor](https://github.com/leafall903/ORPHEUS/blob/d1676cecd1162983987a48024d7c787544fd3593/tools/extract_player_voice.cs)
+
+The supported cue path reads `m_identifier` and `m_targets` from
+`STUStatescriptActionCriteria`. When the target is the acting body, its
+living allies and the speaker can receive the cue from the existing room
+queue. The catalog contains identifiers only and stays private. The
+prepared wheel path still requires target tracking. Original-client playback
+remains pending. [Synthetic selection and audience contract](../fixtures/behavior/player-voice-v1.json)
 
 ## Build the private evidence reports
 

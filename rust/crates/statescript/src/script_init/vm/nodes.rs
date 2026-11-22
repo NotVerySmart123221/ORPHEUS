@@ -785,9 +785,23 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }
-            // Base actions and the stat criteria fallback consume the input
-            // and run its output without evaluating an action payload.
-            "STU_D38D0035" | "STUStatescriptActionCriteria" | "STU_6E5C5F66" => {
+            "STUStatescriptActionCriteria" => {
+                self.play_actor_criterion(id, node);
+                self.follow(id, node, "m_outPlug", None, depth)?;
+                Ok(true)
+            }
+            "STU_7106C356" => {
+                if !self.capture_callout(id, node) {
+                    self.report(
+                        self.site(id, node),
+                        Issue::UnsupportedField("callout action"),
+                    );
+                    return Ok(false);
+                }
+                self.follow(id, node, "m_outPlug", caller, depth)?;
+                Ok(true)
+            }
+            "STU_D38D0035" | "STU_6E5C5F66" => {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
@@ -1516,6 +1530,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::CinematicTimeScale { boundary_frame: 0 }
             }
             "STU_91EF24A9" => StateKind::AiCandidate { selected: false },
+            _ if node.is_ai_weapon_fire() => StateKind::AiWeaponFire(None),
             "STUStatescriptStateLogicalButton" => StateKind::LogicalButton { down: false },
             "STU_E4A30BCF" => StateKind::ButtonBlock(None),
             _ if button_lock.is_some() => StateKind::ButtonBlock(None),
@@ -1566,6 +1581,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 if registration.shape(node.contact_volume_bindings().is_some()) =>
             {
                 StateKind::EmptyTargets
+            }
+            "STUStatescriptStateTrackTargets"
+                if registration.shape(node.view_track().is_some()) =>
+            {
+                StateKind::ViewTargets {
+                    next_sample: self.machine.frame,
+                }
             }
             // Other presentation-only trackers retain their empty wire state
             // in the Python reference (`world.tracked_targets` returns
@@ -1796,6 +1818,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 }
             }
             StateKind::TrackedTargets => self.refresh_tracked_targets(key, node)?,
+            StateKind::ViewTargets { .. } => {
+                self.register_tick(key, self.machine.now_ms);
+                if !self.sample_view_targets(key, node)? {
+                    return Ok(());
+                }
+            }
             StateKind::DeadeyeEffects => self.refresh_deadeye_effects(key, node)?,
             StateKind::WitchStaffEffect | StateKind::WitchStaffHealing => {
                 self.register_tick(key, self.machine.now_ms)
@@ -1905,6 +1933,22 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     }
                 } else {
                     self.report(site, Issue::UnsupportedField("AI behavior selection"));
+                }
+            }
+            StateKind::AiWeaponFire(_) if !self.machine.owner_dead => {
+                let target = self.evaluate(id, node, field(&node.fields, "m_14EDDDA7"), None);
+                let enabled = self.evaluate(id, node, field(&node.fields, "m_20BCEE62"), None);
+                let slot = self.evaluate(id, node, field(&node.fields, "m_A60150E2"), None);
+                if let (
+                    Some(Value::Entity(target)),
+                    Some(Value::Bool(true)),
+                    Some(Value::Integer(slot)),
+                ) = (target, enabled, slot)
+                {
+                    if target == self.machine.snapshot.entity && slot >= 0 {
+                        self.state_mut(key).expect("active AI weapon fire").kind =
+                            StateKind::AiWeaponFire(Some(slot));
+                    }
                 }
             }
             StateKind::LogicalButton { .. } => self.enter_button(key, node, depth)?,
@@ -2039,7 +2083,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             | StateKind::ClientPulse { .. }
             | StateKind::EmptyTargets
             | StateKind::ActiveQuery
-            | StateKind::RollMovementParameter => (),
+            | StateKind::RollMovementParameter
+            | StateKind::AiWeaponFire(_) => (),
         }
         self.follow(id, node, "m_onBeginPlug", Some(key), depth)?;
         self.follow(id, node, "m_subgraphPlug", Some(key), depth)?;

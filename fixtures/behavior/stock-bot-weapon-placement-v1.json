@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "case_id": "stock-bot-weapon-placement-v1",
+  "evidence": "rust-headless-synthetic",
+  "input": {
+    "graphs": ["0x0580000000000611", "0x0580000000000614", "0x0580000000000611", "0x0580000000000612", "0x0580000000000615"],
+    "slot": 4,
+    "logical_button": 29
+  },
+  "expected": {
+    "server_roots": [1553],
+    "command_buttons": 2
+  }
+}

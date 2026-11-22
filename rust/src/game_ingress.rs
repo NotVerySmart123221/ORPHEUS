@@ -5,6 +5,7 @@ use std::{collections::HashMap, error::Error, fmt, time::Duration};
 use crate::bits::BitReader;
 use crate::commands::{Command, InputError, read_commands};
 use crate::game_messages::{ChannelError, Message, read_channel};
+use crate::game_parameters::{CLIENT_GAME_MESSAGE, CLIENT_WHEEL_ACTION};
 use crate::jam_codec::{Fields, Schemas, Value};
 
 const PONG: u32 = 20306;
@@ -16,6 +17,7 @@ pub enum MessageKind {
     Ping,
     MapLoaded,
     GameMessage,
+    WheelAction,
     Other,
 }
 
@@ -24,7 +26,8 @@ impl From<u32> for MessageKind {
         match id {
             21610 => Self::Ping,
             21601 | 21602 => Self::MapLoaded,
-            21616 => Self::GameMessage,
+            CLIENT_GAME_MESSAGE => Self::GameMessage,
+            CLIENT_WHEEL_ACTION => Self::WheelAction,
             _ => Self::Other,
         }
     }

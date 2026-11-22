@@ -26,6 +26,47 @@ pub(super) struct RoomScriptTarget {
     pub(super) health: bool,
     pub(super) messages: bool,
     pub(super) cue_listener: bool,
+    pub(super) filter_flags: Option<u64>,
+    pub(super) voice: Option<(u64, u64)>,
+}
+
+impl RoomSpatialFrame {
+    pub(crate) fn actor_voice_available(&self, source: u32) -> bool {
+        self.actor_voice.is_some()
+            && self
+                .script_targets
+                .get(&source)
+                .is_some_and(|body| body.voice.is_some())
+    }
+
+    pub(crate) fn actor_voice_request(
+        &self,
+        source: u32,
+        criterion: u64,
+        choose: &mut dyn FnMut(usize) -> usize,
+    ) -> Option<(RoomCue, Vec<u32>)> {
+        let catalog = self.actor_voice.as_ref()?;
+        let (actor, source_body) = self.actor_sample(source)?;
+        let (hero, skin) = source_body.voice?;
+        let options = catalog.options(hero, skin, criterion)?;
+        let listeners: Vec<_> = self
+            .candidates
+            .iter()
+            .filter(|listener| {
+                (listener.entity == source || actor.team.is_some() && actor.team == listener.team)
+                    && self
+                        .script_targets
+                        .get(&listener.entity)
+                        .is_some_and(|body| body.cue_listener)
+            })
+            .map(|listener| listener.entity)
+            .collect();
+        if listeners.is_empty() || listeners.len() > RoomCue::MAX_TARGETS {
+            return None;
+        }
+        let (stimulus, line) = options.choose(choose)?;
+        Some((RoomCue { stimulus, line }, listeners))
+    }
 }
 
 pub(crate) struct RoomScriptRequest {
@@ -233,6 +274,12 @@ impl RoomSimulation {
                         batches.push((SampledBody { wire, entity }, requests));
                     }
                 }
+                if let Some(script) = &mut state.stock_script {
+                    let requests = script.take_script_requests();
+                    if !requests.is_empty() {
+                        batches.push((SampledBody { wire, entity }, requests));
+                    }
+                }
             }
         }
         for (source, requests) in batches {
@@ -349,6 +396,8 @@ impl RoomSimulation {
                     .filter(|enemy| enemy.fault.is_none() && !enemy.scripts.retirement_requested)
                 {
                     let _ = enemy.scripts.receive_room_message(source, message);
+                } else if let Some(script) = &mut state.stock_script {
+                    script.receive_room_message(source, message);
                 }
             }
         }
@@ -517,6 +566,8 @@ mod tests {
             health,
             messages,
             cue_listener: health,
+            filter_flags: None,
+            voice: None,
         };
         let frame = RoomSpatialFrame {
             candidates: [1, 2, 3]
@@ -536,6 +587,7 @@ mod tests {
             ]),
             player_wires: HashMap::new(),
             ground: Arc::new(fixture_ground()),
+            actor_voice: None,
             captured_tick: 0,
             debug_rays: Arc::default(),
         };
