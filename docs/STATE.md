@@ -99,7 +99,11 @@ A synthetic shot with gravity now expires at its authored flight distance.
 The range and lifetime can end independently. Original-client impact timing
 at that limit remains open. The local deployable graph probe resolves the
 mine definition and its linked actor graph. Standalone startup still requires
-creator and health-pool services and additional StateScript state support.
+room actor admission and health-pool services, along with additional
+StateScript state support. A local probe of the authored mode-0 creator
+selector returns the supplied creator body and reports unavailable when its
+host has no relationship. The actor's startup takes a separate mode-1
+relation, whose semantics remain open.
 
 The follow-up timing capture accumulated 8,819 missed ticks. Misses
 began well before the first recorded shot and continued during intervals

@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Evaluate the authored mode-0 creator-body selector through the StateScript host relationship lookup. Preserve explicit unbound entities and report unavailable or unsupported relationships. The Inspector workspace passed 932 public tests. A local prepared selector probe passed with and without a creator binding. Deployable actor admission, room-backed lookup, and the startup relation mode remain open.
+
 - Track authored projectile range separately from lifetime so falling and rising shots terminate at their actual travelled distance. Use the travelled distance for direct-hit falloff and keep the final partial sweep and optional expiry blast. The Inspector workspace passed 931 public tests and four prepared combat cases. Original-client range and impact timing remain open.
 
 - Extend the prepared encrypted ground-shot checks to Particle Cannon. Verify the confirmed projectile's impact retirement, self-damage across the owner health pools, upward movement, and an owner correction on a post-impact command frame. The Inspector workspace passed 931 public tests, and four prepared cases passed. Original-client visuals and movement remain open.

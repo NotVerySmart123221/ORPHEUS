@@ -1120,6 +1120,30 @@ impl Evaluator {
                     .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?;
                 Value::Entity(related)
             }
+            "STU_2B2E2F6D" => {
+                let unsupported = || EvalError::UnsupportedConfig(class.into());
+                if !native_fields(config, &["m_81A364DE", "m_7BDB02D1"])
+                    || child(config, "m_7BDB02D1").as_u64() != Some(0)
+                {
+                    return Err(unsupported());
+                }
+                let Value::Entity(entity) =
+                    self.config(child(config, "m_81A364DE"), context, nested)?
+                else {
+                    return Err(unsupported());
+                };
+                if entity == 0 {
+                    return Ok(Value::Entity(0));
+                }
+                if !valid_entity(entity) {
+                    return Err(unsupported());
+                }
+                let creator = context
+                    .related_entity(EntityRelation::CreatorBody, entity)
+                    .filter(|&creator| creator == 0 || (valid_entity(creator) && creator != entity))
+                    .ok_or_else(unsupported)?;
+                Value::Entity(creator)
+            }
             "STU_967463AB" => {
                 let unsupported = || EvalError::UnsupportedConfig(class.into());
                 if !native_fields(config, &["m_92D12BE6", "m_C8655030"]) {

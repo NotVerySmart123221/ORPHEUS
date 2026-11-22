@@ -34,6 +34,7 @@ pub enum EntityRelation {
     PossessedBody,
     AiControlEntity,
     ControllerBodyField,
+    CreatorBody,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

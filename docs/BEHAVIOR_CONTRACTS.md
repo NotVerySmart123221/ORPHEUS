@@ -56,6 +56,8 @@ The Rust-only [posed projectile aim fixture](../fixtures/behavior/projectile-pos
 
 The prepared encrypted ground-shot regression applies the same assertions to the stock Helix and Particle Cannon shots. It follows a confirmed projectile ID through impact retirement, reads all owner health pools from the update, and checks a movement correction in the first eight commands after impact. Room snapshots confirm upward motion. The test does not run the original client.
 
+The Rust-only [creator body fixture](../fixtures/behavior/statescript-creator-body-v1.json) checks the default creator relation on a typed entity operand. It distinguishes explicit absence from an unavailable relation and rejects other relation modes and invalid entity references. The expression passes the selected entity to the host for authoritative lookup. [Pinned source relation reference](https://github.com/leafall903/ORPHEUS/blob/a9096f5d5d5ef0d5fe5b48660d9737d26a2029f5/src/ow174/game/ball_mines.py#L190-L197).
+
 The Rust-only [unposed owner volley fixture](../fixtures/behavior/owner-unposed-volley-v1.json) checks that a due round with no pose is skipped at its authored time and a later posed round in the same volley still fires and spends ammunition.
 
 The Rust-only [staged nameplate fixture](../fixtures/behavior/npc-nameplate-staged-admission-v1.json) checks admission after the mode and bot body acknowledgments, exactly retried introduction, and lifetime protection for a bot that died before admission.
