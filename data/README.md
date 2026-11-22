@@ -66,6 +66,12 @@ and mode respawn delays. Practice Range has a shipped three-second default.
 | `data/ai_spawners_174.json`, `data/game_graphs_174.json.gz` | `tools/extract_ai_spawners.py`, `tools/extract_game_graphs.py` |
 | `data/collision_keys_174.json`, `collision/0688.col` (and optional `*.rays.col`) | `tools/export_casc_records.ps1`, `tools/build_collision.py` |
 
+Rust uses the optional map-specific `*.rays.col` for point combat and
+scripted sight queries. The runtime checks its map, collision key and applicable
+prop provenance against the catalogs. A missing or invalid ray cache falls
+back to movement probes. Character collision and nonzero-radius projectile
+terrain sweeps use the movement cache.
+
 ### 2. Prepared Research Data (Must Be Supplied in Source Pack)
 
 | Runtime File | Role |

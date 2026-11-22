@@ -12,6 +12,7 @@ pub(crate) struct BotQueries<'a> {
     free_for_all: bool,
     movers: &'a MoverCatalog,
     ground: &'a CollisionScene,
+    combat_rays: &'a CollisionScene,
     contacts: Option<&'a Arc<ContactWorld>>,
     hurt_volumes: Option<&'a HurtVolumeCatalog>,
 }
@@ -27,9 +28,15 @@ impl<'a> BotQueries<'a> {
             free_for_all,
             movers,
             ground,
+            combat_rays: ground,
             contacts,
             hurt_volumes: None,
         }
+    }
+
+    pub(super) fn with_combat_rays(mut self, rays: &'a CollisionScene) -> Self {
+        self.combat_rays = rays;
+        self
     }
 
     pub(crate) fn with_hurt_volumes(mut self, volumes: &'a HurtVolumeCatalog) -> Self {
@@ -168,7 +175,7 @@ impl<'a> BotQueries<'a> {
         direction: [f64; 3],
         reach: f64,
     ) -> Result<Option<crate::collision_index::RayHit>, crate::collision_index::IndexError> {
-        self.ground
+        self.combat_rays
             .cast_ray(origin, direction, reach, MOVER_CATEGORY)
     }
 

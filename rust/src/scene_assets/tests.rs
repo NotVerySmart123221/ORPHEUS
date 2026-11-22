@@ -7,6 +7,99 @@ mod mode_presentation;
 mod script_coverage;
 
 #[test]
+fn point_aim_uses_combat_geometry_and_leaves_the_movement_probe_intact() {
+    use crate::collision_cache::{CollisionCache, Mesh, Triangle};
+    use serde_json::{Value as Json, json};
+
+    let input: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/map-combat-ray-geometry-v1.json"
+    ))
+    .unwrap();
+    let triangles: Vec<[[f32; 3]; 3]> =
+        serde_json::from_value(input["combat_triangles"].clone()).unwrap();
+    let movement: Vec<[[f32; 3]; 3]> =
+        serde_json::from_value(input["movement_triangles"].clone()).unwrap();
+    let cache = |triangles: Vec<[[f32; 3]; 3]>, expanded| {
+        let mut header = json!({
+            "meshes":[[triangles.len()*3, triangles.len()]],
+            "hulls":0,"models":0,"placements":0,"identifiers":[]
+        });
+        if expanded {
+            header["geometry"] = json!("expanded-static-rays");
+            header["category_mask"] = json!(65535);
+            header["prop_scope"] = json!("indexed-static-models");
+            header["map"] = json!("0x0800000000004242");
+            header["chunk"] = json!(format!("0x{:016X}", chunk_guid(0x0800_0000_0000_4242)));
+            header["ckey"] = json!("synthetic-map");
+        }
+        CollisionCache {
+            header: serde_json::from_value(header).unwrap(),
+            meshes: vec![Mesh {
+                vertices: triangles.iter().flatten().copied().collect(),
+                triangles: (0..triangles.len() as i32)
+                    .map(|i| Triangle {
+                        corners: [3 * i, 3 * i + 1, 3 * i + 2],
+                        wings: [-1; 3],
+                        mask: MOVER_CATEGORY,
+                        surface: 0,
+                    })
+                    .collect(),
+            }],
+            hulls: vec![],
+            models: vec![],
+            placements: vec![],
+        }
+    };
+    let identity = RayCacheIdentity {
+        map_guid: 0x0800_0000_0000_4242,
+        collision_ckey: "synthetic-map",
+        placement_ckey: None,
+        prop_records_sha256: None,
+    };
+    let mut scene = PreparedScene::fixture_for_bots(Vec::new());
+    scene.ground = Arc::new(
+        CollisionScene::movement_probe(&cache(movement, false), &BTreeSet::new()).unwrap(),
+    );
+    scene.combat_rays = Arc::new(
+        CollisionScene::expanded_rays(&cache(triangles, true), &BTreeSet::new(), identity).unwrap(),
+    );
+    for row in input["rays"].as_array().unwrap() {
+        let origin = serde_json::from_value(row["origin"].clone()).unwrap();
+        let direction = [0.0, 0.0, 1.0];
+        let legacy = scene
+            .movement_index()
+            .cast_ray(origin, direction, 4.0, MOVER_CATEGORY)
+            .unwrap();
+        assert!(legacy.is_some());
+        let (_, queries) = scene.bot_simulation();
+        let expected = row["distance"].as_f64();
+        assert_eq!(
+            queries.hitscan_wall(origin, direction, 4.0).unwrap(),
+            expected
+        );
+        assert_eq!(
+            queries
+                .projectile_wall(origin, direction, 4.0, 0.0)
+                .unwrap()
+                .map(|hit| hit.distance),
+            expected
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires prepared 104319 Practice Range expanded ray geometry"]
+fn prepared_map_selects_the_validated_combat_ray_side_cache() {
+    let dir = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let assets = SceneAssets::load(dir).unwrap();
+    let prepared = assets
+        .map_collision(&GameMap::practice_range(), true)
+        .unwrap();
+    assert!(!Arc::ptr_eq(&prepared.combat_rays, &prepared.ground));
+    assert!(prepared.contacts.is_some());
+}
+
+#[test]
 fn practice_only_omits_owner_runtime_when_all_owner_content_is_absent() {
     use serde_json::json;
 

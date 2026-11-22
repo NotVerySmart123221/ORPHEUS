@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "case_id": "map-combat-ray-geometry.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "movement_triangles": [
+    [[-2, -1, 2], [2, -1, 2], [-2, 3, 2]],
+    [[2, -1, 2], [2, 3, 2], [-2, 3, 2]]
+  ],
+  "combat_triangles": [
+    [[-2, -1, 2], [-0.5, -1, 2], [-2, 3, 2]],
+    [[-0.5, -1, 2], [-0.5, 3, 2], [-2, 3, 2]],
+    [[0.5, -1, 2], [2, -1, 2], [0.5, 3, 2]],
+    [[2, -1, 2], [2, 3, 2], [0.5, 3, 2]]
+  ],
+  "rays": [
+    {"origin": [0, 0.5, 0], "distance": null},
+    {"origin": [-1, 0.5, 0], "distance": 2},
+    {"origin": [1, 0.5, 0], "distance": 2}
+  ]
+}
