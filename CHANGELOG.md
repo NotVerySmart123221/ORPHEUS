@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Add optional data-driven actor hurt and death voice cues (`hurt_cooldown_ticks` and `hurt` `minor`/`severe`/`death`/`bot_death` tables) to `CombatVoiceCatalog` and wire authoritative bot and player damage settlement in `RoomSimulation` to emit cooldown-gated hurt and lethal voice cues through the room cue queue.
+
 - Use the shipped Practice Range respawn delay when the local runtime has no override. Replace the dead body at its spawn point with fresh health through ordinary possession and ignore movement and attack input while the body is dead. Preserve local map environment rules during runtime packing. Log client closes and connection expiration reasons for later room-exit diagnostics. Passed 489 Rust library tests covering respawn scheduling, full health at spawn, and runtime packing. Original-client retest remains pending.
 
 - Integrate practice projectile combat and stock bot interactions with the Rust combat audio updates. Use the same actor filter flags for view queries and combat, and route actor voice and mode announcer cues through their declared speakers.

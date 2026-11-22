@@ -909,3 +909,211 @@ fn multikill_announcer_cues_emit_from_mode_entity_across_bot_eliminations() {
         2,
     );
 }
+
+#[test]
+fn bot_hurt_and_death_voice_cues_honor_cooldown_and_bypass_on_elimination() {
+    use crate::{
+        combat_voice::CombatVoiceCatalog,
+        game_bots::{BotCatalog, BotWalk},
+    };
+
+    let bots = BotCatalog::from_json(
+        r#"{
+            "heroes": {"0x01": {"name": "Target", "body": "0x02", "health": 120}},
+            "maps": {"0x03": {"hints": {}, "spawners": [
+                {"hero": "0x01", "team": 1, "position": [6, 0, 0], "rotation": [0, 0, 0, 1], "graphs": []}
+            ]}}
+        }"#,
+    )
+    .unwrap()
+    .make(3, |_| BotWalk::default());
+    let target = bots[0].entity;
+    let target_pos = bots[0].spawn.position;
+    let (mut room, [shooter], mut sequence) = feedback_room_with_bots(Vec::new(), [0], bots);
+    let voice = CombatVoiceCatalog::from_json(
+        r#"{
+            "hurt_cooldown_ticks": 4,
+            "hurt": {
+                "minor": { "stimulus": "0x0EE0000000000003", "lines": ["0x0760000000000006"] },
+                "severe": { "stimulus": "0x0EE0000000000004", "lines": ["0x076000000000000B"] },
+                "bot_death": { "stimulus": "0x0EE0000000000001", "lines": ["0x076000000000819E"] }
+            }
+        }"#,
+    )
+    .unwrap();
+    let scene = room.world.as_mut().unwrap().scene.as_mut();
+    scene.fixture_set_combat_voice(voice);
+    scene.fixture_set_hurt_volumes(
+        HurtVolumeCatalog::from_json(
+            r#"{"version": 1, "bodies": {"0x02": {"body": {"lower": 0.4, "upper": 1.1, "radius": 0.24}, "head": {"lower": 1.7, "upper": 1.7, "radius": 0.2}}}}"#,
+        )
+        .unwrap(),
+    );
+
+    let shoot_bot = |room: &mut Room, height: f64, amount: f64, critical: f64, tick: u32| {
+        let scene = &mut room.world.as_mut().unwrap().scene;
+        let (simulation, queries) = scene.bot_simulation();
+        simulation.activate_combat();
+        simulation
+            .hitscan(
+                &queries,
+                PosedHitscan {
+                    source: shooter.entity,
+                    origin: [0.0, target_pos[1] + height, target_pos[2]],
+                    direction: [1.0, 0.0, 0.0],
+                    command: Command {
+                        frame: tick,
+                        ..Command::default()
+                    },
+                    shot_frame: tick,
+                    reach: 12.0,
+                    hit: HitDefinition {
+                        tags: DamageTags::EMPTY,
+                        amount,
+                        loadout: None,
+                        critical,
+                        falloff: None,
+                    },
+                },
+                ShotContext {
+                    team: 0,
+                    quanta: RETAIL_QUANTA,
+                    tick,
+                    now: tick * TICK_PERIOD,
+                },
+                |entity| entity == target,
+            )
+            .unwrap()
+            .expect("bot hit");
+        advance_feedback(room, [shooter], tick);
+    };
+
+    // Non-lethal body hit emits minor hurt cue.
+    shoot_bot(&mut room, 0.8, 20.0, 1.0, FIRST_TICK + 1);
+    assert_reliable_voice_cue(
+        &mut room,
+        1,
+        target,
+        shooter,
+        &mut sequence[0],
+        FIRST_TICK + 2,
+        0x0760_0000_0000_0006,
+        0,
+    );
+
+    // Follow-up hit within cooldown (4 ticks) is suppressed.
+    shoot_bot(&mut room, 0.8, 20.0, 1.0, FIRST_TICK + 3);
+    assert_eq!(
+        room.members[&1]
+            .peer
+            .as_ref()
+            .unwrap()
+            .pending_combat_notices()
+            .count(),
+        0
+    );
+
+    // Critical head hit once cooldown expires emits severe hurt cue.
+    shoot_bot(&mut room, 1.7, 20.0, 2.0, FIRST_TICK + 5);
+    assert_reliable_voice_cue(
+        &mut room,
+        1,
+        target,
+        shooter,
+        &mut sequence[0],
+        FIRST_TICK + 6,
+        0x0760_0000_0000_000B,
+        1,
+    );
+
+    // Lethal hit inside cooldown bypasses cooldown and emits bot_death cue.
+    shoot_bot(&mut room, 0.8, 80.0, 1.0, FIRST_TICK + 6);
+    assert_reliable_voice_cue(
+        &mut room,
+        1,
+        target,
+        shooter,
+        &mut sequence[0],
+        FIRST_TICK + 7,
+        0x0760_0000_0000_819E,
+        2,
+    );
+}
+
+#[test]
+fn player_hurt_voice_cue_emits_from_victim_on_hit() {
+    use crate::combat_voice::CombatVoiceCatalog;
+
+    let (mut room, [shooter, victim], mut sequence) = feedback_room(Vec::new(), [0, 1]);
+    let voice = CombatVoiceCatalog::from_json(
+        r#"{
+            "hurt_cooldown_ticks": 4,
+            "hurt": {
+                "minor": { "stimulus": "0x0EE0000000000003", "lines": ["0x0760000000000006"] },
+                "severe": { "stimulus": "0x0EE0000000000004", "lines": ["0x076000000000000B"] },
+                "death": { "stimulus": "0x0EE0000000000001", "lines": ["0x076000000000001C"] }
+            }
+        }"#,
+    )
+    .unwrap();
+    room.world
+        .as_mut()
+        .unwrap()
+        .scene
+        .fixture_set_combat_voice(voice);
+
+    let tick = FIRST_TICK + 1;
+    let scene = &mut room.world.as_mut().unwrap().scene;
+    let victim_pos = scene
+        .simulation()
+        .player_body(victim)
+        .unwrap()
+        .mover
+        .pose()
+        .position;
+    let (simulation, queries) = scene.bot_simulation();
+    simulation.activate_combat();
+    simulation
+        .hitscan(
+            &queries,
+            PosedHitscan {
+                source: shooter.entity,
+                origin: [victim_pos[0] - 4.0, victim_pos[1] + 1.0, victim_pos[2]],
+                direction: [1.0, 0.0, 0.0],
+                command: Command {
+                    frame: tick,
+                    ..Command::default()
+                },
+                shot_frame: tick,
+                reach: 12.0,
+                hit: HitDefinition {
+                    tags: DamageTags::EMPTY,
+                    amount: 25.0,
+                    loadout: None,
+                    critical: 1.0,
+                    falloff: None,
+                },
+            },
+            ShotContext {
+                team: 0,
+                quanta: RETAIL_QUANTA,
+                tick,
+                now: tick * TICK_PERIOD,
+            },
+            |entity| entity == victim.entity,
+        )
+        .unwrap()
+        .expect("player hit");
+    advance_feedback(&mut room, [shooter, victim], tick);
+
+    assert_reliable_voice_cue(
+        &mut room,
+        2,
+        victim.entity,
+        victim,
+        &mut sequence[1],
+        tick + 1,
+        0x0760_0000_0000_0006,
+        0,
+    );
+}
