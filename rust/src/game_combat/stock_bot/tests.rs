@@ -438,6 +438,8 @@ fn prepared_firing_placement_drives_the_stock_weapon_graph() {
 }
 
 fn check_stock_bot_firing(catalog: &StockBotCatalog, bot: &Bot) {
+    use crate::script_stream::{BodyStream, ChangeKey, DeltaKind};
+
     let start = 100;
     let mut script = StockBotScript::start(catalog, bot, start, BodyEntry::Initial).unwrap();
     let mut held_ticks = 0;
@@ -471,6 +473,49 @@ fn check_stock_bot_firing(catalog: &StockBotCatalog, bot: &Bot) {
             if let Some(presentation) = batch.presentation {
                 assert_eq!(presentation.volley.event.entity, bot.entity);
                 assert_eq!(presentation.launched, tick);
+                let projection = script.projection().unwrap();
+                let mut projected = projection
+                    .encoder
+                    .project(projection.snapshot, View::Observer)
+                    .unwrap();
+                let instance = presentation.volley.event.instance;
+                // 104319's authored client data flow reads this transient
+                // instance variable from the single-shot volley's stack.
+                let firing_value = |snapshot: &crate::script_snapshot_wire::ProjectedSnapshot| {
+                    snapshot
+                        .instance_variables(instance)
+                        .and_then(|vars| vars.get(&233))
+                        .cloned()
+                };
+                assert_ne!(firing_value(&projected), Some(Value::Bool(true)));
+                assert!(!projected.has_volley(&presentation.volley));
+                let mut stream = BodyStream::new(bot.entity);
+                stream.create_arrived();
+                let full = projection
+                    .encoder
+                    .queue_full(&mut stream, &projected)
+                    .unwrap();
+                assert!(stream.arrived(full.last).advanced);
+                assert!(projected.retain_volley(&presentation.volley));
+                assert_eq!(firing_value(&projected), Some(Value::Bool(true)));
+                assert!(projected.has_volley(&presentation.volley));
+                let delta = projection
+                    .encoder
+                    .queue_delta(
+                        &mut stream,
+                        &projected,
+                        DeltaKind::Observer { resend: true },
+                        crate::script_runtime::FRAME_MS as u32,
+                    )
+                    .unwrap()
+                    .unwrap();
+                assert!(
+                    stream
+                        .touched()
+                        .contains(&ChangeKey::Variable(instance, 233))
+                );
+                assert!(stream.arrived(delta.last).advanced);
+                assert!(stream.base().unwrap().1.has_volley(&presentation.volley));
                 projected_volley = true;
             }
             for projectile in batch.flights {

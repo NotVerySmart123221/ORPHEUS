@@ -165,6 +165,7 @@ impl ObservedProjectiles {
     pub(super) fn retain_volleys(&self, snapshot: &mut ProjectedSnapshot) {
         let source = snapshot.entity();
         let mut retained = BTreeSet::new();
+        let mut presentation = BTreeSet::new();
         for view in self.views.values().filter(|view| {
             view.source() == source
                 && !view.cancelled
@@ -174,8 +175,14 @@ impl ObservedProjectiles {
                 )
         }) {
             let volley = &view.shot.volley;
-            if retained.insert((volley.event.instance, volley.event.raw_state)) {
-                snapshot.retain_volley(volley);
+            if retained.insert((volley.event.instance, volley.event.raw_state))
+                && volley
+                    .presentation_keys()
+                    .all(|key| !presentation.contains(&key))
+                && snapshot.retain_volley(volley)
+            {
+                // Later activations wait for the first shot using the same inputs.
+                presentation.extend(volley.presentation_keys());
             }
         }
     }
@@ -306,6 +313,7 @@ mod tests {
     use crate::{
         bits::{BitReader, BitWriter},
         game_egress::{DeliveryReport, PacketDelivery},
+        script_expr::{Scope, Variable},
         script_init::ShotEvent,
         script_snapshot_wire::{ProjectedInstance, ProjectedState, View, VolleyActivation},
         script_stream::{BodyStream, DeltaKind},
@@ -324,6 +332,8 @@ mod tests {
         launch: u32,
         flight_ticks: u32,
         count: u16,
+        presentation_variable: u32,
+        presentation_value: bool,
     }
 
     fn project(input: &Input, activation: u16) -> ProjectedSnapshot {
@@ -414,10 +424,25 @@ mod tests {
             activation_ms: u64::from(launch) * crate::script_runtime::FRAME_MS,
             ordinal: 0,
         };
-        let original = project(&input, input.activation);
+        let mut original = project(&input, input.activation);
         let newer = project(&input, input.activation + 1);
-        let volley = original.freeze_volley(event).unwrap();
-        assert!(newer.freeze_volley(event).is_none());
+        let variable = Variable {
+            scope: Scope::Instance,
+            id: input.presentation_variable,
+        };
+        let firing = Value::Bool(input.presentation_value);
+        let volley = original
+            .freeze_volley(event, vec![(variable, firing.clone())])
+            .unwrap();
+        assert!(!original.has_volley(&volley));
+        assert!(newer.freeze_volley(event, Vec::new()).is_none());
+        original
+            .instances
+            .get_mut(&input.instance)
+            .unwrap()
+            .variables
+            .values
+            .insert(variable.id, firing);
         let mut world = WorldDelivery::new(103);
         world.started = Some(100);
         world
@@ -471,7 +496,7 @@ mod tests {
         assert!(outgoing(&mut world).is_empty());
 
         // A later server activation cannot replace the one referenced by the shot.
-        let mut pinned = newer;
+        let mut pinned = newer.clone();
         world.observed_projectiles.retain_volleys(&mut pinned);
         assert_eq!(pinned, original);
         let stream = world.scene_views.get_mut(&input.source).unwrap();
@@ -513,6 +538,9 @@ mod tests {
         world.advance_observed_projectiles(finished).unwrap();
         assert!(outgoing(&mut world).is_empty());
         acknowledge(&mut world, replay, true);
+        let mut settled = newer.clone();
+        world.observed_projectiles.retain_volleys(&mut settled);
+        assert_eq!(settled, newer);
         let arrival = finished + 1;
         world.advance_observed_projectiles(arrival).unwrap();
         world

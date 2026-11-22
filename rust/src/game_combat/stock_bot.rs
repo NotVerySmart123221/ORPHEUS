@@ -681,7 +681,7 @@ impl StockBotScript {
     }
 
     pub(super) fn take_projectiles(&mut self, tick: u32, bot: &Bot) -> Vec<StockShotBatch> {
-        let shots = self.component.take_shots().unwrap_or_default();
+        let shots = self.component.take_reported_shots().unwrap_or_default();
         if self.faulted || bot.dead || bot.is_stunned(tick) {
             return Vec::new();
         }
@@ -690,7 +690,8 @@ impl StockBotScript {
         let forward = self.world.forward;
         let mut projectiles = Vec::new();
         let mut projected = None;
-        for shot in shots {
+        for report in shots {
+            let shot = report.event;
             let Some(node) = self.component.shot_node(&shot) else {
                 continue;
             };
@@ -720,7 +721,7 @@ impl StockBotScript {
                                 .ok()
                         })
                         .as_ref()?;
-                    let volley = snapshot.freeze_volley(shot)?;
+                    let volley = snapshot.freeze_volley(shot, report.presentation)?;
                     Some(ObservedShot::new(
                         volley, definition, origin, forward, tick, lifetime,
                     ))
