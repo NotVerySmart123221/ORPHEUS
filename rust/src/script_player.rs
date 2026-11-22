@@ -263,6 +263,7 @@ impl PlayerBodyFactory {
             defenders: Arc::default(),
             sightings: Vec::new(),
             sighting_source: None,
+            death_source: None,
             cinematic_aim: None,
             facing_claims: Default::default(),
             deadeye_scene: DeadeyeScene::default(),

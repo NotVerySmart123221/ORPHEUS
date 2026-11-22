@@ -301,6 +301,11 @@ pub(crate) struct AdmittedFlight {
     pub flight: ProjectileFlight,
 }
 
+pub(crate) struct DeathSourceFacts {
+    pub(crate) target: HealthTargetFacts,
+    pub(crate) velocity: Vec3,
+}
+
 pub(crate) enum FlightOutcome {
     Ended {
         token: ProjectileToken,

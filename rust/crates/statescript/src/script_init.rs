@@ -878,6 +878,28 @@ impl Component {
         })
     }
 
+    /// Submit the common body death event with its authored parameter types.
+    pub fn queue_body_death(
+        &mut self,
+        killer: u32,
+        critical: bool,
+        loadout: Option<u64>,
+        frame: Option<u32>,
+    ) -> Result<usize, InitFault> {
+        const DIED: u64 = 0x0240_0000_0000_003e;
+        let parameters = Variables::from([
+            (0x12, Value::Entity(killer)),
+            (0x95, Value::Bool(critical)),
+            (0x3e6, loadout.map_or(Value::Null, Value::Asset)),
+            (0x3e7, Value::Array(Vec::new())),
+        ]);
+        if let Some(frame) = frame.filter(|&frame| frame_start(frame) >= self.machine.now_ms) {
+            self.queue_frame_message_from(frame, killer, DIED, parameters)
+        } else {
+            self.queue_entity_message_from(killer, DIED, parameters)
+        }
+    }
+
     pub fn queue_entity_message(
         &mut self,
         message: u64,

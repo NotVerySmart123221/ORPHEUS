@@ -474,7 +474,7 @@ impl RoomSimulation {
         true
     }
 
-    fn retire_faulted_defender_script(&mut self, id: BodyId) {
+    fn retire_faulted_player_script(&mut self, id: BodyId) {
         if self.clear_player_runtime(id) {
             if let Some(state) = self.player_body_mut(id) {
                 let owner = state.owner;
@@ -705,7 +705,7 @@ impl RoomSimulation {
                     id.entity
                 );
                 if runtime.snapshot().is_none() {
-                    self.retire_faulted_defender_script(id);
+                    self.retire_faulted_player_script(id);
                 }
             }
         }
@@ -739,7 +739,7 @@ impl RoomSimulation {
                     id.entity
                 );
                 if runtime.snapshot().is_none() {
-                    self.retire_faulted_defender_script(id);
+                    self.retire_faulted_player_script(id);
                 } else {
                     state.mover.set_authored_facing(None);
                 }
@@ -798,6 +798,21 @@ impl RoomSimulation {
             operation: Some(Operation::Update(vec![component])),
             ..EntityUpdate::default()
         });
+        let mut death_script_fault = None;
+        if outcome.killed {
+            let source_facts = self.death_source_facts(source.killer);
+            if let Some(runtime) = self
+                .player_body_mut(id)
+                .and_then(|state| state.runtime.as_mut())
+            {
+                let (critical, loadout) = impact.map_or((false, None), |(impact, _)| {
+                    (impact.critical, impact.loadout)
+                });
+                death_script_fault = runtime
+                    .publish_death(source.killer, critical, loadout, source_facts)
+                    .err();
+            }
+        }
         self.record_health_applied(
             source.killer,
             entity,
@@ -809,7 +824,35 @@ impl RoomSimulation {
                 frame: Some(source.frame),
             }),
         );
+        if let Some(error) = death_script_fault {
+            eprintln!("player {entity:08X} death script stopped: {error}");
+            self.retire_faulted_player_script(id);
+        }
         Some((owner, outcome, health))
+    }
+
+    fn death_source_facts(&self, wire: u32) -> Option<super::DeathSourceFacts> {
+        if let Some(player) = self
+            .player_handle_for_wire(wire)
+            .and_then(|id| self.player_body(id))
+        {
+            return Some(super::DeathSourceFacts {
+                target: player.health_target_facts(),
+                velocity: player.mover.pose().velocity,
+            });
+        }
+        let state = self
+            .world
+            .get::<super::BotState>(*self.by_wire.get(&wire)?)?;
+        let mut target = state.health_target_facts();
+        if let Some(script) = &state.stock_script {
+            target.tags = script.target_tags();
+            target.script_state = script.script_state();
+        }
+        Some(super::DeathSourceFacts {
+            target,
+            velocity: state.bot.velocity,
+        })
     }
 
     pub(crate) fn observer_player_creates(
