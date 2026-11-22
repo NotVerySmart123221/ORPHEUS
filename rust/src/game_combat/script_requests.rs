@@ -385,6 +385,59 @@ impl RoomSimulation {
         cues
     }
 
+    pub(super) fn record_actor_hurt_voice(
+        &mut self,
+        speaker_wire: u32,
+        is_bot: bool,
+        critical: bool,
+        killed: bool,
+        frame: u32,
+    ) {
+        if !self.combat_voice.has_hurt_cues() || !crate::script_expr::valid_entity(speaker_wire) {
+            return;
+        }
+        let prev = self.hurt_voice_history.get(&speaker_wire).copied();
+        let cooldown = self.combat_voice.hurt_cooldown_ticks();
+        if !killed
+            && prev.is_some_and(|(last_frame, _)| {
+                frame >= last_frame && frame.saturating_sub(last_frame) < cooldown
+            })
+        {
+            return;
+        }
+        let pick = prev.map_or(0, |(_, count)| count);
+        let Some((stimulus, line)) = self.combat_voice.hurt_cue(is_bot, critical, killed, pick)
+        else {
+            return;
+        };
+        self.hurt_voice_history
+            .insert(speaker_wire, (frame, pick.wrapping_add(1)));
+        for (&listener_wire, &player_entity) in &self.players_by_wire {
+            let Some(player) = self
+                .world
+                .get::<PlayerBodyState>(player_entity)
+                .filter(|player| player.id.entity == listener_wire && player.alive())
+            else {
+                continue;
+            };
+            self.player_cues.push(PlayerRoomCue {
+                owner: player.owner,
+                listener: player.id,
+                source: RoomBodyIdentity {
+                    wire: listener_wire,
+                    generation: player_entity.to_bits(),
+                },
+                notice: CombatNotice::Voice {
+                    anchor: speaker_wire,
+                    speaker: speaker_wire,
+                    listener: listener_wire,
+                    stimulus,
+                    line,
+                },
+            });
+        }
+    }
+
     pub(super) fn record_enemy_elimination(
         &mut self,
         killer_wire: u32,

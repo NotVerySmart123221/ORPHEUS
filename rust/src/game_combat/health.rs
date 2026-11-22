@@ -66,6 +66,9 @@ impl RoomSimulation {
                             frame: Some(source.frame),
                         }),
                 );
+                if delta < 0.0 || killed {
+                    self.record_actor_hurt_voice(wire, true, false, killed, source.frame);
+                }
                 if killed {
                     self.record_enemy_elimination(source.killer, wire, victim_team, source.frame);
                 }
@@ -84,6 +87,15 @@ impl RoomSimulation {
                     self.damage_player_body_by_wire(id, amount, source, None)
                 {
                     self.scripted_health.extend(health);
+                    if outcome.dealt > 0.0 || outcome.killed {
+                        self.record_actor_hurt_voice(
+                            wire,
+                            false,
+                            false,
+                            outcome.killed,
+                            source.frame,
+                        );
+                    }
                     if outcome.killed {
                         self.player_deaths.push(PlayerDeath {
                             owner,
@@ -499,5 +511,118 @@ mod tests {
         let updates = room.take_scripted_health();
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].entity, first);
+    }
+
+    #[test]
+    fn scripted_health_damage_emits_bot_and_player_hurt_voice_cues_and_ignores_heal() {
+        use crate::{
+            combat_voice::CombatVoiceCatalog, contact_world::ContactWorld,
+            game_combat::PlayerBodyState, game_heroes::SOLDIER, game_replication::BodyId,
+            mover::Mover, mover_settings::MoverSettings, script_player::fixture_body_factory,
+        };
+
+        let bots = fixture_bots();
+        let bot = bots[1].entity;
+        let mut room = RoomSimulation::new(bots).unwrap();
+        let (factory, spawn) = fixture_body_factory();
+        let mover = Mover::new(
+            MoverSettings::default(),
+            Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+            spawn.pose.position,
+            0,
+            0x08,
+        )
+        .unwrap();
+        let player = BodyId {
+            entity: spawn.entity,
+            generation: 1,
+        };
+        room.spawn_player_body(PlayerBodyState::new(
+            player,
+            spawn.controller,
+            spawn.slot,
+            0,
+            SOLDIER,
+            mover,
+            Some(Box::new(factory.start(spawn).unwrap())),
+            spawn.frame,
+            None,
+        ))
+        .unwrap();
+        let catalog = CombatVoiceCatalog::from_json(
+            r#"{
+                "hurt_cooldown_ticks": 5,
+                "hurt": {
+                    "minor": { "stimulus": "0x0EE0000000000003", "lines": ["0x0760000000000006"] },
+                    "bot_death": { "stimulus": "0x0EE0000000000001", "lines": ["0x076000000000819E"] }
+                }
+            }"#,
+        )
+        .unwrap();
+        room.set_combat_voice(Arc::new(catalog));
+
+        let dealer = Death {
+            time: 0.1,
+            frame: 10,
+            killer: player.entity,
+        };
+        assert!(
+            room.settle_health(
+                bot,
+                HealthEffect::Damage(20.0),
+                dealer,
+                Duration::from_millis(160)
+            )
+            .unwrap()
+        );
+        // Heal never emits a hurt cue even after cooldown.
+        assert!(
+            room.settle_health(
+                bot,
+                HealthEffect::Heal(5.0),
+                Death {
+                    frame: 20,
+                    ..dealer
+                },
+                Duration::from_millis(320),
+            )
+            .unwrap()
+        );
+        assert!(
+            room.settle_health(
+                player.entity,
+                HealthEffect::Damage(25.0),
+                Death {
+                    killer: bot,
+                    frame: 11,
+                    time: 0.176,
+                },
+                Duration::from_millis(176),
+            )
+            .unwrap()
+        );
+
+        let cues = room.take_player_cues();
+        assert_eq!(cues.len(), 2);
+        assert_eq!(
+            cues[0].notice,
+            crate::game_combat_messages::CombatNotice::Voice {
+                anchor: bot,
+                speaker: bot,
+                listener: player.entity,
+                stimulus: 0x0EE0_0000_0000_0003,
+                line: 0x0760_0000_0000_0006,
+            }
+        );
+        assert_eq!(
+            cues[1].notice,
+            crate::game_combat_messages::CombatNotice::Voice {
+                anchor: player.entity,
+                speaker: player.entity,
+                listener: player.entity,
+                stimulus: 0x0EE0_0000_0000_0003,
+                line: 0x0760_0000_0000_0006,
+            }
+        );
     }
 }

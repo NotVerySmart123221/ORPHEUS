@@ -623,6 +623,7 @@ pub(crate) struct RoomSimulation {
     free_for_all: bool,
     combat_voice: Arc<crate::combat_voice::CombatVoiceCatalog>,
     elimination_streaks: HashMap<u32, EliminationStreak>,
+    hurt_voice_history: HashMap<u32, (u32, usize)>,
     spatial_queries: Option<RoomSpatialQueries>,
     spatial_frame: Option<(u32, Arc<RoomSpatialFrame>)>,
     movement_contacts: Option<movement::MovementContacts>,
@@ -1055,6 +1056,7 @@ impl RoomSimulation {
             free_for_all: false,
             combat_voice: Arc::default(),
             elimination_streaks: HashMap::new(),
+            hurt_voice_history: HashMap::new(),
             spatial_queries: None,
             spatial_frame: None,
             movement_contacts: None,
@@ -2350,6 +2352,7 @@ impl RoomSimulation {
                 frame: Some(context.tick),
             }),
         );
+        self.record_actor_hurt_voice(entity, true, impact.critical, result.killed, context.tick);
         if result.killed {
             self.record_enemy_elimination(source, entity, victim_team, context.tick);
         }
