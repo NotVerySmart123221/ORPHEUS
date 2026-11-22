@@ -63,6 +63,92 @@ fn ai_weapon_fire_exposes_only_active_self_targeted_slots() {
 }
 
 #[test]
+fn authored_ai_navigation_begin_and_exit_bind_only_the_current_destination() {
+    struct WalkWorld(Option<f64>);
+    impl World for WalkWorld {
+        fn position(&mut self, _: u32) -> Option<[f64; 3]> {
+            None
+        }
+
+        fn entity_variable(&mut self, _: u32, _: u32) -> Option<Value> {
+            None
+        }
+
+        fn ai_walk_speed(&self, _: Site) -> Option<f64> {
+            self.0
+        }
+    }
+    let fixture: Json = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/ai-navigation-destination-v1.json"
+    )))
+    .unwrap();
+    for input in fixture["cases"].as_array().unwrap() {
+        let destination = serde_json::from_value(input["destination"].clone()).unwrap();
+        let mut world = WalkWorld(input["walk_speed"].as_f64());
+        let data = graph(
+            input["graph"].as_u64().unwrap() as u32,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({"m_outPlug": plug(&[(1, "m_beginPlug")], &[])}),
+                ),
+                node(
+                    1,
+                    "STU_ECAEE401",
+                    Some(0),
+                    json!({
+                        "m_6F4283C8": fixture["navigation_mode"],
+                        "m_subgraphPlug": plug(&[(2, "m_beginPlug")], &[1]),
+                    }),
+                ),
+                node(
+                    2,
+                    "STU_194D744E",
+                    Some(1),
+                    json!({
+                        "m_89AABA94": 0,
+                        "m_BD2A95EE": var(51, true),
+                    }),
+                ),
+            ],
+            json!([1, 2]),
+            json!([0]),
+        );
+        let index = input["graph"].as_u64().unwrap() as u32;
+        let mut component = Component::start(
+            Arc::new(store(vec![data])),
+            0xc000_1001,
+            Variables::from([(51, Value::Vector(destination))]),
+            vec![Root::new(1, index)],
+            0,
+            &mut world,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        let requests = |body: &Component| {
+            body.snapshot().unwrap().instances[&1]
+                .states
+                .values()
+                .filter_map(State::move_request)
+                .collect::<Vec<_>>()
+        };
+        let expected = world
+            .0
+            .map(|speed| (destination, speed))
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(requests(&component), expected);
+        if !expected.is_empty() {
+            component.debug_end_state(1, 0, &mut world).unwrap();
+            assert!(requests(&component).is_empty());
+        }
+    }
+}
+
+#[test]
 fn ai_behavior_inputs_update_from_variables_and_native_reads_and_clean_up() {
     #[derive(Default)]
     struct BehaviorWorld {

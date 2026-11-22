@@ -959,8 +959,13 @@ impl RoomSimulation {
             .is_some_and(|state| state.bot.dead)
     }
 
-    fn advance_stock_bots(&mut self, tick: u32) -> Vec<observed_projectiles::StockShotBatch> {
+    fn advance_stock_bots(
+        &mut self,
+        queries: &BotQueries<'_>,
+        tick: u32,
+    ) -> Vec<observed_projectiles::StockShotBatch> {
         let mut launches = Vec::new();
+        let contacts = self.movement_contact_frame();
         let entities: Vec<_> = self.by_wire.values().copied().collect();
         for entity in entities {
             let state = self
@@ -969,7 +974,23 @@ impl RoomSimulation {
                 .expect("live bot handle")
                 .into_inner();
             if let Some(script) = state.stock_script.as_mut() {
-                script.advance(tick, &state.bot);
+                let bot = &mut state.bot;
+                let prior_walk = script.walk_request();
+                if let Some((destination, speed)) = prior_walk
+                    .filter(|_| !bot.dead && !bot.is_stunned(tick) && !bot.patrol_active())
+                {
+                    if let Some(contacts) = &contacts {
+                        contacts.stage_bot(bot, tick);
+                    }
+                    if bot.has_collision() || queries.attach_ai_walk_mover(bot) {
+                        // The steering request carries a destination, not an aim override.
+                        bot.walk_to(tick, destination, speed, false);
+                    }
+                }
+                script.advance(tick, bot);
+                if prior_walk.is_some() && !bot.patrol_active() && script.walk_request().is_none() {
+                    bot.stop_objective(tick);
+                }
                 launches.extend(script.take_projectiles(tick, &state.bot));
             }
         }
@@ -2436,7 +2457,7 @@ impl RoomSimulation {
             self.set_junkenstein_defenders(Arc::clone(&defenders));
             self.set_player_defenders(defenders);
         }
-        let stock_launches = self.advance_stock_bots(tick);
+        let stock_launches = self.advance_stock_bots(queries, tick);
         if !stock_launches.is_empty() {
             self.activate_combat();
         }

@@ -62,6 +62,7 @@ pub(super) struct StockBotWorld {
     position: [f64; 3],
     forward: [f64; 3],
     movement: Option<MovementSample>,
+    walk_speed: f64,
     vitals: Vitals,
     target_tag_effects: TargetTagEffects,
     display_names: HashMap<Site, u64>,
@@ -338,6 +339,11 @@ impl World for StockBotWorld {
         }
     }
 
+    fn ai_walk_speed(&self, site: Site) -> Option<f64> {
+        (site.entity == self.entity && !self.dead && self.placement_graphs.contains(&site.graph))
+            .then_some(self.walk_speed)
+    }
+
     fn selects_ai_behavior(&mut self, site: Site) -> Option<bool> {
         (site.entity == self.entity).then(|| self.placement_graphs.contains(&site.graph))
     }
@@ -487,6 +493,7 @@ impl StockBotScript {
             position: bot.position,
             forward: forward_from_yaw(bot.yaw),
             movement: sample_bot_movement(bot, tick),
+            walk_speed: bot.walk_speed(),
             vitals: if has_body_graph {
                 Vitals::empty()
             } else {
@@ -648,6 +655,22 @@ impl StockBotScript {
         } else {
             Vec::new()
         }
+    }
+
+    pub(super) fn walk_request(&self) -> Option<([f64; 3], f64)> {
+        if self.faulted || self.world.dead || self.world.placement_graphs.is_empty() {
+            return None;
+        }
+        let mut requests = self
+            .component
+            .snapshot()?
+            .instances
+            .values()
+            .filter(|instance| instance.is_server_only())
+            .flat_map(|instance| instance.states.values())
+            .filter_map(|state| state.move_request());
+        let request = requests.next()?;
+        requests.next().is_none().then_some(request)
     }
 
     pub(super) fn advance(&mut self, tick: u32, bot: &Bot) {

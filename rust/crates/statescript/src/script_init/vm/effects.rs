@@ -2486,6 +2486,17 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         key: StateKey,
         node: &Node,
     ) -> Result<(), InitFault> {
+        if node.class == "STU_194D744E" {
+            let site = self.site(key.instance, node);
+            let destination =
+                self.evaluate(key.instance, node, field(&node.fields, "m_BD2A95EE"), None);
+            if let (Some(Value::Vector(destination)), Some(speed)) =
+                (destination, self.world.ai_walk_speed(site))
+            {
+                self.set_move_request(key, destination, speed);
+            }
+            return Ok(());
+        }
         let speed_config = field(&node.fields, "m_speed");
         if field(&node.fields, "m_B060F688").as_u64() != Some(0)
             || speed_config.is_null()
@@ -2510,6 +2521,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             Some(Value::Float(f)) => f,
             _ => return Ok(()),
         };
+        self.set_move_request(key, destination, speed);
+        Ok(())
+    }
+
+    fn set_move_request(&mut self, key: StateKey, destination: [f64; 3], speed: f64) {
         let max_axis = MAX_MOVEMENT_AXIS;
         if speed > 0.0
             && speed <= max_axis
@@ -2523,6 +2539,5 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 };
             }
         }
-        Ok(())
     }
 }

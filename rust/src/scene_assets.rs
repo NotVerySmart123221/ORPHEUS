@@ -72,7 +72,11 @@ pub(crate) const MOVER_CATEGORY: u16 = 0x18;
 const OWNER_PROBE_CONTROLLER: u32 = 0xa000_0100;
 
 fn mover_category(map: &GameMap, team: u8) -> u16 {
-    match (map.free_for_all, team) {
+    mover_category_for_team(map.free_for_all, team)
+}
+
+fn mover_category_for_team(free_for_all: bool, team: u8) -> u16 {
+    match (free_for_all, team) {
         (false, 0) => 0x08,
         (false, 1) => 0x10,
         _ => MOVER_CATEGORY,

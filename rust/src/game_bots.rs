@@ -1255,7 +1255,15 @@ impl Bot {
         true
     }
 
+    pub(crate) fn walk_speed(&self) -> f64 {
+        self.walk.speed
+    }
+
     pub(crate) fn move_to_objective(&mut self, tick: u32, target: [f64; 3], speed: f64) {
+        self.walk_to(tick, target, speed, true);
+    }
+
+    pub(crate) fn walk_to(&mut self, tick: u32, target: [f64; 3], speed: f64, face_target: bool) {
         if self.combat_motion_tick == Some(tick) {
             return;
         }
@@ -1303,8 +1311,12 @@ impl Bot {
             return;
         }
         self.velocity = std::array::from_fn(|axis| (self.position[axis] - start[axis]) / dt);
-        self.yaw = heading([x, z]);
-        self.held = [0, FORWARD as i8];
+        if face_target {
+            self.yaw = heading([x, z]);
+            self.held = [0, FORWARD as i8];
+        } else {
+            self.held = throttles(self.yaw, [x / distance, z / distance]);
+        }
         self.last_held = self.held;
         self.input_tick = Some(tick);
         self.moved_tick = Some(tick);

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "case_id": "ai-navigation-destination.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "navigation_mode": {"$": "STUConfigVarInt", "m_value": 3},
+  "cases": [
+    {"graph": 587, "destination": [2.5, 0.75, -4.0], "walk_speed": 3.0},
+    {"graph": 588, "destination": [-6.0, 1.0, 7.0], "walk_speed": 6.0},
+    {"graph": 589, "destination": [2.5, 0.75, -4.0], "walk_speed": null}
+  ]
+}
