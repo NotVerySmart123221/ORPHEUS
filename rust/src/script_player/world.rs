@@ -468,13 +468,14 @@ impl World for BodyWorld {
     fn queue_contact_damage(
         &mut self,
         site: Site,
+        source_frame: u32,
         damage: f64,
         changes: &[(u32, Option<Vec3>)],
     ) -> bool {
         self.is_player_site(site)
             && self.spatial_frame.as_deref().is_some_and(|frame| {
                 self.script_requests
-                    .queue_contact_damage(frame, damage, changes)
+                    .queue_contact_damage(frame, source_frame, damage, changes)
             })
     }
 

@@ -622,6 +622,7 @@ pub trait World {
     fn queue_contact_damage(
         &mut self,
         _site: Site,
+        _source_frame: u32,
         _damage: f64,
         _changes: &[(u32, Option<[f64; 3]>)],
     ) -> bool {

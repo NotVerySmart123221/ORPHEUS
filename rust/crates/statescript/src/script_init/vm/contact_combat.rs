@@ -149,7 +149,11 @@ impl<'graph, W: World> Vm<'graph, '_, '_, W> {
                     changes.push((target.entity, impulse));
                 }
             }
-            if !changes.is_empty() && !self.world.queue_contact_damage(site, amount, &changes) {
+            if !changes.is_empty()
+                && !self
+                    .world
+                    .queue_contact_damage(site, source_frame, amount, &changes)
+            {
                 self.report(site, Issue::UnsupportedField("contact damage request"));
                 return Ok(());
             }

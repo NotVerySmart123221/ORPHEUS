@@ -99,7 +99,11 @@ impl RoomScriptRequest {
 
 enum ScriptEffect {
     Health(HealthEffect),
-    Contact { damage: f64, impulse: Option<Vec3> },
+    Contact {
+        source_frame: u32,
+        damage: f64,
+        impulse: Option<Vec3>,
+    },
     Message(RoomMessage),
     Cue(RoomCue, Entity),
 }
@@ -140,6 +144,7 @@ impl RoomScriptRequests {
     pub(crate) fn queue_contact_damage(
         &mut self,
         frame: &RoomSpatialFrame,
+        source_frame: u32,
         damage: f64,
         changes: &[(u32, Option<Vec3>)],
     ) -> bool {
@@ -156,7 +161,14 @@ impl RoomScriptRequests {
                 } else {
                     damage > 0.0
                 })
-                .then_some((wire, ScriptEffect::Contact { damage, impulse }))
+                .then_some((
+                    wire,
+                    ScriptEffect::Contact {
+                        source_frame,
+                        damage,
+                        impulse,
+                    },
+                ))
             }),
         )
     }
@@ -317,9 +329,23 @@ impl RoomSimulation {
             ScriptEffect::Health(effect) => {
                 self.settle_health(request.wire, effect, death, now)?;
             }
-            ScriptEffect::Contact { damage, impulse } => {
+            ScriptEffect::Contact {
+                source_frame,
+                damage,
+                impulse,
+            } => {
                 if damage > 0.0 {
-                    self.settle_health(request.wire, HealthEffect::Damage(damage), death, now)?;
+                    let settled =
+                        self.apply_health(request.wire, HealthEffect::Damage(damage), death, now)?;
+                    if let Some(outcome) = settled.filter(|outcome| outcome.delta < 0.0) {
+                        self.record_contact_feedback(
+                            source,
+                            request.wire,
+                            source_frame,
+                            -outcome.delta,
+                            outcome.killed,
+                        );
+                    }
                 }
                 if let Some(delta) = impulse {
                     self.queue_combat_impulse(request.wire, tick, delta)?;
@@ -357,6 +383,40 @@ impl RoomSimulation {
             }
         }
         Ok(())
+    }
+
+    fn record_contact_feedback(
+        &mut self,
+        source: SampledBody,
+        target: u32,
+        shot_frame: u32,
+        dealt: f64,
+        killed: bool,
+    ) {
+        let Some(shooter) = self.world.get::<PlayerBodyState>(source.entity) else {
+            return;
+        };
+        let source = source.identity();
+        let notices = [
+            Some(CombatNotice::Hit {
+                target,
+                dealt,
+                critical: false,
+                killed,
+                shot_frame,
+            }),
+            killed.then_some(CombatNotice::Elimination {
+                killer: source.wire,
+                victim: target,
+            }),
+        ];
+        self.player_cues
+            .extend(notices.into_iter().flatten().map(|notice| PlayerRoomCue {
+                owner: shooter.owner,
+                listener: shooter.id,
+                source,
+                notice,
+            }));
     }
 
     pub(crate) fn room_cue_source_current(&self, source: RoomBodyIdentity) -> bool {
