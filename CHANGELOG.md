@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Use the shipped Practice Range respawn delay when the local runtime has no override. Replace the dead body at its spawn point with fresh health through ordinary possession and ignore movement and attack input while the body is dead. Preserve local map environment rules during runtime packing. Log client closes and connection expiration reasons for later room-exit diagnostics. Passed 489 Rust library tests covering respawn scheduling, full health at spawn, and runtime packing. Original-client retest remains pending.
+
 - Integrate practice projectile combat and stock bot interactions with the Rust combat audio updates. Use the same actor filter flags for view queries and combat, and route actor voice and mode announcer cues through their declared speakers.
 
 - Extend the opt-in Inspector playtest capture with combat settlement, reliable hit and voice admission, and acknowledgement of authored cues. The records show when a cue enters the send queue and whether the client acknowledges the reliable prefix. Audible playback remains a client check.

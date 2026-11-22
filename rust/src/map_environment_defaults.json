@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "maps": {
+    "0x0800000000000688": {
+      "lethal_volumes": [],
+      "player_respawns": [
+        {"mode": "0x0230000000000018", "delay_ms": 3000}
+      ]
+    }
+  }
+}

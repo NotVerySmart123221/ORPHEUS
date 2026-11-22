@@ -364,24 +364,34 @@ fn room_respawn_waits_for_death_notice_admission_then_replaces_the_body_once() {
         Ok(Some(Box::new(factory.start_with_setup(spawn, setup)?)))
     }));
 
-    // The box and delay are original scheduler fixture values, independent of
-    // the prepared scene's real-map identity or retail respawn timing.
-    let delay = Duration::from_millis(32);
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/owner-death-notice-v1.json"
+    ))
+    .unwrap();
+    let death_position: [f64; 3] =
+        serde_json::from_value(fixture["respawn"]["death_position"].clone()).unwrap();
+    let delay = Duration::from_millis(fixture["respawn"]["practice_delay_ms"].as_u64().unwrap());
     let map_guid = scene.map().map_guid;
     let mode_guid = scene.map().mode_guid;
-    let environment = EnvironmentCatalog::from_json(
+    let override_file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        override_file.path(),
         &serde_json::json!({"version":1,"maps":{
             format!("0x{map_guid:016X}"):{
-                "lethal_volumes":[{"min":[199,9,199],"max":[201,11,201]}],
-                "player_respawns":[{"mode":format!("0x{mode_guid:016X}"),"delay_ms":32}]
+                "lethal_volumes":[{
+                    "min":death_position.map(|axis| axis - 1.0),
+                    "max":death_position.map(|axis| axis + 1.0)
+                }]
             }
         }})
         .to_string(),
     )
     .unwrap();
-    scene
-        .simulation_mut()
-        .set_environment(environment.for_map(map_guid));
+    let environment = EnvironmentCatalog::load(override_file.path())
+        .unwrap()
+        .for_map(map_guid);
+    assert_eq!(environment.player_respawn_delay(mode_guid), Some(delay));
+    scene.simulation_mut().set_environment(environment);
 
     let card = PlayerCard::default();
     let owner = player_entity(0);
@@ -403,6 +413,12 @@ fn room_respawn_waits_for_death_notice_admission_then_replaces_the_body_once() {
         assert!(!peer.world.mode_ready());
         pick_body(&mut peer, &mut scene, &viewer, SOLDIER)
     };
+    let initial_pose = scene
+        .simulation()
+        .player_body(old_body)
+        .unwrap()
+        .mover
+        .pose();
     drop(scene.simulation_mut().take_player_events());
     scene
         .simulation_mut()
@@ -411,7 +427,7 @@ fn room_respawn_waits_for_death_notice_admission_then_replaces_the_body_once() {
         .mover = Mover::new(
         MoverSettings::default(),
         Arc::new(ContactWorld::new(Vec::new()).unwrap()),
-        [200.0, 10.0, 200.0],
+        death_position,
         0,
         0x18,
     )
@@ -511,7 +527,11 @@ fn room_respawn_waits_for_death_notice_admission_then_replaces_the_body_once() {
     ));
     let simulation = room.world.as_ref().unwrap().scene.simulation();
     assert!(simulation.player_body(old_body).is_none());
-    assert!(simulation.player_body(fresh).unwrap().alive());
+    let replacement = simulation.player_body(fresh).unwrap();
+    assert!(replacement.alive());
+    let health = replacement.vitals().unwrap();
+    assert_eq!(health.total(), health.maximum());
+    assert_eq!(replacement.mover.pose().position, initial_pose.position);
 
     let updates = room
         .finish_simulation(FIRST_TICK + 4, replacement_time + delay)

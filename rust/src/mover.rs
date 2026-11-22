@@ -123,6 +123,7 @@ pub struct Mover {
     modifiers: ModifierTimeline,
     cinematic_aim: Option<[i32; 2]>,
     authored_facing: Option<[i32; 2]>,
+    player_input_blocked: bool,
     velocity_changes: Vec<(u32, VelocityChange)>,
     scripted_motion: Option<(u32, ScriptedMotion)>,
     scripted_motion_frame: Option<u32>,
@@ -153,6 +154,7 @@ impl Mover {
             modifiers: ModifierTimeline::default(),
             cinematic_aim: None,
             authored_facing: None,
+            player_input_blocked: false,
             velocity_changes: Vec::new(),
             scripted_motion: None,
             scripted_motion_frame: None,
@@ -314,6 +316,10 @@ impl Mover {
         poses(self.last_command, newest)
     }
 
+    pub(crate) fn block_player_input(&mut self, blocked: bool) {
+        self.player_input_blocked = blocked;
+    }
+
     pub(crate) fn step_pending<B: AsRef<[CapsulePose]>>(
         &mut self,
         rays: &TriangleIndex,
@@ -331,6 +337,14 @@ impl Mover {
         let blockers = blockers.as_ref().map_or(&[][..], AsRef::as_ref);
         let mut stepped = 0;
         for mut command in pending.by_ref().take(limit) {
+            if self.player_input_blocked {
+                command = Command {
+                    frame: command.frame,
+                    yaw: command.yaw,
+                    pitch: command.pitch,
+                    ..Command::default()
+                };
+            }
             if let Some(aim) = self.cinematic_aim.or(self.authored_facing) {
                 [command.yaw, command.pitch] = aim;
             }

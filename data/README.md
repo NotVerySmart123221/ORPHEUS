@@ -49,6 +49,10 @@ bundle. You can combine the flag with `--game-graphs` and `--target-tags-xml`.
 The destination manifest hashes the final graph bundle.
 See the [mode profile schema](../docs/STATESCRIPT_DEVELOPMENT.md#set-mode-and-actor-rules).
 
+The packer preserves a supplied `data/map_environment_174.json` and includes
+it in the manifest. This file can supply hazards and override individual map
+and mode respawn delays. Practice Range has a shipped three-second default.
+
 ---
 
 ## Input Provenance (Three Categories)

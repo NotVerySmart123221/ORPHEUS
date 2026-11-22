@@ -1784,6 +1784,8 @@ impl WorldDelivery {
         let Some(state) = simulation.player_body_mut(id) else {
             return Ok((1, true));
         };
+        let alive = state.alive();
+        state.mover.block_player_input(!alive);
         let pending = pending.get_or_insert_with(|| {
             PendingCommand::new(
                 state.mover.pending_poses(command),
