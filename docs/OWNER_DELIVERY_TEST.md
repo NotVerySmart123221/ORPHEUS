@@ -93,10 +93,18 @@ rejected. Controls mutate only the encoded CmFD of actual captured chunks for
 S+1 and an earlier owner packet and reject both as stale. Synthetic controls
 cover an early 1-to-0 pair and graph/codec symlinks escaping the runtime.
 
-Run the public synthetic suite with `python -B -m unittest discover -s
-scripts/tests`; the receiver guard tests require no runtime. The existing
-pinned-reader synthetic tests skip unless `ORPHEUS_PYTHON_REFERENCE` is set;
-the prepared receiver wrapper above is always explicitly opt-in.
+Run the public synthetic reader suite with:
+
+```sh
+python -B -m unittest scripts.tests.test_receiver_convergence
+python -I -S -B -m unittest discover -s scripts/tests -p 'test_sprint_wire.py'
+python -I -S -B -m unittest discover -s scripts/tests -p 'test_state_link_wire.py'
+```
+
+The public PR job sets `ORPHEUS_PYTHON_REFERENCE` to the pinned checkout.
+For the tests that generate Rust wire chunks before decoding them, also set
+`ORPHEUS_STATE_LINK_WIRE_RUST=1`. The prepared receiver wrapper above runs
+locally with the runtime pack.
 
 This demonstrates cumulative delivery
 before the loss report, not retransmission after that report; a broken

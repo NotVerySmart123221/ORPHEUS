@@ -17,6 +17,7 @@ This log records tested changes and their acceptance status. Entries are grouped
 - Release each confirmed predicted projectile at the authoritative contact deadline, even when a related prediction is still awaiting acknowledgment. Unconfirmed predictions retain bounded retry and cleanup. Natural expiry without an authored blast sends destruction without an impact state. Original-client impact rendering remains pending.
 
 - Apply the optional authored self-damage scale to the shooter's projectile splash. Reuse the normal splash range, falloff, occlusion and player health settlement. Self-damage does not create an enemy hit or elimination notice. Original-client acceptance is pending.
+- Run the full Rust suite once per PR in Windows default mode. Windows Inspector and Linux exercise their feature and platform checks. The archived Python server comparison tool tests run on demand, and the public checks exercise the pinned wire reader.
 
 - Deduplicated protected Rust CI runs. Required PR checks still cover Windows default and Inspector, Linux, the minimum Rust version, Python behavior contracts, and C++ preview policy. The Windows workspace runs now prove that named contracts passed from their existing test output. Automatic post-merge checks are limited to workflow and build-input changes.
 - Combined the owner-host capability checks into one test with the same valid, foreign, and unbound actor cases.
