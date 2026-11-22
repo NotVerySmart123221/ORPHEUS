@@ -44,18 +44,20 @@ const ALTERNATE_HERO: u64 = 0x02e0_0000_0052_0044;
 enum CueTrigger {
     DamageReceived,
     CriticalDealt,
+    EliminationDealt,
+}
+
+fn fixture_node(pos: usize, class: &str, fields: Json) -> Json {
+    json!({
+        "pos":pos,"uid":pos,"rid":pos,"remote":-1,"state":null,
+        "class":class,"client_only":false,"server_only":true,"fields":fields,
+    })
 }
 
 fn feedback_graph(stimulus: u64, line: u64, trigger: CueTrigger) -> Vec<Json> {
     let variable = |id| json!({"$": "STUConfigVarDynamic", "m_identifier": id});
     let plug = |index| json!({"$": "Plug", "links": [[index, "m_inPlug"]]});
     let empty = json!({"$": "Plug", "links": []});
-    let node = |pos, class, fields| {
-        json!({
-            "pos":pos,"uid":pos,"rid":pos,"remote":-1,"state":null,
-            "class":class,"client_only":false,"server_only":true,"fields":fields,
-        })
-    };
     let (recipient_slot, condition_slot, condition) = match trigger {
         CueTrigger::DamageReceived => (
             2,
@@ -66,13 +68,14 @@ fn feedback_graph(stimulus: u64, line: u64, trigger: CueTrigger) -> Vec<Json> {
             }),
         ),
         CueTrigger::CriticalDealt => (1, 7, variable(2)),
+        CueTrigger::EliminationDealt => (1, 4, variable(2)),
     };
     let binding = |slot, id| {
         json!({
             "m_B5051BCE":format!("0x{slot:016X}"),"m_out_Var":variable(id),
         })
     };
-    let mut entry = node(
+    let mut entry = fixture_node(
         0,
         "EntryHostEvent",
         json!({
@@ -85,7 +88,7 @@ fn feedback_graph(stimulus: u64, line: u64, trigger: CueTrigger) -> Vec<Json> {
     );
     entry["host_event_entry"] = json!("health_applied");
     let branch = |pos, condition| {
-        let mut node = node(
+        let mut node = fixture_node(
             pos,
             "FixtureBranchAction",
             json!({
@@ -104,7 +107,7 @@ fn feedback_graph(stimulus: u64, line: u64, trigger: CueTrigger) -> Vec<Json> {
         }),
     );
     let damage = branch(2, condition);
-    let mut cue = node(
+    let mut cue = fixture_node(
         3,
         "FixtureCueAction",
         json!({
@@ -139,7 +142,7 @@ fn apply_and_advance(room: &mut Room, bodies: [BodyId; 2], tick: u32, damage: f6
     advance_feedback(room, bodies, tick);
 }
 
-fn advance_feedback(room: &mut Room, bodies: [BodyId; 2], tick: u32) {
+fn advance_feedback(room: &mut Room, bodies: impl IntoIterator<Item = BodyId>, tick: u32) {
     room.finish_simulation(tick, tick * TICK_PERIOD).unwrap();
     let next_tick = tick + 1;
     let simulation = room.world.as_mut().unwrap().scene.simulation_mut();
@@ -164,7 +167,10 @@ fn advance_feedback(room: &mut Room, bodies: [BodyId; 2], tick: u32) {
         .unwrap();
 }
 
-fn feedback_room(graph: Vec<Json>, teams: [u8; 2]) -> (Room, [BodyId; 2], [u32; 2]) {
+fn feedback_room<const N: usize>(
+    graph: Vec<Json>,
+    teams: [u8; N],
+) -> (Room, [BodyId; N], [u32; N]) {
     let hero_entry =
         json!({"name":"Synthetic cue actor","class":"Damage","body":"0x0400000000000001"});
     let heroes = HeroCatalog::from_json(
@@ -182,8 +188,8 @@ fn feedback_room(graph: Vec<Json>, teams: [u8; 2]) -> (Room, [BodyId; 2], [u32; 
         Ok(Some(Box::new(factory.start_with_setup(spawn, setup)?)))
     }));
     let card = PlayerCard::default();
-    let mut sequence = [0; 2];
-    let [shooter, victim] = [0, 1].map(|slot| {
+    let mut sequence = [0; N];
+    let peers: [_; N] = std::array::from_fn(|slot| {
         let owner = player_entity(slot);
         let viewer = PlayerAppearance {
             entity: owner,
@@ -201,15 +207,15 @@ fn feedback_room(graph: Vec<Json>, teams: [u8; 2]) -> (Room, [BodyId; 2], [u32; 
         let id = pick_body(&mut peer, &mut scene, &viewer, SOLDIER);
         (id, peer)
     });
-    let (shooter, shooter_peer) = shooter;
-    let (victim, victim_peer) = victim;
+    let bodies = peers.each_ref().map(|(body, _)| *body);
     let room = Room {
         map: scene.map().clone(),
-        players: [0, 1]
+        players: teams
             .into_iter()
-            .map(|slot| {
+            .enumerate()
+            .map(|(slot, team)| {
                 let mut info = player().pop().unwrap();
-                info.team = teams[slot];
+                info.team = team;
                 Player {
                     info,
                     entity: player_entity(slot),
@@ -217,22 +223,19 @@ fn feedback_room(graph: Vec<Json>, teams: [u8; 2]) -> (Room, [BodyId; 2], [u32; 
                 }
             })
             .collect(),
-        members: IndexMap::from([
-            (
-                1,
-                RoomMember {
-                    slot: 0,
-                    peer: Some(shooter_peer),
-                },
-            ),
-            (
-                2,
-                RoomMember {
-                    slot: 1,
-                    peer: Some(victim_peer),
-                },
-            ),
-        ]),
+        members: peers
+            .into_iter()
+            .enumerate()
+            .map(|(slot, (_, peer))| {
+                (
+                    u32::try_from(slot + 1).unwrap(),
+                    RoomMember {
+                        slot,
+                        peer: Some(peer),
+                    },
+                )
+            })
+            .collect(),
         world: Some(RoomWorld {
             scene: Box::new(scene),
             card,
@@ -242,7 +245,7 @@ fn feedback_room(graph: Vec<Json>, teams: [u8; 2]) -> (Room, [BodyId; 2], [u32; 
         debug_control: room::RoomDebugControl::new(FIRST_TICK, Duration::ZERO),
         injection: None,
     };
-    (room, [shooter, victim], sequence)
+    (room, bodies, sequence)
 }
 
 fn voice_schema() -> Schemas {
@@ -421,14 +424,68 @@ fn send_voice_frame(
         .unwrap();
 }
 
+fn elimination_cue_graph(stimulus: u64, cues: [EliminationCue; 2]) -> Vec<Json> {
+    let mut graph = feedback_graph(stimulus, cues[0].line, CueTrigger::EliminationDealt);
+    let template = graph.pop().unwrap();
+    let count = json!({"$":"STUConfigVarDynamic","m_identifier":3});
+    let mut cases = Vec::new();
+    for (offset, cue) in cues.into_iter().enumerate() {
+        let position = 5 + offset;
+        let mut node = template.clone();
+        for key in ["pos", "uid", "rid"] {
+            node[key] = json!(position);
+        }
+        node["fields"]["speaker"] = json!("mode");
+        node["fields"]["line"] = json!(format!("0x{:016X}", cue.line));
+        graph.push(node);
+        cases.push(json!({"$":"Plug","links":[[position,"m_inPlug"]],"m_value":cue.count}));
+    }
+    graph.insert(
+        3,
+        fixture_node(
+            3,
+            "STUStatescriptActionSetVar",
+            json!({
+                "m_out_Var": count,
+                "m_value": {"$":"STUConfigVarExpression","m_expression":{
+                    "m_opcodes":[8,0,6,0,23,0],"m_dynamicVars":[count],"m_D99EF254":[1]
+                }},
+                "m_outPlug": {"$":"Plug","links":[[4,"m_inPlug"]]}
+            }),
+        ),
+    );
+    graph.insert(
+        4,
+        fixture_node(
+            4,
+            "STUStatescriptActionSwitch",
+            json!({"m_262AE982": count, "m_FDD34C25": cases}),
+        ),
+    );
+    graph
+}
+
+#[derive(Deserialize)]
+struct EliminationCue {
+    count: u32,
+    line: u64,
+}
+
 #[test]
-fn mode_cues_keep_their_order_through_reliable_retransmission() {
+fn settled_elimination_cues_keep_their_order_through_reliable_retransmission() {
     #[derive(Deserialize)]
     struct RetryContract {
-        damage: f64,
         stimulus: u64,
-        lines: [u64; 2],
+        cues: [EliminationCue; 2],
+        hits: Vec<Settlement>,
         sends: Vec<RetrySend>,
+    }
+    #[derive(Deserialize)]
+    struct Settlement {
+        target: usize,
+        frame: u32,
+        damage: f64,
+        killed: bool,
     }
     #[derive(Deserialize)]
     struct RetrySend {
@@ -441,35 +498,59 @@ fn mode_cues_keep_their_order_through_reliable_retransmission() {
         "../../../../fixtures/behavior/mode-cue-retry-v1.json",
     ))
     .unwrap();
-    let mut graph = feedback_graph(
-        contract.stimulus,
-        contract.lines[0],
-        CueTrigger::DamageReceived,
-    );
-    let mut second = graph[3].clone();
-    for key in ["pos", "uid", "rid"] {
-        second[key] = json!(4);
+    let lines = contract.cues.each_ref().map(|cue| cue.line);
+    let graph = elimination_cue_graph(contract.stimulus, contract.cues);
+    let (mut room, bodies, mut sequences) = feedback_room(graph, [0, 1, 1, 1]);
+    let shooter = bodies[0];
+    let last_frame = contract.hits.last().unwrap().frame;
+    for group in contract
+        .hits
+        .chunk_by(|left, right| left.frame == right.frame)
+    {
+        let frame = group[0].frame;
+        let tick = FIRST_TICK + frame;
+        let simulation = room.world.as_mut().unwrap().scene.simulation_mut();
+        for hit in group {
+            let (_, outcome, _) = simulation
+                .damage_player_body_by_wire(
+                    bodies[hit.target],
+                    hit.damage,
+                    Death {
+                        frame: tick,
+                        time: (tick * TICK_PERIOD).as_secs_f64(),
+                        killer: shooter.entity,
+                    },
+                    None,
+                )
+                .unwrap();
+            assert_eq!(outcome.killed, hit.killed);
+        }
+        advance_feedback(&mut room, [shooter], tick);
+        if frame < last_frame {
+            assert_eq!(
+                room.members[&1]
+                    .peer
+                    .as_ref()
+                    .unwrap()
+                    .pending_combat_notices()
+                    .count(),
+                0
+            );
+        }
     }
-    second["fields"]["speaker"] = json!("mode");
-    second["fields"]["line"] = json!(format!("0x{:016X}", contract.lines[1]));
-    graph[3]["fields"]["speaker"] = json!("mode");
-    graph[3]["fields"]["m_outPlug"] = json!({"$":"Plug","links":[[4,"m_inPlug"]]});
-    graph.push(second);
-
-    let (mut room, [shooter, listener], mut sequences) = feedback_room(graph, [0, 0]);
-    let first_tick = FIRST_TICK + 1;
-    apply_and_advance(&mut room, [shooter, listener], first_tick, contract.damage);
-    assert_eq!(
-        room.members[&1]
-            .peer
-            .as_ref()
-            .unwrap()
-            .pending_combat_notices()
-            .count(),
-        0
-    );
+    for connection in 2..=4 {
+        assert_eq!(
+            room.members[&connection]
+                .peer
+                .as_ref()
+                .unwrap()
+                .pending_combat_notices()
+                .count(),
+            0
+        );
+    }
     let simulation = room.world.as_ref().unwrap().scene.simulation();
-    let peer = room.members.get_mut(&2).unwrap().peer.as_mut().unwrap();
+    let peer = room.members.get_mut(&1).unwrap().peer.as_mut().unwrap();
     assert_eq!(
         peer.pending_combat_notices()
             .filter_map(|notice| match notice {
@@ -477,15 +558,15 @@ fn mode_cues_keep_their_order_through_reliable_retransmission() {
                 _ => None,
             })
             .collect::<Vec<_>>(),
-        contract.lines,
+        lines,
     );
-    let sequence = &mut sequences[1];
-    while !peer.world.identity_ready(listener.entity) {
+    let sequence = &mut sequences[0];
+    while !peer.world.identity_ready(shooter.entity) {
         assert!(*sequence < 16);
         acknowledge_world_frame(peer, sequence);
     }
     let schemas = voice_schema();
-    let mut tick = first_tick + 1;
+    let mut tick = FIRST_TICK + last_frame + 1;
     for step in contract.sends {
         let now = tick * TICK_PERIOD;
         peer.flush_combat(&schemas, now, Some(simulation)).unwrap();
@@ -498,7 +579,7 @@ fn mode_cues_keep_their_order_through_reliable_retransmission() {
             *sequence,
             VoiceFrame {
                 speaker: GAME_MODE_ENTITY,
-                listener: listener.entity,
+                listener: shooter.entity,
                 line: step.line,
                 ordinal: step.ordinal,
             },

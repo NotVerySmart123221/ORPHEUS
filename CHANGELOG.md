@@ -6,7 +6,7 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
-- Verify that two authored mode cues keep their order across datagram loss and duplicate acknowledgements. The prepared 104319 replay also matched its six ray classifications, and the existing 104319 voice-message encoding check passed. Audible playback remains a separate client check.
+- Verify that two authored mode cues from distinct eliminations in the same settlement frame keep their order across datagram loss and duplicate acknowledgements. The synthetic room replay excludes a nonlethal hit and repeated damage to a defeated body. The prepared 104319 replay also matched its six ray classifications, and the existing 104319 voice-message encoding check passed. Audible playback remains a separate client check.
 
 - Use each player's selected body template for authored hurt volumes when settling player-fired hitscan and projectiles. The synthetic regression covers a miss, a body hit, head contact with critical damage disabled, and a confirmed critical that reaches the shooter's reliable frame.
 

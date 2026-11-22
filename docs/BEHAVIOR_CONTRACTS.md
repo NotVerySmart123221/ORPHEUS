@@ -38,7 +38,7 @@ The Rust-only [received damage audio fixture](../fixtures/behavior/received-dama
 
 The Rust-only [confirmed headshot audio fixture](../fixtures/behavior/confirmed-headshot-audio-v1.json) loads a synthetic hurt-volume profile through the selected body template, then traces room hitscan, critical settlement, and decoded reliable delivery to the shooter. Its control rays cover a miss, body damage, and head contact with the weapon's critical multiplier disabled.
 
-The Rust-only [mode cue retry fixture](../fixtures/behavior/mode-cue-retry-v1.json) emits two authored mode cues in one room tick. It decodes the mode speaker, listener, line, and reliable ordinal across the original send, retransmission, and next cue. Duplicate acknowledgements leave the retry count unchanged.
+The Rust-only [mode cue retry fixture](../fixtures/behavior/mode-cue-retry-v1.json) follows three distinct room eliminations through an authored count and cue thresholds. Two opponents die in the same settlement frame. Nonlethal damage and damage to an already defeated body do not count. Only the selected peer receives the cues. The test decodes the mode speaker, listener, line, and reliable ordinal across the original send, retransmission, and next cue. Duplicate acknowledgements leave the retry count unchanged. The graph and cue identifiers are synthetic.
 
 The Rust-only [timed elimination fixture](../fixtures/behavior/script-timed-elimination-cues-v1.json) exercises an authored opponent filter, count window, and cue thresholds through the production VM. It checks same-frame eliminations, expiry, stale and missing settlement frames, and ineligible damage. Its policy and assets are synthetic.
 
