@@ -26,7 +26,6 @@ pub(super) struct RoomScriptTarget {
     pub(super) health: bool,
     pub(super) messages: bool,
     pub(super) cue_listener: bool,
-    pub(super) filter_flags: Option<u64>,
     pub(super) voice: Option<(u64, u64)>,
 }
 
@@ -65,7 +64,14 @@ impl RoomSpatialFrame {
             return None;
         }
         let (stimulus, line) = options.choose(choose)?;
-        Some((RoomCue { stimulus, line }, listeners))
+        Some((
+            RoomCue {
+                stimulus,
+                line,
+                speaker: RoomCueSpeaker::Actor,
+            },
+            listeners,
+        ))
     }
 }
 
@@ -630,7 +636,6 @@ mod tests {
             health,
             messages,
             cue_listener: health,
-            filter_flags: None,
             voice: None,
         };
         let frame = RoomSpatialFrame {

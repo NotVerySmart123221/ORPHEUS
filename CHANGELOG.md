@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Integrate practice projectile combat and stock bot interactions with the Rust combat audio updates. Use the same actor filter flags for view queries and combat, and route actor voice and mode announcer cues through their declared speakers.
+
 - Extend the opt-in Inspector playtest capture with combat settlement, reliable hit and voice admission, and acknowledgement of authored cues. The records show when a cue enters the send queue and whether the client acknowledges the reliable prefix. Audible playback remains a client check.
 
 - Keep delayed combat cues scoped to the listener bodies present at settlement. If an entity ID has been reused or retired, other selected listeners still receive the cue.

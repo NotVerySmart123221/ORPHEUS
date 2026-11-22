@@ -43,10 +43,7 @@ impl ClientWheelAction {
             Some(Value::Struct(marker))
                 if marker
                     .get(&0)
-                    .is_none_or(|value| *value == Value::Unsigned(0)) =>
-            {
-                ()
-            }
+                    .is_none_or(|value| *value == Value::Unsigned(0)) => {}
             _ => return None,
         }
         Some(Self { action, confirmed })

@@ -1207,9 +1207,6 @@ impl RoomSimulation {
                             .as_ref()
                             .is_some_and(|script| script.accepts_room_messages()),
                         cue_listener: false,
-                        filter_flags: crate::match_scene::team_bit(bot.spawn.team)
-                            .ok()
-                            .map(|team| team | 1),
                         voice: actor_voice
                             .as_ref()
                             .and_then(|_| state.stock_script.as_ref().map(|_| (bot.spawn.hero, 0))),
@@ -1263,7 +1260,6 @@ impl RoomSimulation {
                         health: state.vitals().is_some(),
                         messages: state.runtime.is_some(),
                         cue_listener: true,
-                        filter_flags: state.native_filter_flags(),
                         voice: actor_voice.as_ref().map(|_| {
                             let skin = state.observer_create.as_ref().and_then(|update| {
                                 let Operation::Create(definition) = update.operation.as_ref()?
