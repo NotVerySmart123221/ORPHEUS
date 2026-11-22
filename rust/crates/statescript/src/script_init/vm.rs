@@ -2094,6 +2094,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 .filter(|facts| carries_entity(facts.target))
                 .cloned(),
             named_pool_losses: None,
+            critical_hit: None,
         }
     }
 

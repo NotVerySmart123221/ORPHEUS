@@ -743,12 +743,12 @@ impl Component {
         let Some(due_ms) = self.next_vm_frame_ms() else {
             return Ok(0);
         };
-        let named_pool_losses = context.named_pool_losses.take();
-        let Some((kind, parameters)) =
-            event.bindings_for(self.machine.snapshot.entity, named_pool_losses.as_deref())
+        let Some((kind, parameters)) = event.bindings_for(self.machine.snapshot.entity, &context)
         else {
             return Ok(0);
         };
+        context.named_pool_losses = None;
+        context.critical_hit = None;
         self.machine
             .queue_host_entries(&self.graphs, kind, parameters, due_ms, context)
     }

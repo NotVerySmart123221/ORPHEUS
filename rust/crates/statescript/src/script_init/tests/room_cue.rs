@@ -234,3 +234,102 @@ fn authored_room_cue_stages_only_a_valid_scoped_audience() {
         );
     }
 }
+
+#[test]
+fn authored_cue_requires_a_settled_critical_impact() {
+    let speaker = 701;
+    let target = 702;
+    let mut entry = node(
+        0,
+        "EntryHostEvent",
+        None,
+        json!({
+            "m_params": [{"m_B5051BCE": "0x0000000000000007", "m_out_Var": var(2, true)}],
+            "m_outPlug": plug(&[(1, "m_inPlug")], &[]),
+        }),
+    );
+    entry["server_only"] = json!(true);
+    entry["host_event_entry"] = json!("health_applied");
+
+    let mut branch = node(
+        1,
+        "SyntheticBranchAction",
+        None,
+        json!({
+            "m_condition": var(2, true),
+            "m_truePlug": plug(&[(2, "m_inPlug")], &[]),
+            "m_falsePlug": plug(&[], &[]),
+        }),
+    );
+    branch["server_only"] = json!(true);
+    branch["action_behavior"] = json!("branch");
+
+    let mut cue = node(
+        2,
+        "SyntheticCueAction",
+        None,
+        json!({
+            "audience": var(1, true),
+            "stimulus": "0x0000000000000031",
+            "line": "0x0000000000000032",
+            "m_outPlug": plug(&[], &[]),
+        }),
+    );
+    cue["server_only"] = json!(true);
+    cue["action_behavior"] = json!("room_cue");
+
+    let mut world = CueWorld {
+        speaker,
+        center: [0.0; 3],
+        candidates: Vec::new(),
+        facts: None,
+        reject: false,
+        attempts: Vec::new(),
+        queued: Vec::new(),
+    };
+    let graphs = Arc::new(store(vec![graph(
+        GRAPH,
+        vec![entry, branch, cue],
+        json!([]),
+        json!([]),
+    )]));
+    let mut component = Component::start(
+        graphs,
+        speaker,
+        Variables::from([(1, Value::Array(vec![Value::Entity(speaker)]))]),
+        vec![Root::listener(INSTANCE, GRAPH, None)],
+        0,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+
+    for (frame, delta, critical_hit, queued) in [
+        (1, -5.0, Some(false), 0),
+        (2, 0.0, Some(true), 0),
+        (3, -5.0, Some(true), 1),
+        (4, -5.0, None, 1),
+        (5, 5.0, Some(true), 1),
+    ] {
+        let count = component
+            .queue_host_event_with_context(
+                HostEvent::HealthApplied {
+                    source: Some(speaker),
+                    target,
+                    delta,
+                    killed: false,
+                    hit_tags: None,
+                },
+                HostHealthContext {
+                    critical_hit,
+                    ..HostHealthContext::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(count, usize::from(delta != 0.0));
+        component.advance_frame(frame, &mut world).unwrap();
+        assert_eq!(world.queued.len(), queued, "frame {frame}");
+    }
+    assert_eq!(world.queued[0].1, [speaker]);
+    assert_eq!((world.queued[0].2, world.queued[0].3), (0x31, 0x32));
+}

@@ -63,6 +63,7 @@ struct Outcome {
     delta: f64,
     killed: bool,
     hit_tags: Option<Vec<u64>>,
+    critical_hit: Option<bool>,
     target_facts: Option<TargetFacts>,
 }
 
@@ -245,6 +246,7 @@ fn native_room_health_events_keep_actual_deltas_and_hit_tag_availability_in_orde
 
     let mut bot_impact = fixture_impact(bot, input.bot_impact);
     bot_impact.tags = hit_tags(&input.ordered_hit_tags);
+    bot_impact.critical = true;
     let bot_hit = room
         .apply_bot_impact(source, FIXTURE_CONTEXT.tick, FIXTURE_CONTEXT, &bot_impact)
         .unwrap()
@@ -314,6 +316,7 @@ fn native_room_health_events_keep_actual_deltas_and_hit_tag_availability_in_orde
             Target::Bot => (bot, &bot_hit.damage.target_facts),
             Target::Player => (player.entity, &player_hit.damage.target_facts),
         };
+        assert_eq!(change.critical_hit, outcome.critical_hit);
         if let Some(expected_facts) = &outcome.target_facts {
             if outcome.hit_tags.is_some() {
                 assert_target_facts(

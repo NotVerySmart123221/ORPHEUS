@@ -18,7 +18,7 @@ use crate::{
     junkenstein_messages::{DefenderMessage, DefenderSighting},
     mover::Mover,
     script_enemy::EnemyTarget,
-    script_init::{HealthTargetFacts, HitTags},
+    script_init::HealthTargetFacts,
     script_snapshot_wire::SceneProjection,
     vitals::{Damage, Death, Vitals},
     world::{Component as WorldComponent, EntityUpdate, Operation},
@@ -776,7 +776,7 @@ impl RoomSimulation {
         id: BodyId,
         amount: f64,
         source: Death,
-        impact: Option<(HitTags, &HealthTargetFacts)>,
+        impact: Option<(&Impact, &HealthTargetFacts)>,
     ) -> Option<(u32, Damage, Option<EntityUpdate>)> {
         let cassidy_protected = self.cassidy_protected;
         let state = self.player_body_mut(id)?;
@@ -984,7 +984,7 @@ impl RoomSimulation {
                 frame: context.tick,
                 killer: source,
             },
-            Some((impact.tags, &target_facts)),
+            Some((impact, &target_facts)),
         ) else {
             return Ok(None);
         };

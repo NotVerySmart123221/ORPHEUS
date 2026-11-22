@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Expose confirmed critical hits on the settled StateScript health event so authored cues can distinguish ordinary impacts, critical impacts, and damage without weapon classification. The binding uses the same settlement for players and bots. The 20 focused StateScript and room regressions passed. Original-client audio remains open.
+
 - Run the full Rust suite once per PR in Windows default mode. Windows Inspector and Linux exercise their feature and platform checks. The archived Python server comparison tool tests run on demand, and the public checks exercise the pinned wire reader.
 
 - Deduplicated protected Rust CI runs. Required PR checks still cover Windows default and Inspector, Linux, the minimum Rust version, Python behavior contracts, and C++ preview policy. The Windows workspace runs now prove that named contracts passed from their existing test output. Automatic post-merge checks are limited to workflow and build-input changes.

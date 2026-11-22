@@ -2183,7 +2183,7 @@ impl RoomSimulation {
             -result.dealt,
             result.killed,
             Some(HealthDamageEvidence {
-                impact: Some((hit.damage.tags, &hit.damage.target_facts)),
+                impact: Some((impact, &hit.damage.target_facts)),
                 named_pool_losses: &hit.damage.named_pool_losses,
             }),
         );
