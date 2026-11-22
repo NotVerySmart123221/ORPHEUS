@@ -67,7 +67,7 @@ pub(crate) struct PlayerBodyState {
     pub(crate) slot: u8,
     pub(crate) team: u8,
     pub(crate) hero: u64,
-    body_template: u64,
+    pub(super) body_template: u64,
     pub(crate) mover: Mover,
     pub(crate) history: TargetHistory,
     pub(crate) runtime: Option<Box<dyn OwnerBodyRuntime>>,
