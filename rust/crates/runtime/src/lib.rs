@@ -45,6 +45,7 @@ pub const JUNKENSTEIN_MAP_WORLD: &str = "data/junkenstein/junkenstein-map-world.
 pub const JUNKENSTEIN_NPCS: &str = "data/junkenstein/junkenstein-npcs.json";
 pub const COMBAT_HURT_VOLUMES: &str = "data/combat_hurt_volumes.json";
 pub const ACTOR_VOICE_CATALOG: &str = "data/player_voice_174.json";
+pub const COMBAT_VOICE_CATALOG: &str = "data/combat_voice_174.json";
 pub const MAP_ENVIRONMENT: &str = "data/map_environment_174.json";
 const PRACTICE_COLLISION: &str = "collision/0688.col";
 const SIGNING_INPUT: &str = "data/lobby_state_blob.key";
@@ -264,7 +265,12 @@ fn inputs(
             inputs.insert(name.into(), input);
         }
     }
-    for name in [COMBAT_HURT_VOLUMES, ACTOR_VOICE_CATALOG, MAP_ENVIRONMENT] {
+    for name in [
+        COMBAT_HURT_VOLUMES,
+        ACTOR_VOICE_CATALOG,
+        COMBAT_VOICE_CATALOG,
+        MAP_ENVIRONMENT,
+    ] {
         let path = source.join(name);
         if path.is_file() {
             inputs.insert(name.into(), path);
@@ -670,6 +676,8 @@ mod tests {
             &format!("source/{MAP_ENVIRONMENT}"),
             br#"{"version":1,"maps":{}}"#,
         );
+        let voice = br#"{"hurt_cooldown_ticks":12,"hurt":{"minor":{"stimulus":"0x0EE0000000000001","lines":["0x0760000000000002"]}}}"#;
+        fixture.write(&format!("source/{COMBAT_VOICE_CATALOG}"), voice);
         let destination = fixture.root.join("new/pack");
         let output = prepare(
             &source,
@@ -698,9 +706,11 @@ mod tests {
         assert_eq!(manifest["schema"], MANIFEST_SCHEMA);
         let entries = manifest["sha256"].as_object().unwrap();
         assert!(entries.contains_key(MAP_ENVIRONMENT));
+        assert!(entries.contains_key(COMBAT_VOICE_CATALOG));
+        assert_eq!(fs::read(output.join(COMBAT_VOICE_CATALOG)).unwrap(), voice);
         assert_eq!(
             entries.len(),
-            LOBBY_RUNTIME_DATA.len() + MATCH_RUNTIME_DATA.len() + 5
+            LOBBY_RUNTIME_DATA.len() + MATCH_RUNTIME_DATA.len() + 6
         );
         for (name, hash) in entries {
             let copied = fs::read(output.join(name)).unwrap();

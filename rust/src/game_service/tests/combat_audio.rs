@@ -919,7 +919,7 @@ fn bot_hurt_and_death_voice_cues_honor_cooldown_and_bypass_on_elimination() {
 
     let bots = BotCatalog::from_json(
         r#"{
-            "heroes": {"0x01": {"name": "Target", "body": "0x02", "health": 120}},
+            "heroes": {"0x01": {"name": "Target", "body": "0x0400000000000002", "health": 120}},
             "maps": {"0x03": {"hints": {}, "spawners": [
                 {"hero": "0x01", "team": 1, "position": [6, 0, 0], "rotation": [0, 0, 0, 1], "graphs": []}
             ]}}
@@ -930,22 +930,24 @@ fn bot_hurt_and_death_voice_cues_honor_cooldown_and_bypass_on_elimination() {
     let target = bots[0].entity;
     let target_pos = bots[0].spawn.position;
     let (mut room, [shooter], mut sequence) = feedback_room_with_bots(Vec::new(), [0], bots);
-    let voice = CombatVoiceCatalog::from_json(
-        r#"{
-            "hurt_cooldown_ticks": 4,
-            "hurt": {
-                "minor": { "stimulus": "0x0EE0000000000003", "lines": ["0x0760000000000006"] },
-                "severe": { "stimulus": "0x0EE0000000000004", "lines": ["0x076000000000000B"] },
-                "bot_death": { "stimulus": "0x0EE0000000000001", "lines": ["0x076000000000819E"] }
-            }
-        }"#,
-    )
+    let contract: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/combat-hurt-voice-v1.json",
+    ))
     .unwrap();
+    let voice = CombatVoiceCatalog::from_json(&contract["input"]["catalog"].to_string()).unwrap();
+    assert_eq!(
+        voice.hurt_cue(Some(0x0400_0000_0000_0003), true, false, false, 0),
+        None
+    );
+    let shot_frame = |event: &str| {
+        FIRST_TICK
+            + u32::try_from(contract["input"]["frame_offsets"][event].as_u64().unwrap()).unwrap()
+    };
     let scene = room.world.as_mut().unwrap().scene.as_mut();
     scene.fixture_set_combat_voice(voice);
     scene.fixture_set_hurt_volumes(
         HurtVolumeCatalog::from_json(
-            r#"{"version": 1, "bodies": {"0x02": {"body": {"lower": 0.4, "upper": 1.1, "radius": 0.24}, "head": {"lower": 1.7, "upper": 1.7, "radius": 0.2}}}}"#,
+            r#"{"version": 1, "bodies": {"0x0400000000000002": {"body": {"lower": 0.4, "upper": 1.1, "radius": 0.24}, "head": {"lower": 1.7, "upper": 1.7, "radius": 0.2}}}}"#,
         )
         .unwrap(),
     );
@@ -985,11 +987,11 @@ fn bot_hurt_and_death_voice_cues_honor_cooldown_and_bypass_on_elimination() {
             )
             .unwrap()
             .expect("bot hit");
-        advance_feedback(room, [shooter], tick);
     };
 
     // Non-lethal body hit emits minor hurt cue.
-    shoot_bot(&mut room, 0.8, 20.0, 1.0, FIRST_TICK + 1);
+    shoot_bot(&mut room, 0.8, 20.0, 1.0, shot_frame("first"));
+    advance_feedback(&mut room, [shooter], shot_frame("first"));
     assert_reliable_voice_cue(
         &mut room,
         1,
@@ -997,12 +999,16 @@ fn bot_hurt_and_death_voice_cues_honor_cooldown_and_bypass_on_elimination() {
         shooter,
         &mut sequence[0],
         FIRST_TICK + 2,
-        0x0760_0000_0000_0006,
+        contract["expected"]["first_line"].as_u64().unwrap(),
         0,
     );
 
+    // An older damage frame must not bypass or rewind the cooldown.
+    shoot_bot(&mut room, 0.8, 20.0, 1.0, shot_frame("late"));
+
     // Follow-up hit within cooldown (4 ticks) is suppressed.
-    shoot_bot(&mut room, 0.8, 20.0, 1.0, FIRST_TICK + 3);
+    shoot_bot(&mut room, 0.8, 20.0, 1.0, shot_frame("follow_up"));
+    advance_feedback(&mut room, [shooter], shot_frame("follow_up"));
     assert_eq!(
         room.members[&1]
             .peer
@@ -1010,11 +1016,14 @@ fn bot_hurt_and_death_voice_cues_honor_cooldown_and_bypass_on_elimination() {
             .unwrap()
             .pending_combat_notices()
             .count(),
-        0
+        contract["expected"]["late_and_follow_up_cues"]
+            .as_u64()
+            .unwrap() as usize
     );
 
     // Critical head hit once cooldown expires emits severe hurt cue.
-    shoot_bot(&mut room, 1.7, 20.0, 2.0, FIRST_TICK + 5);
+    shoot_bot(&mut room, 1.7, 20.0, 2.0, shot_frame("critical"));
+    advance_feedback(&mut room, [shooter], shot_frame("critical"));
     assert_reliable_voice_cue(
         &mut room,
         1,
@@ -1022,12 +1031,13 @@ fn bot_hurt_and_death_voice_cues_honor_cooldown_and_bypass_on_elimination() {
         shooter,
         &mut sequence[0],
         FIRST_TICK + 6,
-        0x0760_0000_0000_000B,
+        contract["expected"]["critical_line"].as_u64().unwrap(),
         1,
     );
 
     // Lethal hit inside cooldown bypasses cooldown and emits bot_death cue.
-    shoot_bot(&mut room, 0.8, 80.0, 1.0, FIRST_TICK + 6);
+    shoot_bot(&mut room, 0.8, 80.0, 1.0, shot_frame("lethal"));
+    advance_feedback(&mut room, [shooter], shot_frame("lethal"));
     assert_reliable_voice_cue(
         &mut room,
         1,
@@ -1035,7 +1045,7 @@ fn bot_hurt_and_death_voice_cues_honor_cooldown_and_bypass_on_elimination() {
         shooter,
         &mut sequence[0],
         FIRST_TICK + 7,
-        0x0760_0000_0000_819E,
+        contract["expected"]["lethal_line"].as_u64().unwrap(),
         2,
     );
 }

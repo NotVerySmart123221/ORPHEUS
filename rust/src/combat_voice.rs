@@ -36,6 +36,7 @@ pub struct CombatVoiceCatalog {
     multikills: BTreeMap<u32, VoiceCueEntry>,
     hurt_cooldown_ticks: u32,
     hurt: HurtVoiceTable,
+    hurt_by_body: BTreeMap<u64, HurtVoiceTable>,
 }
 
 impl CombatVoiceCatalog {
@@ -61,6 +62,8 @@ impl CombatVoiceCatalog {
             hurt_cooldown_ticks: u32,
             #[serde(default)]
             hurt: Option<RawHurtTable>,
+            #[serde(default)]
+            hurt_by_body: BTreeMap<String, RawHurtTable>,
         }
 
         #[derive(Deserialize)]
@@ -108,8 +111,8 @@ impl CombatVoiceCatalog {
         for (count, cue) in raw.multikills {
             multikills.insert(count, parse_cue(cue, &format!("multikill {count}"))?);
         }
-        let hurt = match raw.hurt {
-            Some(table) => HurtVoiceTable {
+        let parse_hurt = |table: RawHurtTable| -> io::Result<HurtVoiceTable> {
+            Ok(HurtVoiceTable {
                 minor: table
                     .minor
                     .map(|cue| parse_cue(cue, "hurt.minor"))
@@ -126,10 +129,21 @@ impl CombatVoiceCatalog {
                     .bot_death
                     .map(|cue| parse_cue(cue, "hurt.bot_death"))
                     .transpose()?,
-            },
-            None => HurtVoiceTable::default(),
+            })
         };
-        if !hurt.is_empty() && raw.hurt_cooldown_ticks == 0 {
+        let hurt = raw.hurt.map(parse_hurt).transpose()?.unwrap_or_default();
+        let mut hurt_by_body = BTreeMap::new();
+        for (key, table) in raw.hurt_by_body {
+            let body = parse_nonzero_guid(&key, "hurt body")?;
+            if body >> 48 != 0x0400 {
+                return Err(invalid("hurt_by_body requires a body definition GUID"));
+            }
+            let table = parse_hurt(table)?;
+            if table.is_empty() || hurt_by_body.insert(body, table).is_some() {
+                return Err(invalid("hurt_by_body entry is empty or duplicates a body"));
+            }
+        }
+        if (!hurt.is_empty() || !hurt_by_body.is_empty()) && raw.hurt_cooldown_ticks == 0 {
             return Err(invalid(
                 "hurt_cooldown_ticks must be positive when hurt cues are configured",
             ));
@@ -139,6 +153,7 @@ impl CombatVoiceCatalog {
             multikills,
             hurt_cooldown_ticks: raw.hurt_cooldown_ticks,
             hurt,
+            hurt_by_body,
         })
     }
 
@@ -149,7 +164,7 @@ impl CombatVoiceCatalog {
 
     /// Whether any actor hurt or death voice cues are configured.
     pub fn has_hurt_cues(&self) -> bool {
-        !self.hurt.is_empty()
+        !self.hurt.is_empty() || !self.hurt_by_body.is_empty()
     }
 
     /// Minimum tick gap between non-lethal hurt voice cues for the same speaker.
@@ -172,21 +187,25 @@ impl CombatVoiceCatalog {
     /// Resolve `(stimulus, line)` for an actor hurt or death cue, if configured.
     pub fn hurt_cue(
         &self,
+        body: Option<u64>,
         is_bot: bool,
         critical: bool,
         killed: bool,
         pick: usize,
     ) -> Option<(u64, u64)> {
+        let table = body
+            .and_then(|body| self.hurt_by_body.get(&body))
+            .unwrap_or(&self.hurt);
         let entry = if killed {
             if is_bot {
-                self.hurt.bot_death.as_ref().or(self.hurt.death.as_ref())
+                table.bot_death.as_ref().or(table.death.as_ref())
             } else {
-                self.hurt.death.as_ref()
+                table.death.as_ref()
             }
         } else if critical {
-            self.hurt.severe.as_ref().or(self.hurt.minor.as_ref())
+            table.severe.as_ref().or(table.minor.as_ref())
         } else {
-            self.hurt.minor.as_ref()
+            table.minor.as_ref()
         }?;
         let line = *entry.lines.get(pick % entry.lines.len())?;
         Some((entry.stimulus, line))
@@ -274,7 +293,7 @@ mod tests {
         .unwrap();
         assert!(!legacy.is_empty());
         assert!(!legacy.has_hurt_cues());
-        assert_eq!(legacy.hurt_cue(true, false, false, 0), None);
+        assert_eq!(legacy.hurt_cue(None, true, false, false, 0), None);
 
         let hurt_only = CombatVoiceCatalog::from_json(
             r#"{
@@ -291,16 +310,16 @@ mod tests {
         assert_eq!(hurt_only.hurt_cooldown_ticks(), 18);
         assert_eq!(hurt_only.multikill_cue(2, 0), None);
         assert_eq!(
-            hurt_only.hurt_cue(true, false, false, 1),
+            hurt_only.hurt_cue(None, true, false, false, 1),
             Some((0x0EE0_0000_0000_0003, 0x0760_0000_0000_0007))
         );
         // Severe falls back to minor; bot_death falls back to death.
         assert_eq!(
-            hurt_only.hurt_cue(false, true, false, 0),
+            hurt_only.hurt_cue(None, false, true, false, 0),
             Some((0x0EE0_0000_0000_0003, 0x0760_0000_0000_0006))
         );
         assert_eq!(
-            hurt_only.hurt_cue(true, false, true, 0),
+            hurt_only.hurt_cue(None, true, false, true, 0),
             Some((0x0EE0_0000_0000_0001, 0x0760_0000_0000_001C))
         );
 
@@ -317,15 +336,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            full.hurt_cue(true, true, false, 0),
+            full.hurt_cue(None, true, true, false, 0),
             Some((0x0EE0_0000_0000_0004, 0x0760_0000_0000_000B))
         );
         assert_eq!(
-            full.hurt_cue(false, false, true, 0),
+            full.hurt_cue(None, false, false, true, 0),
             Some((0x0EE0_0000_0000_0001, 0x0760_0000_0000_001C))
         );
         assert_eq!(
-            full.hurt_cue(true, false, true, 0),
+            full.hurt_cue(None, true, false, true, 0),
             Some((0x0EE0_0000_0000_0001, 0x0760_0000_0000_819E))
         );
     }
