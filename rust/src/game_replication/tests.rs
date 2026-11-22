@@ -2346,6 +2346,7 @@ fn admitted_owner_projectile_preserves_gravity_and_expiry_blast() {
                 speed: 30.0,
                 lifetime: 7.0 / 30.0,
                 max_distance: None,
+                terrain_rebound: None,
                 radius: 0.0,
                 definition: Some(DEFINITION),
                 direct: None,
@@ -2445,6 +2446,7 @@ fn room_flight_outcomes_release_only_the_current_owner_alias() {
                     speed: 1.0,
                     lifetime: 2.0,
                     max_distance: None,
+                    terrain_rebound: None,
                     radius: 0.0,
                     definition: Some(DEFINITION),
                     direct: None,
@@ -3272,6 +3274,7 @@ fn fixture_projectile_flight(
             speed,
             lifetime: 1.0,
             max_distance: None,
+            terrain_rebound: None,
             radius: 0.0,
             definition: Some(definition),
             direct: damage.map(|amount| HitDefinition {

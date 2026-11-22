@@ -297,6 +297,7 @@ mod tests {
                             speed: 50.0,
                             lifetime: 2.0,
                             max_distance: None,
+                            terrain_rebound: None,
                             radius: 0.0,
                             definition: None,
                             direct: Some(hit),

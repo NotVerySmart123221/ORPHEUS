@@ -1464,6 +1464,7 @@ fn admitted_flashbang_hits_deliver_effects_to_all_boss_pairs() {
                 speed: 30.0,
                 lifetime: 1.0,
                 max_distance: None,
+                terrain_rebound: None,
                 radius: 0.0,
                 definition: Some(0x0400_0000_0000_037d),
                 direct: Some(HitDefinition {
