@@ -19,6 +19,7 @@ use crate::{
     collision_cache::{chunk_guid, read_movement_cache},
     collision_index::TriangleIndex,
     collision_scene::CollisionScene,
+    combat_voice::CombatVoiceCatalog,
     contact_world::ContactWorld,
     game_bots::{Bot, BotCatalog, BotWalk},
     game_clock::FIRST_TICK,
@@ -168,6 +169,7 @@ pub struct SceneAssets {
     movers: Arc<MoverCatalog>,
     hurt_volumes: Arc<HurtVolumeCatalog>,
     actor_voice: Option<Arc<ActorVoiceCatalog>>,
+    combat_voice: Arc<CombatVoiceCatalog>,
     stats: StatsCatalog,
     heroes: Arc<HeroCatalog>,
     pools: Arc<PoolCatalog>,
@@ -218,6 +220,9 @@ impl SceneAssets {
             movers: Arc::new(MoverCatalog::load(data.join("game_movers_174.json"))?),
             hurt_volumes: Arc::new(HurtVolumeCatalog::load(&runtime.join(COMBAT_HURT_VOLUMES))?),
             actor_voice: ActorVoiceCatalog::load(&runtime.join(ACTOR_VOICE_CATALOG))?.map(Arc::new),
+            combat_voice: Arc::new(CombatVoiceCatalog::load(
+                data.join("combat_voice_174.json"),
+            )?),
             stats: StatsCatalog::load(data.join("game_stats_174.json"))?,
             heroes: Arc::new(HeroCatalog::load(data.join("game_heroes_174.json"))?),
             pools,
@@ -477,6 +482,8 @@ impl SceneAssets {
                 .component(&PlayerStats::default(), map.mode_guid, None, None);
         let junkenstein_anchors = Arc::new(junkenstein_anchors);
         let mut simulation = RoomSimulation::new(bots).map_err(io::Error::other)?;
+        simulation.set_free_for_all(map.free_for_all);
+        simulation.set_combat_voice(Arc::clone(&self.combat_voice));
         simulation.set_environment(self.environment.for_map(map.map_guid));
         if self.graphs.uses_host_health_events() {
             simulation.enable_host_health_events();

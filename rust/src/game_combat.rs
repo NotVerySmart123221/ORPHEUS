@@ -606,6 +606,12 @@ struct RoomSpatialQueries {
     actor_voice: Option<Arc<ActorVoiceCatalog>>,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct EliminationStreak {
+    last_frame: u32,
+    count: u32,
+}
+
 /// Room-authoritative bot bodies, player bodies, and in-flight projectiles.
 pub(crate) struct RoomSimulation {
     world: World,
@@ -614,6 +620,9 @@ pub(crate) struct RoomSimulation {
     players_by_wire: IndexMap<u32, Entity>,
     players_by_owner: IndexMap<u32, PlayerBodyHandle>,
     team_member_counts: Option<crate::game_instance::TeamMemberCounts>,
+    free_for_all: bool,
+    combat_voice: Arc<crate::combat_voice::CombatVoiceCatalog>,
+    elimination_streaks: HashMap<u32, EliminationStreak>,
     spatial_queries: Option<RoomSpatialQueries>,
     spatial_frame: Option<(u32, Arc<RoomSpatialFrame>)>,
     movement_contacts: Option<movement::MovementContacts>,
@@ -1043,6 +1052,9 @@ impl RoomSimulation {
             players_by_wire: IndexMap::new(),
             players_by_owner: IndexMap::new(),
             team_member_counts: None,
+            free_for_all: false,
+            combat_voice: Arc::default(),
+            elimination_streaks: HashMap::new(),
             spatial_queries: None,
             spatial_frame: None,
             movement_contacts: None,
@@ -1091,12 +1103,24 @@ impl RoomSimulation {
         self.spawn_anchors.as_ref()
     }
 
+    pub(crate) fn set_free_for_all(&mut self, free_for_all: bool) {
+        self.free_for_all = free_for_all;
+    }
+
+    pub(crate) fn set_combat_voice(
+        &mut self,
+        catalog: Arc<crate::combat_voice::CombatVoiceCatalog>,
+    ) {
+        self.combat_voice = catalog;
+    }
+
     pub(crate) fn enable_spatial_queries(
         &mut self,
         free_for_all: bool,
         ground: Arc<CollisionScene>,
         needs: RoomSpatialNeeds,
     ) {
+        self.free_for_all = free_for_all;
         self.spatial_queries = Some(RoomSpatialQueries {
             free_for_all,
             ground,
@@ -2294,6 +2318,7 @@ impl RoomSimulation {
             return Ok(None);
         };
         let entity = state.bot.entity;
+        let victim_team = state.bot.spawn.team;
         let health = bot_health_update(state, result.killed);
         let hit = BotHit {
             damage: AppliedDamage {
@@ -2329,6 +2354,9 @@ impl RoomSimulation {
                 frame: Some(context.tick),
             }),
         );
+        if result.killed {
+            self.record_enemy_elimination(source, entity, victim_team, context.tick);
+        }
         Ok(Some(hit))
     }
 

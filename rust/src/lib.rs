@@ -24,6 +24,7 @@ pub mod bnet_session_key;
 mod body_ruleset;
 pub mod catalog;
 pub mod collection;
+pub mod combat_voice;
 #[cfg(any(test, feature = "inspector"))]
 mod debug_geometry;
 #[cfg(feature = "inspector")]

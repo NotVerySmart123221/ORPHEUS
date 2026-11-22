@@ -988,6 +988,7 @@ impl RoomSimulation {
         if (self.cassidy_protected && state.hero == crate::game_heroes::CASSIDY) || !state.alive() {
             return Ok(None);
         }
+        let victim_team = state.team;
         let fallback_health = state.vitals().map(Vitals::cumulative_component);
         let target_facts = state.health_target_facts();
         let Some((owner, outcome, health)) = self.damage_player_body_by_wire(
@@ -1025,6 +1026,7 @@ impl RoomSimulation {
                 source,
                 killed_by: !self_hit,
             });
+            self.record_enemy_elimination(source, id.entity, victim_team, context.tick);
         }
         if self_hit {
             return Ok(None);

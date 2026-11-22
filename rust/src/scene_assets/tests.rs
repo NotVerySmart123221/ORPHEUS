@@ -85,6 +85,7 @@ fn practice_only_omits_owner_runtime_when_all_owner_content_is_absent() {
             stats: StatsCatalog::default(),
             heroes: Arc::clone(&heroes),
             pools: Arc::new(PoolCatalog::default()),
+            combat_voice: Arc::new(CombatVoiceCatalog::default()),
         };
         let mut scene = PreparedScene::fixture_for_bots(Vec::new());
         scene.initial_board.index = crate::game_stats::GMP_STATS;
