@@ -114,6 +114,15 @@
       {"name": "zero does not identify any actor", "audience": [714, 0]},
       {"name": "oversized input never stages a partial cue", "audience_count": 65}
     ],
+    "settlement_audience": {
+      "target": 702,
+      "settled_generation": 4,
+      "cases": [
+        {"name": "the settled listener is still current", "current_generation": 4, "additional_listeners": [714], "expected": [702, 714]},
+        {"name": "another listener still receives the notification", "current_generation": 5, "additional_listeners": [714], "expected": [714]},
+        {"name": "a departed listener produces an empty audience", "current_generation": null, "additional_listeners": [], "expected": []}
+      ]
+    },
     "reliable_admission": {"listener_generation": 4, "late_damage": 1000}
   },
   "expected": {

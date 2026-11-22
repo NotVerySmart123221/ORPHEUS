@@ -32,7 +32,7 @@ The Rust-only [room message fixture](../fixtures/behavior/script-room-message-v1
 
 The Rust-only [projected message topics fixture](../fixtures/behavior/script-projected-message-topics-v1.json) checks explicit client scope, loading conflicts, ordinary state entry and exit, and server dispatch exclusion. The native test compares owner and observer activation frames and removal deltas with the existing send codec.
 
-The Rust-only [room cue fixture](../fixtures/behavior/script-room-cue-v1.json) covers authored audience selection, actor and mode speakers, and host admission. Native coverage checks selected player generations, late listener death, and reliable notice admission.
+The Rust-only [room cue fixture](../fixtures/behavior/script-room-cue-v1.json) covers authored audience selection, actor and mode speakers, and host admission. It also checks that delayed health events skip replaced or departed listeners without dropping other recipients. Native coverage checks selected player generations, late listener death, and reliable notice admission.
 
 The Rust-only [received damage audio fixture](../fixtures/behavior/received-damage-audio-v1.json) follows settled damage through the authored target filter, room routing, and reliable game frame. It verifies the victim connection, body replacement before reliable admission, and the decoded listener and line for a fresh hit.
 

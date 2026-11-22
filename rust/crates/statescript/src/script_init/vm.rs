@@ -2282,7 +2282,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     return Ok(false);
                 }
             };
-            if seen.insert(entity) {
+            if !self.expired_health_event_body(entity) && seen.insert(entity) {
                 if targets.len() == RoomCue::MAX_TARGETS {
                     self.report(site, Issue::UnsupportedField("room cue audience limit"));
                     return Ok(false);

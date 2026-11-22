@@ -203,6 +203,7 @@ fn timed_elimination_cues_use_settlement_frames_and_authored_thresholds() {
         candidates: Vec::new(),
         facts: Some(facts),
         reject: false,
+        generations: BTreeMap::new(),
         attempts: Vec::new(),
         queued: Vec::new(),
     };
