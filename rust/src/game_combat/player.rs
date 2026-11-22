@@ -67,6 +67,7 @@ pub(crate) struct PlayerBodyState {
     pub(crate) slot: u8,
     pub(crate) team: u8,
     pub(crate) hero: u64,
+    body_template: u64,
     pub(crate) mover: Mover,
     pub(crate) history: TargetHistory,
     pub(crate) runtime: Option<Box<dyn OwnerBodyRuntime>>,
@@ -97,6 +98,7 @@ impl PlayerBodyState {
             slot,
             team,
             hero,
+            body_template: 0,
             mover,
             history: TargetHistory::new(None),
             runtime,
@@ -107,6 +109,11 @@ impl PlayerBodyState {
             hitscan: Vec::new(),
             observer_create,
         }
+    }
+
+    pub(crate) fn with_body_template(mut self, body_template: u64) -> Self {
+        self.body_template = body_template;
+        self
     }
 
     pub(crate) fn alive(&self) -> bool {
@@ -905,7 +912,7 @@ impl RoomSimulation {
         &self,
         source: u32,
         team: u8,
-        free_for_all: bool,
+        queries: &crate::scene_assets::BotQueries<'_>,
         view: ViewFrame,
         visible: &impl Fn(u32) -> bool,
         candidates: &mut Vec<(u32, HurtPose)>,
@@ -920,13 +927,16 @@ impl RoomSimulation {
                 state.team,
                 source,
                 team,
-                free_for_all,
+                queries.free_for_all(),
             ) || !visible(state.id.entity)
             {
                 continue;
             }
             if let Some(pose) = state.history.at(view, state.target_pose()) {
-                candidates.push((state.id.entity, pose.into()));
+                candidates.push((
+                    state.id.entity,
+                    queries.hurt_pose(state.body_template, pose),
+                ));
             }
         }
     }
@@ -935,7 +945,7 @@ impl RoomSimulation {
         &self,
         source: u32,
         team: u8,
-        free_for_all: bool,
+        queries: &crate::scene_assets::BotQueries<'_>,
         candidates: &mut Vec<(u32, HurtPose)>,
     ) {
         for &entity in self.players_by_wire.values() {
@@ -948,9 +958,12 @@ impl RoomSimulation {
                 state.team,
                 source,
                 team,
-                free_for_all,
+                queries.free_for_all(),
             ) {
-                candidates.push((state.id.entity, state.target_pose().into()));
+                candidates.push((
+                    state.id.entity,
+                    queries.hurt_pose(state.body_template, state.target_pose()),
+                ));
             }
         }
     }

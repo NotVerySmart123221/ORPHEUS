@@ -2023,7 +2023,8 @@ impl WorldDelivery {
             runtime,
             start_frame,
             Some(observer_create),
-        );
+        )
+        .with_body_template(hero.body);
         scene.simulation_mut().spawn_player_body(state)?;
         self.controller = controller;
         self.generation = generation;

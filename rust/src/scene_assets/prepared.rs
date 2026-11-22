@@ -45,6 +45,11 @@ impl PreparedScene {
     }
 
     #[cfg(test)]
+    pub(crate) fn fixture_set_hurt_volumes(&mut self, volumes: HurtVolumeCatalog) {
+        self.hurt_volumes = Arc::new(volumes);
+    }
+
+    #[cfg(test)]
     pub(crate) fn fixture_for_bots(bots: Vec<Bot>) -> Self {
         use crate::collision_cache::{CollisionCache, Mesh, Triangle};
 

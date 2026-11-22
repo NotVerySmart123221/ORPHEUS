@@ -36,6 +36,8 @@ The Rust-only [room cue fixture](../fixtures/behavior/script-room-cue-v1.json) c
 
 The Rust-only [received damage audio fixture](../fixtures/behavior/received-damage-audio-v1.json) follows settled damage through the authored target filter, room routing, and reliable game frame. It verifies the victim connection, body replacement before reliable admission, and the decoded listener and line for a fresh hit.
 
+The Rust-only [confirmed headshot audio fixture](../fixtures/behavior/confirmed-headshot-audio-v1.json) loads a synthetic hurt-volume profile through the selected body template, then traces room hitscan, critical settlement, and decoded reliable delivery to the shooter. Its control rays cover a miss, body damage, and head contact with the weapon's critical multiplier disabled.
+
 The Rust-only [timed elimination fixture](../fixtures/behavior/script-timed-elimination-cues-v1.json) exercises an authored opponent filter, count window, and cue thresholds through the production VM. It checks same-frame eliminations, expiry, stale and missing settlement frames, and ineligible damage. Its policy and assets are synthetic.
 
 The Rust-only [health action fixture](../fixtures/behavior/script-health-change-v1.json) checks signed health request admission, continuation, and rejection diagnostics. Room tests cover player and bot settlement, stale body identity, and death and health updates.
