@@ -301,6 +301,11 @@ pub(crate) struct AdmittedFlight {
     pub flight: ProjectileFlight,
 }
 
+pub(crate) struct DeathSourceFacts {
+    pub(crate) target: HealthTargetFacts,
+    pub(crate) velocity: Vec3,
+}
+
 pub(crate) enum FlightOutcome {
     Ended {
         token: ProjectileToken,
@@ -2412,6 +2417,7 @@ impl RoomSimulation {
         Ok(Some(hit))
     }
 
+    #[cfg(test)]
     fn damage_bot(
         state: &mut BotState,
         amount: f64,
@@ -2768,6 +2774,7 @@ impl RoomSimulation {
                                     enemy_damage.push(crate::script_enemy::EnemyDamage {
                                         source: bot.entity,
                                         target: impact.entity,
+                                        impact: Some(impact),
                                         amount: enemy
                                             .scripts
                                             .outgoing_damage(impact.damage, &volley.damage_tags),
@@ -2900,7 +2907,7 @@ impl RoomSimulation {
                 .map(|projectile| self.world.spawn(projectile).id()),
         );
         for hit in enemy_damage {
-            if !self.settle_health(
+            if !self.settle_health_with_impact(
                 hit.target,
                 HealthEffect::Damage(hit.amount),
                 Death {
@@ -2909,6 +2916,7 @@ impl RoomSimulation {
                     killer: hit.source,
                 },
                 now,
+                hit.impact.as_ref(),
             )? {
                 self.external_enemy_damage.push(hit);
             }
@@ -3089,6 +3097,7 @@ impl RoomSimulation {
                             damage.push(EnemyDamage {
                                 source,
                                 target: impact.entity,
+                                impact: Some(impact),
                                 amount: shooter.map_or(impact.damage, |enemy| {
                                     enemy.scripts.outgoing_damage(impact.damage, &tags)
                                 }),

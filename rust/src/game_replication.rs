@@ -209,6 +209,16 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
         Damage::default()
     }
 
+    fn publish_death(
+        &mut self,
+        _killer: u32,
+        _critical: bool,
+        _loadout: Option<u64>,
+        _source: Option<crate::game_combat::DeathSourceFacts>,
+    ) -> Result<(), InitFault> {
+        Ok(())
+    }
+
     /// New health revisions supersede older ones, including any slot clears.
     fn take_health_update(&mut self) -> Option<WorldComponent> {
         None

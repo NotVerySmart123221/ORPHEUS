@@ -64,8 +64,10 @@ earlier `0xB41104` fault were not established by the retest report.
 
 For profiles without saved gameplay options, the lobby now sends the default
 kill feed and tips flags from the [client-tested settings research](https://github.com/leafall903/ORPHEUS/blob/5d86bcb2/docs/research/kill-feed.md).
-The Rust wire check covers saved options as well. Original-client kill feed
-rendering after the lobby change remains open.
+The Rust wire check covers saved options as well. The prepared 104319
+Practice Range regression also projects the stock player death state with a
+bot killer's identity and encodes both owner and observer snapshots.
+Original-client kill feed rendering remains open.
 
 A local combat calibration replay used six playtest rays against the
 prepared scene and distinguished head hits, body hits and a miss. The

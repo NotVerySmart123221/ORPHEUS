@@ -111,6 +111,7 @@ impl World for EnemyWorld<'_> {
         let [thin, wide] = self.control_records.summoner_rays;
         if thin.entity.or(wide.entity) == Some(target) && !self.control_records.room_boss_pause {
             self.control_records.scripted_damage.push(EnemyDamage {
+                impact: None,
                 source: site.entity,
                 target,
                 amount,
@@ -291,6 +292,7 @@ impl World for EnemyWorld<'_> {
             return false;
         }
         self.control_records.scripted_damage.push(EnemyDamage {
+            impact: None,
             source: site.entity,
             target,
             amount,

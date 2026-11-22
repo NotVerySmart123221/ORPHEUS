@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "case_id": "player-authored-death.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "event": "0x024000000000003E",
+  "bindings": [
+    {"parameter": "0x0A40000000000012", "variable": 101},
+    {"parameter": "0x0A40000000000095", "variable": 102},
+    {"parameter": "0x0A400000000003E6", "variable": 103},
+    {"parameter": "0x0A400000000003E7", "variable": 104}
+  ]
+}
