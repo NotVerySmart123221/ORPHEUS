@@ -35,6 +35,10 @@ impl World for ViewWorld {
         );
         assert_eq!(query.masks, [1, 0, 16]);
         assert_eq!(query.ranking["$"], "STU_B61DA2A5");
+        let sight = query.sight.unwrap();
+        assert_eq!(sight.static_mask, 2);
+        assert_eq!(sight.block_actor_flags, 0);
+        assert_eq!(sight.samples, [0.5]);
         self.calls.set(self.calls.get() + 1);
         self.responses.clone()
     }
@@ -54,7 +58,11 @@ fn view_tracker_keeps_order_resamples_and_distinguishes_unavailable() {
     let targets: Vec<u32> = serde_json::from_value(input["targets"].clone()).unwrap();
     let expected_targets = Value::Array(targets.iter().copied().map(Value::Entity).collect());
     let make = |index, fields: Json| {
-        let data = json!({"version":1,"bodies":{},"missing":[],"graphs":[{
+        let data = json!({"version":1,"bodies":{},"missing":[],
+            "view_sight_profiles":{(expected["profile"].as_str().unwrap()):{
+                "static_mask":2,"block_actor_flags":0,"samples":[0.5]
+            }},
+            "graphs":[{
             "index":index,"items":3,"entries":[0],"states":[1],"remote":[],"sync_vars":[],
             "containers":{},"unknown_nodes":[],"fields":{},
             "header":{"m_nodesBitCount":2,"m_statesBitCount":2,"m_remoteSyncNodesBitCount":2,"m_syncVarsBitCount":2},
@@ -76,6 +84,7 @@ fn view_tracker_keeps_order_resamples_and_distinguishes_unavailable() {
     for index in [607, 816] {
         let graphs = make(index, input["field_shape"].clone());
         assert!(graphs.uses_room_spatial_frame());
+        assert!(graphs.uses_spatial_actor_rays());
         let mut world = ViewWorld {
             expected: expected.clone(),
             responses: Some(targets.clone()),

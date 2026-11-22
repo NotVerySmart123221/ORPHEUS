@@ -137,12 +137,24 @@ a matching pair returns false. Keep the extracted catalog in the private
 runtime bundle. The [wheel input contract](../fixtures/behavior/wheel-selection-ingress-v1.json)
 uses synthetic input and generation changes. The build-specific wire layout
 and category fields are documented in the [Python reference](https://github.com/leafall903/ORPHEUS/blob/499b9871b1ff9bf3d86715b7648626b18b154f0d/docs/COMMUNICATION_WHEEL.txt).
-Live owner input stays disabled while target selection in occupied rooms
-is pending. The native `TrackTargets` view shape passes its origin, offset,
-radius, aperture, limit, filter masks, ranking and sight profile to the room.
-The host can prove an empty result when the frozen room has no other
-living actors. A missing or occupied snapshot without a visibility
-implementation reports query unavailability.
+Live owner wheel input stays disabled pending validation of the native sight
+profiles and the remaining wheel receivers. The `TrackTargets` view shape
+passes its origin, offset, radius, aperture, limit, filter masks, ranking and
+sight profile to the room. A frozen room with no other living player bodies
+returns an empty result. Bots may obstruct sight when the supplied profile
+includes them as blockers.
+
+For local validation, the optional graph bundle field `view_sight_profiles`
+maps sight-profile GUIDs to records with `static_mask`, `block_actor_flags`,
+and `samples`. The static mask selects collision categories. Actor flags
+select blockers from the room snapshot. Each sample is a fraction of a
+target's body height in the range 0 to 1, with up to eight samples per
+profile. The supplied actor flags describe the room's actor filter.
+The raw dynamic collision mask from a sight asset requires a separate
+receiver mapping before it can be used here. Missing profiles or required
+room facts leave occupied queries unavailable. The public
+[view target fixture](../fixtures/behavior/script-view-targets-v1.json)
+exercises this interface with synthetic settings and geometry.
 
 Use `scripts/build_runtime_state_metadata.py --asset-categories` with a
 local JSON catalog containing `version: 1`, `build: 104319`, and the asset

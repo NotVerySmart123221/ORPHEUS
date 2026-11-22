@@ -276,6 +276,7 @@ mod observed_projectiles;
 mod player;
 mod script_requests;
 mod stock_bot;
+mod view_targeting;
 pub(crate) use encounter::{
     ENCOUNTER_INSTANCE, EncounterRegistration, EncounterWorld, GateState, GateWorld,
 };
@@ -341,13 +342,13 @@ impl RoomSpatialFrame {
         query: &crate::script_init::ViewTargetQuery<'_>,
     ) -> Option<Vec<u32>> {
         self.actor_sample(query.source)?;
-        // Visibility and ranking cannot add a target when the frozen room
-        // contains none. Occupied scenes need the collision-profile query.
+        // The view tracker filters for living player bodies. Other actors
+        // can block sight but cannot turn an empty search into a selection.
         (query.limit == 0
             || self
-                .candidates
-                .iter()
-                .all(|actor| actor.entity == query.source))
+                .player_wires
+                .values()
+                .all(|&entity| entity == query.source || self.actor_sample(entity).is_none()))
         .then(Vec::new)
     }
 
@@ -1123,6 +1124,9 @@ impl RoomSimulation {
                             .as_ref()
                             .is_some_and(|script| script.accepts_room_messages()),
                         cue_listener: false,
+                        filter_flags: crate::match_scene::team_bit(bot.spawn.team)
+                            .ok()
+                            .map(|team| team | 1),
                         voice: actor_voice
                             .as_ref()
                             .and_then(|_| state.stock_script.as_ref().map(|_| (bot.spawn.hero, 0))),
@@ -1175,6 +1179,7 @@ impl RoomSimulation {
                         health: state.vitals().is_some(),
                         messages: state.runtime.is_some(),
                         cue_listener: true,
+                        filter_flags: state.native_filter_flags(),
                         voice: actor_voice.as_ref().map(|_| {
                             let skin = state.observer_create.as_ref().and_then(|update| {
                                 let Operation::Create(definition) = update.operation.as_ref()?

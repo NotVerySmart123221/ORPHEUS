@@ -1680,6 +1680,8 @@ struct Bundle {
     runtime_state_metadata: RuntimeStateMetadata,
     #[serde(default)]
     asset_categories: Option<BTreeMap<String, Vec<AssetCategoryRow>>>,
+    #[serde(default)]
+    view_sight_profiles: BTreeMap<String, crate::script_init::ViewSightProfile>,
     graphs: Vec<Graph>,
     bodies: BTreeMap<String, Body>,
     #[serde(default)]
@@ -1796,6 +1798,7 @@ fn room_spatial_requirements(value: &Value) -> RoomSpatialRequirements {
 pub struct GraphStore {
     graphs: BTreeMap<u32, Graph>,
     asset_categories: Option<BTreeMap<u64, BTreeSet<(u64, u64)>>>,
+    view_sight_profiles: BTreeMap<u64, crate::script_init::ViewSightProfile>,
     projected_message_topics: BTreeSet<u64>,
     room_spatial_needs: RoomSpatialNeeds,
     uses_spatial_actor_rays: bool,
@@ -2020,18 +2023,36 @@ impl GraphStore {
             bundle.runtime_state_metadata.directed_numeric_messages,
             &mut graphs,
         )?;
+        let view_sight_profiles = keyed_by_guid(bundle.view_sight_profiles)?;
+        for (&guid, profile) in &view_sight_profiles {
+            if guid >> 48 != 0x0690
+                || profile.static_mask == 0
+                || profile.samples.is_empty()
+                || profile.samples.len() > 8
+                || profile
+                    .samples
+                    .iter()
+                    .any(|height| !(0.0..=1.0).contains(height))
+            {
+                return Err(invalid(format!("invalid view sight profile {guid:016X}")));
+            }
+        }
         let room_spatial_requirements = graphs
             .values()
             .flat_map(|graph| &graph.nodes)
             .filter(|node| node.runs_on_server())
             .map(|node| {
                 let mut requirements = room_spatial_requirements(&node.fields);
+                let view_track = node.view_track();
+                requirements.actor_rays |= view_track
+                    .as_ref()
+                    .is_some_and(|track| view_sight_profiles.contains_key(&track.profile));
                 if node.declares_health_change_action()
                     || node.declares_room_message_action()
                     || node.declares_room_cue_action()
                     || node.directed_numeric_parameter().is_some()
                     || node.tracks_room_actor_identity()
-                    || node.view_track().is_some()
+                    || view_track.is_some()
                 {
                     requirements.needs = requirements.needs.max(RoomSpatialNeeds::Queries);
                 }
@@ -2047,6 +2068,7 @@ impl GraphStore {
         Ok(Self {
             graphs,
             asset_categories,
+            view_sight_profiles,
             projected_message_topics,
             room_spatial_needs: room_spatial_requirements.needs,
             uses_spatial_actor_rays: room_spatial_requirements.actor_rays,
@@ -2077,6 +2099,13 @@ impl GraphStore {
                 .get(&asset)
                 .is_some_and(|pairs| pairs.contains(&(kind, id)))
         })
+    }
+
+    pub(crate) fn view_sight_profile(
+        &self,
+        guid: u64,
+    ) -> Option<&crate::script_init::ViewSightProfile> {
+        self.view_sight_profiles.get(&guid)
     }
 
     pub fn has_asset_category_data(&self) -> bool {

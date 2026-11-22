@@ -497,7 +497,7 @@ impl World for BodyWorld {
         if !self.is_player_site(site) || query.source != site.entity {
             return None;
         }
-        self.spatial_frame.as_deref()?.empty_view_targets(query)
+        self.spatial_frame.as_deref()?.view_targets(query)
     }
 
     fn room_entities(&self) -> Option<&BTreeMap<u32, RoomEntityFacts>> {

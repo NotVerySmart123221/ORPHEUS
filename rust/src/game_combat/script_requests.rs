@@ -24,6 +24,7 @@ pub(super) struct RoomScriptTarget {
     pub(super) health: bool,
     pub(super) messages: bool,
     pub(super) cue_listener: bool,
+    pub(super) filter_flags: Option<u64>,
     pub(super) voice: Option<(u64, u64)>,
 }
 
@@ -498,6 +499,7 @@ mod tests {
             health,
             messages,
             cue_listener: health,
+            filter_flags: None,
             voice: None,
         };
         let frame = RoomSpatialFrame {

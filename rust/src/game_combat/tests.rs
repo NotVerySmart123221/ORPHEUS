@@ -53,7 +53,7 @@ fn frozen_view_query_only_reports_empty_when_no_other_actor_can_match() {
         script_init::ViewTargetQuery,
     };
 
-    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    let mut room = RoomSimulation::new(fixture_bots()).unwrap();
     room.enable_spatial_queries(false, Arc::new(fixture_ground()), RoomSpatialNeeds::Queries);
     let query = ViewTargetQuery {
         source: 9,
@@ -64,6 +64,7 @@ fn frozen_view_query_only_reports_empty_when_no_other_actor_can_match() {
         profile: 1,
         masks: [1, 0, 16],
         ranking: &serde_json::Value::Null,
+        sight: None,
     };
     let frame = FIXTURE_CONTEXT.tick;
     let snapshot = room.capture_spatial_frame(frame).unwrap().unwrap();

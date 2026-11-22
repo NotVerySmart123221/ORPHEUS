@@ -32,6 +32,17 @@ pub struct ViewTargetQuery<'a> {
     pub profile: u64,
     pub masks: [u64; 3],
     pub ranking: &'a Json,
+    pub sight: Option<&'a ViewSightProfile>,
+}
+
+/// Room collision settings for a configured view query. Dynamic blockers use
+/// the room's actor flags, which are distinct from asset receiver masks.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViewSightProfile {
+    pub static_mask: u16,
+    pub block_actor_flags: u64,
+    pub samples: Vec<f64>,
 }
 
 /// Authoritative movement facts captured from a single owner pose.

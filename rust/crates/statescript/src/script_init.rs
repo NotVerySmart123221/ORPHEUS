@@ -214,7 +214,7 @@ pub use world::{
     EmptyWorld, EntityCreation, HealthTargetFacts, HitTags, HostEvent, HostHealthContext,
     LandingSelection, MovementSample, NamedPoolLoss, PlayScript, Relocation, RoomBodyIdentity,
     RoomCue, RoomEntityStatus, RoomMessage, ScriptedMotion, Site, SweptDisplacement,
-    TargetTagEffect, TargetTagEffects, TargetTagSnapshot, ViewTargetQuery, World,
+    TargetTagEffect, TargetTagEffects, TargetTagSnapshot, ViewSightProfile, ViewTargetQuery, World,
     named_pool_records,
 };
 

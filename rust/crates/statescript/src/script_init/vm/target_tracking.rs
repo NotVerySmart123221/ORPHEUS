@@ -71,6 +71,7 @@ impl<W: World> Vm<'_, '_, '_, W> {
             profile: track.profile,
             masks: track.masks,
             ranking: track.ranking,
+            sight: self.graphs.view_sight_profile(track.profile),
         };
         let Some(targets) = self.world.view_targets(site, &query) else {
             self.report(
