@@ -122,7 +122,6 @@ impl ProjectilePattern {
         origin: [f64; 3],
         frame: u32,
     ) -> impl Iterator<Item = EnemyProjectile> {
-        let falloff = self.directions.len() > 1;
         self.directions.into_iter().filter_map(move |direction| {
             let mut flight =
                 ProjectileFlight::new(self.ballistics.clone(), origin, direction, Some(frame))?;
@@ -132,11 +131,7 @@ impl ProjectilePattern {
             Some(EnemyProjectile {
                 source,
                 team,
-                flight: if falloff {
-                    flight.with_direct_falloff()
-                } else {
-                    flight
-                },
+                flight,
                 damage_tags: self.damage_tags.clone(),
                 split: None,
             })

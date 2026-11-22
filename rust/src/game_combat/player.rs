@@ -941,31 +941,22 @@ impl RoomSimulation {
         }
     }
 
-    pub(super) fn push_player_projectile_candidates(
+    pub(super) fn extend_player_weapon_targets(
         &self,
-        source: u32,
-        team: u8,
         queries: &crate::scene_assets::BotQueries<'_>,
-        candidates: &mut Vec<(u32, HurtPose)>,
+        targets: &mut Vec<super::WeaponTarget>,
     ) {
-        for &entity in self.players_by_wire.values() {
-            let Some(state) = self.world.get::<PlayerBodyState>(entity) else {
-                continue;
-            };
-            if eligible_target(
-                state.id.entity,
-                state.alive(),
-                state.team,
-                source,
-                team,
-                queries.free_for_all(),
-            ) {
-                candidates.push((
-                    state.id.entity,
-                    queries.hurt_pose(state.body_template, state.target_pose()),
-                ));
-            }
-        }
+        targets.extend(
+            self.players_by_wire
+                .values()
+                .filter_map(|&entity| self.world.get::<PlayerBodyState>(entity))
+                .filter(|state| state.alive())
+                .map(|state| super::WeaponTarget {
+                    wire: state.id.entity,
+                    team: state.team,
+                    pose: queries.hurt_pose(state.body_template, state.target_pose()),
+                }),
+        );
     }
 
     pub(super) fn apply_player_impact(
