@@ -9,6 +9,7 @@ pub struct PreparedScene {
     pub(super) movement_cache: String,
     pub(super) ground: Arc<CollisionScene>,
     pub(super) combat_rays: Arc<CollisionScene>,
+    pub(super) combat_sweeps: Option<Arc<ContactWorld>>,
     pub(super) contacts: Option<Arc<ContactWorld>>,
     pub(super) controller: Controller,
     pub(super) mode_ui: BitWriter,
@@ -92,6 +93,7 @@ impl PreparedScene {
             #[cfg(any(test, feature = "inspector"))]
             movement_cache: String::new(),
             combat_rays: Arc::clone(&ground),
+            combat_sweeps: None,
             ground,
             contacts: None,
             controller: Controller::fixture_for_test(),
@@ -483,7 +485,7 @@ impl PreparedScene {
                 &self.ground,
                 self.contacts.as_ref(),
             )
-            .with_combat_rays(&self.combat_rays)
+            .with_combat_geometry(&self.combat_rays, self.combat_sweeps.as_ref())
             .with_hurt_volumes(&self.hurt_volumes),
         )
     }

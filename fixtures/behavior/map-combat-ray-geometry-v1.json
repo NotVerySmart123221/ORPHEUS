@@ -13,8 +13,8 @@
     [[2, -1, 2], [2, 3, 2], [0.5, 3, 2]]
   ],
   "rays": [
-    {"origin": [0, 0.5, 0], "distance": null},
-    {"origin": [-1, 0.5, 0], "distance": 2},
-    {"origin": [1, 0.5, 0], "distance": 2}
+    {"origin": [0, 0.5, 0], "distance": null, "narrow_sweep_blocked": false, "wide_sweep_blocked": true},
+    {"origin": [-1, 0.5, 0], "distance": 2, "narrow_sweep_blocked": true, "wide_sweep_blocked": true},
+    {"origin": [1, 0.5, 0], "distance": 2, "narrow_sweep_blocked": true, "wide_sweep_blocked": true}
   ]
 }
