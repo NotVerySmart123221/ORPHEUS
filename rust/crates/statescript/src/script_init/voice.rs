@@ -433,6 +433,10 @@ impl<W: World> Context for InstanceContext<'_, W> {
         self.graphs.asset_has_category(asset, kind, id)
     }
 
+    fn asset_texture(&mut self, action: u64) -> Option<u64> {
+        self.graphs.asset_texture(action)
+    }
+
     fn variable(&mut self, variable: Variable) -> Value {
         self.read(source_key(self.site.instance, variable))
     }

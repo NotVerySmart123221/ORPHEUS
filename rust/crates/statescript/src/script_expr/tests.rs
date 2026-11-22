@@ -8,14 +8,20 @@ use crate::script_graph::GraphStore;
 mod degree_trigonometry;
 mod entity_ray_cast;
 
+struct CatalogContext(GraphStore);
+
+impl Context for CatalogContext {
+    fn asset_has_category(&mut self, asset: u64, kind: u64, id: u64) -> Option<bool> {
+        self.0.asset_has_category(asset, kind, id)
+    }
+
+    fn asset_texture(&mut self, action: u64) -> Option<u64> {
+        self.0.asset_texture(action)
+    }
+}
+
 #[test]
 fn authored_asset_category_requires_the_exact_identifier_pair() {
-    struct CatalogContext(GraphStore);
-    impl Context for CatalogContext {
-        fn asset_has_category(&mut self, asset: u64, kind: u64, id: u64) -> Option<bool> {
-            self.0.asset_has_category(asset, kind, id)
-        }
-    }
     let asset = "0x0A9000000000AAAA";
     let kind = "0x0C8800000000BBBB";
     let id = "0x0D8000000000CCCC";
@@ -50,6 +56,47 @@ fn authored_asset_category_requires_the_exact_identifier_pair() {
         evaluate(&config("0x0A9000000000AAAB", kind, id), &mut context),
         Ok(Value::Bool(false))
     );
+}
+
+#[test]
+fn authored_texture_lookup_distinguishes_exact_keys_misses_and_missing_data() {
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../../../fixtures/behavior/script-asset-texture-v1.json"
+    ))
+    .unwrap();
+    let mut bundle = json!({"version":1, "graphs":[], "bodies":{}, "missing":[]});
+    let config = |selected: &str| {
+        json!({
+            "$":"STU_1ECB66A0", "m_EE729DCB":0, "m_resourceKey":null,
+            "m_548E5344":{"$":"STUConfigVarIdentifier","m_identifier":selected}
+        })
+    };
+    let load = |bundle: &Json| {
+        GraphStore::from_json(&serde_json::to_vec(bundle).unwrap()).map(CatalogContext)
+    };
+    let assets = fixture["assets"].as_object().unwrap();
+    let (first, _) = assets.iter().next().unwrap();
+    assert_eq!(
+        evaluate(&config(first), &mut load(&bundle).unwrap()),
+        Err(EvalError::UnsupportedConfig("STU_1ECB66A0".into()))
+    );
+    bundle["asset_textures"] = fixture["assets"].clone();
+    let mut context = load(&bundle).unwrap();
+    for (action, texture) in assets {
+        let texture = crate::script_graph::asset_guid(texture).unwrap();
+        assert_eq!(
+            evaluate(&config(action), &mut context),
+            Ok(Value::Asset(texture))
+        );
+    }
+    for key in ["missing_action", "invalid_action"] {
+        assert_eq!(
+            evaluate(&config(fixture[key].as_str().unwrap()), &mut context),
+            Ok(Value::Asset(0))
+        );
+    }
+    bundle["asset_textures"][first] = fixture["invalid_action"].clone();
+    assert!(load(&bundle).is_err());
 }
 
 #[derive(Default)]

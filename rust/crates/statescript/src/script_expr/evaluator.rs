@@ -917,6 +917,24 @@ impl Evaluator {
             }
             "STU_B70476F3" => literal_asset(config, class, "m_548E5344", 0x0a90)
                 .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
+            "STU_1ECB66A0"
+                if native_fields(config, &["m_548E5344", "m_resourceKey"])
+                    && child(config, "m_resourceKey").is_null() =>
+            {
+                let action =
+                    self.scalar_config(child(config, "m_548E5344"), context, nested, Value::Null)?;
+                let texture = match action {
+                    Value::Asset(action)
+                        if crate::script_graph::is_communication_action(action) =>
+                    {
+                        context
+                            .asset_texture(action)
+                            .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?
+                    }
+                    _ => 0,
+                };
+                Value::Asset(texture)
+            }
             "STU_4460419A" if native_fields(config, &["m_548E5344", "m_D929182B"]) => {
                 let category = child(config, "m_D929182B");
                 let pair = child(category, "m_value");

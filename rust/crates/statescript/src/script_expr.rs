@@ -429,6 +429,10 @@ pub trait Context {
         None
     }
 
+    fn asset_texture(&mut self, _action: u64) -> Option<u64> {
+        None
+    }
+
     fn related_entity(&mut self, _relation: EntityRelation, _entity: u32) -> Option<u32> {
         None
     }

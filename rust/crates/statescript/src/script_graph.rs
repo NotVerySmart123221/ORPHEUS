@@ -1709,6 +1709,8 @@ struct Bundle {
     #[serde(default)]
     asset_categories: Option<BTreeMap<String, Vec<AssetCategoryRow>>>,
     #[serde(default)]
+    asset_textures: Option<BTreeMap<String, String>>,
+    #[serde(default)]
     view_sight_profiles: BTreeMap<String, crate::script_init::ViewSightProfile>,
     graphs: Vec<Graph>,
     bodies: BTreeMap<String, Body>,
@@ -1826,6 +1828,7 @@ fn room_spatial_requirements(value: &Value) -> RoomSpatialRequirements {
 pub struct GraphStore {
     graphs: BTreeMap<u32, Graph>,
     asset_categories: Option<BTreeMap<u64, BTreeSet<(u64, u64)>>>,
+    asset_textures: Option<BTreeMap<u64, u64>>,
     view_sight_profiles: BTreeMap<u64, crate::script_init::ViewSightProfile>,
     projected_message_topics: BTreeSet<u64>,
     room_spatial_needs: RoomSpatialNeeds,
@@ -1883,6 +1886,25 @@ impl GraphStore {
                             })
                             .collect::<io::Result<BTreeSet<_>>>()?;
                         Ok((asset, categories))
+                    })
+                    .collect::<io::Result<BTreeMap<_, _>>>()
+            })
+            .transpose()?;
+        let asset_textures = bundle
+            .asset_textures
+            .map(|rows| {
+                keyed_by_guid(rows)?
+                    .into_iter()
+                    .map(|(action, texture)| {
+                        if !is_communication_action(action) {
+                            return Err(invalid(
+                                "invalid communication action key in texture catalog",
+                            ));
+                        }
+                        let texture = parse_guid(&texture)
+                            .filter(|&id| id >> 48 == 0x0c00 && id != 0x0c00_0000_0000_0000)
+                            .ok_or_else(|| invalid("invalid texture GUID in texture catalog"))?;
+                        Ok((action, texture))
                     })
                     .collect::<io::Result<BTreeMap<_, _>>>()
             })
@@ -2096,6 +2118,7 @@ impl GraphStore {
         Ok(Self {
             graphs,
             asset_categories,
+            asset_textures,
             view_sight_profiles,
             projected_message_topics,
             room_spatial_needs: room_spatial_requirements.needs,
@@ -2127,6 +2150,13 @@ impl GraphStore {
                 .get(&asset)
                 .is_some_and(|pairs| pairs.contains(&(kind, id)))
         })
+    }
+
+    /// A configured lookup returns a typed miss when the action has no texture.
+    pub fn asset_texture(&self, action: u64) -> Option<u64> {
+        self.asset_textures
+            .as_ref()
+            .map(|textures| textures.get(&action).copied().unwrap_or(0))
     }
 
     pub(crate) fn view_sight_profile(
@@ -2378,6 +2408,10 @@ fn collect_graphs(value: &Value, out: &mut BTreeSet<u64>) {
             }
         }
     }
+}
+
+pub(crate) fn is_communication_action(guid: u64) -> bool {
+    guid & !u64::from(u32::MAX) == 0x0a90_0000_0000_0000 && guid as u32 != 0
 }
 
 fn keyed_by_guid<T>(records: BTreeMap<String, T>) -> io::Result<BTreeMap<u64, T>> {

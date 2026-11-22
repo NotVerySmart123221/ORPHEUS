@@ -168,9 +168,12 @@ integer-keyed parameter map. A networked `STU_7106C356` uses the authored
 and observer streams send the captured values with the short action.
 An unacknowledged action keeps its initial stamp and values when a later
 selection arrives. Full baselines omit prior callouts. The client retains
-its existing text rendering and audience checks. The prepared probe next
-reports action `STU_71FE9852` and icon lookup expression `STU_1ECB66A0`.
-Live wheel input and original-client presentation validation remain open.
+its existing text rendering and audience checks. `STU_1ECB66A0` looks up
+the complete communication action GUID in the optional `asset_textures`
+catalog. A missing key in a supplied catalog returns a zero texture
+reference. If the catalog is absent, the VM reports the lookup as
+unavailable. Action `STU_71FE9852`, live wheel input and original-client
+presentation verification remain open.
 The pair and opcode behavior follows the [pinned Python reference for pairs](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/script/play.py#L81-L93)
 and [expression maps](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/script/expr.py#L832-L835).
 The synchronized variable capture follows the [pinned Python frame-action reference](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/script/driver.py#L781-L811).
@@ -179,6 +182,12 @@ Use `scripts/build_runtime_state_metadata.py --asset-categories` with a
 local JSON catalog containing `version: 1`, `build: 104319`, and the asset
 map under `assets`. Supply the resulting bundle through
 `prepare_server_runtime --game-graphs`.
+
+Use `--asset-textures` on the same script to add a local action-to-texture
+catalog. It takes the same version and build and maps full action GUIDs
+to full texture GUIDs under `assets`. The public fixture uses synthetic
+keys. The native resource shape and offline checks are described in the
+[pinned wheel research](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/docs/COMMUNICATION_WHEEL.txt#L537-L543).
 
 ## Supply actor voice criteria
 

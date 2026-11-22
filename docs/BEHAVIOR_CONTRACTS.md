@@ -44,6 +44,8 @@ The Rust-only [view tracker fixture](../fixtures/behavior/script-view-targets-v1
 
 The Rust-only [authored pairs fixture](../fixtures/behavior/script-authored-pairs-v1.json) exercises an asset-keyed table holding an expression-built parameter map. It checks ordered integer keys, typed display-text values, and rejection of malformed expression stacks. The prepared wheel probe checks that the selected action resolves to its own parameter row.
 
+The Rust-only [action texture fixture](../fixtures/behavior/script-asset-texture-v1.json) checks that keys with the same low 16 bits resolve independently. It distinguishes an absent catalog, a missing action in a supplied catalog, and an invalid asset kind.
+
 The Rust-only [health action fixture](../fixtures/behavior/script-health-change-v1.json) checks signed health request admission, continuation, and rejection diagnostics. Room tests cover player and bot settlement, stale body identity, and death and health updates.
 
 The Rust-only [scripted training bot respawn fixture](../fixtures/behavior/training-bot-scripted-respawn-v1.json) checks the ordinary replacement deadline even when authored damage is processed before room combat starts. The [bot respawn delivery fixture](../fixtures/behavior/training-bot-respawn-delivery-v1.json) covers successive replacements behind delayed health or identity acknowledgements, while independent bots continue through their own delivery order.
