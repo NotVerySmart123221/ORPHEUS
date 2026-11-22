@@ -12,5 +12,10 @@
   "expected": {
     "visible_target": 1,
     "out_of_range_target": 2
-  }
+  },
+  "gravity_cases": [
+    {"accelerations": [12.0, 3.0], "disabled": [false, false], "net": 15.0},
+    {"accelerations": [12.0, 3.0], "disabled": [true, false], "net": 3.0},
+    {"accelerations": [12.0, 3.0], "disabled": [true, true], "net": null}
+  ]
 }

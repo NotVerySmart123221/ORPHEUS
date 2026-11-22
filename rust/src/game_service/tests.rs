@@ -411,9 +411,15 @@ fn prepared_worker_delivers_a_stock_nameplate_and_nonlethal_hit_over_encrypted_u
 }
 
 #[test]
-#[ignore = "requires a tagged 104319 Practice Range scene without bot VM graphs"]
+#[ignore = "requires a tagged 104319 Practice Range scene"]
 fn prepared_worker_delivers_stock_helix_over_encrypted_udp() {
     exercise_prepared_world(PreparedFixture::StockProjectile);
+}
+
+#[test]
+#[ignore = "requires a tagged 104319 Practice Range scene with authored mode rules"]
+fn prepared_worker_applies_stock_projectile_self_damage_and_launch() {
+    exercise_prepared_world(PreparedFixture::StockSelfProjectile);
 }
 
 #[test]

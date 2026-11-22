@@ -376,13 +376,10 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                 }
                 let speed = node.field("m_projectileSpeed").unwrap_or(&Json::Null);
                 if !speed.is_null() && to_float(&evaluate(speed).ok()?) != 0.0 {
-                    let gravity = authored_gravity(&node.fields, &mut evaluate);
+                    let gravity = authored_gravity(&node.fields, &mut evaluate).ok()?;
                     if !node.is_networked()
                         || !local_prediction(node)
                         || !predicted_sync(node, &mut evaluate).ok()?
-                        || node
-                            .field("m_projectileMotions")
-                            .is_some_and(|v| !v.is_null() && gravity.is_none())
                         || node.field("m_aimID").is_some_and(|v| !v.is_null())
                         || authored_number(
                             node.field("m_numProjectilesPerShot"),

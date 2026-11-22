@@ -497,18 +497,42 @@ pub(crate) fn gravity_step(mut velocity: Vec3, gravity: f32, duration: f64) -> V
 pub(crate) fn authored_gravity(
     fields: &Json,
     mut evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
-) -> Option<f32> {
-    let [motion] = fields.get("m_projectileMotions")?.as_array()?.as_slice() else {
-        return None;
-    };
-    if motion.get("$")?.as_str()? != "STU_E1A5B579"
-        || !motion["m_D0C4CF49"].is_null()
-        || motion["m_599AB8D7"].is_null()
-    {
-        return None;
+) -> Result<Option<f32>, EvalError> {
+    let motions = &fields["m_projectileMotions"];
+    if motions.is_null() {
+        return Ok(None);
     }
-    let gravity = crate::script_expr::to_float(&evaluate(&motion["m_599AB8D7"]).ok()?) as f32;
-    (gravity.is_finite() && gravity > 0.0).then_some(gravity)
+    let motions = motions
+        .as_array()
+        .ok_or(EvalError::MalformedConfig("projectile motion list"))?;
+    let mut gravity = 0.0f32;
+    for motion in motions {
+        if motion["$"] != "STU_E1A5B579" {
+            return Err(EvalError::UnsupportedConfig(
+                "projectile motion class".into(),
+            ));
+        }
+        let disable = &motion["m_D0C4CF49"];
+        if !disable.is_null() && crate::script_expr::truthy(&evaluate(disable)?) {
+            continue;
+        }
+        let acceleration = match evaluate(&motion["m_599AB8D7"])? {
+            Value::Float(value) => value as f32,
+            Value::Integer(value) => value as f32,
+            _ => {
+                return Err(EvalError::MalformedConfig(
+                    "projectile gravity acceleration",
+                ));
+            }
+        };
+        gravity += acceleration;
+        if acceleration < 0.0 || !gravity.is_finite() {
+            return Err(EvalError::MalformedConfig(
+                "projectile gravity acceleration",
+            ));
+        }
+    }
+    Ok((gravity > 0.0).then_some(gravity))
 }
 
 #[cfg(test)]
@@ -604,6 +628,39 @@ mod tests {
     }
 
     #[test]
+    fn gravity_nodes_apply_only_the_enabled_authored_accelerations() {
+        let fixture: Json = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/projectile-expiry-v1.json"
+        ))
+        .unwrap();
+        let evaluate = |value: &Json| {
+            crate::script_expr::evaluate(value, &mut crate::script_expr::EmptyContext)
+        };
+        for case in fixture["gravity_cases"].as_array().unwrap() {
+            let motions: Vec<_> = case["accelerations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(case["disabled"].as_array().unwrap())
+                .map(|(value, disabled)| {
+                    serde_json::json!({
+                        "$": "STU_E1A5B579",
+                        "m_599AB8D7": value,
+                        "m_D0C4CF49": {"$":"STUConfigVarBool","m_value":disabled},
+                    })
+                })
+                .collect();
+            let mut fields = serde_json::json!({"m_projectileMotions":motions});
+            assert_eq!(
+                authored_gravity(&fields, evaluate).unwrap(),
+                case["net"].as_f64().map(|value| value as f32),
+            );
+            fields["m_projectileMotions"][0]["$"] = serde_json::json!("UnknownMotion");
+            assert!(authored_gravity(&fields, evaluate).is_err());
+        }
+    }
+
+    #[test]
     fn expiry_blast_uses_splash_radius_occlusion_and_once_only_retirement() {
         let fixture: Json = serde_json::from_str(include_str!(
             "../../fixtures/behavior/projectile-expiry-v1.json"
@@ -633,7 +690,7 @@ mod tests {
                 let data = ProjectileBallistics::from_fields(&fields, evaluate)
                     .unwrap()
                     .unwrap();
-                let gravity = authored_gravity(&fields, evaluate).unwrap();
+                let gravity = authored_gravity(&fields, evaluate).unwrap().unwrap();
                 let direction =
                     lifted_direction([0.0, 0.0, 1.0], input["lift"].as_f64().unwrap()).unwrap();
                 let mut flight = ProjectileFlight::new(data, [0.0, 1.55, 0.0], direction, Some(0))

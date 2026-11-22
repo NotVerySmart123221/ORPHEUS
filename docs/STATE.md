@@ -79,6 +79,14 @@ posed command resumes. The follow-up [owner volley trace](OWNER_DELIVERY_TEST.md
 recorded no unposed boundary and no lost owner reports. It did not
 establish what the client rendered for every shot.
 
+Prepared 104319 encrypted loopback now exercises stock Helix against scripted
+training bots. It drops the first projectile acknowledgment and verifies
+impact, target health, and retirement. A ground shot verifies owner health
+on the wire and upward movement in the room simulation. A prepared stock
+quick-melee case verifies one damage and knockback settlement. First-person
+movement, impact rendering, and Particle Cannon and Junkrat self-launch in
+the original client remain open.
+
 The follow-up timing capture accumulated 8,819 missed ticks. Misses
 began well before the first recorded shot and continued during intervals
 with an unchanged ray sample. It also ran with synchronous owner traces

@@ -6,6 +6,7 @@ pub enum PreparedFixture {
     StockOwner,
     StockNameplate,
     StockProjectile,
+    StockSelfProjectile,
     StockBiotic,
     Owner,
     Combat,
@@ -38,7 +39,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
     let schemas = Arc::new(Schemas::load(data.join("game_schemas_174.json")).unwrap());
     let lobby = Schemas::load(data.join("schemas_174.json")).unwrap();
     let assets = SceneAssets::load(runtime).unwrap();
-    let scripted_bots = assets.graphs().entity_body(0x0400_0000_0000_143e).is_some();
+    let mut scripted_bots = false;
     let mode_variables: crate::script_wire::Variables = assets
         .graphs()
         .mode_variables(PRACTICE_RANGE_MODE)
@@ -96,6 +97,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
         (&assets, &collection),
         |map| {
             let mut scene = assets.prepare(map)?;
+            scripted_bots = scene.scripted_bots() != 0;
             if matches!(
                 fixture,
                 PreparedFixture::StockOwner | PreparedFixture::StockNameplate
@@ -119,7 +121,6 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
                 fixture,
                 PreparedFixture::Projectile | PreparedFixture::StockProjectile
             ) {
-                assert!(!scripted_bots);
                 let [x, y, z] = scene.map().spawn_point(0, 0).unwrap().0;
                 let (bots, _) = scene.bot_simulation();
                 assert_eq!(
@@ -146,6 +147,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
                     | PreparedFixture::StockOwner
                     | PreparedFixture::StockNameplate
                     | PreparedFixture::StockProjectile
+                    | PreparedFixture::StockSelfProjectile
                     | PreparedFixture::StockBiotic
             ) {
                 assert!(!scripted_bots);
@@ -198,7 +200,10 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
     if scripted_bots
         && !matches!(
             fixture,
-            PreparedFixture::Stock | PreparedFixture::StockNameplate
+            PreparedFixture::Stock
+                | PreparedFixture::StockNameplate
+                | PreparedFixture::StockProjectile
+                | PreparedFixture::StockSelfProjectile
         )
     {
         assert_eq!(result.err().unwrap().kind(), io::ErrorKind::Unsupported);
@@ -424,6 +429,11 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
             let frame = exercise_owner_vm(&mut client, &schemas, false);
             let launch = wait_for_stock_weapon(&mut client, &schemas, frame + 1);
             exercise_projectile(&mut client, &schemas, Some(launch));
+        }
+        PreparedFixture::StockSelfProjectile => {
+            let frame = exercise_owner_vm(&mut client, &schemas, false);
+            let launch = wait_for_stock_weapon(&mut client, &schemas, frame + 1);
+            exercise_stock_self_splash(&mut client, &schemas, &server, launch);
         }
         PreparedFixture::StockBiotic => {
             assert!(!scripted_bots);
@@ -810,6 +820,83 @@ pub fn exercise_stock_biotic(client: &mut Client, schemas: &Schemas, launch: u32
             "waiting for canister and field lifecycle: {canisters:?}, {fields:?}"
         );
     }
+}
+
+fn exercise_stock_self_splash(
+    client: &mut Client,
+    schemas: &Schemas,
+    server: &GameService,
+    launch: u32,
+) {
+    use crate::{commands::SECONDARY, game_debug::ActorKind};
+    let snapshot_owner = || {
+        server
+            .debug_snapshot()
+            .unwrap()
+            .rooms
+            .into_iter()
+            .flat_map(|room| room.actors)
+            .find(|actor| matches!(actor.kind, ActorKind::Player))
+            .expect("stock owner must have a body")
+    };
+    let before = snapshot_owner();
+    assert_eq!(before.health, Some(200.0));
+    let pitch = 16_384;
+    client.send(
+        ACK,
+        command_batch_with_pitch(launch, 1, -16_384, pitch, SECONDARY, false),
+    );
+    let mut released = false;
+    let mut self_damage = false;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !released || !self_damage {
+        let packet = client.receive();
+        assert!(client.window.accept(packet.seq));
+        for record in world_records(schemas, &packet) {
+            released |= record.projectile_release.is_some();
+            if record.entity == before.entity && record.base_health == Some(160.0) {
+                self_damage = true;
+            }
+        }
+        assert!(
+            messages(schemas, &packet)
+                .iter()
+                .all(|message| { !matches!(message.message.id, 25001 | 25005) })
+        );
+        client.send(ACK, Vec::new());
+        assert!(
+            Instant::now() < deadline,
+            "waiting for self splash and release, damage={self_damage} release={released}"
+        );
+    }
+    assert_eq!(snapshot_owner().health, Some(160.0));
+    // The room registers the impulse at the first real pose after impact.
+    client.send(
+        ACK,
+        command_batch_with_pitch(launch + 1, 8, -16_384, pitch, 0, false),
+    );
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let packet = client.receive();
+        assert!(client.window.accept(packet.seq));
+        client.send(ACK, Vec::new());
+        if input_ack(schemas, &packet) >= launch + 8 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "waiting for posed movement after self splash"
+        );
+    }
+    let after = snapshot_owner();
+    assert_eq!(after.health, Some(160.0));
+    assert!(
+        after.position[1] > before.position[1],
+        "self splash did not raise owner from {:?} to {:?}",
+        before.position,
+        after.position
+    );
+    assert!(after.velocity[1] > 0.0, "{:?}", after.velocity);
 }
 
 pub fn wait_for_stock_weapon(client: &mut Client, schemas: &Schemas, frame: u32) -> u32 {

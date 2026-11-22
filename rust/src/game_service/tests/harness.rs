@@ -389,6 +389,17 @@ pub fn input_batch(first: u32, count: u8, yaw: i16) -> Vec<u8> {
 }
 
 pub fn command_batch(first: u32, count: u8, yaw: i16, buttons: u32, forward: bool) -> Vec<u8> {
+    command_batch_with_pitch(first, count, yaw, 0, buttons, forward)
+}
+
+pub fn command_batch_with_pitch(
+    first: u32,
+    count: u8,
+    yaw: i16,
+    pitch: i16,
+    buttons: u32,
+    forward: bool,
+) -> Vec<u8> {
     let mut input = BitWriter::new();
     input.bits(0, 24).unwrap(); // latency and key flags
     input.bits(u64::from(count), 8).unwrap();
@@ -400,7 +411,7 @@ pub fn command_batch(first: u32, count: u8, yaw: i16, buttons: u32, forward: boo
         input.bits(2, 3).unwrap();
     }
     input.signed(i64::from(yaw), 16).unwrap();
-    input.signed(0, 16).unwrap();
+    input.signed(i64::from(pitch), 16).unwrap();
     input.bits(u64::from(buttons), 24).unwrap();
     input.bits(0, 8).unwrap(); // action
     input.bits(0, 16).unwrap(); // extra
