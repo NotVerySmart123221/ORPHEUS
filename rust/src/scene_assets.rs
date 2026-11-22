@@ -45,7 +45,10 @@ use crate::{
     mover_ground::NOT_GROUND,
     mover_settings::MoverCatalog,
     patrol_script::PatrolScript,
-    runtime::{ACTOR_VOICE_CATALOG, COMBAT_HURT_VOLUMES, JUNKENSTEIN_MAP_WORLD, MAP_ENVIRONMENT},
+    runtime::{
+        ACTOR_VOICE_CATALOG, COMBAT_HURT_VOLUMES, COMBAT_VOICE_CATALOG, JUNKENSTEIN_MAP_WORLD,
+        MAP_ENVIRONMENT,
+    },
     script_codecs::CodecTable,
     script_expr::native_shape,
     script_graph::{GraphStore, asset_guid},
@@ -221,7 +224,7 @@ impl SceneAssets {
             hurt_volumes: Arc::new(HurtVolumeCatalog::load(&runtime.join(COMBAT_HURT_VOLUMES))?),
             actor_voice: ActorVoiceCatalog::load(&runtime.join(ACTOR_VOICE_CATALOG))?.map(Arc::new),
             combat_voice: Arc::new(CombatVoiceCatalog::load(
-                data.join("combat_voice_174.json"),
+                runtime.join(COMBAT_VOICE_CATALOG),
             )?),
             stats: StatsCatalog::load(data.join("game_stats_174.json"))?,
             heroes: Arc::new(HeroCatalog::load(data.join("game_heroes_174.json"))?),
