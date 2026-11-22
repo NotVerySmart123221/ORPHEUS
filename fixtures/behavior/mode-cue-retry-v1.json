@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "case_id": "mode-cue-retry.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "damage": 9,
+  "stimulus": 150,
+  "lines": [301, 302],
+  "sends": [
+    {"line": 301, "ordinal": 0, "arrived": false, "waiting": 1},
+    {"line": 301, "ordinal": 0, "arrived": true, "waiting": 1},
+    {"line": 302, "ordinal": 1, "arrived": true, "waiting": 0}
+  ]
+}

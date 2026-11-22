@@ -248,6 +248,9 @@ fn feedback_room(graph: Vec<Json>, teams: [u8; 2]) -> (Room, [BodyId; 2], [u32; 
 fn voice_schema() -> Schemas {
     Schemas::from_json(
         r#"{"82A2F991":{"27500":[
+            {"type":14,"off":120,"count":0,"array":false,"fields":[
+                {"type":6,"off":0,"count":0,"array":false}
+            ]},
             {"type":14,"off":124,"count":0,"array":false,"fields":[
                 {"type":6,"off":0,"count":0,"array":false}
             ]},
@@ -368,27 +371,151 @@ fn assert_reliable_cue(
     peer.flush_combat(&schemas, tick * TICK_PERIOD, Some(simulation))
         .unwrap();
     assert_eq!(peer.pending_combat_notices().count(), 0);
+    send_voice_frame(
+        peer,
+        &schemas,
+        tick,
+        *sequence + 1,
+        VoiceFrame {
+            speaker: listener.entity,
+            listener: listener.entity,
+            line,
+            ordinal: reliable_sequence,
+        },
+    );
+}
+
+struct VoiceFrame {
+    speaker: u32,
+    listener: u32,
+    line: u64,
+    ordinal: u32,
+}
+
+fn send_voice_frame(
+    peer: &mut Peer,
+    schemas: &Schemas,
+    tick: u32,
+    packet_sequence: u32,
+    expected: VoiceFrame,
+) {
     peer.world
         .send_frame(tick, Vec::new(), false, None, &mut peer.egress, |payload| {
             let mut reader = BitReader::new(&payload);
             reader.var_a().unwrap();
-            let channel = read_channel(&mut reader, &schemas).unwrap();
+            let channel = read_channel(&mut reader, schemas).unwrap();
             let [voice] = channel.reliable.as_slice() else {
                 panic!("expected one cue, got {:?}", channel.reliable);
             };
             assert_eq!(voice.message.id, 27500);
-            assert_eq!(voice.sequence, reliable_sequence);
-            assert_eq!(voice.message.fields[&0x90], Value::Unsigned(line));
-            assert_eq!(
-                voice.message.fields[&0x7c],
-                Value::Struct(Fields::from([(
-                    0,
-                    Value::Unsigned(u64::from(listener.entity))
-                )]))
-            );
-            Ok::<_, io::Error>(*sequence + 1)
+            assert_eq!(voice.sequence, expected.ordinal);
+            assert_eq!(voice.message.fields[&0x90], Value::Unsigned(expected.line));
+            for (field, wire) in [(0x78, expected.speaker), (0x7c, expected.listener)] {
+                assert_eq!(
+                    voice.message.fields[&field],
+                    Value::Struct(Fields::from([(0, Value::Unsigned(u64::from(wire)))]))
+                );
+            }
+            Ok::<_, io::Error>(packet_sequence)
         })
         .unwrap();
+}
+
+#[test]
+fn mode_cues_keep_their_order_through_reliable_retransmission() {
+    #[derive(Deserialize)]
+    struct RetryContract {
+        damage: f64,
+        stimulus: u64,
+        lines: [u64; 2],
+        sends: Vec<RetrySend>,
+    }
+    #[derive(Deserialize)]
+    struct RetrySend {
+        line: u64,
+        ordinal: u32,
+        arrived: bool,
+        waiting: usize,
+    }
+    let contract: RetryContract = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/mode-cue-retry-v1.json",
+    ))
+    .unwrap();
+    let mut graph = feedback_graph(
+        contract.stimulus,
+        contract.lines[0],
+        CueTrigger::DamageReceived,
+    );
+    let mut second = graph[3].clone();
+    for key in ["pos", "uid", "rid"] {
+        second[key] = json!(4);
+    }
+    second["fields"]["speaker"] = json!("mode");
+    second["fields"]["line"] = json!(format!("0x{:016X}", contract.lines[1]));
+    graph[3]["fields"]["speaker"] = json!("mode");
+    graph[3]["fields"]["m_outPlug"] = json!({"$":"Plug","links":[[4,"m_inPlug"]]});
+    graph.push(second);
+
+    let (mut room, [shooter, listener], mut sequences) = feedback_room(graph, [0, 0]);
+    let first_tick = FIRST_TICK + 1;
+    apply_and_advance(&mut room, [shooter, listener], first_tick, contract.damage);
+    assert_eq!(
+        room.members[&1]
+            .peer
+            .as_ref()
+            .unwrap()
+            .pending_combat_notices()
+            .count(),
+        0
+    );
+    let simulation = room.world.as_ref().unwrap().scene.simulation();
+    let peer = room.members.get_mut(&2).unwrap().peer.as_mut().unwrap();
+    assert_eq!(
+        peer.pending_combat_notices()
+            .filter_map(|notice| match notice {
+                CombatNotice::Voice { line, .. } => Some(*line),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        contract.lines,
+    );
+    let sequence = &mut sequences[1];
+    while !peer.world.identity_ready(listener.entity) {
+        assert!(*sequence < 16);
+        acknowledge_world_frame(peer, sequence);
+    }
+    let schemas = voice_schema();
+    let mut tick = first_tick + 1;
+    for step in contract.sends {
+        let now = tick * TICK_PERIOD;
+        peer.flush_combat(&schemas, now, Some(simulation)).unwrap();
+        assert_eq!(peer.pending_combat_notices().count(), step.waiting);
+        *sequence += 1;
+        send_voice_frame(
+            peer,
+            &schemas,
+            tick,
+            *sequence,
+            VoiceFrame {
+                speaker: GAME_MODE_ENTITY,
+                listener: listener.entity,
+                line: step.line,
+                ordinal: step.ordinal,
+            },
+        );
+        let ack_bits = u64::from(step.arrived);
+        let report = peer.egress.acknowledge(*sequence + 1, ack_bits);
+        assert_eq!(report.requeued_reliable, usize::from(!step.arrived));
+        peer.world.acknowledge(report, now);
+        let duplicate = peer.egress.acknowledge(*sequence + 1, ack_bits);
+        assert_eq!(duplicate.requeued_reliable, 0);
+        assert_eq!(peer.egress.delivered_through(step.ordinal), step.arrived);
+        tick += 1;
+    }
+    peer.flush_combat(&schemas, tick * TICK_PERIOD, Some(simulation))
+        .unwrap();
+    assert_eq!(peer.pending_combat_notices().count(), 0);
+    assert!(!peer.egress.has_queued_reliable());
 }
 
 #[test]
