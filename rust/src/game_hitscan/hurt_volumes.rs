@@ -272,28 +272,38 @@ mod tests {
                     .unwrap()
                     .is_none()
             );
-            let mut flight = ProjectileFlight::new(
-                ProjectileBallistics {
-                    speed: 600.0,
-                    lifetime: 0.5,
-                    max_distance: None,
-                    terrain_rebound: None,
-                    terrain_radius: 0.0,
-                    radius: 0.0,
-                    definition: None,
-                    direct: Some(hit),
-                    blast: None,
-                },
-                origin,
-                direction,
-                None,
-            )
-            .unwrap();
-            let impact = flight
-                .advance_combat(1, &[(1, target)], None, |_, _, _, _| Ok(None))
-                .unwrap()
-                .map(|end| end.impacts[0]);
-            assert_eq!(impact.is_some(), critical.is_some(), "{}", case["name"]);
+            for profile in input["projectile_profiles"].as_array().unwrap() {
+                let multiplier = profile["critical_multiplier"].as_f64().unwrap();
+                let expected = critical.map(|head| {
+                    let critical = head && multiplier > 1.0;
+                    (critical, if critical { 20.0 * multiplier } else { 20.0 })
+                });
+                let mut flight = ProjectileFlight::new(
+                    ProjectileBallistics {
+                        speed: 600.0,
+                        lifetime: 0.5,
+                        max_distance: None,
+                        terrain_rebound: None,
+                        terrain_radius: 0.0,
+                        radius: 0.0,
+                        definition: None,
+                        direct: Some(HitDefinition {
+                            critical: multiplier,
+                            ..hit
+                        }),
+                        blast: None,
+                    },
+                    origin,
+                    direction,
+                    None,
+                )
+                .unwrap();
+                let impact = flight
+                    .advance_combat(1, &[(1, target)], None, |_, _, _, _| Ok(None))
+                    .unwrap()
+                    .map(|end| (end.impacts[0].critical, end.impacts[0].damage));
+                assert_eq!(impact, expected, "{} ({multiplier})", case["name"]);
+            }
         }
     }
 

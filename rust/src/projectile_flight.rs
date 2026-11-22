@@ -467,13 +467,13 @@ impl ProjectileFlight {
         let reach = range_left.map_or(step, |range| step.min(range));
         let mut closest = None;
         for &(entity, target) in targets {
-            if let Some((distance, _)) =
+            if let Some((distance, head)) =
                 target
                     .into()
                     .contact(self.position, self.direction, reach, self.ballistics.radius)
             {
                 if closest.is_none_or(|(best, _)| distance < best) {
-                    closest = Some((distance, Some(entity)));
+                    closest = Some((distance, Some((entity, head))));
                 }
             }
         }
@@ -537,20 +537,23 @@ impl ProjectileFlight {
             return Ok(Segment::Rebounded(spent.min(duration)));
         }
         let mut impacts = Vec::new();
-        if let (Some(entity), Some(direct)) = (
+        if let (Some((entity, head)), Some(direct)) = (
             target,
             self.ballistics.direct.filter(|hit| hit.amount > 0.0),
         ) {
+            let critical = head && direct.critical > 1.0;
             impacts.push(Impact {
                 tags: direct.tags,
                 entity,
                 distance,
                 damage: if self.direct_falloff {
-                    direct.damage_at(self.distance_travelled + distance, false)
+                    direct.damage_at(self.distance_travelled + distance, critical)
+                } else if critical {
+                    direct.amount * direct.critical
                 } else {
                     direct.amount
                 },
-                critical: false,
+                critical,
                 loadout: direct.loadout,
                 impulse: None,
             });
@@ -573,7 +576,11 @@ impl ProjectileFlight {
         self.position = point;
         self.distance_travelled += distance;
         self.travelled += spent;
-        Ok(Segment::Ended(self.finish(impacts, false, target)))
+        Ok(Segment::Ended(self.finish(
+            impacts,
+            false,
+            target.map(|(entity, _)| entity),
+        )))
     }
 
     fn splash<T: Copy + Into<HurtPose>>(
