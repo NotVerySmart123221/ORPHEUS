@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "case_id": "bot-grounded-impulse.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "impulse": [1.0, 0.0, 0.0],
+  "arrival_ticks": [12, 24],
+  "max_travel_per_tick": 0.016
+}

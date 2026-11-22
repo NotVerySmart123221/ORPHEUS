@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires tagged 104319 Practice Range graphs and authored static ray profiles"]
-    fn prepared_stock_quick_melee_settles_damage_and_knockback_once() {
+    fn prepared_stock_quick_melee_reapplies_damage_and_knockback_each_swing() {
         use crate::{
             commands::Command,
             game_clock::FIRST_TICK,
@@ -290,16 +290,50 @@ mod tests {
             .unwrap()
             .entity;
         let [x, y, z] = mover.pose().position;
-        room.body_mut(target).unwrap().position = [x - 1.5, y, z];
+        let in_range = [x - 1.5, y, z];
+        let bot = room.body_mut(target).unwrap();
+        bot.position = in_range;
+        // The source is near level geometry. Isolate capsule movement from that
+        // obstruction while keeping the map's authored combat line-of-sight.
+        bot.attach_collision(
+            &crate::mover_settings::MoverSettings::default(),
+            Arc::new(crate::contact_world::ContactWorld::new(Vec::new()).unwrap()),
+            0x10,
+            |_, _, _, _| Some(y),
+        );
         let health = room.body_healths().unwrap()[&target];
-        let mut settled = 0;
-        let mut hit_frame = None;
-        for dt in 1..45 {
+        let patrol = crate::patrol_script::PatrolScript::load().unwrap();
+        let mut hit_frames = Vec::new();
+        let mut displaced_frames = Vec::new();
+        let mut pending_knockback = None;
+        for dt in 1..250 {
             let frame = FIRST_TICK + dt;
+            if let Some((hit_frame, before)) = pending_knockback.take() {
+                scene.step_bots(frame, &patrol).unwrap();
+                let bot = scene.simulation_mut().body_mut(target).unwrap();
+                assert!(
+                    bot.position[0] < before,
+                    "frame {frame}: before x={before}, after={:?}, velocity={:?}",
+                    bot.position,
+                    bot.velocity
+                );
+                displaced_frames.push(hit_frame);
+            }
+            if matches!(dt, 120 | 220) {
+                // Reset the same body's pose to isolate reactivation from range.
+                let bot = scene.simulation_mut().body_mut(target).unwrap();
+                bot.clear_velocity_changes();
+                bot.velocity = [0.0; 3];
+                bot.position = if dt == 120 { in_range } else { [x - 8.0, y, z] };
+            }
             let command = Command {
                 frame,
                 yaw: -16384,
-                buttons: if dt == 20 { 0x800 } else { 0 },
+                buttons: if matches!(dt, 20 | 120 | 220) {
+                    0x800
+                } else {
+                    0
+                },
                 ..Command::default()
             };
             mover
@@ -325,36 +359,35 @@ mod tests {
             for effect in requests {
                 room.settle_script_request(effect, source, frame, Duration::ZERO)
                     .unwrap();
-                hit_frame = Some(frame);
-                settled += 1;
+                hit_frames.push(frame);
+                let bot = room.body_mut(target).unwrap();
+                assert!(
+                    bot.has_combat_motion(),
+                    "frame {frame}: melee impulse was not queued"
+                );
+                pending_knockback = Some((frame, bot.position[0]));
             }
         }
         let room = scene.simulation_mut();
-        assert_eq!(settled, 1);
-        assert_eq!(room.body_healths().unwrap()[&target], health - 30.0);
+        assert_eq!(hit_frames.len(), 2);
+        assert_eq!(displaced_frames, hit_frames);
+        assert_eq!(room.body_healths().unwrap()[&target], health - 60.0);
         let cues = room.take_player_cues();
-        let [cue] = cues.as_slice() else {
-            panic!("expected exactly one confirmed contact notice: {cues:?}");
-        };
-        assert_eq!(cue.owner, owner);
-        assert_eq!(cue.listener, id);
-        assert_eq!(
-            cue.notice,
-            CombatNotice::Hit {
-                target,
-                dealt: 30.0,
-                critical: false,
-                killed: false,
-                shot_frame: hit_frame.unwrap(),
-            }
-        );
-        assert!(
-            room.state_mut(target)
-                .unwrap()
-                .unwrap()
-                .bot
-                .has_combat_motion()
-        );
+        assert_eq!(cues.len(), hit_frames.len());
+        for (cue, shot_frame) in cues.into_iter().zip(hit_frames) {
+            assert_eq!(cue.owner, owner);
+            assert_eq!(cue.listener, id);
+            assert_eq!(
+                cue.notice,
+                CombatNotice::Hit {
+                    target,
+                    dealt: 30.0,
+                    critical: false,
+                    killed: false,
+                    shot_frame,
+                }
+            );
+        }
     }
 
     #[test]
