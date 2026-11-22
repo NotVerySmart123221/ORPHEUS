@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Verify the authored NPC return through a queued room knockback on the prepared 104319 Practice Range. The stock firing bot leaves its post, then returns and ends the movement request after combat motion settles. Original-client rendering remains pending.
+
 - Route authored NPC walk destinations through the collision-aware mover and retire the request when its owning state exits. Passed 807 public library tests and four prepared 104319 stock-bot regressions, including a firing bot walking back after displacement. Original-client animation and navigation around obstructions remain to be verified.
 
 - Add the Linux Proton runtime resolver (`orpheus_proton`) and handle-bound x64 Windows/Wine relay helper (`relay/owwfd_inject.cpp`, documented in `docs/PROTON_HELPER.md`). `orpheus_proton` resolves `WINEPREFIX`, `STEAM_COMPAT_TOOL_PATHS` (confirmed against the pathname column of `/proc/<pid>/maps`, rejecting relative paths), and Wine sync flags (`WINEFSYNC`, `WINEESYNC`, `WINE_NTSYNC`, `PROTON_ENABLE_NTSYNC`, `WINEFUTEX2`) from `--runtime-pid` without claiming Linux-to-Windows PID identity. Injection requires explicit `--win-pid`, `--creation-time`, and `--game-exe` (from `--list`) on a single retained Windows process handle, with opt-in `--start-worker` for relay DLLs that export `worker`. Verified with workspace Clippy/fmt, isolated Wine checks on Proton 10.0 and Proton 11.0 (including live PID-reuse rejection via `creation_time`), and live 104319 client login to the main menu across the four tested Valve Proton builds (Proton 10.0, Proton 11.0, Proton Experimental, and Proton Hotfix).
