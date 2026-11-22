@@ -32,6 +32,8 @@ The Rust-only [room message fixture](../fixtures/behavior/script-room-message-v1
 
 The Rust-only [projected message topics fixture](../fixtures/behavior/script-projected-message-topics-v1.json) checks explicit client scope, loading conflicts, ordinary state entry and exit, and server dispatch exclusion. The native test compares owner and observer activation frames and removal deltas with the existing send codec.
 
+The Rust-only [typed script delta fixture](../fixtures/behavior/script-typed-delta-v1.json) verifies that owner and observer deltas keep explicit booleans, nulls, and integers distinct even when the VM compares them as equal. The prepared Practice Range probe checks the critical flag, killer, loadout, and kill-feed pulse through the normal observer delta writer for both normal and critical bot deaths.
+
 The Rust-only [room cue fixture](../fixtures/behavior/script-room-cue-v1.json) covers authored audience selection, actor and mode speakers, and host admission. It also checks that delayed health events skip replaced or departed listeners without dropping other recipients. Native coverage checks selected player generations, late listener death, and reliable notice admission.
 
 The Rust-only [received damage audio fixture](../fixtures/behavior/received-damage-audio-v1.json) follows settled damage through the authored target filter, room routing, and reliable game frame. It verifies the victim connection, body replacement before reliable admission, and the decoded listener and line for a fresh hit.
@@ -66,7 +68,7 @@ The prepared Practice Range return probe applies a room impulse and steps the re
 
 The Rust-only [combat ray geometry fixture](../fixtures/behavior/map-combat-ray-geometry-v1.json) compares a closed movement proxy with detailed geometry that has an opening. Hitscan and narrow projectiles pass through the opening. Wide projectiles and shots aimed at solid bars still collide.
 
-The Rust-only [combat hurt volumes fixture](../fixtures/behavior/combat-hurt-volumes-v1.json) checks head and body classification, lateral contact, open space, and wall occlusion. Hitscan and projectiles use the same combat shape. Bodies without an optional hurt profile keep the compatibility proxy.
+The Rust-only [combat hurt volumes fixture](../fixtures/behavior/combat-hurt-volumes-v1.json) checks head and body classification, lateral contact, open space, and wall occlusion. Hitscan and projectiles use the same combat shape. Projectile direct hits carry the head result into damage settlement when the hit definition supplies a critical multiplier above one. Bodies without an optional hurt profile keep the compatibility proxy.
 
 The Rust-only [NPC weapon targeting fixture](../fixtures/behavior/npc-projectile-targeting-v1.json) checks that both NPC hitscan and flight use the live room's body-specific combat volumes. It covers an exposed head above the movement capsule, empty space, and same-team admission in team and free-for-all modes. The firing body's own contact is excluded in both modes.
 

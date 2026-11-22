@@ -401,6 +401,151 @@ fn prepared_bot_respawn_projects_its_authored_animation_in_the_first_frame() {
 }
 
 #[test]
+#[ignore = "requires a prepared 104319 Practice Range pack"]
+fn prepared_stock_death_delivers_critical_and_normal_kills_with_the_pulse() {
+    use std::time::Duration;
+
+    use crate::{
+        game_clock::{FIRST_TICK, TICK_PERIOD},
+        game_combat::{ShotContext, tests::fixture_ground},
+        game_combat_messages::CombatNotice,
+        game_hitscan::{DamageTags, Impact},
+        game_instance::RETAIL_QUANTA,
+        mover_settings::MoverCatalog,
+        scene_assets::BotQueries,
+        script_stream::{BodyStream, ChangeKey, DeltaKind},
+    };
+
+    let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let data = runtime.join("data");
+    let bots = BotCatalog::load(data.join("ai_spawners_174.json"))
+        .unwrap()
+        .make(crate::game_content::PRACTICE_RANGE_MAP, |_| {
+            Default::default()
+        });
+    let targets: Vec<_> = bots
+        .iter()
+        .filter(|bot| bot.spawn.team == 1)
+        .take(2)
+        .map(|bot| bot.entity)
+        .collect();
+    assert_eq!(targets.len(), 2);
+    let mut room = RoomSimulation::new(bots).unwrap();
+    room.enable_stock_bot_scripts(
+        Arc::new(GraphStore::load(data.join("game_graphs_174.json.gz")).unwrap()),
+        Arc::new(CodecTable::load(data.join("statescript_codecs_174.json")).unwrap()),
+        crate::game_content::PRACTICE_RANGE_MODE,
+    );
+
+    let ground = fixture_ground();
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, &ground, None);
+    let killer = 0xa000_0100;
+    let loadout = 0x0b90_0000_0000_008d;
+    let mut tick = FIRST_TICK + 1;
+    let mut now = Duration::from_secs(1);
+    for (target, critical) in targets.into_iter().zip([false, true]) {
+        let mut stream = BodyStream::new(target);
+        stream.create_arrived();
+        let projection = room
+            .enemy_projections()
+            .unwrap()
+            .find(|p| p.snapshot.entity == target)
+            .unwrap();
+        let before = projection
+            .encoder
+            .project(projection.snapshot, View::Observer)
+            .unwrap();
+        let full = projection.encoder.queue_full(&mut stream, &before).unwrap();
+        assert!(stream.arrived(full.last).advanced);
+        let hit = room
+            .apply_bot_impact(
+                killer,
+                tick,
+                ShotContext {
+                    team: 0,
+                    quanta: RETAIL_QUANTA,
+                    tick,
+                    now,
+                },
+                &Impact {
+                    tags: DamageTags::EMPTY,
+                    entity: target,
+                    distance: 1.0,
+                    damage: 10000.0,
+                    critical,
+                    loadout: Some(loadout),
+                    impulse: None,
+                },
+            )
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(hit.notices[0], Some(CombatNotice::Hit { critical: flag, killed: true, .. }) if flag == critical)
+        );
+
+        for _ in 0..8 {
+            tick += 1;
+            now += TICK_PERIOD;
+            assert!(room.finish_tick(&queries, tick, now).unwrap().is_empty());
+        }
+        let projection = room
+            .enemy_projections()
+            .unwrap()
+            .find(|p| p.snapshot.entity == target)
+            .unwrap();
+        let (&instance, graph) = projection
+            .snapshot
+            .instances
+            .iter()
+            .find(|(_, graph)| graph.graph == 0x0c18)
+            .unwrap();
+        assert!(matches!(
+            graph.states[&8].kind,
+            script_init::StateKind::ClientPulse { count: 1, .. }
+        ));
+        let after = projection
+            .encoder
+            .project_next(projection.snapshot, stream.base().unwrap().1)
+            .unwrap();
+        let fields = after.instance_variables(instance).unwrap();
+        assert_eq!(fields.get(&392), Some(&Value::Entity(killer)));
+        assert_eq!(fields.get(&1821), Some(&Value::Bool(critical)));
+        assert_eq!(fields.get(&9300), Some(&Value::Asset(loadout)));
+        let delta = projection
+            .encoder
+            .queue_delta(
+                &mut stream,
+                &after,
+                DeltaKind::Observer { resend: true },
+                FRAME_MS as u32,
+            )
+            .unwrap()
+            .unwrap();
+        let changed = stream.touched();
+        assert!(changed.contains(&ChangeKey::State(instance, 8)));
+        let previously_sent = before
+            .instance_variables(instance)
+            .and_then(|values| values.get(&1821));
+        assert_eq!(
+            changed.contains(&ChangeKey::Variable(instance, 1821)),
+            previously_sent != Some(&Value::Bool(critical)),
+        );
+        assert!(stream.arrived(delta.last).advanced);
+        assert_eq!(
+            stream
+                .base()
+                .unwrap()
+                .1
+                .instance_variables(instance)
+                .unwrap()
+                .get(&1821),
+            Some(&Value::Bool(critical)),
+        );
+    }
+}
+
+#[test]
 #[ignore = "requires a prepared 104319 Practice Range pack with firing graph state metadata"]
 fn prepared_firing_placement_drives_the_stock_weapon_graph() {
     let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());

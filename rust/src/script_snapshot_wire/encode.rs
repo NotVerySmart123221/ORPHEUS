@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::bits::BitWriter;
 use crate::script_codecs::{Codec, CodecTable, PayloadError, PayloadMode, StatePayload};
-use crate::script_expr::{Scope, equal};
+use crate::script_expr::Scope;
 use crate::script_graph::Graph;
 use crate::script_init::FrameAction;
 use crate::script_stream::{BodyStream, ChangeKey, DeltaKind, ScriptChunk, StreamError};
@@ -958,7 +958,9 @@ fn delta_variables(
         let bindings = current.bindings.get(&id);
         let previous_bindings = before.and_then(|vars| vars.bindings.get(&id));
         let key = ChangeKey::Variable(instance, id);
-        if touched.contains(&key) || !equal(now, was) || bindings != previous_bindings {
+        // Replication preserves wire types as well as values. StateScript
+        // expression equality intentionally coerces nulls, booleans and numbers.
+        if touched.contains(&key) || now != was || bindings != previous_bindings {
             result.values.insert(id, now.clone());
             if let Some(bindings) = bindings {
                 result.bindings.insert(id, bindings.clone());
