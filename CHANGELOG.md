@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Extend the prepared encrypted ground-shot checks to Particle Cannon. Verify the confirmed projectile's impact retirement, self-damage across the owner health pools, upward movement, and an owner correction on a post-impact command frame. The Inspector workspace passed 931 public tests, and four prepared cases passed. Original-client visuals and movement remain open.
+
 - Admit direct single-shot projectiles that use either supported literal aim slot and the sampled command pose. Keep dynamic aim and spread configurations out of the straight-flight path. A prepared Practice Range replay verifies Zarya's secondary-fire launch and owner egress independently of the primary beam. The Inspector workspace passed 931 public tests, and the prepared replay and both Helix loopbacks passed. Impact and owner movement for Zarya remain open.
 
 - Evaluate projectile gravity in authored order for player and NPC volleys, including each gravity node's disable expression. The Inspector workspace passed 930 public tests. Three prepared 104319 cases verify an enemy impact and retirement after a dropped acknowledgement, self-splash health delivery and upward movement, and single-settlement melee knockback. The available catalogs lack Junkenstein spawn entries, so three NPC firing probes stopped during setup. Original-client projectile rendering and movement remain pending.

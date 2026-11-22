@@ -6,11 +6,18 @@ pub enum PreparedFixture {
     StockOwner,
     StockNameplate,
     StockProjectile,
-    StockSelfProjectile,
+    StockSelfProjectile(GroundShot),
     StockBiotic,
     Owner,
     Combat,
     Projectile,
+}
+
+#[derive(Clone, Copy)]
+pub struct GroundShot {
+    pub hero: u64,
+    pub definition: u32,
+    pub expected_damage: f32,
 }
 
 pub fn exercise_prepared_world(fixture: PreparedFixture) {
@@ -147,7 +154,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
                     | PreparedFixture::StockOwner
                     | PreparedFixture::StockNameplate
                     | PreparedFixture::StockProjectile
-                    | PreparedFixture::StockSelfProjectile
+                    | PreparedFixture::StockSelfProjectile(_)
                     | PreparedFixture::StockBiotic
             ) {
                 assert!(!scripted_bots);
@@ -203,7 +210,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
             PreparedFixture::Stock
                 | PreparedFixture::StockNameplate
                 | PreparedFixture::StockProjectile
-                | PreparedFixture::StockSelfProjectile
+                | PreparedFixture::StockSelfProjectile(_)
         )
     {
         assert_eq!(result.err().unwrap().kind(), io::ErrorKind::Unsupported);
@@ -430,10 +437,10 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
             let launch = wait_for_stock_weapon(&mut client, &schemas, frame + 1);
             exercise_projectile(&mut client, &schemas, Some(launch));
         }
-        PreparedFixture::StockSelfProjectile => {
-            let frame = exercise_owner_vm(&mut client, &schemas, false);
-            let launch = wait_for_stock_weapon(&mut client, &schemas, frame + 1);
-            exercise_stock_self_splash(&mut client, &schemas, &server, launch);
+        PreparedFixture::StockSelfProjectile(shot) => {
+            let frame = pick_stock_actor(&mut client, &schemas, shot.hero);
+            let launch = wait_for_stock_weapon(&mut client, &schemas, frame);
+            exercise_stock_self_splash(&mut client, &schemas, &server, launch, shot);
         }
         PreparedFixture::StockBiotic => {
             assert!(!scripted_bots);
@@ -550,15 +557,13 @@ pub fn send_game_message(
 }
 
 pub fn pick_soldier_for_weapon(client: &mut Client, schemas: &Schemas) -> u32 {
-    use crate::{game_heroes::SOLDIER, game_parameters::PICK_HERO};
+    pick_stock_actor(client, schemas, crate::game_heroes::SOLDIER)
+}
+
+fn pick_stock_actor(client: &mut Client, schemas: &Schemas, hero: u64) -> u32 {
+    use crate::game_parameters::PICK_HERO;
     let body = player_entity(0) | 1;
-    send_game_message(
-        client,
-        schemas,
-        1,
-        PICK_HERO,
-        SOLDIER.to_le_bytes().to_vec(),
-    );
+    send_game_message(client, schemas, 1, PICK_HERO, hero.to_le_bytes().to_vec());
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         let packet = client.receive();
@@ -827,6 +832,7 @@ fn exercise_stock_self_splash(
     schemas: &Schemas,
     server: &GameService,
     launch: u32,
+    shot: GroundShot,
 ) {
     use crate::{commands::SECONDARY, game_debug::ActorKind};
     let snapshot_owner = || {
@@ -840,22 +846,34 @@ fn exercise_stock_self_splash(
             .expect("stock owner must have a body")
     };
     let before = snapshot_owner();
-    assert_eq!(before.health, Some(200.0));
+    let initial_health = before.health.unwrap() as f32;
     let pitch = 16_384;
     client.send(
         ACK,
         command_batch_with_pitch(launch, 1, -16_384, pitch, SECONDARY, false),
     );
+    let mut predicted = HashSet::new();
     let mut released = false;
-    let mut self_damage = false;
+    let mut owner_health = None;
     let deadline = Instant::now() + Duration::from_secs(3);
-    while !released || !self_damage {
+    while !released || owner_health.is_none() {
         let packet = client.receive();
         assert!(client.window.accept(packet.seq));
         for record in world_records(schemas, &packet) {
-            released |= record.projectile_release.is_some();
-            if record.entity == before.entity && record.base_health == Some(160.0) {
-                self_damage = true;
+            if record.definition == Some(shot.definition) {
+                predicted.insert(record.entity);
+            }
+            if record.projectile_release.is_some() && predicted.contains(&record.entity) {
+                assert_eq!(record.operation, Some(3));
+                released = true;
+            }
+            if record.entity == before.entity {
+                if let Some(health) = record
+                    .total_health
+                    .filter(|health| *health < initial_health)
+                {
+                    owner_health = Some(health);
+                }
             }
         }
         assert!(
@@ -866,30 +884,45 @@ fn exercise_stock_self_splash(
         client.send(ACK, Vec::new());
         assert!(
             Instant::now() < deadline,
-            "waiting for self splash and release, damage={self_damage} release={released}"
+            "waiting for self splash and release, health={owner_health:?} release={released} predicted={predicted:?} server={:?}",
+            snapshot_owner().health,
         );
     }
-    assert_eq!(snapshot_owner().health, Some(160.0));
+    let owner_health = owner_health.unwrap();
+    assert!(owner_health > 0.0);
+    assert_eq!(initial_health - owner_health, shot.expected_damage);
+    assert_eq!(
+        snapshot_owner().health.map(|value| value as f32),
+        Some(owner_health)
+    );
     // The room registers the impulse at the first real pose after impact.
     client.send(
         ACK,
         command_batch_with_pitch(launch + 1, 8, -16_384, pitch, 0, false),
     );
     let deadline = Instant::now() + Duration::from_secs(3);
+    let mut corrected = false;
     loop {
         let packet = client.receive();
         assert!(client.window.accept(packet.seq));
+        corrected |= world_records(schemas, &packet).iter().any(|record| {
+            record.entity == before.entity
+                && record.operation.is_none()
+                && record
+                    .movement_frame
+                    .is_some_and(|frame| (launch + 1..=launch + 8).contains(&frame))
+        });
         client.send(ACK, Vec::new());
-        if input_ack(schemas, &packet) >= launch + 8 {
+        if corrected && input_ack(schemas, &packet) >= launch + 8 {
             break;
         }
         assert!(
             Instant::now() < deadline,
-            "waiting for posed movement after self splash"
+            "waiting for posed movement and owner correction after self splash"
         );
     }
     let after = snapshot_owner();
-    assert_eq!(after.health, Some(160.0));
+    assert_eq!(after.health.map(|value| value as f32), Some(owner_health));
     assert!(
         after.position[1] > before.position[1],
         "self splash did not raise owner from {:?} to {:?}",
