@@ -3232,15 +3232,20 @@ fn prepared_soldier_without_target_tags_reports_unavailable_filter() {
 #[ignore = "requires a tagged separately prepared 104319 statescript catalog"]
 fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
     use crate::{
+        collision_cache::CollisionCache,
+        contact_world::ContactWorld,
         game_clock::FIRST_TICK,
+        game_combat::{PlayerBodyState, RoomSimulation},
         game_messages::Message,
         game_parameters::{CLIENT_WHEEL_ACTION, ClientWheelAction},
+        game_replication::BodyId,
         jam_codec::{Fields, Value as WireValue},
+        mover_settings::MoverSettings,
+        script_graph::RoomSpatialNeeds,
     };
 
     let root = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
     let graphs = Arc::new(GraphStore::load(root.join("data/game_graphs_174.json.gz")).unwrap());
-    let (mut component, mut world) = prepared_soldier_component(graphs, true);
     let action = 0x0a90_0000_0000_0171;
     let request = ClientWheelAction::read(&Message {
         id: CLIENT_WHEEL_ACTION,
@@ -3251,51 +3256,100 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
     })
     .unwrap()
     .into_local_message();
-    assert_eq!(
-        component
-            .queue_entity_message_from(world.entity, request.id, request.parameters)
-            .unwrap(),
-        2
-    );
-    component.advance_frame(FIRST_TICK + 1, &mut world).unwrap();
-    let snapshot = component.snapshot().unwrap();
-    if world.graphs.has_asset_category_data() {
-        assert!(!snapshot.diagnostics.iter().any(|diagnostic| {
-            matches!(&diagnostic.issue, crate::script_init::Issue::Expression(crate::script_expr::EvalError::UnsupportedConfig(class))
-                if class == "STU_4460419A")
-        }));
-        assert!(
-            snapshot.diagnostics.iter().any(|diagnostic| {
-                diagnostic.issue
-                    == crate::script_init::Issue::UnsupportedField("view target query unavailable")
-            }),
-            "{:?}",
-            snapshot.diagnostics
-        );
-    }
-    for diagnostic in snapshot
-        .diagnostics
-        .iter()
-        .filter(|diagnostic| !diagnostic.server_only)
-    {
-        eprintln!(
-            "wheel path {:04X}:{:?} {:?}",
-            diagnostic.site.graph, diagnostic.site.node, diagnostic.issue
-        );
-    }
-    for graph in [0x05ad, 0x02cf] {
-        let instance = snapshot
-            .instances
-            .values()
-            .find(|instance| instance.graph == graph)
+    for with_room in [false, true] {
+        let (mut component, mut world) = prepared_soldier_component(Arc::clone(&graphs), true);
+        if with_room {
+            let ground = CollisionScene::movement_probe(
+                &CollisionCache {
+                    header: serde_json::from_str(
+                        r#"{"meshes":[],"hulls":0,"models":0,"placements":0,"identifiers":[]}"#,
+                    )
+                    .unwrap(),
+                    meshes: Vec::new(),
+                    hulls: Vec::new(),
+                    models: Vec::new(),
+                    placements: Vec::new(),
+                },
+                &Default::default(),
+            )
             .unwrap();
+            let mut room = RoomSimulation::new(Vec::new()).unwrap();
+            room.enable_spatial_queries(false, Arc::new(ground), RoomSpatialNeeds::Queries);
+            let mover = Mover::new(
+                MoverSettings::default(),
+                Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+                world.position,
+                0,
+                MOVER_CATEGORY,
+            )
+            .unwrap();
+            room.spawn_player_body(PlayerBodyState::new(
+                BodyId {
+                    entity: world.entity,
+                    generation: 1,
+                },
+                world.controller,
+                0,
+                0,
+                world.hero,
+                mover,
+                None,
+                FIRST_TICK,
+                None,
+            ))
+            .unwrap();
+            world.spatial_frame = room.capture_spatial_frame(FIRST_TICK + 1).unwrap();
+            assert!(world.spatial_frame.is_some());
+        }
         assert_eq!(
-            instance.variables[&29699],
-            Value::Asset(action),
-            "{graph:04X}"
+            component
+                .queue_entity_message_from(world.entity, request.id, request.parameters.clone())
+                .unwrap(),
+            2
         );
-        if graph == 0x05ad {
-            assert_eq!(instance.variables[&9253], Value::Bool(true));
+        component.advance_frame(FIRST_TICK + 1, &mut world).unwrap();
+        let snapshot = component.snapshot().unwrap();
+        if graphs.has_asset_category_data() {
+            assert!(!snapshot.diagnostics.iter().any(|diagnostic| {
+                matches!(&diagnostic.issue, crate::script_init::Issue::Expression(crate::script_expr::EvalError::UnsupportedConfig(class))
+                    if class == "STU_4460419A")
+            }));
+            assert_eq!(
+                snapshot.diagnostics.iter().any(|diagnostic| {
+                    diagnostic.issue
+                        == crate::script_init::Issue::UnsupportedField(
+                            "view target query unavailable",
+                        )
+                }),
+                !with_room,
+                "{:?}",
+                snapshot.diagnostics
+            );
+        }
+        for diagnostic in snapshot
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| !diagnostic.server_only)
+        {
+            eprintln!(
+                "wheel room={with_room} {:04X}:{:?} {:?}",
+                diagnostic.site.graph, diagnostic.site.node, diagnostic.issue
+            );
+        }
+        for graph in [0x05ad, 0x02cf] {
+            let instance = snapshot
+                .instances
+                .values()
+                .find(|instance| instance.graph == graph)
+                .unwrap();
+            assert_eq!(
+                instance.variables[&29699],
+                Value::Asset(action),
+                "{graph:04X}"
+            );
+            if graph == 0x05ad {
+                assert_eq!(instance.variables[&9253], Value::Bool(true));
+            }
         }
     }
 }

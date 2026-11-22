@@ -156,6 +156,14 @@ room facts leave occupied queries unavailable. The public
 [view target fixture](../fixtures/behavior/script-view-targets-v1.json)
 exercises this interface with synthetic settings and geometry.
 
+The prepared `prepared_wheel_packet_bindings_reach_both_authored_handlers`
+probe compares the same selection with a missing room snapshot and with a
+frozen single-player snapshot. With the asset categories supplied, the
+single-player case passes the view query and reaches three open VM shapes.
+The diagnostics identify actions `STU_71FE9852` and `STU_7106C356` and
+expression `STU_7757D403`. The probe uses a local 104319 graph bundle
+with synthetic room geometry.
+
 Use `scripts/build_runtime_state_metadata.py --asset-categories` with a
 local JSON catalog containing `version: 1`, `build: 104319`, and the asset
 map under `assets`. Supply the resulting bundle through
