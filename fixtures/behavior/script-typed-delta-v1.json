@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "case_id": "script-typed-delta.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "input": {
+    "variable": 77,
+    "transitions": [
+      { "from": null, "to": false },
+      { "from": false, "to": null },
+      { "from": false, "to": 0 },
+      { "from": 1, "to": true }
+    ]
+  },
+  "expected": { "send_variable_for_each_transition": true }
+}
