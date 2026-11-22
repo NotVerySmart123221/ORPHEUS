@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Resolve self-directed StateScript voice criteria through an optional local actor voice catalog. Use the speaker's current hero and skin voice set to select a playable line and submit it to the shared room cue queue for living allies and the speaker. Passed 771 Rust library tests and a probe of the local 104319 voice catalog. The wheel probe still reaches the unsupported `TrackTargets` state.
+
 - Route stock bot StateScript messages through the shared room queue. Deliver registered messages on the receiver's next VM frame and discard directed messages if the recipient dies before dispatch. Passed 759 Rust library tests and prepared 104319 probes for firing, damage, and respawn animation. The prepared wheel probe still reports the unsupported `TrackTargets` state.
 
 - Decode context-free communication wheel requests as body-local StateScript messages. The input regression covers reliable retries, possession, death, and replacement with the same wire ID. Resolve authored asset categories from private metadata through `STU_4460419A`. Passed 758 Rust library tests and the runtime metadata importer checks. A prepared 104319 probe bound the request in both authored receivers and reached an unsupported `TrackTargets` state. Live wheel input remains disabled pending the shared target tracking implementation.

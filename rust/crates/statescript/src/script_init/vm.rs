@@ -2250,6 +2250,37 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         Ok(true)
     }
 
+    fn play_actor_criterion(&mut self, id: u16, node: &Node) {
+        let site = self.site(id, node);
+        if self.machine.owner_dead || !self.world.actor_voice_available(site) {
+            return;
+        }
+        // Criteria may belong to other services. An unavailable voice operand
+        // leaves the ordinary continuation intact.
+        let Ok(Value::Asset(criterion)) = self.evaluate_with_context(
+            site,
+            field(&node.fields, "m_identifier"),
+            None,
+            Value::Null,
+            false,
+        ) else {
+            return;
+        };
+        let speaker = self.evaluate_with_context(
+            site,
+            field(&node.fields, "m_targets"),
+            None,
+            Value::Null,
+            false,
+        );
+        if speaker != Ok(Value::Entity(site.entity)) {
+            return;
+        }
+        self.world.queue_actor_voice(site, criterion, &mut |count| {
+            ((u128::from(self.machine.random_u64()) * count as u128) >> 64) as usize
+        });
+    }
+
     fn send_room_cue(
         &mut self,
         id: u16,

@@ -4,6 +4,136 @@ use super::*;
 use crate::{game_bots::BotCatalog, game_combat::RoomSimulation, script_snapshot_wire::View};
 
 #[test]
+fn stock_bot_criteria_uses_shared_cue_delivery_to_living_allies() {
+    use std::time::Duration;
+
+    use crate::{
+        actor_voice::ActorVoiceCatalog,
+        contact_world::ContactWorld,
+        game_clock::FIRST_TICK,
+        game_combat::{
+            BotState, PlayerBodyState,
+            tests::{fixture_bots, fixture_ground},
+        },
+        game_combat_messages::CombatNotice,
+        game_replication::BodyId,
+        mover::Mover,
+        mover_settings::{MoverCatalog, MoverSettings},
+        runtime::format::parse_guid,
+        scene_assets::BotQueries,
+        script_graph::RoomSpatialNeeds,
+    };
+
+    const TRIGGER: u64 = 0xf000_0000_0000_1350;
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/player-voice-v1.json"
+    ))
+    .unwrap();
+    let input = &fixture["input"];
+    let criterion = &fixture["rust_selection"]["criterion"];
+    let cue = &fixture["expected"]["wheel_friendly"][0];
+    let mut data = input["fixtures"].clone();
+    let skin = input["skin"].as_str().unwrap();
+    let hero = input["hero"].as_str().unwrap();
+    let base = data["heroes"][hero].as_str().unwrap().to_owned();
+    data["heroes"]["0x01"] = data["skins"][skin][base].clone();
+    let catalog = Arc::new(serde_json::from_value::<ActorVoiceCatalog>(data).unwrap());
+    let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(&json!({
+        "version":1,"bodies":{},"missing":[],
+        "entities":{"0x02":{"name":"Fixture speaker","weapons":[],"graphs":[{"graph":42,"m_75408640":0}]}},
+        "graphs":[{
+            "index":42,"items":2,"entries":[0],"states":[],"remote":[],"sync_vars":[],
+            "containers":{},"unknown_nodes":[],"fields":{},
+            "header":{"m_nodesBitCount":2,"m_statesBitCount":2,"m_remoteSyncNodesBitCount":2,"m_syncVarsBitCount":2},
+            "nodes":[
+                {"pos":0,"rid":0,"uid":0,"remote":-1,"state":null,"server_only":false,"client_only":false,
+                 "class":"STUStatescriptEntryGameMessage","fields":{
+                    "m_gameMessage":{"m_gameMessage":format!("0x{TRIGGER:016X}")},
+                    "m_outPlug":{"$":"Plug","links":[[1,"m_inPlug"]]}
+                 }},
+                {"pos":1,"rid":1,"uid":1,"remote":-1,"state":null,"server_only":false,"client_only":false,
+                 "class":"STUStatescriptActionCriteria","fields":{
+                    "m_identifier":{"$":"STUConfigVarIdentifier","m_identifier":criterion},
+                    "m_targets":{"$":"STU_B5A0CAF0"}
+                 }}
+            ]
+        }]
+    })).unwrap()).unwrap());
+    let codecs = Arc::new(CodecTable::from_json(r#"{"classes":{}}"#).unwrap());
+    let ground = Arc::new(fixture_ground());
+    let movers = MoverCatalog::default();
+    for free_for_all in [false, true] {
+        let mut bots = fixture_bots();
+        bots.truncate(1);
+        let speaker = bots[0].entity;
+        let mut room = RoomSimulation::new(bots).unwrap();
+        room.enable_stock_bot_scripts(Arc::clone(&graphs), Arc::clone(&codecs), 0);
+        room.enable_spatial_queries(free_for_all, Arc::clone(&ground), RoomSpatialNeeds::Queries);
+        room.enable_actor_voice(Arc::clone(&catalog));
+        for (team, entity) in [(0, 30), (1, 31)] {
+            let mover = Mover::new(
+                MoverSettings::default(),
+                Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+                [3.0, 0.0, 0.0],
+                0,
+                0x18,
+            )
+            .unwrap();
+            room.spawn_player_body(PlayerBodyState::new(
+                BodyId {
+                    entity,
+                    generation: 1,
+                },
+                entity - 10,
+                team,
+                team,
+                0,
+                mover,
+                None,
+                FIRST_TICK,
+                None,
+            ))
+            .unwrap();
+        }
+        let mut state = room
+            .world
+            .get_mut::<BotState>(room.by_wire[&speaker])
+            .unwrap();
+        assert_eq!(
+            state
+                .stock_script
+                .as_mut()
+                .unwrap()
+                .component
+                .queue_entity_message(TRIGGER, Variables::new())
+                .unwrap(),
+            1
+        );
+        let queries = BotQueries::new(free_for_all, &movers, &ground, None);
+        room.finish_tick(&queries, FIRST_TICK + 1, Duration::ZERO)
+            .unwrap();
+        let notices = room.take_player_cues();
+        if free_for_all {
+            assert!(notices.is_empty());
+        } else {
+            let [notice] = notices.as_slice() else {
+                panic!("expected exactly one allied listener");
+            };
+            assert_eq!(
+                notice.notice,
+                CombatNotice::Voice {
+                    anchor: speaker,
+                    speaker,
+                    listener: 31,
+                    stimulus: parse_guid(cue[0].as_str().unwrap()).unwrap(),
+                    line: parse_guid(cue[1].as_str().unwrap()).unwrap(),
+                }
+            );
+        }
+    }
+}
+
+#[test]
 fn stock_bot_room_messages_run_in_the_next_frame_and_expire_on_death() {
     use std::time::Duration;
 

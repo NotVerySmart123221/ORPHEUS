@@ -1082,6 +1082,20 @@ pub trait World {
         false
     }
 
+    /// Whether this actor has a room-backed voice catalog.
+    fn actor_voice_available(&self, _site: Site) -> bool {
+        false
+    }
+
+    /// Resolve a criterion to a cue for the actor and its audience.
+    fn queue_actor_voice(
+        &mut self,
+        _site: Site,
+        _criterion: u64,
+        _choose: &mut dyn FnMut(usize) -> usize,
+    ) {
+    }
+
     /// The world owns delivery outside the current body.
     fn send_message(
         &mut self,

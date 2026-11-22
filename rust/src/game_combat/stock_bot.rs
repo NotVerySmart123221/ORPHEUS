@@ -26,8 +26,8 @@ use crate::{
     script_graph::{GraphStore, graph_asset_index},
     script_init::{
         self, AiControlOverride, AiWeaponOverride, Component, HUD_MAX_HEALTH, InitFault, Issue,
-        MAX_INIT_WORK, MovementSample, OWNER_HEALTH, RoomMessage, Root, Site, TargetTagEffect,
-        TargetTagEffects, World,
+        MAX_INIT_WORK, MovementSample, OWNER_HEALTH, RoomCue, RoomMessage, Root, Site,
+        TargetTagEffect, TargetTagEffects, World,
     },
     script_runtime::{FRAME_MS, held_button_mask},
     script_snapshot_wire::{SceneProjection, SnapshotEncoder, View},
@@ -85,6 +85,39 @@ impl World for StockBotWorld {
                 .spatial_frame
                 .as_deref()
                 .is_some_and(|frame| self.script_requests.queue_message(frame, target, message))
+    }
+
+    fn queue_room_cue(&mut self, site: Site, targets: &[u32], cue: RoomCue) -> bool {
+        site.entity == self.entity
+            && !self.dead
+            && self.spatial_frame.as_deref().is_some_and(|frame| {
+                self.script_requests
+                    .queue_cue(frame, site.entity, targets, cue)
+            })
+    }
+
+    fn actor_voice_available(&self, site: Site) -> bool {
+        site.entity == self.entity
+            && !self.dead
+            && self
+                .spatial_frame
+                .as_deref()
+                .is_some_and(|frame| frame.actor_voice_available(site.entity))
+    }
+
+    fn queue_actor_voice(
+        &mut self,
+        site: Site,
+        criterion: u64,
+        choose: &mut dyn FnMut(usize) -> usize,
+    ) {
+        if let Some((cue, listeners)) = self
+            .spatial_frame
+            .as_deref()
+            .and_then(|frame| frame.actor_voice_request(site.entity, criterion, choose))
+        {
+            self.queue_room_cue(site, &listeners, cue);
+        }
     }
 
     fn entity_variable(&mut self, entity: u32, id: u32) -> Option<Value> {

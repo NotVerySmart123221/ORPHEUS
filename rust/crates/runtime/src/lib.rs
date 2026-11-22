@@ -44,6 +44,7 @@ pub const BNET_DESCRIPTORS: &str = "bnet/descriptors.pb";
 pub const JUNKENSTEIN_MAP_WORLD: &str = "data/junkenstein/junkenstein-map-world.json";
 pub const JUNKENSTEIN_NPCS: &str = "data/junkenstein/junkenstein-npcs.json";
 pub const COMBAT_HURT_VOLUMES: &str = "data/combat_hurt_volumes.json";
+pub const ACTOR_VOICE_CATALOG: &str = "data/player_voice_174.json";
 const PRACTICE_COLLISION: &str = "collision/0688.col";
 const SIGNING_INPUT: &str = "data/lobby_state_blob.key";
 const CONTENT_KEY_TABLE: &str = "data/resource_keys_174.json";
@@ -262,9 +263,11 @@ fn inputs(
             inputs.insert(name.into(), input);
         }
     }
-    let hurt_volumes = source.join(COMBAT_HURT_VOLUMES);
-    if hurt_volumes.is_file() {
-        inputs.insert(COMBAT_HURT_VOLUMES.into(), hurt_volumes);
+    for name in [COMBAT_HURT_VOLUMES, ACTOR_VOICE_CATALOG] {
+        let path = source.join(name);
+        if path.is_file() {
+            inputs.insert(name.into(), path);
+        }
     }
 
     let missing: Vec<_> = inputs

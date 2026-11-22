@@ -24,6 +24,46 @@ pub(super) struct RoomScriptTarget {
     pub(super) health: bool,
     pub(super) messages: bool,
     pub(super) cue_listener: bool,
+    pub(super) voice: Option<(u64, u64)>,
+}
+
+impl RoomSpatialFrame {
+    pub(crate) fn actor_voice_available(&self, source: u32) -> bool {
+        self.actor_voice.is_some()
+            && self
+                .script_targets
+                .get(&source)
+                .is_some_and(|body| body.voice.is_some())
+    }
+
+    pub(crate) fn actor_voice_request(
+        &self,
+        source: u32,
+        criterion: u64,
+        choose: &mut dyn FnMut(usize) -> usize,
+    ) -> Option<(RoomCue, Vec<u32>)> {
+        let catalog = self.actor_voice.as_ref()?;
+        let (actor, source_body) = self.actor_sample(source)?;
+        let (hero, skin) = source_body.voice?;
+        let options = catalog.options(hero, skin, criterion)?;
+        let listeners: Vec<_> = self
+            .candidates
+            .iter()
+            .filter(|listener| {
+                (listener.entity == source || actor.team.is_some() && actor.team == listener.team)
+                    && self
+                        .script_targets
+                        .get(&listener.entity)
+                        .is_some_and(|body| body.cue_listener)
+            })
+            .map(|listener| listener.entity)
+            .collect();
+        if listeners.is_empty() || listeners.len() > RoomCue::MAX_TARGETS {
+            return None;
+        }
+        let (stimulus, line) = options.choose(choose)?;
+        Some((RoomCue { stimulus, line }, listeners))
+    }
 }
 
 pub(crate) struct RoomScriptRequest {
@@ -458,6 +498,7 @@ mod tests {
             health,
             messages,
             cue_listener: health,
+            voice: None,
         };
         let frame = RoomSpatialFrame {
             candidates: [1, 2, 3]
@@ -477,6 +518,7 @@ mod tests {
             ]),
             player_wires: HashMap::new(),
             ground: Arc::new(fixture_ground()),
+            actor_voice: None,
             captured_tick: 0,
             debug_rays: Arc::default(),
         };

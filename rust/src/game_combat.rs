@@ -15,6 +15,7 @@ use bevy_ecs::{component::Component, entity::Entity, world::World};
 use indexmap::IndexMap;
 
 use crate::{
+    actor_voice::ActorVoiceCatalog,
     collision_index::IndexError,
     collision_scene::CollisionScene,
     commands::Command,
@@ -319,6 +320,7 @@ pub(crate) struct RoomSpatialFrame {
     script_targets: HashMap<u32, RoomScriptTarget>,
     player_wires: HashMap<u32, u32>,
     ground: Arc<CollisionScene>,
+    actor_voice: Option<Arc<ActorVoiceCatalog>>,
     #[cfg(any(test, feature = "inspector"))]
     captured_tick: u32,
     #[cfg(any(test, feature = "inspector"))]
@@ -527,6 +529,7 @@ struct RoomSpatialQueries {
     ground: Arc<CollisionScene>,
     needs: RoomSpatialNeeds,
     actor_movers: Option<Arc<crate::mover_settings::MoverCatalog>>,
+    actor_voice: Option<Arc<ActorVoiceCatalog>>,
 }
 
 /// Room-authoritative bot bodies, player bodies, and in-flight projectiles.
@@ -1025,7 +1028,14 @@ impl RoomSimulation {
             ground,
             needs,
             actor_movers: None,
+            actor_voice: None,
         });
+    }
+
+    pub(crate) fn enable_actor_voice(&mut self, catalog: Arc<ActorVoiceCatalog>) {
+        if let Some(queries) = &mut self.spatial_queries {
+            queries.actor_voice = Some(catalog);
+        }
     }
 
     pub(crate) fn enable_spatial_actor_rays(
@@ -1056,6 +1066,7 @@ impl RoomSimulation {
         let include_tags = queries.needs == RoomSpatialNeeds::EntityTags;
         let mut script_targets = HashMap::with_capacity(capacity);
         let mut player_wires = HashMap::with_capacity(self.players_by_wire.len());
+        let actor_voice = queries.actor_voice.as_ref().map(Arc::clone);
         for (state, &entity) in self.states().zip(self.by_wire.values()) {
             let state = state?;
             let bot = &state.bot;
@@ -1097,6 +1108,9 @@ impl RoomSimulation {
                             .as_ref()
                             .is_some_and(|script| script.accepts_room_messages()),
                         cue_listener: false,
+                        voice: actor_voice
+                            .as_ref()
+                            .and_then(|_| state.stock_script.as_ref().map(|_| (bot.spawn.hero, 0))),
                     },
                 );
                 candidates.push(SpatialCandidate {
@@ -1146,6 +1160,16 @@ impl RoomSimulation {
                         health: state.vitals().is_some(),
                         messages: state.runtime.is_some(),
                         cue_listener: true,
+                        voice: actor_voice.as_ref().map(|_| {
+                            let skin = state.observer_create.as_ref().and_then(|update| {
+                                let Operation::Create(definition) = update.operation.as_ref()?
+                                else {
+                                    return None;
+                                };
+                                Some(definition.skin.guid)
+                            });
+                            (state.hero, skin.unwrap_or(0))
+                        }),
                     },
                 );
                 candidates.push(SpatialCandidate {
@@ -1163,6 +1187,7 @@ impl RoomSimulation {
             script_targets,
             player_wires,
             ground: Arc::clone(&queries.ground),
+            actor_voice,
             #[cfg(any(test, feature = "inspector"))]
             captured_tick: frame,
             #[cfg(any(test, feature = "inspector"))]

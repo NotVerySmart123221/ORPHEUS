@@ -81,6 +81,7 @@ fn practice_only_omits_owner_runtime_when_all_owner_content_is_absent() {
             bots: BotCatalog::default(),
             movers: Arc::new(MoverCatalog::default()),
             hurt_volumes: Arc::new(HurtVolumeCatalog::default()),
+            actor_voice: None,
             stats: StatsCatalog::default(),
             heroes: Arc::clone(&heroes),
             pools: Arc::new(PoolCatalog::default()),

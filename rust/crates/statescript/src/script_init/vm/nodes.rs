@@ -785,9 +785,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }
-            // Base actions and the stat criteria fallback consume the input
-            // and run its output without evaluating an action payload.
-            "STU_D38D0035" | "STUStatescriptActionCriteria" | "STU_6E5C5F66" => {
+            "STUStatescriptActionCriteria" => {
+                self.play_actor_criterion(id, node);
+                self.follow(id, node, "m_outPlug", None, depth)?;
+                Ok(true)
+            }
+            "STU_D38D0035" | "STU_6E5C5F66" => {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }

@@ -146,6 +146,24 @@ local JSON catalog containing `version: 1`, `build: 104319`, and the asset
 map under `assets`. Supply the resulting bundle through
 `prepare_server_runtime --game-graphs`.
 
+## Supply actor voice criteria
+
+Place the optional catalog at `data/player_voice_174.json` in the private
+runtime source before preparing the server runtime. Its `criteria` map
+contains each criterion's ordered stimulus IDs. The `heroes` map identifies
+the base set, `skins` maps a skin's base sets to replacements, and `sets`
+maps each voice set to its stimulus and line lists. A criterion plays the
+first available stimulus in the selected set. A mapped skin replacement
+controls playback for that set. Missing entries leave the action silent.
+[Reference catalog extractor](https://github.com/leafall903/ORPHEUS/blob/d1676cecd1162983987a48024d7c787544fd3593/tools/extract_player_voice.cs)
+
+The supported cue path reads `m_identifier` and `m_targets` from
+`STUStatescriptActionCriteria`. When the target is the acting body, its
+living allies and the speaker can receive the cue from the existing room
+queue. The catalog contains identifiers only and stays private. The
+prepared wheel path still requires target tracking. Original-client playback
+remains pending. [Synthetic selection and audience contract](../fixtures/behavior/player-voice-v1.json)
+
 ## Build the private evidence reports
 
 Use the graph index, RID, state slot, and raw class as the verified
