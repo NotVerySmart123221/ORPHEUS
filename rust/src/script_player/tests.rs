@@ -3165,6 +3165,75 @@ fn posed_single_projectiles_use_the_supported_aim_configurations() {
 }
 
 #[test]
+fn impact_spawn_uses_declared_resources_on_a_relocated_volley() {
+    use crate::{
+        game_combat::{BIOTIC_CANISTER, BIOTIC_FIELD_ENTITY},
+        game_projectiles::ImpactSpawn,
+    };
+    use serde_json::json;
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/projectile-impact-spawn-v1.json"
+    ))
+    .unwrap();
+    let (_, spawn) = fixture_body_factory();
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        spawn.pose.position,
+        0,
+        0x18,
+    )
+    .unwrap();
+    let fire = Command {
+        frame: spawn.frame + 1,
+        buttons: crate::commands::SECONDARY,
+        ..Command::default()
+    };
+    for case in fixture["cases"].as_array().unwrap() {
+        let mut fields = fixture_projectile_fields(40.0);
+        fields["m_projectileEntity"]["m_entityDef"]["m_entityDef"] =
+            json!(format!("0x{BIOTIC_CANISTER:016X}"));
+        fields["m_49CBA3BC"] = json!({
+            "$": case["class"],
+            "m_entityDefinition": {"$":"STU_8556841E", "m_entityDef":format!("0x{BIOTIC_FIELD_ENTITY:016X}")},
+        });
+        if let Some(graph) = case["on_spawn_graph"].as_str() {
+            fields["m_49CBA3BC"]["m_410BF8BD"] = json!({"$":"STU_105E1BCC","m_graph":graph});
+        }
+        let mut factory = fixture_volley_factory(29, true, fields);
+        factory.hero = CASSIDY;
+        let node = factory.graphs.graph(42).unwrap().state(1).unwrap();
+        let parsed = ImpactSpawn::from_volley(node, |value| {
+            crate::script_expr::evaluate(value, &mut crate::script_expr::EmptyContext)
+        });
+        match case["on_spawn_graph"].as_str() {
+            Some(graph) => assert_eq!(
+                parsed.unwrap().unwrap().on_spawn_graph,
+                crate::accounts::parse_guid(graph)
+            ),
+            None if case["field"] == true => assert_eq!(
+                parsed.unwrap(),
+                Some(ImpactSpawn {
+                    definition: BIOTIC_FIELD_ENTITY,
+                    on_spawn_graph: None
+                })
+            ),
+            None => assert!(parsed.is_err()),
+        }
+        let mut runtime = factory.start(spawn).unwrap();
+        runtime.advance(fire, &mover, BodyStep::Posed).unwrap();
+        let shots = runtime.take_shots(Some(fire), &mover);
+        assert_eq!(
+            matches!(shots.as_slice(), [PosedShot::BioticField(_)]),
+            case["field"] == true,
+            "{}",
+            case["name"],
+        );
+    }
+}
+
+#[test]
 fn unsupported_projectile_modes_do_not_become_hitscan_or_straight_damage() {
     use serde_json::json;
 

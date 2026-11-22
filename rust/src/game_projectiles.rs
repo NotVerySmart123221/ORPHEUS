@@ -35,6 +35,49 @@ const RELEASE_AHEAD: u32 = 4096;
 const DELIVERY_GRACE: u32 = 64;
 const MAX_PROJECTILES: usize = 256;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ImpactSpawn {
+    pub definition: u64,
+    pub on_spawn_graph: Option<u64>,
+}
+
+impl ImpactSpawn {
+    /// Read the entity resource and optional script on the landed actor.
+    pub(crate) fn from_volley(
+        node: &Node,
+        mut evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
+    ) -> Result<Option<Self>, EvalError> {
+        let Some(config) = node.field("m_49CBA3BC").filter(|value| !value.is_null()) else {
+            return Ok(None);
+        };
+        if config["$"] != "STU_78BF9026" {
+            return Err(EvalError::UnsupportedConfig(
+                "projectile impact spawn class".into(),
+            ));
+        }
+        let resource = |value, kind, name| match value {
+            Value::Asset(asset) if asset >> 48 == kind && asset & 0x0000_ffff_ffff_ffff != 0 => {
+                Ok(asset)
+            }
+            _ => Err(EvalError::MalformedConfig(name)),
+        };
+        let definition = resource(
+            evaluate(&config["m_entityDefinition"])?,
+            0x0400,
+            "projectile impact entity",
+        )?;
+        let on_spawn_graph = config
+            .get("m_410BF8BD")
+            .filter(|value| !value.is_null())
+            .map(|graph| resource(evaluate(graph)?, 0x0580, "projectile impact script"))
+            .transpose()?;
+        Ok(Some(Self {
+            definition,
+            on_spawn_graph,
+        }))
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ProjectileLeases {
     blocks: Vec<LeaseBlock>,

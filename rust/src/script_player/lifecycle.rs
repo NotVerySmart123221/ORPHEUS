@@ -9,14 +9,16 @@ use super::{
 use crate::{
     commands::Command,
     game_combat::{
-        BIOTIC_CANISTER, PosedBioticField, PosedHitscan, PosedProjectile, PosedShot, Stun,
-        eye_height, script_eye_position,
+        BIOTIC_CANISTER, BIOTIC_FIELD_ENTITY, PosedBioticField, PosedHitscan, PosedProjectile,
+        PosedShot, Stun, eye_height, script_eye_position,
     },
     game_content::is_junkenstein_mode,
-    game_heroes::{CASSIDY, SOLDIER},
+    game_heroes::CASSIDY,
     game_hitscan::{HitDefinition, aim_direction},
     game_instance::TeamMemberCounts,
-    game_projectiles::{ProjectileLeases, authored_number, local_prediction, predicted_sync},
+    game_projectiles::{
+        ImpactSpawn, ProjectileLeases, authored_number, local_prediction, predicted_sync,
+    },
     game_replication::{BodyStep, OwnerBodyRuntime, OwnerRoomActivity},
     junkenstein_messages::{DefenderMessage, DefenderSighting, SIGHTING},
     mover::Mover,
@@ -356,13 +358,11 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                     self.component
                         .evaluate_shot_config(&shot, config, &mut self.world)
                 };
-                if shot.graph == 0x0257
-                    && node.pos == 4
-                    && hero == SOLDIER
-                    && node
-                        .field("m_49CBA3BC.m_entityDefinition")
-                        .and_then(|config| evaluate(config).ok())
-                        == Some(Value::Asset(0x0400_0000_0000_03dc))
+                if ImpactSpawn::from_volley(node, &mut evaluate).ok().flatten()
+                    == Some(ImpactSpawn {
+                        definition: BIOTIC_FIELD_ENTITY,
+                        on_spawn_graph: None,
+                    })
                     && node
                         .field("m_projectileEntity.m_entityDef")
                         .and_then(|config| evaluate(config).ok())

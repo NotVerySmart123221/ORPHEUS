@@ -15,9 +15,9 @@ use crate::{
     game_bots::BOT_RECORD_DELAY,
     game_clock::{MAX_LEASE_FRAME, SEND_EVERY, TICK_PERIOD},
     game_combat::{
-        AdmittedFlight, BIOTIC_CANISTER, BioticField, BotReplacement, CombatError, FlightOutcome,
-        HealingPulse, PlayerBodyState, PosedBioticField, PosedHitscan, PosedProjectile, PosedShot,
-        RoomSimulation,
+        AdmittedFlight, BIOTIC_CANISTER, BIOTIC_FIELD_ENTITY, BioticField, BotReplacement,
+        CombatError, FlightOutcome, HealingPulse, PlayerBodyState, PosedBioticField, PosedHitscan,
+        PosedProjectile, PosedShot, RoomSimulation,
     },
     game_controller::ControllerFrame,
     game_egress::{DeliveryReport, FrameRecords, GameEgress, RecordSource, SendError, SentFrame},
@@ -58,7 +58,6 @@ const MAX_PENDING_INPUT: usize = 256;
 const MAX_SCRIPT_TAIL: u32 = 256;
 const FIRST_BIOTIC_VIEW: u32 = 0xa008_0000;
 const END_BIOTIC_VIEW: u32 = 0xa00c_0000;
-const BIOTIC_FIELD_ENTITY: u64 = 0x0400_0000_0000_03dc;
 const KEEP_MOVEMENT_ROTATION: u32 = 0x0100_0000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

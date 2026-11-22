@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Read typed impact-spawn resources from the authored volley, including its optional attached actor graph. Select the existing Biotic Field path from the authored canister and field definitions without depending on a particular hero or volley location. The Inspector workspace passed 934 public tests. Prepared tests verified the stock field cast, encrypted canister and field delivery, and both projectile self-launch regressions. A general landed actor host remains open.
+
 - Preserve map contact normals for both player and NPC projectile blasts. At a glancing impact, cast visibility rays from the incident side so a nearby wall blocks both splash damage and knockback. Preserve the actual impact point for damage falloff and flight retirement. The Inspector workspace passed 933 public tests and four prepared combat probes.
 
 - Evaluate the authored mode-0 creator-body selector through the StateScript host relationship lookup. Preserve explicit unbound entities and report unavailable or unsupported relationships. The Inspector workspace passed 932 public tests. A local prepared selector probe passed with and without a creator binding. Deployable actor admission, room-backed lookup, and the startup relation mode remain open.

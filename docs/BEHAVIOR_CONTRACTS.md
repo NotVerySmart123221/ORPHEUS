@@ -60,6 +60,8 @@ The Rust-only [creator body fixture](../fixtures/behavior/statescript-creator-bo
 
 The [glancing wall fixture](../fixtures/behavior/projectile-glancing-wall-v1.json) sweeps a projectile against both sides of a synthetic triangle. The real map query supplies the surface normal for blast visibility. The exposed target receives damage and impulse, and the wall blocks both for the far target. The collision point still determines range and falloff. [Pinned blast visibility reference](https://github.com/leafall903/ORPHEUS/blob/a9096f5d5d5ef0d5fe5b48660d9737d26a2029f5/src/ow174/game/combat.py#L9212-L9220).
 
+The Rust-only [impact-spawn fixture](../fixtures/behavior/projectile-impact-spawn-v1.json) reads the landed entity definition and optional graph from the volley. It moves the existing canister and field configuration to another graph and a different player body. The legacy projection handles its declared resources. A separately attached actor graph remains outside that projection. [Pinned impact-spawn reference](https://github.com/leafall903/ORPHEUS/blob/a9096f5d5d5ef0d5fe5b48660d9737d26a2029f5/src/ow174/game/steel_trap.py#L49-L57).
+
 The Rust-only [unposed owner volley fixture](../fixtures/behavior/owner-unposed-volley-v1.json) checks that a due round with no pose is skipped at its authored time and a later posed round in the same volley still fires and spends ammunition.
 
 The Rust-only [staged nameplate fixture](../fixtures/behavior/npc-nameplate-staged-admission-v1.json) checks admission after the mode and bot body acknowledgments, exactly retried introduction, and lifetime protection for a bot that died before admission.

@@ -105,6 +105,13 @@ selector returns the supplied creator body and reports unavailable when its
 host has no relationship. The actor's startup takes a separate mode-1
 relation, whose semantics remain open.
 
+The owner volley now decodes the impact-spawn entity and optional attached
+graph from the authored configuration. The existing Biotic Field path is
+selected by its canister and deployed entity definitions, including under
+a relocated graph on a different synthetic body. Its existing presentation
+and timing still use the legacy field host. The room does not yet start an
+arbitrary attached actor graph from a projectile.
+
 The follow-up timing capture accumulated 8,819 missed ticks. Misses
 began well before the first recorded shot and continued during intervals
 with an unchanged ray sample. It also ran with synchronous owner traces

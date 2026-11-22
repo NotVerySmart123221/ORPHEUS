@@ -130,6 +130,7 @@ pub(crate) enum PosedShot {
 }
 
 pub(crate) const BIOTIC_CANISTER: u64 = 0x0400_0000_0000_072d;
+pub(crate) const BIOTIC_FIELD_ENTITY: u64 = 0x0400_0000_0000_03dc;
 const FIELD_DELAY: u32 = 12;
 const FIELD_TICKS: u32 = 313; // ceil(5 seconds / 16 ms).
 const FIELD_FADE_TICKS: u32 = 282; // ceil(4.5 seconds / 16 ms).
