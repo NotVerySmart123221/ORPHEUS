@@ -2201,6 +2201,7 @@ pub(super) fn flight_fixture(owner: BodyId, speed: f64) -> AdmittedFlight {
             lifetime: 0.04,
             max_distance: None,
             terrain_rebound: None,
+            terrain_radius: 0.0,
             radius: 0.0,
             definition: Some(definition),
             direct: None,
@@ -2269,6 +2270,7 @@ fn projectile_stun_applies_only_to_surviving_hits_and_expires_exclusively() {
                 lifetime: 1.0,
                 max_distance: None,
                 terrain_rebound: None,
+                terrain_radius: 0.0,
                 radius: 0.0,
                 definition: None,
                 direct: Some(HitDefinition {

@@ -278,6 +278,7 @@ mod tests {
                     lifetime: 0.5,
                     max_distance: None,
                     terrain_rebound: None,
+                    terrain_radius: 0.0,
                     radius: 0.0,
                     definition: None,
                     direct: Some(hit),
@@ -289,7 +290,7 @@ mod tests {
             )
             .unwrap();
             let impact = flight
-                .advance_combat(1, &[(1, target)], None, |_, _, _| Ok(None))
+                .advance_combat(1, &[(1, target)], None, |_, _, _, _| Ok(None))
                 .unwrap()
                 .map(|end| end.impacts[0]);
             assert_eq!(impact.is_some(), critical.is_some(), "{}", case["name"]);

@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Sweep the projectile's authored terrain radius through the shared static contact world for player and NPC volleys. Keep direct actor contact and splash visibility on their own queries. A synthetic regression verifies the earlier contact and that the wall still blocks splash. The Inspector workspace passed 936 public tests. Four prepared 104319 regressions passed for Helix delivery, both self-launch cases, and quick melee. The radius sweep requires prepared contact geometry for the radius sweep. Original-client visuals remain unverified.
+
 - Evaluate static terrain rebound from the authored volley switch, count, normal restitution, and tangential coefficients. Player and NPC shots use the same sweep and preserve the remainder of the tick, distance budget, and closer actor contact. The Inspector workspace passed 935 public tests. Four prepared 104319 regressions passed for Helix impact and release, two projectile self-launch cases, and quick melee. Original-client rebound and impact visuals remain unverified.
 
 - Read typed impact-spawn resources from the authored volley, including its optional attached actor graph. Select the existing Biotic Field path from the authored canister and field definitions without depending on a particular hero or volley location. The Inspector workspace passed 934 public tests. Prepared tests verified the stock field cast, encrypted canister and field delivery, and both projectile self-launch regressions. A general landed actor host remains open.

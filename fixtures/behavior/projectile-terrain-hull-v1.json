@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "case_id": "projectile-terrain-hull-v1",
+  "input": {
+    "wall": [[1.0, -3.0, -3.0], [1.0, -3.0, 3.0], [1.0, 4.0, 3.0], [1.0, 4.0, -3.0]],
+    "origin": [0.0, 1.0, 0.25],
+    "direction": [1.0, 0.0, 0.0],
+    "speed": 50.0,
+    "terrain_radius": 0.25,
+    "splash_radius": 2.5,
+    "splash_damage": 40.0
+  },
+  "expected": {
+    "contact_centre_x": [0.72, 0.77],
+    "exposed_target": 1,
+    "occluded_target": 2
+  }
+}

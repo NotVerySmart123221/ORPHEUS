@@ -1,6 +1,11 @@
 //! Read-only map collision and navigation queries shared with bot simulation.
 
 use super::*;
+use crate::{
+    collision_index::IndexError,
+    contact_gjk::sweep::MeshProbe,
+    static_ray::{SurfaceHit, Vec3, along},
+};
 
 /// Map queries used by bot simulation without borrowing its entity storage.
 pub(crate) struct BotQueries<'a> {
@@ -165,6 +170,48 @@ impl<'a> BotQueries<'a> {
     ) -> Result<Option<crate::collision_index::RayHit>, crate::collision_index::IndexError> {
         self.ground
             .cast_ray(origin, direction, reach, MOVER_CATEGORY)
+    }
+
+    /// Sweep the authored terrain hull using the same scene as movement contacts.
+    /// A zero-radius call is also used for point visibility from a blast.
+    pub(crate) fn projectile_wall(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        reach: f64,
+        radius: f32,
+    ) -> Result<Option<SurfaceHit>, IndexError> {
+        if reach <= 0.0 {
+            return Ok(None);
+        }
+        if let Some(world) = self.contacts.filter(|_| radius > 0.0) {
+            let start = origin.map(|axis| axis as f32);
+            let end = along(origin, direction, reach).map(|axis| axis as f32);
+            if !start.into_iter().chain(end).all(f32::is_finite) {
+                return Err(IndexError::InvalidSweep);
+            }
+            return world
+                .scene_sweep(MeshProbe {
+                    points: &[[0.0; 3]],
+                    radius,
+                    start,
+                    end,
+                    category: MOVER_CATEGORY,
+                })
+                .map(|hit| {
+                    hit.map(|result| SurfaceHit {
+                        distance: reach * f64::from(result.hit.fraction),
+                        normal: result.hit.normal.map(f64::from),
+                    })
+                })
+                .map_err(|_| IndexError::InvalidSweep);
+        }
+        self.combat_wall(origin, direction, reach).map(|hit| {
+            hit.map(|hit| SurfaceHit {
+                distance: hit.distance,
+                normal: hit.normal,
+            })
+        })
     }
 
     pub(crate) fn summoner_beam_contacts(
