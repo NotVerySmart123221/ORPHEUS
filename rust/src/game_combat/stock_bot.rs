@@ -29,7 +29,7 @@ use crate::{
         MAX_INIT_WORK, MovementSample, OWNER_HEALTH, RoomCue, RoomMessage, Root, Site,
         TargetTagEffect, TargetTagEffects, World,
     },
-    script_runtime::{FRAME_MS, held_button_mask},
+    script_runtime::held_button_mask,
     script_snapshot_wire::{SceneProjection, SnapshotEncoder, View},
     script_wire::{Value, Variables},
     vitals::{Death, PoolKind, Vitals},

@@ -335,8 +335,13 @@ impl RoomSimulation {
                 impulse,
             } => {
                 if damage > 0.0 {
-                    let settled =
-                        self.apply_health(request.wire, HealthEffect::Damage(damage), death, now, None)?;
+                    let settled = self.apply_health(
+                        request.wire,
+                        HealthEffect::Damage(damage),
+                        death,
+                        now,
+                        None,
+                    )?;
                     if let Some(outcome) = settled.filter(|outcome| outcome.delta < 0.0) {
                         self.record_contact_feedback(
                             source,

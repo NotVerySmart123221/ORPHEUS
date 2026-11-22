@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Integrate the Practice Range combat changes and keep shared health settlement responsible for contact, NPC attribution, and settled impact metadata. Keep projectile distance falloff and critical scaling in the same calculation. Prepared 104319 probes cover NPC firing and projectile damage with the firing-graph runtime pack. Original-client animation and audio acceptance remain pending.
+
 - Allow locally configured hurt and death voice cues to select the victim's body definition. Older damage frames no longer bypass or rewind the victim's hurt voice cooldown. Verified with the synthetic hurt and death delivery regression and the inspector-feature voice test group. Original-client playback remains unverified for this change.
 
 - Preserve the optional combat voice catalog and its manifest hash when preparing a runtime pack. This keeps locally configured announcer, hurt, and death cues available after repacking.

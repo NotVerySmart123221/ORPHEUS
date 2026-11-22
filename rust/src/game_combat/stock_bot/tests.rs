@@ -1,7 +1,10 @@
 use serde_json::json;
 
 use super::*;
-use crate::{game_bots::BotCatalog, game_combat::RoomSimulation, script_snapshot_wire::View};
+use crate::{
+    game_bots::BotCatalog, game_combat::RoomSimulation, script_runtime::FRAME_MS,
+    script_snapshot_wire::View,
+};
 
 #[test]
 fn stock_bot_criteria_uses_shared_cue_delivery_to_living_allies() {

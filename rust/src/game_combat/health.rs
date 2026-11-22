@@ -52,7 +52,9 @@ impl RoomSimulation {
         now: Duration,
         impact: Option<&Impact>,
     ) -> Result<bool, CombatError> {
-        Ok(self.apply_health(wire, effect, source, now, impact)?.is_some())
+        Ok(self
+            .apply_health(wire, effect, source, now, impact)?
+            .is_some())
     }
 
     /// A known target can settle with no health change.
