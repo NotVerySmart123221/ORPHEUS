@@ -488,6 +488,64 @@ fn shared_total_health_contract() {
 }
 
 #[test]
+fn creator_body_selector_uses_the_typed_host_relation() {
+    struct Host {
+        target: Value,
+        creator: Option<u32>,
+        requests: Vec<u32>,
+    }
+    impl Context for Host {
+        fn variable(&mut self, variable: Variable) -> Value {
+            assert_eq!(
+                variable,
+                Variable {
+                    scope: Scope::Instance,
+                    id: 1
+                }
+            );
+            self.target.clone()
+        }
+
+        fn related_entity(&mut self, relation: EntityRelation, entity: u32) -> Option<u32> {
+            assert_eq!(relation, EntityRelation::CreatorBody);
+            self.requests.push(entity);
+            self.creator
+        }
+    }
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../../../fixtures/behavior/statescript-creator-body-v1.json"
+    ))
+    .unwrap();
+    for case in fixture["cases"].as_array().unwrap() {
+        let target = case["entity"].as_u64().map_or_else(
+            || Value::Integer(case["operand"].as_i64().unwrap()),
+            |entity| Value::Entity(entity as u32),
+        );
+        let mut host = Host {
+            target,
+            creator: case["creator"].as_u64().map(|entity| entity as u32),
+            requests: Vec::new(),
+        };
+        let mut config = json!({
+            "$": "STU_2B2E2F6D",
+            "m_EE729DCB": 0,
+            "m_81A364DE": {"$": "STUConfigVarDynamic", "m_identifier": 1},
+        });
+        if let Some(selector) = case.get("selector") {
+            config["m_7BDB02D1"] = selector.clone();
+        }
+        let expected = case["result"].as_u64().map_or_else(
+            || Err(EvalError::UnsupportedConfig("STU_2B2E2F6D".into())),
+            |entity| Ok(Value::Entity(entity as u32)),
+        );
+        assert_eq!(evaluate(&config, &mut host), expected, "{}", case["name"]);
+        let expected_requests: Vec<u32> = serde_json::from_value(case["requests"].clone()).unwrap();
+        assert_eq!(host.requests, expected_requests, "{}", case["name"]);
+    }
+}
+
+#[test]
 fn velocity_selector_is_bounded_and_preserves_explicit_legacy_hosts() {
     struct Legacy;
     impl Context for Legacy {

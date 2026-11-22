@@ -25,6 +25,7 @@ Target build: **Overwatch 1 retail 1.74.0.0.104319**.
 
 ### 1. Practice Range & Stock Soldier: 76
 - [ ] Verify stock weapon attachment, ammo HUD, Sprint, Helix Rockets, and Biotic Field in live client `104319`.
+- [ ] Verify projectile impact and retirement, ground-shot self-launch, and quick-melee knockback in the original client. The prepared server baseline is recorded in [STATE.md](STATE.md#practice-range-playtest-follow-up).
 - [ ] Confirm several consecutive training bot kills and respawns keep the client in the room. Compare head, torso and lateral shots against the standing combat calibration.
 - [ ] Verify upstairs patrol route geometry matches contact solver bounds and hitscan wall queries (use `--features inspector` to diagnose).
 - [ ] Resolve bot overhead health bars (#7), kill feed localized names (#8), headshot SFX (#9), and Practice Range boundary death (#13).

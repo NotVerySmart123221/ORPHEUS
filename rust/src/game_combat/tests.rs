@@ -1528,6 +1528,7 @@ pub(super) fn fixture_impact(entity: u32, damage: f64) -> Impact {
         damage,
         critical: false,
         loadout: None,
+        impulse: None,
     }
 }
 
@@ -2198,6 +2199,9 @@ pub(super) fn flight_fixture(owner: BodyId, speed: f64) -> AdmittedFlight {
         ProjectileBallistics {
             speed,
             lifetime: 0.04,
+            max_distance: None,
+            terrain_rebound: None,
+            terrain_radius: 0.0,
             radius: 0.0,
             definition: Some(definition),
             direct: None,
@@ -2264,6 +2268,9 @@ fn projectile_stun_applies_only_to_surviving_hits_and_expires_exclusively() {
             ProjectileBallistics {
                 speed: 100.0,
                 lifetime: 1.0,
+                max_distance: None,
+                terrain_rebound: None,
+                terrain_radius: 0.0,
                 radius: 0.0,
                 definition: None,
                 direct: Some(HitDefinition {
@@ -2371,7 +2378,7 @@ fn projectile_flights_keep_peer_generation_and_report_terminal_outcomes() {
     assert!(hits.is_empty());
     assert!(matches!(
         outcomes.as_slice(),
-        [FlightOutcome::Ended { token: observed, travelled }]
+        [FlightOutcome::Ended { token: observed, travelled, impact: false }]
             if *observed == token && (*travelled - 0.04).abs() < 1e-12
     ));
     assert!(

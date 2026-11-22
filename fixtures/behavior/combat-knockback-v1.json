@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "case_id": "combat-knockback-v1",
+  "input": {
+    "base_horizontal": 4.0,
+    "base_upward": 7.0,
+    "rings": [
+      {"radius": 2.5, "horizontal": 0.25, "upward": 0.5},
+      {"radius": 0.5, "horizontal": 1.0, "upward": 1.0}
+    ]
+  },
+  "expected": {
+    "near": [0.0, 7.0, -4.0],
+    "middle": [0.0, 5.25, -2.5]
+  }
+}

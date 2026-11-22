@@ -21,7 +21,9 @@ use crate::{
     game_bots::{BOT_ENTITY, BOT_RECORD_DELAY, BOT_RESPAWN_TIME, Bot},
     game_combat_messages::CombatNotice,
     game_heroes::SOLDIER,
-    game_hitscan::{HitDefinition, HitscanShot, Impact, TargetHistory, TargetPose, ViewFrame},
+    game_hitscan::{
+        HitDefinition, HitscanShot, HurtPose, Impact, TargetHistory, TargetPose, ViewFrame,
+    },
     game_projectiles::ProjectileToken,
     game_replication::BodyId,
     junkenstein_messages::DefenderMessage,
@@ -128,6 +130,7 @@ pub(crate) enum PosedShot {
 }
 
 pub(crate) const BIOTIC_CANISTER: u64 = 0x0400_0000_0000_072d;
+pub(crate) const BIOTIC_FIELD_ENTITY: u64 = 0x0400_0000_0000_03dc;
 const FIELD_DELAY: u32 = 12;
 const FIELD_TICKS: u32 = 313; // ceil(5 seconds / 16 ms).
 const FIELD_FADE_TICKS: u32 = 282; // ceil(4.5 seconds / 16 ms).
@@ -218,7 +221,6 @@ impl Stun {
 pub(crate) struct PosedProjectile {
     pub stun: Option<Stun>,
     pub gravity: Option<f32>,
-    pub expiry_blast: bool,
     pub shot: ShotEvent,
     pub ballistics: ProjectileBallistics,
     pub origin: [f64; 3],
@@ -299,6 +301,7 @@ pub(crate) enum FlightOutcome {
     Ended {
         token: ProjectileToken,
         travelled: f64,
+        impact: bool,
     },
     Failed(ProjectileToken),
 }
@@ -341,6 +344,10 @@ impl RoomSpatialFrame {
         self.actor_sample(entity)?.1.eye_position
     }
 
+    pub(crate) fn actor_filter_flags(&self, entity: u32) -> Option<u64> {
+        self.actor_sample(entity)?.1.filter_flags
+    }
+
     /// Opaque room-local identity from the same frozen actor admission as queries.
     pub(crate) fn actor_identity(&self, entity: u32) -> Option<u64> {
         Some(self.actor_sample(entity)?.1.entity.to_bits())
@@ -358,6 +365,57 @@ impl RoomSpatialFrame {
 
     pub(crate) fn line_clear(&self, origin: Vec3, target: Vec3) -> Option<bool> {
         self.ground.segment_clear(origin, target, MOVER_CATEGORY)
+    }
+
+    pub(crate) fn hostile_contact_targets(
+        &self,
+        source: u32,
+        centre: Vec3,
+        origin: Vec3,
+        radius: f64,
+        category: u16,
+    ) -> Option<Vec<crate::script_init::ContactTarget>> {
+        let source = self.actor_sample(source)?.0;
+        let capsules = self.actor_capsules.as_ref()?;
+        if !centre.into_iter().chain(origin).all(f64::is_finite)
+            || !radius.is_finite()
+            || radius <= 0.0
+        {
+            return None;
+        }
+        let mut targets = Vec::new();
+        for candidate in &self.candidates {
+            if candidate.entity == source.entity
+                || source.team.is_some_and(|team| candidate.team == Some(team))
+                || !self.script_targets.get(&candidate.entity)?.health
+            {
+                continue;
+            }
+            let pose = *capsules.get(&candidate.entity)?;
+            let surface = HurtPose::from(pose).nearest_surface(centre, origin)?;
+            if surface.distance > radius {
+                continue;
+            }
+            if !surface
+                .visible(|direction, reach| {
+                    self.ground
+                        .checked_cast_ray(origin, direction, reach, category)
+                        .map(|hit| hit.map(|hit| hit.distance))
+                        .ok_or(())
+                })
+                .ok()?
+            {
+                continue;
+            }
+            if targets.len() == script_requests::MAX_BODY_SCRIPT_REQUESTS {
+                return None;
+            }
+            targets.push(crate::script_init::ContactTarget {
+                entity: candidate.entity,
+                feet: pose.feet,
+            });
+        }
+        Some(targets)
     }
 
     pub(crate) fn ray_cast(
@@ -1081,6 +1139,7 @@ impl RoomSimulation {
                         candidate_index: candidates.len(),
                         angles: [pose.yaw, pose.pitch],
                         eye_position: None,
+                        filter_flags: state.native_filter_flags(),
                         health: true,
                         messages: state.enemy.as_ref().is_some_and(|enemy| {
                             enemy.fault.is_none() && !enemy.scripts.retirement_requested
@@ -1132,6 +1191,7 @@ impl RoomSimulation {
                         candidate_index: candidates.len(),
                         angles: [pose.yaw, pose.pitch],
                         eye_position: state.script_eye_position(),
+                        filter_flags: state.native_filter_flags(),
                         health: state.vitals().is_some(),
                         messages: state.runtime.is_some(),
                         cue_listener: true,
@@ -1982,6 +2042,18 @@ impl RoomSimulation {
                 queries,
                 &mut candidates,
             );
+            // The shooter can receive splash but never blocks its own flight.
+            let shooter = if self
+                .world
+                .get::<AdmittedFlight>(entity)
+                .is_some_and(|active| active.flight.affects_shooter())
+            {
+                self.player_body(owner)
+                    .filter(|state| state.alive())
+                    .map(|state| (owner.entity, state.target_pose().into()))
+            } else {
+                None
+            };
             let (token, stun, hit_effect, result) = {
                 let mut active = self
                     .world
@@ -1990,7 +2062,10 @@ impl RoomSimulation {
                 let result = active.flight.advance_combat(
                     context.tick,
                     &candidates,
-                    |origin, direction, reach| queries.hitscan_wall(origin, direction, reach),
+                    shooter,
+                    |origin, direction, reach, radius| {
+                        queries.projectile_wall(origin, direction, reach, radius)
+                    },
                 );
                 (active.token, active.stun, active.hit_effect, result)
             };
@@ -2029,6 +2104,12 @@ impl RoomSimulation {
                             impact.damage,
                             impact.distance
                         ));
+                        if let Some(delta) = impact.impulse {
+                            self.queue_combat_impulse(impact.entity, context.tick, delta)?;
+                        }
+                        if impact.damage == 0.0 {
+                            continue;
+                        }
                         if self.players_by_wire.contains_key(&impact.entity) {
                             if let Some(hit) = self.apply_player_impact(
                                 owner.entity,
@@ -2078,6 +2159,7 @@ impl RoomSimulation {
                     outcomes.push(FlightOutcome::Ended {
                         token,
                         travelled: end.travelled,
+                        impact: end.impact,
                     });
                 }
                 // A query exceeding the bounded ray budget cancels only this
@@ -2663,7 +2745,7 @@ impl RoomSimulation {
             roster.as_deref().map_or(&[], Vec::as_slice),
             tick,
             &mut enemy_damage,
-        );
+        )?;
         self.enemy_projectiles.extend(
             launched
                 .into_iter()
@@ -2790,11 +2872,30 @@ impl RoomSimulation {
         roster: &[crate::script_enemy::EnemyTarget],
         tick: u32,
         damage: &mut Vec<crate::script_enemy::EnemyDamage>,
-    ) {
+    ) -> Result<(), CombatError> {
         use crate::script_enemy::{EnemyDamage, EnemyProjectile};
 
         let mut children = Vec::new();
+        let mut impulses = Vec::new();
         for handle in std::mem::take(&mut self.enemy_projectiles) {
+            let seed = self
+                .world
+                .get::<EnemyProjectile>(handle)
+                .expect("live enemy projectile");
+            let shooter_pose = if seed.flight.affects_shooter() {
+                self.by_wire
+                    .get(&seed.source)
+                    .and_then(|&body| self.world.get::<BotState>(body))
+                    .filter(|state| !state.bot.dead && state.vitals.death().is_none())
+                    .map(|state| {
+                        (
+                            seed.source,
+                            queries.hurt_pose(state.bot.spawn.body, queries.target(&state.bot)),
+                        )
+                    })
+            } else {
+                None
+            };
             let mut projectile = self
                 .world
                 .get_mut::<EnemyProjectile>(handle)
@@ -2804,11 +2905,14 @@ impl RoomSimulation {
                 .filter(|target| target.alive && target.team != projectile.team)
                 .map(|target| (target.entity, target.pose))
                 .collect();
-            match projectile
-                .flight
-                .advance(tick, &targets, |origin, direction, reach| {
-                    queries.hitscan_wall(origin, direction, reach)
-                }) {
+            match projectile.flight.advance_combat(
+                tick,
+                &targets,
+                shooter_pose,
+                |origin, direction, reach, radius| {
+                    queries.projectile_wall(origin, direction, reach, radius)
+                },
+            ) {
                 Ok(None) => {
                     self.enemy_projectiles.push(handle);
                     continue;
@@ -2827,13 +2931,20 @@ impl RoomSimulation {
                         .get(&source)
                         .and_then(|&body| self.world.get::<BotState>(body))
                         .and_then(|state| state.enemy.as_ref());
-                    damage.extend(end.impacts.into_iter().map(|impact| EnemyDamage {
-                        source,
-                        target: impact.entity,
-                        amount: shooter.map_or(impact.damage, |enemy| {
-                            enemy.scripts.outgoing_damage(impact.damage, &tags)
-                        }),
-                    }));
+                    for impact in end.impacts {
+                        if let Some(delta) = impact.impulse {
+                            impulses.push((impact.entity, delta));
+                        }
+                        if impact.damage > 0.0 {
+                            damage.push(EnemyDamage {
+                                source,
+                                target: impact.entity,
+                                amount: shooter.map_or(impact.damage, |enemy| {
+                                    enemy.scripts.outgoing_damage(impact.damage, &tags)
+                                }),
+                            });
+                        }
+                    }
                 }
                 Err(_) => {}
             }
@@ -2844,6 +2955,10 @@ impl RoomSimulation {
                 .into_iter()
                 .map(|projectile| self.world.spawn(projectile).id()),
         );
+        for (target, delta) in impulses {
+            self.queue_combat_impulse(target, tick, delta)?;
+        }
+        Ok(())
     }
 
     fn respawn_due(

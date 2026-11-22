@@ -21,6 +21,22 @@ pub struct Site {
     pub node: Option<u16>,
 }
 
+/// One authored hostile body overlap, resolved at the current posed input.
+#[derive(Clone, Copy, Debug)]
+pub struct ContactVolume {
+    pub source_frame: u32,
+    pub offset: [f64; 3],
+    pub sight_origin: [f64; 3],
+    pub radius: f64,
+    pub profile: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ContactTarget {
+    pub entity: u32,
+    pub feet: [f64; 3],
+}
+
 /// Authoritative movement facts captured from a single owner pose.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MovementSample {
@@ -563,6 +579,23 @@ pub trait World {
     }
     /// Admit every signed change together or leave the host queue unchanged.
     fn queue_health_changes(&mut self, _site: Site, _changes: &[(u32, f64)]) -> bool {
+        false
+    }
+
+    fn contact_volume_targets(
+        &self,
+        _site: Site,
+        _volume: ContactVolume,
+    ) -> Option<Vec<ContactTarget>> {
+        None
+    }
+
+    fn queue_contact_damage(
+        &mut self,
+        _site: Site,
+        _damage: f64,
+        _changes: &[(u32, Option<[f64; 3]>)],
+    ) -> bool {
         false
     }
     /// Admit movement for the bound body at the supplied future simulation frame.

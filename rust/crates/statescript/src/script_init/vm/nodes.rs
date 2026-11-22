@@ -1562,13 +1562,18 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 };
                 self.client_pulse(id, count)
             }
-            // 0043:11 and 0257:11 use unimplemented client/world target tracking
+            "STUStatescriptStateTrackTargets"
+                if registration.shape(node.contact_volume_bindings().is_some()) =>
+            {
+                StateKind::EmptyTargets
+            }
+            // Other presentation-only trackers retain their empty wire state
             // in the Python reference (`world.tracked_targets` returns
             // NotImplemented / empty targets).
             "STUStatescriptStateTrackTargets"
                 if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
-                    (0x0043, 11) | (0x0257, 11) | (0x00ca, 90)
+                    (0x0257, 11) | (0x00ca, 90)
                 )) =>
             {
                 StateKind::EmptyTargets
@@ -1586,7 +1591,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::ExplosionContact
             }
             "STUStatescriptStateModifyHealth"
-                if registration.permits((self.graph(id).index, node.pos) == (0x0043, 10)) =>
+                if registration.shape(self.contact_damage_tracker(key, node).is_some()) =>
             {
                 StateKind::Plain
             }
@@ -1680,14 +1685,20 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             "STUStatescriptStateCosmeticEntity" => StateKind::CosmeticEntity,
             "STUStatescriptStateChaseVar" => StateKind::ChaseVar,
             "STU_77E13026"
-                if registration.permits((self.graph(id).index, node.pos) == (0x0043, 60)) =>
-            {
-                StateKind::Plain
-            }
-            "STU_77E13026"
                 if registration.permits((self.graph(id).index, node.pos) == (0x180a, 42)) =>
             {
                 StateKind::PhaseScriptList
+            }
+            "STU_77E13026"
+                if registration.shape(
+                    node.remote >= 0
+                        && ["m_814F8EC3", "m_3DC6FAAA"].into_iter().all(|name| {
+                            script_expr::lvalue(field(&node.fields, name))
+                                .is_ok_and(|variable| variable.is_some())
+                        }),
+                ) =>
+            {
+                StateKind::Plain
             }
             "STU_CB4905E9"
                 if registration.permits((self.graph(id).index, node.pos) == (0x180a, 41)) =>
@@ -1794,6 +1805,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             StateKind::Plain if node.class == "STU_066B4605" => {
                 // The absent AI relation finishes through the current clock's event queue.
                 self.post(id, Event::Finish(key.raw))?;
+            }
+            StateKind::Plain if node.class == "STUStatescriptStateModifyHealth" => {
+                self.begin_contact_damage(key, node)?;
             }
             StateKind::Plain if node.class == "STU_160F2578" => {
                 if !self.begin_static_target(key, node)? {

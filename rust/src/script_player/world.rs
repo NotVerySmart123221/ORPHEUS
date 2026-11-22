@@ -436,6 +436,48 @@ impl World for BodyWorld {
             .is_some_and(|frame| self.script_requests.queue_health_changes(frame, changes))
     }
 
+    fn contact_volume_targets(
+        &self,
+        site: Site,
+        volume: crate::script_init::ContactVolume,
+    ) -> Option<Vec<crate::script_init::ContactTarget>> {
+        if !self.is_player_site(site)
+            || self.vitals.death().is_some()
+            || self.movement.frame != Some(volume.source_frame)
+        {
+            return None;
+        }
+        let category = self.graphs.static_ray_category(volume.profile)?;
+        let yaw = self.movement.yaw;
+        let right = direction_for_angles(yaw + 16384, 0);
+        let forward = direction_for_angles(yaw, self.movement.pitch);
+        let [x, y, z] = volume.offset;
+        let vertical = [0.0, y, 0.0];
+        let centre = std::array::from_fn(|axis| {
+            self.movement.position[axis] + x * right[axis] + vertical[axis] + z * forward[axis]
+        });
+        self.spatial_frame.as_deref()?.hostile_contact_targets(
+            site.entity,
+            centre,
+            volume.sight_origin,
+            volume.radius,
+            category,
+        )
+    }
+
+    fn queue_contact_damage(
+        &mut self,
+        site: Site,
+        damage: f64,
+        changes: &[(u32, Option<Vec3>)],
+    ) -> bool {
+        self.is_player_site(site)
+            && self.spatial_frame.as_deref().is_some_and(|frame| {
+                self.script_requests
+                    .queue_contact_damage(frame, damage, changes)
+            })
+    }
+
     fn room_body_generation(&self, wire: u32) -> Option<u64> {
         self.spatial_frame.as_deref()?.body_generation(wire)
     }
@@ -782,8 +824,9 @@ impl World for BodyWorld {
             Some(self.own_filter_flags())
         } else {
             self.sighting_source
-                .filter(|source| source.entity == entity)?
-                .filter_flags
+                .filter(|source| source.entity == entity)
+                .and_then(|source| source.filter_flags)
+                .or_else(|| self.spatial_frame.as_deref()?.actor_filter_flags(entity))
         }
     }
 

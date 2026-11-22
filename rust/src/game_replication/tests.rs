@@ -2345,6 +2345,9 @@ fn admitted_owner_projectile_preserves_gravity_and_expiry_blast() {
             ballistics: ProjectileBallistics {
                 speed: 30.0,
                 lifetime: 7.0 / 30.0,
+                max_distance: None,
+                terrain_rebound: None,
+                terrain_radius: 0.0,
                 radius: 0.0,
                 definition: Some(DEFINITION),
                 direct: None,
@@ -2357,12 +2360,15 @@ fn admitted_owner_projectile_preserves_gravity_and_expiry_blast() {
                         falloff: None,
                     },
                     rings: vec![(3.0, 1.0)],
+                    self_damage_scale: 0.0,
+                    self_knockback_scale: 0.0,
+                    knockback: None,
+                    detonate_on_expiry: true,
                 }),
             },
             origin: [0.0, 1.55, 0.0],
             direction: lifted_direction([0.0, 0.0, 1.0], 0.05).unwrap(),
             gravity: Some(20.0),
-            expiry_blast: true,
         },
         launches,
     );
@@ -2426,7 +2432,6 @@ fn room_flight_outcomes_release_only_the_current_owner_alias() {
             PosedProjectile {
                 stun: None,
                 gravity: None,
-                expiry_blast: false,
                 shot: ShotEvent {
                     entity: id.entity,
                     instance: 1,
@@ -2441,6 +2446,9 @@ fn room_flight_outcomes_release_only_the_current_owner_alias() {
                 ballistics: ProjectileBallistics {
                     speed: 1.0,
                     lifetime: 2.0,
+                    max_distance: None,
+                    terrain_rebound: None,
+                    terrain_radius: 0.0,
                     radius: 0.0,
                     definition: Some(DEFINITION),
                     direct: None,
@@ -2485,6 +2493,7 @@ fn room_flight_outcomes_release_only_the_current_owner_alias() {
             FlightOutcome::Ended {
                 token,
                 travelled: 34.25 * TICK_PERIOD.as_secs_f64(),
+                impact: true,
             }
         } else {
             FlightOutcome::Failed(token)
@@ -3252,7 +3261,6 @@ fn fixture_projectile_flight(
     let posed = PosedProjectile {
         stun: None,
         gravity: None,
-        expiry_blast: false,
         shot: ShotEvent {
             entity: owner.entity,
             instance: 1,
@@ -3267,6 +3275,9 @@ fn fixture_projectile_flight(
         ballistics: ProjectileBallistics {
             speed,
             lifetime: 1.0,
+            max_distance: None,
+            terrain_rebound: None,
+            terrain_radius: 0.0,
             radius: 0.0,
             definition: Some(definition),
             direct: damage.map(|amount| HitDefinition {

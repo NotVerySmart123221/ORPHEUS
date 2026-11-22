@@ -16,13 +16,17 @@ use serde::Deserialize;
 use crate::accounts::parse_guid;
 use crate::ai_script::{AiActorSnapshot, AiPatrolSnapshot};
 use crate::collision_scene::CollisionScene;
+use crate::commands::Command;
 use crate::contact_body::CharacterBody;
 use crate::contact_cache::CapsulePose;
 use crate::contact_math::{add, sub};
 use crate::contact_world::ContactWorld;
 use crate::game_clock::TICK_PERIOD;
 use crate::game_debug::ContactClip;
+use crate::mover::VelocityChange;
 use crate::mover_ground::{pogo, standing_body, standing_capsule, standing_origin};
+use crate::mover_kinematics::{Ground, MotionInput, VelocityStep};
+use crate::mover_posture::IN_AIR;
 use crate::mover_settings::MoverSettings;
 use crate::navigation::{PathOptions, PathQuery, find_path};
 use crate::patrol_script::{PatrolScript, WaitEvent};
@@ -412,6 +416,7 @@ pub struct Bot {
     patrol_failed: bool,
     stunned_until: u32,
     velocity_changes: Vec<(u32, crate::mover::VelocityChange)>,
+    combat_motion_tick: Option<u32>,
 }
 
 impl Bot {
@@ -487,6 +492,7 @@ impl Bot {
             patrol_failed: false,
             stunned_until: 0,
             velocity_changes: Vec::new(),
+            combat_motion_tick: None,
             spawn,
         }
     }
@@ -1064,9 +1070,101 @@ impl Bot {
         self.velocity_changes.extend(changes);
     }
 
-    /// Cancel pending script edits without changing already resolved motion.
+    /// Cancel pending movement edits when this body dies.
     pub(crate) fn clear_velocity_changes(&mut self) {
         self.velocity_changes.clear();
+        self.combat_motion_tick = None;
+    }
+
+    pub(crate) fn clear_script_velocity_changes(&mut self) {
+        self.velocity_changes
+            .retain(|(_, change)| matches!(change, VelocityChange::Impulse(_)));
+    }
+
+    pub(crate) fn has_combat_motion(&self) -> bool {
+        self.combat_motion_tick.is_some()
+            || self
+                .velocity_changes
+                .iter()
+                .any(|(_, change)| matches!(change, VelocityChange::Impulse(_)))
+    }
+
+    pub(crate) fn has_collision(&self) -> bool {
+        self.collision.is_some()
+    }
+
+    /// Consume combat impulses before AI steering, including for stationary actors.
+    pub(crate) fn step_combat_motion(
+        &mut self,
+        tick: u32,
+        settings: &MoverSettings,
+        ground: &mut impl FnMut(f64, f64, f64, f64) -> Option<f64>,
+    ) -> bool {
+        if self.dead || !self.has_combat_motion() {
+            return false;
+        }
+        if self.combat_motion_tick == Some(tick) {
+            return true;
+        }
+        let mut velocity = self.velocity;
+        let mut active = self.combat_motion_tick.is_some() && velocity != [0.0; 3];
+        self.velocity_changes.retain(|&(due, change)| {
+            if due <= tick && matches!(change, VelocityChange::Impulse(_)) {
+                let before = velocity;
+                change.apply(&mut velocity);
+                active |= before != velocity;
+                false
+            } else {
+                true
+            }
+        });
+        self.combat_motion_tick = None;
+        if !active {
+            return false;
+        }
+        let blockers = self.movement_blocker_snapshot(tick);
+        let Some(collision) = self.collision.as_mut() else {
+            return false;
+        };
+        let dt = TICK_PERIOD.as_secs_f64();
+        let from = self.position;
+        let [x, y, z] = from;
+        let grounded = velocity[1] <= 0.0 && ground(x, z, y + ARRIVED, y - ARRIVED).is_some();
+        let previous_flags = self.movement_flags;
+        if grounded {
+            velocity[1] = 0.0;
+            self.movement_flags &= !IN_AIR;
+        } else {
+            self.movement_flags |= IN_AIR;
+        }
+        let velocity = VelocityStep {
+            base: settings,
+            settings,
+            input: MotionInput::from(&Command::default()),
+            ground: if grounded {
+                Ground::Standing
+            } else {
+                Ground::Airborne
+            },
+            crouched: false,
+            dt,
+        }
+        .advance(velocity);
+        if !velocity.into_iter().all(|axis| (axis as f32).is_finite()) {
+            self.velocity = [0.0; 3];
+            return false;
+        }
+        let to = std::array::from_fn(|axis| from[axis] + velocity[axis] * dt);
+        let after = collision.advance(tick, from, to, dt, blockers.as_deref().unwrap_or(&[]));
+        self.position = after;
+        self.velocity = std::array::from_fn(|axis| (after[axis] - from[axis]) / dt);
+        self.held = [0; 2];
+        self.combat_motion_tick = Some(tick);
+        self.last_tick = Some(tick);
+        if after != from || self.movement_flags != previous_flags {
+            self.moved_tick = Some(tick);
+        }
+        true
     }
 
     /// Freeze the room's actor-contact admission for this update tick.
@@ -1161,6 +1259,9 @@ impl Bot {
     }
 
     pub(crate) fn move_to_objective(&mut self, tick: u32, target: [f64; 3], speed: f64) {
+        if self.combat_motion_tick == Some(tick) {
+            return;
+        }
         let start = self.position;
         let [x, y, z] = std::array::from_fn(|axis| target[axis] - start[axis]);
         let distance = x.hypot(y).hypot(z);
@@ -1213,6 +1314,9 @@ impl Bot {
     }
 
     pub(crate) fn stop_objective(&mut self, tick: u32) {
+        if self.combat_motion_tick == Some(tick) {
+            return;
+        }
         self.velocity_changes.retain(|&(frame, _)| frame > tick);
         if self.held != [0; 2] || self.velocity != [0.0; 3] {
             self.held = [0; 2];
@@ -2153,4 +2257,29 @@ mod tests {
             "b149457ffd1e86f976def1ffb6d53c7a955582cced2fbcc03fd424c1a0a893e9"
         );
     }
+}
+#[test]
+fn idle_bot_combat_impulse_uses_capsule_and_ticks_once() {
+    let mut bot = tests::walker([0.0, 0.0, 10.0]);
+    Arc::get_mut(&mut bot.spawn).unwrap().route.clear();
+    assert!(!bot.patrol_active());
+    let settings = MoverSettings::default();
+    let mut floor = |_, _, top, bottom| (bottom <= 0.0 && 0.0 <= top).then_some(0.0);
+    bot.attach_collision(
+        &settings,
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        0x08,
+        floor,
+    );
+    let start = bot.position;
+    bot.queue_velocity_changes(vec![(12, VelocityChange::Impulse([3.0, 7.0, 0.0]))]);
+    assert!(!bot.step_combat_motion(11, &settings, &mut floor));
+    assert!(bot.step_combat_motion(12, &settings, &mut floor));
+    let first = bot.position;
+    assert!(first[0] > start[0] && first[1] > start[1]);
+    assert!(bot.step_combat_motion(12, &settings, &mut floor));
+    assert_eq!(bot.position, first);
+    assert!(bot.step_combat_motion(13, &settings, &mut floor));
+    assert!(bot.position[1] > first[1]);
+    assert!(bot.velocity_changes.is_empty());
 }

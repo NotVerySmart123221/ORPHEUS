@@ -943,6 +943,12 @@ without declaring body rules.
 
 See the [synthetic mode ruleset contract](../fixtures/behavior/script-mode-rulesets-v1.json).
 
+## Contact combat profiles
+
+A linked hostile contact volume uses its authored collision profile to select the static ray category. A local graph bundle can provide the mapping in its top-level `static_ray_profiles` table. Each key is the canonical profile GUID and each value is a nonzero unsigned 16-bit category. For example, `"static_ray_profiles": {"0x06900000000000AA": 24}` uses invented test data. Supply the composed graph bundle with `prepare_server_runtime --game-graphs`.
+
+The server samples the living room bodies at the damage state's first posed activation. It matches the two authored variable bindings and the tracker-to-state link before settling damage and knockback. A missing profile leaves the contact unavailable. Static walls and body affiliation are supported by this path. Authored dynamic barrier filters, client rendering, and original-client movement require separate evidence.
+
 ## Receive a settled health event
 
 A graph can subscribe to room-authoritative health changes with an

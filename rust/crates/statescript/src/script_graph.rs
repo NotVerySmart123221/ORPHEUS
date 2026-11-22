@@ -392,6 +392,48 @@ impl Node {
         field_at(&self.fields, path)
     }
 
+    /// The one-shot hostile overlap with an owner-relative centre and static sight.
+    pub(crate) fn contact_volume_bindings(
+        &self,
+    ) -> Option<(
+        crate::script_expr::Variable,
+        crate::script_expr::Variable,
+        u64,
+    )> {
+        let fields = &self.fields;
+        let filter = &fields["m_filter"];
+        let sight = &fields["m_3D667CE3"];
+        let cast = &sight["m_C1903771"];
+        let profile = cast.get("m_C1903771").and_then(asset_guid)?;
+        if self.class != "STUStatescriptStateTrackTargets"
+            || fields["m_DD792FF0"].as_u64().unwrap_or(0) != 0
+            || fields["m_95FFC3C5"].as_u64() != Some(1)
+            || fields["m_radius"].is_null()
+            || fields["m_05BE62DD"].is_null()
+            || !native_shape(&fields["m_8DCA77B6"], "STU_B5A0CAF0", None)
+            || !native_shape(&fields["m_D59188D5"], "STU_21A13145", Some("m_entity"))
+            || filter["$"] != "STUConfigVarFilter"
+            || filter["m_84065FD1"].as_u64() != Some(64)
+            || filter["m_4EA686DB"].as_u64() != Some(20)
+            || filter["m_89831602"].as_u64() != Some(1)
+            || sight["$"] != "STUConfigVarFilter"
+            || cast["$"] != "STU_20DB8AB5"
+            || profile >> 48 != 0x0690
+            || !filter.as_object()?.iter().all(|(key, value)| {
+                matches!(
+                    key.as_str(),
+                    "$" | "m_84065FD1" | "m_4EA686DB" | "m_89831602"
+                ) || value.is_null()
+                    || value.as_u64() == Some(0)
+            })
+        {
+            return None;
+        }
+        let target = crate::script_expr::lvalue(&fields["m_8A2905A0"]).ok()??;
+        let paired = crate::script_expr::lvalue(&fields["m_24A4AB8A"]).ok()??;
+        (target != paired).then_some((target, paired, profile))
+    }
+
     pub(crate) fn subscript_graph_asset(&self) -> Option<u64> {
         self.field("m_36F7B64C.m_36F7B64C.m_C974E369.m_graph")
             .and_then(asset_guid)
@@ -1680,6 +1722,8 @@ struct Bundle {
     #[serde(default)]
     mode_rulesets: ModeRulesets,
     #[serde(default)]
+    static_ray_profiles: BTreeMap<String, u16>,
+    #[serde(default)]
     junkenstein: EnemyCatalog,
     missing: Vec<u32>,
 }
@@ -1786,6 +1830,7 @@ pub struct GraphStore {
     mode_variables: BTreeMap<u64, BTreeMap<u32, ModeValue>>,
     mode_scripts: BTreeMap<u64, ModeScripts>,
     mode_rulesets: ModeRulesets,
+    static_ray_profiles: BTreeMap<u64, u16>,
     enemies: EnemyCatalog,
     missing: Vec<u32>,
 }
@@ -1976,12 +2021,28 @@ impl GraphStore {
             bundle.runtime_state_metadata.directed_numeric_messages,
             &mut graphs,
         )?;
+        let static_ray_profiles = keyed_by_guid(bundle.static_ray_profiles)?;
+        if static_ray_profiles
+            .iter()
+            .any(|(guid, category)| guid >> 48 != 0x0690 || *category == 0)
+        {
+            return Err(invalid(
+                "static ray profile requires a collision profile GUID and a nonzero category",
+            ));
+        }
         let room_spatial_requirements = graphs
             .values()
             .flat_map(|graph| &graph.nodes)
             .filter(|node| node.runs_on_server())
             .map(|node| {
                 let mut requirements = room_spatial_requirements(&node.fields);
+                if node
+                    .contact_volume_bindings()
+                    .is_some_and(|(_, _, profile)| static_ray_profiles.contains_key(&profile))
+                {
+                    requirements.needs = requirements.needs.max(RoomSpatialNeeds::Queries);
+                    requirements.actor_rays = true;
+                }
                 if node.declares_health_change_action()
                     || node.declares_room_message_action()
                     || node.declares_room_cue_action()
@@ -2019,6 +2080,7 @@ impl GraphStore {
                 .collect::<io::Result<_>>()?,
             mode_scripts: keyed_by_guid(bundle.mode_scripts)?,
             mode_rulesets: bundle.mode_rulesets,
+            static_ray_profiles,
             enemies: bundle.junkenstein.validate()?,
             missing: bundle.missing,
         })
@@ -2027,6 +2089,10 @@ impl GraphStore {
     /// Whether any server graph uses the room's living body snapshot.
     pub fn uses_room_spatial_frame(&self) -> bool {
         self.room_spatial_needs != RoomSpatialNeeds::None
+    }
+
+    pub fn static_ray_category(&self, profile: u64) -> Option<u16> {
+        self.static_ray_profiles.get(&profile).copied()
     }
 
     /// The most detailed room data requested by any server graph.

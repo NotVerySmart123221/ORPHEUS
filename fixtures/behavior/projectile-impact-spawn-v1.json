@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "case_id": "projectile-impact-spawn-v1",
+  "cases": [
+    {"name": "known field presentation", "class": "STU_78BF9026", "on_spawn_graph": null, "field": true},
+    {"name": "additional actor script", "class": "STU_78BF9026", "on_spawn_graph": "0x0580000000001234", "field": false},
+    {"name": "unrecognized spawn class", "class": "SyntheticOther", "on_spawn_graph": null, "field": false}
+  ]
+}

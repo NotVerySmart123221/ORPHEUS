@@ -6,6 +6,7 @@ mod actor_scope_identity;
 mod ai_and_spawning;
 mod arrays_and_boss;
 mod authored_classes;
+mod contact_combat;
 mod destination_and_victory;
 mod directed_charge;
 mod elapsed_wait;

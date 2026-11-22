@@ -247,6 +247,7 @@ pub struct Impact {
     pub damage: f64,
     pub critical: bool,
     pub loadout: Option<u64>,
+    pub impulse: Option<Vec3>,
 }
 
 impl HitscanShot {
@@ -317,6 +318,7 @@ impl HitscanShot {
             damage: self.hit.damage_at(distance, head),
             critical: head && self.hit.critical > 1.0,
             loadout: self.hit.loadout,
+            impulse: None,
         }))
     }
 }
@@ -452,7 +454,8 @@ mod tests {
                 distance: 9.5,
                 damage: 20.0,
                 critical: false,
-                loadout: RIFLE.loadout
+                loadout: RIFLE.loadout,
+                impulse: None,
             }
         );
         assert_eq!(resolve(&coincident), Some(hit));

@@ -34,6 +34,7 @@ pub enum EntityRelation {
     PossessedBody,
     AiControlEntity,
     ControllerBodyField,
+    CreatorBody,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -771,6 +772,22 @@ pub(crate) fn asset_scalar(value: &Value) -> u64 {
         Some(Value::Asset(guid)) => *guid,
         _ => 0,
     }
+}
+
+pub fn authored_number(
+    config: Option<&Json>,
+    default: f64,
+    evaluate: &mut impl FnMut(&Json) -> Result<Value, EvalError>,
+) -> Result<f64, EvalError> {
+    let Some(config) = config.filter(|value| !value.is_null()) else {
+        return Ok(default);
+    };
+    let value = evaluate(config)?;
+    Ok(if value == Value::Null {
+        default
+    } else {
+        to_float(&value)
+    })
 }
 
 pub fn to_float(value: &Value) -> f64 {
