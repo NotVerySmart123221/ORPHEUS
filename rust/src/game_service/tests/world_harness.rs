@@ -6,13 +6,23 @@ pub enum PreparedFixture {
     StockOwner,
     StockNameplate,
     StockProjectile,
+    StockSelfProjectile(GroundShot),
     StockBiotic,
     Owner,
     Combat,
     Projectile,
 }
 
+#[derive(Clone, Copy)]
+pub struct GroundShot {
+    pub hero: u64,
+    pub definition: u32,
+    pub expected_damage: f32,
+}
+
 pub fn exercise_prepared_world(fixture: PreparedFixture) {
+    use std::collections::HashMap;
+
     use crate::{
         accounts::Accounts,
         catalog::ItemDb,
@@ -36,7 +46,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
     let schemas = Arc::new(Schemas::load(data.join("game_schemas_174.json")).unwrap());
     let lobby = Schemas::load(data.join("schemas_174.json")).unwrap();
     let assets = SceneAssets::load(runtime).unwrap();
-    let scripted_bots = assets.graphs().entity_body(0x0400_0000_0000_143e).is_some();
+    let mut scripted_bots = false;
     let mode_variables: crate::script_wire::Variables = assets
         .graphs()
         .mode_variables(PRACTICE_RANGE_MODE)
@@ -94,6 +104,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
         (&assets, &collection),
         |map| {
             let mut scene = assets.prepare(map)?;
+            scripted_bots = scene.scripted_bots() != 0;
             if matches!(
                 fixture,
                 PreparedFixture::StockOwner | PreparedFixture::StockNameplate
@@ -117,7 +128,6 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
                 fixture,
                 PreparedFixture::Projectile | PreparedFixture::StockProjectile
             ) {
-                assert!(!scripted_bots);
                 let [x, y, z] = scene.map().spawn_point(0, 0).unwrap().0;
                 let (bots, _) = scene.bot_simulation();
                 assert_eq!(
@@ -144,6 +154,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
                     | PreparedFixture::StockOwner
                     | PreparedFixture::StockNameplate
                     | PreparedFixture::StockProjectile
+                    | PreparedFixture::StockSelfProjectile(_)
                     | PreparedFixture::StockBiotic
             ) {
                 assert!(!scripted_bots);
@@ -196,7 +207,10 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
     if scripted_bots
         && !matches!(
             fixture,
-            PreparedFixture::Stock | PreparedFixture::StockNameplate
+            PreparedFixture::Stock
+                | PreparedFixture::StockNameplate
+                | PreparedFixture::StockProjectile
+                | PreparedFixture::StockSelfProjectile(_)
         )
     {
         assert_eq!(result.err().unwrap().kind(), io::ErrorKind::Unsupported);
@@ -271,13 +285,19 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
         client.send(ACK, Vec::new());
         assert!(Instant::now() < deadline, "waiting for first world creates");
     };
+    let expected_bot_controllers: Vec<u32> = (1..=15)
+        .map(|slot| crate::game_bots::BOT_CONTROLLER_BASE | (slot << 8))
+        .collect();
     let mut creates = HashSet::new();
     let mut acknowledged_creates = HashSet::<u32>::new();
+    let mut bot_possessions = HashMap::new();
     let mut retried_all_creates = false;
     let mut mode = false;
     let mut mode_ack_sent = false;
     let mut controller = false;
     let mut moving_bot = false;
+    let mut npc_full_parents = HashMap::new();
+    let mut acknowledged_npc_baselines = HashSet::new();
     let mut target_nameplate = !matches!(fixture, PreparedFixture::StockNameplate);
     loop {
         let frame = client.receive();
@@ -286,6 +306,20 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
             if record.is_create() {
                 assert!(!retried_all_creates);
                 assert!(creates.insert(record.entity));
+            }
+            if let Some(body) = record.possessed_body {
+                if record.entity != CONTROLLER {
+                    assert!(
+                        acknowledged_creates.contains(&record.entity),
+                        "possession arrived before bot controller create ACK for {:08x}",
+                        record.entity
+                    );
+                    assert!(
+                        acknowledged_creates.contains(&body),
+                        "possession arrived before bot body create ACK for {body:08x}",
+                    );
+                    bot_possessions.insert(record.entity, body);
+                }
             }
             if record.movement {
                 assert!((BOT_ENTITY..BOT_ENTITY + 15).contains(&record.entity));
@@ -316,15 +350,40 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
                     assert!(
                         scripted_bots && (BOT_ENTITY..BOT_ENTITY + 15).contains(&record.entity)
                     );
-                    if observer_introduces_graph(&script, 0x0d24) {
+                    let descriptions = observer_descriptors(&script);
+                    if script.first == 0 {
+                        assert!(
+                            !descriptions.iter().any(|entry| entry.graph == 0x0d24),
+                            "nameplate was included in the parent baseline"
+                        );
+                        npc_full_parents.insert(
+                            record.entity,
+                            descriptions
+                                .into_iter()
+                                .map(|entry| (entry.id, entry.graph))
+                                .collect::<HashMap<_, _>>(),
+                        );
+                    } else if let Some(nameplate) =
+                        descriptions.iter().find(|entry| entry.graph == 0x0d24)
+                    {
                         assert!(mode_ack_sent, "nameplate arrived before mode frame ACK");
+                        assert!(
+                            acknowledged_npc_baselines.contains(&record.entity),
+                            "nameplate arrived before the body script full-frame ACK"
+                        );
+                        let (parent, state) = nameplate.parent.expect("body-owned nameplate");
+                        assert_eq!(npc_full_parents[&record.entity].get(&parent), Some(&0x0c18));
+                        assert_eq!(state, 3);
                         target_nameplate |= record.entity == target;
                     }
                 }
             }
         }
-        if !retried_all_creates && lost.iter().all(|id| creates.contains(id)) {
-            assert_eq!(creates.len(), 21);
+        if !retried_all_creates && creates.len() == 36 && lost.iter().all(|id| creates.contains(id))
+        {
+            for &id in &expected_bot_controllers {
+                assert!(creates.contains(&id), "missing bot controller {id:08x}");
+            }
             retried_all_creates = true;
             // Receive one more datagram before acknowledging these creates.
             // It may carry scripts only for entities acknowledged earlier.
@@ -332,8 +391,18 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
         }
         client.send(ACK, Vec::new());
         acknowledged_creates.extend(&creates);
+        acknowledged_npc_baselines.extend(npc_full_parents.keys().copied());
         mode_ack_sent = mode;
-        if retried_all_creates && mode && controller && moving_bot && target_nameplate {
+        if retried_all_creates
+            && mode
+            && controller
+            && moving_bot
+            && target_nameplate
+            && bot_possessions.len() == 15
+        {
+            let possessed_bodies: HashSet<_> = bot_possessions.values().copied().collect();
+            let expected_bodies: HashSet<_> = (BOT_ENTITY..BOT_ENTITY + 15).collect();
+            assert_eq!(possessed_bodies, expected_bodies);
             break;
         }
         assert!(
@@ -367,6 +436,11 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
             let frame = exercise_owner_vm(&mut client, &schemas, false);
             let launch = wait_for_stock_weapon(&mut client, &schemas, frame + 1);
             exercise_projectile(&mut client, &schemas, Some(launch));
+        }
+        PreparedFixture::StockSelfProjectile(shot) => {
+            let frame = pick_stock_actor(&mut client, &schemas, shot.hero);
+            let launch = wait_for_stock_weapon(&mut client, &schemas, frame);
+            exercise_stock_self_splash(&mut client, &schemas, &server, launch, shot);
         }
         PreparedFixture::StockBiotic => {
             assert!(!scripted_bots);
@@ -420,25 +494,36 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
     server.stop().unwrap();
 }
 
-fn observer_introduces_graph(script: &ReceivedChunk, wanted: u32) -> bool {
+struct ObserverDescriptor {
+    id: u32,
+    graph: u32,
+    parent: Option<(u32, u32)>,
+}
+
+fn observer_descriptors(script: &ReceivedChunk) -> Vec<ObserverDescriptor> {
     let mut reader = script.bits();
     assert_eq!(reader.bits(2).unwrap(), 0, "observer frame header");
-    while reader.w_u16().unwrap() != 0 {
+    let mut descriptions = Vec::new();
+    let mut id = 0;
+    loop {
+        let offset = reader.w_u16().unwrap();
+        if offset == 0 {
+            break;
+        }
+        id += u32::from(offset);
         if script.first != 0 && (reader.bit().unwrap() || !reader.bit().unwrap()) {
             continue;
         }
         let graph = reader.bits(16).unwrap() as u32;
         assert_eq!(reader.bits(2).unwrap(), 0);
-        if reader.bit().unwrap() {
-            reader.w_var().unwrap();
-            reader.w_var().unwrap();
-        }
+        let parent = reader
+            .bit()
+            .unwrap()
+            .then(|| (reader.w_var().unwrap(), reader.w_var().unwrap()));
         assert!(!reader.bit().unwrap(), "unexpected descriptor references");
-        if graph == wanted {
-            return true;
-        }
+        descriptions.push(ObserverDescriptor { id, graph, parent });
     }
-    false
+    descriptions
 }
 
 pub fn send_game_message(
@@ -472,15 +557,13 @@ pub fn send_game_message(
 }
 
 pub fn pick_soldier_for_weapon(client: &mut Client, schemas: &Schemas) -> u32 {
-    use crate::{game_heroes::SOLDIER, game_parameters::PICK_HERO};
+    pick_stock_actor(client, schemas, crate::game_heroes::SOLDIER)
+}
+
+fn pick_stock_actor(client: &mut Client, schemas: &Schemas, hero: u64) -> u32 {
+    use crate::game_parameters::PICK_HERO;
     let body = player_entity(0) | 1;
-    send_game_message(
-        client,
-        schemas,
-        1,
-        PICK_HERO,
-        SOLDIER.to_le_bytes().to_vec(),
-    );
+    send_game_message(client, schemas, 1, PICK_HERO, hero.to_le_bytes().to_vec());
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         let packet = client.receive();
@@ -742,6 +825,111 @@ pub fn exercise_stock_biotic(client: &mut Client, schemas: &Schemas, launch: u32
             "waiting for canister and field lifecycle: {canisters:?}, {fields:?}"
         );
     }
+}
+
+fn exercise_stock_self_splash(
+    client: &mut Client,
+    schemas: &Schemas,
+    server: &GameService,
+    launch: u32,
+    shot: GroundShot,
+) {
+    use crate::{commands::SECONDARY, game_debug::ActorKind};
+    let snapshot_owner = || {
+        server
+            .debug_snapshot()
+            .unwrap()
+            .rooms
+            .into_iter()
+            .flat_map(|room| room.actors)
+            .find(|actor| matches!(actor.kind, ActorKind::Player))
+            .expect("stock owner must have a body")
+    };
+    let before = snapshot_owner();
+    let initial_health = before.health.unwrap() as f32;
+    let pitch = 16_384;
+    client.send(
+        ACK,
+        command_batch_with_pitch(launch, 1, -16_384, pitch, SECONDARY, false),
+    );
+    let mut predicted = HashSet::new();
+    let mut released = false;
+    let mut owner_health = None;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !released || owner_health.is_none() {
+        let packet = client.receive();
+        assert!(client.window.accept(packet.seq));
+        for record in world_records(schemas, &packet) {
+            if record.definition == Some(shot.definition) {
+                predicted.insert(record.entity);
+            }
+            if record.projectile_release.is_some() && predicted.contains(&record.entity) {
+                assert_eq!(record.operation, Some(3));
+                released = true;
+            }
+            if record.entity == before.entity {
+                if let Some(health) = record
+                    .total_health
+                    .filter(|health| *health < initial_health)
+                {
+                    owner_health = Some(health);
+                }
+            }
+        }
+        assert!(
+            messages(schemas, &packet)
+                .iter()
+                .all(|message| { !matches!(message.message.id, 25001 | 25005) })
+        );
+        client.send(ACK, Vec::new());
+        assert!(
+            Instant::now() < deadline,
+            "waiting for self splash and release, health={owner_health:?} release={released} predicted={predicted:?} server={:?}",
+            snapshot_owner().health,
+        );
+    }
+    let owner_health = owner_health.unwrap();
+    assert!(owner_health > 0.0);
+    assert_eq!(initial_health - owner_health, shot.expected_damage);
+    assert_eq!(
+        snapshot_owner().health.map(|value| value as f32),
+        Some(owner_health)
+    );
+    // The room registers the impulse at the first real pose after impact.
+    client.send(
+        ACK,
+        command_batch_with_pitch(launch + 1, 8, -16_384, pitch, 0, false),
+    );
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut corrected = false;
+    loop {
+        let packet = client.receive();
+        assert!(client.window.accept(packet.seq));
+        corrected |= world_records(schemas, &packet).iter().any(|record| {
+            record.entity == before.entity
+                && record.operation.is_none()
+                && record
+                    .movement_frame
+                    .is_some_and(|frame| (launch + 1..=launch + 8).contains(&frame))
+        });
+        client.send(ACK, Vec::new());
+        if corrected && input_ack(schemas, &packet) >= launch + 8 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "waiting for posed movement and owner correction after self splash"
+        );
+    }
+    let after = snapshot_owner();
+    assert_eq!(after.health.map(|value| value as f32), Some(owner_health));
+    assert!(
+        after.position[1] > before.position[1],
+        "self splash did not raise owner from {:?} to {:?}",
+        before.position,
+        after.position
+    );
+    assert!(after.velocity[1] > 0.0, "{:?}", after.velocity);
 }
 
 pub fn wait_for_stock_weapon(client: &mut Client, schemas: &Schemas, frame: u32) -> u32 {

@@ -107,12 +107,22 @@
       {"name": "team, radius and liveness use the room snapshot", "facts_available": true},
       {"name": "room facts are unavailable"},
       {"name": "direct input preserves first occurrences", "audience": [714, 702, 714]},
+      {"name": "a mode speaker preserves the selected audience", "audience": [714, 702], "mode_speaker": true},
       {"name": "empty direct input succeeds", "audience": []},
       {"name": "host rejects a well-formed command", "audience": [714], "reject": true},
       {"name": "malformed member invalidates the whole input", "audience": [714, "not-an-entity"]},
       {"name": "zero does not identify any actor", "audience": [714, 0]},
       {"name": "oversized input never stages a partial cue", "audience_count": 65}
     ],
+    "settlement_audience": {
+      "target": 702,
+      "settled_generation": 4,
+      "cases": [
+        {"name": "the settled listener is still current", "current_generation": 4, "additional_listeners": [714], "expected": [702, 714]},
+        {"name": "another listener still receives the notification", "current_generation": 5, "additional_listeners": [714], "expected": [714]},
+        {"name": "a departed listener produces an empty audience", "current_generation": null, "additional_listeners": [], "expected": []}
+      ]
+    },
     "reliable_admission": {"listener_generation": 4, "late_damage": 1000}
   },
   "expected": {
@@ -121,6 +131,7 @@
     "outputs": [
       {"attempted": [702, 714], "queued": [702, 714], "continued": true},
       {"continued": false},
+      {"attempted": [714, 702], "queued": [714, 702], "continued": true},
       {"attempted": [714, 702], "queued": [714, 702], "continued": true},
       {"continued": true},
       {"attempted": [714], "continued": false},

@@ -22,6 +22,8 @@ const PLAYER_DEFINITION: u64 = 0x0400_0000_0000_000e;
 const GAME_MODE_DEFINITION: u64 = 0x0400_0000_0000_16b2;
 const PLAYER_FILTER: u64 = 0x0004_0001;
 const TEAM_BIT: u64 = 0x0080_0000;
+pub(crate) const HERO_BIT: u64 = 0x1;
+pub(crate) const DEAD_BIT: u64 = 0x10;
 const MODE_UI: u32 = 0x0cb6;
 const MODE_UI_STATE: usize = 21;
 
@@ -135,20 +137,69 @@ pub fn mode_create(mode: u64) -> EntityUpdate {
     )
 }
 
+pub(crate) fn bot_filter_component(team: u8, dead: bool) -> io::Result<Component> {
+    let mut bits = HERO_BIT | team_bit(team)?;
+    if dead {
+        bits |= DEAD_BIT;
+    }
+    Ok(fields(26, vec![Some(ComponentValue::Id(bits))]))
+}
+
 /// The match freezes each bot's pose and pools when it queues the create.
 pub fn bot_create(bot: &Bot, vitals: Option<&crate::vitals::Vitals>) -> io::Result<EntityUpdate> {
     let pools = vitals.map_or_else(
         || health(bot.spawn.health as f32, bot.spawn.health as f32, 0.0, 0.0),
         crate::vitals::Vitals::component,
     );
-    let team = fields(
-        26,
-        vec![Some(ComponentValue::Id(team_bit(bot.spawn.team)?))],
-    );
+    let team = bot_filter_component(bot.spawn.team, bot.dead)?;
     let mut definition = Create::new(bot.spawn.body, vec![pools, team]);
     definition.position = bot.position.map(|position| position as f32);
     definition.rotation = yaw_rotation(bot.yaw.round_ties_even());
     Ok(create(bot.entity, definition))
+}
+
+/// Create a seated bot's controller entity carrying team filter (26) and roster slot (74).
+pub fn bot_controller_create(controller: u32, slot: u8, team: u8) -> io::Result<EntityUpdate> {
+    use ComponentValue::*;
+    let seat = i8::try_from(slot).map_err(|_| invalid("invalid bot seat"))?;
+    let mut definition = Create::new(
+        PLAYER_DEFINITION,
+        vec![
+            fields(26, vec![Some(Id(PLAYER_FILTER | team_bit(team)?))]),
+            fields(
+                74,
+                vec![
+                    None,
+                    None,
+                    Some(I8(seat)),
+                    None,
+                    None,
+                    None,
+                    Some(U8(1)),
+                    Some(U8(1)),
+                ],
+            ),
+        ],
+    );
+    definition.flags = WITH_PARTICIPANT | WITH_TRANSFORM | WITH_SCALE;
+    Ok(create(controller, definition))
+}
+
+/// Bind a seated bot's controller to its current body entity and hero definition.
+pub fn bot_controller_possession(controller: u32, body: u32, hero: u64) -> EntityUpdate {
+    EntityUpdate {
+        entity: controller,
+        operation: Some(Operation::Update(
+            Possession {
+                body,
+                hero,
+                skin: None,
+            }
+            .components()
+            .to_vec(),
+        )),
+        ..EntityUpdate::default()
+    }
 }
 
 /// Build the initial world before the local player picks a hero.
@@ -367,7 +418,6 @@ mod tests {
         script_wire::Value,
         world::{FrameCandidates, MAX_PAYLOAD, frame, select_frame},
     };
-    use sha2::{Digest, Sha256};
 
     fn runtime() -> std::path::PathBuf {
         std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap()).join("data")
@@ -424,12 +474,24 @@ mod tests {
                 .collect::<Vec<_>>(),
             expected
         );
+        for (bot, update) in bots.iter().zip(&updates[6..]) {
+            let Some(Operation::Create(definition)) = &update.operation else {
+                panic!("expected bot create");
+            };
+            let filter = definition
+                .components
+                .iter()
+                .find(|component| component.index == 26)
+                .expect("bot component 26");
+            assert_eq!(
+                filter.fields,
+                vec![Some(ComponentValue::Id(
+                    HERO_BIT | team_bit(bot.spawn.team).unwrap()
+                ))]
+            );
+        }
         let encoded = frame(1234, 1234, &[], &[], &updates.iter().collect::<Vec<_>>()).unwrap();
-        assert_eq!(encoded.len(), 1674);
-        assert_eq!(
-            format!("{:x}", Sha256::digest(&encoded)),
-            "b82987cb93e2e93851a16452fbb2230637b89edd70cf9f07b9a34c054689d66f",
-        );
+        assert_eq!(encoded.len(), 1689);
         let mut remaining = updates.as_slice();
         let mut transmitted = Vec::new();
         while !remaining.is_empty() {

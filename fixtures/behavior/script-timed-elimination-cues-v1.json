@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "case_id": "script-timed-elimination-cues.synthetic.v1",
+  "source": {"basis": "An original authored graph with a synthetic six-frame elimination window."},
+  "evidence": "synthetic-rust",
+  "owner": 57,
+  "ally": 58,
+  "opponents": [61, 62, 63, 64, 65, 66],
+  "window_frames": 6,
+  "cues": [{"count": 2, "line": 301}, {"count": 3, "line": 302}],
+  "events": [
+    {"name": "first opponent", "source": 57, "target": 61, "frame": 100, "killed": true, "count": 1},
+    {"name": "nonlethal", "source": 57, "target": 62, "frame": 102, "killed": false, "count": 1},
+    {"name": "same team", "source": 57, "target": 58, "frame": 102, "killed": true, "count": 1},
+    {"name": "window boundary", "source": 57, "target": 62, "frame": 106, "killed": true, "count": 2, "cue": 301},
+    {"name": "third opponent in the same settlement frame", "source": 57, "target": 63, "frame": 106, "killed": true, "count": 3, "cue": 302},
+    {"name": "undeclared threshold", "source": 57, "target": 64, "frame": 107, "killed": true, "count": 4},
+    {"name": "expired window", "source": 57, "target": 65, "frame": 114, "killed": true, "count": 1},
+    {"name": "older damage arriving late", "source": 57, "target": 66, "frame": 112, "killed": true, "count": 1},
+    {"name": "no settlement frame", "source": 57, "target": 66, "frame": null, "killed": true, "count": 1},
+    {"name": "self damage", "source": 57, "target": 57, "frame": 116, "killed": true, "count": 1},
+    {"name": "receiving a foreign kill", "source": 61, "target": 57, "frame": 119, "killed": true, "count": 1},
+    {"name": "unattributed damage", "source": null, "target": 57, "frame": 119, "killed": true, "count": 1},
+    {"name": "second opponent after reset", "source": 57, "target": 66, "frame": 120, "killed": true, "count": 2, "cue": 301}
+  ]
+}

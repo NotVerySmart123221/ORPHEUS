@@ -89,6 +89,22 @@ fn scheduled_player_respawn_keeps_choice_and_fires_once_at_the_original_deadline
         .unwrap();
     assert_eq!(world.active_body_id(), Some(dead));
     assert!(!scene.simulation().player_body(dead).unwrap().alive());
+    let command = forward(FIRST_TICK + 1);
+    world.queue_commands(command.frame, &[command]);
+    world
+        .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
+        .unwrap();
+    assert_eq!(
+        scene
+            .simulation()
+            .player_body(dead)
+            .unwrap()
+            .mover
+            .pose()
+            .throttles,
+        [0; 2]
+    );
+    assert_eq!(world.input.processed, Some(command.frame));
     world
         .advance_player_respawn(&mut scene, &viewer, FIRST_TICK + 2, RETAIL_QUANTA, due)
         .unwrap();

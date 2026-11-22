@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "case_id": "wheel-selection-ingress-v1",
+  "target_build": 104319,
+  "source": {
+    "paths": ["docs/COMMUNICATION_WHEEL.txt", "src/ow174/game/match.py"],
+    "notes": "The input and VM message layouts follow the Python reference. The actor identities, confirmation order, and generation replacement are synthetic."
+  },
+  "evidence": "synthetic-reference",
+  "client_acceptance": "pending",
+  "input": {
+    "action": "0x0A9000000000016B",
+    "foreign_asset": "0x02E000000000016B",
+    "unvalidated_marker": 2684354817,
+    "confirmed": [false, true]
+  },
+  "expected": {
+    "topic": "0x02400000000002A3",
+    "action_parameter": 2300,
+    "confirmed_parameter": 993,
+    "delivered_with_current_body": 2,
+    "delivered_to_replacement": 0
+  }
+}

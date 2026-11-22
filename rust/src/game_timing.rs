@@ -35,6 +35,14 @@ pub(crate) struct InputBudget {
     pub turns_with_backlog: u64,
 }
 
+#[derive(Clone, Default, Serialize)]
+struct WorkerTurnTiming {
+    requests_us: DurationBins,
+    receive_us: DurationBins,
+    input_us: DurationBins,
+    poll_lateness_us: DurationBins,
+}
+
 #[derive(Clone, Serialize)]
 pub(crate) struct WorkerTiming {
     pub bin_upper_exclusive_us: &'static [u64],
@@ -42,6 +50,7 @@ pub(crate) struct WorkerTiming {
     pub schedule_lateness_us: DurationBins,
     pub missed_ticks: u64,
     pub input_budget: InputBudget,
+    turn_work: WorkerTurnTiming,
 }
 
 impl WorkerTiming {
@@ -52,6 +61,7 @@ impl WorkerTiming {
             schedule_lateness_us: DurationBins::default(),
             missed_ticks: 0,
             input_budget: InputBudget::default(),
+            turn_work: WorkerTurnTiming::default(),
         }
     }
 
@@ -59,6 +69,29 @@ impl WorkerTiming {
         self.tick_duration_us.record(duration);
         self.schedule_lateness_us.record(lateness);
         self.missed_ticks = self.missed_ticks.saturating_add(missed);
+    }
+
+    pub(crate) fn record_turn_work(
+        &mut self,
+        requests: Option<Duration>,
+        receive: Option<Duration>,
+        input: Option<Duration>,
+    ) {
+        if let Some(duration) = requests {
+            self.turn_work.requests_us.record(duration);
+        }
+        if let Some(duration) = receive {
+            self.turn_work.receive_us.record(duration);
+        }
+        if let Some(duration) = input {
+            self.turn_work.input_us.record(duration);
+        }
+    }
+
+    pub(crate) fn record_poll_lateness(&mut self, duration: Duration) {
+        if !duration.is_zero() {
+            self.turn_work.poll_lateness_us.record(duration);
+        }
     }
 
     pub(crate) fn record_input(
@@ -114,6 +147,13 @@ mod tests {
         let before = timing.clone();
         timing.record_tick(Duration::from_micros(50), Duration::from_millis(16), 2);
         timing.record_tick(Duration::from_micros(500), Duration::from_millis(1), 0);
+        timing.record_turn_work(
+            Some(Duration::from_micros(25)),
+            None,
+            Some(Duration::from_millis(17)),
+        );
+        timing.record_poll_lateness(Duration::ZERO);
+        timing.record_poll_lateness(Duration::from_millis(32));
         timing.record_input(64, 4, true, true);
         timing.record_input(7, 0, false, false);
 
@@ -134,5 +174,11 @@ mod tests {
         );
         assert_eq!(timing.schedule_lateness_us.counts[14], 1);
         assert_eq!(timing.schedule_lateness_us.max_us, 16_000);
+        assert_eq!(before.turn_work.requests_us.samples, 0);
+        assert_eq!(timing.turn_work.requests_us.counts[1], 1);
+        assert_eq!(timing.turn_work.receive_us.samples, 0);
+        assert_eq!(timing.turn_work.input_us.counts[14], 1);
+        assert_eq!(timing.turn_work.poll_lateness_us.samples, 1);
+        assert_eq!(timing.turn_work.poll_lateness_us.counts[16], 1);
     }
 }

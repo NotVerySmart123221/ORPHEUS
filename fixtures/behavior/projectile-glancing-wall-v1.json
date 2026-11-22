@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "case_id": "projectile-glancing-wall-v1",
+  "wall": [[0.0, -2.0, -4.0], [0.0, 4.0, 0.0], [0.0, -2.0, 4.0]],
+  "input": {
+    "start_offset": 0.0045,
+    "incidence": 0.005,
+    "target_offset": 1.0,
+    "damage": 25.0,
+    "horizontal_impulse": 3.0,
+    "upward_impulse": 2.0
+  }
+}

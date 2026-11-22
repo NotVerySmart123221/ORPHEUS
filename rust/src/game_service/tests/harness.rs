@@ -206,10 +206,13 @@ pub struct WorldRecord {
     pub operation: Option<u8>,
     pub definition: Option<u32>,
     pub movement: bool,
+    pub movement_frame: Option<u32>,
     pub skin: Option<(u32, bool)>,
     pub script: Option<ReceivedChunk>,
     pub projectile_release: Option<u32>,
     pub base_health: Option<f32>,
+    pub total_health: Option<f32>,
+    pub possessed_body: Option<u32>,
 }
 
 #[derive(Eq, PartialEq)]
@@ -274,7 +277,7 @@ impl WorldRecord {
 
 pub fn world_records(schemas: &Schemas, packet: &Packet) -> Vec<WorldRecord> {
     let mut reader = BitReader::new(&packet.payload);
-    reader.var_a().unwrap();
+    let tick = reader.var_a().unwrap();
     read_channel(&mut reader, schemas).unwrap();
     reader.var_a().unwrap();
     assert_eq!(reader.bits(7).unwrap(), 0b010_0000);
@@ -286,10 +289,13 @@ pub fn world_records(schemas: &Schemas, packet: &Packet) -> Vec<WorldRecord> {
                 operation: None,
                 definition: None,
                 movement: false,
+                movement_frame: None,
                 skin: None,
                 script: None,
                 projectile_release: None,
                 base_health: None,
+                total_health: None,
+                possessed_body: None,
             };
             assert!(reader.bit().unwrap());
             if !reader.bit().unwrap() {
@@ -335,6 +341,29 @@ pub fn world_records(schemas: &Schemas, packet: &Packet) -> Vec<WorldRecord> {
             record.movement = reader.bit().unwrap();
             if record.movement {
                 let length = reader.bits(12).unwrap() as usize;
+                let mut movement = reader;
+                assert!(!movement.bit().unwrap()); // movement header
+                if movement.bit().unwrap() {
+                    for _ in 0..4 {
+                        if movement.bit().unwrap() {
+                            movement.advance(8).unwrap();
+                        }
+                    }
+                }
+                assert!(!movement.bit().unwrap()); // fixed-precision grid
+                let frame_back = if movement.bit().unwrap() {
+                    let width = if movement.bit().unwrap() {
+                        4
+                    } else if movement.bit().unwrap() {
+                        10
+                    } else {
+                        32
+                    };
+                    movement.bits(width).unwrap() as u32
+                } else {
+                    0
+                };
+                record.movement_frame = Some(tick.checked_sub(frame_back).unwrap());
                 reader.advance(length - 12).unwrap();
             }
             if reader.bit().unwrap() {
@@ -353,12 +382,31 @@ pub fn world_records(schemas: &Schemas, packet: &Packet) -> Vec<WorldRecord> {
                         }
                     } else if operation == 2 {
                         let mut components = reader;
-                        if components.bits(8).unwrap() == 1 && components.bits(8).unwrap() == 51 {
+                        let count = components.bits(8).unwrap();
+                        let index = components.bits(8).unwrap();
+                        if count == 1 && index == 51 {
                             components.align();
-                            if components.bits(8).unwrap() == 7 && components.bits(56).unwrap() == 1
-                            {
+                            assert_eq!(components.bits(8).unwrap(), 7);
+                            let mut fields = components.bits(56).unwrap();
+                            let mut total = 0.0;
+                            while fields != 0 {
+                                let field = fields.trailing_zeros();
+                                fields &= fields - 1;
                                 components.advance(64).unwrap(); // ID and maximum
-                                record.base_health = Some(components.f32().unwrap());
+                                let current = components.f32().unwrap();
+                                components.advance(64).unwrap(); // pool kind and padding
+                                if field == 0 {
+                                    record.base_health = Some(current);
+                                }
+                                total += current;
+                            }
+                            record.total_health = Some(total);
+                        } else if index == 44 {
+                            components.align();
+                            if components.bits(8).unwrap() == 1
+                                && (components.bits(8).unwrap() & 1) != 0
+                            {
+                                record.possessed_body = Some(components.bits(32).unwrap() as u32);
                             }
                         }
                     }
@@ -378,6 +426,17 @@ pub fn input_batch(first: u32, count: u8, yaw: i16) -> Vec<u8> {
 }
 
 pub fn command_batch(first: u32, count: u8, yaw: i16, buttons: u32, forward: bool) -> Vec<u8> {
+    command_batch_with_pitch(first, count, yaw, 0, buttons, forward)
+}
+
+pub fn command_batch_with_pitch(
+    first: u32,
+    count: u8,
+    yaw: i16,
+    pitch: i16,
+    buttons: u32,
+    forward: bool,
+) -> Vec<u8> {
     let mut input = BitWriter::new();
     input.bits(0, 24).unwrap(); // latency and key flags
     input.bits(u64::from(count), 8).unwrap();
@@ -389,7 +448,7 @@ pub fn command_batch(first: u32, count: u8, yaw: i16, buttons: u32, forward: boo
         input.bits(2, 3).unwrap();
     }
     input.signed(i64::from(yaw), 16).unwrap();
-    input.signed(0, 16).unwrap();
+    input.signed(i64::from(pitch), 16).unwrap();
     input.bits(u64::from(buttons), 24).unwrap();
     input.bits(0, 8).unwrap(); // action
     input.bits(0, 16).unwrap(); // extra

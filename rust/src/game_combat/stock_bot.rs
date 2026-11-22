@@ -11,19 +11,26 @@ use std::{
 
 use serde_json::Value as Json;
 
+use super::{
+    RoomScriptRequest, RoomScriptRequests, RoomSpatialFrame,
+    observed_projectiles::{ObservedShot, StockShotBatch},
+};
 use crate::{
+    commands::Command,
     game_bots::Bot,
+    game_projectiles::predicted_sync,
     mover::sample_movement_flags,
     script_codecs::CodecTable,
+    script_enemy::projectile_pattern,
     script_expr::{EngineSetting, EntityRelation, is_zeroed_owner_selector, native_shape},
-    script_graph::GraphStore,
+    script_graph::{GraphStore, graph_asset_index},
     script_init::{
         self, AiControlOverride, AiWeaponOverride, Component, HUD_MAX_HEALTH, InitFault, Issue,
-        MAX_INIT_WORK, MovementSample, OWNER_HEALTH, Site, TargetTagEffect, TargetTagEffects,
-        World,
+        MAX_INIT_WORK, MovementSample, OWNER_HEALTH, RoomCue, RoomMessage, Root, Site,
+        TargetTagEffect, TargetTagEffects, World,
     },
-    script_runtime::FRAME_MS,
-    script_snapshot_wire::{SceneProjection, SnapshotEncoder},
+    script_runtime::{FRAME_MS, held_button_mask},
+    script_snapshot_wire::{SceneProjection, SnapshotEncoder, View},
     script_wire::{Value, Variables},
     vitals::{Death, PoolKind, Vitals},
     world::GAME_MODE_ENTITY,
@@ -34,6 +41,7 @@ mod tests;
 
 const HUD_HEALTH: u32 = 1732;
 const DIED_MESSAGE: u64 = 0x0240_0000_0000_003e;
+const RESET_MESSAGE: u64 = 0x0240_0000_0000_0013;
 const YAW_UNITS: f64 = 65_536.0;
 
 #[derive(Clone)]
@@ -58,6 +66,9 @@ pub(super) struct StockBotWorld {
     target_tag_effects: TargetTagEffects,
     display_names: HashMap<Site, u64>,
     ai_control_overrides: BTreeMap<(u16, u16), AiControlOverride>,
+    placement_graphs: Vec<u32>,
+    spatial_frame: Option<Arc<RoomSpatialFrame>>,
+    script_requests: RoomScriptRequests,
 }
 
 impl StockBotWorld {
@@ -67,6 +78,48 @@ impl StockBotWorld {
 }
 
 impl World for StockBotWorld {
+    fn queue_room_message(&mut self, site: Site, target: u32, message: RoomMessage) -> bool {
+        site.entity == self.entity
+            && !self.dead
+            && self
+                .spatial_frame
+                .as_deref()
+                .is_some_and(|frame| self.script_requests.queue_message(frame, target, message))
+    }
+
+    fn queue_room_cue(&mut self, site: Site, targets: &[u32], cue: RoomCue) -> bool {
+        site.entity == self.entity
+            && !self.dead
+            && self.spatial_frame.as_deref().is_some_and(|frame| {
+                self.script_requests
+                    .queue_cue(frame, site.entity, targets, cue)
+            })
+    }
+
+    fn actor_voice_available(&self, site: Site) -> bool {
+        site.entity == self.entity
+            && !self.dead
+            && self
+                .spatial_frame
+                .as_deref()
+                .is_some_and(|frame| frame.actor_voice_available(site.entity))
+    }
+
+    fn queue_actor_voice(
+        &mut self,
+        site: Site,
+        criterion: u64,
+        choose: &mut dyn FnMut(usize) -> usize,
+    ) {
+        if let Some((cue, listeners)) = self
+            .spatial_frame
+            .as_deref()
+            .and_then(|frame| frame.actor_voice_request(site.entity, criterion, choose))
+        {
+            self.queue_room_cue(site, &listeners, cue);
+        }
+    }
+
     fn entity_variable(&mut self, entity: u32, id: u32) -> Option<Value> {
         if entity == GAME_MODE_ENTITY {
             return self
@@ -266,6 +319,11 @@ impl World for StockBotWorld {
             return None;
         }
         match relation {
+            EntityRelation::PossessedBody
+                if entity == self.entity && self.placement_graphs.contains(&site.graph) =>
+            {
+                Some(self.entity)
+            }
             EntityRelation::OwningController
             | EntityRelation::CurrentPossessor
             | EntityRelation::AiControlEntity
@@ -278,6 +336,10 @@ impl World for StockBotWorld {
             }
             _ => None,
         }
+    }
+
+    fn selects_ai_behavior(&mut self, site: Site) -> Option<bool> {
+        (site.entity == self.entity).then(|| self.placement_graphs.contains(&site.graph))
     }
 
     fn ai_control_override(
@@ -352,13 +414,25 @@ pub(crate) struct StockBotScript {
     graphs: Arc<GraphStore>,
     codecs: Arc<CodecTable>,
     frame: u32,
+    weapon_inputs: BTreeMap<i64, u32>,
     faulted: bool,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum BodyEntry {
+    Initial,
+    Respawn,
+}
+
 impl StockBotScript {
-    pub(super) fn start(catalog: &StockBotCatalog, bot: &Bot, tick: u32) -> Option<Self> {
+    pub(super) fn start(
+        catalog: &StockBotCatalog,
+        bot: &Bot,
+        tick: u32,
+        entry: BodyEntry,
+    ) -> Option<Self> {
         let entity_body = catalog.graphs.entity_body(bot.spawn.body)?;
-        let roots = match script_init::body_roots(entity_body) {
+        let mut roots = match script_init::body_roots(entity_body) {
             Ok(roots) => roots,
             Err(error) => {
                 eprintln!("stock bot {:08X} roots unavailable: {error}", bot.entity);
@@ -373,6 +447,35 @@ impl StockBotScript {
             (HUD_HEALTH, Value::Float(bot.spawn.health)),
             (HUD_MAX_HEALTH, Value::Float(bot.spawn.health)),
         ]);
+        let weapon_inputs = entity_body
+            .ai_weapon_buttons
+            .iter()
+            .filter_map(|(slot, button)| {
+                let slot = slot.parse::<i64>().ok()?;
+                let button = u8::try_from(button.as_u64()?).ok()?;
+                Some((slot, held_button_mask(button)?))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut placement_graphs = Vec::new();
+        if !weapon_inputs.is_empty() {
+            for index in bot
+                .spawn
+                .placement_graphs
+                .iter()
+                .copied()
+                .filter_map(graph_asset_index)
+            {
+                if !roots.iter().any(|root| root.graph == index)
+                    && catalog
+                        .graphs
+                        .graph(index)
+                        .is_some_and(|graph| graph.drives_ai_weapon_input())
+                {
+                    roots.push(Root::server_only(index));
+                    placement_graphs.push(index);
+                }
+            }
+        }
         let mut world = StockBotWorld {
             graphs: Arc::clone(&catalog.graphs),
             mode: catalog.mode,
@@ -392,6 +495,9 @@ impl StockBotScript {
             target_tag_effects: TargetTagEffects::default(),
             display_names: HashMap::new(),
             ai_control_overrides: BTreeMap::new(),
+            placement_graphs,
+            spatial_frame: None,
+            script_requests: RoomScriptRequests::default(),
         };
         let component = match Component::start_with_public_schema(
             Arc::clone(&catalog.graphs),
@@ -414,9 +520,47 @@ impl StockBotScript {
             graphs: Arc::clone(&catalog.graphs),
             codecs: Arc::clone(&catalog.codecs),
             frame: tick,
+            weapon_inputs,
             faulted: false,
         };
-        script.check_projection(Ok(()));
+        let queued = match entry {
+            // The replacement's body, including its private placement
+            // behavior, receives the authored reset before publication.
+            BodyEntry::Respawn => script.component.queue_entity_message_from(
+                bot.entity,
+                RESET_MESSAGE,
+                Variables::new(),
+            ),
+            BodyEntry::Initial => {
+                let placements = script
+                    .component
+                    .snapshot()
+                    .into_iter()
+                    .flat_map(|snapshot| {
+                        snapshot.instances.iter().filter_map(|(&id, instance)| {
+                            (instance.is_server_only()
+                                && instance.parent.is_none()
+                                && script.world.placement_graphs.contains(&instance.graph))
+                            .then_some(id)
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                placements.into_iter().try_fold(0, |total, id| {
+                    script
+                        .component
+                        .queue_message(id, RESET_MESSAGE, Variables::new())
+                        .map(|queued| total + queued)
+                })
+            }
+        };
+        let result = queued.and_then(|count| {
+            if count == 0 {
+                Ok(())
+            } else {
+                script.component.run_now(&mut script.world)
+            }
+        });
+        script.check_projection(result);
         Some(script)
     }
 
@@ -483,6 +627,29 @@ impl StockBotScript {
         self.check_projection(result);
     }
 
+    pub(super) fn set_spatial_frame(&mut self, frame: Arc<RoomSpatialFrame>) {
+        self.world.spatial_frame = Some(frame);
+    }
+
+    pub(super) fn accepts_room_messages(&self) -> bool {
+        !self.faulted && !self.world.dead
+    }
+
+    pub(super) fn receive_room_message(&mut self, sender: u32, message: RoomMessage) {
+        if self.accepts_room_messages() {
+            let _ = self.component.queue_room_message_from(sender, message);
+        }
+    }
+
+    pub(super) fn take_script_requests(&mut self) -> Vec<RoomScriptRequest> {
+        let requests = self.world.script_requests.take();
+        if self.accepts_room_messages() {
+            requests
+        } else {
+            Vec::new()
+        }
+    }
+
     pub(super) fn advance(&mut self, tick: u32, bot: &Bot) {
         self.world.position = bot.position;
         self.world.forward = forward_from_yaw(bot.yaw);
@@ -491,8 +658,84 @@ impl StockBotScript {
             return;
         }
         self.frame = tick;
-        let result = self.component.advance_frame(tick, &mut self.world);
+        let result = if !self.world.placement_graphs.is_empty() && !bot.dead {
+            let buttons = if bot.is_stunned(tick) {
+                0
+            } else {
+                self.component
+                    .ai_fire_slots()
+                    .filter_map(|slot| self.weapon_inputs.get(&slot))
+                    .fold(0, |buttons, mask| buttons | mask)
+            };
+            let command = Command {
+                frame: tick,
+                yaw: bot.yaw.round_ties_even() as i32,
+                buttons,
+                ..Command::default()
+            };
+            self.component.advance_command(command, &mut self.world)
+        } else {
+            self.component.advance_frame(tick, &mut self.world)
+        };
         self.check_projection(result);
+    }
+
+    pub(super) fn take_projectiles(&mut self, tick: u32, bot: &Bot) -> Vec<StockShotBatch> {
+        let shots = self.component.take_shots().unwrap_or_default();
+        if self.faulted || bot.dead || bot.is_stunned(tick) {
+            return Vec::new();
+        }
+        let [x, y, z] = bot.position;
+        let origin = [x, y + super::eye_height(bot.spawn.hero, false), z];
+        let forward = self.world.forward;
+        let mut projectiles = Vec::new();
+        let mut projected = None;
+        for shot in shots {
+            let Some(node) = self.component.shot_node(&shot) else {
+                continue;
+            };
+            let mut evaluate = |value: &Json| {
+                self.component
+                    .evaluate_shot_config(&shot, value, &mut self.world)
+            };
+            let Some(pattern) =
+                projectile_pattern(&node.fields, forward, &shot, node.pos, &mut evaluate)
+            else {
+                continue;
+            };
+            let presentation = pattern
+                .definition_and_lifetime()
+                .filter(|_| {
+                    node.field("m_49CBA3BC").is_none_or(|value| {
+                        value.is_null() || value.as_array().is_some_and(Vec::is_empty)
+                    }) && predicted_sync(node, &mut evaluate).unwrap_or(false)
+                })
+                .and_then(|(definition, lifetime)| {
+                    let snapshot = projected
+                        .get_or_insert_with(|| {
+                            let projection = self.projection()?;
+                            projection
+                                .encoder
+                                .project(projection.snapshot, View::Observer)
+                                .ok()
+                        })
+                        .as_ref()?;
+                    let volley = snapshot.freeze_volley(shot)?;
+                    Some(ObservedShot::new(
+                        volley, definition, origin, forward, tick, lifetime,
+                    ))
+                });
+            let flights: Vec<_> = pattern
+                .launch(bot.entity, bot.spawn.team, origin, tick)
+                .collect();
+            if !flights.is_empty() {
+                projectiles.push(StockShotBatch {
+                    flights,
+                    presentation,
+                });
+            }
+        }
+        projectiles
     }
 
     fn check_projection(&mut self, result: Result<(), InitFault>) {

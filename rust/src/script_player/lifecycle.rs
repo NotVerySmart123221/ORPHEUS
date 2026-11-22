@@ -9,19 +9,21 @@ use super::{
 use crate::{
     commands::Command,
     game_combat::{
-        BIOTIC_CANISTER, PosedBioticField, PosedHitscan, PosedProjectile, PosedShot, Stun,
-        eye_height, script_eye_position,
+        BIOTIC_CANISTER, BIOTIC_FIELD_ENTITY, PosedBioticField, PosedHitscan, PosedProjectile,
+        PosedShot, Stun, eye_height, script_eye_position,
     },
     game_content::is_junkenstein_mode,
-    game_heroes::{CASSIDY, SOLDIER},
+    game_heroes::CASSIDY,
     game_hitscan::{HitDefinition, aim_direction},
     game_instance::TeamMemberCounts,
-    game_projectiles::{ProjectileLeases, authored_number, local_prediction, predicted_sync},
+    game_projectiles::{
+        ImpactSpawn, ProjectileLeases, authored_number, local_prediction, predicted_sync,
+    },
     game_replication::{BodyStep, OwnerBodyRuntime, OwnerRoomActivity},
     junkenstein_messages::{DefenderMessage, DefenderSighting, SIGHTING},
     mover::Mover,
     mover_modifiers::{Modifier, ModifierKey},
-    projectile_flight::{ProjectileBallistics, authored_gravity, lifted_direction},
+    projectile_flight::{ProjectileBallistics, authored_gravity, posed_projectile_direction},
     script_codecs::CodecTable,
     script_control::LEGACY_PROJECTILE_CONTROL,
     script_expr::to_float,
@@ -232,21 +234,25 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
             ));
         }
         #[cfg(feature = "inspector")]
-        if step != BodyStep::UnposedTimer
-            && (step == BodyStep::UnposedBoundary
-                || command.buttons != self.component.command_buttons()
-                || command.action != 0)
-            && crate::game_replication::owner_volley_trace_enabled()
-        {
-            eprintln!(
-                "owner-volley input body={:08x} previous={} frame={} step={step:?} buttons={:#x}->{:#x} action={}",
-                self.world.entity,
-                self.frame,
-                command.frame,
-                self.component.command_buttons(),
-                command.buttons,
-                command.action
-            );
+        if step != BodyStep::UnposedTimer && crate::owner_trace::enabled() {
+            let buttons = self.component.command_buttons();
+            let throttle = [command.right, command.forward];
+            if step == BodyStep::UnposedBoundary
+                || command.buttons != buttons
+                || command.action != 0
+                || (command.buttons != 0 && throttle != self.world.throttles)
+            {
+                crate::owner_trace::record(format_args!(
+                    "owner-volley input body={:08x} previous={} frame={} step={step:?} buttons={buttons:#x}->{:#x} action={} right={} forward={}",
+                    self.world.entity,
+                    self.frame,
+                    command.frame,
+                    command.buttons,
+                    command.action,
+                    command.right,
+                    command.forward
+                ));
+            }
         }
         let pose = mover.pose();
         self.world.position = pose.position;
@@ -308,10 +314,10 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
     fn take_shots(&mut self, command: Option<Command>, mover: &Mover) -> Vec<PosedShot> {
         let shots = self.component.take_shots().unwrap_or_default();
         #[cfg(feature = "inspector")]
-        if !shots.is_empty() && crate::game_replication::owner_volley_trace_enabled() {
+        if !shots.is_empty() && crate::owner_trace::enabled() {
             let pose_frame = command.map(|command| command.frame);
             for shot in &shots {
-                eprintln!(
+                crate::owner_trace::record(format_args!(
                     "owner-volley vm-shot body={:08x} shot_frame={} pose_frame={pose_frame:?} instance={} state={} counter={} start_ms={} ordinal={}",
                     shot.entity,
                     shot.frame,
@@ -320,7 +326,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                     shot.activation,
                     shot.activation_ms,
                     shot.ordinal
-                );
+                ));
             }
         }
         let Some(command) = command else {
@@ -352,13 +358,11 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                     self.component
                         .evaluate_shot_config(&shot, config, &mut self.world)
                 };
-                if shot.graph == 0x0257
-                    && node.pos == 4
-                    && hero == SOLDIER
-                    && node
-                        .field("m_49CBA3BC.m_entityDefinition")
-                        .and_then(|config| evaluate(config).ok())
-                        == Some(Value::Asset(0x0400_0000_0000_03dc))
+                if ImpactSpawn::from_volley(node, &mut evaluate).ok().flatten()
+                    == Some(ImpactSpawn {
+                        definition: BIOTIC_FIELD_ENTITY,
+                        on_spawn_graph: None,
+                    })
                     && node
                         .field("m_projectileEntity.m_entityDef")
                         .and_then(|config| evaluate(config).ok())
@@ -372,18 +376,10 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                 }
                 let speed = node.field("m_projectileSpeed").unwrap_or(&Json::Null);
                 if !speed.is_null() && to_float(&evaluate(speed).ok()?) != 0.0 {
-                    // Admit only the known unconditional gravity path for Flashbang;
-                    // other projectile motion/aim configurations remain unsupported.
-                    let gravity = flashbang
-                        .then(|| authored_gravity(&node.fields, &mut evaluate))
-                        .flatten();
+                    let gravity = authored_gravity(&node.fields, &mut evaluate).ok()?;
                     if !node.is_networked()
                         || !local_prediction(node)
                         || !predicted_sync(node, &mut evaluate).ok()?
-                        || node
-                            .field("m_projectileMotions")
-                            .is_some_and(|v| !v.is_null() && gravity.is_none())
-                        || node.field("m_aimID").is_some_and(|v| !v.is_null())
                         || authored_number(
                             node.field("m_numProjectilesPerShot"),
                             1.0,
@@ -398,35 +394,23 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                         ProjectileBallistics::from_authored(node, &mut evaluate).ok()??;
                     let definition = ballistics.definition?;
                     self.leases.entity(definition, shot.frame, 0)?;
-                    if !ballistics.direct.is_some_and(|hit| hit.amount > 0.0)
-                        && !ballistics
+                    if ballistics.direct.is_some_and(|hit| hit.amount < 0.0)
+                        || ballistics
                             .blast
                             .as_ref()
-                            .is_some_and(|blast| blast.hit.amount > 0.0)
+                            .is_some_and(|blast| blast.hit.amount < 0.0)
                     {
                         return None;
                     }
-                    // Preserve the existing rejection of unsupported mixed
-                    // payloads outside the verified Flashbang zero-direct case.
-                    if !flashbang
-                        && (ballistics.direct.is_some_and(|hit| hit.amount <= 0.0)
-                            || ballistics
-                                .blast
-                                .as_ref()
-                                .is_some_and(|blast| blast.hit.amount <= 0.0))
+                    if !ballistics.direct.is_some_and(|hit| hit.amount > 0.0)
+                        && !ballistics.blast.as_ref().is_some_and(|blast| {
+                            blast.hit.amount > 0.0 || blast.knockback.is_some()
+                        })
                     {
                         return None;
                     }
-                    let mut direction = aim_direction(&command);
-                    if flashbang {
-                        let lift = authored_number(
-                            node.field("m_5EC1EB38.m_22CE7F30"),
-                            0.0,
-                            &mut evaluate,
-                        )
-                        .ok()?;
-                        direction = lifted_direction(direction, lift)?;
-                    }
+                    let direction =
+                        posed_projectile_direction(node, aim_direction(&command), &mut evaluate)?;
                     let stun = if flashbang {
                         let effect = node.field("m_D2D11CE9.m_modifyHealth.m_277A4ECA")?;
                         if !LEGACY_PROJECTILE_CONTROL.has_effect_marker(&evaluate(effect).ok()?) {
@@ -445,8 +429,6 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                         origin,
                         direction,
                         gravity,
-                        // Scoped reconstruction shared with Python e1128509.
-                        expiry_blast: flashbang && gravity.is_some(),
                     })));
                 }
                 let hit = HitDefinition::from_authored_with_critical(

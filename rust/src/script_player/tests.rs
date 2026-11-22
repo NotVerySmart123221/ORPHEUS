@@ -241,33 +241,7 @@ fn owner_engine_settings_follow_the_authored_mode_table() {
 }
 
 #[test]
-fn owner_reports_absent_combat_accumulator_only_for_valid_own_body() {
-    let (factory, spawn) = fixture_body_factory();
-    let mut runtime = factory.start(spawn).unwrap();
-    let world = &mut runtime.world;
-    let site = Site {
-        entity: spawn.entity,
-        instance: 1,
-        graph: 42,
-        node: Some(7),
-    };
-    assert_eq!(world.local_combat_context_available(site), Some(false));
-    for entity in [spawn.controller, spawn.entity + 1, 0] {
-        assert_eq!(
-            world.local_combat_context_available(Site { entity, ..site }),
-            None
-        );
-    }
-
-    world.entity = 0;
-    assert_eq!(
-        world.local_combat_context_available(Site { entity: 0, ..site }),
-        None
-    );
-}
-
-#[test]
-fn owner_reports_absent_presentation_contexts_only_for_valid_own_body() {
+fn owner_reports_absent_host_contexts_only_for_valid_own_body() {
     let (factory, spawn) = fixture_body_factory();
     let mut runtime = factory.start(spawn).unwrap();
     let world = &mut runtime.world;
@@ -289,6 +263,7 @@ fn owner_reports_absent_presentation_contexts_only_for_valid_own_body() {
             (0, None),
         ] {
             let site = Site { entity, ..site };
+            assert_eq!(world.local_combat_context_available(site), expected);
             assert_eq!(world.spatial_binding_owner_available(site), expected);
             assert_eq!(world.outline_context_available(site), expected);
             assert_eq!(world.voice_context(site), expected);
@@ -297,6 +272,7 @@ fn owner_reports_absent_presentation_contexts_only_for_valid_own_body() {
 
     world.entity = 0;
     let invalid = Site { entity: 0, ..site };
+    assert_eq!(world.local_combat_context_available(invalid), None);
     assert_eq!(world.spatial_binding_owner_available(invalid), None);
     assert_eq!(world.outline_context_available(invalid), None);
     assert_eq!(world.voice_context(invalid), None);
@@ -751,6 +727,8 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
                 },
                 HostHealthContext {
                     named_pool_losses: None,
+                    critical_hit: None,
+                    damage_frame: None,
                     source_body: None,
                     target_body: None,
                     target_facts: Some(Arc::new(HealthTargetFacts {
@@ -3147,6 +3125,117 @@ fn authored_flashbang_duration_follows_both_mode_branches() {
 }
 
 #[test]
+fn posed_single_projectiles_use_the_supported_aim_configurations() {
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/projectile-posed-aim-v1.json"
+    ))
+    .unwrap();
+    let (_, spawn) = fixture_body_factory();
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        spawn.pose.position,
+        0,
+        0x18,
+    )
+    .unwrap();
+    let fire = Command {
+        frame: spawn.frame + 1,
+        buttons: crate::commands::SECONDARY,
+        yaw: 16_384,
+        pitch: 4_096,
+        ..Command::default()
+    };
+    for case in fixture["cases"].as_array().unwrap() {
+        let mut fields = fixture_projectile_fields(40.0);
+        fields["m_aimID"] = case["aim"].clone();
+        fields["m_5EC1EB38"] = case["launch"].clone();
+        let mut runtime = fixture_volley_factory(29, true, fields)
+            .start(spawn)
+            .unwrap();
+        runtime.advance(fire, &mover, BodyStep::Posed).unwrap();
+        let shots = runtime.take_shots(Some(fire), &mover);
+        if case["uses_pose"] == true {
+            let [PosedShot::Projectile(projectile)] = shots.as_slice() else {
+                panic!("expected the posed projectile for {}", case["name"]);
+            };
+            assert_eq!(projectile.direction, aim_direction(&fire));
+        } else {
+            assert!(shots.is_empty(), "{}", case["name"]);
+        }
+    }
+}
+
+#[test]
+fn impact_spawn_uses_declared_resources_on_a_relocated_volley() {
+    use crate::{
+        game_combat::{BIOTIC_CANISTER, BIOTIC_FIELD_ENTITY},
+        game_projectiles::ImpactSpawn,
+    };
+    use serde_json::json;
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/projectile-impact-spawn-v1.json"
+    ))
+    .unwrap();
+    let (_, spawn) = fixture_body_factory();
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        spawn.pose.position,
+        0,
+        0x18,
+    )
+    .unwrap();
+    let fire = Command {
+        frame: spawn.frame + 1,
+        buttons: crate::commands::SECONDARY,
+        ..Command::default()
+    };
+    for case in fixture["cases"].as_array().unwrap() {
+        let mut fields = fixture_projectile_fields(40.0);
+        fields["m_projectileEntity"]["m_entityDef"]["m_entityDef"] =
+            json!(format!("0x{BIOTIC_CANISTER:016X}"));
+        fields["m_49CBA3BC"] = json!({
+            "$": case["class"],
+            "m_entityDefinition": {"$":"STU_8556841E", "m_entityDef":format!("0x{BIOTIC_FIELD_ENTITY:016X}")},
+        });
+        if let Some(graph) = case["on_spawn_graph"].as_str() {
+            fields["m_49CBA3BC"]["m_410BF8BD"] = json!({"$":"STU_105E1BCC","m_graph":graph});
+        }
+        let mut factory = fixture_volley_factory(29, true, fields);
+        factory.hero = CASSIDY;
+        let node = factory.graphs.graph(42).unwrap().state(1).unwrap();
+        let parsed = ImpactSpawn::from_volley(node, |value| {
+            crate::script_expr::evaluate(value, &mut crate::script_expr::EmptyContext)
+        });
+        match case["on_spawn_graph"].as_str() {
+            Some(graph) => assert_eq!(
+                parsed.unwrap().unwrap().on_spawn_graph,
+                crate::accounts::parse_guid(graph)
+            ),
+            None if case["field"] == true => assert_eq!(
+                parsed.unwrap(),
+                Some(ImpactSpawn {
+                    definition: BIOTIC_FIELD_ENTITY,
+                    on_spawn_graph: None
+                })
+            ),
+            None => assert!(parsed.is_err()),
+        }
+        let mut runtime = factory.start(spawn).unwrap();
+        runtime.advance(fire, &mover, BodyStep::Posed).unwrap();
+        let shots = runtime.take_shots(Some(fire), &mover);
+        assert_eq!(
+            matches!(shots.as_slice(), [PosedShot::BioticField(_)]),
+            case["field"] == true,
+            "{}",
+            case["name"],
+        );
+    }
+}
+
+#[test]
 fn unsupported_projectile_modes_do_not_become_hitscan_or_straight_damage() {
     use serde_json::json;
 
@@ -3250,6 +3339,160 @@ fn prepared_soldier_without_target_tags_reports_unavailable_filter() {
             && diagnostic.site.node == Some(21)
             && matches!(&diagnostic.issue, Issue::Expression(EvalError::UnsupportedConfig(class)) if class == "STU_AC829876")
     }), "{:?}", snapshot.diagnostics);
+}
+
+#[test]
+#[ignore = "requires a tagged separately prepared 104319 statescript catalog"]
+fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
+    use crate::{
+        collision_cache::CollisionCache,
+        contact_world::ContactWorld,
+        game_clock::FIRST_TICK,
+        game_combat::{PlayerBodyState, RoomSimulation},
+        game_messages::Message,
+        game_parameters::{CLIENT_WHEEL_ACTION, ClientWheelAction},
+        game_replication::BodyId,
+        jam_codec::{Fields, Value as WireValue},
+        mover_settings::MoverSettings,
+        script_graph::RoomSpatialNeeds,
+    };
+
+    let root = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let graphs = Arc::new(GraphStore::load(root.join("data/game_graphs_174.json.gz")).unwrap());
+    let action = 0x0a90_0000_0000_0171;
+    let request = ClientWheelAction::read(&Message {
+        id: CLIENT_WHEEL_ACTION,
+        fields: Fields::from([
+            (0x78, WireValue::Unsigned(action)),
+            (0x80, WireValue::Bool(true)),
+        ]),
+    })
+    .unwrap()
+    .into_local_message();
+    for with_room in [false, true] {
+        let (mut component, mut world) = prepared_soldier_component(Arc::clone(&graphs), true);
+        if with_room {
+            let ground = CollisionScene::movement_probe(
+                &CollisionCache {
+                    header: serde_json::from_str(
+                        r#"{"meshes":[],"hulls":0,"models":0,"placements":0,"identifiers":[]}"#,
+                    )
+                    .unwrap(),
+                    meshes: Vec::new(),
+                    hulls: Vec::new(),
+                    models: Vec::new(),
+                    placements: Vec::new(),
+                },
+                &Default::default(),
+            )
+            .unwrap();
+            let mut room = RoomSimulation::new(Vec::new()).unwrap();
+            room.enable_spatial_queries(false, Arc::new(ground), RoomSpatialNeeds::Queries);
+            let mover = Mover::new(
+                MoverSettings::default(),
+                Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+                world.position,
+                0,
+                MOVER_CATEGORY,
+            )
+            .unwrap();
+            room.spawn_player_body(PlayerBodyState::new(
+                BodyId {
+                    entity: world.entity,
+                    generation: 1,
+                },
+                world.controller,
+                0,
+                0,
+                world.hero,
+                mover,
+                None,
+                FIRST_TICK,
+                None,
+            ))
+            .unwrap();
+            world.spatial_frame = room.capture_spatial_frame(FIRST_TICK + 1).unwrap();
+            assert!(world.spatial_frame.is_some());
+        }
+        assert_eq!(
+            component
+                .queue_entity_message_from(world.entity, request.id, request.parameters.clone())
+                .unwrap(),
+            2
+        );
+        component.advance_frame(FIRST_TICK + 1, &mut world).unwrap();
+        let snapshot = component.snapshot().unwrap();
+        if graphs.has_asset_category_data() {
+            assert!(!snapshot.diagnostics.iter().any(|diagnostic| {
+                matches!(&diagnostic.issue, crate::script_init::Issue::Expression(crate::script_expr::EvalError::UnsupportedConfig(class))
+                    if class == "STU_4460419A")
+            }));
+            assert_eq!(
+                snapshot.diagnostics.iter().any(|diagnostic| {
+                    diagnostic.issue
+                        == crate::script_init::Issue::UnsupportedField(
+                            "view target query unavailable",
+                        )
+                }),
+                !with_room,
+                "{:?}",
+                snapshot.diagnostics
+            );
+            if with_room {
+                let callout = snapshot
+                    .instances
+                    .values()
+                    .find(|instance| instance.graph == 0x0686)
+                    .unwrap();
+                let local_callout = callout.variables.get(&29861);
+                assert!(
+                    matches!(local_callout, Some(Value::Map(rows)) if rows.iter().any(
+                        |(key, value)| *key == Value::Asset(action) && matches!(value, Value::Map(parameters) if parameters.len() == 2)
+                    )),
+                    "{local_callout:?}"
+                );
+                assert!(
+                    snapshot.frame_actions.iter().any(|action| {
+                        snapshot
+                            .instances
+                            .get(&action.callout.instance)
+                            .is_some_and(|instance| instance.graph == 0x0686)
+                            && action.values.len() == 2
+                    }),
+                    "{:?}",
+                    snapshot.frame_actions
+                );
+                if let Some(texture) = graphs.asset_texture(action) {
+                    assert_eq!(callout.variables.get(&3793), Some(&Value::Asset(texture)));
+                }
+            }
+        }
+        for diagnostic in snapshot
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| !diagnostic.server_only)
+        {
+            eprintln!(
+                "wheel room={with_room} {:04X}:{:?} {:?}",
+                diagnostic.site.graph, diagnostic.site.node, diagnostic.issue
+            );
+        }
+        for graph in [0x05ad, 0x02cf] {
+            let instance = snapshot
+                .instances
+                .values()
+                .find(|instance| instance.graph == graph)
+                .unwrap();
+            assert_eq!(
+                instance.variables[&29699],
+                Value::Asset(action),
+                "{graph:04X}"
+            );
+            if graph == 0x05ad {
+                assert_eq!(instance.variables[&9253], Value::Bool(true));
+            }
+        }
+    }
 }
 
 #[test]

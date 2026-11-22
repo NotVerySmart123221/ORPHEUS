@@ -31,6 +31,7 @@ mod owner_swept_motion;
 mod owner_synchronous_fault;
 mod player_respawn;
 pub(crate) mod practice_observation;
+mod wheel_input;
 
 fn pick_hero(entity: u32, hero: u64) -> Message {
     Message {
@@ -270,7 +271,7 @@ fn enemy_observer_waits_for_identity_and_retries_the_exact_baseline() {
 }
 
 #[test]
-fn bot_practice_nameplates_wait_for_mode_ready_and_skip_new_dead_corpses() {
+fn bot_practice_nameplates_wait_for_mode_and_body_acknowledgments() {
     use crate::{
         script_codecs::CodecTable,
         script_graph::GraphStore,
@@ -278,6 +279,13 @@ fn bot_practice_nameplates_wait_for_mode_ready_and_skip_new_dead_corpses() {
         script_wire::Variables,
     };
 
+    let contract: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/npc-nameplate-staged-admission-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(contract["schema_version"], 1);
+    assert_eq!(contract["case_id"], "npc-nameplate-staged-admission-v1");
+    let expected = |key: &str| contract["expected"][key].as_bool().unwrap();
     let mk_graph = |index: u32| {
         serde_json::json!({
             "index": index,
@@ -346,6 +354,7 @@ fn bot_practice_nameplates_wait_for_mode_ready_and_skip_new_dead_corpses() {
 
     let live_entity = 0x8000_0001;
     let dead_entity = 0x8000_0002;
+    let later_live_entity = 0x8000_0003;
     let live_script = Component::start(
         Arc::clone(&graphs),
         live_entity,
@@ -366,6 +375,15 @@ fn bot_practice_nameplates_wait_for_mode_ready_and_skip_new_dead_corpses() {
         MAX_INIT_WORK,
     )
     .unwrap();
+    let with_parent = |script: &Component| {
+        let mut snapshot = script.snapshot().unwrap().clone();
+        snapshot.instances.get_mut(&2).unwrap().parent = Some((1, 0));
+        snapshot
+    };
+    let live = with_parent(&live_script);
+    let dead = with_parent(&dead_script);
+    let mut later_live = live.clone();
+    later_live.entity = later_live_entity;
 
     let mut world = WorldDelivery::new(OWNER);
     world.started = Some(1000);
@@ -374,6 +392,7 @@ fn bot_practice_nameplates_wait_for_mode_ready_and_skip_new_dead_corpses() {
     // Live bot before mode_ready(): 0x0D24 is stripped from its initial observer baseline.
     world.create_bot(bot_create(live_entity));
     world.create_bot(bot_create(dead_entity));
+    world.create_bot(bot_create(later_live_entity));
     let creates: Vec<_> = world.ready().iter().map(|r| r.tracked()).collect();
     world.sent(&eligible(&world));
     for record in creates {
@@ -381,16 +400,14 @@ fn bot_practice_nameplates_wait_for_mode_ready_and_skip_new_dead_corpses() {
     }
 
     let encoder = SnapshotEncoder::new(&graphs, &codecs);
-    let full = encoder
-        .project(live_script.snapshot().unwrap(), View::Observer)
-        .unwrap();
+    let full = encoder.project(&live, View::Observer).unwrap();
     assert!(full.has_graph(0x0c18));
     assert!(full.has_graph(0x0d24));
 
     world
         .present_scene_script_with_dead(
             SceneProjection {
-                snapshot: live_script.snapshot().unwrap(),
+                snapshot: &live,
                 encoder: SnapshotEncoder::new(&graphs, &codecs),
             },
             false,
@@ -411,7 +428,7 @@ fn bot_practice_nameplates_wait_for_mode_ready_and_skip_new_dead_corpses() {
     world
         .present_scene_script_with_dead(
             SceneProjection {
-                snapshot: live_script.snapshot().unwrap(),
+                snapshot: &live,
                 encoder: SnapshotEncoder::new(&graphs, &codecs),
             },
             false,
@@ -423,11 +440,75 @@ fn bot_practice_nameplates_wait_for_mode_ready_and_skip_new_dead_corpses() {
     let (_, live_after) = world.scene_views[&live_entity].base().unwrap();
     assert!(live_after.has_graph(0x0d24));
 
+    // Mode was ready before this bot's first script frame. Its parent still
+    // needs an ACK before the nameplate can use that baseline.
+    let present = |world: &mut WorldDelivery, snapshot: &crate::script_init::Snapshot| {
+        world
+            .present_scene_script_with_dead(
+                SceneProjection {
+                    snapshot,
+                    encoder: SnapshotEncoder::new(&graphs, &codecs),
+                },
+                false,
+            )
+            .unwrap();
+    };
+    present(&mut world, &later_live);
+    let parent_full = world.ready()[0].tracked();
+    world.sent(&eligible(&world));
+    present(&mut world, &later_live);
+    assert!(world.ready().is_empty());
+    world.acknowledge(outcome(parent_full, true), Duration::ZERO);
+    let (_, later_base) = world.scene_views[&later_live_entity].base().unwrap();
+    assert!(later_base.has_graph(0x0c18));
+    assert_eq!(
+        later_base.has_graph(0x0d24),
+        expected("parent_baseline_has_nameplate")
+    );
+
+    let unrelated = u32::try_from(
+        contract["input"]["concurrent_entity_variable"]
+            .as_u64()
+            .unwrap(),
+    )
+    .unwrap();
+    later_live
+        .variables
+        .insert(unrelated, crate::script_wire::Value::Bool(true));
+    present(&mut world, &later_live);
+    let nameplate = world.ready()[0].tracked();
+    world.sent(&eligible(&world));
+    if contract["input"]["lost_introduction"].as_bool().unwrap() {
+        world.acknowledge(outcome(Arc::clone(&nameplate), false), Duration::ZERO);
+        assert!(Arc::ptr_eq(&nameplate, &world.ready()[0].tracked()));
+        world.sent(&eligible(&world));
+    }
+    world.acknowledge(outcome(nameplate, true), Duration::ZERO);
+    let (_, staged) = world.scene_views[&later_live_entity].base().unwrap();
+    assert_eq!(
+        staged.has_graph(0x0d24),
+        expected("introduction_has_nameplate")
+    );
+    assert_eq!(
+        staged.entity_variables().contains_key(&unrelated),
+        expected("introduction_has_concurrent_entity_variable")
+    );
+
+    present(&mut world, &later_live);
+    let changes = world.ready()[0].tracked();
+    world.sent(&eligible(&world));
+    world.acknowledge(outcome(changes, true), Duration::ZERO);
+    let (_, caught_up) = world.scene_views[&later_live_entity].base().unwrap();
+    assert_eq!(
+        caught_up.entity_variables().contains_key(&unrelated),
+        expected("following_delta_has_concurrent_entity_variable")
+    );
+
     // An already-dead bot without a prior 0x0D24 never gets one even after mode_ready().
     world
         .present_scene_script_with_dead(
             SceneProjection {
-                snapshot: dead_script.snapshot().unwrap(),
+                snapshot: &dead,
                 encoder: SnapshotEncoder::new(&graphs, &codecs),
             },
             true,
@@ -438,7 +519,10 @@ fn bot_practice_nameplates_wait_for_mode_ready_and_skip_new_dead_corpses() {
     world.acknowledge(outcome(dead_base_record, true), Duration::ZERO);
     let (_, dead_base) = world.scene_views[&dead_entity].base().unwrap();
     assert!(dead_base.has_graph(0x0c18));
-    assert!(!dead_base.has_graph(0x0d24));
+    assert_eq!(
+        dead_base.has_graph(0x0d24),
+        expected("dead_baseline_has_nameplate")
+    );
 }
 
 #[test]
@@ -1165,6 +1249,14 @@ impl OwnerBodyRuntime for SyntheticOwner {
             .unwrap()
             .push((sender, message));
         Ok(1)
+    }
+
+    fn queue_local_message(&mut self, message: RoomMessage) -> Result<usize, InitFault> {
+        self.receive_room_message(self.component.snapshot().unwrap().entity, message)
+    }
+
+    fn wheel_actions_available(&self) -> bool {
+        true
     }
 
     fn take_script_requests(&mut self) -> Vec<crate::game_combat::RoomScriptRequest> {
@@ -2262,6 +2354,9 @@ fn admitted_owner_projectile_preserves_gravity_and_expiry_blast() {
             ballistics: ProjectileBallistics {
                 speed: 30.0,
                 lifetime: 7.0 / 30.0,
+                max_distance: None,
+                terrain_rebound: None,
+                terrain_radius: 0.0,
                 radius: 0.0,
                 definition: Some(DEFINITION),
                 direct: None,
@@ -2274,12 +2369,15 @@ fn admitted_owner_projectile_preserves_gravity_and_expiry_blast() {
                         falloff: None,
                     },
                     rings: vec![(3.0, 1.0)],
+                    self_damage_scale: 0.0,
+                    self_knockback_scale: 0.0,
+                    knockback: None,
+                    detonate_on_expiry: true,
                 }),
             },
             origin: [0.0, 1.55, 0.0],
             direction: lifted_direction([0.0, 0.0, 1.0], 0.05).unwrap(),
             gravity: Some(20.0),
-            expiry_blast: true,
         },
         launches,
     );
@@ -2343,7 +2441,6 @@ fn room_flight_outcomes_release_only_the_current_owner_alias() {
             PosedProjectile {
                 stun: None,
                 gravity: None,
-                expiry_blast: false,
                 shot: ShotEvent {
                     entity: id.entity,
                     instance: 1,
@@ -2358,6 +2455,9 @@ fn room_flight_outcomes_release_only_the_current_owner_alias() {
                 ballistics: ProjectileBallistics {
                     speed: 1.0,
                     lifetime: 2.0,
+                    max_distance: None,
+                    terrain_rebound: None,
+                    terrain_radius: 0.0,
                     radius: 0.0,
                     definition: Some(DEFINITION),
                     direct: None,
@@ -2402,6 +2502,7 @@ fn room_flight_outcomes_release_only_the_current_owner_alias() {
             FlightOutcome::Ended {
                 token,
                 travelled: 34.25 * TICK_PERIOD.as_secs_f64(),
+                impact: true,
             }
         } else {
             FlightOutcome::Failed(token)
@@ -2650,7 +2751,9 @@ fn retirement_waits_for_the_reliable_notice_across_retransmission() {
             .insert(id.entity, (id.generation, Lifetime::Live));
         world.created.insert(id.entity);
     }
-    let notice = egress.queue_reliable(vec![0x42]).unwrap();
+    let notice = egress
+        .queue_reliable(crate::game_messages::EncodedMessage::from_bytes(vec![0x42]))
+        .unwrap();
     world.track_entity_notice(body.entity, notice);
 
     world.retire_body(body);
@@ -3167,7 +3270,6 @@ fn fixture_projectile_flight(
     let posed = PosedProjectile {
         stun: None,
         gravity: None,
-        expiry_blast: false,
         shot: ShotEvent {
             entity: owner.entity,
             instance: 1,
@@ -3182,6 +3284,9 @@ fn fixture_projectile_flight(
         ballistics: ProjectileBallistics {
             speed,
             lifetime: 1.0,
+            max_distance: None,
+            terrain_rebound: None,
+            terrain_radius: 0.0,
             radius: 0.0,
             definition: Some(definition),
             direct: damage.map(|amount| HitDefinition {
@@ -4017,4 +4122,143 @@ fn body_replacement_rejects_stale_generation_mutations() {
     assert!(simulation.retire_player_body(id2));
     assert!(!simulation.retire_player_body(id2));
     assert!(simulation.player_body(id2).is_none());
+}
+
+#[test]
+fn present_bot_controllers_sequences_creation_possession_and_respawn() {
+    use crate::{
+        game_bots::{BOT_CONTROLLER_BASE, BOT_ENTITY, Bot},
+        game_combat::BotReplacement,
+        match_scene::bot_create,
+        scene_assets::PreparedScene,
+        world::{ComponentValue, Create, Operation, PLAYER_PATH, WITH_PARTICIPANT},
+    };
+
+    let mut scene = PreparedScene::fixture_for_bots(vec![Bot::fixture_walker([0.0, 0.0, 10.0])]);
+    scene
+        .simulation_mut()
+        .seat_bots(&GameMap::practice_range(), 1);
+    let seated = scene.simulation().seated_bots();
+    assert_eq!(seated.len(), 1);
+    let controller = seated[0].controller;
+    assert_eq!(controller, BOT_CONTROLLER_BASE | 0x100);
+    assert_eq!(seated[0].slot, 1);
+    assert_eq!(seated[0].body, BOT_ENTITY);
+
+    let mut world = WorldDelivery::new(OWNER);
+    world.started = Some(FIRST_TICK);
+    world.create_bot(bot_create(scene.bots().unwrap().next().unwrap(), None).unwrap());
+    world.present_bot_controllers(&scene).unwrap();
+
+    // First queue holds BotCreate (with HERO_BIT) and BotControllerCreate (no PLAYER_PATH).
+    let initial: Vec<_> = world.ready().iter().map(|ready| ready.tracked()).collect();
+    assert_eq!(initial.len(), 2);
+    assert_eq!(initial[0].update.entity, BOT_ENTITY);
+    assert_eq!(initial[1].update.entity, controller);
+    let Some(Operation::Create(ctrl_create)) = &initial[1].update.operation else {
+        panic!("expected controller create");
+    };
+    assert_ne!(ctrl_create.flags & WITH_PARTICIPANT, 0);
+    assert_eq!(ctrl_create.flags & PLAYER_PATH, 0);
+    let slot_component = ctrl_create
+        .components
+        .iter()
+        .find(|component| component.index == 74)
+        .expect("controller component 74");
+    assert_eq!(slot_component.fields[2], Some(ComponentValue::I8(1)));
+    world.sent(&eligible(&world));
+
+    // If BotControllerCreate is lost while BotCreate arrives, retry creates without possessing.
+    world.acknowledge(outcome(Arc::clone(&initial[0]), true), Duration::ZERO);
+    world.acknowledge(outcome(Arc::clone(&initial[1]), false), Duration::ZERO);
+    world.present_bot_controllers(&scene).unwrap();
+    let retry: Vec<_> = world.ready().iter().map(|ready| ready.tracked()).collect();
+    assert_eq!(retry.len(), 1);
+    assert_eq!(retry[0].update.entity, controller);
+    assert!(matches!(
+        retry[0].update.operation,
+        Some(Operation::Create(_))
+    ));
+    world.sent(&eligible(&world));
+    world.acknowledge(outcome(Arc::clone(&retry[0]), true), Duration::ZERO);
+
+    // Once both controller and body creates are acknowledged, 44/75 possession is queued.
+    world.present_bot_controllers(&scene).unwrap();
+    let possess: Vec<_> = world.ready().iter().map(|ready| ready.tracked()).collect();
+    assert_eq!(possess.len(), 1);
+    assert_eq!(possess[0].update.entity, controller);
+    let Some(Operation::Update(components)) = &possess[0].update.operation else {
+        panic!("expected controller possession update");
+    };
+    assert_eq!(components.len(), 2);
+    assert_eq!(components[0].index, 44);
+    assert_eq!(
+        components[0].fields,
+        vec![Some(ComponentValue::Entity(BOT_ENTITY)); 3]
+    );
+    assert_eq!(components[1].index, 75);
+    assert_eq!(
+        components[1].fields[0],
+        Some(ComponentValue::Id(seated[0].hero))
+    );
+    world.sent(&eligible(&world));
+    world.acknowledge(outcome(Arc::clone(&possess[0]), true), Duration::ZERO);
+
+    // Respawning replaces the bot body ID while reusing the same seated controller.
+    let mut respawned_bot = scene
+        .bots()
+        .unwrap()
+        .next()
+        .unwrap()
+        .respawned(BOT_ENTITY + 1, FIRST_TICK);
+    assert_eq!(respawned_bot.slot, Some(1));
+    assert_eq!(respawned_bot.controller(), Some(controller));
+    scene
+        .simulation_mut()
+        .kill_bot_for_test(BOT_ENTITY, FIRST_TICK + 1, Duration::from_secs(1));
+    let replacements = {
+        let (simulation, queries) = scene.bot_simulation();
+        simulation
+            .finish_tick(
+                &queries,
+                FIRST_TICK + 200,
+                Duration::from_secs(1) + crate::game_bots::BOT_RESPAWN_TIME,
+            )
+            .unwrap()
+    };
+    assert_eq!(replacements.len(), 1);
+    let fresh_entity = replacements[0].created.entity;
+    assert_eq!(fresh_entity, BOT_ENTITY + 1);
+    respawned_bot.entity = fresh_entity;
+
+    world.replace_bot(BotReplacement {
+        retired: BOT_ENTITY,
+        created: replacements[0].created.clone(),
+    });
+    // Possession waits until the respawned bot's create is acknowledged.
+    world.present_bot_controllers(&scene).unwrap();
+    let respawn_records: Vec<_> = world.ready().iter().map(|ready| ready.tracked()).collect();
+    assert_eq!(respawn_records.len(), 2);
+    assert!(
+        respawn_records
+            .iter()
+            .all(|r| r.update.entity != controller)
+    );
+    world.sent(&eligible(&world));
+    for record in respawn_records {
+        world.acknowledge(outcome(record, true), Duration::ZERO);
+    }
+
+    world.present_bot_controllers(&scene).unwrap();
+    let repossess: Vec<_> = world.ready().iter().map(|ready| ready.tracked()).collect();
+    assert_eq!(repossess.len(), 1);
+    assert_eq!(repossess[0].update.entity, controller);
+    let Some(Operation::Update(components)) = &repossess[0].update.operation else {
+        panic!("expected re-possession update after bot respawn");
+    };
+    assert_eq!(
+        components[0].fields,
+        vec![Some(ComponentValue::Entity(fresh_entity)); 3]
+    );
+    assert!(Create::new(1, vec![]).components.is_empty());
 }

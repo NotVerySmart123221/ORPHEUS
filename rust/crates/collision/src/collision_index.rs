@@ -54,6 +54,7 @@ pub enum IndexError {
     InvalidTriangle,
     IndexLimit,
     RayTraversalLimit,
+    InvalidSweep,
 }
 
 impl fmt::Display for IndexError {
@@ -62,6 +63,7 @@ impl fmt::Display for IndexError {
             Self::InvalidTriangle => "triangle is nonfinite or outside the collision grid",
             Self::IndexLimit => "collision geometry exceeds the triangle index limit",
             Self::RayTraversalLimit => "ray exceeds the collision column traversal limit",
+            Self::InvalidSweep => "invalid collision sweep coordinates or point count",
         })
     }
 }

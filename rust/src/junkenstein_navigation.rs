@@ -13,7 +13,7 @@ use crate::{
     game_clock::TICK_PERIOD,
     game_hitscan::{TargetPose, aim_direction},
     junkenstein_spawn::walk_edge,
-    mover::Mover,
+    mover::{Mover, VelocityChange},
     mover_posture::IN_AIR,
     mover_settings::MoverSettings,
     projectile_flight::{gravity_step, launch_velocity},
@@ -105,6 +105,14 @@ pub(crate) enum ReaperExit {
 }
 
 impl ReaperExit {
+    pub(crate) fn queue_velocity_change(&mut self, frame: u32, change: VelocityChange) -> bool {
+        let Self::Walking { mover, .. } = self else {
+            return false;
+        };
+        mover.queue_velocity_change(frame, change);
+        true
+    }
+
     #[cfg(any(test, feature = "inspector"))]
     pub(crate) fn debug_mover(&self) -> Option<&Mover> {
         match self {
@@ -131,7 +139,7 @@ impl ReaperExit {
             return Ok(true);
         }
         if matches!(self, Self::Waiting) {
-            if !can_walk {
+            if !can_walk || bot.has_combat_motion() {
                 return Ok(false);
             }
             let Some(mover) = new_mover(bot)? else {

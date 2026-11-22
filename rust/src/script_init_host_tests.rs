@@ -296,6 +296,9 @@ mod tests {
                         ProjectileBallistics {
                             speed: 50.0,
                             lifetime: 2.0,
+                            max_distance: None,
+                            terrain_rebound: None,
+                            terrain_radius: 0.0,
                             radius: 0.0,
                             definition: None,
                             direct: Some(hit),
@@ -305,6 +308,10 @@ mod tests {
                                     ..hit
                                 },
                                 rings: vec![(1.0, 1.0)],
+                                self_damage_scale: 0.0,
+                                self_knockback_scale: 0.0,
+                                knockback: None,
+                                detonate_on_expiry: false,
                             }),
                         },
                         [0.0, 1.0, 0.0],

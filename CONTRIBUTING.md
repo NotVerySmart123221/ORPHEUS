@@ -44,7 +44,7 @@ cargo test --locked --all-targets -p orpheus-collision -p orpheus-golden-trace -
 python3 -B scripts/check_gallery_preview_policy.py
 ```
 
-Note: `public-checks.yml` also verifies all **38** `shared_*_contract` tests by `--exact` name. When splitting modules or moving tests, preserve the exact test module path expected by `.github/workflows/public-checks.yml` and [docs/STATE.md](docs/STATE.md).
+Windows default runs the full workspace and verifies that the named shared Rust contracts passed. Pipelines for Windows Inspector and Linux run targeted checks for feature and platform behavior. Update the workflow's expected name when moving a guarded test. The six required jobs run on pull requests to `rust`. Build and workflow input changes also run them on the protected branch to refresh its cache. **Run workflow** repeats these checks on a selected branch. Enable **Run the archived Python server comparison tool tests** to include the legacy comparison tool tests.
 
 To compare local cross-language gameplay evidence, see [the trace format, command and synthetic example](docs/GOLDEN_COMPARISON.md).
 

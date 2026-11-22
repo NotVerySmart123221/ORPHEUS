@@ -9,7 +9,7 @@ use crate::{
 };
 use serde::Deserialize;
 
-fn acknowledge_world_frame(peer: &mut Peer, sequence: &mut u32) {
+pub(super) fn acknowledge_world_frame(peer: &mut Peer, sequence: &mut u32) {
     *sequence += 1;
     peer.world
         .send_frame(
@@ -26,7 +26,7 @@ fn acknowledge_world_frame(peer: &mut Peer, sequence: &mut u32) {
     peer.world.acknowledge(report, Duration::ZERO);
 }
 
-fn pick_body(
+pub(super) fn pick_body(
     peer: &mut Peer,
     scene: &mut PreparedScene,
     viewer: &PlayerAppearance<'_>,
@@ -82,6 +82,131 @@ fn kill_body(scene: &mut PreparedScene, body: BodyId, damage: f64) -> PlayerDeat
         source: body.entity,
         killed_by: false,
     }
+}
+
+#[test]
+fn bot_hit_feedback_waits_for_possession_and_keeps_its_shooter_generation() {
+    use crate::{
+        game_combat::AppliedDamage,
+        script_entity_state::EntityScriptState,
+        script_init::{HealthTargetFacts, HitTags},
+        world::{Create, Operation, health},
+    };
+
+    let contract: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/combat-feedback-owner-body-v1.json"
+    ))
+    .unwrap();
+    let input = &contract["input"];
+    let expected = &contract["expected"];
+    let first_hero = input["heroes"][0].as_u64().unwrap();
+    let next_hero = input["heroes"][1].as_u64().unwrap();
+    let target = u32::try_from(input["target"].as_u64().unwrap()).unwrap();
+    let amount = input["lethal_damage"].as_f64().unwrap();
+    let catalog = HeroCatalog::from_json(
+        &serde_json::json!({
+            format!("{first_hero:#018x}"): {
+                "name": "First fixture hero", "class": "Damage", "body": "0x0400000000000001",
+            },
+            format!("{next_hero:#018x}"): {
+                "name": "Second fixture hero", "class": "Damage", "body": "0x0400000000000001",
+            },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut scene = PreparedScene::fixture_for_owner_admission(catalog);
+    let owner = player_entity(0);
+    let card = PlayerCard::default();
+    let viewer = PlayerAppearance {
+        entity: owner,
+        slot: 0,
+        team: 0,
+        card: &card,
+    };
+    let mut peer = Peer::new(owner);
+    peer.world.start(&scene, &viewer, FIRST_TICK).unwrap();
+    peer.world.create_bot(EntityUpdate {
+        entity: target,
+        operation: Some(Operation::Create(Box::new(Create::new(1, Vec::new())))),
+        ..EntityUpdate::default()
+    });
+    let mut sequence = 0;
+    while !peer.world.identity_ready(target) || !peer.world.mode_ready() {
+        assert!(sequence < 8, "fixture baseline did not arrive");
+        peer.world.present(&scene, FIRST_TICK).unwrap();
+        acknowledge_world_frame(&mut peer, &mut sequence);
+    }
+
+    let hit = |shooter: BodyId| BotHit {
+        damage: AppliedDamage {
+            source: shooter.entity,
+            amount,
+            named_pool_losses: Vec::new(),
+            tags: HitTags::EMPTY,
+            target_facts: HealthTargetFacts {
+                target,
+                filter_flags: None,
+                room_status: None,
+                tags: Default::default(),
+                script_state: EntityScriptState::Absent,
+            },
+        },
+        notices: [
+            Some(CombatNotice::Hit {
+                target,
+                dealt: amount,
+                critical: false,
+                killed: true,
+                shot_frame: FIRST_TICK,
+            }),
+            Some(CombatNotice::Elimination {
+                killer: shooter.entity,
+                victim: target,
+            }),
+        ],
+        health: EntityUpdate {
+            entity: target,
+            operation: Some(Operation::Update(vec![health(
+                0.0,
+                amount as f32,
+                0.0,
+                0.0,
+            )])),
+            ..EntityUpdate::default()
+        },
+    };
+    // Only the envelope is needed to exercise reliable admission.
+    let schemas = Schemas::from_json(r#"{"8F89E0DF":{"25001":[],"25005":[]}}"#).unwrap();
+    let stale = pick_body(&mut peer, &mut scene, &viewer, first_hero);
+    peer.bot_hit(hit(stale));
+    peer.flush_combat(&schemas, Duration::ZERO, None).unwrap();
+    assert_eq!(
+        peer.pending_combat_notices().count() as u64,
+        expected["pending_before_possession"].as_u64().unwrap(),
+    );
+    assert!(!peer.egress.has_queued_reliable());
+
+    let live = pick_body(&mut peer, &mut scene, &viewer, next_hero);
+    peer.flush_combat(&schemas, Duration::ZERO, None).unwrap();
+    assert_eq!(
+        peer.pending_combat_notices().count() as u64,
+        expected["pending_after_replacement"].as_u64().unwrap(),
+    );
+    assert!(!peer.egress.has_queued_reliable());
+    assert!(peer.world.health_pending(target));
+
+    peer.bot_hit(hit(live));
+    while !peer.world.owner_body_ready(live) {
+        assert!(sequence < 16, "replacement possession did not arrive");
+        acknowledge_world_frame(&mut peer, &mut sequence);
+    }
+    peer.flush_combat(&schemas, Duration::ZERO, None).unwrap();
+    assert_eq!(peer.pending_combat_notices().count(), 0);
+    acknowledge_world_frame(&mut peer, &mut sequence);
+    let acknowledged = u32::try_from(expected["reliable_notices"].as_u64().unwrap()).unwrap();
+    assert!(peer.egress.delivered_through(acknowledged - 1));
+    assert!(!peer.egress.delivered_through(acknowledged));
 }
 
 #[test]
@@ -239,24 +364,34 @@ fn room_respawn_waits_for_death_notice_admission_then_replaces_the_body_once() {
         Ok(Some(Box::new(factory.start_with_setup(spawn, setup)?)))
     }));
 
-    // The box and delay are original scheduler fixture values, independent of
-    // the prepared scene's real-map identity or retail respawn timing.
-    let delay = Duration::from_millis(32);
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/owner-death-notice-v1.json"
+    ))
+    .unwrap();
+    let death_position: [f64; 3] =
+        serde_json::from_value(fixture["respawn"]["death_position"].clone()).unwrap();
+    let delay = Duration::from_millis(fixture["respawn"]["practice_delay_ms"].as_u64().unwrap());
     let map_guid = scene.map().map_guid;
     let mode_guid = scene.map().mode_guid;
-    let environment = EnvironmentCatalog::from_json(
-        &serde_json::json!({"version":1,"maps":{
+    let override_file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        override_file.path(),
+        serde_json::json!({"version":1,"maps":{
             format!("0x{map_guid:016X}"):{
-                "lethal_volumes":[{"min":[199,9,199],"max":[201,11,201]}],
-                "player_respawns":[{"mode":format!("0x{mode_guid:016X}"),"delay_ms":32}]
+                "lethal_volumes":[{
+                    "min":death_position.map(|axis| axis - 1.0),
+                    "max":death_position.map(|axis| axis + 1.0)
+                }]
             }
         }})
         .to_string(),
     )
     .unwrap();
-    scene
-        .simulation_mut()
-        .set_environment(environment.for_map(map_guid));
+    let environment = EnvironmentCatalog::load(override_file.path())
+        .unwrap()
+        .for_map(map_guid);
+    assert_eq!(environment.player_respawn_delay(mode_guid), Some(delay));
+    scene.simulation_mut().set_environment(environment);
 
     let card = PlayerCard::default();
     let owner = player_entity(0);
@@ -278,6 +413,12 @@ fn room_respawn_waits_for_death_notice_admission_then_replaces_the_body_once() {
         assert!(!peer.world.mode_ready());
         pick_body(&mut peer, &mut scene, &viewer, SOLDIER)
     };
+    let initial_pose = scene
+        .simulation()
+        .player_body(old_body)
+        .unwrap()
+        .mover
+        .pose();
     drop(scene.simulation_mut().take_player_events());
     scene
         .simulation_mut()
@@ -286,7 +427,7 @@ fn room_respawn_waits_for_death_notice_admission_then_replaces_the_body_once() {
         .mover = Mover::new(
         MoverSettings::default(),
         Arc::new(ContactWorld::new(Vec::new()).unwrap()),
-        [200.0, 10.0, 200.0],
+        death_position,
         0,
         0x18,
     )
@@ -386,7 +527,11 @@ fn room_respawn_waits_for_death_notice_admission_then_replaces_the_body_once() {
     ));
     let simulation = room.world.as_ref().unwrap().scene.simulation();
     assert!(simulation.player_body(old_body).is_none());
-    assert!(simulation.player_body(fresh).unwrap().alive());
+    let replacement = simulation.player_body(fresh).unwrap();
+    assert!(replacement.alive());
+    let health = replacement.vitals().unwrap();
+    assert_eq!(health.total(), health.maximum());
+    assert_eq!(replacement.mover.pose().position, initial_pose.position);
 
     let updates = room
         .finish_simulation(FIRST_TICK + 4, replacement_time + delay)

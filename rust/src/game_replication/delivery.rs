@@ -17,6 +17,10 @@ pub(super) enum Delivery {
         revision: u64,
     },
     BotDestroy,
+    BotControllerCreate,
+    BotPossession {
+        body: u32,
+    },
     RemotePlayerCreate(BodyId),
     RemotePlayerDestroy(BodyId),
     CreateBody(BodyId),
@@ -31,6 +35,10 @@ pub(super) enum Delivery {
     },
     SceneScript {
         last: u32,
+    },
+    ObservedProjectile {
+        id: u64,
+        step: super::observed_projectiles::ProjectileDelivery,
     },
     ProjectileConfirm {
         id: BodyId,
@@ -66,6 +74,7 @@ impl WorldDelivery {
             queued: Vec::new(),
             created: HashSet::new(),
             bots: HashMap::new(),
+            bot_controllers: HashMap::new(),
             health_updates: HashMap::new(),
             health_revision: 0,
             entity_notice_ordinals: HashMap::new(),
@@ -96,6 +105,7 @@ impl WorldDelivery {
             projectile_destroys: HashMap::new(),
             biotic_views: BTreeMap::new(),
             scene_views: BTreeMap::new(),
+            observed_projectiles: Default::default(),
             bot_chunk_waited: false,
             gate: None,
             next_biotic_view: FIRST_BIOTIC_VIEW,
@@ -111,6 +121,7 @@ impl WorldDelivery {
         self.queued.clear();
         self.created.clear();
         self.bots.clear();
+        self.bot_controllers.clear();
         self.remote_players.clear();
         self.health_updates.clear();
         self.started = None;
@@ -128,6 +139,7 @@ impl WorldDelivery {
         self.projectile_destroys.clear();
         self.biotic_views.clear();
         self.scene_views.clear();
+        self.observed_projectiles = Default::default();
         self.bot_chunk_waited = false;
         self.gate = None;
         self.input.clear();
@@ -160,6 +172,10 @@ impl WorldDelivery {
 
     pub(crate) fn identity_ready(&self, entity: u32) -> bool {
         self.world_started() && self.created.contains(&entity)
+    }
+
+    pub(crate) fn owner_body_ready(&self, id: BodyId) -> bool {
+        self.bound == Some(id) && self.identity_ready(id.entity)
     }
 
     pub(crate) fn track_entity_notice(&mut self, entity: u32, ordinal: u32) {
@@ -269,6 +285,13 @@ impl WorldDelivery {
         if !self.tracks_current_bot(old) || self.bots.contains_key(&new) {
             return;
         }
+        #[cfg(feature = "inspector")]
+        if let Some(Operation::Create(create)) = &replacement.created.operation {
+            crate::owner_trace::playtest(format_args!(
+                "bot-respawn event=queued owner={:08x} old={old:08x} new={new:08x} spawn={:?}",
+                self.owner, create.position
+            ));
+        }
         self.bots.insert(old, BotLifetime::Retiring);
         self.bots.insert(new, BotLifetime::Live);
         self.created.remove(&old);
@@ -327,6 +350,17 @@ impl WorldDelivery {
                 self.bots.get(&entity),
                 Some(BotLifetime::Retiring | BotLifetime::RetiringEnemy)
             ),
+            Delivery::BotControllerCreate => self
+                .bot_controllers
+                .get(&entity)
+                .is_some_and(|state| !state.created),
+            Delivery::BotPossession { body } => {
+                self.tracks_current_bot(body)
+                    && self
+                        .bot_controllers
+                        .get(&entity)
+                        .is_some_and(|state| state.possessed == Some(body))
+            }
             Delivery::RemotePlayerCreate(id) => {
                 matches!(
                     self.remote_players.get(&id.entity),
@@ -352,6 +386,11 @@ impl WorldDelivery {
                     })
             }
             Delivery::Health { revision } => self.health_updates.get(&entity) == Some(&revision),
+            Delivery::ObservedProjectile { id, step } => {
+                self.observed_projectiles.current(id, step)
+                    && (step != super::observed_projectiles::ProjectileDelivery::Launch
+                        || self.tracks_current_bot(entity))
+            }
             Delivery::Script {
                 last, close: true, ..
             } => last == self.controller.latest_data(),
@@ -401,6 +440,14 @@ impl WorldDelivery {
                 if !self.current(&record) {
                     continue;
                 }
+                #[cfg(feature = "inspector")]
+                if crate::owner_trace::playtest_enabled() {
+                    self.trace_playtest_delivery(
+                        &record,
+                        packet.sequence,
+                        if packet.arrived { "ack" } else { "lost" },
+                    );
+                }
                 match (packet.arrived, record.delivery) {
                     (arrived, Delivery::SceneScript { last }) => {
                         let stream = self
@@ -426,12 +473,12 @@ impl WorldDelivery {
                         #[cfg(feature = "inspector")]
                         if let Some(arrived) = delivery
                             .owner_report
-                            .filter(|_| owner_volley_trace_enabled())
+                            .filter(|_| crate::owner_trace::enabled())
                         {
-                            eprintln!(
+                            crate::owner_trace::record(format_args!(
                                 "owner-volley delivery body={:08x} chunk={last} arrived={arrived}",
                                 script.id.entity
-                            );
+                            ));
                         }
                         if let Some((projectiles, arrived)) =
                             script.projectiles.as_mut().zip(delivery.owner_report)
@@ -463,6 +510,13 @@ impl WorldDelivery {
                         self.created.remove(&record.update.entity);
                         self.scene_views.remove(&record.update.entity);
                     }
+                    (true, Delivery::BotControllerCreate) => {
+                        self.created.insert(record.update.entity);
+                        if let Some(state) = self.bot_controllers.get_mut(&record.update.entity) {
+                            state.created = true;
+                        }
+                    }
+                    (true, Delivery::BotPossession { .. }) => {}
                     (true, Delivery::RemotePlayerCreate(id)) => {
                         self.created.insert(id.entity);
                         if let Some(stream) = self.scene_views.get_mut(&id.entity) {
@@ -480,6 +534,9 @@ impl WorldDelivery {
                     }
                     (true, Delivery::Health { .. }) => {
                         self.health_updates.remove(&record.update.entity);
+                    }
+                    (true, Delivery::ObservedProjectile { id, step }) => {
+                        self.observed_projectiles.arrived(id, step);
                     }
                     (true, Delivery::CreateBody(id)) => {
                         self.created.insert(id.entity);
@@ -541,6 +598,36 @@ impl WorldDelivery {
         }
     }
 
+    #[cfg(feature = "inspector")]
+    fn trace_playtest_delivery(&self, record: &Record, sequence: u32, event: &str) {
+        let entity = record.update.entity;
+        match record.delivery {
+            Delivery::BotCreate { after: Some(old) } => {
+                crate::owner_trace::playtest(format_args!(
+                    "bot-respawn event={event} owner={:08x} packet={sequence} record=create old={old:08x} new={entity:08x}",
+                    self.owner
+                ));
+            }
+            Delivery::BotDestroy => crate::owner_trace::playtest(format_args!(
+                "bot-respawn event={event} owner={:08x} packet={sequence} record=destroy old={entity:08x}",
+                self.owner
+            )),
+            Delivery::ProjectileConfirm { id, token }
+            | Delivery::ProjectileDestroy { id, token } => {
+                let operation = if matches!(record.delivery, Delivery::ProjectileConfirm { .. }) {
+                    "confirm"
+                } else {
+                    "destroy"
+                };
+                crate::owner_trace::playtest(format_args!(
+                    "projectile event={event} owner={:08x} packet={sequence} record={operation} token={token:?} entity={entity:08x}",
+                    id.entity
+                ));
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn remove_stale(&mut self) {
         let mut queued = std::mem::take(&mut self.queued);
         queued.retain(|record| self.current(record));
@@ -594,6 +681,12 @@ impl WorldDelivery {
                     {
                         return None;
                     }
+                    Delivery::BotPossession { body }
+                        if !self.identity_ready(record.update.entity)
+                            || !self.identity_ready(body) =>
+                    {
+                        return None;
+                    }
                     Delivery::Health { .. } if !self.identity_ready(record.update.entity) => {
                         return None;
                     }
@@ -620,9 +713,7 @@ impl WorldDelivery {
                     {
                         return None;
                     }
-                    Delivery::ProjectileConfirm { id, .. }
-                        if self.bound != Some(id) || !self.created.contains(&id.entity) =>
-                    {
+                    Delivery::ProjectileConfirm { id, .. } if !self.owner_body_ready(id) => {
                         // Even a fallback confirmation needs an acknowledged owner lease.
                         return None;
                     }
@@ -762,6 +853,12 @@ impl WorldDelivery {
             send,
         )?;
         let indexes = Self::sent_indices(&queued, &sent.records);
+        #[cfg(feature = "inspector")]
+        if crate::owner_trace::playtest_enabled() {
+            for &index in &indexes {
+                self.trace_playtest_delivery(&self.queued[index], sent.sequence, "sent");
+            }
+        }
         self.sent(&indexes);
         if !reliable_only {
             self.bot_chunk_waited = contention && !bot_turn;
@@ -998,7 +1095,11 @@ impl WorldDelivery {
         Ok(())
     }
 
-    pub(crate) fn present_scene_scripts(&mut self, scene: &PreparedScene) -> io::Result<()> {
+    pub(crate) fn present_scene_scripts(
+        &mut self,
+        scene: &PreparedScene,
+        tick: u32,
+    ) -> io::Result<()> {
         if let Some(projection) = scene.simulation().gate_projection() {
             self.present_scene_script(projection)?;
         }
@@ -1008,6 +1109,37 @@ impl WorldDelivery {
         }
         for projection in scene.simulation().player_projections(self.owner) {
             self.present_scene_script(projection)?;
+        }
+        self.advance_observed_projectiles(tick)
+    }
+
+    pub(crate) fn present_bot_controllers(&mut self, scene: &PreparedScene) -> io::Result<()> {
+        if !self.world_started() {
+            return Ok(());
+        }
+        for bot in scene.simulation().seated_bots() {
+            let Some(&state) = self.bot_controllers.get(&bot.controller) else {
+                self.bot_controllers
+                    .insert(bot.controller, BotControllerState::default());
+                self.push(Record {
+                    update: bot_controller_create(bot.controller, bot.slot, bot.team)?,
+                    delivery: Delivery::BotControllerCreate,
+                });
+                continue;
+            };
+            if state.created
+                && self.created.contains(&bot.body)
+                && self.tracks_current_bot(bot.body)
+                && state.possessed != Some(bot.body)
+            {
+                if let Some(entry) = self.bot_controllers.get_mut(&bot.controller) {
+                    entry.possessed = Some(bot.body);
+                }
+                self.push(Record {
+                    update: bot_controller_possession(bot.controller, bot.body, bot.hero),
+                    delivery: Delivery::BotPossession { body: bot.body },
+                });
+            }
         }
         Ok(())
     }
@@ -1034,16 +1166,8 @@ impl WorldDelivery {
         {
             return Ok(());
         }
-        // Client 0x0D24 nameplates read mode variables from 0CB6, so hold them
-        // until mode_ready() and never add a new nameplate to an already-dead bot.
-        let strip_nameplate = self.bots.contains_key(&entity)
-            && (!self.mode_ready()
-                || (bot_dead
-                    && !self
-                        .scene_views
-                        .get(&entity)
-                        .and_then(|stream| stream.base())
-                        .is_some_and(|(_, base)| base.has_graph(0x0d24))));
+        let bot = self.bots.contains_key(&entity);
+        let can_introduce = self.mode_ready() && !bot_dead;
         let stream = self
             .scene_views
             .entry(entity)
@@ -1059,8 +1183,9 @@ impl WorldDelivery {
             let mut snapshot = encoder
                 .project_next(projection.snapshot, base)
                 .map_err(invalid)?;
-            if strip_nameplate {
-                snapshot.strip_practice_nameplates();
+            if bot {
+                snapshot.stage_practice_nameplates(Some(base), can_introduce);
+                self.observed_projectiles.retain_volleys(&mut snapshot);
             }
             encoder
                 .queue_delta(stream, &snapshot, DeltaKind::Observer { resend: true }, 16)
@@ -1069,8 +1194,9 @@ impl WorldDelivery {
             let mut snapshot = encoder
                 .project(projection.snapshot, View::Observer)
                 .map_err(invalid)?;
-            if strip_nameplate {
-                snapshot.strip_practice_nameplates();
+            if bot {
+                snapshot.stage_practice_nameplates(None, false);
+                self.observed_projectiles.retain_volleys(&mut snapshot);
             }
             Some(encoder.queue_full(stream, &snapshot).map_err(invalid)?)
         };
@@ -1264,6 +1390,26 @@ impl WorldDelivery {
                 tick,
                 received,
             });
+        }
+    }
+
+    pub(crate) fn queue_wheel_action(&mut self, simulation: &RoomSimulation, message: &Message) {
+        let Some(body) = self
+            .active_body_id()
+            .filter(|&id| self.owner_body_ready(id))
+        else {
+            return;
+        };
+        if !simulation
+            .player_body(body)
+            .filter(|state| state.owner == self.owner && state.alive())
+            .and_then(|state| state.runtime.as_deref())
+            .is_some_and(OwnerBodyRuntime::wheel_actions_available)
+        {
+            return;
+        }
+        if let Some(action) = ClientWheelAction::read(message) {
+            self.input.push(InputWork::WheelAction { body, action });
         }
     }
 
@@ -1495,9 +1641,13 @@ impl WorldDelivery {
         let mut deliveries = Vec::new();
         for outcome in outcomes {
             match outcome {
-                FlightOutcome::Ended { token, travelled } => {
+                FlightOutcome::Ended {
+                    token,
+                    travelled,
+                    impact,
+                } => {
                     let travelled = (travelled / TICK_PERIOD.as_secs_f64()).ceil() as u32;
-                    projectiles.flight_ended(token, travelled, tick);
+                    projectiles.flight_ended(token, travelled, tick, impact);
                 }
                 FlightOutcome::Failed(token) => projectiles.cancel(token, &mut deliveries),
             }
@@ -1566,6 +1716,20 @@ impl WorldDelivery {
                     self.game_message(scene, viewer, tick, received, quanta, &message)?;
                     remaining -= 1;
                 }
+                InputWork::WheelAction { body, action } => {
+                    let runtime = self
+                        .active_body_id()
+                        .filter(|&active| active == body && self.owner_body_ready(active))
+                        .and_then(|id| scene.simulation_mut().player_body_mut(id))
+                        .filter(|state| state.owner == self.owner && state.alive())
+                        .and_then(|state| state.runtime.as_mut())
+                        .filter(|runtime| runtime.wheel_actions_available());
+                    if let Some(runtime) = runtime {
+                        // A full or halted VM queue rejects the request locally.
+                        let _ = runtime.queue_local_message(action.into_local_message());
+                    }
+                    remaining -= 1;
+                }
                 InputWork::Skin {
                     hero,
                     tick,
@@ -1620,6 +1784,8 @@ impl WorldDelivery {
         let Some(state) = simulation.player_body_mut(id) else {
             return Ok((1, true));
         };
+        let alive = state.alive();
+        state.mover.block_player_input(!alive);
         let pending = pending.get_or_insert_with(|| {
             PendingCommand::new(
                 state.mover.pending_poses(command),
@@ -1631,11 +1797,7 @@ impl WorldDelivery {
         let team = state.team;
         let previously_processed = self.input.processed;
         let script = &mut self.body_script;
-        let mut detached_motion = self
-            .detached_motion
-            .as_mut()
-            .filter(|(owner, _)| *owner == id)
-            .map(|(_, history)| history);
+        let detached_motion = &mut self.detached_motion;
         let PlayerBodyState {
             mover,
             runtime,
@@ -1684,7 +1846,25 @@ impl WorldDelivery {
                     .map_or_else(Vec::new, |frame| frame.blockers(id.entity, team))
             },
             |mover, command| {
-                if let Some(history) = detached_motion.as_deref_mut() {
+                if script.is_none() && frame_us != 0 && mover.scripted_motion_at(command.frame) {
+                    if detached_motion
+                        .as_ref()
+                        .is_some_and(|(owner, _)| *owner != id)
+                    {
+                        *detached_motion = None;
+                    }
+                    let (_, history) = detached_motion.get_or_insert_with(|| {
+                        (
+                            id,
+                            CorrectionHistory::new(id.entity, id.generation)
+                                .with_processed_at_spawn(previously_processed),
+                        )
+                    });
+                    history.swept_motion(command.frame, frame_us);
+                }
+                if let Some((_, history)) =
+                    detached_motion.as_mut().filter(|(owner, _)| *owner == id)
+                {
                     history.record(mover.pose());
                 }
                 if let Some(script) = script.as_mut() {
@@ -1917,7 +2097,8 @@ impl WorldDelivery {
             runtime,
             start_frame,
             Some(observer_create),
-        );
+        )
+        .with_body_template(hero.body);
         scene.simulation_mut().spawn_player_body(state)?;
         self.controller = controller;
         self.generation = generation;

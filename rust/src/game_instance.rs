@@ -8,6 +8,7 @@ use crate::{game_content::GameMap, game_messages::Message};
 
 pub const RETAIL_QUANTA: u32 = 16_000;
 pub const TOURNAMENT_QUANTA: u32 = 7_000;
+pub const PARTICIPANTS: usize = 16;
 pub(crate) const FREE_FOR_ALL_TEAM: u8 = 4;
 
 /// Membership of the admitted player roster, independent of spawned bodies.
@@ -43,22 +44,57 @@ pub struct Member<'a> {
     pub ranked: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeatedBot<'a> {
+    pub slot: u8,
+    pub controller: u32,
+    pub name: &'a str,
+    pub team: u8,
+}
+
 pub struct Instance<'a> {
     pub map: &'a GameMap,
     pub members: &'a [Member<'a>],
+    pub bots: &'a [SeatedBot<'a>],
 }
 
 impl Instance<'_> {
     fn roster(&self, viewer: u32) -> Fields {
         let playing = || self.members.iter().filter(|member| !member.gone);
-        let records = playing()
+        let mut records: Vec<_> = playing()
             .map(|member| Struct(Fields::from([(0x50, String(member.name.into()))])))
             .collect();
+        let player_count = records.len();
+        let mut seated: Vec<_> = if self.map.free_for_all {
+            Vec::new()
+        } else {
+            self.bots
+                .iter()
+                .copied()
+                .filter(|bot| usize::from(bot.slot) >= player_count)
+                .collect()
+        };
+        seated.sort_by_key(|bot| bot.slot);
+        for bot in &seated {
+            let seat = usize::from(bot.slot);
+            if seat >= records.len() {
+                records.resize_with(seat, || Struct(Fields::new()));
+                records.push(Struct(Fields::from([(0x50, String(bot.name.into()))])));
+            }
+        }
         let team = |number, size| {
-            let slots = playing()
+            let mut slots: Vec<_> = playing()
                 .filter(|member| self.map.free_for_all || member.team == number)
                 .map(|member| entity(member.entity))
                 .collect();
+            if !self.map.free_for_all {
+                slots.extend(
+                    seated
+                        .iter()
+                        .filter(|bot| bot.team == number)
+                        .map(|bot| entity(bot.controller)),
+                );
+            }
             Struct(Fields::from([
                 (0x18, Array(slots)),
                 (0x60, Unsigned(u64::from(number))),
@@ -79,7 +115,10 @@ impl Instance<'_> {
         ]);
         Fields::from([(
             0,
-            Struct(Fields::from([(0, Struct(roster)), (0x274, Unsigned(16))])),
+            Struct(Fields::from([
+                (0, Struct(roster)),
+                (0x274, Unsigned(PARTICIPANTS as u64)),
+            ])),
         )])
     }
 
@@ -161,6 +200,7 @@ mod tests {
         let instance = Instance {
             map: &map,
             members: &members,
+            bots: &[],
         };
         let initial = instance.load(members[0].entity, TOURNAMENT_QUANTA);
         assert_eq!(initial.fields[&0x78], Unsigned(9));
@@ -176,6 +216,107 @@ mod tests {
         assert_eq!(
             active_only.load(members[0].entity, RETAIL_QUANTA).fields[&0x78],
             Unsigned(1)
+        );
+    }
+
+    #[test]
+    fn instance_roster_seats_bots_in_team_slots_without_changing_team_sizes() {
+        let members = members();
+        let map = GameMap::practice_range();
+        let bots = [
+            SeatedBot {
+                slot: 2,
+                controller: 0xa000_8200,
+                name: "Training Bot",
+                team: 1,
+            },
+            SeatedBot {
+                slot: 4,
+                controller: 0xa000_8400,
+                name: "Ally Bot",
+                team: 0,
+            },
+        ];
+        let instance = Instance {
+            map: &map,
+            members: &members[..1],
+            bots: &bots,
+        };
+        let load = instance.load(members[0].entity, RETAIL_QUANTA);
+        let Struct(outer) = &load.fields[&0x80] else {
+            panic!("missing outer roster struct");
+        };
+        let Struct(inner) = &outer[&0] else {
+            panic!("missing inner roster struct");
+        };
+        let Struct(roster) = &inner[&0] else {
+            panic!("missing roster");
+        };
+        let Struct(record_box) = &roster[&0] else {
+            panic!("missing records");
+        };
+        let Array(records) = &record_box[&0] else {
+            panic!("missing record array");
+        };
+        assert_eq!(records.len(), 5);
+        assert_eq!(
+            records[0],
+            Struct(Fields::from([(0x50, String("Blue".into()))]))
+        );
+        assert_eq!(records[1], Struct(Fields::new()));
+        assert_eq!(
+            records[2],
+            Struct(Fields::from([(0x50, String("Training Bot".into()))]))
+        );
+        assert_eq!(records[3], Struct(Fields::new()));
+        assert_eq!(
+            records[4],
+            Struct(Fields::from([(0x50, String("Ally Bot".into()))]))
+        );
+
+        let Array(teams) = &roster[&0xc0] else {
+            panic!("missing teams");
+        };
+        let Struct(team0) = &teams[0] else {
+            panic!("missing team 0");
+        };
+        let Struct(team1) = &teams[1] else {
+            panic!("missing team 1");
+        };
+        assert_eq!(
+            team0[&0x18],
+            Array(vec![entity(members[0].entity), entity(0xa000_8400)])
+        );
+        assert_eq!(team0[&0x61], Unsigned(1));
+        assert_eq!(team1[&0x18], Array(vec![entity(0xa000_8200)]));
+        assert_eq!(team1[&0x61], Unsigned(0));
+
+        let ffa_map = GameMap {
+            free_for_all: true,
+            team_sizes: vec![8],
+            ..GameMap::practice_range()
+        };
+        let ffa = Instance {
+            map: &ffa_map,
+            members: &members[..1],
+            bots: &bots,
+        };
+        let ffa_load = ffa.load(members[0].entity, RETAIL_QUANTA);
+        let Struct(ffa_outer) = &ffa_load.fields[&0x80] else {
+            panic!();
+        };
+        let Struct(ffa_inner) = &ffa_outer[&0] else {
+            panic!();
+        };
+        let Struct(ffa_roster) = &ffa_inner[&0] else {
+            panic!();
+        };
+        let Struct(ffa_record_box) = &ffa_roster[&0] else {
+            panic!();
+        };
+        assert_eq!(
+            ffa_record_box[&0],
+            Array(vec![Struct(Fields::from([(0x50, String("Blue".into()))]))])
         );
     }
 
@@ -201,6 +342,7 @@ mod tests {
                 Instance {
                     map: &practice_range,
                     members: &members,
+                    bots: &[],
                 },
                 [
                     (
@@ -217,6 +359,7 @@ mod tests {
                 Instance {
                     map: &free_for_all,
                     members: &members,
+                    bots: &[],
                 },
                 [
                     (
@@ -236,9 +379,9 @@ mod tests {
                 instance.update(members[2].entity),
             ];
             for (message, (length, digest)) in messages.into_iter().zip(expected) {
-                let bytes = encode(&schemas, message.id, &message.fields).unwrap();
-                assert_eq!(bytes.len(), length);
-                assert_eq!(format!("{:x}", Sha256::digest(bytes)), digest);
+                let encoded = encode(&schemas, message.id, &message.fields).unwrap();
+                assert_eq!(encoded.as_bytes().len(), length);
+                assert_eq!(format!("{:x}", Sha256::digest(encoded.as_bytes())), digest);
             }
         }
     }

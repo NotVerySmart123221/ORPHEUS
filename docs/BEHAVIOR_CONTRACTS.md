@@ -32,7 +32,27 @@ The Rust-only [room message fixture](../fixtures/behavior/script-room-message-v1
 
 The Rust-only [projected message topics fixture](../fixtures/behavior/script-projected-message-topics-v1.json) checks explicit client scope, loading conflicts, ordinary state entry and exit, and server dispatch exclusion. The native test compares owner and observer activation frames and removal deltas with the existing send codec.
 
-The Rust-only [room cue fixture](../fixtures/behavior/script-room-cue-v1.json) covers authored audience selection and host admission. Native coverage checks selected player generations, late listener death, and reliable notice admission.
+The Rust-only [room cue fixture](../fixtures/behavior/script-room-cue-v1.json) covers authored audience selection, actor and mode speakers, and host admission. It also checks that delayed health events skip replaced or departed listeners without dropping other recipients. Native coverage checks selected player generations, late listener death, and reliable notice admission.
+
+The Rust-only [received damage audio fixture](../fixtures/behavior/received-damage-audio-v1.json) follows settled damage through the authored target filter, room routing, and reliable game frame. It verifies the victim connection, body replacement before reliable admission, and the decoded listener and line for a fresh hit.
+
+The Rust-only [confirmed headshot audio fixture](../fixtures/behavior/confirmed-headshot-audio-v1.json) loads a synthetic hurt-volume profile through the selected body template, then traces room hitscan, critical settlement, and decoded reliable delivery to the shooter. Its control rays cover a miss, body damage, and head contact with the weapon's critical multiplier disabled.
+
+The Rust-only [mode cue retry fixture](../fixtures/behavior/mode-cue-retry-v1.json) follows three distinct room eliminations through an authored count and cue thresholds. Two opponents die in the same settlement frame. Nonlethal damage and damage to an already defeated body do not count. Only the selected peer receives the cues. The test decodes the mode speaker, listener, line, and reliable ordinal across the original send, retransmission, and next cue. Duplicate acknowledgements leave the retry count unchanged. The graph and cue identifiers are synthetic.
+
+The Rust-only [timed elimination fixture](../fixtures/behavior/script-timed-elimination-cues-v1.json) exercises an authored opponent filter, count window, and cue thresholds through the production VM. It checks same-frame eliminations, expiry, stale and missing settlement frames, and ineligible damage. Its policy and assets are synthetic.
+
+The [actor voice fixture](../fixtures/behavior/player-voice-v1.json) covers first-playable stimulus selection, skin overrides, and line variation. The Rust stock bot case runs an authored criteria action through the existing room cue queue and checks team and free-for-all audiences.
+
+The [directed room message fixture](../fixtures/behavior/script-room-message-v1.json) also runs through two stock bot VMs. The room test checks typed bindings, delivery on the next receiver frame, isolation from ordinary entries, and a recipient who dies after a message was admitted.
+
+The Rust-only [wheel selection fixture](../fixtures/behavior/wheel-selection-ingress-v1.json) covers typed client input, reliable ordering and retries, possession admission, and an actor replacement with the same wire ID. The prepared 104319 probe checks parameter binding in both authored receivers.
+
+The Rust-only [view tracker fixture](../fixtures/behavior/script-view-targets-v1.json) gives the same native field layout to two synthetic graph placements. It covers ordered output, periodic sampling, a successful empty result, and an unavailable room query. The room test uses a frozen actor snapshot and synthetic sight profiles to check range, aperture, ranking, result limits, and occlusion by walls and actors.
+
+The Rust-only [authored pairs fixture](../fixtures/behavior/script-authored-pairs-v1.json) exercises an asset-keyed table holding an expression-built parameter map. It checks ordered integer keys, typed display-text values, and rejection of malformed expression stacks. The prepared wheel probe checks that the selected action resolves to its own parameter row.
+
+The Rust-only [action texture fixture](../fixtures/behavior/script-asset-texture-v1.json) checks that keys with the same low 16 bits resolve independently. It distinguishes an absent catalog, a missing action in a supplied catalog, and an invalid asset kind.
 
 The Rust-only [health action fixture](../fixtures/behavior/script-health-change-v1.json) checks signed health request admission, continuation, and rejection diagnostics. Room tests cover player and bot settlement, stale body identity, and death and health updates.
 
@@ -42,7 +62,37 @@ The Rust-only [stock bot script isolation fixture](../fixtures/behavior/stock-bo
 
 The Rust-only [combat hurt volumes fixture](../fixtures/behavior/combat-hurt-volumes-v1.json) checks head and body classification, lateral contact, open space, and wall occlusion. Hitscan and projectiles use the same combat shape. Bodies without an optional hurt profile keep the compatibility proxy.
 
+The Rust-only [projectile self-splash fixture](../fixtures/behavior/projectile-self-splash-v1.json) covers the authored scale, visibility checks, and absent configuration. The owner can take splash without blocking their own projectile. A room regression covers health and death feedback.
+
+The Rust-only [combat knockback fixture](../fixtures/behavior/combat-knockback-v1.json) exercises authored ring order, an exclusive outer radius, and the horizontal and upward channels independently of damage. Companion tests cover the authored self-impulse switch and scale, occluded and zero-damage self impulses, a stationary bot's movement, and owner correction with and without an active script. The remaining ring field and original-client movement are still unverified.
+
+The prepared knockback probe evaluates the stock Helix and Particle Cannon profiles with the active mode's actor rules. Some projectile coefficients reference mode rules instead of storing literal values. A pack missing those rules can resolve the coefficients to zero. Use the [mode and actor rules preparation guide](STATESCRIPT_DEVELOPMENT.md#set-mode-and-actor-rules) when preparing the local graph data. The profile probe exercises expression evaluation independently of stock body admission and client movement.
+
+The Rust-only [contact combat fixture](../fixtures/behavior/script-contact-combat-v1.json) runs a linked target volume and damage state at two synthetic graph placements. It checks one settlement per activation and confirms that the same force ring evaluator used by projectiles can reject an impulse without suppressing damage. The room regression checks teammate exclusion, static occlusion, and generation-bound damage and impulse admission.
+
+The Rust-only [projectile delivery fixture](../fixtures/behavior/projectile-alias-release-v1.json) covers staggered acknowledgments for two predictions of one shot. A confirmed prediction is released when the authoritative impact is due. An introduction still in flight can create another confirmation after the original release. Its own acknowledgment permits retirement without repeating the original release. A lost introduction admits no alias. The [projectile expiry fixture](../fixtures/behavior/projectile-expiry-v1.json) drives the authored gravity and detonation switch through the production parser. It checks additive gravity, conditional disable, distance-limited flight, occlusion, and single retirement. Range and lifetime have independent budgets. The final sweep runs only as far as the remaining distance permits. Direct-hit falloff uses the same accumulated distance. [Pinned sweep reference](https://github.com/leafall903/ORPHEUS/blob/a9096f5d5d5ef0d5fe5b48660d9737d26a2029f5/src/ow174/game/combat.py#L9028-L9049).
+
+The Rust-only [posed projectile aim fixture](../fixtures/behavior/projectile-posed-aim-v1.json) runs a single predicted shot through the owner VM with absent aim or either of two literal direct-launch slots. It checks that the supported configurations use the sampled command direction. Unresolved aim channels and spread configs do not fall back to a straight flight. This follows the [pinned Python command-aim path](https://github.com/leafall903/ORPHEUS/blob/a9096f5d5d5ef0d5fe5b48660d9737d26a2029f5/src/ow174/game/combat.py#L6699-L6710). The contract covers server launch direction. Native muzzle and additional aim-channel semantics remain open.
+
+The prepared encrypted ground-shot regression applies the same assertions to the stock Helix and Particle Cannon shots. It follows a confirmed projectile ID through impact retirement, reads all owner health pools from the update, and checks a movement correction in the first eight commands after impact. Room snapshots confirm upward motion. The test does not run the original client.
+
+The Rust-only [creator body fixture](../fixtures/behavior/statescript-creator-body-v1.json) checks the default creator relation on a typed entity operand. It distinguishes explicit absence from an unavailable relation and rejects other relation modes and invalid entity references. The expression passes the selected entity to the host for authoritative lookup. [Pinned source relation reference](https://github.com/leafall903/ORPHEUS/blob/a9096f5d5d5ef0d5fe5b48660d9737d26a2029f5/src/ow174/game/ball_mines.py#L190-L197).
+
+The [glancing wall fixture](../fixtures/behavior/projectile-glancing-wall-v1.json) sweeps a projectile against both sides of a synthetic triangle. The real map query supplies the surface normal for blast visibility. The exposed target receives damage and impulse, and the wall blocks both for the far target. The collision point still determines range and falloff. [Pinned blast visibility reference](https://github.com/leafall903/ORPHEUS/blob/a9096f5d5d5ef0d5fe5b48660d9737d26a2029f5/src/ow174/game/combat.py#L9212-L9220).
+
+The Rust-only [terrain hull fixture](../fixtures/behavior/projectile-terrain-hull-v1.json) routes an authored projectile radius through the room's movement contact world. Contact occurs in the first tick for the sphere and in the second tick with the radius absent. Splash still uses a point ray and reaches only the exposed target. Actor hit radius remains independent. Rooms without contact geometry retain the centreline ray. [Pinned reference sweep](https://github.com/leafall903/ORPHEUS/blob/a9096f5d5d5ef0d5fe5b48660d9737d26a2029f5/src/ow174/game/junkrat_projectile.py#L79-L105).
+
+The Rust-only [terrain rebound fixture](../fixtures/behavior/projectile-terrain-rebound-v1.json) evaluates the authored enable expression, count, and normal and tangential velocity coefficients. It sweeps two synthetic walls through the map index and checks that a nearer actor wins, that the remainder of the tick continues after a rebound, and that rebound travel counts toward the same range limit. A rebound does not terminate the projectile. Missing count or normal restitution retain the existing terminal-contact behavior until their native defaults are established. Native collision hulls, additional surface response fields, and original-client rendering remain open. [Pinned terrain response reference](https://github.com/leafall903/ORPHEUS/blob/a9096f5d5d5ef0d5fe5b48660d9737d26a2029f5/src/ow174/game/junkrat_projectile.py#L91-L137).
+
+The Rust-only [impact-spawn fixture](../fixtures/behavior/projectile-impact-spawn-v1.json) reads the landed entity definition and optional graph from the volley. It moves the existing canister and field configuration to another graph and a different player body. The legacy projection handles its declared resources. A separately attached actor graph remains outside that projection. [Pinned impact-spawn reference](https://github.com/leafall903/ORPHEUS/blob/a9096f5d5d5ef0d5fe5b48660d9737d26a2029f5/src/ow174/game/steel_trap.py#L49-L57).
+
 The Rust-only [unposed owner volley fixture](../fixtures/behavior/owner-unposed-volley-v1.json) checks that a due round with no pose is skipped at its authored time and a later posed round in the same volley still fires and spends ammunition.
+
+The Rust-only [staged nameplate fixture](../fixtures/behavior/npc-nameplate-staged-admission-v1.json) checks admission after the mode and bot body acknowledgments, exactly retried introduction, and lifetime protection for a bot that died before admission.
+
+The Rust-only [combat feedback fixture](../fixtures/behavior/combat-feedback-owner-body-v1.json) checks reliable hit and elimination admission after shooter possession, replacement of the shooter before acknowledgment, and independent target health delivery.
+
+The Rust-only [gameplay defaults fixture](../fixtures/behavior/profile-gameplay-defaults-v1.json) checks login settings with an unsaved, null, or explicitly saved gameplay block. The shared profile fixture continues to exercise the pinned Python baseline.
 
 The Rust-only [NPC script packet fixture](../fixtures/behavior/npc-script-packet-isolation-v1.json) checks that a peer sends reliable messages and NPC script chunks separately, retries a lost chunk, and retains its pending turn after a transport error. Other scene-script chunks can still share a datagram with reliable messages. The scheduling rule follows the [Python implementation and client observation](https://github.com/leafall903/ORPHEUS/commit/858e54dfa43e0e19abd59b07efa548b8270038f0).
 
@@ -129,7 +179,7 @@ The Rust-only [owner replacement fixture](../fixtures/behavior/owner-admission-t
 
 The Rust-only [owner fault hitscan fixture](../fixtures/behavior/owner-script-fault-hitscan-v1.json) compares split and batched input across a VM fault and queued replacement. Only completed hitscan steps reach room settlement. The [owner fault vitals fixture](../fixtures/behavior/owner-script-fault-vitals-v1.json) checks cumulative health updates, later healing and death, and body identity after script retirement. Bodies without modeled vitals still leave health queries unavailable.
 
-The Rust-only [hitscan order fixture](../fixtures/behavior/owner-hitscan-before-switch-v1.json) checks that an acknowledged shot settles once before a queued hero or skin replacement, under split and shared input budgets. The [owner death notice fixture](../fixtures/behavior/owner-death-notice-v1.json) checks that a waiting notice stays with the victim generation and that a current death can still enter the reliable queue after mode UI readiness.
+The Rust-only [hitscan order fixture](../fixtures/behavior/owner-hitscan-before-switch-v1.json) checks that an acknowledged shot settles once before a queued hero or skin replacement, under split and shared input budgets. The [owner death notice fixture](../fixtures/behavior/owner-death-notice-v1.json) checks that a waiting notice stays with the victim generation and that a current death can still enter the reliable queue after mode UI readiness. The room regression uses the shipped respawn rule and verifies a fresh body with full health at the original spawn point. The player delivery regression verifies that dead bodies ignore movement input while still consuming commands.
 
 The Rust-only [Practice Range selection fixture](../fixtures/behavior/practice-owner-selector-v1.json) starts two distinct catalog definitions through the ordinary scene selector and checks their graph roots. It distinguishes an invalid authored definition from an identity absent from the selector.
 
@@ -239,7 +289,7 @@ The graphs (`0x0CE0` -> `0x0D03` model) and codec table are synthetic, so no run
 
 ## Cross-Language CI (`shared-behavior-contracts`)
 
-In [`.github/workflows/public-checks.yml`](../.github/workflows/public-checks.yml), the `shared-behavior-contracts` job checks out the pinned Python `main` reference alongside this `rust` checkout and feeds **`rust`'s own `fixtures/behavior/` files** to both implementations:
+In [`.github/workflows/public-checks.yml`](../.github/workflows/public-checks.yml), the `shared-behavior-contracts` job checks the pinned Python reference against **`rust`'s own `fixtures/behavior/` files**. The Windows default workspace job runs the Rust consumers and checks their reported results. To run the consumers directly:
 
 ```powershell
 # Python consumer side (run from a main checkout with ORPHEUS_BEHAVIOR_FIXTURES pointed at rust)
@@ -282,7 +332,7 @@ Mirrored under `fixtures/behavior/` so `rust` maintains a strict superset of `ma
 - **Verified by Python CI in `shared-behavior-contracts`** (Rust consumers tracked in [#61](https://github.com/leafall903/ORPHEUS/issues/61)):
   - `seismic-slam-wave-v1.json` (shockwave reach sampling & candidate dedup)
   - `seismic-slam-placement-v1.json` (airborne selector states & MoveTo handoff)
-  - `body-short-action-retry-v1.json` (short frame-action stamps, loss/retry & ACK retirement)
+  - `body-short-action-retry-v1.json` (short frame-action stamps, loss and ACK retirement, captured entity and instance variables after a later callout, and late observer admission)
   - `server-only-movement-v1.json` (channel-2 throttle mods & owner record tail window)
 - **Runtime-backed Python fixtures** (verified on `main` via `tests/runtime/`):
   - `player-voice-v1.json`, `wheel-emote-presentation-v1.json`, `wheel-emote-weapon-v1.json`
@@ -296,9 +346,9 @@ Mirrored under `fixtures/behavior/` so `rust` maintains a strict superset of `ma
 | `room-isolation-v1.json` | Encrypted worker room fault/panic retirement while sibling rooms stay live (`encrypted_worker_satisfies_room_recovery_contract`) |
 | `junkenstein-validation-v1.json` | Normal Cassidy validation overrides (`--junkenstein-validation`) & post-AI immunity damage routing |
 
-### 4. StateScript VM, Combat & Junkenstein Contracts (`38` Exact CI Checks + Remaining Helper Scripts)
+### 4. StateScript VM, Combat & Junkenstein Contracts
 
-Checked individually by `--exact` test name in `.github/workflows/public-checks.yml` (the `main`-compatible subset was ported back to `main` under [#61](https://github.com/leafall903/ORPHEUS/issues/61) in `tests/public/test_statescript_*.py`, retiring 19 superseded `scripts/check_*_contract.py` helpers; only `check_body_field_contract.py` and `check_spatial_owner_absence_contract.py` remain here pending Draft [#32](https://github.com/leafall903/ORPHEUS/pull/32)):
+The Windows default CI job requires these named contracts to pass in the full workspace run. The `main`-compatible subset moved to `tests/public/test_statescript_*.py` under [#61](https://github.com/leafall903/ORPHEUS/issues/61), retiring 19 standalone verifiers. The body-field and spatial-owner-absence Python helpers remain available for the pinned research revision.
 
 - **Portable VM core (`-p orpheus-statescript`, `script_init::tests::*`):** `shared_unkeyed_array_contract`, `shared_corpse_retirement_contract`, `shared_contains_condition_contract`, `shared_voice_lifecycle_contract`, `shared_nested_destination_contract`, `shared_unbound_loadout_action_contract`, `shared_foreign_notification_contract`, `shared_spatial_owner_absence_contract`, `shared_ability_press_window_contract`, `shared_stack_admission_contract`.
 - **Portable expressions & foreign reads (`-p orpheus-statescript`, `script_expr::tests::*`, `script_entity_state::tests::*`):** `shared_engine_setting_contract`, `shared_foreign_component_contract`, `shared_velocity_contract`, `shared_total_health_contract`, `shared_hostile_filter_contract`, `shared_combat_target_contract`, `shared_ally_filter_contract`, `shared_native_filter_tag_clauses`, `shared_body_field_contract`, `shared_body_angle_contract`, `shared_flashbang_filter_admission_contract`, `shared_absent_target_filter_contract`.

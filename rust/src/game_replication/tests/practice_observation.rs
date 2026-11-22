@@ -452,7 +452,7 @@ fn observe_prepared_actor_input(
     scene: &mut PreparedScene,
     hero: u64,
     observation: &mut InputObservation,
-    extra_phases: &[InputPhase],
+    phases: impl IntoIterator<Item = &'static InputPhase>,
 ) -> Result<(), (&'static str, u32, &'static str)> {
     use crate::game_instance::TeamMemberCounts;
 
@@ -512,7 +512,7 @@ fn observe_prepared_actor_input(
         ));
     };
 
-    for &(phase, frames, forward, buttons) in WEAPON_PHASES.iter().chain(extra_phases) {
+    for &(phase, frames, forward, buttons) in phases {
         for _ in 0..frames {
             tick += 1;
             scene.simulation_mut().prepare_spatial_frame(tick).unwrap();
@@ -588,7 +588,8 @@ fn prepared_practice_catalog_observes_input_survival_and_owner_egress() {
         total += 1;
         let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
         let mut observation = InputObservation::default();
-        let result = observe_prepared_actor_input(&mut scene, hero.guid, &mut observation, &[]);
+        let result =
+            observe_prepared_actor_input(&mut scene, hero.guid, &mut observation, WEAPON_PHASES);
         admitted += usize::from(observation.admitted);
         completed += usize::from(result.is_ok());
         if hero.guid == SOLDIER {
@@ -616,6 +617,35 @@ fn prepared_practice_catalog_observes_input_survival_and_owner_egress() {
     assert!(
         soldier_passed,
         "expected both weapon outputs from the reference control"
+    );
+}
+
+#[test]
+#[ignore = "requires the local 104319 stock Practice Range runtime"]
+fn prepared_stock_secondary_projectile_launches_from_a_fresh_body() {
+    let runtime = std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap();
+    let assets = SceneAssets::load(runtime).unwrap();
+    let hero = assets
+        .heroes()
+        .heroes()
+        .find(|hero| hero.name == "Zarya")
+        .unwrap();
+    let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
+    let mut observation = InputObservation::default();
+    let phases: &[InputPhase] = &[
+        ("idle", 12, 0, 0),
+        ("secondary", 24, 0, SECONDARY),
+        ("settle", 8, 0, 0),
+    ];
+    let result = observe_prepared_actor_input(&mut scene, hero.guid, &mut observation, phases);
+    assert!(
+        result.is_ok() && observation.launches > 0,
+        "right-click replay {result:?}, launches={}, fault={:?}",
+        observation.launches,
+        observation
+            .script_fault
+            .as_ref()
+            .map(|fault| fault.error.to_string()),
     );
 }
 
@@ -660,8 +690,12 @@ fn prepared_practice_actor_input_matrix() {
     for hero in assets.heroes().heroes() {
         let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
         let mut observation = InputObservation::default();
-        let result =
-            observe_prepared_actor_input(&mut scene, hero.guid, &mut observation, ABILITY_PHASES);
+        let result = observe_prepared_actor_input(
+            &mut scene,
+            hero.guid,
+            &mut observation,
+            WEAPON_PHASES.iter().chain(ABILITY_PHASES),
+        );
         let failure = result.err().map(
             |(phase, frame, reason)| json!({"phase": phase, "frame": frame, "reason": reason}),
         );

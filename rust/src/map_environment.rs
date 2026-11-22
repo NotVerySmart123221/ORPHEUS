@@ -1,4 +1,4 @@
-//! Optional authored hazards and lifecycle policy, independent of collision safety bounds.
+//! Authored hazards and lifecycle policy, independent of collision safety bounds.
 
 use std::{collections::HashMap, fs, io, path::Path, time::Duration};
 
@@ -83,13 +83,23 @@ pub(crate) struct EnvironmentCatalog {
 }
 
 impl EnvironmentCatalog {
-    /// An omitted opt-in file leaves all maps without environmental hazards.
+    /// Ship the known lifecycle rules and let local maps extend or override them.
     pub(crate) fn load(path: impl AsRef<Path>) -> io::Result<Self> {
-        match fs::read_to_string(path) {
-            Ok(text) => Self::from_json(&text),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(error) => Err(error),
+        let mut defaults = Self::from_json(include_str!("map_environment_defaults.json"))?;
+        let text = match fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(defaults),
+            Err(error) => return Err(error),
+        };
+        for (map, mut configured) in Self::from_json(&text)?.maps {
+            if let Some(shipped) = defaults.maps.get(&map) {
+                for (&mode, &delay) in &shipped.player_respawns {
+                    configured.player_respawns.entry(mode).or_insert(delay);
+                }
+            }
+            defaults.maps.insert(map, configured);
         }
+        Ok(defaults)
     }
 
     pub(crate) fn from_json(text: &str) -> io::Result<Self> {
@@ -163,6 +173,42 @@ mod tests {
 
     fn volume() -> Value {
         json!({"min":[-2,-4,-6],"max":[2,4,6]})
+    }
+
+    #[test]
+    fn practice_respawn_default_survives_missing_data_and_accepts_mode_override() {
+        let practice = crate::game_content::GameMap::practice_range();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("environment.json");
+        let load = || {
+            EnvironmentCatalog::load(&path)
+                .unwrap()
+                .for_map(practice.map_guid)
+        };
+        assert_eq!(
+            load().player_respawn_delay(practice.mode_guid),
+            Some(Duration::from_secs(3))
+        );
+        assert_eq!(load().player_respawn_delay(42), None);
+        fs::write(
+            &path,
+            json!({"version":1,"maps":{
+                (format!("0x{:016X}", practice.map_guid)):{
+                    "lethal_volumes":[volume()],
+                    "player_respawns":[{
+                        "mode":format!("0x{:016X}", practice.mode_guid), "delay_ms":750
+                    }]
+                }
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let configured = load();
+        assert_eq!(
+            configured.player_respawn_delay(practice.mode_guid),
+            Some(Duration::from_millis(750))
+        );
+        assert!(configured.lethal_at([0.0; 3]));
     }
 
     #[test]

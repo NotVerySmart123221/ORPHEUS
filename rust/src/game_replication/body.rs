@@ -169,7 +169,7 @@ impl BodyScript {
             .vitals()
             .is_some_and(|vitals| vitals.death().is_some())
         {
-            mover.clear_pending_script_motion();
+            mover.clear_pending_motion();
         } else {
             for (frame, change) in velocity_changes {
                 mover.queue_velocity_change(frame, change);
@@ -228,15 +228,27 @@ impl BodyScript {
             .as_mut()
             .zip(projectile.ballistics.definition)
         else {
+            #[cfg(feature = "inspector")]
+            crate::owner_trace::playtest(format_args!(
+                "projectile event=launch-rejected shot={:?} reason=no-definition-or-tracker",
+                projectile.shot
+            ));
             return;
         };
         let bound = (projectile.ballistics.lifetime / TICK_PERIOD.as_secs_f64()).ceil() as u32;
+        #[cfg(feature = "inspector")]
+        let radius = projectile.ballistics.radius;
         let Some(flight) = ProjectileFlight::new(
             projectile.ballistics,
             projectile.origin,
             projectile.direction,
             None,
         ) else {
+            #[cfg(feature = "inspector")]
+            crate::owner_trace::playtest(format_args!(
+                "projectile event=launch-rejected shot={:?} reason=invalid-flight",
+                projectile.shot
+            ));
             return;
         };
         let flight = if let Some(gravity) = projectile.gravity {
@@ -244,8 +256,12 @@ impl BodyScript {
         } else {
             flight
         };
-        let flight = flight.with_expiry_blast(projectile.expiry_blast);
         if let Some(token) = projectiles.admit(projectile.shot, definition, bound) {
+            #[cfg(feature = "inspector")]
+            crate::owner_trace::playtest(format_args!(
+                "projectile event=launched token={token:?} shot={:?} definition={definition:016x} origin={:?} aim={:?} radius={radius}",
+                projectile.shot, projectile.origin, projectile.direction
+            ));
             launches.push(AdmittedFlight {
                 token,
                 flight,
@@ -254,6 +270,12 @@ impl BodyScript {
                     .stun
                     .and_then(|_| LEGACY_PROJECTILE_CONTROL.flight_site(&projectile.shot)),
             });
+        } else {
+            #[cfg(feature = "inspector")]
+            crate::owner_trace::playtest(format_args!(
+                "projectile event=launch-rejected shot={:?} definition={definition:016x} reason=not-admitted",
+                projectile.shot
+            ));
         }
     }
 
@@ -327,7 +349,7 @@ impl BodyScript {
     pub(super) fn sent(&mut self, last: u32) {
         if let Some(report) = self.stream.sent(last) {
             #[cfg(feature = "inspector")]
-            if owner_volley_trace_enabled() {
+            if crate::owner_trace::enabled() {
                 report.snapshot.trace_owner_volley_delta(
                     last,
                     report.command_frame,
@@ -364,6 +386,10 @@ pub(super) enum InputWork {
         message: Message,
         tick: u32,
         received: Duration,
+    },
+    WheelAction {
+        body: BodyId,
+        action: ClientWheelAction,
     },
     Skin {
         hero: u64,

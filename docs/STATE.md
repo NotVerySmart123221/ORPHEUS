@@ -10,9 +10,9 @@ The [pinned Python → Rust parity matrix](https://github.com/leafall903/ORPHEUS
 
 | Lane / Suite | Scope Verified in CI (`.github/workflows/public-checks.yml`) |
 | --- | --- |
-| **Portable crates (Linux)** | `orpheus-wire`, `orpheus-collision`, `orpheus-runtime`, and `orpheus-statescript` compile and pass isolated tests without server/ECS deps (`cargo test --locked --all-targets -p orpheus-collision -p orpheus-runtime -p orpheus-statescript -p orpheus-wire`). |
-| **Root workspace (`default` / `inspector`)** | `rustfmt --check`, zero-warning `clippy`, root library `438` (`319` public / `119` `#[ignore]`) tests in `default`, `444` (`325` public / `119` `#[ignore]`) tests in `--features inspector`, and `orpheus-statescript` `144` (`131` public / `13` `#[ignore]`) tests, plus MSRV `1.85.0` check. Workspace members and integration targets bring public totals to `571` / `577`; the synthetic action benchmark also validates both workloads in test mode. |
-| **Cross-language contracts (`shared-behavior-contracts`)** | Checks out pinned `main` (`python-reference`) and verifies identical outputs across `jam-framing-v1.json`, `world-queries-v1.json`, and `profile-settings-v1.json`, `12` public Python tests, and `38` exact StateScript VM contracts on `rust`. |
+| **Linux workspace** | Default-feature workspace build check, profile persistence on the Linux filesystem, and encrypted UDP room recovery on the Linux worker. |
+| **Windows workspace** | Full default workspace tests and Clippy, plus focused Inspector HTTP, owner trace, CLI and node-observation tests. Includes formatting and a separate Rust 1.85.0 check. Named shared contract results are verified from the default workspace test output. |
+| **Cross-language contracts** | Runs the pinned Python consumers against the Rust checkout's fixtures. The Windows default workspace job covers the Rust consumers, including JAM framing, strict World queries, and profile settings. The Python job also runs synthetic checks against the pinned wire reader. |
 | **C++ gallery preview policy** | `scripts/check_gallery_preview_policy.py` compiles `relay/gallery_preview_policy.h` and checks `18` resource-selection + `6` owned-tree pruning cases against `gallery-preview-policy-v1.json`. |
 
 [#61](https://github.com/leafall903/ORPHEUS/issues/61) is complete. [#79](https://github.com/leafall903/ORPHEUS/issues/79) records the four Rust consumers and [#80](https://github.com/leafall903/ORPHEUS/issues/80) records the Python StateScript consumers.
@@ -27,12 +27,45 @@ corpse through those frames and admits the replacement on schedule. A
 synthetic regression also checks that a bot with a blocking diagnostic
 cannot interrupt a healthy peer bot's projection.
 
+The original 104319 client completed the 2026-11-21 follow-up session
+without returning to the lobby on a training bot kill. The session
+lasted about 331 seconds and exited without a room fault or crash dialog.
+
 The room's initial mode frame includes the authored nameplate inputs. The
-prepared check decodes those variables from the wire. An encrypted 104319
-loopback check receives a bot's nameplate graph after acknowledging the mode
-frame. It drops the first nonlethal hit notice and verifies the retried
-target, damage and shot frame alongside the decreased bot health. The
-original client still needs to verify that this data drives the visible bar.
+prepared check decodes those variables from the wire. The follow-up client
+session still lacked overhead bars. The native server now stages the
+nameplate as a separate delta after acknowledgments for both the mode
+frame and the bot's parent script. This follows the delivery sequence
+recorded in the [client-tested nameplate research](https://github.com/leafall903/ORPHEUS/blob/5d86bcb2/docs/research/bot-nameplates-and-hit-feedback.md).
+The prepared encrypted replay checks this ordering and drops the first
+nonlethal hit notice before validating the retry and decreased bot health.
+The subsequent original-client session on #176 still showed missing overhead
+names and health bars.
+
+That session reproduced the client access violation tracked in
+[#121](https://github.com/leafall903/ORPHEUS/issues/121). A local capture
+identified a client read from near-null memory after a lethal projectile
+impact following a body change. The triggering update remains unconfirmed.
+Separately, headless coverage exercises an early-feedback race at body
+replacement. Hit and elimination notices now wait for the shooter's
+acknowledged possession and expire if their shooter is replaced before
+reliable admission.
+
+A second original-client session hit the previously documented
+`Overwatch.exe+0xD697D0` access violation. It occurred without an observed
+body change, after a hitscan kill. The Rust game channel now preserves the
+exact end bit of its final JAM message so the receiver resumes at the
+correct world header. Synthetic regressions cover the packet boundary and
+the byte alignment of intermediate messages. On 2026-11-22, the maintainer
+confirmed the crash was fixed after testing the original client. Issue #121
+was closed on that result. The exact session parameters and the cause of the
+earlier `0xB41104` fault were not established by the retest report.
+[Reference investigation](https://github.com/leafall903/ORPHEUS/blob/5d86bcb2/docs/MCCREE_COMBAT.txt#L1007-L1027)
+
+For profiles without saved gameplay options, the lobby now sends the default
+kill feed and tips flags from the [client-tested settings research](https://github.com/leafall903/ORPHEUS/blob/5d86bcb2/docs/research/kill-feed.md).
+The Rust wire check covers saved options as well. Original-client kill feed
+rendering after the lobby change remains open.
 
 A local combat calibration replay used six playtest rays against the
 prepared scene and distinguished head hits, body hits and a miss. The
@@ -42,9 +75,56 @@ alignment and other bodies still require their own evidence.
 The 104319 owner replay exposed a due rifle round that spent ammunition
 at a synthetic gap boundary without producing a posed shot. The owner
 clock now skips such rounds and preserves ordinary ammunition cost when a
-posed command resumes. Saved playtest logs did not include owner deltas
-or command boundaries. An opt-in [owner volley trace](OWNER_DELIVERY_TEST.md#observe-a-short-weapon-volley)
-can correlate these events with the next live animation observation.
+posed command resumes. The follow-up [owner volley trace](OWNER_DELIVERY_TEST.md#observe-a-short-weapon-volley)
+recorded no unposed boundary and no lost owner reports. It did not
+establish what the client rendered for every shot.
+
+Prepared 104319 encrypted loopback now exercises stock Helix against scripted
+training bots. It drops the first projectile acknowledgment and verifies
+impact, target health, and retirement. A ground shot verifies owner health
+on the wire and upward movement in the room simulation. A prepared stock
+quick-melee case verifies one damage and knockback settlement. First-person
+movement, impact rendering, and Particle Cannon and Junkrat self-launch in
+the original client remain open.
+
+A prepared Practice Range replay selects Zarya and fires a single ground shot
+before any primary input. Over encrypted loopback, the test verifies impact
+retirement for the confirmed projectile, 23.5 points of self-damage across
+the owner health pools, and a post-impact owner movement correction. The room
+reports an upward launch. The mixed-input matrix still stops on an
+unsupported primary `TrackRay` state. Original-client rendering and movement
+for Zarya remain open.
+
+A synthetic shot with gravity now expires at its authored flight distance.
+The range and lifetime can end independently. Original-client impact timing
+at that limit remains open. The local deployable graph probe resolves the
+mine definition and its linked actor graph. Standalone startup still requires
+room actor admission and health-pool services, along with additional
+StateScript state support. A local probe of the authored mode-0 creator
+selector returns the supplied creator body and reports unavailable when its
+host has no relationship. The actor's startup takes a separate mode-1
+relation, whose semantics remain open.
+
+The owner volley now decodes the impact-spawn entity and optional attached
+graph from the authored configuration. The existing Biotic Field path is
+selected by its canister and deployed entity definitions, including under
+a relocated graph on a different synthetic body. Its existing presentation
+and timing still use the legacy field host. The room does not yet start an
+arbitrary attached actor graph from a projectile.
+
+The follow-up timing capture accumulated 8,819 missed ticks. Misses
+began well before the first recorded shot and continued during intervals
+with an unchanged ray sample. It also ran with synchronous owner traces
+enabled. The trace now uses a bounded background writer, and worker
+timing separates work before the tick from timed poll wake lateness.
+A controlled original-client performance comparison remains open.
+
+Prepared Sprint coverage now includes the button sequence observed in
+that session, with sustained forward input, and controls at the authored
+throttle threshold. The server activates Sprint and produces the
+expected speed modifier and HUD value in that replay. The session trace
+did not record the throttle or matching ability state. The next trace
+can distinguish the player's input from server activation and delivery.
 
 ## Shared StateScript integration
 
@@ -767,5 +847,4 @@ Headless offline regressions against pinned Python `e1128509` and prepared 10431
 | Issue | Scope |
 | --- | --- |
 | [#70](https://github.com/leafall903/ORPHEUS/issues/70) | Clean up transitional contract scripts, legacy prototypes, and stale branches. |
-| [#121](https://github.com/leafall903/ORPHEUS/issues/121) | Diagnose and fix the 104319 client access violation (`0xC0000005`) during sustained Soldier Practice Range play. |
 | [#131](https://github.com/leafall903/ORPHEUS/issues/131) | Complete the private verified Soldier gameplay trace comparison on the ARM64 runner and reconcile remaining RNG setup/parity items (`golden_python_room.py` now aligns `owner_component_start_frame = 1047` and `setup_delivery_ticks = 50`). |

@@ -21,6 +21,46 @@ pub struct Site {
     pub node: Option<u16>,
 }
 
+/// One authored hostile body overlap, resolved at the current posed input.
+#[derive(Clone, Copy, Debug)]
+pub struct ContactVolume {
+    pub source_frame: u32,
+    pub offset: [f64; 3],
+    pub sight_origin: [f64; 3],
+    pub radius: f64,
+    pub profile: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ContactTarget {
+    pub entity: u32,
+    pub feet: [f64; 3],
+}
+
+/// The body, aperture, collision profile and ranking requested by a view tracker.
+#[derive(Debug)]
+pub struct ViewTargetQuery<'a> {
+    pub source: u32,
+    pub offset: [f64; 3],
+    pub range: f64,
+    pub aperture: f64,
+    pub limit: usize,
+    pub profile: u64,
+    pub masks: [u64; 3],
+    pub ranking: &'a Json,
+    pub sight: Option<&'a ViewSightProfile>,
+}
+
+/// Room collision settings for a configured view query. Dynamic blockers use
+/// the room's actor flags, which are distinct from asset receiver masks.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViewSightProfile {
+    pub static_mask: u16,
+    pub block_actor_flags: u64,
+    pub samples: Vec<f64>,
+}
+
 /// Authoritative movement facts captured from a single owner pose.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MovementSample {
@@ -116,6 +156,13 @@ impl RoomMessage {
 pub struct RoomCue {
     pub stimulus: u64,
     pub line: u64,
+    pub speaker: RoomCueSpeaker,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RoomCueSpeaker {
+    Actor,
+    Mode,
 }
 
 impl RoomCue {
@@ -205,7 +252,7 @@ impl HostEvent {
     pub(super) fn bindings_for(
         self,
         receiver: u32,
-        named_pool_losses: Option<&[NamedPoolLoss]>,
+        context: &HostHealthContext,
     ) -> Option<(HostEventKind, Variables)> {
         match self {
             Self::HealthApplied {
@@ -236,8 +283,14 @@ impl HostEvent {
                         Value::Array(tags.as_slice().iter().copied().map(Value::Asset).collect()),
                     );
                 }
-                if let Some(losses) = named_pool_losses.filter(|_| delta < 0.0) {
+                if let Some(losses) = context.named_pool_losses.as_deref().filter(|_| delta < 0.0) {
                     parameters.insert(6, named_pool_records(losses));
+                }
+                if let Some(critical) = context.critical_hit.filter(|_| delta < 0.0) {
+                    parameters.insert(7, Value::Bool(critical));
+                }
+                if let Some(frame) = context.damage_frame.filter(|_| delta < 0.0) {
+                    parameters.insert(8, Value::Integer(i64::from(frame)));
                 }
                 Some((HostEventKind::HealthApplied, parameters))
             }
@@ -268,6 +321,10 @@ pub struct HostHealthContext {
     pub target_facts: Option<Arc<HealthTargetFacts>>,
     /// Optional settlement records for damage parameter 6. None leaves it absent.
     pub named_pool_losses: Option<Arc<[NamedPoolLoss]>>,
+    /// Confirmed impact classification for damage parameter 7.
+    pub critical_hit: Option<bool>,
+    /// Authoritative room frame of damage settlement for parameter 8.
+    pub damage_frame: Option<u32>,
 }
 
 /// Room-sampled facts for the original target of a settled health event.
@@ -528,6 +585,11 @@ pub trait World {
     ) -> Option<Vec<u32>> {
         None
     }
+
+    /// None leaves the view query unavailable. An empty list is a completed query.
+    fn view_targets(&self, _site: Site, _query: &ViewTargetQuery<'_>) -> Option<Vec<u32>> {
+        None
+    }
     fn witch_staff_targets(&self, _site: Site, _radius: f64) -> Option<Vec<u32>> {
         None
     }
@@ -546,6 +608,23 @@ pub trait World {
     }
     /// Admit every signed change together or leave the host queue unchanged.
     fn queue_health_changes(&mut self, _site: Site, _changes: &[(u32, f64)]) -> bool {
+        false
+    }
+
+    fn contact_volume_targets(
+        &self,
+        _site: Site,
+        _volume: ContactVolume,
+    ) -> Option<Vec<ContactTarget>> {
+        None
+    }
+
+    fn queue_contact_damage(
+        &mut self,
+        _site: Site,
+        _damage: f64,
+        _changes: &[(u32, Option<[f64; 3]>)],
+    ) -> bool {
         false
     }
     /// Admit movement for the bound body at the supplied future simulation frame.
@@ -1080,6 +1159,20 @@ pub trait World {
     /// Admit a cue for a bounded set of listeners. Delivery happens later.
     fn queue_room_cue(&mut self, _site: Site, _targets: &[u32], _cue: RoomCue) -> bool {
         false
+    }
+
+    /// Whether this actor has a room-backed voice catalog.
+    fn actor_voice_available(&self, _site: Site) -> bool {
+        false
+    }
+
+    /// Resolve a criterion to a cue for the actor and its audience.
+    fn queue_actor_voice(
+        &mut self,
+        _site: Site,
+        _criterion: u64,
+        _choose: &mut dyn FnMut(usize) -> usize,
+    ) {
     }
 
     /// The world owns delivery outside the current body.

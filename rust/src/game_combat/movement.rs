@@ -2,7 +2,10 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use crate::{contact_cache::CapsulePose, game_bots::Bot, mover_settings::MoverCatalog};
+use crate::{
+    contact_cache::CapsulePose, game_bots::Bot, mover::VelocityChange,
+    mover_settings::MoverCatalog, static_ray::Vec3,
+};
 
 use super::{CombatError, PlayerBodyState, RoomSimulation};
 
@@ -43,6 +46,41 @@ impl MovementContactFrame {
 }
 
 impl RoomSimulation {
+    pub(super) fn queue_combat_impulse(
+        &mut self,
+        wire: u32,
+        tick: u32,
+        delta: Vec3,
+    ) -> Result<(), CombatError> {
+        let change = VelocityChange::Impulse(delta);
+        if !change.valid() {
+            return Ok(());
+        }
+        if let Some(id) = self.player_handle_for_wire(wire) {
+            if let Some(player) = self.player_body_mut(id).filter(|state| state.alive()) {
+                // Input frames can run ahead of the room clock. Apply once at
+                // the next actual pose so correction carries that pose's frame.
+                let frame = player.mover.pose().frame.unwrap_or(player.frame);
+                player
+                    .mover
+                    .queue_velocity_change(frame.saturating_add(1), change);
+            }
+        } else if let Some(state) = self.state_mut(wire)? {
+            if !state.bot.dead && state.vitals.death().is_none() {
+                let frame = tick.saturating_add(1);
+                let applied = state
+                    .enemy
+                    .as_mut()
+                    .filter(|enemy| enemy.fault.is_none())
+                    .is_some_and(|enemy| enemy.queue_active_mover_change(frame, change));
+                if !applied {
+                    state.bot.queue_velocity_changes(vec![(frame, change)]);
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn enable_movement_contacts(
         &mut self,
         free_for_all: bool,

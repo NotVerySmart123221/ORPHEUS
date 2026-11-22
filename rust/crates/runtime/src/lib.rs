@@ -44,6 +44,8 @@ pub const BNET_DESCRIPTORS: &str = "bnet/descriptors.pb";
 pub const JUNKENSTEIN_MAP_WORLD: &str = "data/junkenstein/junkenstein-map-world.json";
 pub const JUNKENSTEIN_NPCS: &str = "data/junkenstein/junkenstein-npcs.json";
 pub const COMBAT_HURT_VOLUMES: &str = "data/combat_hurt_volumes.json";
+pub const ACTOR_VOICE_CATALOG: &str = "data/player_voice_174.json";
+pub const MAP_ENVIRONMENT: &str = "data/map_environment_174.json";
 const PRACTICE_COLLISION: &str = "collision/0688.col";
 const SIGNING_INPUT: &str = "data/lobby_state_blob.key";
 const CONTENT_KEY_TABLE: &str = "data/resource_keys_174.json";
@@ -262,9 +264,11 @@ fn inputs(
             inputs.insert(name.into(), input);
         }
     }
-    let hurt_volumes = source.join(COMBAT_HURT_VOLUMES);
-    if hurt_volumes.is_file() {
-        inputs.insert(COMBAT_HURT_VOLUMES.into(), hurt_volumes);
+    for name in [COMBAT_HURT_VOLUMES, ACTOR_VOICE_CATALOG, MAP_ENVIRONMENT] {
+        let path = source.join(name);
+        if path.is_file() {
+            inputs.insert(name.into(), path);
+        }
     }
 
     let missing: Vec<_> = inputs
@@ -662,6 +666,10 @@ mod tests {
             &format!("source/{COMBAT_HURT_VOLUMES}"),
             br#"{"version":1,"bodies":{}}"#,
         );
+        fixture.write(
+            &format!("source/{MAP_ENVIRONMENT}"),
+            br#"{"version":1,"maps":{}}"#,
+        );
         let destination = fixture.root.join("new/pack");
         let output = prepare(
             &source,
@@ -689,9 +697,10 @@ mod tests {
             serde_json::from_slice(&fs::read(output.join("manifest.json")).unwrap()).unwrap();
         assert_eq!(manifest["schema"], MANIFEST_SCHEMA);
         let entries = manifest["sha256"].as_object().unwrap();
+        assert!(entries.contains_key(MAP_ENVIRONMENT));
         assert_eq!(
             entries.len(),
-            LOBBY_RUNTIME_DATA.len() + MATCH_RUNTIME_DATA.len() + 4
+            LOBBY_RUNTIME_DATA.len() + MATCH_RUNTIME_DATA.len() + 5
         );
         for (name, hash) in entries {
             let copied = fs::read(output.join(name)).unwrap();

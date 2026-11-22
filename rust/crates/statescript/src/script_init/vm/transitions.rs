@@ -160,6 +160,17 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             .expect("tracked target state");
                         self.refresh_tracked_targets(key, node)?;
                     }
+                    Some(StateKind::ViewTargets { next_sample })
+                        if self.machine.frame >= next_sample =>
+                    {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("view tracker state");
+                        if self.sample_view_targets(key, node)? {
+                            self.try_complete(key, node, 0)?;
+                        }
+                    }
                     Some(StateKind::DeadeyeEffects) => {
                         let node = self
                             .graph(id)
@@ -1674,7 +1685,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let state = self.state_mut(key).expect("ending state");
         if matches!(
             kind,
-            StateKind::TrackedTargets | StateKind::TrackEntities { .. }
+            StateKind::TrackedTargets
+                | StateKind::TrackEntities { .. }
+                | StateKind::ViewTargets { .. }
         ) {
             state.tracked_targets.clear();
         }

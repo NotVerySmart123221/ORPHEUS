@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "case_id": "profile-gameplay-defaults-v1",
+  "target_build": 104319,
+  "evidence": "rust-headless-synthetic",
+  "cases": [
+    {
+      "name": "unsaved_gameplay_block",
+      "settings": {},
+      "expected": {"+0x0": 0, "+0x4": true, "+0x7": true}
+    },
+    {
+      "name": "null_gameplay_block",
+      "settings": {"+0x120": null},
+      "expected": {"+0x0": 0, "+0x4": true, "+0x7": true}
+    },
+    {
+      "name": "saved_gameplay_block_with_feed_disabled",
+      "settings": {"+0x120": {"+0x0": 7, "+0x4": false, "+0x7": true}},
+      "expected": {"+0x0": 7, "+0x4": false, "+0x7": true}
+    }
+  ]
+}

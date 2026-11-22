@@ -34,6 +34,7 @@ pub enum EntityRelation {
     PossessedBody,
     AiControlEntity,
     ControllerBodyField,
+    CreatorBody,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -425,6 +426,14 @@ pub trait Context {
         None
     }
 
+    fn asset_has_category(&mut self, _asset: u64, _kind: u64, _id: u64) -> Option<bool> {
+        None
+    }
+
+    fn asset_texture(&mut self, _action: u64) -> Option<u64> {
+        None
+    }
+
     fn related_entity(&mut self, _relation: EntityRelation, _entity: u32) -> Option<u32> {
         None
     }
@@ -771,6 +780,22 @@ pub(crate) fn asset_scalar(value: &Value) -> u64 {
         Some(Value::Asset(guid)) => *guid,
         _ => 0,
     }
+}
+
+pub fn authored_number(
+    config: Option<&Json>,
+    default: f64,
+    evaluate: &mut impl FnMut(&Json) -> Result<Value, EvalError>,
+) -> Result<f64, EvalError> {
+    let Some(config) = config.filter(|value| !value.is_null()) else {
+        return Ok(default);
+    };
+    let value = evaluate(config)?;
+    Ok(if value == Value::Null {
+        default
+    } else {
+        to_float(&value)
+    })
 }
 
 pub fn to_float(value: &Value) -> f64 {

@@ -6,6 +6,7 @@ use bevy_ecs::{entity::Entity, world::World};
 use indexmap::IndexMap;
 
 use crate::{
+    game_hitscan::Impact,
     script_expr::valid_entity,
     script_init::{
         HealthTargetFacts, HitTags, HostEvent, HostHealthContext, RoomBodyIdentity,
@@ -37,7 +38,7 @@ impl SampledBody {
         Some(Self { wire, entity })
     }
 
-    fn identity(self) -> RoomBodyIdentity {
+    pub(super) fn identity(self) -> RoomBodyIdentity {
         RoomBodyIdentity {
             wire: self.wire,
             generation: self.entity.to_bits(),
@@ -70,8 +71,9 @@ impl SampledBody {
 }
 
 pub(super) struct HealthDamageEvidence<'a> {
-    pub(super) impact: Option<(HitTags, &'a HealthTargetFacts)>,
+    pub(super) impact: Option<(&'a Impact, &'a HealthTargetFacts)>,
     pub(super) named_pool_losses: &'a [NamedPoolLoss],
+    pub(super) frame: Option<u32>,
 }
 
 pub(super) struct HealthEventContext<'a> {
@@ -85,6 +87,8 @@ struct HealthApplied {
     delta: f64,
     killed: bool,
     hit_tags: Option<HitTags>,
+    critical_hit: Option<bool>,
+    damage_frame: Option<u32>,
     target_facts: Option<Arc<HealthTargetFacts>>,
     named_pool_losses: Option<Arc<[NamedPoolLoss]>>,
 }
@@ -134,16 +138,20 @@ impl RoomHealthEvents {
         {
             return;
         }
-        let impact = context.damage.as_ref().and_then(|damage| damage.impact);
-        let (hit_tags, mut target_facts) = match impact {
-            Some((tags, facts)) if facts.target == target.wire => (Some(tags), Some(facts.clone())),
-            // A settled change without weapon tags can still authenticate the
-            // target facts seen by a distinct source.
-            None if source.is_some_and(|source| source != target) => {
-                (None, target.health_target_facts(context.world))
-            }
-            _ => (None, None),
-        };
+        let (impact, mut target_facts) =
+            match context.damage.as_ref().and_then(|damage| damage.impact) {
+                Some((impact, facts))
+                    if impact.entity == target.wire && facts.target == target.wire =>
+                {
+                    (Some(impact), Some(facts.clone()))
+                }
+                // A settled change without weapon tags can still authenticate the
+                // target facts seen by a distinct source.
+                None if source.is_some_and(|source| source != target) => {
+                    (None, target.health_target_facts(context.world))
+                }
+                _ => (None, None),
+            };
         if let Some(facts) = &mut target_facts {
             facts.room_status = room_status;
         }
@@ -152,7 +160,9 @@ impl RoomHealthEvents {
             target,
             delta,
             killed,
-            hit_tags,
+            hit_tags: impact.map(|impact| impact.tags),
+            critical_hit: impact.map(|impact| impact.critical),
+            damage_frame: context.damage.as_ref().and_then(|damage| damage.frame),
             target_facts: target_facts.map(Arc::new),
             named_pool_losses: context
                 .damage
@@ -174,6 +184,18 @@ impl RoomSimulation {
         killed: bool,
         damage: Option<HealthDamageEvidence<'_>>,
     ) {
+        #[cfg(feature = "inspector")]
+        if delta.is_finite() && delta < 0.0 && crate::owner_trace::playtest_enabled() {
+            let frame = damage.as_ref().and_then(|evidence| evidence.frame);
+            let critical = damage
+                .as_ref()
+                .and_then(|evidence| evidence.impact)
+                .map(|(impact, _)| impact.critical);
+            crate::owner_trace::playtest(format_args!(
+                "combat settled frame={frame:?} source={source:08X} target={target:08X} delta={delta} critical={critical:?} killed={killed} health_events={}",
+                self.health_events.enabled,
+            ));
+        }
         if !self.health_events.enabled {
             return;
         }
@@ -218,6 +240,8 @@ impl RoomSimulation {
                     target_body: Some(change.target.identity()),
                     target_facts: change.target_facts,
                     named_pool_losses: change.named_pool_losses,
+                    critical_hit: change.critical_hit,
+                    damage_frame: change.damage_frame,
                 };
                 for body in receivers.into_iter().flatten() {
                     self.queue_health_event(body.entity, event, context.clone());
@@ -264,6 +288,7 @@ impl RoomSimulation {
                             .map(|named_pool_losses| HealthDamageEvidence {
                                 impact: None,
                                 named_pool_losses,
+                                frame: None,
                             }),
                     },
                     room_status,

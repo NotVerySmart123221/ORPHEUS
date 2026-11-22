@@ -785,9 +785,23 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }
-            // Base actions and the stat criteria fallback consume the input
-            // and run its output without evaluating an action payload.
-            "STU_D38D0035" | "STUStatescriptActionCriteria" | "STU_6E5C5F66" => {
+            "STUStatescriptActionCriteria" => {
+                self.play_actor_criterion(id, node);
+                self.follow(id, node, "m_outPlug", None, depth)?;
+                Ok(true)
+            }
+            "STU_7106C356" => {
+                if !self.capture_callout(id, node) {
+                    self.report(
+                        self.site(id, node),
+                        Issue::UnsupportedField("callout action"),
+                    );
+                    return Ok(false);
+                }
+                self.follow(id, node, "m_outPlug", caller, depth)?;
+                Ok(true)
+            }
+            "STU_D38D0035" | "STU_6E5C5F66" => {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
@@ -1516,6 +1530,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::CinematicTimeScale { boundary_frame: 0 }
             }
             "STU_91EF24A9" => StateKind::AiCandidate { selected: false },
+            _ if node.is_ai_weapon_fire() => StateKind::AiWeaponFire(None),
             "STUStatescriptStateLogicalButton" => StateKind::LogicalButton { down: false },
             "STU_E4A30BCF" => StateKind::ButtonBlock(None),
             _ if button_lock.is_some() => StateKind::ButtonBlock(None),
@@ -1562,13 +1577,25 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 };
                 self.client_pulse(id, count)
             }
-            // 0043:11 and 0257:11 use unimplemented client/world target tracking
+            "STUStatescriptStateTrackTargets"
+                if registration.shape(node.contact_volume_bindings().is_some()) =>
+            {
+                StateKind::EmptyTargets
+            }
+            "STUStatescriptStateTrackTargets"
+                if registration.shape(node.view_track().is_some()) =>
+            {
+                StateKind::ViewTargets {
+                    next_sample: self.machine.frame,
+                }
+            }
+            // Other presentation-only trackers retain their empty wire state
             // in the Python reference (`world.tracked_targets` returns
             // NotImplemented / empty targets).
             "STUStatescriptStateTrackTargets"
                 if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
-                    (0x0043, 11) | (0x0257, 11) | (0x00ca, 90)
+                    (0x0257, 11) | (0x00ca, 90)
                 )) =>
             {
                 StateKind::EmptyTargets
@@ -1586,7 +1613,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::ExplosionContact
             }
             "STUStatescriptStateModifyHealth"
-                if registration.permits((self.graph(id).index, node.pos) == (0x0043, 10)) =>
+                if registration.shape(self.contact_damage_tracker(key, node).is_some()) =>
             {
                 StateKind::Plain
             }
@@ -1680,14 +1707,20 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             "STUStatescriptStateCosmeticEntity" => StateKind::CosmeticEntity,
             "STUStatescriptStateChaseVar" => StateKind::ChaseVar,
             "STU_77E13026"
-                if registration.permits((self.graph(id).index, node.pos) == (0x0043, 60)) =>
-            {
-                StateKind::Plain
-            }
-            "STU_77E13026"
                 if registration.permits((self.graph(id).index, node.pos) == (0x180a, 42)) =>
             {
                 StateKind::PhaseScriptList
+            }
+            "STU_77E13026"
+                if registration.shape(
+                    node.remote >= 0
+                        && ["m_814F8EC3", "m_3DC6FAAA"].into_iter().all(|name| {
+                            script_expr::lvalue(field(&node.fields, name))
+                                .is_ok_and(|variable| variable.is_some())
+                        }),
+                ) =>
+            {
+                StateKind::Plain
             }
             "STU_CB4905E9"
                 if registration.permits((self.graph(id).index, node.pos) == (0x180a, 41)) =>
@@ -1785,6 +1818,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 }
             }
             StateKind::TrackedTargets => self.refresh_tracked_targets(key, node)?,
+            StateKind::ViewTargets { .. } => {
+                self.register_tick(key, self.machine.now_ms);
+                if !self.sample_view_targets(key, node)? {
+                    return Ok(());
+                }
+            }
             StateKind::DeadeyeEffects => self.refresh_deadeye_effects(key, node)?,
             StateKind::WitchStaffEffect | StateKind::WitchStaffHealing => {
                 self.register_tick(key, self.machine.now_ms)
@@ -1794,6 +1833,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             StateKind::Plain if node.class == "STU_066B4605" => {
                 // The absent AI relation finishes through the current clock's event queue.
                 self.post(id, Event::Finish(key.raw))?;
+            }
+            StateKind::Plain if node.class == "STUStatescriptStateModifyHealth" => {
+                self.begin_contact_damage(key, node)?;
             }
             StateKind::Plain if node.class == "STU_160F2578" => {
                 if !self.begin_static_target(key, node)? {
@@ -1891,6 +1933,22 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     }
                 } else {
                     self.report(site, Issue::UnsupportedField("AI behavior selection"));
+                }
+            }
+            StateKind::AiWeaponFire(_) if !self.machine.owner_dead => {
+                let target = self.evaluate(id, node, field(&node.fields, "m_14EDDDA7"), None);
+                let enabled = self.evaluate(id, node, field(&node.fields, "m_20BCEE62"), None);
+                let slot = self.evaluate(id, node, field(&node.fields, "m_A60150E2"), None);
+                if let (
+                    Some(Value::Entity(target)),
+                    Some(Value::Bool(true)),
+                    Some(Value::Integer(slot)),
+                ) = (target, enabled, slot)
+                {
+                    if target == self.machine.snapshot.entity && slot >= 0 {
+                        self.state_mut(key).expect("active AI weapon fire").kind =
+                            StateKind::AiWeaponFire(Some(slot));
+                    }
                 }
             }
             StateKind::LogicalButton { .. } => self.enter_button(key, node, depth)?,
@@ -2025,7 +2083,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             | StateKind::ClientPulse { .. }
             | StateKind::EmptyTargets
             | StateKind::ActiveQuery
-            | StateKind::RollMovementParameter => (),
+            | StateKind::RollMovementParameter
+            | StateKind::AiWeaponFire(_) => (),
         }
         self.follow(id, node, "m_onBeginPlug", Some(key), depth)?;
         self.follow(id, node, "m_subgraphPlug", Some(key), depth)?;

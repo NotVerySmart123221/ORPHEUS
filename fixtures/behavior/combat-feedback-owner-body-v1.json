@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "case_id": "combat-feedback-owner-body-v1",
+  "evidence": "rust-headless-synthetic",
+  "input": {
+    "heroes": [207165582859063517, 207165582859063518],
+    "target": 3221229568,
+    "lethal_damage": 40.0
+  },
+  "expected": {
+    "pending_before_possession": 2,
+    "pending_after_replacement": 0,
+    "reliable_notices": 2
+  }
+}

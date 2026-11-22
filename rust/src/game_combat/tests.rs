@@ -46,6 +46,59 @@ fn spatial_candidates_capture_living_room_bodies_once_per_frame() {
     check_spatial_candidates_frame(true);
 }
 
+#[test]
+fn frozen_view_query_only_reports_empty_when_no_other_actor_can_match() {
+    use crate::{
+        contact_world::ContactWorld, mover::Mover, mover_settings::MoverSettings,
+        script_init::ViewTargetQuery,
+    };
+
+    let mut room = RoomSimulation::new(fixture_bots()).unwrap();
+    room.enable_spatial_queries(false, Arc::new(fixture_ground()), RoomSpatialNeeds::Queries);
+    let query = ViewTargetQuery {
+        source: 9,
+        offset: [0.0; 3],
+        range: 10.0,
+        aperture: 22.0,
+        limit: 4,
+        profile: 1,
+        masks: [1, 0, 16],
+        ranking: &serde_json::Value::Null,
+        sight: None,
+    };
+    let frame = FIXTURE_CONTEXT.tick;
+    let snapshot = room.capture_spatial_frame(frame).unwrap().unwrap();
+    assert_eq!(snapshot.empty_view_targets(&query), None);
+    for (entity, slot) in [(9, 0), (11, 1)] {
+        let mover = Mover::new(
+            MoverSettings::default(),
+            Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+            [4.0, 0.0, 2.0],
+            0,
+            0x08,
+        )
+        .unwrap();
+        room.spawn_player_body(PlayerBodyState::new(
+            BodyId {
+                entity,
+                generation: 1,
+            },
+            entity + 100,
+            slot,
+            0,
+            1,
+            mover,
+            None,
+            frame,
+            None,
+        ))
+        .unwrap();
+        let snapshot = room.capture_spatial_frame(frame).unwrap().unwrap();
+        let expected = (slot == 0).then(Vec::new);
+        assert_eq!(snapshot.empty_view_targets(&query), expected);
+    }
+}
+
 fn check_spatial_candidates_frame(free_for_all: bool) {
     use crate::{contact_world::ContactWorld, mover::Mover, mover_settings::MoverSettings};
 
@@ -1528,6 +1581,7 @@ pub(super) fn fixture_impact(entity: u32, damage: f64) -> Impact {
         damage,
         critical: false,
         loadout: None,
+        impulse: None,
     }
 }
 
@@ -2198,6 +2252,9 @@ pub(super) fn flight_fixture(owner: BodyId, speed: f64) -> AdmittedFlight {
         ProjectileBallistics {
             speed,
             lifetime: 0.04,
+            max_distance: None,
+            terrain_rebound: None,
+            terrain_radius: 0.0,
             radius: 0.0,
             definition: Some(definition),
             direct: None,
@@ -2264,6 +2321,9 @@ fn projectile_stun_applies_only_to_surviving_hits_and_expires_exclusively() {
             ProjectileBallistics {
                 speed: 100.0,
                 lifetime: 1.0,
+                max_distance: None,
+                terrain_rebound: None,
+                terrain_radius: 0.0,
                 radius: 0.0,
                 definition: None,
                 direct: Some(HitDefinition {
@@ -2371,7 +2431,7 @@ fn projectile_flights_keep_peer_generation_and_report_terminal_outcomes() {
     assert!(hits.is_empty());
     assert!(matches!(
         outcomes.as_slice(),
-        [FlightOutcome::Ended { token: observed, travelled }]
+        [FlightOutcome::Ended { token: observed, travelled, impact: false }]
             if *observed == token && (*travelled - 0.04).abs() < 1e-12
     ));
     assert!(
@@ -3075,28 +3135,44 @@ fn debug_physics_records_hitscan_rays_and_enforces_ring_cap() {
         .is_none()
     );
 
+    // 4) Find an actor behind the wall, then report the wall as the endpoint.
+    room.body_mut(target).unwrap().position = [11.0, 0.0, 0.0];
+    assert!(
+        room.hitscan(
+            &queries,
+            make_shot(13, [0.0, 1.0, 0.0], [1.0, 0.0, 0.0], 50.0),
+            ShotContext { tick: 13, ..ctx },
+            |entity| entity == target,
+        )
+        .unwrap()
+        .is_none()
+    );
+
     let overlay = room.debug_physics().unwrap().unwrap();
     assert!(!overlay.truncated.rays);
-    assert_eq!(overlay.rays.len(), 3);
+    assert_eq!(overlay.rays.len(), 4);
     assert_eq!(overlay.rays[0].hit, "actor");
     assert_eq!(overlay.rays[0].target, Some(target));
     assert_eq!(overlay.rays[1].hit, "world");
     assert!((overlay.rays[1].end[0] - 10.0).abs() < 1e-6);
     assert_eq!(overlay.rays[2].hit, "none");
     assert_eq!(overlay.rays[2].end, [-25.0, 1.0, 0.0]);
+    assert_eq!(overlay.rays[3].hit, "world");
+    assert!((overlay.rays[3].end[0] - 10.0).abs() < 1e-6);
+    assert_eq!(overlay.rays[3].target, None);
     assert!(overlay.rays.iter().all(|ray| ray.script.is_none()));
 
     room.enable_spatial_queries(false, Arc::new(fixture_ground()), RoomSpatialNeeds::Queries);
-    let captured = room.capture_spatial_frame(13).unwrap().unwrap();
+    let captured = room.capture_spatial_frame(14).unwrap().unwrap();
     captured
-        .ray_cast(SCRIPT_RAY_SITE, 14, [-2.0, 0.5, 0.25], [1.0, 0.0, 0.0], 1.0)
+        .ray_cast(SCRIPT_RAY_SITE, 15, [-2.0, 0.5, 0.25], [1.0, 0.0, 0.0], 1.0)
         .unwrap()
         .unwrap();
     let shared = room.debug_physics().unwrap().unwrap();
-    assert_eq!(shared.rays.len(), 4);
-    assert_eq!(shared.rays[3].kind, "script_static");
-    assert_eq!(shared.rays[3].tick, 13);
-    assert_eq!(shared.rays[3].script.unwrap().vm_frame, 14);
+    assert_eq!(shared.rays.len(), 5);
+    assert_eq!(shared.rays[4].kind, "script_static");
+    assert_eq!(shared.rays[4].tick, 14);
+    assert_eq!(shared.rays[4].script.unwrap().vm_frame, 15);
     assert!(
         serde_json::to_value(shared.rays[0])
             .unwrap()

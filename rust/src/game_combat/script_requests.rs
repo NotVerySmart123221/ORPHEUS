@@ -1,14 +1,15 @@
 //! Deferred script operations for generation-checked room bodies.
 
 use super::{
-    BotState, CombatError, PlayerBodyState, RoomSimulation, RoomSpatialFrame, SampledBody, Vec3,
-    health::HealthEffect,
+    BotState, CombatError, EliminationStreak, PlayerBodyState, RoomSimulation, RoomSpatialFrame,
+    SampledBody, Vec3, health::HealthEffect,
 };
 use crate::{
     game_combat_messages::CombatNotice,
     game_replication::BodyId,
-    script_init::{RoomCue, RoomMessage},
+    script_init::{RoomBodyIdentity, RoomCue, RoomCueSpeaker, RoomMessage},
     vitals::Death,
+    world::GAME_MODE_ENTITY,
 };
 use bevy_ecs::entity::Entity;
 use std::{collections::HashSet, time::Duration};
@@ -21,9 +22,57 @@ pub(super) struct RoomScriptTarget {
     pub(super) candidate_index: usize,
     pub(super) angles: [i32; 2],
     pub(super) eye_position: Option<Vec3>,
+    pub(super) filter_flags: Option<u64>,
     pub(super) health: bool,
     pub(super) messages: bool,
     pub(super) cue_listener: bool,
+    pub(super) voice: Option<(u64, u64)>,
+}
+
+impl RoomSpatialFrame {
+    pub(crate) fn actor_voice_available(&self, source: u32) -> bool {
+        self.actor_voice.is_some()
+            && self
+                .script_targets
+                .get(&source)
+                .is_some_and(|body| body.voice.is_some())
+    }
+
+    pub(crate) fn actor_voice_request(
+        &self,
+        source: u32,
+        criterion: u64,
+        choose: &mut dyn FnMut(usize) -> usize,
+    ) -> Option<(RoomCue, Vec<u32>)> {
+        let catalog = self.actor_voice.as_ref()?;
+        let (actor, source_body) = self.actor_sample(source)?;
+        let (hero, skin) = source_body.voice?;
+        let options = catalog.options(hero, skin, criterion)?;
+        let listeners: Vec<_> = self
+            .candidates
+            .iter()
+            .filter(|listener| {
+                (listener.entity == source || actor.team.is_some() && actor.team == listener.team)
+                    && self
+                        .script_targets
+                        .get(&listener.entity)
+                        .is_some_and(|body| body.cue_listener)
+            })
+            .map(|listener| listener.entity)
+            .collect();
+        if listeners.is_empty() || listeners.len() > RoomCue::MAX_TARGETS {
+            return None;
+        }
+        let (stimulus, line) = options.choose(choose)?;
+        Some((
+            RoomCue {
+                stimulus,
+                line,
+                speaker: RoomCueSpeaker::Actor,
+            },
+            listeners,
+        ))
+    }
 }
 
 pub(crate) struct RoomScriptRequest {
@@ -36,7 +85,7 @@ impl RoomScriptRequest {
     fn for_target(frame: &RoomSpatialFrame, wire: u32, effect: ScriptEffect) -> Option<Self> {
         let target = frame.script_targets.get(&wire)?;
         let supported = match &effect {
-            ScriptEffect::Health(_) => target.health,
+            ScriptEffect::Health(_) | ScriptEffect::Contact { .. } => target.health,
             ScriptEffect::Message(_) => target.messages,
             ScriptEffect::Cue(_, _) => target.cue_listener,
         };
@@ -50,6 +99,7 @@ impl RoomScriptRequest {
 
 enum ScriptEffect {
     Health(HealthEffect),
+    Contact { damage: f64, impulse: Option<Vec3> },
     Message(RoomMessage),
     Cue(RoomCue, Entity),
 }
@@ -58,7 +108,7 @@ enum ScriptEffect {
 pub(crate) struct PlayerRoomCue {
     pub(crate) owner: u32,
     pub(crate) listener: BodyId,
-    pub(crate) source: Entity,
+    pub(crate) source: RoomBodyIdentity,
     pub(crate) notice: CombatNotice,
 }
 
@@ -79,24 +129,56 @@ impl RoomScriptRequests {
         frame: &RoomSpatialFrame,
         changes: &[(u32, f64)],
     ) -> bool {
-        if changes.is_empty() {
-            return true;
+        self.queue_batch(
+            frame,
+            changes.iter().map(|&(wire, delta)| {
+                Some((wire, ScriptEffect::Health(HealthEffect::from_delta(delta)?)))
+            }),
+        )
+    }
+
+    pub(crate) fn queue_contact_damage(
+        &mut self,
+        frame: &RoomSpatialFrame,
+        damage: f64,
+        changes: &[(u32, Option<Vec3>)],
+    ) -> bool {
+        if !damage.is_finite() || damage < 0.0 {
+            return false;
         }
+        self.queue_batch(
+            frame,
+            changes.iter().map(|&(wire, impulse)| {
+                let valid = impulse
+                    .is_some_and(|delta| crate::mover::VelocityChange::Impulse(delta).valid());
+                (if impulse.is_some() {
+                    valid
+                } else {
+                    damage > 0.0
+                })
+                .then_some((wire, ScriptEffect::Contact { damage, impulse }))
+            }),
+        )
+    }
+
+    fn queue_batch(
+        &mut self,
+        frame: &RoomSpatialFrame,
+        changes: impl ExactSizeIterator<Item = Option<(u32, ScriptEffect)>>,
+    ) -> bool {
         if changes.len() > MAX_BODY_SCRIPT_REQUESTS.saturating_sub(self.0.len()) {
             return false;
         }
         let mut targets = HashSet::with_capacity(changes.len());
         let mut staged = Vec::with_capacity(changes.len());
-        for &(wire, delta) in changes {
+        for change in changes {
+            let Some((wire, effect)) = change else {
+                return false;
+            };
             if !targets.insert(wire) {
                 return false;
             }
-            let Some(effect) = HealthEffect::from_delta(delta) else {
-                return false;
-            };
-            let Some(request) =
-                RoomScriptRequest::for_target(frame, wire, ScriptEffect::Health(effect))
-            else {
+            let Some(request) = RoomScriptRequest::for_target(frame, wire, effect) else {
                 return false;
             };
             staged.push(request);
@@ -198,6 +280,12 @@ impl RoomSimulation {
                         batches.push((SampledBody { wire, entity }, requests));
                     }
                 }
+                if let Some(script) = &mut state.stock_script {
+                    let requests = script.take_script_requests();
+                    if !requests.is_empty() {
+                        batches.push((SampledBody { wire, entity }, requests));
+                    }
+                }
             }
         }
         for (source, requests) in batches {
@@ -220,18 +308,22 @@ impl RoomSimulation {
         {
             return Ok(());
         }
+        let death = Death {
+            time: now.as_secs_f64(),
+            frame: tick,
+            killer: source.wire,
+        };
         match request.effect {
             ScriptEffect::Health(effect) => {
-                self.settle_health(
-                    request.wire,
-                    effect,
-                    Death {
-                        time: now.as_secs_f64(),
-                        frame: tick,
-                        killer: source.wire,
-                    },
-                    now,
-                )?;
+                self.settle_health(request.wire, effect, death, now)?;
+            }
+            ScriptEffect::Contact { damage, impulse } => {
+                if damage > 0.0 {
+                    self.settle_health(request.wire, HealthEffect::Damage(damage), death, now)?;
+                }
+                if let Some(delta) = impulse {
+                    self.queue_combat_impulse(request.wire, tick, delta)?;
+                }
             }
             ScriptEffect::Message(message) => {
                 self.route_room_message(request.entity, source.wire, message);
@@ -245,13 +337,17 @@ impl RoomSimulation {
                     .get::<PlayerBodyState>(request.entity)
                     .filter(|player| player.alive())
                 {
+                    let speaker = match cue.speaker {
+                        RoomCueSpeaker::Actor => source.wire,
+                        RoomCueSpeaker::Mode => GAME_MODE_ENTITY,
+                    };
                     self.player_cues.push(PlayerRoomCue {
                         owner: player.owner,
                         listener: player.id,
-                        source: source_entity,
+                        source: source.identity(),
                         notice: CombatNotice::Voice {
-                            anchor: source.wire,
-                            speaker: source.wire,
+                            anchor: speaker,
+                            speaker,
                             listener: request.wire,
                             stimulus: cue.stimulus,
                             line: cue.line,
@@ -263,8 +359,9 @@ impl RoomSimulation {
         Ok(())
     }
 
-    pub(crate) fn room_cue_source_current(&self, wire: u32, source: Entity) -> bool {
-        self.room_body_generation_current(wire, source)
+    pub(crate) fn room_cue_source_current(&self, source: RoomBodyIdentity) -> bool {
+        self.sample_health_body(source.wire)
+            .is_some_and(|body| body.identity() == source)
     }
 
     fn room_body_generation_current(&self, wire: u32, entity: Entity) -> bool {
@@ -282,12 +379,127 @@ impl RoomSimulation {
     pub(crate) fn take_player_cues(&mut self) -> Vec<PlayerRoomCue> {
         let mut cues = std::mem::take(&mut self.player_cues);
         cues.retain(|cue| {
-            cue.notice
-                .required_identity()
-                .is_some_and(|wire| self.room_cue_source_current(wire, cue.source))
+            self.room_cue_source_current(cue.source)
                 && self.room_cue_listener_current(cue.owner, cue.listener)
         });
         cues
+    }
+
+    pub(super) fn record_actor_hurt_voice(
+        &mut self,
+        speaker_wire: u32,
+        is_bot: bool,
+        critical: bool,
+        killed: bool,
+        frame: u32,
+    ) {
+        if !self.combat_voice.has_hurt_cues() || !crate::script_expr::valid_entity(speaker_wire) {
+            return;
+        }
+        let prev = self.hurt_voice_history.get(&speaker_wire).copied();
+        let cooldown = self.combat_voice.hurt_cooldown_ticks();
+        if !killed
+            && prev.is_some_and(|(last_frame, _)| {
+                frame >= last_frame && frame.saturating_sub(last_frame) < cooldown
+            })
+        {
+            return;
+        }
+        let pick = prev.map_or(0, |(_, count)| count);
+        let Some((stimulus, line)) = self.combat_voice.hurt_cue(is_bot, critical, killed, pick)
+        else {
+            return;
+        };
+        self.hurt_voice_history
+            .insert(speaker_wire, (frame, pick.wrapping_add(1)));
+        for (&listener_wire, &player_entity) in &self.players_by_wire {
+            let Some(player) = self
+                .world
+                .get::<PlayerBodyState>(player_entity)
+                .filter(|player| player.id.entity == listener_wire && player.alive())
+            else {
+                continue;
+            };
+            self.player_cues.push(PlayerRoomCue {
+                owner: player.owner,
+                listener: player.id,
+                source: RoomBodyIdentity {
+                    wire: listener_wire,
+                    generation: player_entity.to_bits(),
+                },
+                notice: CombatNotice::Voice {
+                    anchor: speaker_wire,
+                    speaker: speaker_wire,
+                    listener: listener_wire,
+                    stimulus,
+                    line,
+                },
+            });
+        }
+    }
+
+    pub(super) fn record_enemy_elimination(
+        &mut self,
+        killer_wire: u32,
+        victim_wire: u32,
+        victim_team: u8,
+        frame: u32,
+    ) {
+        if self.combat_voice.is_empty()
+            || killer_wire == victim_wire
+            || !crate::script_expr::valid_entity(killer_wire)
+        {
+            return;
+        }
+        let Some(&entity) = self.players_by_wire.get(&killer_wire) else {
+            return;
+        };
+        let Some(player) = self
+            .world
+            .get::<PlayerBodyState>(entity)
+            .filter(|player| player.id.entity == killer_wire && player.alive())
+        else {
+            return;
+        };
+        if !self.free_for_all && player.team == victim_team {
+            return;
+        }
+        let owner = player.owner;
+        let listener = player.id;
+        let window = self.combat_voice.multikill_window_ticks();
+        let streak = self
+            .elimination_streaks
+            .entry(killer_wire)
+            .and_modify(|streak| {
+                if frame >= streak.last_frame && frame.saturating_sub(streak.last_frame) <= window {
+                    streak.count = streak.count.saturating_add(1);
+                } else {
+                    streak.count = 1;
+                }
+                streak.last_frame = frame;
+            })
+            .or_insert(EliminationStreak {
+                last_frame: frame,
+                count: 1,
+            });
+        let count = streak.count;
+        if let Some((stimulus, line)) = self.combat_voice.multikill_cue(count, count as usize) {
+            self.player_cues.push(PlayerRoomCue {
+                owner,
+                listener,
+                source: RoomBodyIdentity {
+                    wire: killer_wire,
+                    generation: entity.to_bits(),
+                },
+                notice: CombatNotice::Voice {
+                    anchor: GAME_MODE_ENTITY,
+                    speaker: GAME_MODE_ENTITY,
+                    listener: killer_wire,
+                    stimulus,
+                    line,
+                },
+            });
+        }
     }
 
     fn route_room_message(&mut self, entity: Entity, source: u32, message: RoomMessage) {
@@ -307,6 +519,8 @@ impl RoomSimulation {
                     .filter(|enemy| enemy.fault.is_none() && !enemy.scripts.retirement_requested)
                 {
                     let _ = enemy.scripts.receive_room_message(source, message);
+                } else if let Some(script) = &mut state.stock_script {
+                    script.receive_room_message(source, message);
                 }
             }
         }
@@ -371,6 +585,11 @@ mod tests {
         let cue = RoomCue {
             stimulus: 41,
             line: 42,
+            speaker: RoomCueSpeaker::Actor,
+        };
+        let mode_cue = RoomCue {
+            speaker: RoomCueSpeaker::Mode,
+            ..cue
         };
         let mut outbox = RoomScriptRequests::default();
         assert!(outbox.queue_cue(
@@ -380,13 +599,18 @@ mod tests {
             cue
         ));
         assert!(outbox.queue_cue(frame, speaker, &[second.entity], cue));
+        assert!(outbox.queue_cue(frame, speaker, &[first.entity], mode_cue));
         assert!(outbox.queue_cue(frame, speaker, &[], cue));
-        let [valid, expires_after_settlement, expires_before_settlement]: [RoomScriptRequest; 3] =
-            outbox.take().try_into().ok().unwrap();
+        let [
+            valid,
+            expires_after_settlement,
+            expires_before_settlement,
+            mode,
+        ]: [RoomScriptRequest; 4] = outbox.take().try_into().ok().unwrap();
         assert_eq!(valid.wire, first.entity);
         assert_eq!(expires_after_settlement.wire, second.entity);
 
-        for request in [valid, expires_after_settlement] {
+        for request in [valid, expires_after_settlement, mode] {
             room.settle_script_request(request, sender, 1, Duration::ZERO)
                 .unwrap();
         }
@@ -404,24 +628,38 @@ mod tests {
             .unwrap();
         assert_eq!(
             room.take_player_cues(),
-            [PlayerRoomCue {
-                owner: 2,
-                listener: first,
-                source,
-                notice: CombatNotice::Voice {
-                    anchor: speaker,
-                    speaker,
-                    listener: first.entity,
-                    stimulus: 41,
-                    line: 42,
+            [
+                PlayerRoomCue {
+                    owner: 2,
+                    listener: first,
+                    source: sender.identity(),
+                    notice: CombatNotice::Voice {
+                        anchor: speaker,
+                        speaker,
+                        listener: first.entity,
+                        stimulus: 41,
+                        line: 42,
+                    },
                 },
-            }]
+                PlayerRoomCue {
+                    owner: 2,
+                    listener: first,
+                    source: sender.identity(),
+                    notice: CombatNotice::Voice {
+                        anchor: GAME_MODE_ENTITY,
+                        speaker: GAME_MODE_ENTITY,
+                        listener: first.entity,
+                        stimulus: 41,
+                        line: 42,
+                    },
+                }
+            ]
         );
         assert!(room.take_player_cues().is_empty());
 
         room.prepare_spatial_frame(2).unwrap();
         let frame = &room.spatial_frame.as_ref().unwrap().1;
-        assert!(outbox.queue_cue(frame, outsider.entity, &[first.entity], cue));
+        assert!(outbox.queue_cue(frame, outsider.entity, &[first.entity], mode_cue));
         let request = outbox.take().pop().unwrap();
         let outsider_sender = room.sample_health_body(outsider.entity).unwrap();
         room.settle_script_request(request, outsider_sender, 2, Duration::ZERO)
@@ -447,9 +685,11 @@ mod tests {
             candidate_index,
             angles: [0; 2],
             eye_position: None,
+            filter_flags: None,
             health,
             messages,
             cue_listener: health,
+            voice: None,
         };
         let frame = RoomSpatialFrame {
             candidates: [1, 2, 3]
@@ -469,6 +709,7 @@ mod tests {
             ]),
             player_wires: HashMap::new(),
             ground: Arc::new(fixture_ground()),
+            actor_voice: None,
             captured_tick: 0,
             debug_rays: Arc::default(),
         };
@@ -496,7 +737,8 @@ mod tests {
             &[2],
             RoomCue {
                 stimulus: 9,
-                line: 10
+                line: 10,
+                speaker: RoomCueSpeaker::Actor,
             }
         ));
 

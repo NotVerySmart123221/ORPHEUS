@@ -14,6 +14,7 @@ pub use orpheus_statescript::{
 pub use orpheus_wire::{bits, commands, game_link, jam_cipher, jam_codec, jam_framing};
 
 pub mod accounts;
+mod actor_voice;
 mod ai_script;
 pub mod battle_tag_query;
 pub mod bnet_protocol;
@@ -23,6 +24,7 @@ pub mod bnet_session_key;
 mod body_ruleset;
 pub mod catalog;
 pub mod collection;
+pub mod combat_voice;
 #[cfg(any(test, feature = "inspector"))]
 mod debug_geometry;
 #[cfg(feature = "inspector")]
@@ -85,6 +87,8 @@ pub mod mover_modifiers;
 mod mover_posture;
 pub mod mover_settings;
 pub mod npc_catalog;
+#[cfg(feature = "inspector")]
+mod owner_trace;
 mod patrol_script;
 pub mod projectile_flight;
 pub mod projectile_wire;

@@ -5,6 +5,7 @@ use std::{collections::HashMap, error::Error, fmt, time::Duration};
 use crate::bits::BitReader;
 use crate::commands::{Command, InputError, read_commands};
 use crate::game_messages::{ChannelError, Message, read_channel};
+use crate::game_parameters::{CLIENT_GAME_MESSAGE, CLIENT_WHEEL_ACTION};
 use crate::jam_codec::{Fields, Schemas, Value};
 
 const PONG: u32 = 20306;
@@ -16,6 +17,7 @@ pub enum MessageKind {
     Ping,
     MapLoaded,
     GameMessage,
+    WheelAction,
     Other,
 }
 
@@ -24,7 +26,8 @@ impl From<u32> for MessageKind {
         match id {
             21610 => Self::Ping,
             21601 | 21602 => Self::MapLoaded,
-            21616 => Self::GameMessage,
+            CLIENT_GAME_MESSAGE => Self::GameMessage,
+            CLIENT_WHEEL_ACTION => Self::WheelAction,
             _ => Self::Other,
         }
     }
@@ -375,7 +378,7 @@ mod tests {
         for stamp in [111_u64, 222, 333, 444] {
             expected.extend(stamp.to_le_bytes());
         }
-        assert_eq!(bytes, expected);
+        assert_eq!(bytes.as_bytes(), expected);
         let defaults = pong(&Fields::new(), 1, 2).unwrap();
         assert_eq!(defaults.fields[&0x78], Value::Unsigned(0));
         assert_eq!(
@@ -429,7 +432,12 @@ mod tests {
             0, 6, 3, 0, 0, 0, 4, 0, 0, 0, 111, 0, 0, 0, 0, 0, 0, 0, 222, 0, 0, 0, 0, 0, 0, 0, 0x4d,
             1, 0, 0, 0, 0, 0, 0, 0xbc, 1, 0, 0, 0, 0, 0, 0,
         ];
-        assert_eq!(encode(&schemas, reply.id, &reply.fields).unwrap(), expected);
+        assert_eq!(
+            encode(&schemas, reply.id, &reply.fields)
+                .unwrap()
+                .as_bytes(),
+            expected
+        );
     }
 
     #[test]

@@ -6,6 +6,12 @@
 
 use serde_json::Value as Json;
 
+pub use crate::script_init::Knockback;
+
+#[cfg(test)]
+#[path = "projectile_flight/knockback.rs"]
+mod knockback_tests;
+
 use crate::{
     collision_index::IndexError,
     game_clock::TICK_PERIOD,
@@ -14,27 +20,42 @@ use crate::{
     script_expr::EvalError,
     script_graph::Node,
     script_wire::Value,
-    static_ray::{Vec3, along, norm},
+    static_ray::{MIN_SURFACE_DISTANCE, SurfaceHit, Vec3, along, norm},
 };
 
 const DEFAULT_LIFETIME: f64 = 5.0;
 const EPSILON: f64 = 1e-9;
-const IMPACT_RAY_OFFSET: f64 = 1e-4;
+const DISTANCE_ONLY_RAY_OFFSET: f64 = 1e-4;
+const SURFACE_RAY_OFFSET: f64 = 2.0 * MIN_SURFACE_DISTANCE;
+const REBOUND_SEPARATION: f64 = 0.001;
+
+#[derive(Clone, Copy)]
+struct WallContact {
+    distance: f64,
+    normal: Option<Vec3>,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectileBallistics {
     pub speed: f64,
     pub lifetime: f64,
+    pub max_distance: Option<f64>,
     pub radius: f64,
+    pub(crate) terrain_radius: f32,
     pub definition: Option<u64>,
     pub direct: Option<HitDefinition>,
     pub blast: Option<Blast>,
+    pub(crate) terrain_rebound: Option<TerrainRebound>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Blast {
     pub hit: HitDefinition,
     pub rings: Vec<(f64, f64)>,
+    pub self_damage_scale: f64,
+    pub self_knockback_scale: f32,
+    pub knockback: Option<Knockback>,
+    pub detonate_on_expiry: bool,
 }
 
 impl ProjectileBallistics {
@@ -63,10 +84,7 @@ impl ProjectileBallistics {
             lifetime = DEFAULT_LIFETIME;
         }
         let reach = authored_number(field("m_FEC435C6"), 0.0, &mut evaluate)?;
-        if reach != 0.0 {
-            lifetime = lifetime.min(reach / speed);
-        }
-        if !lifetime.is_finite() || lifetime <= 0.0 {
+        if !lifetime.is_finite() || lifetime <= 0.0 || !reach.is_finite() || reach < 0.0 {
             return Ok(None);
         }
         let definition = match field("m_projectileEntity.m_entityDef") {
@@ -82,6 +100,13 @@ impl ProjectileBallistics {
         } else {
             0.0
         };
+        let terrain_radius = field("m_8236947A")
+            .filter(|config| config["$"] == "STU_20C861FB")
+            .and_then(|config| config.get("m_9655ED90"));
+        let terrain_radius = authored_number(terrain_radius, 0.0, &mut evaluate)? as f32;
+        if !terrain_radius.is_finite() || terrain_radius < 0.0 {
+            return Err(EvalError::MalformedConfig("projectile terrain radius"));
+        }
         let direct = HitDefinition::from_authored(
             field("m_6396149F").unwrap_or(&Json::Null),
             &mut evaluate,
@@ -99,22 +124,133 @@ impl ProjectileBallistics {
                 }
             }
             rings.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
-            Some(Blast { hit, rings })
+            let scale = authored_number(config.get("m_8A3E3883"), 0.0, &mut evaluate)?;
+            let self_knockback = &config["m_49F60FB8"];
+            let self_knockback_scale = if self_knockback.as_bool() == Some(true)
+                || self_knockback.as_u64() == Some(1)
+            {
+                authored_number(config.get("m_2FE97560"), 0.0, &mut evaluate).unwrap_or(0.0) as f32
+            } else {
+                0.0
+            };
+            Some(Blast {
+                hit,
+                rings,
+                self_damage_scale: if scale.is_finite() {
+                    scale.max(0.0)
+                } else {
+                    0.0
+                },
+                self_knockback_scale: if self_knockback_scale.is_finite() {
+                    self_knockback_scale.max(0.0)
+                } else {
+                    0.0
+                },
+                knockback: Knockback::from_authored(&config["m_modifyHealth"], &mut evaluate),
+                detonate_on_expiry: config
+                    .get("m_EEB99E41")
+                    .filter(|value| !value.is_null())
+                    .and_then(|value| evaluate(value).ok())
+                    .is_some_and(|value| crate::script_expr::truthy(&value)),
+            })
         } else {
             None
         };
         Ok(Some(Self {
             speed,
             lifetime,
+            max_distance: (reach > 0.0).then_some(reach),
             radius,
+            terrain_radius,
             definition,
             direct,
             blast,
+            terrain_rebound: TerrainRebound::from_authored(field("m_E365DB20"), &mut evaluate)?,
         }))
     }
 }
 
+/// Static terrain response declared by the shared volley configuration.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TerrainRebound {
+    limit: u32,
+    normal_retention: f64,
+    tangent_retention: f64,
+    tangent_loss: f64,
+}
+
+impl TerrainRebound {
+    fn from_authored(
+        config: Option<&Json>,
+        evaluate: &mut impl FnMut(&Json) -> Result<Value, EvalError>,
+    ) -> Result<Option<Self>, EvalError> {
+        let Some(config) = config.filter(|config| config["$"] == "STU_3FE1A93B") else {
+            return Ok(None);
+        };
+        let Some(enabled) = config.get("m_D9EFD182").filter(|config| !config.is_null()) else {
+            return Ok(None);
+        };
+        if !crate::script_expr::truthy(&evaluate(enabled)?) {
+            return Ok(None);
+        }
+        let (Some(limit), Some(normal)) = (
+            config.get("m_360294F0").filter(|config| !config.is_null()),
+            config.get("m_0D20DAFD").filter(|config| !config.is_null()),
+        ) else {
+            // The native defaults for these operands are not established.
+            return Ok(None);
+        };
+        let Value::Integer(limit) = evaluate(limit)? else {
+            return Err(EvalError::MalformedConfig("projectile rebound count"));
+        };
+        let limit = u32::try_from(limit)
+            .map_err(|_| EvalError::MalformedConfig("projectile rebound count"))?;
+        let normal_retention = authored_number(Some(normal), -1.0, evaluate)?;
+        let tangent_retention = authored_number(config.get("m_C29D35E8"), 1.0, evaluate)?;
+        let tangent_loss = authored_number(config.get("m_CE33458D"), 0.0, evaluate)? * 0.016;
+        if !(0.0..=1.0).contains(&normal_retention)
+            || !(0.0..=1.0).contains(&tangent_retention)
+            || !tangent_loss.is_finite()
+            || tangent_loss < 0.0
+        {
+            return Err(EvalError::MalformedConfig(
+                "projectile rebound coefficients",
+            ));
+        }
+        Ok(Some(Self {
+            limit,
+            normal_retention,
+            tangent_retention,
+            tangent_loss,
+        }))
+    }
+
+    fn reflect(self, incident: Vec3, normal: Vec3) -> Vec3 {
+        let approach = incident[0] * normal[0] + incident[1] * normal[1] + incident[2] * normal[2];
+        if approach >= 0.0 {
+            return incident;
+        }
+        let tangent = along(incident, normal, -approach);
+        let speed = norm(tangent);
+        let retained = if speed > 0.0 {
+            self.tangent_retention * (1.0 - self.tangent_loss / speed).max(0.0)
+        } else {
+            0.0
+        };
+        along(
+            tangent.map(|axis| axis * retained),
+            normal,
+            -approach * self.normal_retention,
+        )
+    }
+}
+
 impl Blast {
+    fn affects_shooter(&self) -> bool {
+        (self.knockback.is_some() && self.self_knockback_scale > 0.0)
+            || (self.hit.amount > 0.0 && self.self_damage_scale > 0.0)
+    }
+
     fn multiplier(&self, distance: f64) -> f64 {
         let Some(&(mut previous, mut scalar)) = self.rings.first() else {
             return 0.0;
@@ -140,22 +276,41 @@ pub struct ProjectileFlight {
     direction: Vec3,
     remaining: f64,
     travelled: f64,
+    distance_travelled: f64,
     last_tick: Option<u32>,
     ended: bool,
     direct_falloff: bool,
     expiry_blast: bool,
-    gravity: Option<(f32, Vec3)>,
+    gravity: f32,
+    velocity: Vec3,
+    terrain_rebounds: u32,
 }
 
 #[derive(Debug, PartialEq)]
 pub struct FlightEnd {
     pub point: Vec3,
+    /// The directly contacted actor, if the flight ended against one.
+    pub contact: Option<u32>,
     pub travelled: f64,
     pub impacts: Vec<Impact>,
     pub expired: bool,
+    pub impact: bool,
+}
+
+enum Segment {
+    Complete,
+    Rebounded(f64),
+    Ended(FlightEnd),
 }
 
 impl ProjectileFlight {
+    pub(crate) fn affects_shooter(&self) -> bool {
+        self.ballistics
+            .blast
+            .as_ref()
+            .is_some_and(Blast::affects_shooter)
+    }
+
     pub fn new(
         ballistics: ProjectileBallistics,
         position: Vec3,
@@ -167,28 +322,33 @@ impl ProjectileFlight {
             || !ballistics.lifetime.is_finite()
             || ballistics.lifetime <= 0.0
             || !(ballistics.speed * ballistics.lifetime).is_finite()
+            || ballistics
+                .max_distance
+                .is_some_and(|range| !range.is_finite() || range <= 0.0)
             || !position.into_iter().chain(direction).all(f64::is_finite)
             || (direction.iter().map(|value| value * value).sum::<f64>() - 1.0).abs() > 1e-6
         {
             return None;
         }
+        let expiry_blast = ballistics
+            .blast
+            .as_ref()
+            .is_some_and(|blast| blast.detonate_on_expiry);
         Some(Self {
             remaining: ballistics.lifetime,
+            velocity: direction.map(|axis| axis * ballistics.speed),
             ballistics,
             position,
             direction,
             travelled: 0.0,
+            distance_travelled: 0.0,
             last_tick: fired_at,
             ended: false,
             direct_falloff: false,
-            expiry_blast: false,
-            gravity: None,
+            expiry_blast,
+            gravity: 0.0,
+            terrain_rebounds: 0,
         })
-    }
-
-    pub(crate) fn with_expiry_blast(mut self, enabled: bool) -> Self {
-        self.expiry_blast = enabled;
-        self
     }
 
     pub(crate) fn with_direct_falloff(mut self) -> Self {
@@ -197,10 +357,8 @@ impl ProjectileFlight {
     }
 
     pub(crate) fn with_gravity(mut self, gravity: f32) -> Self {
-        self.gravity = Some((
-            gravity,
-            launch_velocity(self.direction, self.ballistics.speed),
-        ));
+        self.gravity = gravity;
+        self.velocity = launch_velocity(self.direction, self.ballistics.speed);
         self
     }
 
@@ -210,16 +368,44 @@ impl ProjectileFlight {
         &mut self,
         tick: u32,
         targets: &[(u32, TargetPose)],
-        wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
+        mut wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
     ) -> Result<Option<FlightEnd>, IndexError> {
-        self.advance_combat(tick, targets, wall)
+        self.advance_with_wall(tick, targets, None, |origin, direction, reach, _| {
+            Ok(wall(origin, direction, reach)?.map(|distance| WallContact {
+                distance,
+                normal: None,
+            }))
+        })
     }
 
     pub(crate) fn advance_combat<T: Copy + Into<HurtPose>>(
         &mut self,
         tick: u32,
         targets: &[(u32, T)],
-        mut wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
+        shooter: Option<(u32, HurtPose)>,
+        mut wall: impl FnMut(Vec3, Vec3, f64, f32) -> Result<Option<SurfaceHit>, IndexError>,
+    ) -> Result<Option<FlightEnd>, IndexError> {
+        self.advance_with_wall(
+            tick,
+            targets,
+            shooter,
+            |origin, direction, reach, radius| {
+                Ok(
+                    wall(origin, direction, reach, radius)?.map(|hit| WallContact {
+                        distance: hit.distance,
+                        normal: Some(hit.normal),
+                    }),
+                )
+            },
+        )
+    }
+
+    fn advance_with_wall<T: Copy + Into<HurtPose>>(
+        &mut self,
+        tick: u32,
+        targets: &[(u32, T)],
+        shooter: Option<(u32, HurtPose)>,
+        mut wall: impl FnMut(Vec3, Vec3, f64, f32) -> Result<Option<WallContact>, IndexError>,
     ) -> Result<Option<FlightEnd>, IndexError> {
         if self.ended {
             return Ok(None);
@@ -229,27 +415,40 @@ impl ProjectileFlight {
             return Ok(None);
         }
         let seconds = TICK_PERIOD.as_secs_f64();
-        let mut end = None;
-        if self.gravity.is_some() {
-            for _ in 0..elapsed {
-                let duration = seconds.min(self.remaining);
-                let (gravity, velocity) = self.gravity.as_mut().expect("gravity flight");
-                *velocity = gravity_step(*velocity, *gravity, duration);
-                let speed = norm(*velocity);
-                if speed > EPSILON {
+        self.last_tick = Some(tick);
+        let kinetic = self.gravity != 0.0 || self.ballistics.terrain_rebound.is_some();
+        let steps = if kinetic { elapsed } else { 1 };
+        let step_time = if kinetic {
+            seconds
+        } else {
+            f64::from(elapsed) * seconds
+        };
+        for _ in 0..steps {
+            let mut duration = step_time.min(self.remaining);
+            while duration > 0.0 {
+                let mut velocity = self.velocity;
+                if self.gravity != 0.0 {
+                    velocity = gravity_step(velocity, self.gravity, duration);
+                }
+                let speed = if kinetic {
+                    norm(velocity)
+                } else {
+                    self.ballistics.speed
+                };
+                if kinetic && speed > EPSILON {
                     self.direction = velocity.map(|axis| axis / speed);
                 }
-                end = self.advance_segment(duration, speed, targets, &mut wall)?;
-                if end.is_some() {
-                    break;
+                match self.advance_segment(duration, speed, targets, shooter, &mut wall)? {
+                    Segment::Complete => {
+                        self.velocity = velocity;
+                        break;
+                    }
+                    Segment::Rebounded(spent) => duration -= spent,
+                    Segment::Ended(end) => return Ok(Some(end)),
                 }
             }
-        } else {
-            let duration = (f64::from(elapsed) * seconds).min(self.remaining);
-            end = self.advance_segment(duration, self.ballistics.speed, targets, &mut wall)?;
         }
-        self.last_tick = Some(tick);
-        Ok(end)
+        Ok(None)
     }
 
     fn advance_segment<T: Copy + Into<HurtPose>>(
@@ -257,9 +456,15 @@ impl ProjectileFlight {
         duration: f64,
         speed: f64,
         targets: &[(u32, T)],
-        mut wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
-    ) -> Result<Option<FlightEnd>, IndexError> {
-        let reach = speed * duration;
+        shooter: Option<(u32, HurtPose)>,
+        mut wall: impl FnMut(Vec3, Vec3, f64, f32) -> Result<Option<WallContact>, IndexError>,
+    ) -> Result<Segment, IndexError> {
+        let step = speed * duration;
+        let range_left = self
+            .ballistics
+            .max_distance
+            .map(|range| (range - self.distance_travelled).max(0.0));
+        let reach = range_left.map_or(step, |range| step.min(range));
         let mut closest = None;
         for &(entity, target) in targets {
             if let Some((distance, _)) =
@@ -272,28 +477,65 @@ impl ProjectileFlight {
                 }
             }
         }
-        if let Some(distance) = wall(self.position, self.direction, reach)?
-            .filter(|distance| (0.0..=reach).contains(distance))
-        {
-            if closest.is_none_or(|(best, _)| distance < best) {
-                closest = Some((distance, None));
-            }
+        let wall_hit = wall(
+            self.position,
+            self.direction,
+            reach,
+            self.ballistics.terrain_radius,
+        )?
+        .filter(|hit| {
+            (0.0..=reach).contains(&hit.distance)
+                && closest.is_none_or(|(best, _)| hit.distance < best)
+        });
+        if let Some(hit) = wall_hit {
+            closest = Some((hit.distance, None));
         }
         let Some((distance, target)) = closest else {
             self.position = along(self.position, self.direction, reach);
-            self.travelled += duration;
-            self.remaining -= duration;
-            if self.remaining <= 0.0 {
+            let spent = if reach < step {
+                reach / speed
+            } else {
+                duration
+            };
+            self.travelled += spent;
+            self.distance_travelled += reach;
+            self.remaining -= spent;
+            if self.remaining <= 0.0 || range_left == Some(reach) {
                 let impacts = if self.expiry_blast {
-                    self.splash(self.position, self.position, targets, &mut wall)?
+                    self.splash(self.position, self.position, targets, shooter, &mut wall)?
                 } else {
                     Vec::new()
                 };
-                return Ok(Some(self.finish(impacts, true)));
+                return Ok(Segment::Ended(self.finish(impacts, true, None)));
             }
-            return Ok(None);
+            return Ok(Segment::Complete);
         };
         let point = along(self.position, self.direction, distance);
+        let spent = if speed > EPSILON {
+            distance / speed
+        } else {
+            0.0
+        };
+        let rebound = self.ballistics.terrain_rebound.filter(|response| {
+            spent > 0.0
+                && spent < self.remaining
+                && range_left.is_none_or(|range| distance < range)
+                && self.terrain_rebounds < response.limit
+        });
+        if let (Some(normal), Some(rebound)) = (wall_hit.and_then(|hit| hit.normal), rebound) {
+            let incident = if self.gravity == 0.0 {
+                self.velocity
+            } else {
+                gravity_step(self.velocity, self.gravity, spent)
+            };
+            self.velocity = rebound.reflect(incident, normal);
+            self.position = along(point, normal, REBOUND_SEPARATION);
+            self.terrain_rebounds += 1;
+            self.distance_travelled += distance;
+            self.travelled += spent;
+            self.remaining -= spent;
+            return Ok(Segment::Rebounded(spent.min(duration)));
+        }
         let mut impacts = Vec::new();
         if let (Some(entity), Some(direct)) = (
             target,
@@ -304,30 +546,34 @@ impl ProjectileFlight {
                 entity,
                 distance,
                 damage: if self.direct_falloff {
-                    direct.damage_at(self.travelled * self.ballistics.speed + distance, false)
+                    direct.damage_at(self.distance_travelled + distance, false)
                 } else {
                     direct.amount
                 },
                 critical: false,
                 loadout: direct.loadout,
+                impulse: None,
             });
         }
-        // Cast from the approach side when the projectile hit the map.
-        let origin = if target.is_none() {
-            along(
+        let origin = match wall_hit {
+            // Offset perpendicular to the hit surface. At a glancing angle an
+            // offset along the shot can leave the blast origin inside the ray cutoff.
+            Some(WallContact {
+                normal: Some(normal),
+                ..
+            }) => along(point, normal, SURFACE_RAY_OFFSET),
+            Some(_) => along(
                 self.position,
                 self.direction,
-                (distance - IMPACT_RAY_OFFSET).max(0.0),
-            )
-        } else {
-            point
+                (distance - DISTANCE_ONLY_RAY_OFFSET).max(0.0),
+            ),
+            None => point,
         };
-        impacts.extend(self.splash(point, origin, targets, &mut wall)?);
+        impacts.extend(self.splash(point, origin, targets, shooter, &mut wall)?);
         self.position = point;
-        if speed > EPSILON {
-            self.travelled += distance / speed;
-        }
-        Ok(Some(self.finish(impacts, false)))
+        self.distance_travelled += distance;
+        self.travelled += spent;
+        Ok(Segment::Ended(self.finish(impacts, false, target)))
     }
 
     fn splash<T: Copy + Into<HurtPose>>(
@@ -335,34 +581,55 @@ impl ProjectileFlight {
         point: Vec3,
         origin: Vec3,
         targets: &[(u32, T)],
-        mut wall: impl FnMut(Vec3, Vec3, f64) -> Result<Option<f64>, IndexError>,
+        shooter: Option<(u32, HurtPose)>,
+        mut wall: impl FnMut(Vec3, Vec3, f64, f32) -> Result<Option<WallContact>, IndexError>,
     ) -> Result<Vec<Impact>, IndexError> {
         let mut impacts = Vec::new();
         if let Some(blast) = self
             .ballistics
             .blast
             .as_ref()
-            .filter(|blast| blast.hit.amount > 0.0)
+            .filter(|blast| blast.hit.amount > 0.0 || blast.knockback.is_some())
         {
-            for &(entity, pose) in targets {
-                let Some(surface) = pose.into().nearest_surface(point, origin) else {
+            let targets = targets
+                .iter()
+                .map(|&(entity, pose)| (entity, pose.into(), 1.0, 1.0));
+            let shooter = shooter
+                .filter(|_| blast.affects_shooter())
+                .map(|(entity, pose)| {
+                    (
+                        entity,
+                        pose,
+                        blast.self_damage_scale,
+                        blast.self_knockback_scale,
+                    )
+                });
+            for (entity, pose, damage_scale, knockback_scale) in targets.chain(shooter) {
+                let Some(surface) = pose.nearest_surface(point, origin) else {
                     continue;
                 };
-                let damage = blast.hit.amount * blast.multiplier(surface.distance);
-                if damage <= 0.0 {
+                let falloff = blast.multiplier(surface.distance);
+                let damage = blast.hit.amount * falloff * damage_scale;
+                let damage = if damage.is_finite() {
+                    damage.max(0.0)
+                } else {
+                    0.0
+                };
+                let impulse = blast.knockback.as_ref().and_then(|knockback| {
+                    knockback.delta(
+                        point,
+                        pose.feet(),
+                        surface.distance,
+                        falloff > 0.0,
+                        knockback_scale,
+                    )
+                });
+                if damage == 0.0 && impulse.is_none() {
                     continue;
                 }
-                let reach = surface.sight_reach;
-                if reach > EPSILON
-                    && wall(
-                        origin,
-                        surface
-                            .from_axis
-                            .map(|value| -value / surface.axis_distance),
-                        reach,
-                    )?
-                    .is_some_and(|hit| hit + EPSILON < reach)
-                {
+                if !surface.visible(|direction, reach| {
+                    wall(origin, direction, reach, 0.0).map(|hit| hit.map(|hit| hit.distance))
+                })? {
                     continue;
                 }
                 impacts.push(Impact {
@@ -372,20 +639,55 @@ impl ProjectileFlight {
                     damage,
                     critical: false,
                     loadout: blast.hit.loadout,
+                    impulse,
                 });
             }
         }
         Ok(impacts)
     }
 
-    fn finish(&mut self, impacts: Vec<Impact>, expired: bool) -> FlightEnd {
+    fn finish(&mut self, impacts: Vec<Impact>, expired: bool, contact: Option<u32>) -> FlightEnd {
         self.ended = true;
         FlightEnd {
             point: self.position,
+            contact,
             travelled: self.travelled,
             impacts,
             expired,
+            impact: !expired || self.expiry_blast,
         }
+    }
+}
+
+/// A direct single shot uses the sampled command pose for the first two
+/// literal aim slots, as in the reference server's posed weapon path.
+pub(crate) fn posed_projectile_direction(
+    node: &Node,
+    direction: Vec3,
+    mut evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
+) -> Option<Vec3> {
+    let launch = node.field("m_5EC1EB38").filter(|config| !config.is_null());
+    let direct = launch.is_some_and(|config| config["$"] == "STU_239B571E");
+    if launch.is_some() && !direct {
+        return None;
+    }
+    if let Some(aim) = node.field("m_aimID").filter(|config| !config.is_null()) {
+        if !direct
+            || aim["$"] != "STUConfigVarInt"
+            || !matches!(aim["m_value"].as_i64(), Some(0 | 1))
+        {
+            return None;
+        }
+    }
+    match launch
+        .map(|config| &config["m_22CE7F30"])
+        .filter(|lift| !lift.is_null())
+    {
+        Some(lift) => lifted_direction(
+            direction,
+            crate::script_expr::to_float(&evaluate(lift).ok()?),
+        ),
+        None => Some(direction),
     }
 }
 
@@ -419,18 +721,42 @@ pub(crate) fn gravity_step(mut velocity: Vec3, gravity: f32, duration: f64) -> V
 pub(crate) fn authored_gravity(
     fields: &Json,
     mut evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
-) -> Option<f32> {
-    let [motion] = fields.get("m_projectileMotions")?.as_array()?.as_slice() else {
-        return None;
-    };
-    if motion.get("$")?.as_str()? != "STU_E1A5B579"
-        || !motion["m_D0C4CF49"].is_null()
-        || motion["m_599AB8D7"].is_null()
-    {
-        return None;
+) -> Result<Option<f32>, EvalError> {
+    let motions = &fields["m_projectileMotions"];
+    if motions.is_null() {
+        return Ok(None);
     }
-    let gravity = crate::script_expr::to_float(&evaluate(&motion["m_599AB8D7"]).ok()?) as f32;
-    (gravity.is_finite() && gravity > 0.0).then_some(gravity)
+    let motions = motions
+        .as_array()
+        .ok_or(EvalError::MalformedConfig("projectile motion list"))?;
+    let mut gravity = 0.0f32;
+    for motion in motions {
+        if motion["$"] != "STU_E1A5B579" {
+            return Err(EvalError::UnsupportedConfig(
+                "projectile motion class".into(),
+            ));
+        }
+        let disable = &motion["m_D0C4CF49"];
+        if !disable.is_null() && crate::script_expr::truthy(&evaluate(disable)?) {
+            continue;
+        }
+        let acceleration = match evaluate(&motion["m_599AB8D7"])? {
+            Value::Float(value) => value as f32,
+            Value::Integer(value) => value as f32,
+            _ => {
+                return Err(EvalError::MalformedConfig(
+                    "projectile gravity acceleration",
+                ));
+            }
+        };
+        gravity += acceleration;
+        if acceleration < 0.0 || !gravity.is_finite() {
+            return Err(EvalError::MalformedConfig(
+                "projectile gravity acceleration",
+            ));
+        }
+    }
+    Ok((gravity > 0.0).then_some(gravity))
 }
 
 #[cfg(test)]
@@ -451,6 +777,9 @@ mod tests {
         ProjectileBallistics {
             speed: 50.0,
             lifetime: 2.0,
+            max_distance: None,
+            terrain_rebound: None,
+            terrain_radius: 0.0,
             radius: 0.0,
             definition: Some(0x0400_0000_0000_072c),
             direct: Some(hit),
@@ -461,6 +790,10 @@ mod tests {
                     ..hit
                 },
                 rings: vec![(1.0, 1.0), (3.0, 0.5)],
+                self_damage_scale: 0.0,
+                self_knockback_scale: 0.0,
+                knockback: None,
+                detonate_on_expiry: false,
             }),
         }
     }
@@ -522,23 +855,82 @@ mod tests {
     }
 
     #[test]
+    fn gravity_nodes_apply_only_the_enabled_authored_accelerations() {
+        let fixture: Json = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/projectile-expiry-v1.json"
+        ))
+        .unwrap();
+        let evaluate = |value: &Json| {
+            crate::script_expr::evaluate(value, &mut crate::script_expr::EmptyContext)
+        };
+        for case in fixture["gravity_cases"].as_array().unwrap() {
+            let motions: Vec<_> = case["accelerations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(case["disabled"].as_array().unwrap())
+                .map(|(value, disabled)| {
+                    serde_json::json!({
+                        "$": "STU_E1A5B579",
+                        "m_599AB8D7": value,
+                        "m_D0C4CF49": {"$":"STUConfigVarBool","m_value":disabled},
+                    })
+                })
+                .collect();
+            let mut fields = serde_json::json!({"m_projectileMotions":motions});
+            assert_eq!(
+                authored_gravity(&fields, evaluate).unwrap(),
+                case["net"].as_f64().map(|value| value as f32),
+            );
+            fields["m_projectileMotions"][0]["$"] = serde_json::json!("UnknownMotion");
+            assert!(authored_gravity(&fields, evaluate).is_err());
+        }
+    }
+
+    #[test]
     fn expiry_blast_uses_splash_radius_occlusion_and_once_only_retirement() {
+        let fixture: Json = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/projectile-expiry-v1.json"
+        ))
+        .unwrap();
+        let input = &fixture["input"];
+        let expected = &fixture["expected"];
+        let range = input["range"].as_f64().unwrap();
+        let speed = input["speed"].as_f64().unwrap();
+        let splash_damage = input["splash_damage"].as_f64().unwrap();
         for enabled in [false, true] {
             for blocked in [false, true] {
-                let mut data = helix();
-                data.speed = 30.0;
-                data.lifetime = 7.0 / 30.0;
-                data.direct = None;
-                let blast = data.blast.as_mut().unwrap();
-                blast.hit.amount = 25.0;
-                blast.rings = vec![(3.0, 1.0)];
-                let direction = lifted_direction([0.0, 0.0, 1.0], 0.05).unwrap();
+                let fields = serde_json::json!({
+                    "m_projectileSpeed": speed,
+                    "m_projectileLifetime": 1.0,
+                    "m_FEC435C6": range,
+                    "m_projectileMotions":[{"$":"STU_E1A5B579","m_599AB8D7":input["gravity"]}],
+                    "m_D2D11CE9": {
+                        "$": "STU_4AA6CA44",
+                        "m_modifyHealth": {"m_amount": splash_damage},
+                        "m_0D30E40C": [{"m_radius": input["splash_radius"], "m_B399CACB": 1.0}],
+                        "m_EEB99E41": {"$": "STUConfigVarBool", "m_value": enabled},
+                    },
+                });
+                let evaluate = |value: &Json| {
+                    crate::script_expr::evaluate(value, &mut crate::script_expr::EmptyContext)
+                };
+                let data = ProjectileBallistics::from_fields(&fields, evaluate)
+                    .unwrap()
+                    .unwrap();
+                let gravity = authored_gravity(&fields, evaluate).unwrap().unwrap();
+                let direction =
+                    lifted_direction([0.0, 0.0, 1.0], input["lift"].as_f64().unwrap()).unwrap();
                 let mut flight = ProjectileFlight::new(data, [0.0, 1.55, 0.0], direction, Some(0))
                     .unwrap()
-                    .with_gravity(20.0)
-                    .with_expiry_blast(enabled);
+                    .with_gravity(gravity);
                 // The target is off the flight axis but inside the range-end blast.
-                let targets = [(1, target(2.0, 7.0)), (2, target(5.0, 7.0))];
+                let visible = expected["visible_target"].as_u64().unwrap() as u32;
+                let out_of_range = expected["out_of_range_target"].as_u64().unwrap() as u32;
+                let targets = [
+                    (visible, target(2.0, range)),
+                    (out_of_range, target(5.0, range)),
+                ];
                 let end = (1..=30)
                     .find_map(|tick| {
                         flight
@@ -549,8 +941,10 @@ mod tests {
                     })
                     .expect("range expiry");
                 assert!(end.expired);
+                assert_eq!(end.impact, enabled);
                 assert!(end.point[1] < 1.55);
-                assert!((end.point[2] - direction[2] * 7.0).abs() < 1e-6);
+                assert!((flight.distance_travelled - range).abs() < 1e-9);
+                assert!((end.point[2] - expected["range_end_z"].as_f64().unwrap()).abs() < 1e-6);
                 let hits: Vec<_> = end
                     .impacts
                     .iter()
@@ -559,7 +953,7 @@ mod tests {
                 assert_eq!(
                     hits,
                     if enabled && !blocked {
-                        vec![(1, 25.0)]
+                        vec![(visible, splash_damage)]
                     } else {
                         vec![]
                     }
@@ -653,6 +1047,390 @@ mod tests {
         assert_eq!((end.point[2], end.travelled), (0.5, 0.01));
         assert!(end.impacts.is_empty());
         assert!(end.expired);
+        assert!(!end.impact);
+    }
+
+    #[test]
+    fn authored_terrain_hull_contacts_early_without_widening_blast_visibility() {
+        use crate::{
+            collision_cache::{CollisionCache, Mesh, Triangle},
+            collision_scene::CollisionScene,
+            contact_world::ContactWorld,
+            mover_settings::MoverCatalog,
+            scene_assets::BotQueries,
+        };
+
+        let fixture: Json = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/projectile-terrain-hull-v1.json"
+        ))
+        .unwrap();
+        let input = &fixture["input"];
+        let expected = &fixture["expected"];
+        let cache = CollisionCache {
+            header: serde_json::from_str(
+                r#"{"meshes":[[4,2]],"hulls":0,"models":0,"placements":0,"identifiers":[]}"#,
+            )
+            .unwrap(),
+            meshes: vec![Mesh {
+                vertices: serde_json::from_value(input["wall"].clone()).unwrap(),
+                triangles: [[0, 1, 2], [0, 2, 3]]
+                    .map(|corners| Triangle {
+                        corners,
+                        wings: [-1; 3],
+                        mask: 0x18,
+                        surface: 0,
+                    })
+                    .to_vec(),
+            }],
+            hulls: vec![],
+            models: vec![],
+            placements: vec![],
+        };
+        let ids = Default::default();
+        let ground = CollisionScene::movement_probe(&cache, &ids).unwrap();
+        let contacts = std::sync::Arc::new(ContactWorld::from_movement_cache(cache, &ids).unwrap());
+        let movers = MoverCatalog::default();
+        let queries = BotQueries::new(false, &movers, &ground, Some(&contacts));
+        let mut fields = serde_json::json!({
+            "m_projectileSpeed": input["speed"],
+            "m_8236947A": {
+                "$": "STU_20C861FB",
+                "m_9655ED90": {"$": "STUConfigVarFloat", "m_value": input["terrain_radius"]},
+            },
+            "m_D2D11CE9": {
+                "m_modifyHealth": {"m_amount": input["splash_damage"]},
+                "m_0D30E40C": [{"m_radius": input["splash_radius"], "m_B399CACB": 1.0}],
+            },
+        });
+        let evaluate = |value: &Json| {
+            crate::script_expr::evaluate(value, &mut crate::script_expr::EmptyContext)
+        };
+        let origin = serde_json::from_value(input["origin"].clone()).unwrap();
+        let direction = serde_json::from_value(input["direction"].clone()).unwrap();
+        let exposed = expected["exposed_target"].as_u64().unwrap() as u32;
+        let occluded = expected["occluded_target"].as_u64().unwrap() as u32;
+        let targets = [(exposed, target(0.25, 1.2)), (occluded, target(1.75, 0.25))];
+
+        let profile = ProjectileBallistics::from_fields(&fields, evaluate)
+            .unwrap()
+            .unwrap();
+        let mut flight = ProjectileFlight::new(profile, origin, direction, Some(0)).unwrap();
+        let mut radii = Vec::new();
+        let end = flight
+            .advance_combat(1, &targets, None, |origin, direction, reach, radius| {
+                radii.push(radius);
+                queries.projectile_wall(origin, direction, reach, radius)
+            })
+            .unwrap()
+            .unwrap();
+        let [low, high]: [f64; 2] =
+            serde_json::from_value(expected["contact_centre_x"].clone()).unwrap();
+        assert!((low..=high).contains(&end.point[0]), "{end:?}");
+        assert!(end.impact && !end.expired && end.contact.is_none());
+        let [hit] = end.impacts.as_slice() else {
+            panic!("expected one exposed actor, got {:?}", end.impacts);
+        };
+        assert_eq!(hit.entity, exposed);
+        assert_eq!(hit.damage, input["splash_damage"].as_f64().unwrap());
+        assert_eq!(radii[0], input["terrain_radius"].as_f64().unwrap() as f32);
+        assert!(!radii[1..].is_empty() && radii[1..].iter().all(|&radius| radius == 0.0));
+
+        // With the same motion and no declared terrain hull, first contact
+        // with this wall occurs in the next tick at the centreline crossing.
+        fields["m_8236947A"] = Json::Null;
+        let profile = ProjectileBallistics::from_fields(&fields, evaluate)
+            .unwrap()
+            .unwrap();
+        let mut flight = ProjectileFlight::new(profile, origin, direction, Some(0)).unwrap();
+        let wall = |origin, direction, reach, radius| {
+            queries.projectile_wall(origin, direction, reach, radius)
+        };
+        assert!(
+            flight
+                .advance_combat(1, &targets, None, wall)
+                .unwrap()
+                .is_none()
+        );
+        let end = flight
+            .advance_combat(2, &targets, None, wall)
+            .unwrap()
+            .unwrap();
+        assert_eq!(end.point[0], 1.0);
+    }
+
+    #[test]
+    fn authored_rebound_preserves_sweep_order_and_remaining_time_and_range() {
+        let fixture: Json = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/projectile-terrain-rebound-v1.json"
+        ))
+        .unwrap();
+        let input = &fixture["input"];
+        let expected = &fixture["expected"];
+        let start = serde_json::from_value(input["origin"].clone()).unwrap();
+        let direction = serde_json::from_value(input["direction"].clone()).unwrap();
+        let front = input["front_wall"].as_f64().unwrap();
+        let back = input["back_wall"].as_f64().unwrap();
+        let world = TriangleIndex::new([front, back].map(|z| SceneTriangle {
+            vertices: [[-6.0, -3.0, z], [6.0, -3.0, z], [0.0, 7.0, z]],
+            mask: 0x18,
+            surface: 0,
+        }))
+        .unwrap();
+        let wall = |origin, direction, length, _| {
+            world.cast_ray(origin, direction, length, 0x18).map(|hit| {
+                hit.map(|hit| SurfaceHit {
+                    distance: hit.distance,
+                    normal: hit.normal,
+                })
+            })
+        };
+        let mut fields = serde_json::json!({
+            "m_projectileSpeed": input["speed"],
+            "m_E365DB20": {
+                "$": "STU_3FE1A93B",
+                "m_D9EFD182": {"$": "STUConfigVarBool", "m_value": 1},
+                "m_360294F0": {"$": "STUConfigVarInt", "m_value": input["count"]},
+                "m_0D20DAFD": input["normal_retention"],
+                "m_C29D35E8": input["tangent_retention"],
+                "m_CE33458D": input["tangent_loss"],
+            },
+        });
+        let evaluate = |value: &Json| {
+            crate::script_expr::evaluate(value, &mut crate::script_expr::EmptyContext)
+        };
+        let profile = ProjectileBallistics::from_fields(&fields, evaluate)
+            .unwrap()
+            .unwrap();
+        let no_targets: [(u32, TargetPose); 0] = [];
+        let mut flight = ProjectileFlight::new(profile.clone(), start, direction, Some(0)).unwrap();
+        assert!(
+            flight
+                .advance_combat(1, &no_targets, None, wall)
+                .unwrap()
+                .is_none()
+        );
+        for (actual, expected) in flight
+            .position
+            .into_iter()
+            .zip(expected["after_first_tick"].as_array().unwrap())
+        {
+            assert!((actual - expected.as_f64().unwrap()).abs() < 1e-9);
+        }
+        assert!(
+            flight
+                .advance_combat(2, &no_targets, None, wall)
+                .unwrap()
+                .is_none()
+        );
+        let end = flight
+            .advance_combat(3, &no_targets, None, wall)
+            .unwrap()
+            .unwrap();
+        assert!(end.impact && !end.expired && end.contact.is_none());
+        assert!((end.point[2] - back).abs() < 1e-9);
+        assert!(
+            (end.travelled - expected["elapsed_at_second_wall"].as_f64().unwrap()).abs() < 1e-9
+        );
+        assert!(
+            flight
+                .advance_combat(4, &no_targets, None, wall)
+                .unwrap()
+                .is_none()
+        );
+
+        let intervening_actor = [(
+            42,
+            TargetPose {
+                radius: 0.1,
+                ..target(0.25, 0.3)
+            },
+        )];
+        let mut flight = ProjectileFlight::new(profile.clone(), start, direction, Some(0)).unwrap();
+        let end = flight
+            .advance_combat(1, &intervening_actor, None, wall)
+            .unwrap()
+            .unwrap();
+        assert_eq!(end.contact, Some(42));
+        assert_eq!(flight.terrain_rebounds, 0);
+
+        let short = ProjectileBallistics {
+            max_distance: expected["short_range"].as_f64(),
+            ..profile
+        };
+        let mut flight = ProjectileFlight::new(short, start, direction, Some(0)).unwrap();
+        let end = flight
+            .advance_combat(1, &no_targets, None, wall)
+            .unwrap()
+            .unwrap();
+        assert!(end.expired && !end.impact);
+        assert_eq!(flight.terrain_rebounds, 1);
+        assert!(
+            (flight.distance_travelled - expected["short_range"].as_f64().unwrap()).abs() < 1e-9
+        );
+
+        fields["m_E365DB20"]["m_D9EFD182"]["m_value"] = serde_json::json!(0);
+        let disabled = ProjectileBallistics::from_fields(&fields, evaluate)
+            .unwrap()
+            .unwrap();
+        let mut flight = ProjectileFlight::new(disabled, start, direction, Some(0)).unwrap();
+        let end = flight
+            .advance_combat(1, &no_targets, None, wall)
+            .unwrap()
+            .unwrap();
+        assert!((end.point[2] - front).abs() < 1e-9);
+        assert!(end.impact && !end.expired);
+        assert_eq!(flight.terrain_rebounds, 0);
+    }
+
+    #[test]
+    fn glancing_impact_blocks_blast_damage_and_force_on_the_far_side() {
+        let fixture: Json = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/projectile-glancing-wall-v1.json"
+        ))
+        .unwrap();
+        let vertices = serde_json::from_value(fixture["wall"].clone()).unwrap();
+        let world = TriangleIndex::new([SceneTriangle {
+            vertices,
+            mask: 0x18,
+            surface: 0,
+        }])
+        .unwrap();
+        let input = &fixture["input"];
+        let incidence = input["incidence"].as_f64().unwrap();
+        let offset = input["start_offset"].as_f64().unwrap();
+        let target_offset = input["target_offset"].as_f64().unwrap();
+        let along_wall = (1.0 - incidence * incidence).sqrt();
+        let impact_z = along_wall * offset / incidence;
+        let fields = serde_json::json!({
+            "m_projectileSpeed": 50.0,
+            "m_D2D11CE9": {
+                "m_modifyHealth": {
+                    "m_amount": input["damage"],
+                    "m_E33EFEE1": input["horizontal_impulse"],
+                    "m_10399AE7": input["upward_impulse"],
+                },
+                "m_0D30E40C": [{"m_radius": 2.0, "m_B399CACB": 1.0}]
+            }
+        });
+        let profile = ProjectileBallistics::from_fields(&fields, |value| {
+            crate::script_expr::evaluate(value, &mut crate::script_expr::EmptyContext)
+        })
+        .unwrap()
+        .unwrap();
+        for side in [-1.0, 1.0] {
+            let mut flight = ProjectileFlight::new(
+                profile.clone(),
+                [side * offset, 1.0, 0.0],
+                [-side * incidence, 0.0, along_wall],
+                Some(0),
+            )
+            .unwrap();
+            let end = flight
+                .advance_combat(
+                    2,
+                    &[
+                        (1, target(side * target_offset, impact_z)),
+                        (2, target(-side * target_offset, impact_z)),
+                    ],
+                    None,
+                    |origin, direction, reach, _| {
+                        world.cast_ray(origin, direction, reach, 0x18).map(|hit| {
+                            hit.map(|hit| SurfaceHit {
+                                distance: hit.distance,
+                                normal: hit.normal,
+                            })
+                        })
+                    },
+                )
+                .unwrap()
+                .unwrap();
+            assert!(end.impact && !end.expired && end.contact.is_none());
+            assert!(end.point[0].abs() < 1e-12);
+            assert!((end.point[2] - impact_z).abs() < 1e-12);
+            let [near] = end.impacts.as_slice() else {
+                panic!("expected only the exposed target, got {:?}", end.impacts);
+            };
+            assert_eq!(near.entity, 1);
+            assert_eq!(near.damage, input["damage"].as_f64().unwrap());
+            let [x, y, z] = near.impulse.unwrap();
+            assert_eq!(x, side * input["horizontal_impulse"].as_f64().unwrap());
+            assert_eq!(y, input["upward_impulse"].as_f64().unwrap());
+            assert!(z.abs() < 1e-12, "unexpected impulse along the wall: {z}");
+        }
+    }
+
+    #[test]
+    fn authored_self_splash_reuses_damage_falloff_and_occlusion_without_blocking_the_flight() {
+        let fixture: Json = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/projectile-self-splash-v1.json"
+        ))
+        .unwrap();
+        let input = &fixture["input"];
+        let expected = &fixture["expected"];
+        let mut fields = serde_json::json!({
+            "m_projectileSpeed": input["projectile_speed"],
+            "m_D2D11CE9": {
+                "m_8A3E3883": input["self_damage_scale"],
+                "m_modifyHealth": { "m_amount": input["blast_damage"] },
+                "m_0D30E40C": [{ "m_radius": input["blast_radius"], "m_B399CACB": 1.0 }]
+            }
+        });
+        let shooter = (1, target(0.0, 0.0).into());
+        let targets = [(2, target(1.2, 0.75))];
+        let fire = |fields: &Json, obstructed: bool| {
+            let profile = ProjectileBallistics::from_fields(fields, |config| {
+                Ok(config.as_f64().map_or(Value::Null, Value::Float))
+            })
+            .unwrap()
+            .unwrap();
+            let mut flight =
+                ProjectileFlight::new(profile, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], None).unwrap();
+            flight
+                .advance_with_wall(1, &targets, Some(shooter), |_, direction, reach, _| {
+                    if direction == [0.0, 0.0, 1.0] && reach >= 0.75 {
+                        Ok(Some(WallContact {
+                            distance: 0.75,
+                            normal: None,
+                        }))
+                    } else if obstructed && direction[2] < -0.9 {
+                        Ok(Some(WallContact {
+                            distance: reach / 2.0,
+                            normal: None,
+                        }))
+                    } else {
+                        Ok(None)
+                    }
+                })
+                .unwrap()
+                .unwrap()
+        };
+        let hit = fire(&fields, false);
+        assert_eq!(hit.point, [0.0, 1.0, 0.75]);
+        assert_eq!(hit.contact, None);
+        assert_eq!(
+            hit.impacts
+                .iter()
+                .map(|hit| (hit.entity, hit.damage))
+                .collect::<Vec<_>>(),
+            [
+                (2, expected["enemy_damage"].as_f64().unwrap()),
+                (1, expected["owner_damage"].as_f64().unwrap())
+            ],
+        );
+        let obscured = fire(&fields, true);
+        assert_eq!(obscured.impacts, hit.impacts[..1]);
+        fields["m_D2D11CE9"]["m_8A3E3883"] = Json::Null;
+        assert_eq!(fire(&fields, false).impacts, hit.impacts[..1]);
+
+        fields["m_D2D11CE9"]["m_modifyHealth"]["m_10399AE7"] = serde_json::json!(4.0);
+        assert_eq!(fire(&fields, false).impacts.len(), 1);
+        fields["m_D2D11CE9"]["m_49F60FB8"] = serde_json::json!(1);
+        fields["m_D2D11CE9"]["m_2FE97560"] = serde_json::json!(0.5);
+        let impulse_only = fire(&fields, false);
+        assert_eq!(impulse_only.impacts[1].entity, shooter.0);
+        assert_eq!(impulse_only.impacts[1].damage, 0.0);
+        assert_eq!(impulse_only.impacts[1].impulse, Some([0.0, 2.0, 0.0]));
+        assert_eq!(fire(&fields, true).impacts.len(), 1);
     }
 
     #[test]

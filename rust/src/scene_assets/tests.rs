@@ -81,9 +81,11 @@ fn practice_only_omits_owner_runtime_when_all_owner_content_is_absent() {
             bots: BotCatalog::default(),
             movers: Arc::new(MoverCatalog::default()),
             hurt_volumes: Arc::new(HurtVolumeCatalog::default()),
+            actor_voice: None,
             stats: StatsCatalog::default(),
             heroes: Arc::clone(&heroes),
             pools: Arc::new(PoolCatalog::default()),
+            combat_voice: Arc::new(CombatVoiceCatalog::default()),
         };
         let mut scene = PreparedScene::fixture_for_bots(Vec::new());
         scene.initial_board.index = crate::game_stats::GMP_STATS;
@@ -340,6 +342,7 @@ fn prepared_practice_debug_view_contains_real_collision_layers() {
 fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
     use crate::commands::Command;
     use crate::game_replication::BodyStep;
+    use crate::mover_modifiers::SPEED_SLOT;
     use crate::script_init::{Snapshot, StateKind};
     use crate::script_snapshot_wire::identity_test_reader::IdentityReader;
     use crate::script_snapshot_wire::{View, uncertain_polled_switch};
@@ -491,8 +494,11 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
             let (forward, buttons) = match t {
                 188..=281 | 520..=540 | 600..=640 => (0, 1),
                 300 => (0, 0x400),
-                700 => (127, 8),
-                701..=760 => (127, 0),
+                // Match the observed two-frame combined mask and the
+                // subsequent held Shift before forward-only movement.
+                700..=701 => (127, 0x2008),
+                702..=709 => (127, 0x8),
+                710..=760 => (127, 0),
                 _ => (0, 0),
             };
             let command = Command {
@@ -540,8 +546,8 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
             let sprint = &snapshot.instances[&sprint_id];
             assert_eq!(sprint.graph, 0x0255);
             let (flags, hud) = match t {
-                700 => (5, Some(1)),
-                701..=760 => (1, Some(1)),
+                700..=709 => (5, Some(1)),
+                710..=760 => (1, Some(1)),
                 761.. => (0, Some(0)),
                 _ => (0, None),
             };
@@ -549,6 +555,17 @@ fn stock_soldier_owner_session_idles_fires_reloads_and_sprints() {
                 (sprint.states[&1].kind, int(sprint.variables.get(&699))),
                 (StateKind::Ability { flags }, hud),
                 "{t}"
+            );
+            let speed_modifier = runtime
+                .movement_modifiers()
+                .expect("complete owner movement state")
+                .iter()
+                .find(|(key, value)| key.instance == sprint_id && value.index == SPEED_SLOT)
+                .map(|(_, value)| value);
+            assert_eq!(
+                speed_modifier.is_some_and(|modifier| modifier.apply(1.0) > 1.0),
+                (700..=760).contains(&t),
+                "Sprint speed modifier at {t}"
             );
             let excluded = uncertain(snapshot);
             let encoder = runtime.encoder();
@@ -1344,6 +1361,7 @@ fn practice_range_stock_bots_drive_overhead_nameplates_through_death_and_respawn
     tick += 1;
     scene.simulation_mut().kill_bot_for_test(target, tick, now);
     let death_frame = tick;
+    let mut saw_kill_feed_pulse = false;
     for _ in 0..10 {
         tick += 1;
         now += crate::game_clock::TICK_PERIOD;
@@ -1366,6 +1384,26 @@ fn practice_range_stock_bots_drive_overhead_nameplates_through_death_and_respawn
                     tick - death_frame
                 )
             });
+        if let Some(parent) = projection
+            .snapshot
+            .instances
+            .values()
+            .find(|instance| instance.graph == 0x0c18)
+        {
+            if parent.states.get(&8).is_some_and(|state| {
+                state.active
+                    && matches!(
+                        state.kind,
+                        crate::script_init::StateKind::ClientPulse { count: 1, .. }
+                    )
+            }) {
+                assert_eq!(
+                    parent.variables.get(&392).unwrap(),
+                    &crate::script_wire::Value::Entity(0xa000_0100)
+                );
+                saw_kill_feed_pulse = true;
+            }
+        }
         projection
             .encoder
             .project(projection.snapshot, View::Observer)
@@ -1376,6 +1414,10 @@ fn practice_range_stock_bots_drive_overhead_nameplates_through_death_and_respawn
                 )
             });
     }
+    assert!(
+        saw_kill_feed_pulse,
+        "killed stock bot must activate 0x0C18 state 8 kill-feed pulser and killer #392"
+    );
 
     now += Duration::from_secs(4);
     scene.step_bots(tick + 240, &patrol).unwrap();

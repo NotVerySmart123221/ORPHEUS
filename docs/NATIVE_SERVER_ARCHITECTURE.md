@@ -87,6 +87,7 @@ Remaining boundary cleanups:
 Disabled in default builds. Enable `--features inspector --debug-port 3726` to serve a loopback HTTP viewer (assets live under `rust/assets/inspector/`):
 - Displays a read-only `48 x 32 x 48` m window of ground/hitscan triangle layers (`4,096` triangles max per sample), broad-phase contact bounds (`256` max), active actors, and fraction-limiting bot sweep clips.
 - Shows worker tick timing histograms (`p95`/`p99` bin bounds and missed ticks) and up to `64` room retirement records without exposing credentials or local file paths.
+- Exposes `timing.turn_work` with separate histograms for request handling, receive batches, and input processing. `poll_lateness_us` samples positive wake lateness after a timed poll. Use these alongside tick timing to distinguish work before simulation from delayed wakeups.
 - Planned overlays (raycast/hitscan lines, AI navigation paths, and live StateScript state) are tracked in [#62](https://github.com/leafall903/ORPHEUS/issues/62).
 
 ### Multi-Map Packing & Two-Room Workload Benchmark

@@ -1,4 +1,4 @@
-"""Add locally verified state and message metadata to a private graph bundle."""
+"""Add locally verified state, message, and asset metadata to a private graph bundle."""
 
 import argparse
 import gzip
@@ -147,6 +147,64 @@ def directed_numeric_message(raw):
     return {"topic": f"0x{topic:016X}", "parameter": f"0x{parameter:016X}"}
 
 
+def guid(value):
+    return (
+        isinstance(value, str)
+        and re.fullmatch(r"0x[0-9a-fA-F]{16}", value) is not None
+        and int(value, 16) != 0
+    )
+
+
+def catalog_assets(path, label):
+    with path.open(encoding="utf-8") as source:
+        catalog = json.load(source)
+    if (
+        not isinstance(catalog, dict)
+        or catalog.get("version") != 1
+        or catalog.get("build") != 104319
+        or not isinstance(catalog.get("assets"), dict)
+        or not catalog["assets"]
+    ):
+        raise ValueError(f"expected version 1 {label} for build 104319")
+    return catalog["assets"]
+
+
+def asset_categories(path):
+    assets = catalog_assets(path, "asset categories")
+    for asset, rows in assets.items():
+        if not guid(asset) or not isinstance(rows, list):
+            raise ValueError("invalid asset category row")
+        for row in rows:
+            if (
+                not isinstance(row, dict)
+                or set(row) != {"type", "id"}
+                or not guid(row["type"])
+                or not guid(row["id"])
+            ):
+                raise ValueError("invalid asset category identifier pair")
+    return assets
+
+
+def asset_textures(path):
+    assets = catalog_assets(path, "asset textures")
+    actions = set()
+    for action, texture in assets.items():
+        if not guid(action):
+            raise ValueError("invalid communication action key in texture catalog")
+        action_id = int(action, 16)
+        if action_id >> 32 != 0x0A900000 or action_id & 0xFFFFFFFF == 0:
+            raise ValueError("invalid communication action key in texture catalog")
+        if not guid(texture):
+            raise ValueError("invalid texture GUID in texture catalog")
+        texture_id = int(texture, 16)
+        if texture_id >> 48 != 0x0C00 or texture_id == 0x0C00000000000000:
+            raise ValueError("invalid texture GUID in texture catalog")
+        if action_id in actions:
+            raise ValueError("duplicate communication action key in texture catalog")
+        actions.add(action_id)
+    return assets
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--graph-bundle", type=Path, required=True, help="version 1 gzip graph bundle")
@@ -159,10 +217,12 @@ def main():
         metavar="TOPIC:PARAMETER",
         help="declare a reviewed native numeric room message (repeatable)",
     )
+    parser.add_argument("--asset-categories", type=Path, help="local 104319 asset category catalog")
+    parser.add_argument("--asset-textures", type=Path, help="local 104319 action-to-texture catalog")
     parser.add_argument("--output", type=Path, required=True, help="new private gzip bundle")
     args = parser.parse_args()
-    if args.evidence is None and not args.directed_numeric_message:
-        parser.error("provide --evidence or --directed-numeric-message")
+    if not (args.evidence or args.directed_numeric_message or args.asset_categories or args.asset_textures):
+        parser.error("provide --evidence, --directed-numeric-message, --asset-categories, or --asset-textures")
 
     try:
         with gzip.open(args.graph_bundle, "rt", encoding="utf-8") as source:
@@ -190,6 +250,14 @@ def main():
             if len({route["topic"] for route in routes}) != len(routes):
                 raise ValueError("duplicate directed numeric message topic")
             metadata["directed_numeric_messages"] = routes
+        if args.asset_categories is not None:
+            if "asset_categories" in bundle:
+                raise ValueError("cannot replace existing asset category metadata")
+            bundle["asset_categories"] = asset_categories(args.asset_categories)
+        if args.asset_textures is not None:
+            if "asset_textures" in bundle:
+                raise ValueError("cannot replace existing asset texture metadata")
+            bundle["asset_textures"] = asset_textures(args.asset_textures)
         write_bundle(args.output, bundle)
     except (OSError, ValueError, KeyError, TypeError, BadZipFile) as error:
         parser.error(str(error))
@@ -205,6 +273,10 @@ def main():
         )
     if args.directed_numeric_message:
         print(f"Declared {len(args.directed_numeric_message)} directed numeric messages.")
+    if args.asset_categories is not None:
+        print(f"Imported categories for {len(bundle['asset_categories'])} assets.")
+    if args.asset_textures is not None:
+        print(f"Imported textures for {len(bundle['asset_textures'])} actions.")
 
 
 if __name__ == "__main__":

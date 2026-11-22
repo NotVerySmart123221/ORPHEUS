@@ -1,7 +1,7 @@
 //! StateScript runtime snapshots, state payloads, diagnostics, and fault types.
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashSet, VecDeque},
     error::Error,
     fmt,
     num::NonZeroU32,
@@ -29,6 +29,9 @@ pub enum StateKind {
     RollMovementParameter,
     ExplosionContact,
     TrackedTargets,
+    ViewTargets {
+        next_sample: u32,
+    },
     DeadeyeEffects,
     WitchStaffEffect,
     WitchStaffHealing,
@@ -42,6 +45,7 @@ pub enum StateKind {
         record: Option<AiBehaviorRequest>,
     },
     AiControlSetting,
+    AiWeaponFire(Option<i64>),
     AiControlOverride {
         record: Option<AiControlOverride>,
     },
@@ -439,9 +443,24 @@ pub struct Snapshot {
     pub bindings: IndexMap<(u16, u32), Vec<StackBinding>>,
     /// Effective linked values, separate from their stored bases.
     pub resolved_bindings: IndexMap<(u16, u32), Value>,
+    pub frame_actions: VecDeque<FrameAction>,
     pub diagnostics: Vec<Diagnostic>,
     #[cfg(feature = "node-observations")]
     pub(super) node_observations: NodeObservations,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FrameCallout {
+    pub serial: u32,
+    pub instance: u16,
+    pub position: u16,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrameAction {
+    pub callout: FrameCallout,
+    /// Effective values at dispatch. Owner zero means an entity variable.
+    pub values: BTreeMap<(u16, u32), Value>,
 }
 
 impl Snapshot {

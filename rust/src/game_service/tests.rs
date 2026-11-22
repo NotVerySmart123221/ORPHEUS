@@ -2,6 +2,7 @@ use super::*;
 
 mod benchmark;
 mod bot_replacement;
+mod combat_audio;
 mod death_notice;
 mod harness;
 mod isolation;
@@ -411,9 +412,33 @@ fn prepared_worker_delivers_a_stock_nameplate_and_nonlethal_hit_over_encrypted_u
 }
 
 #[test]
-#[ignore = "requires a tagged 104319 Practice Range scene without bot VM graphs"]
+#[ignore = "requires a tagged 104319 Practice Range scene"]
 fn prepared_worker_delivers_stock_helix_over_encrypted_udp() {
     exercise_prepared_world(PreparedFixture::StockProjectile);
+}
+
+#[test]
+#[ignore = "requires a tagged 104319 Practice Range scene with authored mode rules"]
+fn prepared_worker_applies_stock_projectile_self_damage_and_launch() {
+    exercise_prepared_world(PreparedFixture::StockSelfProjectile(
+        world_harness::GroundShot {
+            hero: crate::game_heroes::SOLDIER,
+            definition: crate::script_player::FIXTURE_PROJECTILE_DEFINITION as u32,
+            expected_damage: 40.0,
+        },
+    ));
+}
+
+#[test]
+#[ignore = "requires a tagged 104319 Practice Range scene with authored mode rules"]
+fn prepared_worker_applies_stock_particle_splash_damage_and_launch() {
+    exercise_prepared_world(PreparedFixture::StockSelfProjectile(
+        world_harness::GroundShot {
+            hero: 0x02e0_0000_0000_0068,
+            definition: 0x03db,
+            expected_damage: 23.5,
+        },
+    ));
 }
 
 #[test]

@@ -35,6 +35,7 @@ impl RoomSimulation {
         now: Duration,
     ) -> Result<bool, CombatError> {
         if let Some(state) = self.state_mut(wire)? {
+            let victim_team = state.bot.spawn.team;
             let (delta, killed, named_pool_losses) = match effect {
                 HealthEffect::Damage(amount) => Self::damage_bot(state, amount, source, now)
                     .map_or((0.0, false, None), |outcome| {
@@ -50,13 +51,8 @@ impl RoomSimulation {
                 HealthEffect::Heal(_) => (0.0, false, None),
             };
             if delta != 0.0 {
-                let health = state.vitals.component();
-                state.vitals.clear_changed();
-                self.scripted_health.push(EntityUpdate {
-                    entity: wire,
-                    operation: Some(Operation::Update(vec![health])),
-                    ..Default::default()
-                });
+                let update = super::bot_health_update(state, killed);
+                self.scripted_health.push(update);
                 self.record_health_applied(
                     source.killer,
                     wire,
@@ -67,12 +63,22 @@ impl RoomSimulation {
                         .map(|named_pool_losses| HealthDamageEvidence {
                             impact: None,
                             named_pool_losses,
+                            frame: Some(source.frame),
                         }),
                 );
+                if delta < 0.0 || killed {
+                    self.record_actor_hurt_voice(wire, true, false, killed, source.frame);
+                }
+                if killed {
+                    self.record_enemy_elimination(source.killer, wire, victim_team, source.frame);
+                }
             }
             return Ok(true);
         }
         let Some(id) = self.player_handle_for_wire(wire) else {
+            return Ok(false);
+        };
+        let Some(victim_team) = self.player_body(id).map(|state| state.team) else {
             return Ok(false);
         };
         match effect {
@@ -81,6 +87,15 @@ impl RoomSimulation {
                     self.damage_player_body_by_wire(id, amount, source, None)
                 {
                     self.scripted_health.extend(health);
+                    if outcome.dealt > 0.0 || outcome.killed {
+                        self.record_actor_hurt_voice(
+                            wire,
+                            false,
+                            false,
+                            outcome.killed,
+                            source.frame,
+                        );
+                    }
                     if outcome.killed {
                         self.player_deaths.push(PlayerDeath {
                             owner,
@@ -88,6 +103,12 @@ impl RoomSimulation {
                             source: source.killer,
                             killed_by: valid_entity(source.killer) && source.killer != wire,
                         });
+                        self.record_enemy_elimination(
+                            source.killer,
+                            wire,
+                            victim_team,
+                            source.frame,
+                        );
                     }
                 }
             }
@@ -121,6 +142,168 @@ mod tests {
     };
     use crate::game_combat::{RoomScriptRequests, script_requests::MAX_BODY_SCRIPT_REQUESTS};
     use std::sync::Arc;
+
+    #[test]
+    fn contact_damage_and_impulse_follow_room_team_wall_and_body_admission() {
+        use crate::{mover_settings::MoverCatalog, script_graph::RoomSpatialNeeds};
+        let bots = fixture_bots();
+        let (source, target) = (bots[0].entity, bots[1].entity);
+        for free_for_all in [false, true] {
+            let mut room = RoomSimulation::new(fixture_bots()).unwrap();
+            room.enable_spatial_queries(
+                free_for_all,
+                Arc::new(fixture_ground()),
+                RoomSpatialNeeds::Queries,
+            );
+            room.enable_spatial_actor_rays(Arc::new(MoverCatalog::default()));
+            let tick = 7;
+            room.prepare_spatial_frame(tick).unwrap();
+            let frame = &room.spatial_frame.as_ref().unwrap().1;
+            let targets = frame
+                .hostile_contact_targets(source, [2.0, 0.5, 0.0], [1.0, 0.5, 0.0], 0.25, 0x18)
+                .unwrap();
+            assert_eq!(
+                targets
+                    .iter()
+                    .map(|target| target.entity)
+                    .collect::<Vec<_>>(),
+                if free_for_all { vec![target] } else { vec![] }
+            );
+            if !free_for_all {
+                continue;
+            }
+            assert!(
+                frame
+                    .hostile_contact_targets(source, [2.0, 0.5, 0.0], [-3.0, 0.5, 0.25], 0.25, 0x18)
+                    .unwrap()
+                    .is_empty()
+            );
+            let mut requests = RoomScriptRequests::default();
+            assert!(!requests.queue_contact_damage(frame, 25.0, &[(target, None), (target, None)]));
+            assert!(requests.queue_contact_damage(frame, 25.0, &[(target, Some([5.0, 2.0, 0.0]))]));
+            let source = room.sample_health_body(source).unwrap();
+            let [effect] = requests.take().try_into().ok().unwrap();
+            room.settle_script_request(effect, source, tick, Duration::ZERO)
+                .unwrap();
+            assert_eq!(room.body_healths().unwrap()[&target], 75.0);
+            assert!(
+                room.state_mut(target)
+                    .unwrap()
+                    .unwrap()
+                    .bot
+                    .has_combat_motion()
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires tagged 104319 Practice Range graphs and authored static ray profiles"]
+    fn prepared_stock_quick_melee_settles_damage_and_knockback_once() {
+        use crate::{
+            commands::Command,
+            game_clock::FIRST_TICK,
+            game_combat::{PlayerBodyState, script_eye_position},
+            game_content::GameMap,
+            game_heroes::SOLDIER,
+            game_instance::RETAIL_QUANTA,
+            game_replication::{BodyId, BodyStep},
+            match_scene::team_bit,
+            scene_assets::SceneAssets,
+            script_player::OwnerBodySpawn,
+            script_snapshot_wire::View,
+        };
+
+        let path = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+        let assets = SceneAssets::load(path).unwrap();
+        let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
+        let hero = assets.heroes().get(SOLDIER).unwrap();
+        let mut mover = scene.player_spawn_mover(hero.body, 0).unwrap();
+        let owner = 0xa000_0100;
+        let id = BodyId {
+            entity: owner + 1,
+            generation: 1,
+        };
+        let spawn = OwnerBodySpawn {
+            slot: 0,
+            controller: owner,
+            entity: id.entity,
+            body_filter: team_bit(0).unwrap(),
+            frame: FIRST_TICK,
+            pose: mover.pose(),
+            eye_position: script_eye_position(hero.guid, &mover),
+            skin: 0,
+            quanta: RETAIL_QUANTA,
+        };
+        let mut runtime = scene.owner_body_runtime(hero, spawn).unwrap().unwrap();
+        let source_pose = scene.player_spawn_mover(hero.body, 0).unwrap();
+        let room = scene.simulation_mut();
+        room.spawn_player_body(PlayerBodyState::new(
+            id,
+            owner,
+            0,
+            0,
+            hero.guid,
+            source_pose,
+            None,
+            FIRST_TICK,
+            None,
+        ))
+        .unwrap();
+        let target = room
+            .bodies()
+            .unwrap()
+            .find(|bot| bot.spawn.team == 1)
+            .unwrap()
+            .entity;
+        let [x, y, z] = mover.pose().position;
+        room.body_mut(target).unwrap().position = [x - 1.5, y, z];
+        let health = room.body_healths().unwrap()[&target];
+        let mut settled = 0;
+        for dt in 1..45 {
+            let frame = FIRST_TICK + dt;
+            let command = Command {
+                frame,
+                yaw: -16384,
+                buttons: if dt == 20 { 0x800 } else { 0 },
+                ..Command::default()
+            };
+            mover
+                .step(scene.movement_index(), command, 0.016, |_, _| {})
+                .unwrap();
+            let room = scene.simulation_mut();
+            room.prepare_spatial_frame(frame).unwrap();
+            runtime.set_spatial_frame(Arc::clone(&room.spatial_frame.as_ref().unwrap().1));
+            runtime.advance(command, &mover, BodyStep::Posed).unwrap();
+            let source = room.sample_health_body(id.entity).unwrap();
+            let requests = runtime.take_script_requests();
+            let snapshot = runtime.snapshot().unwrap();
+            assert!(
+                snapshot.diagnostics.is_empty(),
+                "frame {frame}: {:?}",
+                snapshot.diagnostics
+            );
+            if !requests.is_empty() {
+                for view in [View::Owner, View::Observer] {
+                    runtime.encoder().project(snapshot, view).unwrap();
+                }
+            }
+            for effect in requests {
+                room.settle_script_request(effect, source, frame, Duration::ZERO)
+                    .unwrap();
+                settled += 1;
+            }
+        }
+        let room = scene.simulation_mut();
+        assert_eq!(settled, 1);
+        assert_eq!(room.body_healths().unwrap()[&target], health - 30.0);
+        assert!(
+            room.state_mut(target)
+                .unwrap()
+                .unwrap()
+                .bot
+                .has_combat_motion()
+        );
+    }
 
     #[test]
     fn authored_health_settlement_uses_bot_health_and_death_lifecycle() {
@@ -328,5 +511,118 @@ mod tests {
         let updates = room.take_scripted_health();
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].entity, first);
+    }
+
+    #[test]
+    fn scripted_health_damage_emits_bot_and_player_hurt_voice_cues_and_ignores_heal() {
+        use crate::{
+            combat_voice::CombatVoiceCatalog, contact_world::ContactWorld,
+            game_combat::PlayerBodyState, game_heroes::SOLDIER, game_replication::BodyId,
+            mover::Mover, mover_settings::MoverSettings, script_player::fixture_body_factory,
+        };
+
+        let bots = fixture_bots();
+        let bot = bots[1].entity;
+        let mut room = RoomSimulation::new(bots).unwrap();
+        let (factory, spawn) = fixture_body_factory();
+        let mover = Mover::new(
+            MoverSettings::default(),
+            Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+            spawn.pose.position,
+            0,
+            0x08,
+        )
+        .unwrap();
+        let player = BodyId {
+            entity: spawn.entity,
+            generation: 1,
+        };
+        room.spawn_player_body(PlayerBodyState::new(
+            player,
+            spawn.controller,
+            spawn.slot,
+            0,
+            SOLDIER,
+            mover,
+            Some(Box::new(factory.start(spawn).unwrap())),
+            spawn.frame,
+            None,
+        ))
+        .unwrap();
+        let catalog = CombatVoiceCatalog::from_json(
+            r#"{
+                "hurt_cooldown_ticks": 5,
+                "hurt": {
+                    "minor": { "stimulus": "0x0EE0000000000003", "lines": ["0x0760000000000006"] },
+                    "bot_death": { "stimulus": "0x0EE0000000000001", "lines": ["0x076000000000819E"] }
+                }
+            }"#,
+        )
+        .unwrap();
+        room.set_combat_voice(Arc::new(catalog));
+
+        let dealer = Death {
+            time: 0.1,
+            frame: 10,
+            killer: player.entity,
+        };
+        assert!(
+            room.settle_health(
+                bot,
+                HealthEffect::Damage(20.0),
+                dealer,
+                Duration::from_millis(160)
+            )
+            .unwrap()
+        );
+        // Heal never emits a hurt cue even after cooldown.
+        assert!(
+            room.settle_health(
+                bot,
+                HealthEffect::Heal(5.0),
+                Death {
+                    frame: 20,
+                    ..dealer
+                },
+                Duration::from_millis(320),
+            )
+            .unwrap()
+        );
+        assert!(
+            room.settle_health(
+                player.entity,
+                HealthEffect::Damage(25.0),
+                Death {
+                    killer: bot,
+                    frame: 11,
+                    time: 0.176,
+                },
+                Duration::from_millis(176),
+            )
+            .unwrap()
+        );
+
+        let cues = room.take_player_cues();
+        assert_eq!(cues.len(), 2);
+        assert_eq!(
+            cues[0].notice,
+            crate::game_combat_messages::CombatNotice::Voice {
+                anchor: bot,
+                speaker: bot,
+                listener: player.entity,
+                stimulus: 0x0EE0_0000_0000_0003,
+                line: 0x0760_0000_0000_0006,
+            }
+        );
+        assert_eq!(
+            cues[1].notice,
+            crate::game_combat_messages::CombatNotice::Voice {
+                anchor: player.entity,
+                speaker: player.entity,
+                listener: player.entity,
+                stimulus: 0x0EE0_0000_0000_0003,
+                line: 0x0760_0000_0000_0006,
+            }
+        );
     }
 }

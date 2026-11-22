@@ -60,6 +60,7 @@ struct Event {
     killed: bool,
     hit_tags: Option<Vec<u64>>,
     named_pool_losses: Option<Vec<(u64, f64)>>,
+    critical_hit: Option<bool>,
 }
 
 type Delivery = (
@@ -69,13 +70,14 @@ type Delivery = (
     bool,
     Option<Vec<u64>>,
     Option<Vec<(u64, f64)>>,
+    Option<bool>,
 );
 
 #[derive(Deserialize)]
 struct Expected {
     ordinary_variable: u32,
     room_variable: u32,
-    host_variables: [u32; 7],
+    host_variables: [u32; 8],
     deliveries: Vec<Option<Delivery>>,
     target_tag_query: ExpectedTargetTagQuery,
     settled_damage_query: ExpectedSettledDamageQuery,
@@ -158,6 +160,7 @@ fn host_health_entries_only_receive_settled_events_on_the_next_frame() {
         (3, Value::Float(input.forged_delta)),
         (4, Value::Bool(true)),
         (6, Value::Float(999.0)),
+        (7, Value::Bool(true)),
     ]);
     assert_eq!(
         target.queue_message(ROOT, message, forged.clone()).unwrap(),
@@ -228,6 +231,7 @@ fn host_health_entries_only_receive_settled_events_on_the_next_frame() {
                         hit_tags,
                     },
                     HostHealthContext {
+                        critical_hit: event.critical_hit,
                         named_pool_losses: event.named_pool_losses.map(|rows| {
                             rows.into_iter()
                                 .map(|(identifier, amount)| NamedPoolLoss { identifier, amount })
@@ -246,7 +250,7 @@ fn host_health_entries_only_receive_settled_events_on_the_next_frame() {
         recipient.advance_frame(frame + 1, &mut EmptyWorld).unwrap();
 
         let mut after = before;
-        if let Some((source, target, delta, killed, tags, losses)) = delivery {
+        if let Some((source, target, delta, killed, tags, losses, critical)) = delivery {
             let after = after.as_mut().unwrap();
             for (variable, value) in expected.host_variables.into_iter().zip([
                 source.map_or(Value::Null, Value::Entity),
@@ -270,6 +274,7 @@ fn host_health_entries_only_receive_settled_events_on_the_next_frame() {
                             .collect(),
                     )
                 }),
+                critical.map_or(Value::Null, Value::Bool),
             ]) {
                 after.insert(variable, value);
             }
@@ -936,6 +941,8 @@ fn check_health_delivery_generation(endpoint: HealthEndpoint) {
     };
     let context = |generation| HostHealthContext {
         named_pool_losses: None,
+        critical_hit: None,
+        damage_frame: None,
         source_body: Some(RoomBodyIdentity {
             wire: SOURCE,
             generation: if subject == SOURCE {

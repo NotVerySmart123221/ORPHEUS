@@ -13,7 +13,8 @@ use crate::bits::{BitError, BitWriter};
 use crate::script_codecs::{Codec, CodecTable, PayloadError, PayloadMode, StatePayload};
 use crate::script_expr::Variable;
 use crate::script_graph::{Graph, GraphStore};
-use crate::script_init::{ChasePayload, Snapshot, StackBinding, StateKind};
+pub use crate::script_init::FrameCallout;
+use crate::script_init::{ChasePayload, FrameAction, ShotEvent, Snapshot, StackBinding, StateKind};
 use crate::script_stream::StreamError;
 use crate::script_wire::{self, Bindings, Value, ValueEncoding, Variables, WireError};
 
@@ -47,13 +48,6 @@ pub enum View {
     Observer,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FrameCallout {
-    pub serial: u32,
-    pub instance: u16,
-    pub position: u16,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectedSnapshot {
     pub(super) entity: u32,
@@ -62,7 +56,7 @@ pub struct ProjectedSnapshot {
     pub(super) variables: ProjectedVariables,
     pub(super) instances: BTreeMap<u16, ProjectedInstance>,
     pub(super) callout: u32,
-    pub(super) callouts: Vec<FrameCallout>,
+    pub(super) callouts: Vec<FrameAction>,
     pub(super) emit_events: bool,
 }
 
@@ -84,7 +78,10 @@ impl ProjectedSnapshot {
     }
 
     pub fn with_callout(mut self, callout: FrameCallout) -> Self {
-        self.callouts.push(callout);
+        self.callouts.push(FrameAction {
+            callout,
+            values: BTreeMap::new(),
+        });
         self
     }
 
@@ -94,54 +91,90 @@ impl ProjectedSnapshot {
         self
     }
 
+    #[cfg(test)]
     pub(crate) fn has_graph(&self, graph: u32) -> bool {
         self.instances
             .values()
             .any(|instance| instance.graph == graph)
     }
 
-    /// Omit Practice Range `0x0D24` nameplate subgraphs (and any descendants)
-    /// from an observer projection until the game mode entity is ready.
-    pub(crate) fn strip_practice_nameplates(&mut self) {
+    /// Introduce a Practice Range nameplate after the viewer has acknowledged
+    /// both the mode HUD and its body-script parent. The introducing delta
+    /// changes only the deferred subtree.
+    pub(crate) fn stage_practice_nameplates(&mut self, base: Option<&Self>, can_introduce: bool) {
         const PRACTICE_NAMEPLATE: u32 = 0x0d24;
-        let mut removed = BTreeSet::new();
-        for (&id, instance) in &self.instances {
-            if instance.graph == PRACTICE_NAMEPLATE {
-                removed.insert(id);
-            }
-        }
-        if removed.is_empty() {
+        let mut unseen: BTreeSet<_> = self
+            .instances
+            .iter()
+            .filter_map(|(&id, instance)| {
+                (instance.graph == PRACTICE_NAMEPLATE
+                    && base.is_none_or(|base| !base.instances.contains_key(&id)))
+                .then_some(id)
+            })
+            .collect();
+        if unseen.is_empty() {
             return;
         }
-        loop {
-            let mut grew = false;
-            for (&id, instance) in &self.instances {
-                if !removed.contains(&id)
-                    && instance
-                        .parent
-                        .is_some_and(|(parent, _)| removed.contains(&parent))
-                {
-                    removed.insert(id);
-                    grew = true;
+        if let Some(base) = base.filter(|_| can_introduce) {
+            let mut ready: BTreeSet<_> = unseen
+                .iter()
+                .copied()
+                .filter(|id| {
+                    let Some((parent, _)) = self.instances[id].parent else {
+                        return false;
+                    };
+                    base.instances
+                        .get(&parent)
+                        .zip(self.instances.get(&parent))
+                        .is_some_and(|(previous, current)| {
+                            previous.graph == current.graph && previous.parent == current.parent
+                        })
+                })
+                .collect();
+            if !ready.is_empty() {
+                self.extend_descendants(&mut ready);
+                let mut introduction = base.clone();
+                for id in ready {
+                    if let Some(instance) = self.instances.remove(&id) {
+                        introduction.instances.insert(id, instance);
+                    }
                 }
-            }
-            if !grew {
-                break;
+                introduction.callouts.clear();
+                *self = introduction;
+                return;
             }
         }
-        self.instances.retain(|id, _| !removed.contains(id));
+        self.extend_descendants(&mut unseen);
+        self.instances.retain(|id, _| !unseen.contains(id));
         for instance in self.instances.values_mut() {
             for state in instance.states.values_mut() {
                 if state
                     .link
-                    .is_some_and(|link| removed.contains(&link.instance))
+                    .is_some_and(|link| unseen.contains(&link.instance))
                 {
                     state.link = None;
                 }
             }
         }
         self.callouts
-            .retain(|callout| !removed.contains(&callout.instance));
+            .retain(|action| !unseen.contains(&action.callout.instance));
+    }
+
+    fn extend_descendants(&self, selected: &mut BTreeSet<u16>) {
+        loop {
+            let mut changed = false;
+            for (&id, instance) in &self.instances {
+                if instance
+                    .parent
+                    .is_some_and(|(parent, _)| selected.contains(&parent))
+                {
+                    changed |= selected.insert(id);
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
     }
 
     /// The activation counter and absolute start in milliseconds from this frame.
@@ -152,6 +185,58 @@ impl ProjectedSnapshot {
             .get(&state)?
             .volley
             .map(|volley| volley.identity)
+    }
+
+    pub(crate) fn freeze_volley(&self, event: ShotEvent) -> Option<FrozenVolley> {
+        let instance = self.instances.get(&event.instance)?;
+        let state = instance.states.get(&event.raw_state)?;
+        let identity = state.volley?.identity;
+        if self.entity != event.entity
+            || self.view != View::Observer
+            || instance.graph != event.graph
+            || identity != (event.activation, event.activation_ms)
+        {
+            return None;
+        }
+        let Value::Integer(count) = state.payload.get("volleys")? else {
+            return None;
+        };
+        Some(FrozenVolley {
+            event,
+            parent: instance.parent,
+            state: state.clone(),
+            count: u16::try_from(*count).ok()?,
+        })
+    }
+
+    pub(crate) fn retain_volley(&mut self, volley: &FrozenVolley) {
+        if self.entity != volley.event.entity {
+            return;
+        }
+        if let Some(instance) = self
+            .instances
+            .get_mut(&volley.event.instance)
+            .filter(|instance| {
+                instance.graph == volley.event.graph && instance.parent == volley.parent
+            })
+        {
+            instance
+                .states
+                .insert(volley.event.raw_state, volley.state.clone());
+        }
+    }
+
+    pub(crate) fn has_volley(&self, volley: &FrozenVolley) -> bool {
+        let event = volley.event;
+        self.entity == event.entity
+            && self
+                .instances
+                .get(&event.instance)
+                .filter(|instance| {
+                    instance.graph == event.graph && instance.parent == volley.parent
+                })
+                .and_then(|instance| instance.states.get(&event.raw_state))
+                .is_some_and(|state| state == &volley.state)
     }
 
     #[cfg(feature = "inspector")]
@@ -186,10 +271,10 @@ impl ProjectedSnapshot {
                 if sent_state || written_ammo.is_some() {
                     let (counter, start_ms) = volley.identity;
                     let introduced = changes.contains(&ChangeKey::VolleyIntroduction(id, raw));
-                    eprintln!(
+                    crate::owner_trace::record(format_args!(
                         "owner-volley delta body={:08x} chunk={chunk} frame={frame} instance={id} state={raw} sent_state={sent_state} active={} counter={counter} start_ms={start_ms} introduced={introduced} written_ammo={written_ammo:?}",
                         self.entity, state.active
-                    );
+                    ));
                 }
             }
         }
@@ -217,6 +302,14 @@ impl ProjectedSnapshot {
                 .collect(),
         )
     }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FrozenVolley {
+    pub(crate) event: ShotEvent,
+    pub(crate) count: u16,
+    parent: Option<(u16, u16)>,
+    state: ProjectedState,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -284,8 +377,8 @@ impl ProjectedVariables {
         )
     }
 
-    pub(super) fn seed_ammo(&mut self, variable: u32, ammo: i64) {
-        self.values.insert(variable, Value::Integer(ammo));
+    pub(super) fn seed_value(&mut self, variable: u32, value: Value) {
+        self.values.insert(variable, value);
         self.bindings.remove(&variable);
     }
 }

@@ -1,5 +1,22 @@
 # Prepared owner delivery observation
 
+## Targeted Practice Range playtest capture
+
+With an Inspector build, set `ORPHEUS_PLAYTEST_CAPTURE_FILE` to a writable
+local path. Check for `playtest capture=ready` before starting the client.
+Leave `ORPHEUS_TRACE_OWNER_VOLLEYS` unset to keep the per-command and
+owner-delta trace disabled.
+
+Compare projectile launch and termination by flight token, then check the
+contact and impact records. Compare replacement bots by the retired and new
+entity IDs. The `sent`, `ack` and `lost` records identify the datagram
+carrying each replacement operation. An ACK confirms packet receipt.
+Check the original client separately for on-screen appearance.
+
+Keep local captures out of Git. The bounded writer reports any dropped rows.
+
+## Owner loss and arrival
+
 Run the opt-in test with a prepared target-tagged 104319 Practice Range runtime
 that does not contain bot VM graphs:
 
@@ -76,10 +93,18 @@ rejected. Controls mutate only the encoded CmFD of actual captured chunks for
 S+1 and an earlier owner packet and reject both as stale. Synthetic controls
 cover an early 1-to-0 pair and graph/codec symlinks escaping the runtime.
 
-Run the public synthetic suite with `python -B -m unittest discover -s
-scripts/tests`; the receiver guard tests require no runtime. The existing
-pinned-reader synthetic tests skip unless `ORPHEUS_PYTHON_REFERENCE` is set;
-the prepared receiver wrapper above is always explicitly opt-in.
+Run the public synthetic reader suite with:
+
+```sh
+python -B -m unittest scripts.tests.test_receiver_convergence
+python -I -S -B -m unittest discover -s scripts/tests -p 'test_sprint_wire.py'
+python -I -S -B -m unittest discover -s scripts/tests -p 'test_state_link_wire.py'
+```
+
+The public PR job sets `ORPHEUS_PYTHON_REFERENCE` to the pinned checkout.
+For the tests that generate Rust wire chunks before decoding them, also set
+`ORPHEUS_STATE_LINK_WIRE_RUST=1`. The prepared receiver wrapper above runs
+locally with the runtime pack.
 
 This demonstrates cumulative delivery
 before the loss report, not retransmission after that report; a broken
@@ -114,8 +139,11 @@ the elapsed clock and ammo through a gap within the same volley.
 
 To collect evidence for an intermittent animation failure, run an Inspector
 build with `ORPHEUS_TRACE_OWNER_VOLLEYS=1` set in the server environment.
-Correlate the `owner-volley` rows in the server log by body and command
-frame. Input rows include edges and unposed gap boundaries. Shot rows carry
+Set `ORPHEUS_OWNER_TRACE_FILE` to keep the trace in a separate file. The
+server otherwise writes the trace to stderr. The bounded trace queue
+reports how many rows were dropped if the output falls behind.
+Correlate the `owner-volley` rows by body and command frame. Input rows include
+button edges, held-button throttle changes, and unposed gap boundaries. Shot rows carry
 their authored frame and corresponding pose frame when available. Delta
 rows show the sent activation, its active flag, and explicitly written
 ammunition. Delivery rows show whether the transport acknowledged each

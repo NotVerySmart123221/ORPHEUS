@@ -24,7 +24,15 @@ pub struct PreparedScene {
 impl PreparedScene {
     #[cfg(test)]
     pub(crate) fn fixture_for_owner_admission(heroes: HeroCatalog) -> Self {
-        let mut scene = Self::fixture_for_bots(Vec::new());
+        Self::fixture_for_owner_admission_with_bots(heroes, Vec::new())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_for_owner_admission_with_bots(
+        heroes: HeroCatalog,
+        bots: Vec<Bot>,
+    ) -> Self {
+        let mut scene = Self::fixture_for_bots(bots);
         scene.contacts = Some(Arc::new(ContactWorld::new(Vec::new()).unwrap()));
         scene.controller = Controller::fixture_for_owner_admission();
         let stats = PlayerStats::default();
@@ -32,6 +40,26 @@ impl PreparedScene {
             StatsCatalog::default().component(&stats, scene.map.mode_guid, None, None);
         scene.heroes = Arc::new(heroes);
         scene
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_enable_room_health_scripts(&mut self) {
+        self.simulation.enable_host_health_events();
+        self.simulation.enable_spatial_queries(
+            self.map.free_for_all,
+            Arc::clone(&self.ground),
+            crate::script_graph::RoomSpatialNeeds::Queries,
+        );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_set_hurt_volumes(&mut self, volumes: HurtVolumeCatalog) {
+        self.hurt_volumes = Arc::new(volumes);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_set_combat_voice(&mut self, catalog: CombatVoiceCatalog) {
+        self.simulation.set_combat_voice(Arc::new(catalog));
     }
 
     #[cfg(test)]
@@ -479,15 +507,28 @@ impl PreparedScene {
         let contacts = self.simulation.movement_contact_frame();
         let floor = self.ground.triangles();
         let map = &self.map;
+        let movers = &self.movers;
+        let world = self.contacts.as_ref();
         self.simulation.for_each_body_mut(|bot| {
-            if let Some(contacts) = contacts.as_ref().filter(|_| bot.patrol_active()) {
+            let combat_motion = bot.has_combat_motion();
+            if let Some(contacts) = contacts
+                .as_ref()
+                .filter(|_| bot.patrol_active() || combat_motion)
+            {
                 contacts.stage_bot(bot, tick);
             }
-            if let Err(error) = bot.step(
-                tick,
-                patrol,
-                ground_height(floor, mover_category(map, bot.spawn.team)),
-            ) {
+            let category = mover_category(map, bot.spawn.team);
+            let mut ground = ground_height(floor, category);
+            if combat_motion {
+                let settings = movers.for_body(Some(bot.spawn.body));
+                if let Some(world) = world.filter(|_| !bot.has_collision()) {
+                    bot.attach_collision(settings, Arc::clone(world), category, &mut ground);
+                }
+                if bot.step_combat_motion(tick, settings, &mut ground) {
+                    return;
+                }
+            }
+            if let Err(error) = bot.step(tick, patrol, ground) {
                 eprintln!(
                     "Patrol for bot {:08x} stopped at frame {tick}: {error}",
                     bot.entity

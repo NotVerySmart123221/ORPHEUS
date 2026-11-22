@@ -318,6 +318,13 @@ pub(super) fn unsupported(error: impl std::fmt::Display) -> io::Error {
 
 #[cfg(test)]
 pub(crate) fn fixture_body_factory() -> (PlayerBodyFactory, OwnerBodySpawn) {
+    fixture_body_factory_with_nodes(Vec::new())
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_body_factory_with_nodes(
+    nodes: Vec<serde_json::Value>,
+) -> (PlayerBodyFactory, OwnerBodySpawn) {
     use serde_json::json;
 
     let body = 0x0400_0000_0000_0001;
@@ -327,15 +334,26 @@ pub(crate) fn fixture_body_factory() -> (PlayerBodyFactory, OwnerBodySpawn) {
         role: "Damage".into(),
         body,
     };
-    let graph = json!({
-        "index":42,"items":0,"nodes":[],"states":[],"entries":[],"remote":[],
-        "sync_vars":[],"containers":{},"unknown_nodes":[],"fields":{},
-        "header":{"m_nodesBitCount":4,"m_statesBitCount":4,
-            "m_remoteSyncNodesBitCount":4,"m_syncVarsBitCount":4}
-    });
-    let bundle = json!({"version":1,"missing":[],"graphs":[graph],"bodies":{
+    let graph = |index, nodes: Vec<serde_json::Value>| {
+        json!({
+            "index":index,"items":nodes.len(),"nodes":nodes,"states":[],"entries":[],"remote":[],
+            "sync_vars":[],"containers":{},"unknown_nodes":[],"fields":{},
+            "header":{"m_nodesBitCount":4,"m_statesBitCount":4,
+                "m_remoteSyncNodesBitCount":4,"m_syncVarsBitCount":4}
+        })
+    };
+    let mut graphs = vec![graph(42, Vec::new())];
+    let body_graph = if nodes.is_empty() {
+        42
+    } else {
+        // Keep the fixture listener on one body root. The manager and weapon
+        // still use the empty graph and each subscribe only to their own data.
+        graphs.push(graph(43, nodes));
+        43
+    };
+    let bundle = json!({"version":1,"missing":[],"graphs":graphs,"bodies":{
         format!("0x{body:016X}"): {"hero": format!("0x{SOLDIER:016X}"), "name":"Fixture",
-            "graphs":[{"graph":42,"m_75408640":0}],"manager":42,"weapons":[null,42]}
+            "graphs":[{"graph":body_graph,"m_75408640":0}],"manager":42,"weapons":[null,42]}
     }});
     let graphs = Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
     let codecs = Arc::new(CodecTable::from_json(r#"{"classes":{}}"#).unwrap());

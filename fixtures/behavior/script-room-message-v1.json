@@ -184,6 +184,9 @@
     "stale_payload": 20,
     "current_payload": 21
   },
+  "stock_bot_lifecycle": {
+    "payload_before_recipient_death": 491
+  },
   "expected": {
     "continuation_value": 19,
     "room_receiver_count": 2,

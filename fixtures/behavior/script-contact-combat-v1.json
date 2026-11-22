@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "case_id": "script-contact-combat-v1",
+  "input": {
+    "radius": 1.75,
+    "offset": [0.0, 1.25, 2.0],
+    "damage": 27.0,
+    "knockback": [5.0, 2.0]
+  },
+  "expected": {
+    "full_impulse": [5.0, 2.0, 0.0],
+    "outside_impulse": null
+  }
+}

@@ -305,6 +305,37 @@ impl Evaluator {
         self.config_with_initial(config, context, depth, Value::Integer(0))
     }
 
+    fn authored_pairs(
+        &mut self,
+        config: &Json,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<Value, EvalError> {
+        let unsupported = || EvalError::UnsupportedConfig("STU_7757D403".into());
+        if !native_fields(config, &["m_configVars"]) {
+            return Err(unsupported());
+        }
+        let mut pairs = Vec::new();
+        for row in array_field(config, "m_configVars")? {
+            self.charge()?;
+            if class(row) != Some("STU_98DD1872") || !native_fields(row, &["m_key", "m_value"]) {
+                return Err(unsupported());
+            }
+            let value = self.scalar_config(child(row, "m_value"), context, depth, Value::Null)?;
+            let key = self
+                .scalar_config(child(row, "m_key"), context, depth, Value::Null)
+                .map_err(|error| match error {
+                    EvalError::UnsupportedConfig(_) => unsupported(),
+                    other => other,
+                })?;
+            if !matches!(key, Value::Asset(guid) if guid != 0) {
+                return Err(unsupported());
+            }
+            pairs.push((key, value));
+        }
+        Ok(Value::Map(pairs))
+    }
+
     pub(super) fn config(
         &mut self,
         config: &Json,
@@ -886,6 +917,48 @@ impl Evaluator {
             }
             "STU_B70476F3" => literal_asset(config, class, "m_548E5344", 0x0a90)
                 .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
+            "STU_1ECB66A0"
+                if native_fields(config, &["m_548E5344", "m_resourceKey"])
+                    && child(config, "m_resourceKey").is_null() =>
+            {
+                let action =
+                    self.scalar_config(child(config, "m_548E5344"), context, nested, Value::Null)?;
+                let texture = match action {
+                    Value::Asset(action)
+                        if crate::script_graph::is_communication_action(action) =>
+                    {
+                        context
+                            .asset_texture(action)
+                            .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?
+                    }
+                    _ => 0,
+                };
+                Value::Asset(texture)
+            }
+            "STU_4460419A" if native_fields(config, &["m_548E5344", "m_D929182B"]) => {
+                let category = child(config, "m_D929182B");
+                let pair = child(category, "m_value");
+                if !native_shape(category, "STU_A1353B54", Some("m_value"))
+                    || !native_fields(pair, &["m_type", "m_id"])
+                    || helpers::class(pair) != Some("STU_BCD1C634")
+                {
+                    return Err(EvalError::UnsupportedConfig(class.into()));
+                }
+                let category_id = resource(child(pair, "m_id")).filter(|&id| id != 0);
+                let category_kind = resource(child(pair, "m_type")).filter(|&kind| kind != 0);
+                let (Some(kind), Some(id)) = (category_kind, category_id) else {
+                    return Err(EvalError::MalformedConfig("asset category identifier"));
+                };
+                match self.config(child(config, "m_548E5344"), context, nested)? {
+                    Value::Null | Value::Asset(0) => Value::Bool(false),
+                    Value::Asset(asset) => Value::Bool(
+                        context
+                            .asset_has_category(asset, kind, id)
+                            .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
+                    ),
+                    _ => return Err(EvalError::MalformedConfig("asset category operand")),
+                }
+            }
             "STU_8556841E" => literal_asset(config, class, "m_entityDef", 0x0400)
                 .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
             "STUConfigVarBone" => literal_asset(config, class, "m_bone", 0x0880)
@@ -1009,7 +1082,7 @@ impl Evaluator {
             {
                 self.fold_array(config, context, nested)?
             }
-            "STU_7757D403" => literal_message_map(config)?,
+            "STU_7757D403" => self.authored_pairs(config, context, nested)?,
             "STU_B5A0CAF0" => context.owner(),
             "STU_25ECB55F" => {
                 let unsupported = || EvalError::UnsupportedConfig(class.into());
@@ -1119,6 +1192,30 @@ impl Evaluator {
                     .related_entity(relation, entity)
                     .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?;
                 Value::Entity(related)
+            }
+            "STU_2B2E2F6D" => {
+                let unsupported = || EvalError::UnsupportedConfig(class.into());
+                if !native_fields(config, &["m_81A364DE", "m_7BDB02D1"])
+                    || child(config, "m_7BDB02D1").as_u64() != Some(0)
+                {
+                    return Err(unsupported());
+                }
+                let Value::Entity(entity) =
+                    self.config(child(config, "m_81A364DE"), context, nested)?
+                else {
+                    return Err(unsupported());
+                };
+                if entity == 0 {
+                    return Ok(Value::Entity(0));
+                }
+                if !valid_entity(entity) {
+                    return Err(unsupported());
+                }
+                let creator = context
+                    .related_entity(EntityRelation::CreatorBody, entity)
+                    .filter(|&creator| creator == 0 || (valid_entity(creator) && creator != entity))
+                    .ok_or_else(unsupported)?;
+                Value::Entity(creator)
             }
             "STU_967463AB" => {
                 let unsupported = || EvalError::UnsupportedConfig(class.into());
@@ -1469,9 +1566,10 @@ impl Evaluator {
         if !filter_shape(filter) {
             return Err(unsupported());
         }
-        let entity = match self.config(child(config, "m_entity"), context, depth)? {
-            Value::Entity(entity) => entity,
-            Value::Null => return Ok(Value::Bool(false)),
+        let operand = self.config(child(config, "m_entity"), context, depth)?;
+        let entity = match first_scalar(&operand) {
+            Some(Value::Entity(entity)) => *entity,
+            Some(Value::Null) | None => return Ok(Value::Bool(false)),
             _ => return Err(unsupported()),
         };
         if !valid_entity(entity) || context.entity_exists(entity) == Some(false) {
@@ -2340,6 +2438,18 @@ impl Evaluator {
                         _ => 0,
                     };
                     Value::Integer(length)
+                }
+                19 => {
+                    let start = stack
+                        .len()
+                        .checked_sub(usize::from(arg) * 2)
+                        .ok_or_else(|| malformed(pc, "expression stack underflow"))?;
+                    let mut items = stack.split_off(start).into_iter();
+                    let pairs = std::iter::from_fn(|| {
+                        let key = Value::Integer(to_int(&items.next()?, 0));
+                        Some((key, items.next()?))
+                    });
+                    Value::Map(pairs.collect())
                 }
                 20 => {
                     let start = stack

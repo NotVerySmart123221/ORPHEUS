@@ -6,7 +6,7 @@ use serde_json::Value as Json;
 
 use crate::{
     script_expr::{self, Context, EntityRelation, OnFire, StackPriority, Variable},
-    script_graph::Node,
+    script_graph::{GraphStore, Node},
     script_runtime::PoolKind,
     script_wire::{Value, Variables},
 };
@@ -360,6 +360,7 @@ impl<W: World> Vm<'_, '_, '_, W> {
 
 pub(super) struct InstanceContext<'a, W> {
     pub(super) machine: &'a Machine,
+    pub(super) graphs: &'a GraphStore,
     pub(super) world: &'a mut W,
     pub(super) site: Site,
     pub(super) reads: Vec<VarKey>,
@@ -428,6 +429,14 @@ impl<W: World> InstanceContext<'_, W> {
 }
 
 impl<W: World> Context for InstanceContext<'_, W> {
+    fn asset_has_category(&mut self, asset: u64, kind: u64, id: u64) -> Option<bool> {
+        self.graphs.asset_has_category(asset, kind, id)
+    }
+
+    fn asset_texture(&mut self, action: u64) -> Option<u64> {
+        self.graphs.asset_texture(action)
+    }
+
     fn variable(&mut self, variable: Variable) -> Value {
         self.read(source_key(self.site.instance, variable))
     }

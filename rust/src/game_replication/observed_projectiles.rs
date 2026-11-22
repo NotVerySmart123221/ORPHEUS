@@ -1,0 +1,545 @@
+//! Reliable entity and launch records for remote projectiles.
+
+use std::{
+    collections::{BTreeMap, BTreeSet, HashSet},
+    io,
+    sync::Arc,
+};
+
+use crate::{
+    game_combat::{ObservedProjectileEvent, ObservedShot},
+    game_projectiles::DELIVERY_GRACE,
+    projectile_wire::{self, ShotRecord},
+    script_snapshot_wire::ProjectedSnapshot,
+    world::{EntityUpdate, Operation},
+};
+
+use super::{Delivery, Record, WorldDelivery};
+
+// This wire namespace is separate from player leases and persistent field views.
+const FIRST_ENTITY: u32 = 0xa00c_0000;
+const END_ENTITY: u32 = 0xa010_0000;
+const MAX_ENTITIES: usize = 256;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ProjectileDelivery {
+    Create(u32),
+    Launch,
+    Destroy(u32),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Phase {
+    AwaitingSource,
+    Creating,
+    Launching,
+    Visible { since: Option<u32> },
+    Retiring,
+}
+
+struct ProjectileView {
+    shot: Arc<ObservedShot>,
+    entities: Vec<u32>,
+    pending: HashSet<u32>,
+    phase: Phase,
+    finished: Option<u32>,
+    cancelled: bool,
+}
+
+impl ProjectileView {
+    fn source(&self) -> u32 {
+        self.shot.volley.event.entity
+    }
+
+    fn track_record(&self, step: ProjectileDelivery) -> bool {
+        match (self.phase, step) {
+            (Phase::Creating, ProjectileDelivery::Create(entity))
+            | (Phase::Retiring, ProjectileDelivery::Destroy(entity)) => {
+                self.pending.contains(&entity)
+            }
+            (Phase::Launching, ProjectileDelivery::Launch) => true,
+            _ => false,
+        }
+    }
+
+    fn launch(&self) -> io::Result<EntityUpdate> {
+        let shot = self.shot.volley.event;
+        let payload = projectile_wire::shot_events(&[ShotRecord {
+            frame: shot.frame,
+            instance: shot.instance,
+            state: shot.raw_state,
+            activation: shot.activation,
+            ordinal: shot.ordinal,
+            volleys: self.shot.volley.count,
+            origin: self.shot.origin,
+            direction: self.shot.direction,
+            entities: &self.entities,
+        }])?;
+        Ok(EntityUpdate {
+            entity: shot.entity,
+            ch2: Some(payload),
+            ..EntityUpdate::default()
+        })
+    }
+}
+
+pub(super) struct ObservedProjectiles {
+    views: BTreeMap<u64, ProjectileView>,
+    reserved: HashSet<u32>,
+    next: u32,
+}
+
+impl Default for ObservedProjectiles {
+    fn default() -> Self {
+        Self {
+            views: BTreeMap::new(),
+            reserved: HashSet::new(),
+            next: FIRST_ENTITY,
+        }
+    }
+}
+
+impl ObservedProjectiles {
+    pub(super) fn current(&self, id: u64, step: ProjectileDelivery) -> bool {
+        self.views
+            .get(&id)
+            .is_some_and(|view| view.track_record(step))
+    }
+
+    pub(super) fn arrived(&mut self, id: u64, step: ProjectileDelivery) {
+        let Some(view) = self.views.get_mut(&id) else {
+            return;
+        };
+        match step {
+            ProjectileDelivery::Create(entity) | ProjectileDelivery::Destroy(entity) => {
+                view.pending.remove(&entity);
+            }
+            ProjectileDelivery::Launch => view.phase = Phase::Visible { since: None },
+        }
+    }
+
+    fn apply(&mut self, event: &ObservedProjectileEvent) {
+        match event {
+            ObservedProjectileEvent::Launched {
+                id,
+                presentation,
+                count,
+            } => {
+                if usize::from(*count) > MAX_ENTITIES.saturating_sub(self.reserved.len())
+                    || self.views.contains_key(id)
+                {
+                    return;
+                }
+                let mut entities = Vec::with_capacity(usize::from(*count));
+                while entities.len() < usize::from(*count) {
+                    let candidate = self.next;
+                    self.next = if candidate + 1 == END_ENTITY {
+                        FIRST_ENTITY
+                    } else {
+                        candidate + 1
+                    };
+                    if self.reserved.insert(candidate) {
+                        entities.push(candidate);
+                    }
+                }
+                self.views.insert(
+                    *id,
+                    ProjectileView {
+                        shot: Arc::clone(presentation),
+                        entities,
+                        pending: HashSet::new(),
+                        phase: Phase::AwaitingSource,
+                        finished: None,
+                        cancelled: false,
+                    },
+                );
+            }
+            ObservedProjectileEvent::Completed { id, frame } => {
+                if let Some(view) = self.views.get_mut(id) {
+                    view.finished.get_or_insert(*frame);
+                }
+            }
+        }
+    }
+
+    pub(super) fn retain_volleys(&self, snapshot: &mut ProjectedSnapshot) {
+        let source = snapshot.entity();
+        let mut retained = BTreeSet::new();
+        for view in self.views.values().filter(|view| {
+            view.source() == source
+                && !view.cancelled
+                && matches!(
+                    view.phase,
+                    Phase::AwaitingSource | Phase::Creating | Phase::Launching
+                )
+        }) {
+            let volley = &view.shot.volley;
+            if retained.insert((volley.event.instance, volley.event.raw_state)) {
+                snapshot.retain_volley(volley);
+            }
+        }
+    }
+}
+
+impl WorldDelivery {
+    pub(crate) fn observe_projectiles(&mut self, events: &[ObservedProjectileEvent]) {
+        if self.world_started() {
+            for event in events {
+                self.observed_projectiles.apply(event);
+            }
+        }
+    }
+
+    pub(super) fn advance_observed_projectiles(&mut self, tick: u32) -> io::Result<()> {
+        if self.observed_projectiles.views.is_empty() {
+            return Ok(());
+        }
+        let mut records = Vec::new();
+        let mut clear = Vec::new();
+        let tracker = &mut self.observed_projectiles;
+        for (&id, view) in &mut tracker.views {
+            let mut queue = |update, step| {
+                records.push(Record {
+                    update,
+                    delivery: Delivery::ObservedProjectile { id, step },
+                });
+            };
+            let source = view.source();
+            let live = self.bots.get(&source) == Some(&super::BotLifetime::Live);
+            let base = self
+                .scene_views
+                .get(&source)
+                .and_then(|stream| stream.base())
+                .map(|(_, base)| base);
+            let deadline = view
+                .finished
+                .unwrap_or_else(|| view.shot.launched.saturating_add(view.shot.lifetime_ticks))
+                .saturating_add(DELIVERY_GRACE);
+            let expired = tick >= deadline;
+            let retire = match view.phase {
+                Phase::AwaitingSource => {
+                    if !live || expired {
+                        clear.push(id);
+                    } else if base.is_some() {
+                        view.phase = Phase::Creating;
+                        view.pending.extend(view.entities.iter().copied());
+                        for &entity in &view.entities {
+                            queue(
+                                projectile_wire::confirmation(entity, view.shot.definition),
+                                ProjectileDelivery::Create(entity),
+                            );
+                        }
+                    }
+                    false
+                }
+                Phase::Creating => {
+                    view.cancelled |= !live || expired;
+                    if !view.pending.is_empty() {
+                        false
+                    } else if view.cancelled {
+                        true
+                    } else {
+                        if base.is_some_and(|base| base.has_volley(&view.shot.volley)) {
+                            let update = view.launch()?;
+                            super::delivery::ensure_script_chunk_fits(
+                                &update,
+                                "remote projectile launch exceeds the datagram budget",
+                            )?;
+                            queue(update, ProjectileDelivery::Launch);
+                            view.phase = Phase::Launching;
+                        }
+                        false
+                    }
+                }
+                Phase::Launching => !live || expired,
+                Phase::Visible { since } => {
+                    let since = since.unwrap_or(tick);
+                    view.phase = Phase::Visible { since: Some(since) };
+                    !live
+                        || view.finished.is_some_and(|finished| {
+                            let elapsed = finished.saturating_sub(view.shot.launched).max(1);
+                            tick.saturating_sub(since) >= elapsed
+                        })
+                }
+                Phase::Retiring => {
+                    if view.pending.is_empty() {
+                        clear.push(id);
+                    }
+                    false
+                }
+            };
+            if retire {
+                view.phase = Phase::Retiring;
+                view.pending.extend(view.entities.iter().copied());
+                for &entity in &view.entities {
+                    queue(
+                        EntityUpdate {
+                            entity,
+                            operation: Some(Operation::Destroy),
+                            ..Default::default()
+                        },
+                        ProjectileDelivery::Destroy(entity),
+                    );
+                }
+            }
+        }
+        for id in clear {
+            if let Some(view) = tracker.views.remove(&id) {
+                for entity in view.entities {
+                    tracker.reserved.remove(&entity);
+                }
+            }
+        }
+        if !records.is_empty() {
+            for record in records {
+                self.push(record);
+            }
+            self.remove_stale();
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        bits::{BitReader, BitWriter},
+        game_egress::{DeliveryReport, PacketDelivery},
+        script_init::ShotEvent,
+        script_snapshot_wire::{ProjectedInstance, ProjectedState, View, VolleyActivation},
+        script_stream::{BodyStream, DeltaKind},
+        script_wire::Value,
+    };
+    use serde::Deserialize;
+    use std::time::Duration;
+
+    #[derive(Deserialize)]
+    struct Input {
+        source: u32,
+        graph: u32,
+        instance: u16,
+        state: u16,
+        activation: u16,
+        launch: u32,
+        flight_ticks: u32,
+        count: u16,
+    }
+
+    fn project(input: &Input, activation: u16) -> ProjectedSnapshot {
+        let start_ms = u64::from(input.launch) * crate::script_runtime::FRAME_MS;
+        ProjectedSnapshot {
+            entity: input.source,
+            view: View::Observer,
+            entity_exclusions: BTreeSet::new(),
+            variables: Default::default(),
+            instances: BTreeMap::from([(
+                input.instance,
+                ProjectedInstance {
+                    graph: input.graph,
+                    parent: None,
+                    variables: Default::default(),
+                    states: BTreeMap::from([(
+                        input.state,
+                        ProjectedState {
+                            active: false,
+                            payload: BTreeMap::from([
+                                ("counter".into(), Value::Integer(i64::from(activation))),
+                                ("volleys".into(), Value::Integer(1)),
+                            ]),
+                            volley: Some(VolleyActivation {
+                                identity: (activation, start_ms),
+                                ammo: None,
+                            }),
+                            link: None,
+                        },
+                    )]),
+                    events: Vec::new(),
+                },
+            )]),
+            callout: 0,
+            callouts: Vec::new(),
+            emit_events: false,
+        }
+    }
+
+    fn outgoing(world: &mut WorldDelivery) -> Vec<Arc<Record>> {
+        let (indices, records): (Vec<_>, Vec<_>) = world
+            .ready()
+            .iter()
+            .map(|ready| (ready.index, ready.tracked()))
+            .unzip();
+        world.sent(&indices);
+        records
+    }
+
+    fn acknowledge(world: &mut WorldDelivery, records: Vec<Arc<Record>>, arrived: bool) {
+        world.acknowledge(
+            DeliveryReport {
+                requeued_reliable: 0,
+                packets: vec![PacketDelivery {
+                    sequence: 0,
+                    arrived,
+                    records,
+                }],
+            },
+            Duration::ZERO,
+        );
+    }
+
+    #[test]
+    fn remote_projectiles_wait_for_creates_and_the_exact_volley_then_retry_launch() {
+        #[derive(Deserialize)]
+        struct Fixture {
+            case_id: String,
+            input: Input,
+        }
+        let fixture: Fixture = serde_json::from_str(include_str!(
+            "../../../fixtures/behavior/observed-projectile-delivery-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(fixture.case_id, "observed-projectile-delivery-v1");
+        let input = fixture.input;
+        let id = 1;
+        let launch = input.launch;
+        let finished = launch + input.flight_ticks;
+        let event = ShotEvent {
+            entity: input.source,
+            instance: input.instance,
+            raw_state: input.state,
+            graph: input.graph,
+            frame: launch,
+            time_ms: u64::from(launch) * crate::script_runtime::FRAME_MS,
+            activation: input.activation,
+            activation_ms: u64::from(launch) * crate::script_runtime::FRAME_MS,
+            ordinal: 0,
+        };
+        let original = project(&input, input.activation);
+        let newer = project(&input, input.activation + 1);
+        let volley = original.freeze_volley(event).unwrap();
+        assert!(newer.freeze_volley(event).is_none());
+        let mut world = WorldDelivery::new(103);
+        world.started = Some(100);
+        world
+            .bots
+            .insert(input.source, super::super::BotLifetime::Live);
+        world.observe_projectiles(&[ObservedProjectileEvent::Launched {
+            id,
+            presentation: Arc::new(ObservedShot {
+                volley,
+                definition: 0x0400_0000_0000_00ab,
+                origin: [1.0, 2.0, 3.0],
+                direction: [0.0, 0.0, 1.0],
+                launched: launch,
+                lifetime_ticks: 30,
+            }),
+            count: input.count,
+        }]);
+        world.advance_observed_projectiles(launch).unwrap();
+        assert!(outgoing(&mut world).is_empty());
+
+        let mut source = BodyStream::new(input.source);
+        source.create_arrived();
+        let chunk = source.full(&BitWriter::new(), newer.clone()).unwrap();
+        assert!(source.arrived(chunk.last).advanced);
+        world.scene_views.insert(input.source, source);
+        world.advance_observed_projectiles(launch + 1).unwrap();
+        let creates = outgoing(&mut world);
+        assert_eq!(creates.len(), usize::from(input.count));
+        assert!(
+            creates
+                .iter()
+                .all(|record| matches!(record.update.operation, Some(Operation::Create(_))))
+        );
+        let entities: Vec<_> = creates.iter().map(|record| record.update.entity).collect();
+        acknowledge(&mut world, creates, false);
+        let mut retry = outgoing(&mut world);
+        assert_eq!(
+            retry
+                .iter()
+                .map(|record| record.update.entity)
+                .collect::<Vec<_>>(),
+            entities
+        );
+        // A partial acknowledgement must not publish a launch.
+        let last = retry.pop().unwrap();
+        acknowledge(&mut world, retry, true);
+        world.advance_observed_projectiles(launch + 2).unwrap();
+        assert!(outgoing(&mut world).is_empty());
+        acknowledge(&mut world, vec![last], true);
+        world.advance_observed_projectiles(launch + 3).unwrap();
+        assert!(outgoing(&mut world).is_empty());
+
+        // A later server activation cannot replace the one referenced by the shot.
+        let mut pinned = newer;
+        world.observed_projectiles.retain_volleys(&mut pinned);
+        assert_eq!(pinned, original);
+        let stream = world.scene_views.get_mut(&input.source).unwrap();
+        let delta = stream
+            .delta(
+                &BitWriter::new(),
+                pinned,
+                BTreeSet::new(),
+                DeltaKind::Observer { resend: true },
+            )
+            .unwrap();
+        world.advance_observed_projectiles(launch + 4).unwrap();
+        assert!(outgoing(&mut world).is_empty());
+        assert!(
+            world
+                .scene_views
+                .get_mut(&input.source)
+                .unwrap()
+                .arrived(delta.last)
+                .advanced
+        );
+        world.advance_observed_projectiles(launch + 5).unwrap();
+        let launched = outgoing(&mut world);
+        assert_eq!(launched.len(), 1);
+        assert_eq!(launched[0].update.entity, input.source);
+        let bits = launched[0].update.ch2.as_ref().unwrap();
+        let mut reader = BitReader::new(bits.as_bytes());
+        assert!(reader.bit().unwrap());
+        assert!(reader.bit().unwrap());
+        assert_eq!(reader.var_b().unwrap(), launch);
+        acknowledge(&mut world, launched.clone(), false);
+        let replay = outgoing(&mut world);
+        assert_eq!(replay[0].update, launched[0].update);
+
+        world.observe_projectiles(&[ObservedProjectileEvent::Completed {
+            id,
+            frame: finished,
+        }]);
+        world.advance_observed_projectiles(finished).unwrap();
+        assert!(outgoing(&mut world).is_empty());
+        acknowledge(&mut world, replay, true);
+        let arrival = finished + 1;
+        world.advance_observed_projectiles(arrival).unwrap();
+        world
+            .advance_observed_projectiles(arrival + input.flight_ticks - 1)
+            .unwrap();
+        assert!(outgoing(&mut world).is_empty());
+        world
+            .advance_observed_projectiles(arrival + input.flight_ticks)
+            .unwrap();
+        let destroys = outgoing(&mut world);
+        assert_eq!(
+            destroys
+                .iter()
+                .map(|record| record.update.entity)
+                .collect::<Vec<_>>(),
+            entities
+        );
+        assert!(
+            destroys
+                .iter()
+                .all(|record| matches!(record.update.operation, Some(Operation::Destroy)))
+        );
+        acknowledge(&mut world, destroys, true);
+        world
+            .advance_observed_projectiles(arrival + input.flight_ticks + 1)
+            .unwrap();
+        assert!(world.observed_projectiles.views.is_empty());
+        assert!(world.observed_projectiles.reserved.is_empty());
+    }
+}
