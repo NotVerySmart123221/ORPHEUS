@@ -9,7 +9,7 @@ use crate::{
 };
 use serde::Deserialize;
 
-fn acknowledge_world_frame(peer: &mut Peer, sequence: &mut u32) {
+pub(super) fn acknowledge_world_frame(peer: &mut Peer, sequence: &mut u32) {
     *sequence += 1;
     peer.world
         .send_frame(
@@ -26,7 +26,7 @@ fn acknowledge_world_frame(peer: &mut Peer, sequence: &mut u32) {
     peer.world.acknowledge(report, Duration::ZERO);
 }
 
-fn pick_body(
+pub(super) fn pick_body(
     peer: &mut Peer,
     scene: &mut PreparedScene,
     viewer: &PlayerAppearance<'_>,

@@ -35,6 +35,16 @@ impl PreparedScene {
     }
 
     #[cfg(test)]
+    pub(crate) fn fixture_enable_room_health_scripts(&mut self) {
+        self.simulation.enable_host_health_events();
+        self.simulation.enable_spatial_queries(
+            self.map.free_for_all,
+            Arc::clone(&self.ground),
+            crate::script_graph::RoomSpatialNeeds::Queries,
+        );
+    }
+
+    #[cfg(test)]
     pub(crate) fn fixture_for_bots(bots: Vec<Bot>) -> Self {
         use crate::collision_cache::{CollisionCache, Mesh, Triangle};
 

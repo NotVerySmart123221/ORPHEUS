@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "case_id": "received-damage-audio.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "input": {"damage": 9, "stimulus": 109, "line": 207},
+  "expected": {"shooter_notices": 0, "victim_notices": 1, "after_replacement": 0, "reliable_sequence": 0}
+}

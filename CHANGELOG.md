@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Verify authored victim feedback from native damage settlement through a reliable game frame in a two-peer synthetic room. The shooter receives no victim cue. An unadmitted cue expires with its listener body, and a fresh cue carries the replacement listener and authored line.
+
 - Expose the authoritative damage settlement frame to StateScript. An authored elimination sequence can choose its opponent filter, count window, thresholds and mode cues from data. Sixteen focused VM and room tests and strict Inspector Clippy passed. The contract uses synthetic settings and leaves original-client audio open.
 
 - Allow authored room cues to select the mode entity as their voice source while preserving the triggering actor and listener generation checks. Six focused VM, room, and peer tests passed. Mode-specific cue rules and original-client audio remain open.
