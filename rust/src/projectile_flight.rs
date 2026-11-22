@@ -279,7 +279,6 @@ pub struct ProjectileFlight {
     distance_travelled: f64,
     last_tick: Option<u32>,
     ended: bool,
-    direct_falloff: bool,
     expiry_blast: bool,
     gravity: f32,
     velocity: Vec3,
@@ -344,16 +343,10 @@ impl ProjectileFlight {
             distance_travelled: 0.0,
             last_tick: fired_at,
             ended: false,
-            direct_falloff: false,
             expiry_blast,
             gravity: 0.0,
             terrain_rebounds: 0,
         })
-    }
-
-    pub(crate) fn with_direct_falloff(mut self) -> Self {
-        self.direct_falloff = true;
-        self
     }
 
     pub(crate) fn with_gravity(mut self, gravity: f32) -> Self {
@@ -545,11 +538,7 @@ impl ProjectileFlight {
                 tags: direct.tags,
                 entity,
                 distance,
-                damage: if self.direct_falloff {
-                    direct.damage_at(self.distance_travelled + distance, false)
-                } else {
-                    direct.amount
-                },
+                damage: direct.damage_at(self.distance_travelled + distance, false),
                 critical: false,
                 loadout: direct.loadout,
                 impulse: None,
@@ -804,6 +793,58 @@ mod tests {
             height: 2.0,
             radius: 0.5,
             eye: 1.55,
+        }
+    }
+
+    #[test]
+    fn direct_projectile_uses_authored_falloff_over_the_entire_flight() {
+        #[derive(serde::Deserialize)]
+        struct Case {
+            contact_distance: f64,
+            damage: f64,
+            without_falloff: bool,
+        }
+        #[derive(serde::Deserialize)]
+        struct Contract {
+            fields: Json,
+            cases: Vec<Case>,
+        }
+        let contract: Contract = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/projectile-direct-falloff-v1.json"
+        ))
+        .unwrap();
+        for case in contract.cases {
+            let mut fields = contract.fields.clone();
+            if case.without_falloff {
+                fields["m_6396149F"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("m_157E5BC5");
+            }
+            let profile = ProjectileBallistics::from_fields(&fields, |value| {
+                crate::script_expr::evaluate(value, &mut crate::script_expr::EmptyContext)
+            })
+            .unwrap()
+            .unwrap();
+            let mut flight =
+                ProjectileFlight::new(profile, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], Some(0)).unwrap();
+            let targets = [(1, target(0.0, case.contact_distance + 0.5))];
+            assert!(
+                flight
+                    .advance(1, &targets, |_, _, _| Ok(None))
+                    .unwrap()
+                    .is_none()
+            );
+            let end = flight
+                .advance(20, &targets, |_, _, _| Ok(None))
+                .unwrap()
+                .unwrap();
+            assert!((end.point[2] - case.contact_distance).abs() < EPSILON);
+            assert_eq!(end.contact, Some(1));
+            let [impact] = end.impacts.as_slice() else {
+                panic!("expected one direct projectile impact");
+            };
+            assert!((impact.damage - case.damage).abs() < EPSILON);
         }
     }
 
