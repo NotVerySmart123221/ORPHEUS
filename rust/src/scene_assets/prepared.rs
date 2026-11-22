@@ -24,7 +24,15 @@ pub struct PreparedScene {
 impl PreparedScene {
     #[cfg(test)]
     pub(crate) fn fixture_for_owner_admission(heroes: HeroCatalog) -> Self {
-        let mut scene = Self::fixture_for_bots(Vec::new());
+        Self::fixture_for_owner_admission_with_bots(heroes, Vec::new())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_for_owner_admission_with_bots(
+        heroes: HeroCatalog,
+        bots: Vec<Bot>,
+    ) -> Self {
+        let mut scene = Self::fixture_for_bots(bots);
         scene.contacts = Some(Arc::new(ContactWorld::new(Vec::new()).unwrap()));
         scene.controller = Controller::fixture_for_owner_admission();
         let stats = PlayerStats::default();
@@ -47,6 +55,11 @@ impl PreparedScene {
     #[cfg(test)]
     pub(crate) fn fixture_set_hurt_volumes(&mut self, volumes: HurtVolumeCatalog) {
         self.hurt_volumes = Arc::new(volumes);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_set_combat_voice(&mut self, catalog: CombatVoiceCatalog) {
+        self.simulation.set_combat_voice(Arc::new(catalog));
     }
 
     #[cfg(test)]

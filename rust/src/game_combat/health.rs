@@ -35,6 +35,7 @@ impl RoomSimulation {
         now: Duration,
     ) -> Result<bool, CombatError> {
         if let Some(state) = self.state_mut(wire)? {
+            let victim_team = state.bot.spawn.team;
             let (delta, killed, named_pool_losses) = match effect {
                 HealthEffect::Damage(amount) => Self::damage_bot(state, amount, source, now)
                     .map_or((0.0, false, None), |outcome| {
@@ -65,10 +66,16 @@ impl RoomSimulation {
                             frame: Some(source.frame),
                         }),
                 );
+                if killed {
+                    self.record_enemy_elimination(source.killer, wire, victim_team, source.frame);
+                }
             }
             return Ok(true);
         }
         let Some(id) = self.player_handle_for_wire(wire) else {
+            return Ok(false);
+        };
+        let Some(victim_team) = self.player_body(id).map(|state| state.team) else {
             return Ok(false);
         };
         match effect {
@@ -84,6 +91,12 @@ impl RoomSimulation {
                             source: source.killer,
                             killed_by: valid_entity(source.killer) && source.killer != wire,
                         });
+                        self.record_enemy_elimination(
+                            source.killer,
+                            wire,
+                            victim_team,
+                            source.frame,
+                        );
                     }
                 }
             }

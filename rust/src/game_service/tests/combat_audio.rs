@@ -171,6 +171,14 @@ fn feedback_room<const N: usize>(
     graph: Vec<Json>,
     teams: [u8; N],
 ) -> (Room, [BodyId; N], [u32; N]) {
+    feedback_room_with_bots(graph, teams, Vec::new())
+}
+
+fn feedback_room_with_bots<const N: usize>(
+    graph: Vec<Json>,
+    teams: [u8; N],
+    bots: Vec<crate::game_bots::Bot>,
+) -> (Room, [BodyId; N], [u32; N]) {
     let hero_entry =
         json!({"name":"Synthetic cue actor","class":"Damage","body":"0x0400000000000001"});
     let heroes = HeroCatalog::from_json(
@@ -182,7 +190,7 @@ fn feedback_room<const N: usize>(
     )
     .unwrap();
     let (factory, _) = fixture_body_factory_with_nodes(graph);
-    let mut scene = PreparedScene::fixture_for_owner_admission(heroes);
+    let mut scene = PreparedScene::fixture_for_owner_admission_with_bots(heroes, bots);
     scene.fixture_enable_room_health_scripts();
     scene.owner_body_factory = Some(Arc::new(move |_, spawn, setup| {
         Ok(Some(Box::new(factory.start_with_setup(spawn, setup)?)))
@@ -358,6 +366,29 @@ fn assert_reliable_cue(
     line: u64,
     reliable_sequence: u32,
 ) {
+    assert_reliable_voice_cue(
+        room,
+        connection,
+        listener.entity,
+        listener,
+        sequence,
+        tick,
+        line,
+        reliable_sequence,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn assert_reliable_voice_cue(
+    room: &mut Room,
+    connection: u32,
+    speaker: u32,
+    listener: BodyId,
+    sequence: &mut u32,
+    tick: u32,
+    line: u64,
+    reliable_sequence: u32,
+) {
     let schemas = voice_schema();
     let simulation = room.world.as_ref().unwrap().scene.simulation();
     let peer = room
@@ -367,25 +398,30 @@ fn assert_reliable_cue(
         .peer
         .as_mut()
         .unwrap();
-    while !peer.world.identity_ready(listener.entity) {
+    while !peer.world.identity_ready(listener.entity)
+        || !peer.world.identity_ready(GAME_MODE_ENTITY)
+    {
         assert!(*sequence < 16);
         acknowledge_world_frame(peer, sequence);
     }
     peer.flush_combat(&schemas, tick * TICK_PERIOD, Some(simulation))
         .unwrap();
     assert_eq!(peer.pending_combat_notices().count(), 0);
+    *sequence += 1;
     send_voice_frame(
         peer,
         &schemas,
         tick,
-        *sequence + 1,
+        *sequence,
         VoiceFrame {
-            speaker: listener.entity,
+            speaker,
             listener: listener.entity,
             line,
             ordinal: reliable_sequence,
         },
     );
+    let report = peer.acknowledge(*sequence + 1, 1);
+    peer.world.acknowledge(report, tick * TICK_PERIOD);
 }
 
 struct VoiceFrame {
@@ -707,4 +743,169 @@ fn confirmed_headshot_cue_reaches_only_the_shooter_connection() {
         }
         tick += 2;
     }
+}
+
+#[test]
+fn multikill_announcer_cues_emit_from_mode_entity_across_bot_eliminations() {
+    use crate::{
+        combat_voice::CombatVoiceCatalog,
+        game_bots::{BotCatalog, BotWalk},
+    };
+
+    let bots = BotCatalog::from_json(
+        r#"{
+            "heroes": {"0x01": {"name": "Target", "body": "0x02", "health": 50}},
+            "maps": {"0x03": {"hints": {}, "spawners": [
+                {"hero": "0x01", "team": 1, "position": [6, 0, 0], "rotation": [0, 0, 0, 1], "graphs": []},
+                {"hero": "0x01", "team": 1, "position": [6, 0, 4], "rotation": [0, 0, 0, 1], "graphs": []},
+                {"hero": "0x01", "team": 1, "position": [6, 0, 8], "rotation": [0, 0, 0, 1], "graphs": []},
+                {"hero": "0x01", "team": 1, "position": [6, 0, 12], "rotation": [0, 0, 0, 1], "graphs": []},
+                {"hero": "0x01", "team": 1, "position": [6, 0, 16], "rotation": [0, 0, 0, 1], "graphs": []},
+                {"hero": "0x01", "team": 0, "position": [6, 0, 20], "rotation": [0, 0, 0, 1], "graphs": []}
+            ]}}
+        }"#,
+    )
+    .unwrap()
+    .make(3, |_| BotWalk::default());
+    let targets: Vec<_> = bots
+        .iter()
+        .map(|bot| (bot.entity, bot.spawn.position))
+        .collect();
+    let (mut room, [shooter], mut sequence) = feedback_room_with_bots(Vec::new(), [0], bots);
+    let voice = CombatVoiceCatalog::from_json(
+        r#"{
+            "multikill_window_ticks": 3,
+            "multikills": {
+                "2": { "stimulus": "0x0EE0000000000102", "lines": ["0x0760000000000202"] },
+                "3": { "stimulus": "0x0EE0000000000103", "lines": ["0x0760000000000203"] }
+            }
+        }"#,
+    )
+    .unwrap();
+    room.world
+        .as_mut()
+        .unwrap()
+        .scene
+        .fixture_set_combat_voice(voice);
+
+    let kill_bot = |room: &mut Room, target: u32, pos: [f64; 3], tick: u32| {
+        let scene = &mut room.world.as_mut().unwrap().scene;
+        let (simulation, queries) = scene.bot_simulation();
+        simulation.activate_combat();
+        let hit = simulation
+            .hitscan(
+                &queries,
+                PosedHitscan {
+                    source: shooter.entity,
+                    origin: [0.0, pos[1] + 1.0, pos[2]],
+                    direction: [1.0, 0.0, 0.0],
+                    command: Command {
+                        frame: tick,
+                        ..Command::default()
+                    },
+                    shot_frame: tick,
+                    reach: 12.0,
+                    hit: HitDefinition {
+                        tags: DamageTags::EMPTY,
+                        amount: 100.0,
+                        loadout: None,
+                        critical: 1.0,
+                        falloff: None,
+                    },
+                },
+                ShotContext {
+                    team: 0,
+                    quanta: RETAIL_QUANTA,
+                    tick,
+                    now: tick * TICK_PERIOD,
+                },
+                |entity| entity == target,
+            )
+            .unwrap()
+            .expect("bot lethal hit");
+        assert!(matches!(
+            hit.notices[0],
+            Some(CombatNotice::Hit { killed: true, .. })
+        ));
+        advance_feedback(room, [shooter], tick);
+    };
+
+    kill_bot(&mut room, targets[0].0, targets[0].1, FIRST_TICK + 1);
+    assert_eq!(
+        room.members[&1]
+            .peer
+            .as_ref()
+            .unwrap()
+            .pending_combat_notices()
+            .count(),
+        0
+    );
+
+    kill_bot(&mut room, targets[1].0, targets[1].1, FIRST_TICK + 3);
+    assert_reliable_voice_cue(
+        &mut room,
+        1,
+        GAME_MODE_ENTITY,
+        shooter,
+        &mut sequence[0],
+        FIRST_TICK + 4,
+        0x0760_0000_0000_0202,
+        0,
+    );
+
+    kill_bot(&mut room, targets[2].0, targets[2].1, FIRST_TICK + 5);
+    assert_reliable_voice_cue(
+        &mut room,
+        1,
+        GAME_MODE_ENTITY,
+        shooter,
+        &mut sequence[0],
+        FIRST_TICK + 6,
+        0x0760_0000_0000_0203,
+        1,
+    );
+
+    // Same-team scripted elimination does not extend the multikill streak.
+    room.world
+        .as_mut()
+        .unwrap()
+        .scene
+        .simulation_mut()
+        .kill_bot_for_test(targets[5].0, FIRST_TICK + 6, (FIRST_TICK + 6) * TICK_PERIOD);
+    assert_eq!(
+        room.members[&1]
+            .peer
+            .as_ref()
+            .unwrap()
+            .pending_combat_notices()
+            .count(),
+        0
+    );
+
+    // Expiring the multikill window resets the streak back to 1 (no announcement).
+    for gap_tick in [FIRST_TICK + 7, FIRST_TICK + 9] {
+        advance_feedback(&mut room, [shooter], gap_tick);
+    }
+    kill_bot(&mut room, targets[3].0, targets[3].1, FIRST_TICK + 11);
+    assert_eq!(
+        room.members[&1]
+            .peer
+            .as_ref()
+            .unwrap()
+            .pending_combat_notices()
+            .count(),
+        0
+    );
+
+    kill_bot(&mut room, targets[4].0, targets[4].1, FIRST_TICK + 13);
+    assert_reliable_voice_cue(
+        &mut room,
+        1,
+        GAME_MODE_ENTITY,
+        shooter,
+        &mut sequence[0],
+        FIRST_TICK + 14,
+        0x0760_0000_0000_0202,
+        2,
+    );
 }

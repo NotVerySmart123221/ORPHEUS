@@ -1,8 +1,8 @@
 //! Deferred script operations for generation-checked room bodies.
 
 use super::{
-    BotState, CombatError, PlayerBodyState, RoomSimulation, RoomSpatialFrame, SampledBody, Vec3,
-    health::HealthEffect,
+    BotState, CombatError, EliminationStreak, PlayerBodyState, RoomSimulation, RoomSpatialFrame,
+    SampledBody, Vec3, health::HealthEffect,
 };
 use crate::{
     game_combat_messages::CombatNotice,
@@ -292,6 +292,70 @@ impl RoomSimulation {
                 && self.room_cue_listener_current(cue.owner, cue.listener)
         });
         cues
+    }
+
+    pub(super) fn record_enemy_elimination(
+        &mut self,
+        killer_wire: u32,
+        victim_wire: u32,
+        victim_team: u8,
+        frame: u32,
+    ) {
+        if self.combat_voice.is_empty()
+            || killer_wire == victim_wire
+            || !crate::script_expr::valid_entity(killer_wire)
+        {
+            return;
+        }
+        let Some(&entity) = self.players_by_wire.get(&killer_wire) else {
+            return;
+        };
+        let Some(player) = self
+            .world
+            .get::<PlayerBodyState>(entity)
+            .filter(|player| player.id.entity == killer_wire && player.alive())
+        else {
+            return;
+        };
+        if !self.free_for_all && player.team == victim_team {
+            return;
+        }
+        let owner = player.owner;
+        let listener = player.id;
+        let window = self.combat_voice.multikill_window_ticks();
+        let streak = self
+            .elimination_streaks
+            .entry(killer_wire)
+            .and_modify(|streak| {
+                if frame >= streak.last_frame && frame.saturating_sub(streak.last_frame) <= window {
+                    streak.count = streak.count.saturating_add(1);
+                } else {
+                    streak.count = 1;
+                }
+                streak.last_frame = frame;
+            })
+            .or_insert(EliminationStreak {
+                last_frame: frame,
+                count: 1,
+            });
+        let count = streak.count;
+        if let Some((stimulus, line)) = self.combat_voice.multikill_cue(count, count as usize) {
+            self.player_cues.push(PlayerRoomCue {
+                owner,
+                listener,
+                source: RoomBodyIdentity {
+                    wire: killer_wire,
+                    generation: entity.to_bits(),
+                },
+                notice: CombatNotice::Voice {
+                    anchor: GAME_MODE_ENTITY,
+                    speaker: GAME_MODE_ENTITY,
+                    listener: killer_wire,
+                    stimulus,
+                    line,
+                },
+            });
+        }
     }
 
     fn route_room_message(&mut self, entity: Entity, source: u32, message: RoomMessage) {
