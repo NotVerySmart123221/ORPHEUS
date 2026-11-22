@@ -506,6 +506,16 @@ impl OwnerProjectiles {
                         .creates
                         .values()
                         .all(|&state| state == Confirmation::Released)
+                    // An earlier receipt may have exposed only the original ID.
+                    // A later introduction can still name another prediction.
+                    && !pending.reports.values().any(|report| {
+                        report.introduces
+                            && report.arrived.is_none()
+                            && self
+                                .leases
+                                .entity(pending.definition, report.frame, 0)
+                                .is_some_and(|entity| !pending.creates.contains_key(&entity))
+                    })
                 {
                     retire(pending, &mut self.occupied, None, &mut out);
                     return false;
@@ -725,6 +735,84 @@ mod tests {
         );
         assert!(!tracker.confirmation_current(token, alias));
         assert!(tracker.advance(alias_at + 1).is_empty());
+    }
+
+    #[test]
+    fn an_introduction_in_flight_keeps_its_prediction_eligible_after_original_release() {
+        let contract: Json = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/projectile-alias-release-v1.json"
+        ))
+        .unwrap();
+        let late = &contract["late_introduction"];
+        let frame = contract["input"]["shot_frame"].as_u64().unwrap() as u32;
+        let impact_tick = contract["input"]["contact_tick"].as_u64().unwrap() as u32;
+        let introduction = late["introduction_frame"].as_u64().unwrap() as u32;
+        let receipt_tick = late["report_receipt_tick"].as_u64().unwrap() as u32;
+        let alias_release = late["alias_release_tick"].as_u64().unwrap() as u32;
+        let definition = 0x0400_0000_0000_abc1;
+        let shot = shot(frame);
+        let leases = ProjectileLeases::new(0, frame, [definition]).unwrap();
+        let original = leases.entity(definition, frame, 0).unwrap();
+        let alias = leases.entity(definition, introduction, 0).unwrap();
+        let identity = |instance, state| {
+            (instance == shot.instance && state == shot.raw_state)
+                .then_some((shot.activation, shot.activation_ms))
+        };
+
+        for arrives in [false, true] {
+            let mut tracker = OwnerProjectiles::new(BODY, leases.clone());
+            let token = tracker.admit(shot, definition, 80).unwrap();
+            tracker.owner_sent(1, frame, identity, |_, _| true);
+            tracker.owner_sent(2, introduction, identity, |_, _| true);
+            tracker.owner_arrival(1, true);
+            assert_eq!(
+                tracker.advance(impact_tick - 1),
+                [ProjectileDelivery::Confirm {
+                    token,
+                    entity: original,
+                    definition
+                }]
+            );
+            tracker.create_arrived(token, original);
+            tracker.flight_ended(token, 2, impact_tick, true);
+            assert_eq!(
+                tracker.advance(impact_tick),
+                [ProjectileDelivery::Destroy {
+                    token,
+                    entity: original,
+                    explosion_frame: Some(impact_tick + RELEASE_AHEAD),
+                }]
+            );
+            assert!(!tracker.confirmation_current(token, original));
+            assert!(tracker.advance(receipt_tick - 1).is_empty());
+            tracker.owner_arrival(2, arrives);
+            if arrives {
+                assert_eq!(
+                    tracker.advance(receipt_tick),
+                    [ProjectileDelivery::Confirm {
+                        token,
+                        entity: alias,
+                        definition
+                    }]
+                );
+                assert!(tracker.advance(alias_release - 1).is_empty());
+                tracker.create_arrived(token, alias);
+                assert_eq!(
+                    tracker.advance(alias_release),
+                    [ProjectileDelivery::Destroy {
+                        token,
+                        entity: alias,
+                        explosion_frame: Some(alias_release + RELEASE_AHEAD),
+                    }]
+                );
+            } else {
+                assert!(tracker.advance(receipt_tick).is_empty());
+            }
+            assert!(!tracker.confirmation_current(token, alias));
+            assert!(tracker.pending.is_empty());
+            assert!(tracker.occupied.is_empty());
+            assert!(tracker.advance(alias_release + 1).is_empty());
+        }
     }
 
     #[test]

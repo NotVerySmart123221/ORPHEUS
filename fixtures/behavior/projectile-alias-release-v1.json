@@ -8,5 +8,10 @@
   "expected": {
     "first_release_tick": 1005,
     "second_release_tick": 1013
+  },
+  "late_introduction": {
+    "introduction_frame": 1004,
+    "report_receipt_tick": 1011,
+    "alias_release_tick": 1013
   }
 }

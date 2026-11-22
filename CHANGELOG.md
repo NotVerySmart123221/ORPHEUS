@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Keep unresolved owner volley introductions eligible through the existing projectile delivery grace window. A late introduction can confirm and retire its own predicted ID after the original has already received its impact release. A dropped introduction admits no alias. The Inspector workspace passed 937 public tests. Both the stock and synthetic Helix encrypted loopback regressions passed. Original-client rendering remains unverified.
+
 - Sweep the projectile's authored terrain radius through the shared static contact world for player and NPC volleys. Keep direct actor contact and splash visibility on their own queries. A synthetic regression verifies the earlier contact and that the wall still blocks splash. The Inspector workspace passed 936 public tests. Four prepared 104319 regressions passed for Helix delivery, both self-launch cases, and quick melee. The radius sweep requires prepared contact geometry for the radius sweep. Original-client visuals remain unverified.
 
 - Evaluate static terrain rebound from the authored volley switch, count, normal restitution, and tangential coefficients. Player and NPC shots use the same sweep and preserve the remainder of the tick, distance budget, and closer actor contact. The Inspector workspace passed 935 public tests. Four prepared 104319 regressions passed for Helix impact and release, two projectile self-launch cases, and quick melee. Original-client rebound and impact visuals remain unverified.
