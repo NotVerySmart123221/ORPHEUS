@@ -184,6 +184,7 @@ impl RoomSimulation {
         killed: bool,
         damage: Option<HealthDamageEvidence<'_>>,
     ) {
+        #[cfg(feature = "inspector")]
         if delta.is_finite() && delta < 0.0 && crate::owner_trace::playtest_enabled() {
             let frame = damage.as_ref().and_then(|evidence| evidence.frame);
             let critical = damage

@@ -224,10 +224,12 @@ impl Peer {
         ack: u32,
         bits: u64,
     ) -> crate::game_egress::DeliveryReport<Arc<Record>> {
+        #[cfg(feature = "inspector")]
         let pending_cue = self.authored_cue_ordinal.filter(|&ordinal| {
             crate::owner_trace::playtest_enabled() && !self.egress.delivered_through(ordinal)
         });
         let report = self.egress.acknowledge(ack, bits);
+        #[cfg(feature = "inspector")]
         if let Some(ordinal) = pending_cue.filter(|&ordinal| self.egress.delivered_through(ordinal))
         {
             crate::owner_trace::playtest(format_args!(
@@ -285,6 +287,7 @@ impl Peer {
             if authored.is_some() {
                 self.authored_cue_ordinal = Some(ordinal);
             }
+            #[cfg(feature = "inspector")]
             if crate::owner_trace::playtest_enabled() {
                 match notice {
                     CombatNotice::Hit {
