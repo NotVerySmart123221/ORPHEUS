@@ -73,6 +73,7 @@ impl SampledBody {
 pub(super) struct HealthDamageEvidence<'a> {
     pub(super) impact: Option<(&'a Impact, &'a HealthTargetFacts)>,
     pub(super) named_pool_losses: &'a [NamedPoolLoss],
+    pub(super) frame: Option<u32>,
 }
 
 pub(super) struct HealthEventContext<'a> {
@@ -87,6 +88,7 @@ struct HealthApplied {
     killed: bool,
     hit_tags: Option<HitTags>,
     critical_hit: Option<bool>,
+    damage_frame: Option<u32>,
     target_facts: Option<Arc<HealthTargetFacts>>,
     named_pool_losses: Option<Arc<[NamedPoolLoss]>>,
 }
@@ -160,6 +162,7 @@ impl RoomHealthEvents {
             killed,
             hit_tags: impact.map(|impact| impact.tags),
             critical_hit: impact.map(|impact| impact.critical),
+            damage_frame: context.damage.as_ref().and_then(|damage| damage.frame),
             target_facts: target_facts.map(Arc::new),
             named_pool_losses: context
                 .damage
@@ -226,6 +229,7 @@ impl RoomSimulation {
                     target_facts: change.target_facts,
                     named_pool_losses: change.named_pool_losses,
                     critical_hit: change.critical_hit,
+                    damage_frame: change.damage_frame,
                 };
                 for body in receivers.into_iter().flatten() {
                     self.queue_health_event(body.entity, event, context.clone());
@@ -272,6 +276,7 @@ impl RoomSimulation {
                             .map(|named_pool_losses| HealthDamageEvidence {
                                 impact: None,
                                 named_pool_losses,
+                                frame: None,
                             }),
                     },
                     room_status,

@@ -2185,6 +2185,7 @@ impl RoomSimulation {
             Some(HealthDamageEvidence {
                 impact: Some((impact, &hit.damage.target_facts)),
                 named_pool_losses: &hit.damage.named_pool_losses,
+                frame: Some(context.tick),
             }),
         );
         Ok(Some(hit))

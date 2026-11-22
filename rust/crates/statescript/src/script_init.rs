@@ -750,6 +750,7 @@ impl Component {
         };
         context.named_pool_losses = None;
         context.critical_hit = None;
+        context.damage_frame = None;
         self.machine
             .queue_host_entries(&self.graphs, kind, parameters, due_ms, context)
     }

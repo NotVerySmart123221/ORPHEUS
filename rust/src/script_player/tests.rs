@@ -728,6 +728,7 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
                 HostHealthContext {
                     named_pool_losses: None,
                     critical_hit: None,
+                    damage_frame: None,
                     source_body: None,
                     target_body: None,
                     target_facts: Some(Arc::new(HealthTargetFacts {

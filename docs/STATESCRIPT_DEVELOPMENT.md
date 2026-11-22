@@ -959,6 +959,7 @@ and continue from `m_outPlug`.
 | 5 | Ordered hit tag assets, or null at a declared binding when unavailable |
 | 6 | Ordered records of named shield loss, or null at a declared binding when unavailable |
 | 7 | Confirmed critical hit flag for settled weapon damage, or null when no impact classification is available |
+| 8 | Authoritative room frame of damage settlement, or null when unavailable |
 
 The hit tag slot uses the list carried by the applied impact. A known
 empty list stays empty. Other settled effects that lack hit attribution
@@ -979,8 +980,13 @@ an ORPHEUS server host binding. A graph can route a cue to the source
 from slot 1 for a confirmed critical hit, or to the target from slot 2
 for victim feedback after negative damage in slot 3. The health event
 reaches living receivers and shares their normal body lifetime. Scripts
-can combine the kill flag with authored eligibility and timing rules for
-multi-elimination cues. Cue resources are supplied by authored content.
+can combine the kill flag with slot 8 and authored eligibility and
+timing rules for multi-elimination cues. Slot 8 uses the room frame
+that applied damage, rather than a fire command, VM delivery or
+acknowledgment frame. Room-settled weapon and scripted damage supply
+it. Healing and VM-local changes without a sampled room frame leave
+it unavailable. Cue resources are supplied by authored content.
+[Synthetic timed elimination contract](../fixtures/behavior/script-timed-elimination-cues-v1.json)
 
 Weapon notifications carry the target's captured filter flags, target
 tags, and script variables. A room-settled health change from a distinct

@@ -799,6 +799,7 @@ impl RoomSimulation {
             Some(HealthDamageEvidence {
                 impact,
                 named_pool_losses: &outcome.named_pool_losses,
+                frame: Some(source.frame),
             }),
         );
         Some((owner, outcome, health))

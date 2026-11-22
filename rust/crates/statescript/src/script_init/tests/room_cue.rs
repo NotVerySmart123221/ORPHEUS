@@ -3,6 +3,8 @@ use serde::Deserialize;
 use super::*;
 use crate::script_expr::{RoomEntityFacts, SpatialCandidate};
 
+mod timed_eliminations;
+
 const GRAPH: u32 = 211;
 const INSTANCE: u16 = 1;
 const TRIGGER: u64 = 61;

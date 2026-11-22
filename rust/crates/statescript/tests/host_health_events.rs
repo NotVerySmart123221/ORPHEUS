@@ -942,6 +942,7 @@ fn check_health_delivery_generation(endpoint: HealthEndpoint) {
     let context = |generation| HostHealthContext {
         named_pool_losses: None,
         critical_hit: None,
+        damage_frame: None,
         source_body: Some(RoomBodyIdentity {
             wire: SOURCE,
             generation: if subject == SOURCE {

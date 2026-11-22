@@ -2095,6 +2095,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 .cloned(),
             named_pool_losses: None,
             critical_hit: None,
+            damage_frame: None,
         }
     }
 
