@@ -219,8 +219,7 @@ fn authored_player_death_preserves_attribution_without_advancing_input() {
         frame: spawn.frame + 12,
         killer,
     };
-    let facts = room.player_body(id).unwrap().health_target_facts();
-    let mut impact = fixture_impact(id.entity, health);
+    let mut impact = fixture_impact(id.entity, health * 2.0);
     impact.critical = true;
     let expected_loadout = 0x0b90_0000_0000_0041;
     impact.loadout = Some(expected_loadout);
@@ -238,11 +237,19 @@ fn authored_player_death_preserves_attribution_without_advancing_input() {
             .variables
             .contains_key(&101)
     );
-    let (_, killed, _) = room
-        .damage_player_body_by_wire(id, health, death, Some((&impact, &facts)))
-        .unwrap();
-    assert!(killed.killed);
+    let now = std::time::Duration::from_millis(2000);
+    assert!(
+        room.settle_health_with_impact(
+            id.entity,
+            HealthEffect::Damage(health),
+            death,
+            now,
+            Some(&impact)
+        )
+        .unwrap()
+    );
     let state = room.player_body(id).unwrap();
+    assert!(!state.alive());
     let death_snapshot = state.projection().unwrap().snapshot;
     let variables = &death_snapshot.variables;
     assert_eq!(variables.get(&101), Some(&Value::Entity(killer)));
@@ -250,6 +257,10 @@ fn authored_player_death_preserves_attribution_without_advancing_input() {
     assert_eq!(variables.get(&103), Some(&Value::Asset(expected_loadout)));
     assert_eq!(variables.get(&104), Some(&Value::Array(Vec::new())));
     assert_eq!(state.frame, spawn.frame);
+    let deaths = room.take_player_deaths();
+    assert_eq!(deaths.len(), 1);
+    assert_eq!(deaths[0].source, killer);
+    assert!(deaths[0].killed_by);
 
     let other = Death { killer: 0, ..death };
     let (_, unchanged, _) = room

@@ -198,6 +198,7 @@ pub(crate) struct EnemyDamage {
     pub source: u32,
     pub target: u32,
     pub amount: f64,
+    pub impact: Option<crate::game_hitscan::Impact>,
 }
 
 pub(crate) struct EnemyScripts {

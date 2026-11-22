@@ -2,6 +2,7 @@
 
 use super::{CombatError, HealthDamageEvidence, RoomSimulation, player::PlayerDeath};
 use crate::{
+    game_hitscan::Impact,
     script_expr::valid_entity,
     vitals::Death,
     world::{EntityUpdate, Operation},
@@ -34,17 +35,33 @@ impl RoomSimulation {
         source: Death,
         now: Duration,
     ) -> Result<bool, CombatError> {
+        self.settle_health_with_impact(wire, effect, source, now, None)
+    }
+
+    pub(super) fn settle_health_with_impact(
+        &mut self,
+        wire: u32,
+        effect: HealthEffect,
+        source: Death,
+        now: Duration,
+        impact: Option<&Impact>,
+    ) -> Result<bool, CombatError> {
+        let critical = impact.is_some_and(|impact| impact.critical);
+        let loadout = impact.and_then(|impact| impact.loadout);
         if let Some(state) = self.state_mut(wire)? {
             let victim_team = state.bot.spawn.team;
+            let target_facts = impact.map(|_| state.health_target_facts());
             let (delta, killed, named_pool_losses) = match effect {
-                HealthEffect::Damage(amount) => Self::damage_bot(state, amount, source, now)
-                    .map_or((0.0, false, None), |outcome| {
-                        (
-                            -outcome.dealt,
-                            outcome.killed,
-                            Some(outcome.named_pool_losses),
-                        )
-                    }),
+                HealthEffect::Damage(amount) => Self::damage_bot_with_hit(
+                    state, amount, source, now, critical, loadout,
+                )
+                .map_or((0.0, false, None), |outcome| {
+                    (
+                        -outcome.dealt,
+                        outcome.killed,
+                        Some(outcome.named_pool_losses),
+                    )
+                }),
                 HealthEffect::Heal(amount) if !state.bot.dead => {
                     (state.vitals.heal(amount), false, None)
                 }
@@ -61,13 +78,13 @@ impl RoomSimulation {
                     named_pool_losses
                         .as_deref()
                         .map(|named_pool_losses| HealthDamageEvidence {
-                            impact: None,
+                            impact: impact.zip(target_facts.as_ref()),
                             named_pool_losses,
                             frame: Some(source.frame),
                         }),
                 );
                 if delta < 0.0 || killed {
-                    self.record_actor_hurt_voice(wire, true, false, killed, source.frame);
+                    self.record_actor_hurt_voice(wire, true, critical, killed, source.frame);
                 }
                 if killed {
                     self.record_enemy_elimination(source.killer, wire, victim_team, source.frame);
@@ -83,15 +100,19 @@ impl RoomSimulation {
         };
         match effect {
             HealthEffect::Damage(amount) => {
+                let target_facts = impact
+                    .and_then(|_| self.player_body(id))
+                    .map(|state| state.health_target_facts());
+                let evidence = impact.zip(target_facts.as_ref());
                 if let Some((owner, outcome, health)) =
-                    self.damage_player_body_by_wire(id, amount, source, None)
+                    self.damage_player_body_by_wire(id, amount, source, evidence)
                 {
                     self.scripted_health.extend(health);
                     if outcome.dealt > 0.0 || outcome.killed {
                         self.record_actor_hurt_voice(
                             wire,
                             false,
-                            false,
+                            critical,
                             outcome.killed,
                             source.frame,
                         );

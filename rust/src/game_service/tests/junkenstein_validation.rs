@@ -136,6 +136,7 @@ fn configured_cassidy_immunity_routes_real_room_damage_and_death_notices() {
                 .bot_simulation()
                 .0
                 .queue_test_external_enemy_damage(EnemyDamage {
+                    impact: None,
                     source: input["source"].as_u64().unwrap() as u32,
                     target: body,
                     amount: amount.as_f64().unwrap(),
