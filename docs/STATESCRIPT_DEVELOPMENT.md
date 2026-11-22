@@ -850,14 +850,23 @@ audiences the room keeps current living player bodies and ignores other
 entities. The batch uses the sender's existing request budget. The action
 continues once the batch is accepted.
 
-The notice carries the sender as its anchor and speaker. Before reliable
-admission, the transport checks both body generations and the listener's
-liveness. It waits for both identity acknowledgements. Each player has at most one unacknowledged
-authored cue in reliable delivery. When the pending combat queue is full,
-a new cue is dropped. Cue identifiers describe resources supplied by the
-author.
+Omit `fields.speaker` or set it to `"actor"` to use the triggering actor
+as the voice source. Set it to `"mode"` to use the room's mode entity
+for a match announcement. The transport checks the triggering actor and
+listener generations and the listener's liveness. It waits for the
+listener and selected voice source to be acknowledged. Each player
+has at most one unacknowledged authored cue in reliable delivery.
+When the pending combat queue is full, a new cue is dropped.
+Cue identifiers describe resources supplied by the author.
 
 See the [synthetic room cue contract](../fixtures/behavior/script-room-cue-v1.json).
+
+The Python branch models match announcements as timeline transitions and
+delivers them through a per-listener reliable queue. Its mode speaker
+is independent of an actor anchor. The Python implementation covers
+round announcements. Timed elimination counts
+and their eligibility still need a separate contract.
+[Python match audio](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/match_audio.py)
 
 ## Request a health change
 
@@ -949,6 +958,8 @@ and continue from `m_outPlug`.
 | 4 | Whether damage killed the target |
 | 5 | Ordered hit tag assets, or null at a declared binding when unavailable |
 | 6 | Ordered records of named shield loss, or null at a declared binding when unavailable |
+| 7 | Confirmed critical hit flag for settled weapon damage, or null when no impact classification is available |
+| 8 | Authoritative room frame of damage settlement, or null when unavailable |
 
 The hit tag slot uses the list carried by the applied impact. A known
 empty list stays empty. Other settled effects that lack hit attribution
@@ -962,6 +973,20 @@ empty array means a known result with no named loss. Healing and damage
 without pool accounting omit the slot. The compatibility charge message
 uses the same record encoder. A same-body GameMessage can carry the
 array as an explicit parameter.
+
+A confirmed normal impact binds slot 7 to `false`. A confirmed critical
+impact binds it to `true` only after nonzero damage settles. Slot 7 is
+an ORPHEUS server host binding. A graph can route a cue to the source
+from slot 1 for a confirmed critical hit, or to the target from slot 2
+for victim feedback after negative damage in slot 3. The health event
+reaches living receivers and shares their normal body lifetime. Scripts
+can combine the kill flag with slot 8 and authored eligibility and
+timing rules for multi-elimination cues. Slot 8 uses the room frame
+that applied damage, rather than a fire command, VM delivery or
+acknowledgment frame. Room-settled weapon and scripted damage supply
+it. Healing and VM-local changes without a sampled room frame leave
+it unavailable. Cue resources are supplied by authored content.
+[Synthetic timed elimination contract](../fixtures/behavior/script-timed-elimination-cues-v1.json)
 
 Weapon notifications carry the target's captured filter flags, target
 tags, and script variables. A room-settled health change from a distinct

@@ -6,6 +6,22 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Extend the opt-in Inspector playtest capture with combat settlement, reliable hit and voice admission, and acknowledgement of authored cues. The records show when a cue enters the send queue and whether the client acknowledges the reliable prefix. Audible playback remains a client check.
+
+- Keep delayed combat cues scoped to the listener bodies present at settlement. If an entity ID has been reused or retired, other selected listeners still receive the cue.
+
+- Verify that two authored mode cues from distinct eliminations in the same settlement frame keep their order across datagram loss and duplicate acknowledgements. The synthetic room replay excludes a nonlethal hit and repeated damage to a defeated body. The prepared 104319 replay also matched its six ray classifications, and the existing 104319 voice-message encoding check passed. Audible playback remains a separate client check.
+
+- Use each player's selected body template for authored hurt volumes when settling player-fired hitscan and projectiles. The synthetic regression covers a miss, a body hit, head contact with critical damage disabled, and a confirmed critical that reaches the shooter's reliable frame.
+
+- Verify authored victim feedback from native damage settlement through a reliable game frame in a two-peer synthetic room. The shooter receives no victim cue. An unadmitted cue expires with its listener body, and a fresh cue carries the replacement listener and authored line.
+
+- Expose the authoritative damage settlement frame to StateScript. An authored elimination sequence can choose its opponent filter, count window, thresholds and mode cues from data. Sixteen focused VM and room tests and strict Inspector Clippy passed. The contract uses synthetic settings and leaves original-client audio open.
+
+- Allow authored room cues to select the mode entity as their voice source while preserving the triggering actor and listener generation checks. Six focused VM, room, and peer tests passed. Mode-specific cue rules and original-client audio remain open.
+
+- Expose confirmed critical hits on the settled StateScript health event so authored cues can distinguish ordinary impacts, critical impacts, and damage without weapon classification. The binding uses the same settlement for players and bots. The 20 focused StateScript and room regressions passed. Original-client audio remains open.
+
 - Run the full Rust suite once per PR in Windows default mode. Windows Inspector and Linux exercise their feature and platform checks. The archived Python server comparison tool tests run on demand, and the public checks exercise the pinned wire reader.
 
 - Deduplicated protected Rust CI runs. Required PR checks still cover Windows default and Inspector, Linux, the minimum Rust version, Python behavior contracts, and C++ preview policy. The Windows workspace runs now prove that named contracts passed from their existing test output. Automatic post-merge checks are limited to workflow and build-input changes.

@@ -23,6 +23,7 @@ use crate::{
         authored_stack_variable, client_only_fallback, dynamic, native_entity_operand,
         native_fields, native_shape, native_target_tag_operand,
     },
+    script_init::{RoomCue, RoomCueSpeaker},
     script_wire::{Value as ScriptValue, Variables},
 };
 
@@ -249,13 +250,25 @@ impl Node {
         self.action_behavior == Some(ActionBehavior::RoomCue)
     }
 
-    pub(crate) fn room_cue_assets(&self) -> Option<(u64, u64)> {
+    pub(crate) fn room_cue(&self) -> Option<RoomCue> {
         if !self.declares_room_cue_action() {
             return None;
         }
         let stimulus = asset_guid(self.field("stimulus")?)?;
         let line = asset_guid(self.field("line")?)?;
-        (stimulus != 0 && line != 0).then_some((stimulus, line))
+        let speaker = match self.field("speaker") {
+            None => RoomCueSpeaker::Actor,
+            Some(value) => match value.as_str()? {
+                "actor" => RoomCueSpeaker::Actor,
+                "mode" => RoomCueSpeaker::Mode,
+                _ => return None,
+            },
+        };
+        (stimulus != 0 && line != 0).then_some(RoomCue {
+            stimulus,
+            line,
+            speaker,
+        })
     }
 
     pub(crate) fn declares_room_message_entry(&self) -> bool {
@@ -282,7 +295,7 @@ impl Node {
 
     fn valid_host_event_parameters(&self, kind: HostEventKind) -> bool {
         let max_slot = match kind {
-            HostEventKind::HealthApplied => 6,
+            HostEventKind::HealthApplied => 8,
         };
         let Some(parameters) = self.fields.get("m_params").filter(|value| !value.is_null()) else {
             return true;
@@ -843,9 +856,9 @@ impl Graph {
                                 self.index, node.pos
                             )));
                         }
-                        if node.room_cue_assets().is_none() {
+                        if node.room_cue().is_none() {
                             return Err(invalid(format!(
-                                "{action} in graph {} at node {} requires nonzero stimulus and line asset GUIDs",
+                                "{action} in graph {} at node {} requires nonzero stimulus and line asset GUIDs and an optional actor or mode speaker",
                                 self.index, node.pos
                             )));
                         }
@@ -3488,7 +3501,14 @@ mod tests {
         let action = store.graph(42).unwrap().node(2).unwrap();
         assert_eq!(action.class, "ActionRoomCue");
         assert!(action.is_action() && !action.is_networked() && !action.is_state());
-        assert_eq!(action.room_cue_assets(), Some((0xA1, 0xB2)));
+        assert_eq!(
+            action.room_cue(),
+            Some(RoomCue {
+                stimulus: 0xA1,
+                line: 0xB2,
+                speaker: RoomCueSpeaker::Actor,
+            })
+        );
         assert_eq!(store.room_spatial_needs(), RoomSpatialNeeds::Queries);
 
         for (field, value, diagnostic) in [
@@ -3497,6 +3517,8 @@ mod tests {
             ("stimulus", json!("0x00000000000000a1"), "asset GUIDs"),
             ("line", json!(178), "asset GUIDs"),
             ("line", json!("0xB2"), "asset GUIDs"),
+            ("speaker", json!("other"), "actor or mode speaker"),
+            ("speaker", Value::Null, "actor or mode speaker"),
             ("m_outPlug", Value::Null, "m_outPlug output plug"),
         ] {
             let mut malformed = data.clone();
@@ -3518,7 +3540,7 @@ mod tests {
         let store = load(&data).unwrap();
         let action = store.graph(42).unwrap().node(2).unwrap();
         assert!(!action.declares_room_cue_action());
-        assert_eq!(action.room_cue_assets(), None);
+        assert_eq!(action.room_cue(), None);
         assert_eq!(store.room_spatial_needs(), RoomSpatialNeeds::None);
 
         let node = &mut data["graphs"][0]["nodes"][2];
@@ -3529,13 +3551,21 @@ mod tests {
             "radius": 10,
             "filter": {"tags": {"all": ["0xF100000000000007"]}},
         });
+        node["fields"]["speaker"] = json!("mode");
         data["authored_classes"] =
             json!([{"class": "authored.cue", "behavior": "room_cue_action"}]);
         let store = load(&data).unwrap();
         let action = store.graph(42).unwrap().node(2).unwrap();
         assert_eq!(action.class, "ActionRoomCue");
         assert!(action.server_only && action.declares_room_cue_action());
-        assert_eq!(action.room_cue_assets(), Some((0xA1, 0xB2)));
+        assert_eq!(
+            action.room_cue(),
+            Some(RoomCue {
+                stimulus: 0xA1,
+                line: 0xB2,
+                speaker: RoomCueSpeaker::Mode,
+            })
+        );
         assert_eq!(store.room_spatial_needs(), RoomSpatialNeeds::EntityTags);
     }
 

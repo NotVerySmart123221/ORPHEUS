@@ -1775,7 +1775,7 @@ impl RoomSimulation {
         self.push_player_hitscan_candidates(
             shot.source,
             context.team,
-            queries.free_for_all(),
+            queries,
             view,
             &visible,
             &mut candidates,
@@ -1979,7 +1979,7 @@ impl RoomSimulation {
             self.push_player_projectile_candidates(
                 owner.entity,
                 context.team,
-                queries.free_for_all(),
+                queries,
                 &mut candidates,
             );
             let (token, stun, hit_effect, result) = {
@@ -2183,8 +2183,9 @@ impl RoomSimulation {
             -result.dealt,
             result.killed,
             Some(HealthDamageEvidence {
-                impact: Some((hit.damage.tags, &hit.damage.target_facts)),
+                impact: Some((impact, &hit.damage.target_facts)),
                 named_pool_losses: &hit.damage.named_pool_losses,
+                frame: Some(context.tick),
             }),
         );
         Ok(Some(hit))

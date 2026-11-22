@@ -62,6 +62,7 @@ impl RoomSimulation {
                         .map(|named_pool_losses| HealthDamageEvidence {
                             impact: None,
                             named_pool_losses,
+                            frame: Some(source.frame),
                         }),
                 );
             }

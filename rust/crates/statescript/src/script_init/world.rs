@@ -116,6 +116,13 @@ impl RoomMessage {
 pub struct RoomCue {
     pub stimulus: u64,
     pub line: u64,
+    pub speaker: RoomCueSpeaker,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RoomCueSpeaker {
+    Actor,
+    Mode,
 }
 
 impl RoomCue {
@@ -205,7 +212,7 @@ impl HostEvent {
     pub(super) fn bindings_for(
         self,
         receiver: u32,
-        named_pool_losses: Option<&[NamedPoolLoss]>,
+        context: &HostHealthContext,
     ) -> Option<(HostEventKind, Variables)> {
         match self {
             Self::HealthApplied {
@@ -236,8 +243,14 @@ impl HostEvent {
                         Value::Array(tags.as_slice().iter().copied().map(Value::Asset).collect()),
                     );
                 }
-                if let Some(losses) = named_pool_losses.filter(|_| delta < 0.0) {
+                if let Some(losses) = context.named_pool_losses.as_deref().filter(|_| delta < 0.0) {
                     parameters.insert(6, named_pool_records(losses));
+                }
+                if let Some(critical) = context.critical_hit.filter(|_| delta < 0.0) {
+                    parameters.insert(7, Value::Bool(critical));
+                }
+                if let Some(frame) = context.damage_frame.filter(|_| delta < 0.0) {
+                    parameters.insert(8, Value::Integer(i64::from(frame)));
                 }
                 Some((HostEventKind::HealthApplied, parameters))
             }
@@ -268,6 +281,10 @@ pub struct HostHealthContext {
     pub target_facts: Option<Arc<HealthTargetFacts>>,
     /// Optional settlement records for damage parameter 6. None leaves it absent.
     pub named_pool_losses: Option<Arc<[NamedPoolLoss]>>,
+    /// Confirmed impact classification for damage parameter 7.
+    pub critical_hit: Option<bool>,
+    /// Authoritative room frame of damage settlement for parameter 8.
+    pub damage_frame: Option<u32>,
 }
 
 /// Room-sampled facts for the original target of a settled health event.

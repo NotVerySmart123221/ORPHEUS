@@ -2,6 +2,7 @@ use super::*;
 
 mod benchmark;
 mod bot_replacement;
+mod combat_audio;
 mod death_notice;
 mod harness;
 mod isolation;

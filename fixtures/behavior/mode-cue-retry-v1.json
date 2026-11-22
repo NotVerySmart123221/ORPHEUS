@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "case_id": "mode-cue-retry.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "stimulus": 150,
+  "cues": [{"count": 2, "line": 301}, {"count": 3, "line": 302}],
+  "hits": [
+    {"target": 1, "frame": 1, "damage": 9, "killed": false},
+    {"target": 1, "frame": 1, "damage": 999, "killed": true},
+    {"target": 1, "frame": 3, "damage": 999, "killed": false},
+    {"target": 2, "frame": 3, "damage": 999, "killed": true},
+    {"target": 3, "frame": 3, "damage": 999, "killed": true}
+  ],
+  "sends": [
+    {"line": 301, "ordinal": 0, "arrived": false, "waiting": 1},
+    {"line": 301, "ordinal": 0, "arrived": true, "waiting": 1},
+    {"line": 302, "ordinal": 1, "arrived": true, "waiting": 0}
+  ]
+}

@@ -1,11 +1,10 @@
 //! Per-peer delivery, loading readiness, and combat UI state.
 
-use bevy_ecs::entity::Entity;
-
 use super::*;
 use crate::{
     game_combat::{PlayerDeath, RoomSimulation},
     game_replication::BodyId,
+    script_init::RoomBodyIdentity,
 };
 
 const MAX_PENDING_COMBAT_NOTICES: usize = 256;
@@ -31,7 +30,7 @@ pub(super) struct CombatUi {
 
 struct AuthoredCueIdentity {
     listener: BodyId,
-    source: Entity,
+    source: RoomBodyIdentity,
 }
 
 struct PendingCombatNotice {
@@ -64,16 +63,13 @@ impl PendingCombatNotice {
                 body == Some(*recipient)
             }
             CombatAudience::Authored(cue) => {
-                let CombatNotice::Voice {
-                    anchor, listener, ..
-                } = self.notice
-                else {
+                let CombatNotice::Voice { listener, .. } = self.notice else {
                     return false;
                 };
                 body == Some(cue.listener)
                     && cue.listener.entity == listener
                     && simulation.is_some_and(|room| {
-                        room.room_cue_source_current(anchor, cue.source)
+                        room.room_cue_source_current(cue.source)
                             && room.room_cue_listener_current(owner, cue.listener)
                     })
             }
@@ -206,7 +202,7 @@ impl Peer {
     pub(super) fn queue_player_cue(
         &mut self,
         listener: BodyId,
-        source: Entity,
+        source: RoomBodyIdentity,
         notice: CombatNotice,
     ) {
         if self.combat_ui.notices.len() == MAX_PENDING_COMBAT_NOTICES {
@@ -221,6 +217,27 @@ impl Peer {
     #[cfg(test)]
     pub(super) fn pending_combat_notices(&self) -> impl Iterator<Item = &CombatNotice> {
         self.combat_ui.notices.iter().map(|pending| &pending.notice)
+    }
+
+    pub(super) fn acknowledge(
+        &mut self,
+        ack: u32,
+        bits: u64,
+    ) -> crate::game_egress::DeliveryReport<Arc<Record>> {
+        #[cfg(feature = "inspector")]
+        let pending_cue = self.authored_cue_ordinal.filter(|&ordinal| {
+            crate::owner_trace::playtest_enabled() && !self.egress.delivered_through(ordinal)
+        });
+        let report = self.egress.acknowledge(ack, bits);
+        #[cfg(feature = "inspector")]
+        if let Some(ordinal) = pending_cue.filter(|&ordinal| self.egress.delivered_through(ordinal))
+        {
+            crate::owner_trace::playtest(format_args!(
+                "combat audio acknowledged owner={:08X} ordinal={ordinal}",
+                self.world.owner(),
+            ));
+        }
+        report
     }
 
     pub(super) fn flush_combat(
@@ -269,6 +286,37 @@ impl Peer {
             let ordinal = self.egress.queue_reliable(bytes)?;
             if authored.is_some() {
                 self.authored_cue_ordinal = Some(ordinal);
+            }
+            #[cfg(feature = "inspector")]
+            if crate::owner_trace::playtest_enabled() {
+                match notice {
+                    CombatNotice::Hit {
+                        target,
+                        dealt,
+                        critical,
+                        killed,
+                        shot_frame,
+                    } => {
+                        crate::owner_trace::playtest(format_args!(
+                            "combat hit admitted owner={:08X} frame={shot_frame} target={target:08X} dealt={dealt} critical={critical} killed={killed} ordinal={ordinal}",
+                            self.world.owner(),
+                        ));
+                    }
+                    CombatNotice::Voice {
+                        speaker,
+                        listener,
+                        stimulus,
+                        line,
+                        ..
+                    } => {
+                        crate::owner_trace::playtest(format_args!(
+                            "combat audio admitted owner={:08X} speaker={speaker:08X} listener={listener:08X} stimulus={stimulus:016X} line={line:016X} ordinal={ordinal} authored={}",
+                            self.world.owner(),
+                            authored.is_some(),
+                        ));
+                    }
+                    _ => (),
+                }
             }
             for entity in notice.referenced_entities() {
                 self.world.track_entity_notice(entity, ordinal);
@@ -400,7 +448,10 @@ mod tests {
             stimulus: 1,
             line: 2,
         };
-        let source = bevy_ecs::world::World::new().spawn_empty().id();
+        let source = RoomBodyIdentity {
+            wire: 0xc001_0000,
+            generation: bevy_ecs::world::World::new().spawn_empty().id().to_bits(),
+        };
         let mut peer = Peer::new(0xa001_0000);
         peer.queue_player_cue(listener, source, notice);
         peer.queue_combat_notice(notice);
@@ -493,14 +544,21 @@ mod tests {
             .unwrap();
 
         let notice = CombatNotice::Voice {
-            anchor: speaker,
-            speaker,
+            anchor: GAME_MODE_ENTITY,
+            speaker: GAME_MODE_ENTITY,
             listener: listener.entity,
             stimulus: 1,
             line: 2,
         };
         let mut peer = Peer::new(spawn.controller);
-        peer.queue_player_cue(listener, source.entity, notice);
+        peer.queue_player_cue(
+            listener,
+            RoomBodyIdentity {
+                wire: speaker,
+                generation: source.entity.to_bits(),
+            },
+            notice,
+        );
         peer.queue_combat_notice(notice);
         let eligibility = |room: &RoomSimulation| {
             let matches = |index: usize| {

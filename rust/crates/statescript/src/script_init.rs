@@ -213,8 +213,9 @@ pub use world::{
     AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, CreationKind,
     EmptyWorld, EntityCreation, HealthTargetFacts, HitTags, HostEvent, HostHealthContext,
     LandingSelection, MovementSample, NamedPoolLoss, PlayScript, Relocation, RoomBodyIdentity,
-    RoomCue, RoomEntityStatus, RoomMessage, ScriptedMotion, Site, SweptDisplacement,
-    TargetTagEffect, TargetTagEffects, TargetTagSnapshot, World, named_pool_records,
+    RoomCue, RoomCueSpeaker, RoomEntityStatus, RoomMessage, ScriptedMotion, Site,
+    SweptDisplacement, TargetTagEffect, TargetTagEffects, TargetTagSnapshot, World,
+    named_pool_records,
 };
 
 use machine::{Event, Machine, Startup, StateKey, VarKey};
@@ -743,12 +744,13 @@ impl Component {
         let Some(due_ms) = self.next_vm_frame_ms() else {
             return Ok(0);
         };
-        let named_pool_losses = context.named_pool_losses.take();
-        let Some((kind, parameters)) =
-            event.bindings_for(self.machine.snapshot.entity, named_pool_losses.as_deref())
+        let Some((kind, parameters)) = event.bindings_for(self.machine.snapshot.entity, &context)
         else {
             return Ok(0);
         };
+        context.named_pool_losses = None;
+        context.critical_hit = None;
+        context.damage_frame = None;
         self.machine
             .queue_host_entries(&self.graphs, kind, parameters, due_ms, context)
     }

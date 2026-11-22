@@ -31,6 +31,7 @@
         "target": "bot",
         "delta": -23.5,
         "killed": false,
+        "critical_hit": true,
         "hit_tags": [613, 101, 613],
         "target_facts": {"filter_flags": 16777217, "owner_health": null}
       },
@@ -52,6 +53,7 @@
         "target": "player",
         "delta": -200.0,
         "killed": true,
+        "critical_hit": false,
         "hit_tags": [],
         "target_facts": {"filter_flags": 8388609, "owner_health": 200.0}
       },

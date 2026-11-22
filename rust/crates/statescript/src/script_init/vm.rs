@@ -2094,6 +2094,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 .filter(|facts| carries_entity(facts.target))
                 .cloned(),
             named_pool_losses: None,
+            critical_hit: None,
+            damage_frame: None,
         }
     }
 
@@ -2280,7 +2282,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     return Ok(false);
                 }
             };
-            if seen.insert(entity) {
+            if !self.expired_health_event_body(entity) && seen.insert(entity) {
                 if targets.len() == RoomCue::MAX_TARGETS {
                     self.report(site, Issue::UnsupportedField("room cue audience limit"));
                     return Ok(false);
@@ -2288,17 +2290,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 targets.push(entity);
             }
         }
-        let Some((stimulus, line)) = node.room_cue_assets() else {
+        let Some(cue) = node.room_cue() else {
             return Ok(false);
         };
         if targets.is_empty() {
             return Ok(true);
         }
         self.spend("room cue admission")?;
-        if !self
-            .world
-            .queue_room_cue(site, &targets, RoomCue { stimulus, line })
-        {
+        if !self.world.queue_room_cue(site, &targets, cue) {
             self.report(site, Issue::UnsupportedField("room cue request"));
             return Ok(false);
         }
