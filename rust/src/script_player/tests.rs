@@ -3123,6 +3123,48 @@ fn authored_flashbang_duration_follows_both_mode_branches() {
 }
 
 #[test]
+fn posed_single_projectiles_use_the_supported_aim_configurations() {
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/projectile-posed-aim-v1.json"
+    ))
+    .unwrap();
+    let (_, spawn) = fixture_body_factory();
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        spawn.pose.position,
+        0,
+        0x18,
+    )
+    .unwrap();
+    let fire = Command {
+        frame: spawn.frame + 1,
+        buttons: crate::commands::SECONDARY,
+        yaw: 16_384,
+        pitch: 4_096,
+        ..Command::default()
+    };
+    for case in fixture["cases"].as_array().unwrap() {
+        let mut fields = fixture_projectile_fields(40.0);
+        fields["m_aimID"] = case["aim"].clone();
+        fields["m_5EC1EB38"] = case["launch"].clone();
+        let mut runtime = fixture_volley_factory(29, true, fields)
+            .start(spawn)
+            .unwrap();
+        runtime.advance(fire, &mover, BodyStep::Posed).unwrap();
+        let shots = runtime.take_shots(Some(fire), &mover);
+        if case["uses_pose"] == true {
+            let [PosedShot::Projectile(projectile)] = shots.as_slice() else {
+                panic!("expected the posed projectile for {}", case["name"]);
+            };
+            assert_eq!(projectile.direction, aim_direction(&fire));
+        } else {
+            assert!(shots.is_empty(), "{}", case["name"]);
+        }
+    }
+}
+
+#[test]
 fn unsupported_projectile_modes_do_not_become_hitscan_or_straight_damage() {
     use serde_json::json;
 

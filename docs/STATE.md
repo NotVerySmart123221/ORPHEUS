@@ -87,6 +87,12 @@ quick-melee case verifies one damage and knockback settlement. First-person
 movement, impact rendering, and Particle Cannon and Junkrat self-launch in
 the original client remain open.
 
+A separate prepared Practice Range replay selects Zarya and sends secondary
+fire before any primary input. The shared posed projectile path admits the
+stock shot and owner synchronization remains active through the replay.
+The mixed-input matrix still stops on an unsupported primary `TrackRay`
+state. This replay does not measure impact or self-launch for that shot.
+
 The follow-up timing capture accumulated 8,819 missed ticks. Misses
 began well before the first recorded shot and continued during intervals
 with an unchanged ray sample. It also ran with synchronous owner traces

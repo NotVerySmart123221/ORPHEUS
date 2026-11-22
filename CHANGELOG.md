@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Admit direct single-shot projectiles that use either supported literal aim slot and the sampled command pose. Keep dynamic aim and spread configurations out of the straight-flight path. A prepared Practice Range replay verifies Zarya's secondary-fire launch and owner egress independently of the primary beam. The Inspector workspace passed 931 public tests, and the prepared replay and both Helix loopbacks passed. Impact and owner movement for Zarya remain open.
+
 - Evaluate projectile gravity in authored order for player and NPC volleys, including each gravity node's disable expression. The Inspector workspace passed 930 public tests. Three prepared 104319 cases verify an enemy impact and retirement after a dropped acknowledgement, self-splash health delivery and upward movement, and single-settlement melee knockback. The available catalogs lack Junkenstein spawn entries, so three NPC firing probes stopped during setup. Original-client projectile rendering and movement remain pending.
 
 - Drive unconditional projectile gravity, launch lift and expiry detonation from authored volley and blast fields. Allow damage-free direct contact when the same volley declares splash or a knockback ring. The merged Inspector server and StateScript suites passed 769 public tests. Three prepared tests verified the stock quick melee damage and knockback request, owner and observer projection, and stock Helix and Particle Cannon force expressions. Original-client rendering and movement remain unverified.

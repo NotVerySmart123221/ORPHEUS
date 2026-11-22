@@ -467,6 +467,38 @@ impl ProjectileFlight {
     }
 }
 
+/// A direct single shot uses the sampled command pose for the first two
+/// literal aim slots, as in the reference server's posed weapon path.
+pub(crate) fn posed_projectile_direction(
+    node: &Node,
+    direction: Vec3,
+    mut evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
+) -> Option<Vec3> {
+    let launch = node.field("m_5EC1EB38").filter(|config| !config.is_null());
+    let direct = launch.is_some_and(|config| config["$"] == "STU_239B571E");
+    if launch.is_some() && !direct {
+        return None;
+    }
+    if let Some(aim) = node.field("m_aimID").filter(|config| !config.is_null()) {
+        if !direct
+            || aim["$"] != "STUConfigVarInt"
+            || !matches!(aim["m_value"].as_i64(), Some(0 | 1))
+        {
+            return None;
+        }
+    }
+    match launch
+        .map(|config| &config["m_22CE7F30"])
+        .filter(|lift| !lift.is_null())
+    {
+        Some(lift) => lifted_direction(
+            direction,
+            crate::script_expr::to_float(&evaluate(lift).ok()?),
+        ),
+        None => Some(direction),
+    }
+}
+
 /// Native launch bias: float32 add to Y followed by normalization.
 pub(crate) fn lifted_direction(direction: Vec3, lift: f64) -> Option<Vec3> {
     if !direction.into_iter().chain([lift]).all(f64::is_finite) {

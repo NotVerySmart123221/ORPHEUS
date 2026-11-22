@@ -21,7 +21,7 @@ use crate::{
     junkenstein_messages::{DefenderMessage, DefenderSighting, SIGHTING},
     mover::Mover,
     mover_modifiers::{Modifier, ModifierKey},
-    projectile_flight::{ProjectileBallistics, authored_gravity, lifted_direction},
+    projectile_flight::{ProjectileBallistics, authored_gravity, posed_projectile_direction},
     script_codecs::CodecTable,
     script_control::LEGACY_PROJECTILE_CONTROL,
     script_expr::to_float,
@@ -380,7 +380,6 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                     if !node.is_networked()
                         || !local_prediction(node)
                         || !predicted_sync(node, &mut evaluate).ok()?
-                        || node.field("m_aimID").is_some_and(|v| !v.is_null())
                         || authored_number(
                             node.field("m_numProjectilesPerShot"),
                             1.0,
@@ -410,14 +409,8 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                     {
                         return None;
                     }
-                    let mut direction = aim_direction(&command);
-                    if let Some(lift) = node
-                        .field("m_5EC1EB38.m_22CE7F30")
-                        .filter(|lift| !lift.is_null())
-                    {
-                        let lift = to_float(&evaluate(lift).ok()?);
-                        direction = lifted_direction(direction, lift)?;
-                    }
+                    let direction =
+                        posed_projectile_direction(node, aim_direction(&command), &mut evaluate)?;
                     let stun = if flashbang {
                         let effect = node.field("m_D2D11CE9.m_modifyHealth.m_277A4ECA")?;
                         if !LEGACY_PROJECTILE_CONTROL.has_effect_marker(&evaluate(effect).ok()?) {
