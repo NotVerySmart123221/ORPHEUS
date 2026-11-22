@@ -301,6 +301,11 @@ pub(crate) struct AdmittedFlight {
     pub flight: ProjectileFlight,
 }
 
+pub(crate) struct DeathSourceFacts {
+    pub(crate) target: HealthTargetFacts,
+    pub(crate) velocity: Vec3,
+}
+
 pub(crate) enum FlightOutcome {
     Ended {
         token: ProjectileToken,
@@ -959,8 +964,13 @@ impl RoomSimulation {
             .is_some_and(|state| state.bot.dead)
     }
 
-    fn advance_stock_bots(&mut self, tick: u32) -> Vec<observed_projectiles::StockShotBatch> {
+    fn advance_stock_bots(
+        &mut self,
+        queries: &BotQueries<'_>,
+        tick: u32,
+    ) -> Vec<observed_projectiles::StockShotBatch> {
         let mut launches = Vec::new();
+        let contacts = self.movement_contact_frame();
         let entities: Vec<_> = self.by_wire.values().copied().collect();
         for entity in entities {
             let state = self
@@ -969,7 +979,23 @@ impl RoomSimulation {
                 .expect("live bot handle")
                 .into_inner();
             if let Some(script) = state.stock_script.as_mut() {
-                script.advance(tick, &state.bot);
+                let bot = &mut state.bot;
+                let prior_walk = script.walk_request();
+                if let Some((destination, speed)) = prior_walk
+                    .filter(|_| !bot.dead && !bot.is_stunned(tick) && !bot.patrol_active())
+                {
+                    if let Some(contacts) = &contacts {
+                        contacts.stage_bot(bot, tick);
+                    }
+                    if bot.has_collision() || queries.attach_ai_walk_mover(bot) {
+                        // The steering request carries a destination, not an aim override.
+                        bot.walk_to(tick, destination, speed, false);
+                    }
+                }
+                script.advance(tick, bot);
+                if prior_walk.is_some() && !bot.patrol_active() && script.walk_request().is_none() {
+                    bot.stop_objective(tick);
+                }
                 launches.extend(script.take_projectiles(tick, &state.bot));
             }
         }
@@ -2051,6 +2077,46 @@ impl RoomSimulation {
         Ok(updates)
     }
 
+    fn weapon_targets(&self, queries: &BotQueries<'_>) -> Result<Vec<WeaponTarget>, CombatError> {
+        let mut targets = Vec::with_capacity(self.by_wire.len() + self.players_by_wire.len());
+        for state in self.states() {
+            let bot = &state?.bot;
+            if !bot.dead {
+                targets.push(WeaponTarget {
+                    wire: bot.entity,
+                    team: bot.spawn.team,
+                    pose: queries.hurt_pose(bot.spawn.body, queries.target(bot)),
+                });
+            }
+        }
+        self.extend_player_weapon_targets(queries, &mut targets);
+        Ok(targets)
+    }
+
+    fn npc_weapon_targets(
+        &self,
+        queries: &BotQueries<'_>,
+    ) -> Result<Vec<WeaponTarget>, CombatError> {
+        let targets = self.weapon_targets(queries)?;
+        #[cfg(test)]
+        let targets = {
+            let mut targets = targets;
+            targets.extend(
+                self.external_targets
+                    .iter()
+                    .flatten()
+                    .filter(|target| target.alive)
+                    .map(|target| WeaponTarget {
+                        wire: target.entity,
+                        team: target.team,
+                        pose: target.pose.into(),
+                    }),
+            );
+            targets
+        };
+        Ok(targets)
+    }
+
     pub(crate) fn advance_projectiles(
         &mut self,
         queries: &BotQueries<'_>,
@@ -2108,21 +2174,13 @@ impl RoomSimulation {
         let mut continuing = Vec::with_capacity(order.len());
         for entity in order {
             // An earlier flight may have killed a target in this same tick.
-            let mut candidates =
-                Vec::with_capacity(self.by_wire.len() + self.players_by_wire.len());
-            for state in self.states() {
-                let bot = &state?.bot;
-                if eligible_bot(bot, owner.entity, context.team, queries.free_for_all()) {
-                    let pose = queries.hurt_pose(bot.spawn.body, queries.target(bot));
-                    candidates.push((bot.entity, pose));
-                }
-            }
-            self.push_player_projectile_candidates(
-                owner.entity,
-                context.team,
-                queries,
-                &mut candidates,
-            );
+            let candidates: Vec<_> = self
+                .weapon_targets(queries)?
+                .iter()
+                .filter_map(|target| {
+                    target.hostile_to(owner.entity, context.team, queries.free_for_all())
+                })
+                .collect();
             // The shooter can receive splash but never blocks its own flight.
             let shooter = if self
                 .world
@@ -2359,6 +2417,7 @@ impl RoomSimulation {
         Ok(Some(hit))
     }
 
+    #[cfg(test)]
     fn damage_bot(
         state: &mut BotState,
         amount: f64,
@@ -2436,7 +2495,7 @@ impl RoomSimulation {
             self.set_junkenstein_defenders(Arc::clone(&defenders));
             self.set_player_defenders(defenders);
         }
-        let stock_launches = self.advance_stock_bots(tick);
+        let stock_launches = self.advance_stock_bots(queries, tick);
         if !stock_launches.is_empty() {
             self.activate_combat();
         }
@@ -2482,6 +2541,12 @@ impl RoomSimulation {
                         .collect(),
                 )
             });
+        let npc_hitscan_targets = if has_roster && states.iter().any(|state| state.enemy.is_some())
+        {
+            self.npc_weapon_targets(queries)?
+        } else {
+            Vec::new()
+        };
         let mut retired = Vec::new();
         let mut launched = Vec::new();
         let mut enemy_damage = Vec::new();
@@ -2679,12 +2744,14 @@ impl RoomSimulation {
                     launched.extend(shots.projectiles);
                     for volley in shots.hitscan {
                         for pellet in volley.pellets {
-                            let targets = roster
-                                .iter()
-                                .flat_map(|targets| targets.iter())
-                                .filter(|target| target.alive && target.team != enemy.binding.team)
-                                .map(|target| (target.entity, target.pose));
-                            match pellet.resolve(targets, |origin, direction, reach| {
+                            let targets = npc_hitscan_targets.iter().filter_map(|target| {
+                                target.hostile_to(
+                                    bot.entity,
+                                    enemy.binding.team,
+                                    queries.free_for_all(),
+                                )
+                            });
+                            match pellet.resolve_combat(targets, |origin, direction, reach| {
                                 queries.hitscan_wall(origin, direction, reach)
                             }) {
                                 Ok(Some(impact)) => {
@@ -2707,6 +2774,7 @@ impl RoomSimulation {
                                     enemy_damage.push(crate::script_enemy::EnemyDamage {
                                         source: bot.entity,
                                         target: impact.entity,
+                                        impact: Some(impact),
                                         amount: enemy
                                             .scripts
                                             .outgoing_damage(impact.damage, &volley.damage_tags),
@@ -2831,12 +2899,7 @@ impl RoomSimulation {
             }
         }
         self.collect_local_health_events();
-        self.advance_enemy_projectiles(
-            queries,
-            roster.as_deref().map_or(&[], Vec::as_slice),
-            tick,
-            &mut enemy_damage,
-        )?;
+        self.advance_enemy_projectiles(queries, tick, &mut enemy_damage)?;
         self.spawn_stock_shots(stock_launches);
         self.enemy_projectiles.extend(
             launched
@@ -2844,7 +2907,7 @@ impl RoomSimulation {
                 .map(|projectile| self.world.spawn(projectile).id()),
         );
         for hit in enemy_damage {
-            if !self.settle_health(
+            if !self.settle_health_with_impact(
                 hit.target,
                 HealthEffect::Damage(hit.amount),
                 Death {
@@ -2853,6 +2916,7 @@ impl RoomSimulation {
                     killer: hit.source,
                 },
                 now,
+                hit.impact.as_ref(),
             )? {
                 self.external_enemy_damage.push(hit);
             }
@@ -2960,14 +3024,18 @@ impl RoomSimulation {
     fn advance_enemy_projectiles(
         &mut self,
         queries: &BotQueries<'_>,
-        roster: &[crate::script_enemy::EnemyTarget],
         tick: u32,
         damage: &mut Vec<crate::script_enemy::EnemyDamage>,
     ) -> Result<(), CombatError> {
         use crate::script_enemy::{EnemyDamage, EnemyProjectile};
 
+        if self.enemy_projectiles.is_empty() {
+            return Ok(());
+        }
+        let targets = self.npc_weapon_targets(queries)?;
         let mut children = Vec::new();
         let mut impulses = Vec::new();
+        let mut candidates = Vec::with_capacity(targets.len());
         for handle in std::mem::take(&mut self.enemy_projectiles) {
             let seed = self
                 .world
@@ -2987,18 +3055,17 @@ impl RoomSimulation {
             } else {
                 None
             };
+            candidates.clear();
+            candidates.extend(targets.iter().filter_map(|target| {
+                target.hostile_to(seed.source, seed.team, queries.free_for_all())
+            }));
             let mut projectile = self
                 .world
                 .get_mut::<EnemyProjectile>(handle)
                 .expect("live enemy projectile");
-            let targets: Vec<_> = roster
-                .iter()
-                .filter(|target| target.alive && target.team != projectile.team)
-                .map(|target| (target.entity, target.pose))
-                .collect();
             match projectile.flight.advance_combat(
                 tick,
-                &targets,
+                &candidates,
                 shooter_pose,
                 |origin, direction, reach, radius| {
                     queries.projectile_wall(origin, direction, reach, radius)
@@ -3030,6 +3097,7 @@ impl RoomSimulation {
                             damage.push(EnemyDamage {
                                 source,
                                 target: impact.entity,
+                                impact: Some(impact),
                                 amount: shooter.map_or(impact.damage, |enemy| {
                                     enemy.scripts.outgoing_damage(impact.damage, &tags)
                                 }),
@@ -3208,6 +3276,24 @@ fn check_bot_identity(wire: u32, state: &BotState) -> Result<(), CombatError> {
         });
     }
     Ok(())
+}
+
+struct WeaponTarget {
+    wire: u32,
+    team: u8,
+    pose: crate::game_hitscan::HurtPose,
+}
+
+impl WeaponTarget {
+    fn hostile_to(
+        &self,
+        source: u32,
+        team: u8,
+        free_for_all: bool,
+    ) -> Option<(u32, crate::game_hitscan::HurtPose)> {
+        eligible_target(self.wire, true, self.team, source, team, free_for_all)
+            .then_some((self.wire, self.pose))
+    }
 }
 
 fn eligible_target(

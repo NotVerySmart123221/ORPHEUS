@@ -158,6 +158,7 @@ pub(super) struct BodyWorld {
     pub(super) defenders: Arc<[u32]>,
     pub(super) sightings: Vec<DefenderSighting>,
     pub(super) sighting_source: Option<SightingSource>,
+    pub(super) death_source: Option<crate::game_combat::DeathSourceFacts>,
     pub(super) cinematic_aim: Option<(Site, [i32; 2])>,
     pub(super) facing_claims: indexmap::IndexMap<Site, crate::script_init::AiFacing>,
     pub(super) deadeye_scene: DeadeyeScene,
@@ -341,6 +342,13 @@ impl World for BodyWorld {
     }
 
     fn entity_variable(&mut self, entity: u32, id: u32) -> Option<Value> {
+        if let Some(source) = self
+            .death_source
+            .as_ref()
+            .filter(|source| source.target.target == entity)
+        {
+            return source.target.script_state.read(id);
+        }
         if entity != GAME_MODE_ENTITY {
             return self
                 .deadeye_scene
@@ -389,6 +397,13 @@ impl World for BodyWorld {
         }
         if entity == self.entity {
             return VelocityQuery::Present(self.movement.velocity);
+        }
+        if let Some(source) = self
+            .death_source
+            .as_ref()
+            .filter(|source| source.target.target == entity)
+        {
+            return VelocityQuery::Present(source.velocity);
         }
         self.deadeye_scene
             .targets
@@ -468,13 +483,14 @@ impl World for BodyWorld {
     fn queue_contact_damage(
         &mut self,
         site: Site,
+        source_frame: u32,
         damage: f64,
         changes: &[(u32, Option<Vec3>)],
     ) -> bool {
         self.is_player_site(site)
             && self.spatial_frame.as_deref().is_some_and(|frame| {
                 self.script_requests
-                    .queue_contact_damage(frame, damage, changes)
+                    .queue_contact_damage(frame, source_frame, damage, changes)
             })
     }
 
@@ -822,6 +838,13 @@ impl World for BodyWorld {
             return None;
         }
         if entity != self.entity {
+            if let Some(source) = self
+                .death_source
+                .as_ref()
+                .filter(|source| source.target.target == entity)
+            {
+                return source.target.tags.presence(tag);
+            }
             return self
                 .sighting_source
                 .filter(|source| source.entity == entity)
@@ -860,8 +883,23 @@ impl World for BodyWorld {
             self.sighting_source
                 .filter(|source| source.entity == entity)
                 .and_then(|source| source.filter_flags)
+                .or_else(|| {
+                    self.death_source
+                        .as_ref()
+                        .filter(|source| source.target.target == entity)
+                        .and_then(|source| source.target.filter_flags)
+                })
                 .or_else(|| self.spatial_frame.as_deref()?.actor_filter_flags(entity))
         }
+    }
+
+    fn scene_filter_policy(
+        &self,
+        site: Site,
+        filter: &Json,
+    ) -> Option<crate::script_expr::SceneFilterPolicy> {
+        let source = self.death_source.as_ref()?;
+        self.settled_scene_filter_policy(site, filter, &source.target)
     }
 
     fn settled_scene_filter_policy(

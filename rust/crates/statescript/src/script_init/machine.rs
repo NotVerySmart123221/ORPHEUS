@@ -22,7 +22,7 @@ use super::{
     HostHealthContext, MAX_PENDING_EVENTS, RoomMessage,
     shapes::stored,
     types::{
-        InitFault, PendingTimer, RandomCheckpoint, ShotEvent, Snapshot, SpawnSearchKey,
+        InitFault, PendingTimer, RandomCheckpoint, ReportedShot, Snapshot, SpawnSearchKey,
         StackBinding, StateKind,
     },
 };
@@ -284,7 +284,7 @@ pub(super) struct Machine {
     pub(super) links: BTreeMap<VarKey, Vec<VariableLink>>,
     pub(super) volleys: BTreeMap<StateKey, Volley>,
     pub(super) movement_modifiers: BTreeMap<ModifierKey, Modifier>,
-    pub(super) shots: Vec<ShotEvent>,
+    pub(super) shots: Vec<ReportedShot>,
     pub(super) permit_weapon_shots: bool,
     pub(super) ability_presses: BTreeMap<StateKey, Vec<AbilityPress>>,
     next_public_id: u32,

@@ -153,6 +153,220 @@ fn spawn_player(room: &mut RoomSimulation, generation: u64) -> BodyId {
 }
 
 #[test]
+fn authored_player_death_preserves_attribution_without_advancing_input() {
+    use crate::script_player::fixture_body_factory_with_nodes;
+    use serde_json::{Value as Json, json};
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/player-authored-death-v1.json"
+    ))
+    .unwrap();
+    let params: Vec<_> = fixture["bindings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|binding| {
+            json!({
+                "m_B5051BCE": binding["parameter"],
+                "m_out_Var": {
+                    "$": "STUConfigVarDynamic",
+                    "m_60DB8F99": 1,
+                    "m_identifier": binding["variable"]
+                }
+            })
+        })
+        .collect();
+    let entry = json!({
+        "pos":0, "uid":0, "rid":0, "remote":-1, "state":null,
+        "class":"STUStatescriptEntryGameMessage",
+        "client_only":false, "server_only":false,
+        "fields":{"m_gameMessage":{"m_gameMessage":fixture["event"]}, "m_params":params}
+    });
+    let bots = fixture_bots();
+    let killer = bots[0].entity;
+    let mut room = RoomSimulation::new(bots).unwrap();
+    let (factory, spawn) = fixture_body_factory_with_nodes(vec![entry]);
+    let id = BodyId {
+        entity: spawn.entity,
+        generation: 1,
+    };
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        spawn.pose.position,
+        0,
+        0x08,
+    )
+    .unwrap();
+    let runtime = factory.start(spawn).unwrap();
+    let health = crate::game_replication::OwnerBodyRuntime::vitals(&runtime)
+        .unwrap()
+        .total();
+    room.spawn_player_body(PlayerBodyState::new(
+        id,
+        spawn.controller,
+        spawn.slot,
+        0,
+        SOLDIER,
+        mover,
+        Some(Box::new(runtime)),
+        spawn.frame,
+        None,
+    ))
+    .unwrap();
+    let death = Death {
+        time: 2.0,
+        frame: spawn.frame + 12,
+        killer,
+    };
+    let mut impact = fixture_impact(id.entity, health * 2.0);
+    impact.critical = true;
+    let expected_loadout = 0x0b90_0000_0000_0041;
+    impact.loadout = Some(expected_loadout);
+    let (_, wounded, _) = room
+        .damage_player_body_by_wire(id, health / 2.0, death, None)
+        .unwrap();
+    assert!(!wounded.killed);
+    assert!(
+        !room
+            .player_body(id)
+            .unwrap()
+            .projection()
+            .unwrap()
+            .snapshot
+            .variables
+            .contains_key(&101)
+    );
+    let now = std::time::Duration::from_millis(2000);
+    assert!(
+        room.settle_health_with_impact(
+            id.entity,
+            HealthEffect::Damage(health),
+            death,
+            now,
+            Some(&impact)
+        )
+        .unwrap()
+    );
+    let state = room.player_body(id).unwrap();
+    assert!(!state.alive());
+    let death_snapshot = state.projection().unwrap().snapshot;
+    let variables = &death_snapshot.variables;
+    assert_eq!(variables.get(&101), Some(&Value::Entity(killer)));
+    assert_eq!(variables.get(&102), Some(&Value::Bool(true)));
+    assert_eq!(variables.get(&103), Some(&Value::Asset(expected_loadout)));
+    assert_eq!(variables.get(&104), Some(&Value::Array(Vec::new())));
+    assert_eq!(state.frame, spawn.frame);
+    let deaths = room.take_player_deaths();
+    assert_eq!(deaths.len(), 1);
+    assert_eq!(deaths[0].source, killer);
+    assert!(deaths[0].killed_by);
+
+    let other = Death { killer: 0, ..death };
+    let (_, unchanged, _) = room
+        .damage_player_body_by_wire(id, health, other, None)
+        .unwrap();
+    assert!(!unchanged.killed);
+    assert_eq!(
+        room.player_body(id)
+            .unwrap()
+            .projection()
+            .unwrap()
+            .snapshot
+            .variables
+            .get(&101),
+        Some(&Value::Entity(killer)),
+    );
+}
+
+#[test]
+#[ignore = "requires a prepared 104319 stock owner graph and codec catalog"]
+fn prepared_npc_kill_projects_the_player_death_state() {
+    use crate::{
+        game_clock::FIRST_TICK, game_content::GameMap, game_instance::RETAIL_QUANTA,
+        match_scene::team_bit, scene_assets::SceneAssets, script_player::OwnerBodySpawn,
+        script_snapshot_wire::View,
+    };
+    let path = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let assets = SceneAssets::load(path).unwrap();
+    let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
+    let hero = assets.heroes().get(SOLDIER).unwrap();
+    let mover = scene.player_spawn_mover(hero.body, 0).unwrap();
+    let spawn = OwnerBodySpawn {
+        slot: 0,
+        controller: 0xa000_0100,
+        entity: 0xa000_0101,
+        body_filter: team_bit(0).unwrap(),
+        frame: FIRST_TICK,
+        pose: mover.pose(),
+        eye_position: crate::game_combat::script_eye_position(hero.guid, &mover),
+        skin: 0,
+        quanta: RETAIL_QUANTA,
+    };
+    let runtime = scene.owner_body_runtime(hero, spawn).unwrap().unwrap();
+    let id = BodyId {
+        entity: spawn.entity,
+        generation: 1,
+    };
+    let room = scene.simulation_mut();
+    let killer = room
+        .bodies()
+        .unwrap()
+        .find(|bot| bot.spawn.team == 1)
+        .unwrap()
+        .entity;
+    room.spawn_player_body(PlayerBodyState::new(
+        id,
+        spawn.controller,
+        spawn.slot,
+        0,
+        hero.guid,
+        mover,
+        Some(runtime),
+        FIRST_TICK,
+        None,
+    ))
+    .unwrap();
+    assert!(
+        room.settle_health(
+            id.entity,
+            HealthEffect::Damage(f64::MAX),
+            Death {
+                time: 0.16,
+                frame: FIRST_TICK + 10,
+                killer
+            },
+            std::time::Duration::from_millis(160),
+        )
+        .unwrap()
+    );
+    let state = room.player_body(id).unwrap();
+    assert_eq!(state.frame, FIRST_TICK);
+    let projection = state
+        .projection()
+        .expect("player death retained the StateScript runtime");
+    let (&instance_id, instance) = projection
+        .snapshot
+        .instances
+        .iter()
+        .find(|(_, instance)| instance.graph == 0x01cf)
+        .unwrap();
+    assert_eq!(instance.variables.get(&392), Some(&Value::Entity(killer)));
+    let observer = projection
+        .encoder
+        .project(projection.snapshot, View::Observer)
+        .unwrap();
+    let states = observer.instance_states(instance_id).unwrap();
+    assert!(states.contains(&108), "observer states: {states:?}");
+    projection.encoder.full(&observer).unwrap();
+    let owner = projection
+        .encoder
+        .project(projection.snapshot, View::Owner)
+        .unwrap();
+    projection.encoder.full(&owner).unwrap();
+}
+
+#[test]
 fn admitted_health_request_cannot_credit_a_replacement_source() {
     let Contract { input, expected } = contract();
     let bots = fixture_bots();

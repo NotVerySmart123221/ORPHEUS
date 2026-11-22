@@ -797,7 +797,12 @@ impl Room {
                 })
             });
             if let Some(peer) = peer {
-                peer.queue_player_cue(cue.listener, cue.source, cue.notice);
+                match cue.notice {
+                    CombatNotice::Hit { .. } | CombatNotice::Elimination { .. } => {
+                        peer.queue_shooter_notice(cue.listener, cue.notice);
+                    }
+                    _ => peer.queue_player_cue(cue.listener, cue.source, cue.notice),
+                }
             }
         }
         if junkenstein {

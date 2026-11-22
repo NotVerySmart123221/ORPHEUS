@@ -11,7 +11,7 @@ use std::{
 
 use crate::bits::{BitError, BitWriter};
 use crate::script_codecs::{Codec, CodecTable, PayloadError, PayloadMode, StatePayload};
-use crate::script_expr::Variable;
+use crate::script_expr::{Scope, Variable};
 use crate::script_graph::{Graph, GraphStore};
 pub use crate::script_init::FrameCallout;
 use crate::script_init::{ChasePayload, FrameAction, ShotEvent, Snapshot, StackBinding, StateKind};
@@ -58,6 +58,18 @@ pub struct ProjectedSnapshot {
     pub(super) callout: u32,
     pub(super) callouts: Vec<FrameAction>,
     pub(super) emit_events: bool,
+}
+
+impl FrozenVolley {
+    pub(crate) fn presentation_keys(&self) -> impl Iterator<Item = (u16, u32)> + '_ {
+        self.presentation.iter().map(|(variable, _)| {
+            let owner = match variable.scope {
+                Scope::Entity => 0,
+                Scope::Instance => self.event.instance,
+            };
+            (owner, variable.id)
+        })
+    }
 }
 
 impl ProjectedSnapshot {
@@ -187,7 +199,11 @@ impl ProjectedSnapshot {
             .map(|volley| volley.identity)
     }
 
-    pub(crate) fn freeze_volley(&self, event: ShotEvent) -> Option<FrozenVolley> {
+    pub(crate) fn freeze_volley(
+        &self,
+        event: ShotEvent,
+        presentation: Vec<(Variable, Value)>,
+    ) -> Option<FrozenVolley> {
         let instance = self.instances.get(&event.instance)?;
         let state = instance.states.get(&event.raw_state)?;
         let identity = state.volley?.identity;
@@ -206,12 +222,20 @@ impl ProjectedSnapshot {
             parent: instance.parent,
             state: state.clone(),
             count: u16::try_from(*count).ok()?,
+            presentation: presentation
+                .into_iter()
+                .filter(|(variable, value)| {
+                    !matches!(value, Value::Null | Value::Map(_) | Value::IdentifierMap(_))
+                        && !(variable.scope == Scope::Entity
+                            && self.entity_exclusions.contains(&variable.id))
+                })
+                .collect(),
         })
     }
 
-    pub(crate) fn retain_volley(&mut self, volley: &FrozenVolley) {
+    pub(crate) fn retain_volley(&mut self, volley: &FrozenVolley) -> bool {
         if self.entity != volley.event.entity {
-            return;
+            return false;
         }
         if let Some(instance) = self
             .instances
@@ -223,6 +247,16 @@ impl ProjectedSnapshot {
             instance
                 .states
                 .insert(volley.event.raw_state, volley.state.clone());
+            for (variable, value) in &volley.presentation {
+                let values = match variable.scope {
+                    Scope::Entity => &mut self.variables.values,
+                    Scope::Instance => &mut instance.variables.values,
+                };
+                values.insert(variable.id, value.clone());
+            }
+            true
+        } else {
+            false
         }
     }
 
@@ -235,8 +269,16 @@ impl ProjectedSnapshot {
                 .filter(|instance| {
                     instance.graph == event.graph && instance.parent == volley.parent
                 })
-                .and_then(|instance| instance.states.get(&event.raw_state))
-                .is_some_and(|state| state == &volley.state)
+                .is_some_and(|instance| {
+                    instance.states.get(&event.raw_state) == Some(&volley.state)
+                        && volley.presentation.iter().all(|(variable, value)| {
+                            let values = match variable.scope {
+                                Scope::Entity => &self.variables.values,
+                                Scope::Instance => &instance.variables.values,
+                            };
+                            values.get(&variable.id) == Some(value)
+                        })
+                })
     }
 
     #[cfg(feature = "inspector")]
@@ -310,6 +352,7 @@ pub(crate) struct FrozenVolley {
     pub(crate) count: u16,
     parent: Option<(u16, u16)>,
     state: ProjectedState,
+    presentation: Vec<(Variable, Value)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

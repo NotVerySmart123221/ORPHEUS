@@ -29,7 +29,7 @@ use crate::{
         MAX_INIT_WORK, MovementSample, OWNER_HEALTH, RoomCue, RoomMessage, Root, Site,
         TargetTagEffect, TargetTagEffects, World,
     },
-    script_runtime::{FRAME_MS, held_button_mask},
+    script_runtime::held_button_mask,
     script_snapshot_wire::{SceneProjection, SnapshotEncoder, View},
     script_wire::{Value, Variables},
     vitals::{Death, PoolKind, Vitals},
@@ -40,7 +40,6 @@ use crate::{
 mod tests;
 
 const HUD_HEALTH: u32 = 1732;
-const DIED_MESSAGE: u64 = 0x0240_0000_0000_003e;
 const RESET_MESSAGE: u64 = 0x0240_0000_0000_0013;
 const YAW_UNITS: f64 = 65_536.0;
 
@@ -62,6 +61,7 @@ pub(super) struct StockBotWorld {
     position: [f64; 3],
     forward: [f64; 3],
     movement: Option<MovementSample>,
+    walk_speed: f64,
     vitals: Vitals,
     target_tag_effects: TargetTagEffects,
     display_names: HashMap<Site, u64>,
@@ -338,6 +338,11 @@ impl World for StockBotWorld {
         }
     }
 
+    fn ai_walk_speed(&self, site: Site) -> Option<f64> {
+        (site.entity == self.entity && !self.dead && self.placement_graphs.contains(&site.graph))
+            .then_some(self.walk_speed)
+    }
+
     fn selects_ai_behavior(&mut self, site: Site) -> Option<bool> {
         (site.entity == self.entity).then(|| self.placement_graphs.contains(&site.graph))
     }
@@ -487,6 +492,7 @@ impl StockBotScript {
             position: bot.position,
             forward: forward_from_yaw(bot.yaw),
             movement: sample_bot_movement(bot, tick),
+            walk_speed: bot.walk_speed(),
             vitals: if has_body_graph {
                 Vitals::empty()
             } else {
@@ -606,25 +612,26 @@ impl StockBotScript {
             self.stop_script(error);
             return;
         }
-        let parameters = Variables::from([
-            (0x12, Value::Entity(source.killer)),
-            (0x95, Value::Bool(critical)),
-            (0x3e6, loadout.map_or(Value::Null, Value::Asset)),
-            (0x3e7, Value::Array(vec![])),
-        ]);
-        let queued = if u64::from(source.frame) * FRAME_MS >= self.component.now_ms() {
-            self.component.queue_frame_message_from(
-                source.frame,
-                source.killer,
-                DIED_MESSAGE,
-                parameters,
-            )
-        } else {
-            self.component
-                .queue_entity_message_from(source.killer, DIED_MESSAGE, parameters)
-        };
-        let result = queued.and_then(|_| self.component.run_now(&mut self.world));
+        let result = self
+            .component
+            .queue_body_death(source.killer, critical, loadout, Some(source.frame))
+            .and_then(|_| self.component.run_now(&mut self.world));
         self.check_projection(result);
+    }
+
+    pub(super) fn target_tags(&self) -> crate::script_init::TargetTagSnapshot {
+        let base = self.graphs.entity_body(self.world.body);
+        self.world
+            .target_tag_effects
+            .snapshot(base.and_then(|body| body.target_tags.as_ref()))
+    }
+
+    pub(super) fn script_state(&self) -> crate::script_entity_state::EntityScriptState {
+        use crate::script_entity_state::EntityScriptState;
+        self.projection()
+            .map_or(EntityScriptState::Unavailable, |projection| {
+                EntityScriptState::Running(Arc::new(projection.snapshot.variables.clone()))
+            })
     }
 
     pub(super) fn set_spatial_frame(&mut self, frame: Arc<RoomSpatialFrame>) {
@@ -648,6 +655,22 @@ impl StockBotScript {
         } else {
             Vec::new()
         }
+    }
+
+    pub(super) fn walk_request(&self) -> Option<([f64; 3], f64)> {
+        if self.faulted || self.world.dead || self.world.placement_graphs.is_empty() {
+            return None;
+        }
+        let mut requests = self
+            .component
+            .snapshot()?
+            .instances
+            .values()
+            .filter(|instance| instance.is_server_only())
+            .flat_map(|instance| instance.states.values())
+            .filter_map(|state| state.move_request());
+        let request = requests.next()?;
+        requests.next().is_none().then_some(request)
     }
 
     pub(super) fn advance(&mut self, tick: u32, bot: &Bot) {
@@ -681,7 +704,7 @@ impl StockBotScript {
     }
 
     pub(super) fn take_projectiles(&mut self, tick: u32, bot: &Bot) -> Vec<StockShotBatch> {
-        let shots = self.component.take_shots().unwrap_or_default();
+        let shots = self.component.take_reported_shots().unwrap_or_default();
         if self.faulted || bot.dead || bot.is_stunned(tick) {
             return Vec::new();
         }
@@ -690,7 +713,8 @@ impl StockBotScript {
         let forward = self.world.forward;
         let mut projectiles = Vec::new();
         let mut projected = None;
-        for shot in shots {
+        for report in shots {
+            let shot = report.event;
             let Some(node) = self.component.shot_node(&shot) else {
                 continue;
             };
@@ -720,7 +744,7 @@ impl StockBotScript {
                                 .ok()
                         })
                         .as_ref()?;
-                    let volley = snapshot.freeze_volley(shot)?;
+                    let volley = snapshot.freeze_volley(shot, report.presentation)?;
                     Some(ObservedShot::new(
                         volley, definition, origin, forward, tick, lifetime,
                     ))

@@ -886,23 +886,10 @@ impl EnemyScripts {
     ) -> Result<(), String> {
         self.clear_pending_script_motion();
         self.body.set_owner_dead(true);
-        let parameters = Variables::from([
-            (0x12, Value::Entity(source.killer)),
-            (0x95, Value::Bool(critical)),
-            (0x3e6, loadout.map_or(Value::Null, Value::Asset)),
-            (0x3e7, Value::Array(vec![])),
-        ]);
-        const DIED: u64 = 0x0240_0000_0000_003e;
-        if u64::from(source.frame) * crate::script_runtime::FRAME_MS >= self.body.now_ms() {
-            self.body
-                .queue_frame_message_from(source.frame, source.killer, DIED, parameters)
-        } else {
-            // Damage may land after this body's same-frame script update.
-            self.body
-                .queue_entity_message_from(source.killer, DIED, parameters)
-        }
-        .map(|_| ())
-        .map_err(|error| error.to_string())
+        self.body
+            .queue_body_death(source.killer, critical, loadout, Some(source.frame))
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 
     pub fn advance(

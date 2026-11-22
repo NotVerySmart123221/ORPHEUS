@@ -6,7 +6,7 @@ use orpheus_runtime::format::parse_guid;
 use serde_json::Value as Json;
 
 use crate::{
-    script_expr::{self, truthy},
+    script_expr::{self, Scope, Variable, truthy},
     script_graph::{Node, asset_guid},
     script_modifiers::{Modifier, ModifierKey, Operation, SPEED_SLOT, narrow},
     script_runtime::{FRAME_MS, GAME_MODE_ENTITY, MAX_MOVEMENT_AXIS, PoolKind},
@@ -15,13 +15,14 @@ use crate::{
 
 use super::super::{
     ABILITY_PUSHED, ABILITY_RUNNING, HUD_HEALTH, HUD_MAX_HEALTH, LINK_PRIORITY, MAX_PENDING_SHOTS,
-    MAX_PLUG_DEPTH, OWNER_HEALTH, SCRIPT_SOURCE,
+    MAX_PLUG_DEPTH, OWNER_HEALTH, SCRIPT_SOURCE, SUBGRAPH_STATES,
     machine::{Event, LinkValue, StateKey, VarKey, VariableLink, Volley},
     shapes::{
         array_field, chase_lerp, chase_step, chase_value, configured, field, immediate_self_damage,
-        named_temporary_shield, pool_kind, pool_number, same, shot_delay, source_key, stored,
+        named_temporary_shield, pool_kind, pool_number, raw_indices, same, shot_delay, source_key,
+        stored,
     },
-    types::{ChasePayload, InitFault, Issue, ShotEvent, StateKind},
+    types::{ChasePayload, InitFault, Issue, ReportedShot, ShotEvent, StateKind},
     world::{
         AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, Site, TargetTagEffect,
         World,
@@ -1957,30 +1958,100 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             volley.reported = first;
             return Ok(());
         }
-        while volley.reported < volley.planned {
-            let time_ms = volley
-                .start_ms
-                .saturating_add(shot_delay(volley.reported, volley.rate));
+        let start_ms = volley.start_ms;
+        let rate = volley.rate;
+        let graph = instance.graph;
+        let mut ordinal = volley.reported;
+        let planned = volley.planned;
+        let mut presentation = None;
+        while ordinal < planned {
+            let time_ms = start_ms.saturating_add(shot_delay(ordinal, rate));
             if time_ms > self.machine.now_ms {
                 break;
             }
             if self.machine.shots.len() == MAX_PENDING_SHOTS {
                 return Err(InitFault::PendingShots);
             }
-            self.machine.shots.push(ShotEvent {
-                entity: self.machine.snapshot.entity,
-                instance: key.instance,
-                graph: instance.graph,
-                raw_state: key.raw,
-                frame: (time_ms / FRAME_MS) as u32,
-                time_ms,
-                activation,
-                activation_ms: volley.start_ms,
-                ordinal: volley.reported,
+            let presentation = presentation.get_or_insert_with(|| self.volley_presentation(key));
+            self.machine.shots.push(ReportedShot {
+                event: ShotEvent {
+                    entity: self.machine.snapshot.entity,
+                    instance: key.instance,
+                    graph,
+                    raw_state: key.raw,
+                    frame: (time_ms / FRAME_MS) as u32,
+                    time_ms,
+                    activation,
+                    activation_ms: start_ms,
+                    ordinal,
+                },
+                presentation: presentation.clone(),
             });
-            volley.reported += 1;
+            ordinal += 1;
         }
+        self.machine
+            .volleys
+            .get_mut(&key)
+            .expect("reported volley")
+            .reported = ordinal;
         Ok(())
+    }
+
+    fn volley_presentation(&self, key: StateKey) -> Vec<(Variable, Value)> {
+        let instance = &self.machine.snapshot.instances[&key.instance];
+        if instance.is_server_only() {
+            return Vec::new();
+        }
+        let graph = self.graph(key.instance);
+        let Some(plug) = graph
+            .state(usize::from(key.raw))
+            .and_then(|node| node.field("m_subgraphPlug"))
+        else {
+            return Vec::new();
+        };
+        let children = array_field(plug, SUBGRAPH_STATES);
+        if children.is_empty() {
+            return Vec::new();
+        }
+        instance
+            .states
+            .iter()
+            .filter(|(_, state)| state.active)
+            .filter_map(|(&raw, _)| graph.state(usize::from(raw)))
+            .filter(|node| {
+                node.class == "STUStatescriptStateDataFlowMapping"
+                    && node.is_networked()
+                    && graph.remote_positions().contains(&node.pos)
+            })
+            .filter_map(|node| {
+                script_expr::lvalue(field(&node.fields, "m_answer"))
+                    .ok()
+                    .flatten()
+            })
+            .filter(|variable| {
+                let scope = u8::from(variable.scope == Scope::Entity);
+                graph
+                    .sync_vars
+                    .iter()
+                    .any(|sync| sync.0 == Some(variable.id) && sync.1 == scope)
+                    && (variable.scope == Scope::Entity
+                        || graph
+                            .owner_only_instance_vars()
+                            .binary_search(&variable.id)
+                            .is_err())
+                    && !graph.server_only_variables().any(|id| id == variable.id)
+            })
+            .filter_map(|variable| {
+                let source = source_key(key.instance, variable);
+                let top = self.machine.links.get(&source)?.last()?;
+                if top.state.instance != key.instance
+                    || !raw_indices(children).any(|raw| raw == top.state.raw)
+                {
+                    return None;
+                }
+                Some((variable, self.machine.value(source, None)))
+            })
+            .collect()
     }
 
     pub(in crate::script_init) fn finish_volley(
@@ -2486,6 +2557,17 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         key: StateKey,
         node: &Node,
     ) -> Result<(), InitFault> {
+        if node.class == "STU_194D744E" {
+            let site = self.site(key.instance, node);
+            let destination =
+                self.evaluate(key.instance, node, field(&node.fields, "m_BD2A95EE"), None);
+            if let (Some(Value::Vector(destination)), Some(speed)) =
+                (destination, self.world.ai_walk_speed(site))
+            {
+                self.set_move_request(key, destination, speed);
+            }
+            return Ok(());
+        }
         let speed_config = field(&node.fields, "m_speed");
         if field(&node.fields, "m_B060F688").as_u64() != Some(0)
             || speed_config.is_null()
@@ -2510,6 +2592,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             Some(Value::Float(f)) => f,
             _ => return Ok(()),
         };
+        self.set_move_request(key, destination, speed);
+        Ok(())
+    }
+
+    fn set_move_request(&mut self, key: StateKey, destination: [f64; 3], speed: f64) {
         let max_axis = MAX_MOVEMENT_AXIS;
         if speed > 0.0
             && speed <= max_axis
@@ -2523,6 +2610,5 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 };
             }
         }
-        Ok(())
     }
 }

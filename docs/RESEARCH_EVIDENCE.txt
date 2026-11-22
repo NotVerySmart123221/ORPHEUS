@@ -166,3 +166,14 @@ I. Local target-build resource extraction (2026-11-05)
 
   Static resource and chunk evidence still does not establish comp43 replication fields,
   ClientInCombat 25000 semantics or original client presentation. Those remain open work.
+
+Combined Practice Range combat acceptance (104319)
+  The local map-scripts archive lists 79 graphs reachable from the Practice Range.
+  Use its placement and instance-data references to locate authored behavior.
+  Reachability alone does not establish that a node executed at runtime.
+
+  The local ClientInCombat notes identify 25001 as hit UI and 25000 as a combat
+  event. Keep victim hurt cues scoped to the damaged actor, and require separate
+  original-client evidence for the shooter's critical-hit sound. Settled critical
+  flags and the bot death pulse have prepared server coverage. The original-client
+  critical icon, sound, and impact presentation remain open.

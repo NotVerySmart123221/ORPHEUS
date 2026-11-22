@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::script_codecs::{Codec, PayloadError, StatePayload};
-use crate::script_graph::{Graph, Node, asset_guid};
+use crate::script_graph::{Graph, Node};
 use crate::script_init::{Issue, Snapshot, StackBinding, State, StateKind};
 use crate::script_wire::{Binding, Value, Variables};
 
@@ -76,7 +76,7 @@ impl<'a> SnapshotEncoder<'a> {
                 continue;
             }
             let graph = self.graph(id, instance.graph)?;
-            let exclusions = server_only_variables(graph);
+            let exclusions = graph.server_only_variables().collect();
             let variables =
                 self.project_variables(snapshot, id, &instance.variables, &exclusions, view)?;
             if frozen.is_none() {
@@ -445,7 +445,7 @@ impl<'a> SnapshotEncoder<'a> {
                 );
             }
             let mut variables = ProjectedVariables::default();
-            let excluded = server_only_variables(graph);
+            let excluded: BTreeSet<_> = graph.server_only_variables().collect();
             for (&key, value) in &instance.variables {
                 // Preserve the manager's resolved 0695 inputs alongside its
                 // sequence clock. Its observer listener does not run the
@@ -542,18 +542,6 @@ fn server_only_instance(snapshot: &Snapshot, id: u16) -> bool {
         .instances
         .get(&id)
         .is_some_and(|instance| instance.is_server_only())
-}
-
-fn server_only_variables(graph: &Graph) -> BTreeSet<u32> {
-    graph
-        .fields
-        .get("m_9CEC6985")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(asset_guid)
-        .map(|guid| u32::from(guid as u16))
-        .collect()
 }
 
 fn presenter(node: &Node) -> bool {

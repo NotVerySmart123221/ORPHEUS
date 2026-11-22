@@ -16,7 +16,7 @@ use crate::{
     accounts::parse_guid,
     actor_voice::ActorVoiceCatalog,
     bits::BitWriter,
-    collision_cache::{chunk_guid, read_movement_cache},
+    collision_cache::{RayCacheIdentity, chunk_guid, read_movement_cache, read_ray_cache},
     collision_index::TriangleIndex,
     collision_scene::CollisionScene,
     combat_voice::CombatVoiceCatalog,
@@ -75,7 +75,11 @@ pub(crate) const MOVER_CATEGORY: u16 = 0x18;
 const OWNER_PROBE_CONTROLLER: u32 = 0xa000_0100;
 
 fn mover_category(map: &GameMap, team: u8) -> u16 {
-    match (map.free_for_all, team) {
+    mover_category_for_team(map.free_for_all, team)
+}
+
+fn mover_category_for_team(free_for_all: bool, team: u8) -> u16 {
+    match (free_for_all, team) {
         (false, 0) => 0x08,
         (false, 1) => 0x10,
         _ => MOVER_CATEGORY,
@@ -147,6 +151,8 @@ enum SceneOwnerPreparationError {
 struct MapCollision {
     movement_cache: String,
     ground: Arc<CollisionScene>,
+    combat_rays: Arc<CollisionScene>,
+    combat_sweeps: Option<Arc<ContactWorld>>,
     contacts: Option<Arc<ContactWorld>>,
 }
 
@@ -447,6 +453,8 @@ impl SceneAssets {
         let MapCollision {
             movement_cache: _movement_cache,
             ground,
+            combat_rays,
+            combat_sweeps,
             contacts,
         } = self.map_collision(
             &map,
@@ -494,7 +502,7 @@ impl SceneAssets {
         if self.graphs.uses_room_spatial_frame() || self.actor_voice.is_some() {
             simulation.enable_spatial_queries(
                 map.free_for_all,
-                Arc::clone(&ground),
+                Arc::clone(&combat_rays),
                 self.graphs.room_spatial_needs(),
             );
             if let Some(catalog) = &self.actor_voice {
@@ -528,6 +536,8 @@ impl SceneAssets {
             #[cfg(any(test, feature = "inspector"))]
             movement_cache: _movement_cache,
             ground,
+            combat_rays,
+            combat_sweeps,
             contacts,
             controller,
             mode_ui,
@@ -589,7 +599,7 @@ impl SceneAssets {
 
         let movement_cache = format!("{:04X}.col", map.map_guid as u32);
         let path = self.collision.join(&movement_cache);
-        let cache = read_movement_cache(BufReader::new(File::open(path)?)).map_err(invalid)?;
+        let cache = read_movement_cache(BufReader::new(File::open(&path)?)).map_err(invalid)?;
         for (field, expected) in [("map", map.map_guid), ("chunk", chunk_guid(map.map_guid))] {
             if let Some(value) = cache.header.source.get(field) {
                 if value.as_str().and_then(parse_guid) != Some(expected) {
@@ -605,9 +615,35 @@ impl SceneAssets {
             .then(|| ContactWorld::from_movement_cache(cache, identifiers).map(Arc::new))
             .transpose()
             .map_err(invalid)?;
+        let (combat_rays, combat_sweeps) =
+            match load_combat_geometry(&path, map.map_guid, identifiers) {
+                Ok(Some((rays, sweeps))) => (
+                    Arc::new(rays),
+                    match sweeps {
+                        Ok(sweeps) => Some(Arc::new(sweeps)),
+                        Err(error) => {
+                            eprintln!(
+                                "{} combat sweeps unavailable: {error}; using movement contacts",
+                                map.name
+                            );
+                            None
+                        }
+                    },
+                ),
+                Ok(None) => (Arc::clone(&ground), None),
+                Err(error) => {
+                    eprintln!(
+                        "{} combat ray cache unavailable: {error}; using movement probes",
+                        map.name
+                    );
+                    (Arc::clone(&ground), None)
+                }
+            };
         let collision = MapCollision {
             movement_cache,
             ground,
+            combat_rays,
+            combat_sweeps,
             contacts,
         };
         // Retain one prepared key. Active rooms hold their own immutable handles.
@@ -732,6 +768,47 @@ impl SceneAssets {
             .map_err(|source| SceneOwnerPreparationError::Body(Box::new(source)))?;
         Ok(factory)
     }
+}
+
+fn load_combat_geometry(
+    movement_path: &Path,
+    map_guid: u64,
+    identifiers: &BTreeSet<u64>,
+) -> io::Result<Option<(CollisionScene, io::Result<ContactWorld>)>> {
+    let file = match File::open(movement_path.with_extension("rays.col")) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let data = movement_path
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| invalid("missing runtime directory for combat ray cache"))?
+        .join("data");
+    let map_key = format!("0x{map_guid:016X}");
+    let keys: serde_json::Value = serde_json::from_reader(BufReader::new(File::open(
+        data.join("collision_keys_174.json"),
+    )?))
+    .map_err(invalid)?;
+    let collision_ckey = keys[&map_key]["ckey"]
+        .as_str()
+        .ok_or_else(|| invalid("missing map collision key"))?;
+    let props: serde_json::Value = match File::open(data.join("collision_props_174.json")) {
+        Ok(file) => serde_json::from_reader(BufReader::new(file)).map_err(invalid)?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => serde_json::Value::Null,
+        Err(error) => return Err(error),
+    };
+    let identity = RayCacheIdentity {
+        map_guid,
+        collision_ckey,
+        placement_ckey: props["maps"][&map_key]["ckey"].as_str(),
+        prop_records_sha256: None,
+    };
+    let cache = read_ray_cache(BufReader::new(file), identity).map_err(invalid)?;
+    let rays = CollisionScene::expanded_rays(&cache, identifiers, identity).map_err(invalid)?;
+    let sweeps =
+        ContactWorld::from_expanded_ray_cache(cache, identifiers, identity).map_err(invalid);
+    Ok(Some((rays, sweeps)))
 }
 
 #[derive(Deserialize)]

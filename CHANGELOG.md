@@ -6,9 +6,41 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Integrate the Practice Range combat changes and keep shared health settlement responsible for contact, NPC attribution, and settled impact metadata. Keep projectile distance falloff and critical scaling in the same calculation. Prepared 104319 probes cover NPC firing and projectile damage with the firing-graph runtime pack. Original-client animation and audio acceptance remain pending.
+
 - Allow locally configured hurt and death voice cues to select the victim's body definition. Older damage frames no longer bypass or rewind the victim's hurt voice cooldown. Verified with the synthetic hurt and death delivery regression and the inspector-feature voice test group. Original-client playback remains unverified for this change.
 
 - Preserve the optional combat voice catalog and its manifest hash when preparing a runtime pack. This keeps locally configured announcer, hurt, and death cues available after repacking.
+
+- Route NPC hitscan through the same calibrated body volumes and team admission as projectiles. Preserve target sampling before NPC updates for hitscan and after movement for flight. Passed 513 inspector-enabled library tests and the prepared 104319 bot projectile probe. Client feedback and visuals remain pending.
+
+- Apply authored direct-hit damage falloff to player and NPC projectiles using distance travelled across simulation ticks. Missing falloff fields retain base damage. Passed 513 inspector-feature Rust library tests. Original-client verification remains pending.
+
+- Use the same live target admission and calibrated body volumes for player and NPC projectiles. NPC flights share a room target snapshot per simulation tick. Free-for-all projectiles exclude their shooter even when other actors share its team slot. Passed 512 inspector-feature Rust library tests, including a synthetic NPC projectile contact regression. Original-client verification remains pending.
+
+- Verify the authored NPC return through a queued room knockback on the prepared 104319 Practice Range. The stock firing bot leaves its post, then returns and ends the movement request after combat motion settles. Original-client rendering remains pending.
+
+- Route authored NPC walk destinations through the collision-aware mover and retire the request when its owning state exits. Passed 807 public library tests and four prepared 104319 stock-bot regressions, including a firing bot walking back after displacement. Original-client animation and navigation around obstructions remain to be verified.
+
+- Clip NPC knockback against contact planes using the same velocity solver as player movement. Capsule separation can correct a bot's position without turning that correction into extra launch velocity. Passed 513 server library tests and the prepared 104319 repeated quick-melee and authored explosion impulse checks. Original-client knockback distance remains pending.
+
+- Integrate the first grounded NPC knockback step from the velocity at impact through ground braking, so a small authored impulse can move the bot before settling. Passed 512 native-server library tests and a prepared quick-melee regression with two in-range strikes against one bot and an out-of-range miss. Original-client knockback distance remains unverified.
+
+- Route physical contact hits such as quick melee through the ordinary attacker hit-notice delivery after actual health loss. Use the StateScript sample frame and settled damage, and omit feedback for impulse-only contact. Passed 511 native-server and 294 StateScript library tests, plus the prepared 104319 quick-melee damage and notice regression. Original-client verification remains pending.
+
+- Preserve NPC weapon impact metadata through room health settlement. The victim's authored death event receives the weapon loadout and the calculated critical flag when available. Direct scripted damage retains its existing metadata-free path. Passed 512 native-server library tests and the prepared 104319 NPC-kill projection regression.
+
+- Publish the common authored body death event for players without waiting for another input frame. Pass the killer's authoritative tags, variables and velocity into the victim's death script. Passed 807 public library tests and a prepared 104319 Practice Range regression that encodes the stock player death state and bot identity for the owner and observers. Original-client kill-feed rendering remains unverified.
+
+- Use verified expanded map geometry for projectile terrain sweeps as well as point rays. A narrow projectile can cross a gap in the detailed collision mesh, while larger projectiles still contact its edges. Passed 512 server and 68 collision library tests and the prepared 104319 cache selection check. The reported railing remains unverified in the original client.
+
+- Use validated optional expanded map ray caches for hitscan, point projectiles, and scripted sight queries. Movement and nonzero-radius terrain sweeps keep their movement collision data. Passed 580 library tests, including a synthetic wall-and-gap regression, and verified selection of the prepared 104319 Practice Range ray cache. Original-client railing behavior remains unverified.
+
+- Carry authored remote weapon presentation inputs with observed projectile launches when a volley and its child states end in the same tick. Preserve the simulation's authored timing, and release the observer override when launch delivery settles. Verified with the prepared 104319 Practice Range firing probe on both teams and the observer delivery loss replay. Original-client attack animation remains pending.
+
+- Preserve typed changes in StateScript deltas so an explicit false value, zero or null reaches the client even when the VM compares the values as equal. Passed 512 server library tests and a prepared 104319 observer check for critical and ordinary kill-feed pulses, including killer, critical flag and loadout. Original-client rendering remains pending.
+
+- Preserve the selected head contact through direct projectile damage. Apply the authored critical multiplier and report the critical result through the ordinary hit settlement. The shared combat-volume regression covers enabled and disabled projectile critical multipliers. Passed 511 server library tests, the prepared 104319 hitscan replay, and inspector Clippy. Original-client feedback remains unverified.
 
 - Add the Linux Proton runtime resolver (`orpheus_proton`) and handle-bound x64 Windows/Wine relay helper (`relay/owwfd_inject.cpp`, documented in `docs/PROTON_HELPER.md`). `orpheus_proton` resolves `WINEPREFIX`, `STEAM_COMPAT_TOOL_PATHS` (confirmed against the pathname column of `/proc/<pid>/maps`, rejecting relative paths), and Wine sync flags (`WINEFSYNC`, `WINEESYNC`, `WINE_NTSYNC`, `PROTON_ENABLE_NTSYNC`, `WINEFUTEX2`) from `--runtime-pid` without claiming Linux-to-Windows PID identity. Injection requires explicit `--win-pid`, `--creation-time`, and `--game-exe` (from `--list`) on a single retained Windows process handle, with opt-in `--start-worker` for relay DLLs that export `worker`. Verified with workspace Clippy/fmt, isolated Wine checks on Proton 10.0 and Proton 11.0 (including live PID-reuse rejection via `creation_time`), and live 104319 client login to the main menu across the four tested Valve Proton builds (Proton 10.0, Proton 11.0, Proton Experimental, and Proton Hotfix).
 

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "case_id": "projectile-direct-falloff.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "fields": {
+    "m_projectileSpeed": 50.0,
+    "m_6396149F": {
+      "m_modifyHealth": {"m_amount": {"$": "STUConfigVarFloat", "m_value": 40.0}},
+      "m_EAD7F104": {"$": "STUConfigVarFloat", "m_value": 3.0},
+      "m_157E5BC5": {"$": "STUConfigVarFloat", "m_value": 9.0},
+      "m_72A81154": {"$": "STUConfigVarFloat", "m_value": 0.25}
+    }
+  },
+  "cases": [
+    {"contact_distance": 2.0, "damage": 40.0, "without_falloff": false},
+    {"contact_distance": 3.0, "damage": 40.0, "without_falloff": false},
+    {"contact_distance": 6.0, "damage": 25.0, "without_falloff": false},
+    {"contact_distance": 9.0, "damage": 10.0, "without_falloff": false},
+    {"contact_distance": 12.0, "damage": 10.0, "without_falloff": false},
+    {"contact_distance": 12.0, "damage": 40.0, "without_falloff": true}
+  ]
+}

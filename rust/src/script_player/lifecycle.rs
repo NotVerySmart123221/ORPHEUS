@@ -206,6 +206,28 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         result
     }
 
+    fn publish_death(
+        &mut self,
+        killer: u32,
+        critical: bool,
+        loadout: Option<u64>,
+        source: Option<crate::game_combat::DeathSourceFacts>,
+    ) -> Result<(), InitFault> {
+        // A dead owner may stop sending commands. Execute the event at the
+        // current VM clock so the observer projection can publish it immediately.
+        if self
+            .component
+            .queue_body_death(killer, critical, loadout, None)?
+            == 0
+        {
+            return Ok(());
+        }
+        self.world.death_source = source;
+        let result = self.component.run_now(&mut self.world);
+        self.world.death_source = None;
+        result
+    }
+
     fn take_health_update(&mut self) -> Option<EntityComponent> {
         self.world.vitals.take_cumulative_update()
     }

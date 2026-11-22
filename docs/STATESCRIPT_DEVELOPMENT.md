@@ -113,6 +113,15 @@ drives retirement, allowing the acknowledged launch time to elapse on
 the observer. The source, flight definition, and shot timing come from
 the authored volley and shared simulation.
 
+A single-shot activation can start and end within one VM tick. The
+shot report captures active remote data-flow inputs sourced from the
+volley's own child states before their links are removed. Observer
+delivery retains those values with the corresponding volley until the
+launch is acknowledged or expires. The VM still clears its own stack
+claims at the authored time. The prepared firing probe verifies the
+stock firing input on both teams. Rendered attacks remain an
+original-client acceptance check.
+
 ## Supply model hardpoint membership
 
 An external graph bundle can include `model_hardpoints` in a body entry.
@@ -1107,6 +1116,13 @@ acknowledgment frame. Room-settled weapon and scripted damage supply
 it. Healing and VM-local changes without a sampled room frame leave
 it unavailable. Cue resources are supplied by authored content.
 [Synthetic timed elimination contract](../fixtures/behavior/script-timed-elimination-cues-v1.json)
+
+The 104319 hit-marker message updates the shooter's HUD. The damage
+feedback path uses the struck body's combat event for victim effects
+and audio. Keep speaker and recipient selection tied to the settled
+source or victim for each cue. A severe victim cue does not establish
+the shooter's native headshot sound. That sound still needs a verified
+104319 playback trigger.
 
 Weapon notifications carry the target's captured filter flags, target
 tags, and script variables. A room-settled health change from a distinct

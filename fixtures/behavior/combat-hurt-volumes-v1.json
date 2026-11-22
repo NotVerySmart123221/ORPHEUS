@@ -4,6 +4,11 @@
   "evidence": "synthetic-rust",
   "input": {
     "body": "0x040000000000ABC0",
+    "projectile_profiles": [
+      { "critical_multiplier": 2.0 },
+      { "critical_multiplier": 1.0 },
+      { "critical_multiplier": 0.0 }
+    ],
     "movement": { "feet": [0.0, 1.0, 6.0], "height": 2.0, "radius": 0.5, "eye": 1.5 },
     "catalog": {
       "version": 1,

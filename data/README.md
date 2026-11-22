@@ -66,6 +66,13 @@ and mode respawn delays. Practice Range has a shipped three-second default.
 | `data/ai_spawners_174.json`, `data/game_graphs_174.json.gz` | `tools/extract_ai_spawners.py`, `tools/extract_game_graphs.py` |
 | `data/collision_keys_174.json`, `collision/0688.col` (and optional `*.rays.col`) | `tools/export_casc_records.ps1`, `tools/build_collision.py` |
 
+Rust uses the optional map-specific `*.rays.col` for hitscan, scripted
+sight, and both point and swept projectile terrain queries. The runtime
+checks its map, collision key and applicable prop provenance against the
+catalogs. Character movement keeps its own cache. When expanded geometry
+is unavailable, combat uses the existing movement-based probes and sweeps.
+A valid point-ray view remains usable if its sweep view cannot be built.
+
 ### 2. Prepared Research Data (Must Be Supplied in Source Pack)
 
 | Runtime File | Role |
@@ -97,8 +104,8 @@ The combat calibration file has `version: 1` and a `bodies` object keyed
 by body-definition ID. Each record contains a `body` capsule and an optional
 `head` capsule. Each capsule specifies `lower` and `upper` axis endpoints
 in metres above the feet and a positive `radius` in metres. Equal endpoints
-make a sphere. This calibration adjusts player hitscan and projectile contact
-against the listed bot bodies. Movement contacts, healing and navigation keep
+make a sphere. This calibration adjusts player hitscan and both player and NPC projectile
+contact against the listed bodies. Movement contacts, healing and navigation keep
 their own geometry. Bodies without a calibration keep the existing
 compatibility proxy. Use local measurements for the intended body and build.
 See the [synthetic schema example](../fixtures/behavior/combat-hurt-volumes-v1.json).

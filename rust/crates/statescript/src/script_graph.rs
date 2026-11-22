@@ -1249,6 +1249,17 @@ impl Graph {
         &self.owner_only_instance_vars
     }
 
+    /// Variables kept on the server by the authored graph.
+    pub fn server_only_variables(&self) -> impl Iterator<Item = u32> + '_ {
+        self.fields
+            .get("m_9CEC6985")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(asset_guid)
+            .map(|guid| u32::from(guid as u16))
+    }
+
     pub fn remote_positions(&self) -> &[u16] {
         &self.remote.positions
     }

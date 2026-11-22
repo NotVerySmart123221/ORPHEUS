@@ -1169,6 +1169,67 @@ fn bound_maps_are_refused_before_their_bindings_are_checked() {
 }
 
 #[test]
+fn deltas_preserve_typed_variables_with_the_same_expression_truthiness() {
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-typed-delta-v1.json"
+    ))
+    .unwrap();
+    let variable = contract["input"]["variable"].as_u64().unwrap() as u32;
+    let (graphs, mut snapshot) = fixture();
+    let codecs = CodecTable::from_json(CODECS).unwrap();
+    let encoder = SnapshotEncoder::new(&graphs, &codecs);
+    let parse = |raw: &Json| match raw {
+        Json::Null => None,
+        Json::Bool(value) => Some(Value::Bool(*value)),
+        Json::Number(value) => Some(Value::Integer(value.as_i64().unwrap())),
+        _ => panic!("unexpected fixture value: {raw}"),
+    };
+    for (view, kind) in [
+        (View::Owner, DeltaKind::InitialOwner(1000)),
+        (View::Observer, DeltaKind::Observer { resend: true }),
+    ] {
+        for transition in contract["input"]["transitions"].as_array().unwrap() {
+            let before = parse(&transition["from"]);
+            let after = parse(&transition["to"]);
+            assert!(crate::script_expr::equal(
+                before.as_ref().unwrap_or(&Value::Null),
+                after.as_ref().unwrap_or(&Value::Null),
+            ));
+            set_variable(&mut snapshot, 1, variable, before);
+            let mut stream = BodyStream::new(ENTITY);
+            stream.create_arrived();
+            let base = encoder
+                .queue_full(&mut stream, &encoder.project(&snapshot, view).unwrap())
+                .unwrap();
+            assert!(stream.arrived(base.last).advanced);
+            set_variable(&mut snapshot, 1, variable, after.clone());
+            let next = encoder
+                .project_next(&snapshot, stream.base().unwrap().1)
+                .unwrap();
+            let delta = encoder
+                .queue_delta(&mut stream, &next, kind, 16)
+                .unwrap()
+                .unwrap();
+            assert!(
+                stream.touched().contains(&ChangeKey::Variable(1, variable)),
+                "{transition}"
+            );
+            assert!(stream.arrived(delta.last).advanced);
+            assert_eq!(
+                stream
+                    .base()
+                    .unwrap()
+                    .1
+                    .instance_variables(1)
+                    .unwrap()
+                    .get(&variable),
+                after.as_ref(),
+            );
+        }
+    }
+}
+
+#[test]
 fn a_variable_becoming_a_map_deltas_like_it_becoming_null() {
     let (graphs, mut snapshot) = fixture();
     let codecs = CodecTable::from_json(CODECS).unwrap();

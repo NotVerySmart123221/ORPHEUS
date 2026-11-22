@@ -622,6 +622,7 @@ pub trait World {
     fn queue_contact_damage(
         &mut self,
         _site: Site,
+        _source_frame: u32,
         _damage: f64,
         _changes: &[(u32, Option<[f64; 3]>)],
     ) -> bool {
@@ -1140,6 +1141,11 @@ pub trait World {
     /// None leaves an encountered AI candidate explicitly unsupported.
     fn set_display_name(&mut self, _site: Site, _entity: u32, _name: u64, _active: bool) -> bool {
         false
+    }
+
+    /// Speed for walking under this host's authored AI navigation.
+    fn ai_walk_speed(&self, _site: Site) -> Option<f64> {
+        None
     }
 
     fn selects_ai_behavior(&mut self, _site: Site) -> Option<bool> {

@@ -9,7 +9,9 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::collision_cache::{CacheError, CollisionCache, Hull, Mesh, Placement, Shape};
+use crate::collision_cache::{
+    CacheError, CollisionCache, Hull, Mesh, Placement, RayCacheIdentity, Shape,
+};
 use crate::collision_grid::{ColumnGrid, ColumnRange};
 use crate::contact_gjk::PointSetSize;
 use crate::contact_gjk::sweep::{
@@ -269,6 +271,23 @@ impl ContactWorld {
         identifiers: &BTreeSet<u64>,
     ) -> Result<Self, ContactWorldError> {
         cache.header.check_movement()?;
+        Self::from_static_cache(cache, identifiers)
+    }
+
+    /// Prepare swept queries over the same verified geometry as combat rays.
+    pub fn from_expanded_ray_cache(
+        cache: CollisionCache,
+        identifiers: &BTreeSet<u64>,
+        identity: RayCacheIdentity<'_>,
+    ) -> Result<Self, ContactWorldError> {
+        cache.header.check_ray(identity)?;
+        Self::from_static_cache(cache, identifiers)
+    }
+
+    fn from_static_cache(
+        cache: CollisionCache,
+        identifiers: &BTreeSet<u64>,
+    ) -> Result<Self, ContactWorldError> {
         let groups = cache.header.placement_groups(identifiers);
         let mut shapes = Vec::new();
         for hull in cache.hulls {

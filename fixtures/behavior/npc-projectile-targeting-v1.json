@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "case_id": "npc-projectile-targeting.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "volumes": {
+    "version": 1,
+    "bodies": {
+      "0x02": {
+        "body": {"lower": 0.4, "upper": 1.1, "radius": 0.24},
+        "head": {"lower": 3.25, "upper": 3.25, "radius": 0.18}
+      }
+    }
+  },
+  "cases": [
+    {"height": 3.25, "free_for_all": true, "expected_damage": 20.0, "expected_hitscan_damage": 20.0},
+    {"height": 3.25, "free_for_all": false, "expected_damage": null, "expected_hitscan_damage": null},
+    {"height": 2.6, "free_for_all": true, "expected_damage": null, "expected_hitscan_damage": null}
+  ]
+}
