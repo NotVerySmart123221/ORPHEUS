@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-22
 
+- Extend opt-in playtest capture with combat settlement, reliable hit and voice admission, and acknowledgement of authored cues. The records show when a cue enters the send queue and whether the client acknowledges the reliable prefix. Audible playback remains a client check.
+
 - Keep delayed combat cues scoped to the listener bodies present at settlement. If an entity ID has been reused or retired, other selected listeners still receive the cue.
 
 - Verify that two authored mode cues from distinct eliminations in the same settlement frame keep their order across datagram loss and duplicate acknowledgements. The synthetic room replay excludes a nonlethal hit and repeated damage to a defeated body. The prepared 104319 replay also matched its six ray classifications, and the existing 104319 voice-message encoding check passed. Audible playback remains a separate client check.

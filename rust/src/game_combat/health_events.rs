@@ -184,6 +184,17 @@ impl RoomSimulation {
         killed: bool,
         damage: Option<HealthDamageEvidence<'_>>,
     ) {
+        if delta.is_finite() && delta < 0.0 && crate::owner_trace::playtest_enabled() {
+            let frame = damage.as_ref().and_then(|evidence| evidence.frame);
+            let critical = damage
+                .as_ref()
+                .and_then(|evidence| evidence.impact)
+                .map(|(impact, _)| impact.critical);
+            crate::owner_trace::playtest(format_args!(
+                "combat settled frame={frame:?} source={source:08X} target={target:08X} delta={delta} critical={critical:?} killed={killed} health_events={}",
+                self.health_events.enabled,
+            ));
+        }
         if !self.health_events.enabled {
             return;
         }

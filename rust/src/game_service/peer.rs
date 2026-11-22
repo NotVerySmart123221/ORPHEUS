@@ -219,6 +219,25 @@ impl Peer {
         self.combat_ui.notices.iter().map(|pending| &pending.notice)
     }
 
+    pub(super) fn acknowledge(
+        &mut self,
+        ack: u32,
+        bits: u64,
+    ) -> crate::game_egress::DeliveryReport<Arc<Record>> {
+        let pending_cue = self.authored_cue_ordinal.filter(|&ordinal| {
+            crate::owner_trace::playtest_enabled() && !self.egress.delivered_through(ordinal)
+        });
+        let report = self.egress.acknowledge(ack, bits);
+        if let Some(ordinal) = pending_cue.filter(|&ordinal| self.egress.delivered_through(ordinal))
+        {
+            crate::owner_trace::playtest(format_args!(
+                "combat audio acknowledged owner={:08X} ordinal={ordinal}",
+                self.world.owner(),
+            ));
+        }
+        report
+    }
+
     pub(super) fn flush_combat(
         &mut self,
         schemas: &Schemas,
@@ -265,6 +284,36 @@ impl Peer {
             let ordinal = self.egress.queue_reliable(bytes)?;
             if authored.is_some() {
                 self.authored_cue_ordinal = Some(ordinal);
+            }
+            if crate::owner_trace::playtest_enabled() {
+                match notice {
+                    CombatNotice::Hit {
+                        target,
+                        dealt,
+                        critical,
+                        killed,
+                        shot_frame,
+                    } => {
+                        crate::owner_trace::playtest(format_args!(
+                            "combat hit admitted owner={:08X} frame={shot_frame} target={target:08X} dealt={dealt} critical={critical} killed={killed} ordinal={ordinal}",
+                            self.world.owner(),
+                        ));
+                    }
+                    CombatNotice::Voice {
+                        speaker,
+                        listener,
+                        stimulus,
+                        line,
+                        ..
+                    } => {
+                        crate::owner_trace::playtest(format_args!(
+                            "combat audio admitted owner={:08X} speaker={speaker:08X} listener={listener:08X} stimulus={stimulus:016X} line={line:016X} ordinal={ordinal} authored={}",
+                            self.world.owner(),
+                            authored.is_some(),
+                        ));
+                    }
+                    _ => (),
+                }
             }
             for entity in notice.referenced_entities() {
                 self.world.track_entity_notice(entity, ordinal);

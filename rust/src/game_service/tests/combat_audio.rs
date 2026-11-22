@@ -585,10 +585,10 @@ fn settled_elimination_cues_keep_their_order_through_reliable_retransmission() {
             },
         );
         let ack_bits = u64::from(step.arrived);
-        let report = peer.egress.acknowledge(*sequence + 1, ack_bits);
+        let report = peer.acknowledge(*sequence + 1, ack_bits);
         assert_eq!(report.requeued_reliable, usize::from(!step.arrived));
         peer.world.acknowledge(report, now);
-        let duplicate = peer.egress.acknowledge(*sequence + 1, ack_bits);
+        let duplicate = peer.acknowledge(*sequence + 1, ack_bits);
         assert_eq!(duplicate.requeued_reliable, 0);
         assert_eq!(peer.egress.delivered_through(step.ordinal), step.arrived);
         tick += 1;
