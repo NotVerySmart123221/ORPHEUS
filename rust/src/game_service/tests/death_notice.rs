@@ -376,7 +376,7 @@ fn room_respawn_waits_for_death_notice_admission_then_replaces_the_body_once() {
     let override_file = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(
         override_file.path(),
-        &serde_json::json!({"version":1,"maps":{
+        serde_json::json!({"version":1,"maps":{
             format!("0x{map_guid:016X}"):{
                 "lethal_volumes":[{
                     "min":death_position.map(|axis| axis - 1.0),
