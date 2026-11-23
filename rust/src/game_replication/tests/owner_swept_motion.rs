@@ -26,7 +26,9 @@ fn hostile_actor_contact_corrects_ordinary_movement_with_or_without_an_owner_scr
     let input = &fixture["input"];
     let start = u32::try_from(input["start_frame"].as_u64().unwrap()).unwrap();
     let last = u32::try_from(input["last_frame"].as_u64().unwrap()).unwrap();
+    let hero = crate::accounts::parse_guid(input["hero"].as_str().unwrap()).unwrap();
     let position: [f64; 3] = serde_json::from_value(input["actor_position"].clone()).unwrap();
+    let minimum_separation = input["minimum_capsule_separation"].as_f64().unwrap();
     let right = i8::try_from(input["right"].as_i64().unwrap()).unwrap();
     let card = PlayerCard::default();
     let viewer = PlayerAppearance {
@@ -51,7 +53,7 @@ fn hostile_actor_contact_corrects_ordinary_movement_with_or_without_an_owner_scr
         world.started = Some(start);
         world.input.processed = Some(start);
         let room = scene.simulation_mut();
-        activate_script(&mut world, room, id, 7, Arc::default());
+        activate_script(&mut world, room, id, hero, Arc::default());
         if !scripted {
             world.cancel_body_script(Some(room));
         }
@@ -118,13 +120,13 @@ fn hostile_actor_contact_corrects_ordinary_movement_with_or_without_an_owner_scr
         let blocked = team == 1 && delivered;
         if blocked {
             assert!(
-                pose.position[0] > 0.0 && pose.position[0] < position[0],
+                pose.position[0] > 0.0 && position[0] - pose.position[0] >= minimum_separation,
                 "{pose:?}"
             );
         } else {
             assert!(pose.position[0] > position[0], "{pose:?}");
         }
-        assert_eq!(corrected, blocked);
+        assert_eq!(corrected, scripted || blocked);
     }
 }
 
@@ -396,7 +398,7 @@ fn swept_owner_correction_uses_the_applied_pose_and_outlives_a_script_fault() {
         let fault = Arc::new(AtomicBool::new(false));
         world.started = Some(spawn);
         world.input.processed = Some(spawn);
-        activate_script(
+        activate_script_without_movement_projection(
             &mut world,
             scene.simulation_mut(),
             id,

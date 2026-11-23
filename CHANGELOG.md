@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Send continuous owner movement corrections for any hero whose runtime supplies a movement projection. Keep contact and scripted-motion corrections available to bodies without that projection. Passed 597 library tests, the prepared Particle Cannon owner correction replay, and Clippy.
+
 - Rotate remote movement records per viewer when a packet can only carry part of the actor list. Keep walking velocity and throttle updates flowing to later NPCs during sustained reliable traffic. Passed 597 library tests, the prepared firing-bot recovery replay, and Clippy.
 
 - Replan a patrol after combat displacement from its resolved landing position to the existing authored waypoint or waiting spot. The shared map navigator routes around obstacles and the ordinary patrol mover publishes return strides. Passed 596 library tests, the prepared firing-bot recovery replay, and Clippy.

@@ -89,8 +89,7 @@ impl BodyScript {
         runtime: &dyn OwnerBodyRuntime,
     ) -> io::Result<Self> {
         startup_snapshot(runtime, body.id.entity)?;
-        let continuous_corrections =
-            matches!(body.hero, SOLDIER | CASSIDY) && runtime.movement_modifiers().is_some();
+        let continuous_corrections = runtime.movement_modifiers().is_some();
         let corrections = continuous_corrections.then(|| {
             CorrectionHistory::new(body.id.entity, body.id.generation)
                 .with_processed_at_spawn(processed_at_spawn)

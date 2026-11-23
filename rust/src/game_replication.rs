@@ -21,7 +21,7 @@ use crate::{
     },
     game_controller::ControllerFrame,
     game_egress::{DeliveryReport, FrameRecords, GameEgress, RecordSource, SendError, SentFrame},
-    game_heroes::{CASSIDY, Hero, SOLDIER},
+    game_heroes::Hero,
     game_messages::Message,
     game_parameters::{ClientGameMessage, ClientWheelAction, ClientWheelUse, HeroSelectRequest},
     game_projectiles::{OwnerProjectiles, ProjectileDelivery, ProjectileLeases, ProjectileToken},

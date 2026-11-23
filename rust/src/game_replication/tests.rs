@@ -5,7 +5,7 @@ use crate::{
     contact_world::ContactWorld,
     game_clock::FIRST_TICK,
     game_content::GameMap,
-    game_heroes::SOLDIER,
+    game_heroes::{CASSIDY, SOLDIER},
     game_instance::RETAIL_QUANTA,
     game_parameters::{CLIENT_GAME_MESSAGE, PICK_HERO},
     jam_codec::{Fields, Value},
@@ -1250,7 +1250,7 @@ struct SyntheticOwner {
     snapshot_override: Option<Snapshot>,
     graphs: Arc<GraphStore>,
     codecs: CodecTable,
-    modifiers: BTreeMap<ModifierKey, Modifier>,
+    modifiers: Option<BTreeMap<ModifierKey, Modifier>>,
     failed: Arc<AtomicBool>,
     health_update: Arc<Mutex<Option<WorldComponent>>>,
     vitals: Option<crate::vitals::Vitals>,
@@ -1376,7 +1376,7 @@ impl OwnerBodyRuntime for SyntheticOwner {
     }
 
     fn movement_modifiers(&self) -> Option<&BTreeMap<ModifierKey, Modifier>> {
-        Some(&self.modifiers)
+        self.modifiers.as_ref()
     }
 
     fn take_shots(&mut self, command: Option<Command>, _mover: &Mover) -> Vec<PosedShot> {
@@ -1430,7 +1430,7 @@ fn synthetic_owner_with_vitals(
         snapshot_override: None,
         graphs,
         codecs: CodecTable::from_json(r#"{"classes":{}}"#).unwrap(),
-        modifiers: BTreeMap::new(),
+        modifiers: Some(BTreeMap::new()),
         failed,
         health_update: Arc::default(),
         vitals,
@@ -1548,6 +1548,29 @@ fn activate_script(
     hero: u64,
     failed: Arc<AtomicBool>,
 ) {
+    let runtime = synthetic_owner(id.entity, world.input.processed.unwrap_or(100), failed);
+    activate_synthetic_runtime(world, simulation, id, hero, runtime);
+}
+
+fn activate_script_without_movement_projection(
+    world: &mut WorldDelivery,
+    simulation: &mut RoomSimulation,
+    id: BodyId,
+    hero: u64,
+    failed: Arc<AtomicBool>,
+) {
+    let mut runtime = synthetic_owner(id.entity, world.input.processed.unwrap_or(100), failed);
+    runtime.modifiers = None;
+    activate_synthetic_runtime(world, simulation, id, hero, runtime);
+}
+
+fn activate_synthetic_runtime(
+    world: &mut WorldDelivery,
+    simulation: &mut RoomSimulation,
+    id: BodyId,
+    hero: u64,
+    runtime: SyntheticOwner,
+) {
     let body = Body { hero, ..body(id) };
     world.body = Some(body);
     world.bound = None;
@@ -1556,7 +1579,6 @@ fn activate_script(
         .insert(id.entity, (id.generation, Lifetime::Live));
     world.created.remove(&id.entity);
     let frame = world.input.processed.unwrap_or(100);
-    let runtime = synthetic_owner(id.entity, frame, failed);
     world.body_script =
         Some(BodyScript::new(body, frame, world.input.processed, &runtime).unwrap());
     let state = PlayerBodyState::new(
@@ -2676,7 +2698,7 @@ fn body_script_retries_frozen_initial_frames_and_ignores_old_generation_reports(
     let mut simulation = RoomSimulation::new(Vec::new()).unwrap();
     let id = avatar(1, 1);
     world.started = Some(100);
-    activate_script(&mut world, &mut simulation, id, 7, Arc::default());
+    activate_script_without_movement_projection(&mut world, &mut simulation, id, 7, Arc::default());
     world.push(record(id.entity, Delivery::CreateBody(id)));
     let mut egress = GameEgress::default();
     assert_eq!(
@@ -2834,7 +2856,13 @@ fn command_ack_survives_replacing_a_body_without_a_correction_history() {
     let mut simulation = RoomSimulation::new(Vec::new()).unwrap();
     let mut egress = GameEgress::default();
     world.started = Some(tick);
-    activate_script(&mut world, &mut simulation, avatar(1, 1), 7, Arc::default());
+    activate_script_without_movement_projection(
+        &mut world,
+        &mut simulation,
+        avatar(1, 1),
+        7,
+        Arc::default(),
+    );
     world.input.processed = Some(processed);
     let (previous, _) = transmit(&mut world, Some(&mut simulation), &mut egress, tick, 0);
     assert_eq!(read_ack(&previous), processed);
@@ -2892,7 +2920,7 @@ fn command_ack_survives_replacing_a_body_without_a_correction_history() {
 
 #[test]
 fn owner_correction_respects_create_budget_and_failed_transport() {
-    for hero in [SOLDIER, CASSIDY] {
+    for hero in [SOLDIER, CASSIDY, 0x02e0_0000_0000_0002] {
         let mut world = WorldDelivery::new(OWNER);
         let mut simulation = RoomSimulation::new(Vec::new()).unwrap();
         let id = avatar(1, 1);
