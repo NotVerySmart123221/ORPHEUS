@@ -853,7 +853,7 @@ fn prepared_stock_bot_projectiles_damage_live_room_bodies() {
     let data = runtime.join("data");
     let graphs = Arc::new(GraphStore::load(data.join("game_graphs_174.json.gz")).unwrap());
     let codecs = Arc::new(CodecTable::load(data.join("statescript_codecs_174.json")).unwrap());
-    let fixture = |target_team: u8| {
+    let fixture = |front_team: u8, rear_team: u8| {
         BotCatalog::from_json(
             &json!({
                 "heroes": {
@@ -865,8 +865,8 @@ fn prepared_stock_bot_projectiles_damage_live_room_bodies() {
                 "maps": {"0x03": {"hints": {}, "spawners": [
                     {"hero":"0x02E000000000016B","team":1,"position":[0,0,0],
                      "rotation":[0,0,0,1],"graphs":["0x0580000000000B92"]},
-                    {"hero":"0x02","team":1,"position":[0,0,2],"rotation":[0,0,0,1],"graphs":[]},
-                    {"hero":"0x02","team":target_team,"position":[0,0,4],
+                    {"hero":"0x02","team":front_team,"position":[0,0,2],"rotation":[0,0,0,1],"graphs":[]},
+                    {"hero":"0x02","team":rear_team,"position":[0,0,4],
                      "rotation":[0,0,0,1],"graphs":[]}
                 ]}}
             })
@@ -878,9 +878,9 @@ fn prepared_stock_bot_projectiles_damage_live_room_bodies() {
     let ground = fixture_ground();
     let movers = MoverCatalog::default();
     let queries = BotQueries::new(false, &movers, &ground, None);
-    for hit_player in [false, true] {
-        let bots = fixture(u8::from(hit_player));
-        let ally = bots[1].entity;
+    for (has_player, front_team) in [(false, 1), (true, 1), (true, 0)] {
+        let bots = fixture(front_team, u8::from(has_player));
+        let front = bots[1].entity;
         let npc_target = bots[2].entity;
         let mut room = RoomSimulation::new(bots).unwrap();
         room.enable_stock_bot_scripts(
@@ -889,7 +889,7 @@ fn prepared_stock_bot_projectiles_damage_live_room_bodies() {
             crate::game_content::PRACTICE_RANGE_MODE,
         );
         let start = crate::game_clock::FIRST_TICK;
-        let player = if hit_player {
+        let player = if has_player {
             let (factory, mut spawn) = fixture_body_factory();
             spawn.frame = start;
             spawn.pose.position = [0.0, 0.0, 4.0];
@@ -928,18 +928,29 @@ fn prepared_stock_bot_projectiles_damage_live_room_bodies() {
         for tick in start + 1..=start + 800 {
             let elapsed = Duration::from_millis(u64::from(tick - start) * FRAME_MS);
             room.finish_tick(&queries, tick, elapsed).unwrap();
-            hit = match player {
-                Some((id, initial)) => {
+            hit = match (front_team, player) {
+                (0, _) => room.body_healths().unwrap()[&front] < 100.0,
+                (_, Some((id, initial))) => {
                     room.player_body(id).unwrap().vitals().unwrap().total() < initial
                 }
-                None => room.body_healths().unwrap()[&npc_target] < 100.0,
+                (_, None) => room.body_healths().unwrap()[&npc_target] < 100.0,
             };
             if hit {
                 break;
             }
         }
-        assert!(hit, "no damage for hit_player={hit_player}");
-        assert_eq!(room.body_healths().unwrap()[&ally], 100.0);
+        assert!(
+            hit,
+            "no damage with has_player={has_player}, front_team={front_team}"
+        );
+        if front_team == 1 {
+            assert_eq!(room.body_healths().unwrap()[&front], 100.0);
+        } else if let Some((id, initial)) = player {
+            assert_eq!(
+                room.player_body(id).unwrap().vitals().unwrap().total(),
+                initial
+            );
+        }
     }
 }
 

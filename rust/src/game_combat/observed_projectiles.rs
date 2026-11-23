@@ -1,6 +1,6 @@
 //! Observer reports coupled to authoritative projectile lifetimes.
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use bevy_ecs::{component::Component, entity::Entity};
 
@@ -55,17 +55,20 @@ pub(crate) enum ObservedProjectileEvent {
     },
     Completed {
         id: u64,
+        ordinal: usize,
         frame: u32,
     },
 }
 
 #[derive(Component)]
-struct ObservedBatch(u64);
+struct ObservedFlight {
+    batch: u64,
+    ordinal: usize,
+}
 
 #[derive(Default)]
 pub(super) struct RoomProjectileReports {
     next_id: u64,
-    pending: HashMap<u64, u16>,
     events: Vec<ObservedProjectileEvent>,
 }
 
@@ -82,7 +85,6 @@ impl RoomSimulation {
                     .filter(|&count| count > 0)?;
                 let id = self.projectile_reports.next_id;
                 self.projectile_reports.next_id = id.checked_add(1)?;
-                self.projectile_reports.pending.insert(id, count);
                 self.projectile_reports
                     .events
                     .push(ObservedProjectileEvent::Launched {
@@ -93,10 +95,10 @@ impl RoomSimulation {
                 Some(id)
             });
             self.enemy_projectiles
-                .extend(flights.into_iter().map(|flight| {
+                .extend(flights.into_iter().enumerate().map(|(ordinal, flight)| {
                     let mut entity = self.world.spawn(flight);
                     if let Some(id) = id {
-                        entity.insert(ObservedBatch(id));
+                        entity.insert(ObservedFlight { batch: id, ordinal });
                     }
                     entity.id()
                 }));
@@ -104,19 +106,17 @@ impl RoomSimulation {
     }
 
     pub(super) fn complete_observed_projectile(&mut self, entity: Entity, frame: u32) {
-        let Some(&ObservedBatch(id)) = self.world.get::<ObservedBatch>(entity) else {
+        let Some(&ObservedFlight { batch, ordinal }) = self.world.get::<ObservedFlight>(entity)
+        else {
             return;
         };
-        let Some(remaining) = self.projectile_reports.pending.get_mut(&id) else {
-            return;
-        };
-        *remaining -= 1;
-        if *remaining == 0 {
-            self.projectile_reports.pending.remove(&id);
-            self.projectile_reports
-                .events
-                .push(ObservedProjectileEvent::Completed { id, frame });
-        }
+        self.projectile_reports
+            .events
+            .push(ObservedProjectileEvent::Completed {
+                id: batch,
+                ordinal,
+                frame,
+            });
     }
 
     pub(crate) fn take_projectile_reports(&mut self) -> Vec<ObservedProjectileEvent> {

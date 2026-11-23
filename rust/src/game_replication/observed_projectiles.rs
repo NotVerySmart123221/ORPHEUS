@@ -37,12 +37,19 @@ enum Phase {
     Retiring,
 }
 
+#[derive(Clone, Copy)]
+enum Flight {
+    Active,
+    Finished(u32),
+    Retiring,
+}
+
 struct ProjectileView {
     shot: Arc<ObservedShot>,
     entities: Vec<u32>,
     pending: HashSet<u32>,
     phase: Phase,
-    finished: Option<u32>,
+    flights: Vec<Flight>,
     cancelled: bool,
 }
 
@@ -54,7 +61,7 @@ impl ProjectileView {
     fn track_record(&self, step: ProjectileDelivery) -> bool {
         match (self.phase, step) {
             (Phase::Creating, ProjectileDelivery::Create(entity))
-            | (Phase::Retiring, ProjectileDelivery::Destroy(entity)) => {
+            | (Phase::Visible { .. } | Phase::Retiring, ProjectileDelivery::Destroy(entity)) => {
                 self.pending.contains(&entity)
             }
             (Phase::Launching { .. }, ProjectileDelivery::Launch) => true,
@@ -80,6 +87,49 @@ impl ProjectileView {
             ch2: Some(payload),
             ..EntityUpdate::default()
         })
+    }
+
+    fn completed_at(&self) -> Option<u32> {
+        self.flights
+            .iter()
+            .try_fold(0, |last, flight| match *flight {
+                Flight::Finished(tick) => Some(last.max(tick)),
+                _ => None,
+            })
+    }
+
+    fn retire(
+        &mut self,
+        through: u32,
+        all: bool,
+        mut queue: impl FnMut(EntityUpdate, ProjectileDelivery),
+    ) {
+        for (&entity, flight) in self.entities.iter().zip(&mut self.flights) {
+            let due = match *flight {
+                Flight::Retiring => false,
+                Flight::Active => all,
+                Flight::Finished(frame) => all || frame <= through,
+            };
+            if due {
+                *flight = Flight::Retiring;
+                self.pending.insert(entity);
+                queue(
+                    EntityUpdate {
+                        entity,
+                        operation: Some(Operation::Destroy),
+                        ..Default::default()
+                    },
+                    ProjectileDelivery::Destroy(entity),
+                );
+            }
+        }
+        if self
+            .flights
+            .iter()
+            .all(|flight| matches!(flight, Flight::Retiring))
+        {
+            self.phase = Phase::Retiring;
+        }
     }
 }
 
@@ -140,7 +190,8 @@ impl ObservedProjectiles {
                 presentation,
                 count,
             } => {
-                if usize::from(*count) > MAX_ENTITIES.saturating_sub(self.reserved.len())
+                if *count == 0
+                    || usize::from(*count) > MAX_ENTITIES.saturating_sub(self.reserved.len())
                     || self.views.contains_key(id)
                 {
                     return;
@@ -164,14 +215,18 @@ impl ObservedProjectiles {
                         entities,
                         pending: HashSet::new(),
                         phase: Phase::AwaitingSource,
-                        finished: None,
+                        flights: vec![Flight::Active; usize::from(*count)],
                         cancelled: false,
                     },
                 );
             }
-            ObservedProjectileEvent::Completed { id, frame } => {
-                if let Some(view) = self.views.get_mut(id) {
-                    view.finished.get_or_insert(*frame);
+            ObservedProjectileEvent::Completed { id, ordinal, frame } => {
+                if let Some(flight @ Flight::Active) = self
+                    .views
+                    .get_mut(id)
+                    .and_then(|view| view.flights.get_mut(*ordinal))
+                {
+                    *flight = Flight::Finished(*frame);
                 }
             }
         }
@@ -234,7 +289,7 @@ impl WorldDelivery {
                 .and_then(|stream| stream.base())
                 .map(|(_, base)| base);
             let deadline = view
-                .finished
+                .completed_at()
                 .unwrap_or_else(|| view.shot.launched.saturating_add(view.shot.lifetime_ticks))
                 .saturating_add(DELIVERY_GRACE);
             let expired = tick >= deadline;
@@ -277,11 +332,14 @@ impl WorldDelivery {
                 Phase::Visible { sent_at } => {
                     // The client can start tracing the projectile on receipt,
                     // before this room processes the packet acknowledgement.
-                    !live
-                        || view.finished.is_some_and(|finished| {
-                            let elapsed = finished.saturating_sub(view.shot.launched).max(1);
-                            tick.saturating_sub(sent_at) >= elapsed
-                        })
+                    if !live || tick > sent_at {
+                        let through = view
+                            .shot
+                            .launched
+                            .saturating_add(tick.saturating_sub(sent_at));
+                        view.retire(through, !live, &mut queue);
+                    }
+                    false
                 }
                 Phase::Retiring => {
                     if view.pending.is_empty() {
@@ -291,18 +349,7 @@ impl WorldDelivery {
                 }
             };
             if retire {
-                view.phase = Phase::Retiring;
-                view.pending.extend(view.entities.iter().copied());
-                for &entity in &view.entities {
-                    queue(
-                        EntityUpdate {
-                            entity,
-                            operation: Some(Operation::Destroy),
-                            ..Default::default()
-                        },
-                        ProjectileDelivery::Destroy(entity),
-                    );
-                }
+                view.retire(tick, true, &mut queue);
             }
         }
         for id in clear {
@@ -346,6 +393,7 @@ mod tests {
         activation: u16,
         launch: u32,
         flight_ticks: u32,
+        early_contact_ticks: u32,
         count: u16,
         presentation_variable: u32,
         presentation_value: bool,
@@ -588,10 +636,18 @@ mod tests {
         let replay = send_launch(&mut world, retry_tick, 2);
         assert_eq!(replay.update, launched.update);
 
-        world.observe_projectiles(&[ObservedProjectileEvent::Completed {
-            id,
-            frame: finished,
-        }]);
+        world.observe_projectiles(&[
+            ObservedProjectileEvent::Completed {
+                id,
+                ordinal: 1,
+                frame: launch + input.early_contact_ticks,
+            },
+            ObservedProjectileEvent::Completed {
+                id,
+                ordinal: 0,
+                frame: finished,
+            },
+        ]);
         world.advance_observed_projectiles(finished).unwrap();
         assert!(outgoing(&mut world).is_empty());
         acknowledge(&mut world, vec![replay], true);
@@ -601,6 +657,22 @@ mod tests {
         let arrival = finished + 1;
         let retire = retry_tick + input.flight_ticks;
         world.advance_observed_projectiles(arrival).unwrap();
+        assert!(outgoing(&mut world).is_empty());
+        world
+            .advance_observed_projectiles(retry_tick + input.early_contact_ticks)
+            .unwrap();
+        let early = outgoing(&mut world);
+        assert_eq!(early.len(), 1);
+        assert_eq!(early[0].update.entity, entities[1]);
+        assert!(matches!(
+            early[0].update.operation,
+            Some(Operation::Destroy)
+        ));
+        acknowledge(&mut world, early, false);
+        let early_retry = outgoing(&mut world);
+        assert_eq!(early_retry.len(), 1);
+        assert_eq!(early_retry[0].update.entity, entities[1]);
+        acknowledge(&mut world, early_retry, true);
         world.advance_observed_projectiles(retire - 1).unwrap();
         assert!(outgoing(&mut world).is_empty());
         world.advance_observed_projectiles(retire).unwrap();
@@ -610,7 +682,7 @@ mod tests {
                 .iter()
                 .map(|record| record.update.entity)
                 .collect::<Vec<_>>(),
-            entities
+            [entities[0]]
         );
         assert!(
             destroys

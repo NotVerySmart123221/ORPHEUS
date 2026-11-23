@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Retire each observed NPC projectile at its own authoritative flight end. A projectile that hits a nearby body is removed independently of the other projectiles in its volley, with separate destroy retries. Passed 509 Inspector-enabled server tests and a prepared 104319 check in which the opposing robot in front took damage and shielded the player behind it. Original-client projectile presentation still needs a playtest.
+
 - Reorganize both README editions around the Rust developer preview, contributor entry points, and an animated Web Scene Inspector capture made with synthetic data. Update the branch guide to reflect the current default and the status of the Python reference.
 
 - Apply the existing per-observer bot respawn acknowledgement to owner movement contacts. A replacement cannot block its observer from moving through its capsule until the create and required respawn script baseline arrive. Passed 509 Inspector-enabled server tests and the prepared 104319 stock respawn projection and encrypted bot replacement checks. Original-client timing remains open.

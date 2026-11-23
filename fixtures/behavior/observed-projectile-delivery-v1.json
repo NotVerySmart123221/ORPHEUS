@@ -10,6 +10,7 @@
     "activation": 5,
     "launch": 120,
     "flight_ticks": 6,
+    "early_contact_ticks": 2,
     "count": 2,
     "presentation_variable": 810,
     "presentation_value": true
