@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Publish NPC walk input from the horizontal travel resolved by the mover. Purely vertical motion releases walking input while preserving the last input frame and aim. The prepared knockback replay checks outgoing locomotion during the trip back and input release at the destination. Passed 592 library tests, two prepared bot return replays, and Clippy.
+
 - Select map ray and projectile geometry as a pair. Missing or rejected expanded caches use the movement geometry for both, preserving radius-aware projectile sweeps even in rooms without character movement contacts. Passed 591 library tests, two 104319 map checks covering expanded and fallback caches, and Clippy.
 
 - Sweep projectiles using their authored terrain radius without character movement padding. The shared gap fixture reproduces a small projectile stopped by the previous minimum radius and verifies that a wider projectile still strikes the edge. Passed 591 library tests, two prepared collision and NPC projectile checks, and Clippy.

@@ -1358,15 +1358,22 @@ impl Bot {
             self.stop_objective(tick);
             return;
         }
-        self.velocity = std::array::from_fn(|axis| (self.position[axis] - start[axis]) / dt);
-        if face_target {
+        let delta: [f64; 3] = std::array::from_fn(|axis| self.position[axis] - start[axis]);
+        self.velocity = delta.map(|axis| axis / dt);
+        let [dx, _, dz] = delta;
+        let horizontal = dx.hypot(dz);
+        if face_target && (x != 0.0 || z != 0.0) {
             self.yaw = heading([x, z]);
-            self.held = [0, FORWARD as i8];
-        } else {
-            self.held = throttles(self.yaw, [x / distance, z / distance]);
         }
-        self.last_held = self.held;
-        self.input_tick = Some(tick);
+        self.held = if (snap(dx), snap(dz)) == (0.0, 0.0) {
+            [0; 2]
+        } else {
+            throttles(self.yaw, [dx / horizontal, dz / horizontal])
+        };
+        if self.held != [0; 2] {
+            self.last_held = self.held;
+            self.input_tick = Some(tick);
+        }
         self.moved_tick = Some(tick);
     }
 
@@ -2416,6 +2423,43 @@ fn grounded_velocity_below_movement_precision_releases_npc_steering() {
     assert!(airborne.step_combat_motion(tick, &settings, &mut |_, _, _, _| None));
     assert!(airborne.has_combat_motion());
     assert!(airborne.velocity[1] < 0.0);
+}
+
+#[test]
+fn scripted_walk_publishes_locomotion_only_for_horizontal_travel() {
+    let input: serde_json::Value = serde_json::from_str(include_str!(
+        "../../fixtures/behavior/ai-navigation-destination-v1.json"
+    ))
+    .unwrap();
+    let contract = &input["observer_locomotion"];
+    let target = serde_json::from_value(contract["walking_target"].clone()).unwrap();
+    let throttle: [i8; 2] = serde_json::from_value(contract["walking_throttles"].clone()).unwrap();
+    let yaw = contract["aim_yaw"].as_i64().unwrap() as i32;
+    let speed = contract["speed"].as_f64().unwrap();
+    let mut bot = tests::walker(target);
+    bot.yaw = f64::from(yaw);
+    bot.attach_collision(
+        &MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        0x18,
+        |_, _, _, _| None,
+    );
+    bot.walk_to(10, target, speed, false);
+    let walking = bot.movement(10);
+    assert_eq!(walking.yaw, yaw);
+    assert_eq!(walking.throttles, throttle);
+    assert!(walking.velocity[2] > 0.0);
+
+    let mut vertical_target = bot.position;
+    vertical_target[1] = contract["vertical_target_y"].as_f64().unwrap();
+    bot.move_to_objective(11, vertical_target, speed);
+    let vertical = bot.movement(11);
+    assert_eq!(vertical.yaw, yaw);
+    assert_eq!(vertical.throttles, [0; 2]);
+    assert_eq!(vertical.input_frame, Some(10));
+    assert_eq!(vertical.input_throttles, throttle);
+    assert!(vertical.velocity[1] > 0.0);
+    assert!(bot.record_due(11, 4));
 }
 
 #[test]

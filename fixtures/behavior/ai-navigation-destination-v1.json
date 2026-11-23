@@ -7,5 +7,12 @@
     {"graph": 587, "destination": [2.5, 0.75, -4.0], "walk_speed": 3.0},
     {"graph": 588, "destination": [-6.0, 1.0, 7.0], "walk_speed": 6.0},
     {"graph": 589, "destination": [2.5, 0.75, -4.0], "walk_speed": null}
-  ]
+  ],
+  "observer_locomotion": {
+    "aim_yaw": 16384,
+    "speed": 3.0,
+    "walking_target": [0.0, 0.0, 2.0],
+    "vertical_target_y": 1.0,
+    "walking_throttles": [127, 0]
+  }
 }

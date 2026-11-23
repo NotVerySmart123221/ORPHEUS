@@ -768,7 +768,7 @@ fn prepared_stock_firing_bot_walks_back_after_displacement() {
 #[ignore = "requires a prepared 104319 Practice Range pack with authored bot return"]
 fn prepared_stock_firing_bot_returns_after_room_knockback() {
     use crate::{
-        game_clock::{FIRST_TICK, TICK_PERIOD},
+        game_clock::{FIRST_TICK, SEND_EVERY, TICK_PERIOD},
         game_content::GameMap,
         patrol_script::PatrolScript,
         scene_assets::SceneAssets,
@@ -797,6 +797,7 @@ fn prepared_stock_firing_bot_returns_after_room_knockback() {
     let distance = |position: [f64; 3]| (position[0] - home[0]).hypot(position[2] - home[2]);
     let mut maximum: f64 = 0.0;
     let mut walked = false;
+    let mut published_return_stride = false;
     for step in 1..=430 {
         let tick = FIRST_TICK + step;
         if step == 120 {
@@ -816,12 +817,29 @@ fn prepared_stock_firing_bot_returns_after_room_knockback() {
         let script = state.stock_script.as_ref().unwrap();
         maximum = maximum.max(distance(state.bot.position));
         walked |= script.walk_request().is_some();
+        if script.walk_request().is_some() && !state.bot.has_combat_motion() {
+            let pose = state.bot.movement(tick);
+            let toward_home = [0, 2]
+                .into_iter()
+                .map(|axis| pose.velocity[axis] * (home[axis] - pose.position[axis]))
+                .sum::<f64>()
+                > 0.0;
+            published_return_stride |= toward_home
+                && pose.throttles != [0; 2]
+                && tick % SEND_EVERY == 0
+                && state.bot.record_due(tick, SEND_EVERY);
+        }
         if maximum > 0.6
             && walked
             && distance(state.bot.position) < 0.4
             && script.walk_request().is_none()
         {
             assert!(!state.bot.has_combat_motion());
+            assert!(
+                published_return_stride,
+                "no observer locomotion during return"
+            );
+            assert_eq!(state.bot.movement(tick).throttles, [0; 2]);
             return;
         }
     }
