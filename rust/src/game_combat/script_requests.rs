@@ -553,10 +553,7 @@ impl RoomSimulation {
         victim_team: u8,
         frame: u32,
     ) {
-        if self.combat_voice.is_empty()
-            || killer_wire == victim_wire
-            || !crate::script_expr::valid_entity(killer_wire)
-        {
+        if killer_wire == victim_wire || !crate::script_expr::valid_entity(killer_wire) {
             return;
         }
         let Some(&entity) = self.players_by_wire.get(&killer_wire) else {
@@ -574,6 +571,16 @@ impl RoomSimulation {
         }
         let owner = player.owner;
         let listener = player.id;
+        if let Some(target) = self.authored_elimination_target(victim_wire) {
+            if let Some(mut player) = self.world.get_mut::<PlayerBodyState>(entity) {
+                if let Some(runtime) = &mut player.runtime {
+                    let _ = runtime.receive_authored_elimination_feedback(target.into());
+                }
+            }
+        }
+        if self.combat_voice.is_empty() {
+            return;
+        }
         let window = self.combat_voice.multikill_window_ticks();
         let streak = self
             .elimination_streaks

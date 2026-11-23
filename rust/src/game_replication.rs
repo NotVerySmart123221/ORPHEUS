@@ -146,6 +146,12 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
     ) -> Result<usize, InitFault> {
         Ok(0)
     }
+    fn receive_authored_elimination_feedback(
+        &mut self,
+        _target: Arc<crate::script_init::HealthTargetFacts>,
+    ) -> Result<usize, InitFault> {
+        Ok(0)
+    }
     fn set_spatial_frame(&mut self, _frame: Arc<crate::game_combat::RoomSpatialFrame>) {}
     fn set_defenders(&mut self, _defenders: Arc<[u32]>) {}
     fn set_team_member_counts(&mut self, _counts: crate::game_instance::TeamMemberCounts) {}

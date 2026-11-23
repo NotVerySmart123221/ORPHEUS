@@ -118,6 +118,7 @@ impl HealthApplied {
 pub(super) struct RoomHealthEvents {
     enabled: bool,
     authored_hit_variant: Option<f32>,
+    authored_elimination_feedback: bool,
     pending: VecDeque<HealthApplied>,
 }
 
@@ -180,6 +181,24 @@ impl RoomSimulation {
     pub(crate) fn enable_authored_hit_feedback(&mut self, variant: f32) {
         self.health_events.authored_hit_variant = Some(variant);
         self.enable_host_health_events();
+    }
+
+    pub(crate) fn enable_authored_elimination_feedback(&mut self) {
+        self.health_events.authored_elimination_feedback = true;
+    }
+
+    pub(super) fn authored_elimination_target(&self, wire: u32) -> Option<HealthTargetFacts> {
+        if !self.health_events.authored_elimination_feedback {
+            return None;
+        }
+        let target = self.sample_health_body(wire)?;
+        let mut facts = target.health_target_facts(&self.world)?;
+        let status = target.room_status(&self.world, self.free_for_all)?;
+        if status.alive {
+            return None;
+        }
+        facts.room_status = Some(status);
+        Some(facts)
     }
 
     pub(super) fn record_health_applied(

@@ -783,6 +783,7 @@ fn lethal_health_change_notifies_source_with_settled_status_after_target_retirem
         runtime: Box<dyn OwnerBodyRuntime>,
         notification: Arc<Mutex<Option<Notification>>>,
         hit_feedback: Arc<Mutex<Option<(HostEvent, f32)>>>,
+        elimination_feedback: Arc<Mutex<Option<Arc<HealthTargetFacts>>>>,
     }
 
     impl OwnerBodyRuntime for HealthListener {
@@ -813,6 +814,20 @@ fn lethal_health_change_notifies_source_with_settled_status_after_target_retirem
                     .lock()
                     .unwrap()
                     .replace((event, variant))
+                    .is_none()
+            );
+            Ok(1)
+        }
+
+        fn receive_authored_elimination_feedback(
+            &mut self,
+            target: Arc<HealthTargetFacts>,
+        ) -> Result<usize, InitFault> {
+            assert!(
+                self.elimination_feedback
+                    .lock()
+                    .unwrap()
+                    .replace(target)
                     .is_none()
             );
             Ok(1)
@@ -858,12 +873,14 @@ fn lethal_health_change_notifies_source_with_settled_status_after_target_retirem
         let source = spawn_player(&mut room, 1);
         let notification = Arc::new(Mutex::new(None));
         let hit_feedback = Arc::new(Mutex::new(None));
+        let elimination_feedback = Arc::new(Mutex::new(None));
         let state = room.player_body_mut(source).unwrap();
         let runtime = state.runtime.take().unwrap();
         state.runtime = Some(Box::new(HealthListener {
             runtime,
             notification: Arc::clone(&notification),
             hit_feedback: Arc::clone(&hit_feedback),
+            elimination_feedback: Arc::clone(&elimination_feedback),
         }));
         if let Some(free_for_all) = room_mode {
             room.enable_spatial_queries(
@@ -872,7 +889,11 @@ fn lethal_health_change_notifies_source_with_settled_status_after_target_retirem
                 RoomSpatialNeeds::EntityFacts,
             );
         }
+        if room_mode.is_some() {
+            room.enable_authored_elimination_feedback();
+        }
         room.activate_combat();
+        assert!(room.authored_elimination_target(target).is_none());
         if let Some(variant) = hit_variant {
             room.enable_authored_hit_feedback(variant);
         } else {
@@ -906,6 +927,17 @@ fn lethal_health_change_notifies_source_with_settled_status_after_target_retirem
             );
         }
         assert!(notification.lock().unwrap().is_none());
+        let elimination = elimination_feedback.lock().unwrap().take();
+        assert_eq!(elimination.is_some(), room_mode.is_some());
+        if let Some(facts) = elimination {
+            assert_eq!(facts.target, target);
+            assert_eq!(
+                facts.filter_flags,
+                Some(expected.replacement.target_facts.filter_flags)
+            );
+            let status = facts.room_status.unwrap();
+            assert_eq!((status.team, status.alive), expected_status.unwrap());
+        }
 
         let queries = BotQueries::new(room_mode.unwrap_or(false), &movers, &ground, None);
         let replacements = room

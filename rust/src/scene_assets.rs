@@ -509,6 +509,11 @@ impl SceneAssets {
         {
             simulation.enable_authored_hit_feedback(variant);
         }
+        if cfg!(feature = "inspector")
+            && std::env::var_os("ORPHEUS_PLAYTEST_ELIMINATION").is_some_and(|value| value == "1")
+        {
+            simulation.enable_authored_elimination_feedback();
+        }
         simulation.set_environment(self.environment.for_map(map.map_guid));
         if self.graphs.uses_host_health_events() {
             simulation.enable_host_health_events();

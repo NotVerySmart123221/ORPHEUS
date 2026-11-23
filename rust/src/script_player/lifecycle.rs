@@ -199,6 +199,24 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
             .queue_authored_hit_feedback(event, context, variant)
     }
 
+    fn receive_authored_elimination_feedback(
+        &mut self,
+        target: Arc<crate::script_init::HealthTargetFacts>,
+    ) -> Result<usize, InitFault> {
+        #[cfg(feature = "inspector")]
+        let victim = target.target;
+        let result = self
+            .component
+            .queue_authored_elimination_feedback(target, true);
+        #[cfg(feature = "inspector")]
+        if crate::owner_trace::playtest_enabled() {
+            crate::owner_trace::playtest(format_args!(
+                "combat elimination presentation target={victim:08X} queued={result:?}"
+            ));
+        }
+        result
+    }
+
     fn heal(&mut self, amount: f64) -> f64 {
         self.world.vitals.heal(amount)
     }

@@ -3462,15 +3462,7 @@ fn prepared_shared_combat_graph_projects_hit_and_elimination_effects() {
             let before = component.snapshot().unwrap().frame_actions.len();
             assert_eq!(
                 component
-                    .queue_settled_damage_message(
-                        instance,
-                        0x0240_0000_0000_0093,
-                        Variables::from([
-                            (0x15, Value::Entity(target)),
-                            (0x91, Value::Bool(final_blow)),
-                        ]),
-                        Arc::clone(&retired),
-                    )
+                    .queue_authored_elimination_feedback(Arc::clone(&retired), final_blow)
                     .unwrap(),
                 1,
             );

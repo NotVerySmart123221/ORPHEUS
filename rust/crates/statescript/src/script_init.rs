@@ -19,6 +19,9 @@ use crate::{
     script_wire::{Value, Variables},
 };
 
+const HIT_PRESENTATION_MESSAGE: u64 = 0x0240_0000_0000_0012;
+const ELIMINATION_PRESENTATION_MESSAGE: u64 = 0x0240_0000_0000_0093;
+
 pub const MAX_INIT_WORK: usize = 100_000;
 const MAX_PLUG_DEPTH: usize = 64;
 const MAX_EVENTS_PER_UPDATE: usize = 1000;
@@ -52,6 +55,42 @@ const MOVEMENT_BOOLEAN_OUTPUTS: [&str; 12] = [
     "m_45EB431F",
     "m_BF152E27",
 ];
+
+fn has_presentation_entry(
+    graph: &crate::script_graph::Graph,
+    message: u64,
+    parameters: &[u32],
+    server_only: bool,
+) -> bool {
+    use crate::script_graph::{EntryTopic, message_parameter_id};
+
+    let mut entries = graph.entry_handlers(EntryTopic::Message(message));
+    let Some(entry) = entries.next() else {
+        return false;
+    };
+    entry.server_only == server_only
+        && !entry.client_only
+        && entries.next().is_none()
+        && entry
+            .field("m_params")
+            .and_then(Json::as_array)
+            .is_some_and(|fields| {
+                fields.len() == parameters.len()
+                    && parameters.iter().all(|key| {
+                        fields
+                            .iter()
+                            .any(|field| message_parameter_id(field) == *key)
+                    })
+            })
+}
+
+fn presentation_target_available(target: &HealthTargetFacts) -> bool {
+    target.tags.has_known_base()
+        && !matches!(
+            target.script_state,
+            crate::script_entity_state::EntityScriptState::Unavailable
+        )
+}
 
 #[derive(Clone, Debug)]
 pub struct Root {
@@ -609,11 +648,6 @@ impl Component {
         context: &HostHealthContext,
         variant: f32,
     ) -> Result<usize, InitFault> {
-        use crate::script_graph::{EntryTopic, message_parameter_id};
-
-        const HIT_MESSAGE: u64 = 0x0240_0000_0000_0012;
-        const HIT_PARAMETERS: [u32; 5] = [0x13, 0x15, 0x3d, 0x95, 0x724];
-
         let HostEvent::HealthApplied {
             source,
             target,
@@ -633,11 +667,7 @@ impl Component {
         if source != Some(owner)
             || target == owner
             || target_facts.target != target
-            || !target_facts.tags.has_known_base()
-            || matches!(
-                target_facts.script_state,
-                crate::script_entity_state::EntityScriptState::Unavailable
-            )
+            || !presentation_target_available(target_facts)
             || !damage.is_finite()
             || damage <= 0.0
             || !variant.is_finite()
@@ -646,40 +676,12 @@ impl Component {
             return Ok(0);
         }
 
-        let mut receivers = self
-            .machine
-            .snapshot
-            .instances
-            .iter()
-            .filter_map(|(&id, instance)| {
-                if instance.is_server_only() {
-                    return None;
-                }
-                let graph = self.graphs.graph(instance.graph)?;
-                let mut entries = graph.entry_handlers(EntryTopic::Message(HIT_MESSAGE));
-                let entry = entries.next()?;
-                let params = entry.field("m_params")?.as_array()?;
-                (entry.server_only
-                    && !entry.client_only
-                    && entries.next().is_none()
-                    && params.len() == HIT_PARAMETERS.len()
-                    && HIT_PARAMETERS.iter().all(|key| {
-                        params
-                            .iter()
-                            .any(|parameter| message_parameter_id(parameter) == *key)
-                    }))
-                .then_some(id)
-            });
-        let Some(instance) = receivers.next() else {
+        let Some(instance) = self.combat_presentation_instance(false) else {
             return Ok(0);
         };
-        if receivers.next().is_some() {
-            return Ok(0);
-        }
-
         self.queue_settled_damage_message(
             instance,
-            HIT_MESSAGE,
+            HIT_PRESENTATION_MESSAGE,
             Variables::from([
                 (0x13, Value::Float(f64::from(damage))),
                 (0x15, Value::Entity(target)),
@@ -692,6 +694,61 @@ impl Component {
             ]),
             Arc::clone(target_facts),
         )
+    }
+
+    /// Route credited elimination presentation to the active shared combat receiver.
+    pub fn queue_authored_elimination_feedback(
+        &mut self,
+        target: Arc<HealthTargetFacts>,
+        final_blow: bool,
+    ) -> Result<usize, InitFault> {
+        if target.target == self.machine.snapshot.entity || !presentation_target_available(&target)
+        {
+            return Ok(0);
+        }
+        let Some(instance) = self.combat_presentation_instance(true) else {
+            return Ok(0);
+        };
+        self.queue_settled_damage_message(
+            instance,
+            ELIMINATION_PRESENTATION_MESSAGE,
+            Variables::from([
+                (0x15, Value::Entity(target.target)),
+                (0x91, Value::Bool(final_blow)),
+            ]),
+            target,
+        )
+    }
+
+    fn combat_presentation_instance(&self, require_elimination: bool) -> Option<u16> {
+        let mut receivers = self
+            .machine
+            .snapshot
+            .instances
+            .iter()
+            .filter_map(|(&id, instance)| {
+                if instance.is_server_only() {
+                    return None;
+                }
+                let graph = self.graphs.graph(instance.graph)?;
+                // Other elimination consumers bind different data or drive gameplay.
+                // Identify the shared presenter by the contracts on the same graph.
+                (has_presentation_entry(
+                    graph,
+                    HIT_PRESENTATION_MESSAGE,
+                    &[0x13, 0x15, 0x3d, 0x95, 0x724],
+                    true,
+                ) && (!require_elimination
+                    || has_presentation_entry(
+                        graph,
+                        ELIMINATION_PRESENTATION_MESSAGE,
+                        &[0x15, 0x91],
+                        false,
+                    )))
+                .then_some(id)
+            });
+        let instance = receivers.next()?;
+        receivers.next().is_none().then_some(instance)
     }
 
     pub fn queue_frame_message(
