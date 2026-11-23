@@ -7,11 +7,8 @@ use std::{collections::HashSet, fmt, sync::Arc};
 
 use crate::{
     collision_grid::ColumnRange,
-    contact_cache::{CapsulePose, LOOSE, ProxyContact, cast_round, encloses},
-    contact_gjk::{
-        PointSetSize, SimplexCache, gjk,
-        sweep::{CastShape, MeshProbe},
-    },
+    contact_cache::{CapsulePose, LOOSE, ProxyContact, encloses},
+    contact_gjk::{PointSetSize, SimplexCache, gjk, sweep::MeshProbe},
     contact_hull::HullContactError,
     contact_math::{TINY, Vec3, add, dot, maxps, minps, scale, sub},
     contact_mesh::ContactBounds,
@@ -19,6 +16,7 @@ use crate::{
     contact_solver::{Constraint, ContactPlane, project_target},
     contact_triangle::{SKIN, TOUCH, closest_parameters},
     contact_world::{ContactWorld, PROXY_MARGIN, StaticGeometry, StaticShape, WorldHit, overlaps},
+    static_ray::{capsule_entry_hit, norm, segment_separation},
 };
 
 const MAX_ROUNDS: u32 = 20;
@@ -280,21 +278,29 @@ impl CharacterBody {
             }
             let static_constraints = self.constraints.len();
             if !actors.is_empty() {
-                let bounds = self.pose.bounds();
+                let bounds = expanded(self.pose.bounds(), TOUCH);
                 let low = bounds.low.map(f64::from);
                 let high = bounds.high.map(f64::from);
-                let moving = self.pose.world_capsule();
                 for actor in actors {
                     if !overlaps(low, high, actor.bounds()) {
                         continue;
                     }
-                    let manifold = capsule_capsule(moving, actor.world_capsule());
-                    if !manifold.points().is_empty() {
-                        self.constraints.push(contact_constraint(
-                            current,
-                            manifold.normal.map(|axis| -axis),
-                            manifold.points(),
-                        ));
+                    let (a, b, radius) = actor_exclusion(self.pose, *actor);
+                    let separation = segment_separation(current.map(f64::from), a, b);
+                    let distance = norm(separation);
+                    if distance <= radius + f64::from(TOUCH) {
+                        let normal = if distance == 0.0 {
+                            [-1.0, 0.0, 0.0]
+                        } else {
+                            separation.map(|axis| (axis / distance) as f32)
+                        };
+                        // Cancel the static solver's penetration allowance for actors.
+                        // Leave rounding clearance so a projected tangent can slide.
+                        let position_dot = dot(normal, current);
+                        let rounding = f32::EPSILON * position_dot.abs().max(1.0);
+                        let offset = position_dot + ((radius - distance) as f32 + TOUCH + rounding);
+                        self.constraints
+                            .push(ContactPlane { normal, offset }.into());
                     }
                 }
             }
@@ -396,23 +402,22 @@ impl CharacterBody {
             if !actors.is_empty() {
                 let low = swept.low.map(f64::from);
                 let high = swept.high.map(f64::from);
-                let capsule = self.pose.world_capsule();
-                let endpoints = [capsule.a, capsule.b];
-                let moving = CastShape {
-                    points: &endpoints,
-                    radius: capsule.radius,
-                    frame: None,
-                };
+                let origin = self.pose.position.map(f64::from);
+                let delta = translation.map(f64::from);
+                let length = norm(delta);
+                let direction = delta.map(|axis| axis / length);
                 for actor in actors {
                     if !overlaps(low, high, actor.bounds()) {
                         continue;
                     }
-                    if let Some(candidate) = cast_round(
-                        moving,
-                        RoundShape::Capsule(actor.world_capsule()),
-                        None,
-                        translation,
-                    )? {
+                    let (a, b, radius) = actor_exclusion(self.pose, *actor);
+                    if let Some(hit) = capsule_entry_hit(origin, direction, length, a, b, radius)
+                        .filter(|hit| {
+                            hit.distance != 0.0
+                                || dot(hit.normal.map(|axis| axis as f32), translation) < 0.0
+                        })
+                    {
+                        let candidate = (hit.distance / length) as f32;
                         if candidate < fraction {
                             actor_clipped = true;
                             if TRACE {
@@ -437,6 +442,20 @@ impl CharacterBody {
         }
         Ok((self.pose.position, actor_clipped))
     }
+}
+
+// For two upright capsules the forbidden origins form one upright capsule
+// with the summed radii and the interval of vertical axis differences.
+fn actor_exclusion(moving: CapsulePose, actor: CapsulePose) -> ([f64; 3], [f64; 3], f64) {
+    let [x, y, z] = actor.position.map(f64::from);
+    let low = y + f64::from(actor.radius.min(actor.top)) - f64::from(moving.radius.max(moving.top));
+    let high =
+        y + f64::from(actor.radius.max(actor.top)) - f64::from(moving.radius.min(moving.top));
+    (
+        [x, low, z],
+        [x, high, z],
+        f64::from(moving.radius) + f64::from(actor.radius),
+    )
 }
 
 fn contact_constraint(current: Vec3, normal: Vec3, points: &[ContactPoint]) -> Constraint {
@@ -857,6 +876,42 @@ mod tests {
         let clipped = clip_velocity([4.0, 0.0, 0.0], movement.planes);
         assert!(clipped.into_iter().all(|axis| axis.abs() < 1e-4));
         assert_eq!(body.capsule_pose().radius, 0.5);
+    }
+
+    #[test]
+    fn dynamic_capsule_glances_without_entering_the_actor() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../fixtures/behavior/hostile-capsule-glance-v1.json"
+        ))
+        .unwrap();
+        let input = &fixture["input"];
+        let expected = &fixture["expected"];
+        let vector = |key: &str| serde_json::from_value::<Vec3>(input[key].clone()).unwrap();
+        let world = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+        let actor = standing(vector("actor_origin"));
+        let mut body = CharacterBody::new(world, standing(vector("mover_origin")), 0x18);
+        let displacement = vector("displacement");
+        let dt = input["step_seconds"].as_f64().unwrap() as f32;
+        let minimum = expected["minimum_axis_distance"].as_f64().unwrap() as f32;
+        let mut contacted = false;
+        for _ in 0..input["steps"].as_u64().unwrap() {
+            let movement = body
+                .move_capsule_against(displacement, dt, &[actor])
+                .unwrap();
+            let [x, _, z] = movement.position;
+            assert!(
+                (x - actor.position[0]).hypot(z - actor.position[2]) >= minimum - 1e-6,
+                "{:?}",
+                movement.position
+            );
+            contacted |= movement.actor_contact;
+        }
+        assert_eq!(contacted, expected["contact_detected"].as_bool().unwrap());
+        assert!(
+            f64::from(body.position()[0]) > expected["final_x_above"].as_f64().unwrap(),
+            "{:?}",
+            body.position()
+        );
     }
 
     #[test]

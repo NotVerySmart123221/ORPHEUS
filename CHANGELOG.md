@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Use the combined geometric radius when upright actor capsules sweep against one another. The shared solver blocks grazing penetration and allows tangent motion to continue. Existing team and collision-participation rules still select the blockers. Passed 519 server and 69 collision library tests. Original-client collision prediction and the remaining Practice Range shot blockers still need playtest evidence.
+
 - Freeze the shot's authored presentation values without carrying over live stack bindings from another state. Observer projectile launch waits for a snapshot that acknowledges those literal values. The normal projection restores live bindings after the launch. Passed 519 server tests and the 104319 firing projection check for both bot teams.
 
 - Return grounded NPCs to authored steering when their residual knockback velocity quantizes to zero. A newly applied impulse still moves the body, and airborne actors keep their falling motion. Passed 519 server tests and the prepared 104319 firing-bot walk-back check.
