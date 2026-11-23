@@ -544,6 +544,7 @@ impl ProjectileFlight {
                 loadout: direct.loadout,
                 impulse: None,
                 geometry: Some(ImpactGeometry::Direct {
+                    origin: self.position,
                     point,
                     direction: self.direction,
                 }),
@@ -851,6 +852,7 @@ mod tests {
                     .unwrap()
                     .is_none()
             );
+            let segment_origin = flight.position;
             let end = flight
                 .advance(20, &targets, |_, _, _| Ok(None))
                 .unwrap()
@@ -864,6 +866,7 @@ mod tests {
             assert_eq!(
                 impact.geometry,
                 Some(ImpactGeometry::Direct {
+                    origin: segment_origin,
                     point: end.point,
                     direction: [0.0, 0.0, 1.0],
                 })

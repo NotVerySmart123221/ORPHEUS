@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Send the settled weapon origin in the opt-in victim damage feedback event. The client uses this world point for view-relative direction. The synthetic and prepared 104319 replays verify victim-only delivery, and the synthetic replay also checks neutral fields for damage without weapon geometry. Passed 823 library tests and Clippy.
+
 - Identify the native emote exit operand as a voice category, and extend the prepared wheel replay to verify that repeated use replaces the cosmetic preload. Immediate release of the preload on interruption remains open.
 
 - Refine the English and Simplified Chinese README status and contribution sections around shared hero behavior, completed infrastructure, and reproducible gameplay reports.

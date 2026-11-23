@@ -253,14 +253,24 @@ pub struct Impact {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ImpactGeometry {
-    /// The point on the ray or swept sphere's centre path where it first contacts the body.
     Direct {
+        /// The ray origin or the start of the contacting projectile segment.
+        origin: Vec3,
+        /// First contact along the ray or swept sphere's centre path.
         point: Vec3,
         direction: Vec3,
     },
     Blast {
         origin: Vec3,
     },
+}
+
+impl ImpactGeometry {
+    pub(crate) fn origin(self) -> Vec3 {
+        match self {
+            Self::Direct { origin, .. } | Self::Blast { origin } => origin,
+        }
+    }
 }
 
 impl HitscanShot {
@@ -333,6 +343,7 @@ impl HitscanShot {
             loadout: self.hit.loadout,
             impulse: None,
             geometry: Some(ImpactGeometry::Direct {
+                origin: self.origin,
                 point: along(self.origin, self.direction, distance),
                 direction: self.direction,
             }),
@@ -474,6 +485,7 @@ mod tests {
                 loadout: RIFLE.loadout,
                 impulse: None,
                 geometry: Some(ImpactGeometry::Direct {
+                    origin: [0.0, 1.0, 0.0],
                     point: [0.0, 1.0, 9.5],
                     direction: [0.0, 0.0, 1.0],
                 }),

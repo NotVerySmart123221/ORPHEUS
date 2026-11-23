@@ -313,6 +313,7 @@ impl Peer {
                         source,
                         victim,
                         dealt,
+                        ..
                     } => {
                         crate::owner_trace::playtest(format_args!(
                             "received damage admitted owner={:08X} source={source:08X} victim={victim:08X} dealt={dealt} ordinal={ordinal}",

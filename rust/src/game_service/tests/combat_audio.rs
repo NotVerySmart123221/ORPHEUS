@@ -365,7 +365,9 @@ fn native_received_damage_is_delivered_only_to_the_body_that_lost_health() {
     .unwrap();
     let damage = contract["input"]["damage"].as_f64().unwrap();
     let schemas = Schemas::from_json(&contract["jam_schema"].to_string()).unwrap();
-    assert_native_received_damage(schemas, damage);
+    let ray_distance = contract["input"]["ray_distance"].as_f64().unwrap();
+    assert_native_received_damage(&schemas, damage, Some(ray_distance));
+    assert_native_received_damage(&schemas, damage, None);
 }
 
 #[test]
@@ -373,10 +375,10 @@ fn native_received_damage_is_delivered_only_to_the_body_that_lost_health() {
 fn prepared_native_received_damage_uses_the_104319_schema() {
     let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
     let schemas = Schemas::load(runtime.join("data/game_schemas_174.json")).unwrap();
-    assert_native_received_damage(schemas, 9.0);
+    assert_native_received_damage(&schemas, 9.0, Some(4.0));
 }
 
-fn assert_native_received_damage(schemas: Schemas, damage: f64) {
+fn assert_native_received_damage(schemas: &Schemas, damage: f64, ray_distance: Option<f64>) {
     let graph = feedback_graph(109, 207, CueTrigger::EliminationDealt);
     let (mut room, [source, victim], mut sequence) = feedback_room(graph, [0, 1]);
     let source_create = room
@@ -424,15 +426,63 @@ fn assert_native_received_damage(schemas: Schemas, damage: f64) {
             .count(),
         0
     );
-    apply_and_advance(&mut room, [source, victim], tick + 4, damage);
-    assert_eq!(
+    let hit_tick = tick + 4;
+    let origin = if let Some(distance) = ray_distance {
+        let scene = &mut room.world.as_mut().unwrap().scene;
+        let [x, y, z] = scene
+            .simulation()
+            .player_body(victim)
+            .unwrap()
+            .mover
+            .pose()
+            .position;
+        let origin = [x - distance, y + 1.0, z];
+        let (simulation, queries) = scene.bot_simulation();
+        simulation.activate_combat();
+        simulation
+            .hitscan(
+                &queries,
+                PosedHitscan {
+                    source: source.entity,
+                    origin,
+                    direction: [1.0, 0.0, 0.0],
+                    command: Command {
+                        frame: hit_tick,
+                        ..Command::default()
+                    },
+                    shot_frame: hit_tick,
+                    reach: 12.0,
+                    hit: HitDefinition {
+                        tags: DamageTags::EMPTY,
+                        amount: damage,
+                        loadout: None,
+                        critical: 1.0,
+                        falloff: None,
+                    },
+                },
+                ShotContext {
+                    team: 0,
+                    quanta: RETAIL_QUANTA,
+                    tick: hit_tick,
+                    now: hit_tick * TICK_PERIOD,
+                },
+                |entity| entity == victim.entity,
+            )
+            .unwrap()
+            .expect("player hit");
+        advance_feedback(&mut room, [source, victim], hit_tick);
+        Some(origin)
+    } else {
+        apply_and_advance(&mut room, [source, victim], hit_tick, damage);
+        None
+    };
+    assert!(
         room.members[&1]
             .peer
             .as_ref()
             .unwrap()
             .pending_combat_notices()
-            .count(),
-        0
+            .all(|notice| !matches!(notice, CombatNotice::DamageReceived { .. }))
     );
     let simulation = room.world.as_ref().unwrap().scene.simulation();
     let peer = room.members.get_mut(&2).unwrap().peer.as_mut().unwrap();
@@ -442,9 +492,10 @@ fn assert_native_received_damage(schemas: Schemas, damage: f64) {
             source: source.entity,
             victim: victim.entity,
             dealt: damage as f32,
+            origin,
         }]
     );
-    peer.flush_combat(&schemas, (tick + 4) * TICK_PERIOD, Some(simulation))
+    peer.flush_combat(schemas, (tick + 4) * TICK_PERIOD, Some(simulation))
         .unwrap();
     assert!(!peer.egress.has_queued_reliable());
     peer.world.create_remote_player(source, source_create);
@@ -452,7 +503,7 @@ fn assert_native_received_damage(schemas: Schemas, damage: f64) {
         assert!(sequence[1] < 16);
         acknowledge_world_frame(peer, &mut sequence[1]);
     }
-    peer.flush_combat(&schemas, (tick + 5) * TICK_PERIOD, Some(simulation))
+    peer.flush_combat(schemas, (tick + 5) * TICK_PERIOD, Some(simulation))
         .unwrap();
     peer.world
         .send_frame(
@@ -464,12 +515,26 @@ fn assert_native_received_damage(schemas: Schemas, damage: f64) {
             |payload| {
                 let mut reader = BitReader::new(&payload);
                 reader.var_a().unwrap();
-                let channel = read_channel(&mut reader, &schemas).unwrap();
+                let channel = read_channel(&mut reader, schemas).unwrap();
                 let [event] = channel.reliable.as_slice() else {
                     panic!("expected one victim feedback event");
                 };
                 assert_eq!(event.message.id, 25000);
                 assert_eq!(event.message.fields[&0x78], Value::Signed(1));
+                for (offset, xyz) in [
+                    (0x84, [0.0; 3]),
+                    (0x90, [0.0; 3]),
+                    (0x9c, origin.unwrap_or_default()),
+                ] {
+                    assert_eq!(
+                        event.message.fields[&offset],
+                        Value::Struct(Fields::from_iter(
+                            [0, 4, 8]
+                                .into_iter()
+                                .zip(xyz.map(|v| Value::Float32(v as f32)))
+                        ))
+                    );
+                }
                 assert_eq!(
                     event.message.fields[&0xa8],
                     Value::Array(vec![Value::Unsigned(0); 3])

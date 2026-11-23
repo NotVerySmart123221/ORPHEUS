@@ -1207,18 +1207,21 @@ For a received-damage client comparison, set
 `ORPHEUS_PLAYTEST_RECEIVED_DAMAGE=1` on an Inspector server using the prepared
 104319 runtime. Only positive, nonlethal loss from a distinct room actor queues
 the local damage event. The victim's active body and the source generation must
-still match when delivered. The test frame retains neutral direction vectors
-and flags. Compare the client response when an NPC hits the player with the
-response when the player hits the NPC. Verify directional indicators and
-audible cues independently.
+still match when delivered. The client copies the position at offset
+`0x9c` to its combat event and subtracts its view origin before projecting
+the result onto the view axes. The server supplies the settled weapon
+source point for this field. The other vectors and flags retain their
+neutral values. The prepared schema replay verifies the encoded position
+on the struck player's connection. The directional indicator and any
+pose reaction still need separate verification.
 
 The existing playtest settlement trace includes the geometry available at the
-point of damage. A direct hitscan or projectile hit records its contact point
-and incoming direction. For an expanded projectile sweep, this point lies
-on the projectile centre path. Splash records its blast origin. Health
-changes that lack a weapon impact have no geometry. The 104319 damage
-message continues to use neutral vectors pending a verified mapping of its
-three vector fields.
+point of damage. Direct hits record the start of the ray or contacting
+projectile segment, its contact point, and its incoming direction. For an
+expanded projectile sweep, the recorded contact point is on the projectile
+centre path. Splash records the blast origin. A health change without a
+weapon impact has no source point in this path and uses the neutral
+message fields.
 
 Current hit feedback is scoped to settled weapon impacts with a hit
 classification. A generic scripted health change has no hit classification,

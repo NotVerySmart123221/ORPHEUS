@@ -3,7 +3,8 @@
   "case_id": "received-damage-feedback.synthetic.v1",
   "evidence": "synthetic-rust",
   "input": {
-    "damage": 9
+    "damage": 9,
+    "ray_distance": 4
   },
   "jam_schema": {
     "8F89E0DF": {

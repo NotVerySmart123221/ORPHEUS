@@ -441,6 +441,7 @@ impl RoomSimulation {
         victim: BodyId,
         source: u32,
         dealt: f32,
+        origin: Option<Vec3>,
     ) {
         if !self.received_damage_feedback
             || victim.entity == source
@@ -460,6 +461,7 @@ impl RoomSimulation {
                 source: source.wire,
                 victim: victim.entity,
                 dealt,
+                origin,
             },
         });
     }

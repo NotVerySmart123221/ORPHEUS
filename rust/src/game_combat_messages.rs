@@ -6,6 +6,7 @@
 use crate::{
     game_messages::{self, ChannelError, EncodedMessage},
     jam_codec::{Fields, Schemas, Value},
+    static_ray::Vec3,
 };
 
 const RECEIVED_DAMAGE: u32 = 25000;
@@ -27,6 +28,7 @@ pub enum CombatNotice {
         source: u32,
         victim: u32,
         dealt: f32,
+        origin: Option<Vec3>,
     },
     Death {
         source: u32,
@@ -112,12 +114,18 @@ impl CombatNotice {
                 source,
                 victim,
                 dealt,
+                origin,
             } => {
-                // Retain the field shape of the tested nonlethal victim effect.
-                // Direction and flags stay neutral until independently verified.
-                let zero_vector = Value::Struct(Fields::from(
-                    [0, 4, 8].map(|offset| (offset, Value::Float32(0.0))),
-                ));
+                let vector = |xyz: [f32; 3]| {
+                    let [x, y, z] = xyz.map(Value::Float32);
+                    Value::Struct(Fields::from([(0, x), (4, y), (8, z)]))
+                };
+                let zero_vector = vector([0.0; 3]);
+                // The client subtracts its view position from this world point.
+                let origin = origin
+                    .map(|xyz| xyz.map(|value| value as f32))
+                    .filter(|xyz| xyz.iter().all(|value| value.is_finite()))
+                    .map_or_else(|| zero_vector.clone(), vector);
                 (
                     RECEIVED_DAMAGE,
                     Fields::from([
@@ -126,7 +134,7 @@ impl CombatNotice {
                         (0x80, entity(victim)),
                         (0x84, zero_vector.clone()),
                         (0x90, zero_vector.clone()),
-                        (0x9c, zero_vector),
+                        (0x9c, origin),
                         (0xa8, Value::Array(vec![Value::Unsigned(0); 3])),
                         (0xc0, Value::Float32(dealt)),
                         (0xc4, Value::Unsigned(0)),
