@@ -26,6 +26,11 @@
       {"origin": [2.0, 0.0, 0.0], "point_blocked": true, "sphere_blocked": true}
     ]
   },
+  "small_projectile_gap": {
+    "origin": [0.493, 0.5, 0.0],
+    "clear_radius": 0.003,
+    "blocked_radius": 0.009
+  },
   "rays": [
     {"origin": [0, 0.5, 0], "distance": null, "narrow_sweep_blocked": false, "wide_sweep_blocked": true},
     {"origin": [-1, 0.5, 0], "distance": 2, "narrow_sweep_blocked": true, "wide_sweep_blocked": true},

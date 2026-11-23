@@ -115,6 +115,21 @@ fn weapon_queries_preserve_openings_in_the_prepared_combat_geometry() {
             );
         }
     }
+
+    let gap = &input["small_projectile_gap"];
+    let origin = serde_json::from_value(gap["origin"].clone()).unwrap();
+    let (_, queries) = scene.bot_simulation();
+    for (key, blocked) in [("clear_radius", false), ("blocked_radius", true)] {
+        let radius = serde_json::from_value(gap[key].clone()).unwrap();
+        assert_eq!(
+            queries
+                .projectile_wall(origin, [0.0, 0.0, 1.0], 4.0, radius)
+                .unwrap()
+                .is_some(),
+            blocked,
+            "{key}"
+        );
+    }
 }
 
 #[test]

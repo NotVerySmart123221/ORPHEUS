@@ -709,7 +709,7 @@ mod tests {
         let identifiers = BTreeSet::from([MODE_PROP]);
         let sweep = |world: &ContactWorld, category| {
             world
-                .scene_sweep(MeshProbe {
+                .projectile_sweep(MeshProbe {
                     points: &[[0.0; 3]],
                     radius,
                     start: [4.0, 0.0, 0.0],
@@ -751,7 +751,7 @@ mod tests {
                 .cast_ray(origin.map(f64::from), FORWARD, 8.0, EXTRA)
                 .unwrap();
             let sweep = sweeps
-                .scene_sweep(MeshProbe {
+                .projectile_sweep(MeshProbe {
                     points: &[[0.0; 3]],
                     radius,
                     start: origin,

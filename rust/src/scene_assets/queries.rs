@@ -233,7 +233,7 @@ impl<'a> BotQueries<'a> {
                 return Err(IndexError::InvalidSweep);
             }
             return world
-                .scene_sweep(MeshProbe {
+                .projectile_sweep(MeshProbe {
                     points: &[[0.0; 3]],
                     radius,
                     start,

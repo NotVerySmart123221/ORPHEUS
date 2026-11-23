@@ -15,7 +15,8 @@ use crate::collision_cache::{
 use crate::collision_grid::{ColumnGrid, ColumnRange};
 use crate::contact_gjk::PointSetSize;
 use crate::contact_gjk::sweep::{
-    CastFrame, CastOptions, CastShape, MeshProbe, ShapeHit, mesh_sweep, shape_cast,
+    CastFrame, CastOptions, CastShape, MeshProbe, ShapeHit, mesh_sweep_with_skin,
+    shape_cast_with_skin,
 };
 use crate::contact_math::{ContactFrame, Vec3, add, maxps, minps, mul, scale, sub};
 use crate::contact_mesh::{ContactBounds, ContactMesh, ContactMeshError};
@@ -363,6 +364,19 @@ impl ContactWorld {
 
     /// Sweep the probe through all applicable static shapes, in proxy order.
     pub fn scene_sweep(&self, probe: MeshProbe<'_>) -> Result<Option<WorldHit>, PointSetSize> {
+        self.sweep_with_skin(probe, SKIN)
+    }
+
+    /// Sweep weapon geometry using its authored radius in place of movement padding.
+    pub fn projectile_sweep(&self, probe: MeshProbe<'_>) -> Result<Option<WorldHit>, PointSetSize> {
+        self.sweep_with_skin(probe, 0.0)
+    }
+
+    fn sweep_with_skin(
+        &self,
+        probe: MeshProbe<'_>,
+        skin: f32,
+    ) -> Result<Option<WorldHit>, PointSetSize> {
         if probe.points.is_empty() || probe.points.len() > usize::from(u8::MAX) {
             return Err(PointSetSize);
         }
@@ -378,7 +392,7 @@ impl ContactWorld {
         let high = std::array::from_fn(|k| f64::from(probe.start[k].max(probe.end[k])) + reach);
         let b = CastShape {
             points: probe.points,
-            radius: maxps(SKIN, probe.radius),
+            radius: probe.radius,
             frame: Some(
                 ContactFrame {
                     translation: probe.start,
@@ -401,7 +415,7 @@ impl ContactWorld {
                 shrink: false,
             };
             let cast = |points, radius| {
-                shape_cast(
+                shape_cast_with_skin(
                     CastShape {
                         points,
                         radius,
@@ -409,17 +423,19 @@ impl ContactWorld {
                     },
                     b,
                     options,
+                    skin,
                 )
             };
             let result = match &shape.geometry {
-                StaticGeometry::Mesh(mesh) => mesh_sweep(
+                StaticGeometry::Mesh(mesh) => mesh_sweep_with_skin(
                     mesh,
                     shape.frame.unwrap_or(ContactFrame::IDENTITY),
                     probe,
                     max_fraction,
+                    skin,
                 )?
                 .map(|hit| (hit.hit, Some(hit.triangle))),
-                StaticGeometry::Hull(hull) => cast(&hull.vertices, SKIN)?.map(|hit| (hit, None)),
+                StaticGeometry::Hull(hull) => cast(&hull.vertices, skin)?.map(|hit| (hit, None)),
                 StaticGeometry::Round {
                     shape: RoundShape::Capsule(capsule),
                     ..

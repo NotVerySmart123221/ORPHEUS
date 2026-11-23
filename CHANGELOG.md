@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Sweep projectiles using their authored terrain radius without character movement padding. The shared gap fixture reproduces a small projectile stopped by the previous minimum radius and verifies that a wider projectile still strikes the edge. Passed 591 library tests, two prepared collision and NPC projectile checks, and Clippy.
+
 - Keep a projectile's sweep radius in world units at nonuniformly scaled or mirrored meshes in the expanded combat cache. Prepare the scaled vertices once per mesh and scale, and retain their face filters. A synthetic gap fixture checks a point ray, a grazing projectile, and a projectile that clears the gap. Passed 591 library tests and the prepared 104319 combat cache check.
 
 - Admit placed meshes to expanded combat sweeps using the union of their face categories. Individual faces retain their authored filters. The synthetic gap and placement tests cover the sweep and ray behavior; movement keeps its proxy mask. Record the equivalent Practice Range main-mesh selection under the current weapon category. Passed 590 library tests, the prepared 104319 cache check, and Clippy.
