@@ -840,6 +840,81 @@ fn multikill_window_is_unchanged_by_an_older_elimination() {
 }
 
 #[test]
+#[ignore = "requires the prepared 104319 graph and combat voice tables"]
+fn prepared_multikill_filter_excludes_tagged_bodies_before_counting() {
+    use crate::{
+        combat_voice::CombatVoiceCatalog, game_bots::BotCatalog,
+        game_combat_messages::CombatNotice, script_graph::GraphStore,
+    };
+    use std::{path::PathBuf, time::Duration};
+
+    let data = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap()).join("data");
+    let graphs = GraphStore::load(data.join("game_graphs_174.json.gz")).unwrap();
+    let mut voice = CombatVoiceCatalog::load(data.join("combat_voice_174.json")).unwrap();
+    voice.bind_multikill_exclusions(&graphs);
+    assert!(voice.has_multikill_exclusions());
+    let (stimulus, line) = voice.multikill_cue(2, 2).unwrap();
+    let bots = BotCatalog::from_json(
+        r#"{
+        "heroes": {
+            "0x01": {"name": "Eligible", "body": "0x0400000000001403", "health": 100},
+            "0x02": {"name": "Excluded", "body": "0x04000000000014A9", "health": 100}
+        },
+        "maps": {"0x03": {"hints": {}, "spawners": [
+            {"hero":"0x01","team":1,"position":[0,0,2],"rotation":[0,0,0,1],"graphs":[]},
+            {"hero":"0x02","team":1,"position":[0,0,4],"rotation":[0,0,0,1],"graphs":[]},
+            {"hero":"0x01","team":1,"position":[0,0,6],"rotation":[0,0,0,1],"graphs":[]}
+        ]}}
+    }"#,
+    )
+    .unwrap()
+    .make(3, |_| Default::default());
+    let targets: Vec<_> = bots.iter().map(|bot| bot.entity).collect();
+    let mut room = RoomSimulation::new(bots).unwrap();
+    room.load_bot_target_tags(&graphs);
+    room.set_combat_voice(Arc::new(voice));
+    let killer = spawn_player(&mut room, 1).entity;
+    for (index, target) in targets.into_iter().enumerate() {
+        let frame = crate::game_clock::FIRST_TICK + index as u32 + 1;
+        let now = Duration::from_millis(u64::from(frame) * crate::script_runtime::FRAME_MS);
+        assert!(
+            room.apply_health(
+                target,
+                HealthEffect::Damage(1000.0),
+                Death {
+                    killer,
+                    frame,
+                    time: now.as_secs_f64(),
+                },
+                now,
+                None
+            )
+            .unwrap()
+            .unwrap()
+            .killed
+        );
+        let announcements: Vec<_> = room
+            .take_player_cues()
+            .into_iter()
+            .filter_map(|cue| match cue.notice {
+                CombatNotice::Voice {
+                    anchor: crate::world::GAME_MODE_ENTITY,
+                    stimulus,
+                    line,
+                    ..
+                } => Some((stimulus, line)),
+                _ => None,
+            })
+            .collect();
+        if index == 2 {
+            assert_eq!(announcements, [(stimulus, line)]);
+        } else {
+            assert!(announcements.is_empty());
+        }
+    }
+}
+
+#[test]
 fn lethal_health_change_notifies_source_with_settled_status_after_target_retirement() {
     use std::{io, sync::Mutex};
 

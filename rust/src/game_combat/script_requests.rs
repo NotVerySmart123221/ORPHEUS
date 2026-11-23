@@ -583,14 +583,26 @@ impl RoomSimulation {
         let owner = player.owner;
         let listener = player.id;
         let target = self.authored_elimination_target(victim_wire);
+        let window = self.combat_voice.multikill_window_ticks();
+        let eligible = window != 0
+            && (!self.combat_voice.has_multikill_exclusions()
+                || target
+                    .as_ref()
+                    .map(|facts| self.combat_voice.multikill_target_allowed(&facts.tags))
+                    .unwrap_or_else(|| {
+                        self.sample_health_body(victim_wire)
+                            .and_then(|body| body.health_target_facts(&self.world))
+                            .is_some_and(|facts| {
+                                self.combat_voice.multikill_target_allowed(&facts.tags)
+                            })
+                    }));
         let Some(mut player) = self.world.get_mut::<PlayerBodyState>(entity) else {
             return;
         };
         if let Some((target, runtime)) = target.zip(player.runtime.as_mut()) {
             let _ = runtime.receive_authored_elimination_feedback(target.into());
         }
-        let window = self.combat_voice.multikill_window_ticks();
-        if window == 0 {
+        if !eligible {
             return;
         }
         let streak = player.elimination_streak.get_or_insert(EliminationStreak {

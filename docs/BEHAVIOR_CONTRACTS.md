@@ -50,6 +50,8 @@ The Rust-only [timed elimination fixture](../fixtures/behavior/script-timed-elim
 
 The restartable-wait VM regression checks message order immediately before, on, and after expiry. The room announcer regression checks that two kills on the deadline still select cues from the old streak, and that the following frame starts a fresh one.
 
+The prepared 104319 exclusion replay loads the graph's target tag filter through the configured cue switch. It settles three real room eliminations using two authored body definitions and checks that the tagged middle target neither announces nor advances the streak.
+
 The room regression additionally retires a player body and reuses its wire ID inside the synthetic window. The replacement starts its own streak. A separate restartable Wait test checks the order of message actions, timer completion and re-entry at the exact deadline. Original-client elimination message timing still needs direct evidence.
 
 The [actor voice fixture](../fixtures/behavior/player-voice-v1.json) covers first-playable stimulus selection, skin overrides, and line variation. The Rust stock bot case runs an authored criteria action through the existing room cue queue and checks team and free-for-all audiences.

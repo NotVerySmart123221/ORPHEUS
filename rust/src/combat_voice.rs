@@ -1,10 +1,19 @@
 //! Data-driven combat announcer cues loaded from the runtime pack.
 
-use std::{collections::BTreeMap, fs, io, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs, io,
+    path::Path,
+};
 
 use serde::Deserialize;
 
-use crate::accounts::parse_guid;
+use crate::{
+    accounts::parse_guid,
+    script_expr::target_tag_config,
+    script_graph::{Graph, GraphStore, Node},
+    script_init::TargetTagSnapshot,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct VoiceCueEntry {
@@ -34,6 +43,7 @@ impl HurtVoiceTable {
 pub struct CombatVoiceCatalog {
     multikill_window_ticks: u32,
     multikills: BTreeMap<u32, VoiceCueEntry>,
+    multikill_exclusions: BTreeSet<u64>,
     hurt_cooldown_ticks: u32,
     hurt: HurtVoiceTable,
     hurt_by_body: BTreeMap<u64, HurtVoiceTable>,
@@ -151,6 +161,7 @@ impl CombatVoiceCatalog {
         Ok(Self {
             multikill_window_ticks: raw.multikill_window_ticks,
             multikills,
+            multikill_exclusions: BTreeSet::new(),
             hurt_cooldown_ticks: raw.hurt_cooldown_ticks,
             hurt,
             hurt_by_body,
@@ -175,6 +186,36 @@ impl CombatVoiceCatalog {
     /// Maximum tick gap between consecutive eliminations in the same streak.
     pub fn multikill_window_ticks(&self) -> u32 {
         self.multikill_window_ticks
+    }
+
+    pub(crate) fn bind_multikill_exclusions(&mut self, graphs: &GraphStore) {
+        if self.multikills.is_empty() {
+            return;
+        }
+        let cues = &self.multikills;
+        let mut resolved = graphs
+            .graph_indexes()
+            .filter_map(|index| graphs.graph(index))
+            .flat_map(|graph| {
+                graph
+                    .nodes
+                    .iter()
+                    .filter_map(move |node| multikill_exclusions(graph, node, cues))
+            });
+        let Some(tags) = resolved.next() else { return };
+        if resolved.all(|other| other == tags) {
+            self.multikill_exclusions = tags;
+        }
+    }
+
+    pub(crate) fn has_multikill_exclusions(&self) -> bool {
+        !self.multikill_exclusions.is_empty()
+    }
+
+    pub(crate) fn multikill_target_allowed(&self, tags: &TargetTagSnapshot) -> bool {
+        self.multikill_exclusions
+            .iter()
+            .all(|&tag| tags.presence(tag) == Some(false))
     }
 
     /// Resolve `(stimulus, line)` for a streak count, if configured.
@@ -210,6 +251,81 @@ impl CombatVoiceCatalog {
         let line = *entry.lines.get(pick % entry.lines.len())?;
         Some((entry.stimulus, line))
     }
+}
+
+fn multikill_exclusions(
+    graph: &Graph,
+    node: &Node,
+    cues: &BTreeMap<u32, VoiceCueEntry>,
+) -> Option<BTreeSet<u64>> {
+    let condition = node.field("m_condition")?;
+    if node.class != "STU_3387AB5D"
+        || condition["$"] != "STU_AC829876"
+        || condition["m_filter"]["$"] != "STUConfigVarFilter"
+    {
+        return None;
+    }
+    let tags = node.field("m_condition.m_filter.m_8B2A4DF3")?;
+    if tags.is_null() {
+        return None;
+    }
+    let tags = if tags["$"] == "STU_06610EBC" {
+        tags["m_configVars"].as_array()?.as_slice()
+    } else {
+        std::slice::from_ref(tags)
+    };
+    let mut tags = tags
+        .iter()
+        .map(target_tag_config)
+        .collect::<Option<BTreeSet<_>>>()?;
+    tags.remove(&0);
+    let mut frontier: Vec<_> = node
+        .links("m_truePlug")
+        .filter_map(|(pos, _)| pos)
+        .collect();
+    let mut visited = BTreeSet::new();
+    while let Some(pos) = frontier.pop() {
+        let Some(branch) = graph.node(pos).filter(|_| visited.insert(pos)) else {
+            continue;
+        };
+        let paths: &[&str] = match branch.class.as_str() {
+            "STUStatescriptActionSetVar" => &["m_outPlug"],
+            "STU_3387AB5D" => &["m_truePlug", "m_falsePlug"],
+            "STUStatescriptActionSwitch" if matches_cues(graph, branch, cues) => {
+                return Some(tags);
+            }
+            _ => continue,
+        };
+        frontier.extend(
+            paths
+                .iter()
+                .flat_map(|path| branch.links(path))
+                .filter_map(|(pos, _)| pos),
+        );
+    }
+    None
+}
+
+fn matches_cues(graph: &Graph, node: &Node, cues: &BTreeMap<u32, VoiceCueEntry>) -> bool {
+    let Some(cases) = node.field("m_FDD34C25").and_then(|value| value.as_array()) else {
+        return false;
+    };
+    cues.iter().all(|(&count, cue)| {
+        cases.iter().any(|case| {
+            case["m_value"]["m_value"].as_u64() == Some(u64::from(count))
+                && case["links"].as_array().into_iter().flatten().any(|link| {
+                    link[0]
+                        .as_u64()
+                        .and_then(|pos| u16::try_from(pos).ok())
+                        .and_then(|pos| graph.node(pos))
+                        .filter(|action| action.class == "STUStatescriptActionSetVar")
+                        .and_then(|action| action.field("m_value.m_voiceStimulus"))
+                        .and_then(|value| value.as_str())
+                        .and_then(parse_guid)
+                        == Some(cue.stimulus)
+                })
+        })
+    })
 }
 
 fn parse_nonzero_guid(text: &str, field: &str) -> io::Result<u64> {

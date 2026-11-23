@@ -1148,8 +1148,14 @@ the count when it finishes. On the expiry frame, the VM processes the
 message actions before the wait finishes and discards the pending reentry.
 The room announcer mirrors that order: eliminations on the deadline can
 announce from the old count, then the next frame starts a fresh streak.
-The original target filter and announcer-suppression conditions still need
-to be mapped to room facts.
+At runtime load, the combat voice catalog finds the authored counter switch
+by its configured count and stimulus pairs. It follows the target filter's
+action links to that switch and reads the excluded target tags. With a
+bound exclusion list, the target must have a known absence of every
+excluded tag before it can advance the streak. The ordinary elimination
+feedback path can still run for excluded bodies. Packs without a matching
+graph retain the catalog's affiliation check. The other authored filter
+fields and announcer-suppression conditions still need room bindings.
 
 The 104319 hit-marker message updates the shooter's HUD. The damage
 feedback path uses the struck body's combat event for victim effects

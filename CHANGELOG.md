@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Bind multikill target-tag exclusions from the authored filter linked to the configured cue switch. Excluded targets keep their ordinary elimination feedback without advancing or extending the announcer streak. Passed 821 library tests, both prepared multikill replays, and Clippy.
+
 - Match the shared 104319 elimination graph at the multikill deadline. Kills on that frame still select cues from the old streak, and the finishing wait invalidates their attempted restart. The next frame starts a fresh streak. Passed 821 library tests, the prepared two-second announcer replay, and Clippy.
 
 - Retire observer projectile volleys whose flights are all due even when the launch packet has no acknowledgement yet. Stop launch retries before releasing the referenced entities. Keep independent retirement for acknowledged pellets. Passed both observer delivery cases, 821 library tests, and Clippy.

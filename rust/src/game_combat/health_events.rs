@@ -61,7 +61,7 @@ impl SampledBody {
         })
     }
 
-    fn health_target_facts(self, world: &World) -> Option<HealthTargetFacts> {
+    pub(super) fn health_target_facts(self, world: &World) -> Option<HealthTargetFacts> {
         if let Some(state) = world.get::<BotState>(self.entity) {
             return (state.bot.entity == self.wire).then(|| state.health_target_facts());
         }
