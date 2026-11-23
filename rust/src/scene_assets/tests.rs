@@ -386,7 +386,8 @@ fn prepared_cassidy_fan_uses_authored_cone_and_falloff() {
     use crate::{
         commands::{Command, SECONDARY},
         game_clock::FIRST_TICK,
-        game_combat::PosedShot,
+        game_combat::{PosedShot, ShotContext},
+        game_combat_messages::CombatNotice,
         game_replication::BodyStep,
     };
 
@@ -419,7 +420,7 @@ fn prepared_cassidy_fan_uses_authored_cone_and_falloff() {
         .unwrap()
         .unwrap();
     let mut directions = BTreeSet::new();
-    let mut count = 0;
+    let mut volley = Vec::new();
     for frame in FIRST_TICK + 1..=FIRST_TICK + 90 {
         let command = Command {
             frame,
@@ -431,7 +432,7 @@ fn prepared_cassidy_fan_uses_authored_cone_and_falloff() {
             let PosedShot::Hitscan(shot) = shot else {
                 panic!("expected hitscan from the authored alternate fire");
             };
-            count += 1;
+            volley.push(*shot);
             directions.insert(shot.direction.map(f64::to_bits));
             assert!(shot.direction[2] >= 6.0_f64.to_radians().cos() - 1e-6);
             assert_eq!(shot.hit.damage_at(15.0, false), 50.0);
@@ -439,8 +440,76 @@ fn prepared_cassidy_fan_uses_authored_cone_and_falloff() {
             assert!((shot.hit.damage_at(50.0, false) - 15.0).abs() < 1e-5);
         }
     }
-    assert_eq!(count, 6);
-    assert_eq!(directions.len(), count);
+    assert_eq!(volley.len(), 6);
+    assert_eq!(directions.len(), volley.len());
+
+    let contract: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/cassidy-fan-falloff-v1.json"
+    ))
+    .unwrap();
+    for case in contract["cases"].as_array().unwrap() {
+        let range = case["contact_distance"].as_f64().unwrap();
+        let per_round = case["raw_damage_per_round"].as_f64().unwrap();
+        let bot = Bot::fixture_walker([0.0, 0.0, 1.0]);
+        let target = bot.entity;
+        let health = bot.spawn.health;
+        let mut room = PreparedScene::fixture_for_bots(vec![bot]);
+        let (simulation, queries) = room.bot_simulation();
+        let target_pose = queries.target(simulation.bodies().unwrap().next().unwrap());
+        let [x, y, z] = target_pose.feet;
+        let centre = [x, y + target_pose.height * 0.5, z];
+        let mut total = 0.0;
+        let mut eliminated = false;
+        for mut shot in volley.iter().copied() {
+            // Keep the authored spread. Translate the ray so that each round
+            // goes through the torso and contacts it at the requested range.
+            // This measures the full burst even if natural spread would miss.
+            let [dx, _, dz] = shot.direction;
+            let axis_range = range + target_pose.radius / dx.hypot(dz);
+            shot.origin = crate::static_ray::along(centre, shot.direction, -axis_range);
+            let context = ShotContext {
+                team: 0,
+                quanta: RETAIL_QUANTA,
+                tick: shot.shot_frame,
+                now: std::time::Duration::ZERO,
+            };
+            let hit = simulation
+                .hitscan(&queries, shot, context, |id| id == target)
+                .unwrap();
+            if eliminated {
+                assert!(hit.is_none());
+                continue;
+            }
+            let hit = hit.unwrap_or_else(|| panic!("miss at {range} m"));
+            let expected = per_round.min(health - total);
+            assert!(
+                (hit.damage.amount - expected).abs() < 1e-5,
+                "at {range} m: {} vs {expected}",
+                hit.damage.amount
+            );
+            assert!(matches!(
+                hit.notices[0],
+                Some(CombatNotice::Hit { target: victim, critical: false, shot_frame, .. })
+                    if victim == target && shot_frame == shot.shot_frame
+            ));
+            total += hit.damage.amount;
+            eliminated = matches!(hit.notices[1], Some(CombatNotice::Elimination { victim, .. }) if victim == target);
+        }
+        let expected = case["settled_damage"].as_f64().unwrap();
+        assert!(
+            (total - expected).abs() < 1e-5,
+            "at {range} m: {total} vs {expected}"
+        );
+        assert_eq!(
+            eliminated,
+            case["elimination"].as_bool().unwrap(),
+            "at {range} m"
+        );
+        assert_eq!(
+            simulation.bodies().unwrap().next().unwrap().dead,
+            eliminated
+        );
+    }
 }
 
 #[test]
