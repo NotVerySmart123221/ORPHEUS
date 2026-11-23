@@ -718,6 +718,20 @@ impl World for BodyWorld {
         })
     }
 
+    fn emit_contact_effect(
+        &mut self,
+        site: Site,
+        source: u32,
+        _resource: u64,
+        targets: &[u32],
+    ) -> bool {
+        self.is_player_site(site)
+            && source == self.entity
+            && targets
+                .iter()
+                .all(|&target| self.authored_position(target).is_some())
+    }
+
     fn authored_position(&mut self, entity: u32) -> Option<[f64; 3]> {
         if let Some(position) = self.known_position(entity) {
             return Some(position);

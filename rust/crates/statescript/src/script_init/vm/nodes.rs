@@ -1822,9 +1822,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             {
                 StateKind::Plain
             }
-            "STU_23A00A53"
-                if registration.permits((self.graph(id).index, node.pos) == (0x0c89, 49)) =>
-            {
+            "STU_23A00A53" if registration.shape(node.contact_effect_resource().is_some()) => {
                 StateKind::ExplosionContact
             }
             "STUStatescriptStateModifyHealth"

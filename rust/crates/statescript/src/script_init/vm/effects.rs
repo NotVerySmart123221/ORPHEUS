@@ -295,29 +295,25 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             Value::Null => Vec::new(),
             value => vec![value],
         };
-        let targets = targets
-            .into_iter()
-            .map(|value| match value {
-                Value::Entity(entity) => Some(entity),
-                _ => None,
-            })
-            .collect::<Option<Vec<_>>>();
-        let source = self.evaluate(key.instance, node, field(&node.fields, "m_63CB0D07"), None);
-        let resource = self.evaluate(
-            key.instance,
-            node,
-            field(&node.fields, "m_contactSet"),
-            None,
-        );
-        let expected = 0x0120_0000_0000_0015;
-        if node.remote < 0
-            || source != Some(Value::Entity(site.entity))
-            || resource != Some(Value::Asset(expected))
-            || !targets.is_some_and(|targets| {
-                self.world
-                    .emit_contact_effect(site, site.entity, expected, &targets)
-            })
-        {
+        let mut entities = Vec::with_capacity(targets.len());
+        for value in targets {
+            self.spend("contact effect target")?;
+            let Value::Entity(entity) = value else {
+                self.report(site, Issue::UnsupportedField("contact effect target"));
+                return Ok(());
+            };
+            if !script_expr::valid_entity(entity) {
+                self.report(site, Issue::UnsupportedField("contact effect target"));
+                return Ok(());
+            }
+            entities.push(entity);
+        }
+        // The state admission already checked the immutable resource and sync binding.
+        let resource = node.field("m_contactSet.m_contactSet").and_then(asset_guid);
+        if !resource.is_some_and(|resource| {
+            self.world
+                .emit_contact_effect(site, site.entity, resource, &entities)
+        }) {
             self.report(site, Issue::UnsupportedField("contact effect service"));
         }
         Ok(())

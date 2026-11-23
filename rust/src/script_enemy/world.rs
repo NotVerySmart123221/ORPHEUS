@@ -214,13 +214,11 @@ impl World for EnemyWorld<'_> {
         &mut self,
         site: Site,
         source: u32,
-        resource: u64,
+        _resource: u64,
         targets: &[u32],
     ) -> bool {
         site.entity == self.binding.body
             && source == self.binding.body
-            && (site.graph, site.node) == (0x0c89, Some(49))
-            && resource == 0x0120_0000_0000_0015
             && targets
                 .iter()
                 .all(|target| self.known_position(*target).is_some())

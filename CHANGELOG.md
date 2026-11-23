@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Resolve literal contact-set states from their authored resource, source and synchronized target binding. Player and NPC hosts share the state path, with the target list refreshed by the existing VM watcher. Passed 824 library tests, Clippy, and a prepared 104319 replay that loads two distinct contact sets. The full Junkenstein room replay stops at map setup because the local catalog lacks spawn rows.
+
 - Send the settled weapon origin in the opt-in victim damage feedback event. The client uses this world point for view-relative direction. The synthetic and prepared 104319 replays verify victim-only delivery, and the synthetic replay also checks neutral fields for damage without weapon geometry. Passed 823 library tests and Clippy.
 
 - Identify the native emote exit operand as a voice category, and extend the prepared wheel replay to verify that repeated use replaces the cosmetic preload. Immediate release of the preload on interruption remains open.

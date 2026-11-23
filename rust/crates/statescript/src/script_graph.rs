@@ -158,6 +158,29 @@ impl Node {
             .collect()
     }
 
+    pub(crate) fn contact_effect_resource(&self) -> Option<u64> {
+        let fields = &self.fields;
+        let resource = &fields["m_contactSet"];
+        if self.class != "STU_23A00A53"
+            || !self.is_networked()
+            || self.remote < 0
+            || !native_shape(&fields["m_63CB0D07"], "STU_B5A0CAF0", None)
+            || resource["$"] != "STUConfigVarContactSet"
+            || !native_fields(resource, &["m_contactSet", "m_resourceKey"])
+            || !resource["m_resourceKey"].is_null()
+            || !(fields["m_6A3C1510"].is_null() || fields["m_6A3C1510"].as_u64() == Some(0))
+            || !fields["m_ignoreEntities"].is_null()
+        {
+            return None;
+        }
+        let target = dynamic(&fields["m_53FCEDBF"]).ok()??;
+        if target.scope != Scope::Instance || !self.frame_action_variables()?.contains(&target) {
+            return None;
+        }
+        asset_guid(&resource["m_contactSet"])
+            .filter(|&guid| guid >> 48 == 0x0120 && guid & 0x0000_ffff_ffff_ffff != 0)
+    }
+
     pub fn is_state(&self) -> bool {
         self.state_behavior.is_some() || self.fields.get("m_2BBEEAB8").is_some_and(truthy)
     }
@@ -2187,6 +2210,7 @@ impl GraphStore {
                     || node.declares_room_cue_action()
                     || node.directed_numeric_parameter().is_some()
                     || node.tracks_room_actor_identity()
+                    || node.contact_effect_resource().is_some()
                     || view_track.is_some()
                     || node.class == "STU_861D9015"
                 {

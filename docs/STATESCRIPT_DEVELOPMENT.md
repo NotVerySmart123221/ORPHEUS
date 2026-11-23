@@ -1223,6 +1223,24 @@ centre path. Splash records the blast origin. A health change without a
 weapon impact has no source point in this path and uses the neutral
 message fields.
 
+The 104319 victim event also has a compact contact-set operand. The
+client expands it to a `.049` asset and carries it into its contact effect
+request. This is a contact-set selector. The local `STUContactSet` schema
+maps contact type and material to authored responses, and actor and
+projectile components use contact sets for different purposes. A body's
+default set alone does not identify the material or the contact response
+for an incoming hit.
+
+For the authored `STU_23A00A53` state, the VM reads the literal
+`m_contactSet`, verifies a networked self source with a synchronized
+instance target variable, and republishes the contact state when that
+variable changes. The owner and NPC hosts validate their own source and
+available target entities. The original graph retains the resource and
+its presentation operands. This covers the confirmed literal/default
+mode shape; expression-driven selection, other modes, and generic
+weapon-hit material selection remain open. The [Python contact projection](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/junkenstein_scene.py)
+provided the earlier NPC synchronization reference.
+
 Current hit feedback is scoped to settled weapon impacts with a hit
 classification. A generic scripted health change has no hit classification,
 so it can still send victim feedback on a positive nonlethal loss without
