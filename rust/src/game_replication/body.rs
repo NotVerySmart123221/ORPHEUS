@@ -94,14 +94,14 @@ impl BodyScript {
         })
     }
 
-    pub(super) fn record_scripted_movement(
+    pub(super) fn record_authoritative_movement(
         &mut self,
         mover: &Mover,
         frame: u32,
         frame_us: u32,
         previously_processed: Option<u32>,
     ) {
-        if frame_us == 0 || !mover.scripted_motion_at(frame) {
+        if frame_us == 0 || !mover.needs_owner_correction_at(frame) {
             return;
         }
         let history = self.corrections.get_or_insert_with(|| {

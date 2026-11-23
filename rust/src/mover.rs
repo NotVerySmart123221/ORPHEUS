@@ -127,6 +127,7 @@ pub struct Mover {
     velocity_changes: Vec<(u32, VelocityChange)>,
     scripted_motion: Option<(u32, ScriptedMotion)>,
     scripted_motion_frame: Option<u32>,
+    actor_contact: bool,
     last_command: Option<Command>,
     last_input: Option<u32>,
     pose: Movement,
@@ -158,6 +159,7 @@ impl Mover {
             velocity_changes: Vec::new(),
             scripted_motion: None,
             scripted_motion_frame: None,
+            actor_contact: false,
             last_command: None,
             last_input: None,
             pose: Movement {
@@ -284,6 +286,10 @@ impl Mover {
     /// Whether this successfully completed pose moved through a script request.
     pub(crate) fn scripted_motion_at(&self, frame: u32) -> bool {
         self.scripted_motion_frame == Some(frame)
+    }
+
+    pub(crate) fn needs_owner_correction_at(&self, frame: u32) -> bool {
+        self.scripted_motion_at(frame) || (self.pose.frame == Some(frame) && self.actor_contact)
     }
 
     /// Simulate the newest command and any reconstructible poses before it.
@@ -474,7 +480,8 @@ impl Mover {
             self.posture.apply_fall(settings.gravity_scale, dt);
         }
         let normal = probe.ground.map_or([0.0, 1.0, 0.0], |hit| hit.normal);
-        let vertical = self.move_body(rays, velocity, normal, dt, command.frame, blockers)?;
+        let (vertical, actor_contact) =
+            self.move_body(rays, velocity, normal, dt, command.frame, blockers)?;
         self.posture.finish_fall(settings.gravity_scale, vertical);
 
         if input.throttles != [0; 2] {
@@ -497,6 +504,7 @@ impl Mover {
         self.pose.spring_speed = f64::from(self.posture.spring_speed());
         self.pose.fall = self.posture.fall;
         self.scripted_motion_frame = scripted_motion_changed.then_some(command.frame);
+        self.actor_contact = actor_contact;
         Ok(())
     }
 
@@ -556,7 +564,7 @@ impl Mover {
         dt: f64,
         _frame: u32,
         blockers: &[CapsulePose],
-    ) -> Result<f64, HullContactError> {
+    ) -> Result<(f64, bool), HullContactError> {
         let grounded = self.posture.ground() == Ground::Standing;
         let [x, y, z] = velocity;
         let velocity = if grounded && (x * x + y * y) + z * z >= EPSILON {
@@ -573,6 +581,7 @@ impl Mover {
             ((0.0 * rise + z) * dt) + 0.0,
         ];
         let movement = self.body.move_capsule_against(displacement, dt, blockers)?;
+        let actor_contact = movement.actor_contact;
         let [mut x, mut y, mut z] = clip_velocity([x, y, z], movement.planes).map(f64::from);
         if grounded {
             let squared = (x * x + y * y) + z * z;
@@ -613,7 +622,7 @@ impl Mover {
             y = 0.0;
         }
         self.pose.velocity = [x, y, z].map(snap);
-        Ok(y)
+        Ok((y, actor_contact))
     }
 }
 

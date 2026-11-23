@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Send a bounded owner correction when an opposing actor actually clips or redirects ordinary movement, including on bodies without an active owner script. The headless regression checks both scripted and detached bodies and confirms allied pass-through does not trigger this correction. Passed 515 server library and 68 collision tests. Original-client movement and allied separation remain open. Added Practice Range acceptance cases for the reported combat, animation, geometry, and communication-wheel gaps.
+
 - Preserve the active multikill count and its expiry when an older elimination settles late. Independent eliminations at the same settlement frame still advance the count.
 
 - Verify multikill restart and expiry with the local prepared two-second combat voice catalog. Headless coverage checks double and triple cue delivery when each adjacent kill is just inside the window, then checks a reset just outside it. The synthetic catalog uses the same rehearsal. Exact expiry ordering and original-client playback remain unverified.

@@ -1867,7 +1867,10 @@ impl WorldDelivery {
                     .map_or_else(Vec::new, |frame| frame.blockers(id.entity, team))
             },
             |mover, command| {
-                if script.is_none() && frame_us != 0 && mover.scripted_motion_at(command.frame) {
+                if script.is_none()
+                    && frame_us != 0
+                    && mover.needs_owner_correction_at(command.frame)
+                {
                     if detached_motion
                         .as_ref()
                         .is_some_and(|(owner, _)| *owner != id)
@@ -1890,7 +1893,7 @@ impl WorldDelivery {
                 }
                 if let Some(script) = script.as_mut() {
                     // The pose already moved even if the state's next update fails.
-                    script.record_scripted_movement(
+                    script.record_authoritative_movement(
                         mover,
                         command.frame,
                         frame_us,

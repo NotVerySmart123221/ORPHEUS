@@ -28,6 +28,11 @@ Target build: **Overwatch 1 retail 1.74.0.0.104319**.
 - [ ] Verify projectile impact and retirement, ground-shot self-launch, and quick-melee knockback in the original client. The prepared server baseline is recorded in [STATE.md](STATE.md#practice-range-playtest-follow-up).
 - [ ] Confirm several consecutive training bot kills and respawns keep the client in the room. Compare head, torso and lateral shots against the standing combat calibration.
 - [ ] Verify upstairs patrol route geometry matches contact solver bounds and hitscan wall queries (use `--features inspector` to diagnose).
+- [ ] Verify hostile character blocking without rubber-banding and allied pass-through with separation. Check the downed interval and the first frame of the authored bot respawn animation separately for movement and weapon contact.
+- [ ] Compare allied and hostile bot firing animation, projectile interception, and the walk-back animation after displacement. Check weapon occlusion through a recorded railing gap against a shot into the adjacent solid bar.
+- [ ] Compare effective weapon damage on both sides of the authored falloff thresholds, including Cassidy's alternate fire.
+- [ ] Verify directional hit reactions and human and nonhuman impact effects from authored body data. Verify the communication wheel, emotes and voice lines, and spawn voice cues in the original client.
+- [ ] Compare the Practice Range multikill expiry and elimination eligibility against the authored graph. Verify emplaced-weapon elimination audio once the original Torbjörn turret is usable.
 - [ ] Resolve bot overhead health bars (#7), kill feed localized names (#8), headshot SFX (#9), and Practice Range boundary death (#13).
 
 ### 2. Junkenstein's Revenge (Normal Cassidy, Card `0x3C`)

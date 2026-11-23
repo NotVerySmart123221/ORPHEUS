@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "case_id": "owner-actor-contact.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "source": {
+    "basis": "Ordinary movement against a frozen actor capsule and owner delivery."
+  },
+  "input": {
+    "start_frame": 100,
+    "last_frame": 132,
+    "actor_position": [1.5, 0, 0],
+    "right": -127
+  }
+}

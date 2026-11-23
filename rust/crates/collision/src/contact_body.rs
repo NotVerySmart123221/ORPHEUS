@@ -28,6 +28,8 @@ pub struct BodyMove<'a> {
     pub position: Vec3,
     pub planes: &'a [ContactPlane],
     pub touching: bool,
+    /// An admitted actor changed the requested motion through a cast or constraint.
+    pub actor_contact: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -259,6 +261,7 @@ impl CharacterBody {
         let mut current = self.pose.position;
         let target = add(add(scale([0.0; 3], dt), current), displacement);
         let mut passes_total = 0;
+        let mut actor_contact = false;
         for _ in 0..rounds {
             self.update_pairs();
             self.constraints.clear();
@@ -275,6 +278,7 @@ impl CharacterBody {
                         .push(contact_constraint(current, normal, points));
                 }
             }
+            let static_constraints = self.constraints.len();
             if !actors.is_empty() {
                 let bounds = self.pose.bounds();
                 let low = bounds.low.map(f64::from);
@@ -295,8 +299,12 @@ impl CharacterBody {
                 }
             }
             let (projected, passes) = project_target(target, &mut self.constraints);
+            actor_contact |= self.constraints[static_constraints..]
+                .iter()
+                .any(|constraint| constraint.impulse > 0.0);
             passes_total += passes;
-            let moved = self.set_position::<TRACE>(projected, actors, clip)?;
+            let (moved, actor_clipped) = self.set_position::<TRACE>(projected, actors, clip)?;
+            actor_contact |= actor_clipped;
             let step = sub(moved, current);
             current = moved;
             if dot(step, step) < TOUCH * TOUCH {
@@ -322,6 +330,7 @@ impl CharacterBody {
             position: current,
             planes: &self.planes,
             touching,
+            actor_contact,
         })
     }
 
@@ -357,7 +366,7 @@ impl CharacterBody {
         target: Vec3,
         actors: &[CapsulePose],
         clip: &mut Option<SweepClip>,
-    ) -> Result<Vec3, HullContactError> {
+    ) -> Result<(Vec3, bool), HullContactError> {
         let swept = self.pose.swept_bounds(target);
         self.move_proxy(swept);
         self.update_pairs();
@@ -374,6 +383,7 @@ impl CharacterBody {
         });
         let mut fraction = 1.0;
         let mut proxy_id = None;
+        let mut actor_clipped = false;
         if translation != [0.0; 3] {
             for (id, contact) in &mut self.contacts {
                 if let Some(candidate) = contact.cast(self.pose, swept, translation)? {
@@ -403,8 +413,11 @@ impl CharacterBody {
                         None,
                         translation,
                     )? {
-                        if TRACE && candidate < fraction {
-                            proxy_id = None;
+                        if candidate < fraction {
+                            actor_clipped = true;
+                            if TRACE {
+                                proxy_id = None;
+                            }
                         }
                         fraction = minps(fraction, candidate);
                     }
@@ -422,7 +435,7 @@ impl CharacterBody {
         if moved.into_iter().all(f32::is_finite) {
             self.teleport(moved);
         }
-        Ok(self.pose.position)
+        Ok((self.pose.position, actor_clipped))
     }
 }
 
