@@ -15,6 +15,12 @@ Check the original client separately for on-screen appearance.
 
 Keep local captures out of Git. The bounded writer reports any dropped rows.
 
+For combat audio, match a settled hit to the presentation queue by target
+and event order. The `combat effect emitted` row identifies the authored asset, VM
+frame, body and action serial. Match the body and serial to a subsequent
+`combat owner action acknowledged` row. The original client's recording
+provides the playback evidence.
+
 ## Owner loss and arrival
 
 Run the opt-in test with a prepared target-tagged 104319 Practice Range runtime

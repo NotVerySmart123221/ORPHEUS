@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Correlate authored combat presentation with owner delivery in the opt-in Inspector playtest capture. Log the selected effect and the acknowledged action serial so server selection, network receipt, and original-client playback can be checked independently. The default build check and all 520 Inspector library tests passed, with the library tests run serially after two parallel loopback timeouts.
+
 - Extend the prepared final-blow presentation regression to a projectile flight. Both a hitscan final blow and a projectile that collides with the training bot queue one owner effect and retain it through a lost delivery.
 
 - Verify final-blow presentation through prepared practice-room damage, the player's running VM, and normal owner egress. A lost packet leaves the cue unacknowledged. Recovery acknowledges the same single action, and a nonlethal hit produces no elimination action.

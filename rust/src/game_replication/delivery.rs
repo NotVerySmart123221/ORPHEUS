@@ -465,6 +465,15 @@ impl WorldDelivery {
                     }
                     (arrived, Delivery::BodyScript { last, .. }) => {
                         let script = self.body_script.as_mut().expect("current body stream");
+                        #[cfg(feature = "inspector")]
+                        let prior_action = if arrived && crate::owner_trace::playtest_enabled() {
+                            script
+                                .stream
+                                .base()
+                                .map(|(_, snapshot)| snapshot.acknowledged_callout())
+                        } else {
+                            None
+                        };
                         let delivery = if arrived {
                             script.stream.arrived(last)
                         } else {
@@ -479,6 +488,18 @@ impl WorldDelivery {
                                 "owner-volley delivery body={:08x} chunk={last} arrived={arrived}",
                                 script.id.entity
                             ));
+                        }
+                        #[cfg(feature = "inspector")]
+                        if let Some((before, (_, snapshot))) =
+                            prior_action.zip(script.stream.base())
+                        {
+                            let serial = snapshot.acknowledged_callout();
+                            if serial > before {
+                                crate::owner_trace::playtest(format_args!(
+                                    "combat owner action acknowledged body={:08X} generation={} serial={serial} chunk={last}",
+                                    script.id.entity, script.id.generation
+                                ));
+                            }
                         }
                         if let Some((projectiles, arrived)) =
                             script.projectiles.as_mut().zip(delivery.owner_report)

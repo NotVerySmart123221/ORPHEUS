@@ -195,8 +195,18 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         context: &HostHealthContext,
         variant: f32,
     ) -> Result<usize, InitFault> {
-        self.component
-            .queue_authored_hit_feedback(event, context, variant)
+        let result = self
+            .component
+            .queue_authored_hit_feedback(event, context, variant);
+        #[cfg(feature = "inspector")]
+        if crate::owner_trace::playtest_enabled() && !matches!(result, Ok(0)) {
+            let HostEvent::HealthApplied { target, .. } = event;
+            crate::owner_trace::playtest(format_args!(
+                "combat hit presentation body={:08X} target={target:08X} game_frame={:?} vm_frame={} critical={:?} queued={result:?}",
+                self.world.entity, context.damage_frame, self.frame, context.critical_hit
+            ));
+        }
+        result
     }
 
     fn receive_authored_elimination_feedback(
@@ -211,7 +221,8 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         #[cfg(feature = "inspector")]
         if crate::owner_trace::playtest_enabled() {
             crate::owner_trace::playtest(format_args!(
-                "combat elimination presentation target={victim:08X} queued={result:?}"
+                "combat elimination presentation body={:08X} target={victim:08X} vm_frame={} queued={result:?}",
+                self.world.entity, self.frame
             ));
         }
         result
@@ -305,6 +316,13 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
             }
         }
         let pose = mover.pose();
+        #[cfg(feature = "inspector")]
+        let before_effects = crate::owner_trace::playtest_enabled().then(|| {
+            self.component
+                .snapshot()
+                .and_then(|snapshot| snapshot.frame_actions.back())
+                .map_or(0, |action| action.callout.serial)
+        });
         self.world.position = pose.position;
         self.world.eye_position = script_eye_position(self.world.hero, mover);
         // Command gaps and timer advances retain the last movement record.
@@ -332,6 +350,35 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                 .map_err(unsupported)?;
         }
         self.frame = command.frame;
+        #[cfg(feature = "inspector")]
+        if let Some((before, snapshot)) = before_effects.zip(self.component.snapshot()) {
+            for action in snapshot
+                .frame_actions
+                .iter()
+                .rev()
+                .take_while(|action| action.callout.serial > before)
+            {
+                let callout = action.callout;
+                let Some(instance) = snapshot.instances.get(&callout.instance) else {
+                    continue;
+                };
+                let effect = self
+                    .world
+                    .graphs
+                    .graph(instance.graph)
+                    .and_then(|graph| graph.node(callout.position))
+                    .filter(|node| node.class == "STUStatescriptActionEffect")
+                    .and_then(|node| {
+                        crate::script_graph::asset_guid(&node.fields["m_effect"]["m_effect"])
+                    });
+                if let Some(effect) = effect {
+                    crate::owner_trace::playtest(format_args!(
+                        "combat effect emitted body={:08X} vm_frame={} serial={} effect={effect:016X}",
+                        snapshot.entity, self.frame, callout.serial
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 

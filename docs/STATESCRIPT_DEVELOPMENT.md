@@ -1138,6 +1138,12 @@ of parameter 0724. Use 1 to exercise the ordinary and critical default
 variants. The retail source of 0724 and original-client playback and
 audience acceptance remain open.
 
+Set `ORPHEUS_PLAYTEST_ELIMINATION=1` to exercise the shared final-blow
+effect after the room settles an enemy elimination. The active receiver
+selects its authored effect using the defeated body's facts. The test
+captures hitscan and projectile final blows through owner egress. Assist
+credit and the additional elimination audio layers still need verification.
+
 For a received-damage client comparison, set
 `ORPHEUS_PLAYTEST_RECEIVED_DAMAGE=1` on an Inspector server using the prepared
 104319 runtime. Only positive, nonlethal loss from a distinct room actor queues
