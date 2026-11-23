@@ -69,9 +69,13 @@ and mode respawn delays. Practice Range has a shipped three-second default.
 Rust uses the optional map-specific `*.rays.col` for hitscan, scripted
 sight, and both point and swept projectile terrain queries. The runtime
 checks its map, collision key and applicable prop provenance against the
-catalogs. Character movement keeps its own cache. When expanded geometry
-is unavailable, combat uses the existing movement-based probes and sweeps.
-A valid point-ray view remains usable if its sweep view cannot be built.
+catalogs. An expanded cache can specify `weapon_terrain_category` as a
+nonzero 16-bit integer in its JSON header. Use a category verified for the
+target build. The room uses it for hitscan and both point and swept projectile
+terrain queries. `category_mask` continues to describe the cache's coverage.
+Character movement uses the movement cache. Caches without a weapon category
+use the legacy mover category. Missing or rejected expanded geometry uses
+movement-based probes and sweeps.
 
 ### 2. Prepared Research Data (Must Be Supplied in Source Pack)
 

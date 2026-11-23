@@ -232,7 +232,13 @@ impl<'a> BotQueries<'a> {
         reach: f64,
     ) -> Result<Option<crate::collision_index::RayHit>, crate::collision_index::IndexError> {
         self.combat_rays
-            .cast_ray(origin, direction, reach, MOVER_CATEGORY)
+            .cast_ray(origin, direction, reach, self.weapon_terrain_category())
+    }
+
+    fn weapon_terrain_category(&self) -> u16 {
+        self.combat_rays
+            .weapon_terrain_category()
+            .unwrap_or(MOVER_CATEGORY)
     }
 
     #[cfg(any(test, feature = "inspector"))]
@@ -276,7 +282,7 @@ impl<'a> BotQueries<'a> {
                     radius,
                     start,
                     end,
-                    category: MOVER_CATEGORY,
+                    category: self.weapon_terrain_category(),
                 })
                 .map(|hit| {
                     hit.map(|result| SurfaceHit {

@@ -103,6 +103,7 @@ impl RoundProp {
 #[derive(Debug)]
 pub struct CollisionScene {
     triangles: TriangleIndex,
+    weapon_terrain_category: Option<u16>,
     triangle_sources: Vec<(usize, StaticRaySource)>,
     round_props: Vec<(RoundProp, StaticRaySource)>,
 }
@@ -206,9 +207,18 @@ impl CollisionScene {
         }
         Ok(Self {
             triangles: TriangleIndex::new(triangles)?,
+            weapon_terrain_category: cache
+                .header
+                .weapon_terrain_category
+                .filter(|_| expanded)
+                .map(|category| category.get()),
             triangle_sources,
             round_props,
         })
+    }
+
+    pub fn weapon_terrain_category(&self) -> Option<u16> {
+        self.weapon_terrain_category
     }
 
     pub fn triangles(&self) -> &TriangleIndex {

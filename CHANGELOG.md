@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Read an optional weapon terrain category from the validated expanded map collision cache. Use it for point hits and projectile sweeps through detailed meshes that coexist with mover proxies. A local 104319 replay cleared 32 recorded Practice Range shots at one hollow prop and retained 11 blockers at a second prop across three candidate categories. The native category still needs confirmation because those categories differ on base map geometry. Passed 598 library tests, two prepared map collision checks, and Clippy.
+
 - Synchronize the current and maximum owner HUD health with settled health pools after damage, healing, and death. Keep hit-time target facts frozen for weapon events. Passed 902 library tests, two prepared 104319 replays for player splash and firing bot return, and Clippy.
 
 - Send continuous owner movement corrections for any hero whose runtime supplies a movement projection. Keep contact and scripted-motion corrections available to bodies without that projection. Passed 597 library tests, the prepared Particle Cannon owner correction replay, and Clippy.

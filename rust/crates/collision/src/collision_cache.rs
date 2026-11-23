@@ -9,6 +9,7 @@ use std::error::Error;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, BufReader, Read};
+use std::num::NonZeroU16;
 use std::path::Path;
 
 use lzma_rust2::XzReader;
@@ -102,6 +103,9 @@ pub struct CacheHeader {
     pub placements: usize,
     #[serde(deserialize_with = "hex_identifiers")]
     pub identifiers: Vec<u64>,
+    /// Optional verified terrain query category for the expanded weapon geometry.
+    #[serde(default)]
+    pub weapon_terrain_category: Option<NonZeroU16>,
     /// The input catalog's provenance fields, retained without reinterpretation.
     #[serde(flatten)]
     pub source: BTreeMap<String, Value>,

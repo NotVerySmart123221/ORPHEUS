@@ -19,12 +19,14 @@ fn weapon_queries_preserve_openings_in_the_prepared_combat_geometry() {
         serde_json::from_value(input["combat_triangles"].clone()).unwrap();
     let movement: Vec<[[f32; 3]; 3]> =
         serde_json::from_value(input["movement_triangles"].clone()).unwrap();
-    let cache = |triangles: Vec<[[f32; 3]; 3]>, expanded| {
+    let category = input["layered_weapon_terrain_category"].as_u64().unwrap() as u16;
+    let cache = |triangles: Vec<[[f32; 3]; 3]>, weapon_category: Option<u16>| {
         let mut header = json!({
             "meshes":[[triangles.len()*3, triangles.len()]],
             "hulls":0,"models":0,"placements":0,"identifiers":[]
         });
-        if expanded {
+        if let Some(category) = weapon_category {
+            header["weapon_terrain_category"] = json!(category);
             header["geometry"] = json!("expanded-static-rays");
             header["category_mask"] = json!(65535);
             header["prop_scope"] = json!("indexed-static-models");
@@ -40,7 +42,7 @@ fn weapon_queries_preserve_openings_in_the_prepared_combat_geometry() {
                     .map(|i| Triangle {
                         corners: [3 * i, 3 * i + 2, 3 * i + 1],
                         wings: [-1; 3],
-                        mask: MOVER_CATEGORY,
+                        mask: weapon_category.unwrap_or(MOVER_CATEGORY),
                         surface: 0,
                     })
                     .collect(),
@@ -58,16 +60,23 @@ fn weapon_queries_preserve_openings_in_the_prepared_combat_geometry() {
     };
     let mut scene = PreparedScene::fixture_for_bots(Vec::new());
     let groups = BTreeSet::new();
-    let movement = cache(movement, false);
+    let movement = cache(movement, None);
     scene.ground = Arc::new(CollisionScene::movement_probe(&movement, &groups).unwrap());
+    let mut combat = cache(triangles, Some(category));
+    combat
+        .header
+        .meshes
+        .extend_from_slice(&movement.header.meshes);
+    combat.meshes.extend(movement.meshes.iter().cloned());
     let movement_contacts = Arc::new(ContactWorld::from_movement_cache(movement, &groups).unwrap());
     scene.contacts = Some(Arc::clone(&movement_contacts));
-    let combat = cache(triangles, true);
     scene.combat_rays =
         Arc::new(CollisionScene::expanded_rays(&combat, &groups, identity).unwrap());
     scene.combat_sweeps = Some(Arc::new(
         ContactWorld::from_expanded_ray_cache(combat, &groups, identity).unwrap(),
     ));
+    assert_eq!(scene.combat_rays.weapon_terrain_category(), Some(category));
+    assert_eq!(scene.ground.weapon_terrain_category(), None);
     for row in input["rays"].as_array().unwrap() {
         let origin = serde_json::from_value(row["origin"].clone()).unwrap();
         let direction = [0.0, 0.0, 1.0];
