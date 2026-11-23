@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Return grounded NPCs to authored steering when their residual knockback velocity quantizes to zero. A newly applied impulse still moves the body, and airborne actors keep their falling motion. Passed 519 server tests and the prepared 104319 firing-bot walk-back check.
+
 - Record the geometry source, collision mask, material and normal of a player's blocking world hit in the existing bounded Inspector ray history. A shot through an opening keeps its ordinary actor-hit or miss record. Passed 518 server tests, including gap, wall, and geometry-source coverage.
 
 - Sample player capsules again before the NPC movement phase. NPC sweeps now encounter the player's resolved position from the same room tick. Passed 518 server tests, including a regression that reproduces overlap with the earlier snapshot, and the prepared 104319 check for the firing bot's return after knockback. Original-client contact prediction remains open.

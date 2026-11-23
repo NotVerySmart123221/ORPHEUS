@@ -27,7 +27,7 @@ use crate::game_debug::ContactClip;
 use crate::mover::VelocityChange;
 use crate::mover_ground::{pogo, standing_body, standing_capsule, standing_origin};
 use crate::mover_kinematics::{Ground, MotionInput, VelocityStep};
-use crate::mover_posture::IN_AIR;
+use crate::mover_posture::{IN_AIR, snap};
 use crate::mover_settings::MoverSettings;
 use crate::navigation::{PathOptions, PathQuery, find_path};
 use crate::patrol_script::{PatrolScript, WaitEvent};
@@ -1134,6 +1134,16 @@ impl Bot {
         let from = self.position;
         let [x, y, z] = from;
         let grounded = velocity[1] <= 0.0 && ground(x, z, y + ARRIVED, y - ARRIVED).is_some();
+        if grounded
+            && self.movement_flags & IN_AIR == 0
+            && !applied_impulse
+            && velocity.map(snap) == [0.0; 3]
+        {
+            // A sub-grid residue from contact or friction has no visible
+            // motion and must release steering back to the AI.
+            self.velocity = [0.0; 3];
+            return false;
+        }
         let previous_flags = self.movement_flags;
         if grounded {
             velocity[1] = 0.0;
@@ -2370,6 +2380,41 @@ fn grounded_bot_moves_once_per_small_horizontal_impulse() {
         assert!(!bot.step_combat_motion(tick + 1, &settings, &mut floor));
         assert_eq!(bot.position, next);
     }
+}
+
+#[test]
+fn grounded_velocity_below_movement_precision_releases_npc_steering() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../fixtures/behavior/bot-grounded-impulse-v1.json"
+    ))
+    .unwrap();
+    let settling = &fixture["settling"];
+    let residue = serde_json::from_value(settling["velocity"].clone()).unwrap();
+    let tick = u32::try_from(settling["tick"].as_u64().unwrap()).unwrap();
+    let settings = MoverSettings::default();
+    let room = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+    let mut bot = tests::walker([0.0, 0.0, 10.0]);
+    let mut floor = |_, _, top, bottom| (bottom <= 0.0 && 0.0 <= top).then_some(0.0);
+    bot.attach_collision(&settings, Arc::clone(&room), 0x18, floor);
+    bot.velocity = residue;
+    bot.combat_motion_tick = Some(tick - 1);
+    assert!(!bot.step_combat_motion(tick, &settings, &mut floor));
+    assert!(!bot.has_combat_motion());
+    assert_eq!(bot.velocity, [0.0; 3]);
+    let patrol = PatrolScript::load().unwrap();
+    for next in tick..tick + 200 {
+        bot.step(next, &patrol, floor).unwrap();
+    }
+    assert!(bot.position[2] > 0.1, "{:?}", bot.position);
+    assert!(bot.input_tick.is_some());
+
+    let mut airborne = tests::walker([0.0, 0.0, 10.0]);
+    airborne.attach_collision(&settings, room, 0x18, |_, _, _, _| None);
+    airborne.velocity = residue;
+    airborne.combat_motion_tick = Some(tick - 1);
+    assert!(airborne.step_combat_motion(tick, &settings, &mut |_, _, _, _| None));
+    assert!(airborne.has_combat_motion());
+    assert!(airborne.velocity[1] < 0.0);
 }
 
 #[test]
