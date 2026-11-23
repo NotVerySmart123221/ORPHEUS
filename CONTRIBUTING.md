@@ -1,9 +1,9 @@
 # Contributing to ORPHEUS (`rust`)
 
-Contributors are welcome across Rust implementation, behavior contracts, collision/navigation research, and 104319 client testing. Check [open issues](https://github.com/leafall903/ORPHEUS/issues) (`#60`–`#65` track current Rust modularization, contracts, inspector, navmesh, and ECS work).
+Contributors are welcome across Rust implementation, behavior contracts, collision and navigation research, and 104319 client testing. Check [open issues](https://github.com/leafall903/ORPHEUS/issues?q=is%3Aissue+is%3Aopen) for tasks and the [roadmap](docs/ROADMAP.md) for behaviors that still need verification.
 
-- **`rust`:** Native Rust server and workspace crates (target branch for Rust PRs).
-- **`main`:** Python reference server, launchers, and data extractors (target branch for Python/tool PRs).
+- **`rust`:** Default branch and target for native Rust contributions.
+- **`main`:** Unmaintained Python server with reference tests, launchers, and data extractors.
 
 ---
 
@@ -16,7 +16,7 @@ git clone --branch rust https://github.com/leafall903/ORPHEUS.git
 cd ORPHEUS
 ```
 
-For Python work, clone with `git clone --branch main https://github.com/leafall903/ORPHEUS.git`. Set the PR base to `main` for Python and `rust` for Rust, including after the planned default branch change on November 19, 2026 at 12:00 UTC. [Branch guide](docs/BRANCH_TRANSITION.md)
+To inspect the Python reference, clone with `git clone --branch main https://github.com/leafall903/ORPHEUS.git`. Use `rust` as the base for Rust pull requests. [Branch guide](docs/BRANCH_TRANSITION.md)
 
 ---
 

@@ -1,17 +1,24 @@
-# ORPHEUS (Rust)
+# ORPHEUS
 
-[简体中文](README.zh-CN.md) · [Discord](https://discord.gg/tqukqjAk7) · [Python `main` branch](https://github.com/leafall903/ORPHEUS/tree/main)
+[![Rust 1.85+](https://img.shields.io/badge/Rust-1.85%2B-orange?logo=rust)](https://www.rust-lang.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Public source checks](https://github.com/leafall903/ORPHEUS/actions/workflows/public-checks.yml/badge.svg?branch=rust)](https://github.com/leafall903/ORPHEUS/actions/workflows/public-checks.yml?query=branch%3Arust)
+[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/tqukqjAk7)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-ORPHEUS is an open-source server reimplementation for **Overwatch 1 (retail build 1.74.0.0.104319)** focused on research and preservation.
+[简体中文](README.zh-CN.md) · [Quick start](#public-rust-tests-no-game-files-required) · [Current status](#current-status) · [Contribute](#contributing) · [Discord](https://discord.gg/tqukqjAk7)
 
-- **`rust` (this branch):** the experimental native Rust dedicated server, workspace crates, and local 3D debug inspector (`--features inspector`).
-- **`main`:** the community-maintained Python server, Windows game launcher, data extractors, and reference tests ([main branch](https://github.com/leafall903/ORPHEUS/tree/main)).
+**ORPHEUS is an independent, open-source Rust dedicated server reimplementation for Overwatch 1 (retail build 1.74.0.0.104319).** This developer preview supports research and game preservation, with headless regressions for the lobby, Practice Range, and parts of Junkenstein's Revenge.
 
-**Default branch change planned for November 19, 2026 at 12:00 UTC.** New clones will open on `rust`. Choose `rust` for Rust pull requests and `main` for Python pull requests. Both implementations welcome contributions. The Rust server is a developer preview. [Branch guide](docs/BRANCH_TRANSITION.md)
+- **Rust simulation and StateScript.** Bevy ECS runs room simulation, with separate crates for the protocol, collision, runtime data and StateScript VM.
+- **Try the source without a game install.** The public workspace suite runs on synthetic fixtures.
+- **Live Web Scene Inspector.** Follow actors, AI routes, collision samples and rays in top and elevation views. The timing panel reports worker percentiles from tick and scheduling histograms.
 
-[Public Rust Tests](#public-rust-tests) · [Run Native Server](#run-the-native-server) · [Current Status](#current-status) · [Architecture](docs/NATIVE_SERVER_ARCHITECTURE.md) · [Contributing](CONTRIBUTING.md) · [Issues](https://github.com/leafall903/ORPHEUS/issues)
+[![Scene Inspector preview showing patrol routes, ray hits, collision geometry, and worker timing on a synthetic arena](docs/assets/scene-inspector.gif)](docs/assets/scene-inspector.png)
 
----
+*The project’s Inspector rendered with a synthetic arena and example timing data. [Open the static screenshot](docs/assets/scene-inspector.png).*
+
+**Branches.** [`rust`](https://github.com/leafall903/ORPHEUS/tree/rust) is the GitHub default and the target for active development. [`main`](https://github.com/leafall903/ORPHEUS/tree/main) preserves the unmaintained Python server, launcher, extractors and reference tests. [Branch guide](docs/BRANCH_TRANSITION.md)
 
 ## Public Rust Tests (No Game Files Required)
 
@@ -23,9 +30,16 @@ cd ORPHEUS
 cargo test --locked --workspace --all-targets
 ```
 
-The default server uses StateScript for patrol decisions. The included patrol graph selects waits and route slots from map-provided waypoints. Rust owns pathfinding, steering, collision and per-tick movement in the room simulation. Build with `--features lua-debug` and pass `--ai-script <file>` to try a local Lua override. Enabling the feature by itself keeps the StateScript policy.
+The default build excludes the Lua runtime. The server uses StateScript for patrol decisions. The included patrol graph selects waits and route slots from map-provided waypoints. Rust owns pathfinding, steering, collision and per-tick movement in the room simulation.
 
-Public tests use synthetic fixtures only. See [CONTRIBUTING.md](CONTRIBUTING.md) for running `clippy`, `--features inspector`, MSRV, and the 38 StateScript contract checks that public CI runs.
+<details>
+<summary>Optional Lua override and additional checks</summary>
+
+Build with `--features lua-debug` and pass `--ai-script <file>` to use a local Lua override with hot reload. Enabling the feature by itself keeps the StateScript policy.
+
+The [contribution guide](CONTRIBUTING.md) covers Clippy, the optional Inspector and Lua checks, MSRV, and the shared StateScript contracts in public CI.
+
+</details>
 
 ---
 
@@ -39,15 +53,18 @@ cargo run --locked --bin orpheus_server -- --check-runtime
 cargo run --locked --bin orpheus_server -- --data-dir 'C:\path\to\local-state'
 ```
 
-Enable the optional loopback web 3D inspector (`--features inspector`):
+### Live Web Scene Inspector
+
+Enable the optional loopback Inspector with `--features inspector`.
 
 ```powershell
 cargo run --locked --features inspector --bin orpheus_server -- --data-dir 'C:\path\to\local-state' --debug-port 3726
 ```
 
-Then open `http://127.0.0.1:3726/` to view live room actors, sampled collision geometry, bot patrol clips, tick timing histograms, and room-fault records.
+Then open `http://127.0.0.1:3726/` to view live room actors, sampled collision geometry, bot patrol clips, worker timing percentiles, and room-fault records.
 
-### Local Junkenstein Validation Overrides (Normal Cassidy)
+<details>
+<summary>Local Junkenstein validation overrides (Normal Cassidy, card 0x3C)</summary>
 
 For isolated Normal Revenge (`0x3C`) acceptance runs, pass `--junkenstein-validation <path.json>` before startup:
 
@@ -55,6 +72,8 @@ For isolated Normal Revenge (`0x3C`) acceptance runs, pass `--junkenstein-valida
 - **Destructible-gate defeat check:** `{"invulnerable_cassidy": true}`
 
 These overrides apply only to card `0x3C` and do not affect default runs or other heroes/cards. Keep local profile files outside the repository.
+
+</details>
 
 ---
 
@@ -65,13 +84,24 @@ These overrides apply only to card `0x3C` and do not affect default runs or othe
 | **Login, Profiles & Gallery** | Native Battle.net RPC, JAM lobby, profile settings persistence (`profile-settings-v1`), and Hero Gallery loadout previews (including 23 NPC previews). | Encrypted lobby login and Practice Range entry work; client Hero Gallery NPC framing & full live flows await retest. |
 | **Practice Range & Soldier: 76** | Loopback UDP rooms, Bevy ECS bots/projectiles, StateScript patrol decisions, authored rifle/reload/Sprint/Helix/Biotic Field VM & fixture combat. | Headless encrypted tests pass; live 104319 weapon attachment, Sprint/ammo sync, and upstairs patrol need client acceptance. |
 | **Junkenstein & Normal Cassidy** | All 14 cards load; Normal Cassidy Primary/Fan/Roll/Flashbang/Deadeye, ultimate charge (`0B8B`), team score, boss speech (`40E05F6B`), and gate stages pass headless replays. | Client Defeat heading verified; full Cassidy skills, Boss intro cameras/pursuit, recap timer, and natural Victory await live client acceptance. |
-| **Architecture & Isolation** | Independent `orpheus-wire`, `orpheus-collision`, `orpheus-runtime`, and `orpheus-statescript` workspace crates; modularized `game_combat/`, `scene_assets/`, and `game_service/` with room-level fault/panic isolation. | Cross-map NavMesh (#63), unified ECS player bodies (#65), and Inspector ray/nav overlay (#62) tracked in issues. |
+| **Architecture & Isolation** | Independent `orpheus-wire`, `orpheus-collision`, `orpheus-runtime`, and `orpheus-statescript` workspace crates; modularized `game_combat/`, `scene_assets/`, and `game_service/` with room-level fault/panic isolation. | Further cross-map navigation and live behavior verification are tracked in the roadmap. |
 
-Details: [docs/NATIVE_SERVER_ARCHITECTURE.md](docs/NATIVE_SERVER_ARCHITECTURE.md) · [docs/STATE.md](docs/STATE.md) · [docs/BEHAVIOR_CONTRACTS.md](docs/BEHAVIOR_CONTRACTS.md) · [docs/ROADMAP.md](docs/ROADMAP.md)
+See the [architecture](docs/NATIVE_SERVER_ARCHITECTURE.md), [evidence and status](docs/STATE.md), [behavior contracts](docs/BEHAVIOR_CONTRACTS.md), and [roadmap](docs/ROADMAP.md).
 
 ---
 
-## Workspace Layout
+## Architecture and Workspace Layout
+
+```mermaid
+flowchart LR
+    Client["104319 client"] <--> Server["Native server / orpheus-wire"]
+    Server --> ECS["Bevy ECS room simulation"]
+    Runtime["Prepared runtime data"] --> Server
+    ECS --> Collision["Collision queries"]
+    ECS --> StateScript["StateScript VM"]
+    ECS -.-> Inspector["Live Web Scene Inspector"]
+    Lua["Optional Lua debug override"] -.-> ECS
+```
 
 | Path | Role |
 | --- | --- |
@@ -81,10 +111,18 @@ Details: [docs/NATIVE_SERVER_ARCHITECTURE.md](docs/NATIVE_SERVER_ARCHITECTURE.md
 | `rust/crates/collision/` (`orpheus-collision`) | Collision cache reader, spatial triangle index, static rays, GJK/contact solver |
 | `rust/crates/runtime/` (`orpheus-runtime`) | Runtime manifest inventory, preflight checks, and `prepare_server_runtime` CLI |
 | `rust/scripts/` | StateScript patrol policy and sample Lua debug override |
-| `rust/assets/inspector/`, `rust/tests/` | Web 3D debug viewer assets and integration test targets (`world_queries`, `profile_settings`, `protocol`, `runtime_preflight`) |
-| `fixtures/behavior/`, `scripts/` | 48 JSON behavior fixtures (including Rust-only regressions) and cross-language verifier scripts |
+| `rust/assets/inspector/`, `rust/tests/` | Web Scene Inspector assets and integration test targets (`world_queries`, `profile_settings`, `protocol`, `runtime_preflight`) |
+| `fixtures/behavior/`, `scripts/` | JSON behavior fixtures (including Rust-only regressions) and cross-language verifier scripts |
 | `relay/` | Windows C++ client TLS relay source |
+
+## Contributing
+
+- **Rust and protocol.** Extend Soldier: 76 StateScript delivery coverage. [Open issue #166](https://github.com/leafall903/ORPHEUS/issues/166)
+- **Inspector, navigation and ECS.** The completed work in [#62](https://github.com/leafall903/ORPHEUS/issues/62), [#63](https://github.com/leafall903/ORPHEUS/issues/63) and [#65](https://github.com/leafall903/ORPHEUS/issues/65) is a starting point for follow-up contributions.
+- **Client testing.** Use your local 104319 client to verify Practice Range patrol and collision, Soldier: 76 Sprint and ammo sync, or Junkenstein flows. [Playtest checklist](docs/ROADMAP.md#original-client-acceptance-gates)
+
+See the [contribution guide](CONTRIBUTING.md), browse [open issues](https://github.com/leafall903/ORPHEUS/issues?q=is%3Aissue+is%3Aopen), or join [Discord](https://discord.gg/tqukqjAk7).
 
 ## License & Credits
 
-MIT-licensed source code ([LICENSE](LICENSE)); upstream protocol research and contributor credits live in [CREDITS.md](CREDITS.md). Never commit game clients, commercial assets, signing inputs, keys, credentials, or raw packet captures.
+The source is [MIT-licensed](LICENSE). Upstream research and contributor credits are documented in [CREDITS.md](CREDITS.md). ORPHEUS is an independent research and preservation project with no affiliation to Blizzard Entertainment. Never commit game clients, commercial assets, signing inputs, keys, credentials, or raw packet captures.

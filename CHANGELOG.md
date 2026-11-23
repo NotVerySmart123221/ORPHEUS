@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Reorganize both README editions around the Rust developer preview, contributor entry points, and an animated Web Scene Inspector capture made with synthetic data. Update the branch guide to reflect the current default and the status of the Python reference.
+
 - Apply the existing per-observer bot respawn acknowledgement to owner movement contacts. A replacement cannot block its observer from moving through its capsule until the create and required respawn script baseline arrive. Passed 509 Inspector-enabled server tests and the prepared 104319 stock respawn projection and encrypted bot replacement checks. Original-client timing remains open.
 
 - Identify the cache mesh, hull or map placement behind a blocking player hitscan ray in the Inspector. Placement hits carry the original cache placement index, model index and mode group. Passed 509 Inspector-enabled server and 69 collision library tests. Weapon ray admission stays unchanged while the original-client filter is investigated.
