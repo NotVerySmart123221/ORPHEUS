@@ -332,7 +332,7 @@ mod tests {
         script_init::ShotEvent,
         script_snapshot_wire::{ProjectedInstance, ProjectedState, View, VolleyActivation},
         script_stream::{BodyStream, DeltaKind},
-        script_wire::Value,
+        script_wire::{Binding, Value},
     };
     use serde::Deserialize;
     use std::time::Duration;
@@ -458,7 +458,7 @@ mod tests {
             ordinal: 0,
         };
         let mut original = project(&input, input.activation);
-        let newer = project(&input, input.activation + 1);
+        let mut newer = project(&input, input.activation + 1);
         let variable = Variable {
             scope: Scope::Instance,
             id: input.presentation_variable,
@@ -476,6 +476,30 @@ mod tests {
             .variables
             .values
             .insert(variable.id, firing);
+        let binding = Binding {
+            instance: input.instance,
+            state: input.state,
+            state_bits: 4,
+            slot: 0,
+            priority: 0,
+            above: true,
+        };
+        let attach_binding = |snapshot: &mut ProjectedSnapshot| {
+            let variables = &mut snapshot
+                .instances
+                .get_mut(&input.instance)
+                .unwrap()
+                .variables;
+            variables
+                .values
+                .entry(variable.id)
+                .or_insert(Value::Bool(false));
+            variables.bindings.insert(variable.id, vec![binding]);
+        };
+        let mut bound = original.clone();
+        attach_binding(&mut bound);
+        assert!(!bound.has_volley(&volley));
+        attach_binding(&mut newer);
         let mut world = WorldDelivery::new(103);
         world.started = Some(100);
         world

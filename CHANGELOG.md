@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Freeze the shot's authored presentation values without carrying over live stack bindings from another state. Observer projectile launch waits for a snapshot that acknowledges those literal values. The normal projection restores live bindings after the launch. Passed 519 server tests and the 104319 firing projection check for both bot teams.
+
 - Return grounded NPCs to authored steering when their residual knockback velocity quantizes to zero. A newly applied impulse still moves the body, and airborne actors keep their falling motion. Passed 519 server tests and the prepared 104319 firing-bot walk-back check.
 
 - Record the geometry source, collision mask, material and normal of a player's blocking world hit in the existing bounded Inspector ray history. A shot through an opening keeps its ordinary actor-hit or miss record. Passed 518 server tests, including gap, wall, and geometry-source coverage.

@@ -119,7 +119,10 @@ A single-shot activation can start and end within one VM tick. The
 shot report captures active remote data-flow inputs sourced from the
 volley's own child states before their links are removed. Observer
 delivery retains those values with the corresponding volley until the
-launch is acknowledged or expires. The VM still clears its own stack
+launch is acknowledged or expires. The retained snapshot sends the captured
+values as literals and drops competing live bindings for those variables.
+The ordinary projection sends the live bindings again after retirement.
+The VM still clears its own stack
 claims at the authored time. The prepared firing probe verifies the
 stock firing input on both teams. Rendered attacks remain an
 original-client acceptance check.

@@ -248,11 +248,11 @@ impl ProjectedSnapshot {
                 .states
                 .insert(volley.event.raw_state, volley.state.clone());
             for (variable, value) in &volley.presentation {
-                let values = match variable.scope {
-                    Scope::Entity => &mut self.variables.values,
-                    Scope::Instance => &mut instance.variables.values,
+                let variables = match variable.scope {
+                    Scope::Entity => &mut self.variables,
+                    Scope::Instance => &mut instance.variables,
                 };
-                values.insert(variable.id, value.clone());
+                variables.seed_value(variable.id, value.clone());
             }
             true
         } else {
@@ -272,11 +272,12 @@ impl ProjectedSnapshot {
                 .is_some_and(|instance| {
                     instance.states.get(&event.raw_state) == Some(&volley.state)
                         && volley.presentation.iter().all(|(variable, value)| {
-                            let values = match variable.scope {
-                                Scope::Entity => &self.variables.values,
-                                Scope::Instance => &instance.variables.values,
+                            let variables = match variable.scope {
+                                Scope::Entity => &self.variables,
+                                Scope::Instance => &instance.variables,
                             };
-                            values.get(&variable.id) == Some(value)
+                            variables.values.get(&variable.id) == Some(value)
+                                && !variables.bindings.contains_key(&variable.id)
                         })
                 })
     }
