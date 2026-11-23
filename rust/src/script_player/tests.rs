@@ -3236,6 +3236,76 @@ fn impact_spawn_uses_declared_resources_on_a_relocated_volley() {
 }
 
 #[test]
+fn player_volley_projects_each_authored_ring_pellet_once() {
+    use serde_json::json;
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/player-pellet-rings-v1.json"
+    ))
+    .unwrap();
+    let rings: Vec<(f64, usize)> = serde_json::from_value(fixture["rings"].clone()).unwrap();
+    let cone = fixture["cone_degrees"].as_f64().unwrap();
+    let count = fixture["pellets"].as_u64().unwrap() as usize;
+    let damage = fixture["damage_per_pellet"].as_f64().unwrap();
+    let (_, spawn) = fixture_body_factory();
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        spawn.pose.position,
+        0,
+        0x18,
+    )
+    .unwrap();
+    let fire = Command {
+        frame: spawn.frame + 1,
+        buttons: crate::commands::SECONDARY,
+        ..Command::default()
+    };
+    let mut fields = json!({
+        "m_A17BE89B": 1, "m_numShotsPerSecond": 1, "m_FEC435C6": 100,
+        "m_6396149F": {"m_modifyHealth": {"m_amount": damage}},
+        "m_numProjectilesPerShot": count,
+        "m_5EC1EB38": {
+            "$": "STU_613BDDB0",
+            "m_spread": cone,
+            "m_0D30E40C": rings.iter().map(|&(radius, count)| json!({
+                "m_6425FFB9": radius, "m_B19BD35D": count
+            })).collect::<Vec<_>>()
+        }
+    });
+    let mut runtime = fixture_volley_factory(29, false, fields.clone())
+        .start(spawn)
+        .unwrap();
+    runtime.advance(fire, &mover, BodyStep::Posed).unwrap();
+    let shots = runtime.take_shots(Some(fire), &mover);
+    assert_eq!(shots.len(), count);
+    let mut directions = BTreeSet::new();
+    for (shot, radius) in shots.into_iter().zip(
+        rings
+            .iter()
+            .flat_map(|&(radius, count)| std::iter::repeat_n(radius, count)),
+    ) {
+        let PosedShot::Hitscan(shot) = shot else {
+            panic!("expected a hitscan pellet");
+        };
+        assert_eq!(shot.source, spawn.entity);
+        assert_eq!(shot.shot_frame, fire.frame);
+        assert_eq!(shot.hit.amount, damage);
+        assert!((shot.direction[2] - (cone * radius).to_radians().cos()).abs() < 1e-6);
+        directions.insert(shot.direction.map(f64::to_bits));
+    }
+    assert_eq!(directions.len(), count);
+    assert!(runtime.take_shots(Some(fire), &mover).is_empty());
+
+    fields["m_numProjectilesPerShot"] = json!(count + 1);
+    let mut invalid = fixture_volley_factory(29, false, fields)
+        .start(spawn)
+        .unwrap();
+    invalid.advance(fire, &mover, BodyStep::Posed).unwrap();
+    assert!(invalid.take_shots(Some(fire), &mover).is_empty());
+}
+
+#[test]
 fn unsupported_projectile_modes_do_not_become_hitscan_or_straight_damage() {
     use serde_json::json;
 

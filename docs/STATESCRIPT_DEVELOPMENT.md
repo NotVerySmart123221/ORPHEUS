@@ -1169,10 +1169,11 @@ Current hit feedback is scoped to settled weapon impacts with a hit
 classification. A generic scripted health change has no hit classification,
 so it can still send victim feedback on a positive nonlethal loss without
 queuing a shooter hit effect. The victim path can queue once per eligible
-health settlement. Player hitscan currently produces one ray per authored
-shot, while the NPC weapon path resolves each authored pellet independently.
-Player shotgun bursts and original-client feedback cadence for pellet impacts
-and recurring damage remain acceptance gaps.
+health settlement. Authored concentric pellet volleys now use the same
+pattern parser for player hitscan and NPC weapons. Each ray goes through the
+shared combat query and settlement, while the VM still owns the single shot
+event and its ammunition. The original-client feedback cadence for pellet
+impacts and recurring damage remains an acceptance gap.
 
 Weapon notifications carry the target's captured filter flags, target
 tags, and script variables. A room-settled health change from a distinct

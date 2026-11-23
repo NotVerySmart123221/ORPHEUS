@@ -381,6 +381,68 @@ fn normal_cassidy_primary_and_fan_damage_all_boss_bodies() {
 }
 
 #[test]
+#[ignore = "requires the local 104319 Practice Range runtime with authored mode rules"]
+fn prepared_reaper_primary_projects_the_authored_pellet_count() {
+    use crate::{
+        commands::{Command, FIRE},
+        game_clock::FIRST_TICK,
+        game_combat::PosedShot,
+        game_replication::BodyStep,
+    };
+
+    let assets = SceneAssets::load(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap()).unwrap();
+    let scene = assets.prepare(GameMap::practice_range()).unwrap();
+    let hero = scene.heroes().find_hero("Reaper").unwrap();
+    let mover = scene.player_spawn_mover(hero.body, 0).unwrap();
+    let mut owner = scene
+        .owner_body_runtime(
+            hero,
+            OwnerBodySpawn {
+                slot: 0,
+                controller: 0xa000_0100,
+                entity: 0xa000_0101,
+                body_filter: team_bit(0).unwrap(),
+                frame: FIRST_TICK,
+                pose: mover.pose(),
+                eye_position: script_eye_position(hero.guid, &mover),
+                skin: 0,
+                quanta: RETAIL_QUANTA,
+            },
+        )
+        .unwrap()
+        .unwrap();
+
+    for frame in FIRST_TICK + 1..=FIRST_TICK + 90 {
+        let command = Command {
+            frame,
+            buttons: FIRE,
+            ..Command::default()
+        };
+        owner.advance(command, &mover, BodyStep::Posed).unwrap();
+        let shots = owner.take_shots(Some(command), &mover);
+        if shots.is_empty() {
+            continue;
+        }
+        assert_eq!(shots.len(), 20);
+        let mut directions = BTreeSet::new();
+        for shot in shots {
+            let PosedShot::Hitscan(shot) = shot else {
+                panic!("expected a shotgun ray");
+            };
+            assert_eq!(shot.shot_frame, frame);
+            assert!(shot.hit.amount > 0.0);
+            directions.insert(shot.direction.map(f64::to_bits));
+        }
+        assert_eq!(directions.len(), 20);
+        return;
+    }
+    panic!(
+        "the prepared Reaper body did not fire: {:?}",
+        owner.snapshot().unwrap().diagnostics
+    );
+}
+
+#[test]
 #[ignore = "requires the local 104319 Practice Range runtime"]
 fn prepared_cassidy_fan_uses_authored_cone_and_falloff() {
     use crate::{

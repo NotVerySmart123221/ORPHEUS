@@ -29,12 +29,14 @@ use crate::{
     script_control::LEGACY_PROJECTILE_CONTROL,
     script_expr::to_float,
     script_init::{
-        Component, HostEvent, HostHealthContext, InitFault, RoomMessage, ScriptedMotion, Snapshot,
+        Component, HostEvent, HostHealthContext, InitFault, ReportedShot, RoomMessage,
+        ScriptedMotion, Snapshot,
     },
     script_runtime::FRAME_MS,
     script_snapshot_wire::SnapshotEncoder,
     script_wire::Value,
     vitals::{Damage, Death, Vitals},
+    weapon_spread::{authored_hitscan_direction, authored_ring_directions},
     world::Component as EntityComponent,
 };
 
@@ -493,144 +495,118 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         let [x, y, z] = mover.pose().position;
         let hero = self.world.hero;
         let origin = [x, y + eye_height(hero, mover.crouched()), z];
-        shots
-            .into_iter()
-            .filter_map(|report| {
-                let shot = report.event;
-                let node = self.component.shot_node(&shot)?;
-                let flashbang = LEGACY_PROJECTILE_CONTROL.matches_shot(hero, shot.graph, node.pos);
-                let stun_duration = flashbang
-                    .then(|| {
-                        LEGACY_PROJECTILE_CONTROL
-                            .duration(&self.world.graphs)
-                            .cloned()
-                    })
-                    .flatten();
-                // Python e1128509 declares this primary-only implicit policy;
-                // it is not a recovered global native critical default.
-                let default_critical = if (hero, shot.graph, node.pos) == (CASSIDY, 0x01d2, 31) {
-                    2.0
-                } else {
-                    1.0
-                };
-                let mut evaluate = |config: &Json| {
-                    self.component
-                        .evaluate_shot_config(&shot, config, &mut self.world)
-                };
-                if ImpactSpawn::from_volley(node, &mut evaluate).ok().flatten()
-                    == Some(ImpactSpawn {
-                        definition: BIOTIC_FIELD_ENTITY,
-                        on_spawn_graph: None,
-                    })
-                    && node
-                        .field("m_projectileEntity.m_entityDef")
-                        .and_then(|config| evaluate(config).ok())
-                        == Some(Value::Asset(BIOTIC_CANISTER))
-                    && self.leases.entity(BIOTIC_CANISTER, shot.frame, 0).is_some()
-                {
-                    return Some(PosedShot::BioticField(PosedBioticField {
-                        shot,
-                        feet: [x, y, z],
-                    }));
-                }
-                let speed = node.field("m_projectileSpeed").unwrap_or(&Json::Null);
-                if !speed.is_null() && to_float(&evaluate(speed).ok()?) != 0.0 {
-                    let gravity = authored_gravity(&node.fields, &mut evaluate).ok()?;
-                    if !node.is_networked()
-                        || !local_prediction(node)
-                        || !predicted_sync(node, &mut evaluate).ok()?
-                        || authored_number(
-                            node.field("m_numProjectilesPerShot"),
-                            1.0,
-                            &mut evaluate,
-                        )
+        let mut posed = Vec::with_capacity(shots.len());
+        let mut pose = |report: ReportedShot| -> Option<()> {
+            let shot = report.event;
+            let node = self.component.shot_node(&shot)?;
+            let flashbang = LEGACY_PROJECTILE_CONTROL.matches_shot(hero, shot.graph, node.pos);
+            let stun_duration = flashbang
+                .then(|| {
+                    LEGACY_PROJECTILE_CONTROL
+                        .duration(&self.world.graphs)
+                        .cloned()
+                })
+                .flatten();
+            // Python e1128509 declares this primary-only implicit policy;
+            // it is not a recovered global native critical default.
+            let default_critical = if (hero, shot.graph, node.pos) == (CASSIDY, 0x01d2, 31) {
+                2.0
+            } else {
+                1.0
+            };
+            let mut evaluate = |config: &Json| {
+                self.component
+                    .evaluate_shot_config(&shot, config, &mut self.world)
+            };
+            if ImpactSpawn::from_volley(node, &mut evaluate).ok().flatten()
+                == Some(ImpactSpawn {
+                    definition: BIOTIC_FIELD_ENTITY,
+                    on_spawn_graph: None,
+                })
+                && node
+                    .field("m_projectileEntity.m_entityDef")
+                    .and_then(|config| evaluate(config).ok())
+                    == Some(Value::Asset(BIOTIC_CANISTER))
+                && self.leases.entity(BIOTIC_CANISTER, shot.frame, 0).is_some()
+            {
+                posed.push(PosedShot::BioticField(PosedBioticField {
+                    shot,
+                    feet: [x, y, z],
+                }));
+                return Some(());
+            }
+            let speed = node.field("m_projectileSpeed").unwrap_or(&Json::Null);
+            if !speed.is_null() && to_float(&evaluate(speed).ok()?) != 0.0 {
+                let gravity = authored_gravity(&node.fields, &mut evaluate).ok()?;
+                if !node.is_networked()
+                    || !local_prediction(node)
+                    || !predicted_sync(node, &mut evaluate).ok()?
+                    || authored_number(node.field("m_numProjectilesPerShot"), 1.0, &mut evaluate)
                         .ok()?
-                            != 1.0
-                    {
-                        return None;
-                    }
-                    let ballistics =
-                        ProjectileBallistics::from_authored(node, &mut evaluate).ok()??;
-                    let definition = ballistics.definition?;
-                    self.leases.entity(definition, shot.frame, 0)?;
-                    if ballistics.direct.is_some_and(|hit| hit.amount < 0.0)
-                        || ballistics
-                            .blast
-                            .as_ref()
-                            .is_some_and(|blast| blast.hit.amount < 0.0)
-                    {
-                        return None;
-                    }
-                    if !ballistics.direct.is_some_and(|hit| hit.amount > 0.0)
-                        && !ballistics.blast.as_ref().is_some_and(|blast| {
-                            blast.hit.amount > 0.0 || blast.knockback.is_some()
-                        })
-                    {
-                        return None;
-                    }
-                    let direction =
-                        posed_projectile_direction(node, aim_direction(&command), &mut evaluate)?;
-                    let stun = if flashbang {
-                        let effect = node.field("m_D2D11CE9.m_modifyHealth.m_277A4ECA")?;
-                        if !LEGACY_PROJECTILE_CONTROL.has_effect_marker(&evaluate(effect).ok()?) {
-                            return None;
-                        }
-                        Some(Stun::from_seconds(to_float(
-                            &evaluate(stun_duration.as_ref()?).ok()?,
-                        ))?)
-                    } else {
-                        None
-                    };
-                    return Some(PosedShot::Projectile(Box::new(PosedProjectile {
-                        stun,
-                        shot,
-                        ballistics,
-                        origin,
-                        direction,
-                        gravity,
-                    })));
-                }
-                let hit = HitDefinition::from_authored_with_critical(
-                    node.field("m_6396149F")?,
-                    default_critical,
-                    &mut evaluate,
-                )
-                .ok()??;
-                if hit.amount <= 0.0 {
+                        != 1.0
+                {
                     return None;
                 }
-                let reach = node.field("m_FEC435C6").unwrap_or(&Json::Null);
-                let reach = if reach.is_null() {
-                    0.0
-                } else {
-                    to_float(&evaluate(reach).ok()?)
-                };
-                let direction = if (shot.graph, node.pos) == (DEADEYE_TARGET_EFFECT, 14) {
-                    let snapshot = self.component.snapshot()?;
-                    let Value::Entity(entity) = *snapshot
-                        .instances
-                        .get(&shot.instance)?
-                        .variables
-                        .get(&536)?
-                    else {
-                        return None;
-                    };
-                    let Value::Array(visible) = snapshot.variables.get(&5874)? else {
-                        return None;
-                    };
-                    if !visible.contains(&Value::Entity(entity)) {
+                let ballistics =
+                    ProjectileBallistics::from_authored(node, &mut evaluate).ok()??;
+                let definition = ballistics.definition?;
+                self.leases.entity(definition, shot.frame, 0)?;
+                if ballistics.direct.is_some_and(|hit| hit.amount < 0.0)
+                    || ballistics
+                        .blast
+                        .as_ref()
+                        .is_some_and(|blast| blast.hit.amount < 0.0)
+                {
+                    return None;
+                }
+                if !ballistics.direct.is_some_and(|hit| hit.amount > 0.0)
+                    && !ballistics
+                        .blast
+                        .as_ref()
+                        .is_some_and(|blast| blast.hit.amount > 0.0 || blast.knockback.is_some())
+                {
+                    return None;
+                }
+                let direction =
+                    posed_projectile_direction(node, aim_direction(&command), &mut evaluate)?;
+                let stun = if flashbang {
+                    let effect = node.field("m_D2D11CE9.m_modifyHealth.m_277A4ECA")?;
+                    if !LEGACY_PROJECTILE_CONTROL.has_effect_marker(&evaluate(effect).ok()?) {
                         return None;
                     }
-                    DeadeyeScene::shot_direction(&self.world.deadeye_scene, origin, entity)?
+                    Some(Stun::from_seconds(to_float(
+                        &evaluate(stun_duration.as_ref()?).ok()?,
+                    ))?)
                 } else {
-                    crate::weapon_spread::authored_hitscan_direction(
-                        node,
-                        &report,
-                        aim_direction(&command),
-                        &mut evaluate,
-                    )
+                    None
                 };
-                Some(PosedShot::Hitscan(Box::new(PosedHitscan {
+                posed.push(PosedShot::Projectile(Box::new(PosedProjectile {
+                    stun,
+                    shot,
+                    ballistics,
+                    origin,
+                    direction,
+                    gravity,
+                })));
+                return Some(());
+            }
+            let hit = HitDefinition::from_authored_with_critical(
+                node.field("m_6396149F")?,
+                default_critical,
+                &mut evaluate,
+            )
+            .ok()??;
+            if hit.amount <= 0.0 {
+                return None;
+            }
+            let reach = node.field("m_FEC435C6").unwrap_or(&Json::Null);
+            let reach = if reach.is_null() {
+                0.0
+            } else {
+                to_float(&evaluate(reach).ok()?)
+            };
+            let mut push_hitscan = |direction| {
+                posed.push(PosedShot::Hitscan(Box::new(PosedHitscan {
                     source: shot.entity,
                     origin,
                     direction,
@@ -638,8 +614,50 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                     shot_frame: shot.frame,
                     reach,
                     hit,
-                })))
-            })
-            .collect()
+                })));
+            };
+            if node
+                .field("m_5EC1EB38")
+                .and_then(|launch| launch["$"].as_str())
+                == Some("STU_613BDDB0")
+            {
+                for direction in authored_ring_directions(
+                    &node.fields,
+                    aim_direction(&command),
+                    &shot,
+                    node.pos,
+                    &mut evaluate,
+                )? {
+                    push_hitscan(direction);
+                }
+                return Some(());
+            }
+            let direction = if (shot.graph, node.pos) == (DEADEYE_TARGET_EFFECT, 14) {
+                let snapshot = self.component.snapshot()?;
+                let Value::Entity(entity) = *snapshot
+                    .instances
+                    .get(&shot.instance)?
+                    .variables
+                    .get(&536)?
+                else {
+                    return None;
+                };
+                let Value::Array(visible) = snapshot.variables.get(&5874)? else {
+                    return None;
+                };
+                if !visible.contains(&Value::Entity(entity)) {
+                    return None;
+                }
+                DeadeyeScene::shot_direction(&self.world.deadeye_scene, origin, entity)?
+            } else {
+                authored_hitscan_direction(node, &report, aim_direction(&command), &mut evaluate)
+            };
+            push_hitscan(direction);
+            Some(())
+        };
+        for report in shots {
+            pose(report);
+        }
+        posed
     }
 }

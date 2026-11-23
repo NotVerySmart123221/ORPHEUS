@@ -585,9 +585,13 @@ impl EnemyScripts {
                     let Ok(Some(hit)) = HitDefinition::from_authored(direct, &mut evaluate) else {
                         continue;
                     };
-                    let Some(directions) =
-                        shotgun_directions(&node.fields, forward, &shot, node.pos, &mut evaluate)
-                    else {
+                    let Some(directions) = crate::weapon_spread::authored_ring_directions(
+                        &node.fields,
+                        forward,
+                        &shot,
+                        node.pos,
+                        &mut evaluate,
+                    ) else {
                         continue;
                     };
                     weapons.hitscan.push(EnemyHitscanVolley {
@@ -1245,7 +1249,9 @@ pub(crate) fn projectile_pattern(
 ) -> Option<ProjectilePattern> {
     let ballistics = ProjectileBallistics::from_fields(fields, &mut *evaluate).ok()??;
     let directions = match fields["m_5EC1EB38"]["$"].as_str()? {
-        "STU_613BDDB0" => shotgun_directions(fields, forward, shot, position, evaluate)?,
+        "STU_613BDDB0" => crate::weapon_spread::authored_ring_directions(
+            fields, forward, shot, position, evaluate,
+        )?,
         "STU_239B571E" => vec![forward],
         _ => return None,
     };
@@ -1254,40 +1260,6 @@ pub(crate) fn projectile_pattern(
         gravity: authored_gravity(fields, &mut *evaluate).ok()?,
         directions,
         damage_tags: damage_tags(&fields["m_6396149F"], evaluate).collect(),
-    })
-}
-
-fn shotgun_directions(
-    fields: &Json,
-    forward: [f64; 3],
-    shot: &script_init::ShotEvent,
-    position: u16,
-    evaluate: &mut impl FnMut(&Json) -> Result<Value, ShotConfigError>,
-) -> Option<Vec<[f64; 3]>> {
-    use crate::script_expr::{to_float, to_int};
-
-    let launch = &fields["m_5EC1EB38"];
-    if launch["$"] != "STU_613BDDB0" {
-        return None;
-    }
-    let cone = to_float(&evaluate(&launch["m_spread"]).ok()?);
-    let count = to_int(&evaluate(&fields["m_numProjectilesPerShot"]).ok()?, 0);
-    if !(0.0..90.0).contains(&cone) || !(1..=32).contains(&count) {
-        return None;
-    }
-    let rings: Vec<_> = launch["m_0D30E40C"]
-        .as_array()?
-        .iter()
-        .map(|row| {
-            let radius = to_float(&evaluate(&row["m_6425FFB9"]).ok()?);
-            let size = to_int(&evaluate(&row["m_B19BD35D"]).ok()?, 0);
-            ((0.0..=1.0).contains(&radius) && (1..=count).contains(&size))
-                .then_some((radius, size as usize))
-        })
-        .collect::<Option<_>>()?;
-    (rings.iter().map(|(_, size)| size).sum::<usize>() == count as usize).then(|| {
-        crate::weapon_spread::ring_directions(forward, cone.to_radians(), &rings, shot, position)
-            .collect()
     })
 }
 
