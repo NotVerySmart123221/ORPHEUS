@@ -29,6 +29,18 @@ impl HurtPose {
         self.movement.feet
     }
 
+    #[cfg(test)]
+    pub(crate) fn head_probe_height(self) -> Option<f64> {
+        let offset = match self.calibrated {
+            Some(profile) => {
+                let head = profile.head?;
+                head.lower.midpoint(head.upper)
+            }
+            None => self.movement.eye,
+        };
+        Some(self.movement.feet[1] + offset)
+    }
+
     fn capsules(self) -> impl Iterator<Item = (Capsule, bool)> {
         let [x, y, z] = self.movement.feet;
         let world = |shape: LocalCapsule, head| {

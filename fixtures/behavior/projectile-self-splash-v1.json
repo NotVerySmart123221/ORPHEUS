@@ -10,5 +10,14 @@
   "expected": {
     "owner_damage": 16.0,
     "enemy_damage": 64.0
+  },
+  "calibrated_owner": {
+    "launch_origin": [0.0, 1.0, 0.25],
+    "feet": [0.0, 0.0, 0.25],
+    "radius": 0.4,
+    "hurt_profile": {
+      "body": {"lower": 0.75, "upper": 1.15, "radius": 0.8},
+      "head": null
+    }
   }
 }

@@ -2227,7 +2227,12 @@ impl RoomSimulation {
             {
                 self.player_body(owner)
                     .filter(|state| state.alive())
-                    .map(|state| (owner.entity, state.target_pose().into()))
+                    .map(|state| {
+                        (
+                            owner.entity,
+                            queries.hurt_pose(state.body_template, state.target_pose()),
+                        )
+                    })
             } else {
                 None
             };

@@ -2275,6 +2275,93 @@ pub(super) fn flight_fixture(owner: BodyId, speed: f64) -> AdmittedFlight {
 }
 
 #[test]
+fn owner_splash_uses_the_same_calibrated_shape_as_other_targets() {
+    use crate::{
+        contact_world::ContactWorld,
+        game_hitscan::HurtVolumeCatalog,
+        mover_settings::{MoverCatalog, MoverSettings},
+        script_player::fixture_body_factory,
+        script_wire::Value,
+    };
+    use serde_json::{Value as Json, json};
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/projectile-self-splash-v1.json"
+    ))
+    .unwrap();
+    let calibrated = &fixture["calibrated_owner"];
+    let input = &fixture["input"];
+    let (factory, mut spawn) = fixture_body_factory();
+    spawn.pose.position = serde_json::from_value(calibrated["feet"].clone()).unwrap();
+    let owner = BodyId {
+        entity: spawn.entity,
+        generation: 1,
+    };
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        spawn.pose.position,
+        0,
+        0x18,
+    )
+    .unwrap();
+    let body_template = 0x0400_0000_0000_ABCD;
+    let runtime = Box::new(factory.start(spawn).unwrap());
+    let state = PlayerBodyState::new(
+        owner,
+        spawn.controller,
+        spawn.slot,
+        0,
+        SOLDIER,
+        mover,
+        Some(runtime),
+        spawn.frame,
+        None,
+    )
+    .with_body_template(body_template);
+    let before = state.vitals().unwrap().total();
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    room.spawn_player_body(state).unwrap();
+    let mut launch = flight_fixture(owner, input["projectile_speed"].as_f64().unwrap());
+    let ballistics = ProjectileBallistics::from_fields(
+        &json!({
+            "m_projectileSpeed": input["projectile_speed"],
+            "m_D2D11CE9": {
+                "m_8A3E3883": input["self_damage_scale"],
+                "m_modifyHealth": {"m_amount": input["blast_damage"]},
+                "m_0D30E40C": [{"m_radius": calibrated["radius"], "m_B399CACB": 1.0}]
+            }
+        }),
+        |value| Ok(value.as_f64().map_or(Value::Null, Value::Float)),
+    )
+    .unwrap()
+    .unwrap();
+    launch.flight = ProjectileFlight::new(
+        ballistics,
+        serde_json::from_value(calibrated["launch_origin"].clone()).unwrap(),
+        [-1.0, 0.0, 0.0],
+        None,
+    )
+    .unwrap();
+    let catalog = HurtVolumeCatalog::from_json(&json!({
+        "version": 1, "bodies": {(format!("0x{body_template:016X}")): calibrated["hurt_profile"]}
+    }).to_string()).unwrap();
+    let ground = fixture_ground();
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, &ground, None).with_hurt_volumes(&catalog);
+    let (outcomes, hits) = room
+        .advance_projectiles(&queries, 7, owner, vec![launch], FIXTURE_CONTEXT, |_| true)
+        .unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert!(hits.is_empty());
+    let expected = fixture["expected"]["owner_damage"].as_f64().unwrap();
+    assert_eq!(
+        room.player_body(owner).unwrap().vitals().unwrap().total(),
+        before - expected
+    );
+}
+
+#[test]
 fn projectile_stun_applies_only_to_surviving_hits_and_expires_exclusively() {
     use crate::{
         collision_cache::{CollisionCache, Mesh, Triangle},
@@ -2994,7 +3081,11 @@ fn repeated_rifle_hits_retire_and_respawn_only_the_hit_bot() {
         .unwrap();
     let bot = bots.bodies().unwrap().nth(slot).unwrap();
     let entity = bot.entity;
-    let [x, y, z] = bot.position;
+    let [x, _, z] = bot.position;
+    let head_y = queries
+        .hurt_pose(bot.spawn.body, queries.target(bot))
+        .head_probe_height()
+        .expect("training body supports head hits");
     let count = bots.bodies().unwrap().len();
     let mut context = ShotContext {
         team: 0,
@@ -3027,7 +3118,7 @@ fn repeated_rifle_hits_retire_and_respawn_only_the_hit_bot() {
         .unwrap();
     let mut shot = PosedHitscan {
         source: 0xa000_0101,
-        origin: [x - 8.0, y + eye_height(SOLDIER, false), z],
+        origin: [x - 8.0, head_y, z],
         direction: [1.0, 0.0, 0.0],
         command: Command {
             frame: context.tick,
