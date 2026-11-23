@@ -1407,6 +1407,19 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 // evaluating authored fields if 978A30 finds no auxiliary owner.
                 StateKind::Plain
             }
+            "STU_D040C3EF"
+                if registration.shape(
+                    is_self_target(node, "m_4A5CA514")
+                        && self
+                            .world
+                            .spatial_binding_owner_available(self.site(id, node))
+                            == Some(false),
+                ) =>
+            {
+                // 9AE1F0 returns when the auxiliary service is absent before
+                // acquiring a binding. 9AB2D0 skips cleanup without a binding.
+                StateKind::Plain
+            }
             "STU_9028E035" | "STU_43994F1B" | "STU_93B8758C" | "STU_A875CA49"
                 if registration.shape(registered_state(self.graph(id), node).is_some()) =>
             {

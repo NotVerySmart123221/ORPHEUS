@@ -4157,12 +4157,19 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                     .unwrap_or_else(|| {
                         panic!("emote graph did not start: {:?}", snapshot.diagnostics)
                     });
+                assert!(
+                    snapshot.initialization_complete(),
+                    "{:?}",
+                    snapshot.diagnostics
+                );
                 assert_eq!(
                     emote.variables.get(&8908),
                     Some(&Value::Asset(0x0040_0000_0000_0052))
                 );
                 assert_eq!(emote.states[&24].kind, StateKind::Plain);
                 assert!(emote.states[&24].active);
+                assert_eq!(emote.states[&36].kind, StateKind::Plain);
+                assert!(emote.states[&36].active);
                 assert!(emote.states[&19].active);
                 assert_eq!(emote.states[&37].kind, StateKind::Plain);
                 assert!(emote.states[&37].active);
@@ -4177,6 +4184,16 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                 assert!(!snapshot.diagnostics.iter().any(|diagnostic| {
                     matches!(&diagnostic.issue, crate::script_init::Issue::UnsupportedAction(class) if class == "STU_BC5E4622")
                 }), "{:?}", snapshot.diagnostics);
+                for view in [View::Owner, View::Observer] {
+                    let projected = encoder.project(snapshot, view).unwrap();
+                    assert!(
+                        projected
+                            .instance_states(emote_instance)
+                            .unwrap()
+                            .contains(&36)
+                    );
+                    encoder.full(&projected).unwrap();
+                }
                 runtime
                     .component
                     .debug_end_state(emote_instance, 2, &mut runtime.world)
