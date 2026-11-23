@@ -589,23 +589,29 @@ impl RoomSimulation {
         if let Some((target, runtime)) = target.zip(player.runtime.as_mut()) {
             let _ = runtime.receive_authored_elimination_feedback(target.into());
         }
-        if self.combat_voice.is_empty() {
+        let window = self.combat_voice.multikill_window_ticks();
+        if window == 0 {
             return;
         }
-        let window = self.combat_voice.multikill_window_ticks();
         let streak = player.elimination_streak.get_or_insert(EliminationStreak {
             last_frame: frame,
+            expires_at: frame.saturating_add(window),
             count: 0,
         });
-        let Some(gap) = frame.checked_sub(streak.last_frame) else {
+        if frame < streak.last_frame {
             // Older settlements cannot rewind the announcer's window.
             return;
-        };
-        streak.count = if gap <= window {
+        }
+        streak.count = if frame <= streak.expires_at {
             streak.count.saturating_add(1)
         } else {
             1
         };
+        // On the expiry frame, message actions can still announce against the
+        // old count. The finishing wait then clears it and cancels its reentry.
+        if frame != streak.expires_at {
+            streak.expires_at = frame.saturating_add(window);
+        }
         streak.last_frame = frame;
         let count = streak.count;
         if let Some((stimulus, line)) = self.combat_voice.multikill_cue(count, count as usize) {

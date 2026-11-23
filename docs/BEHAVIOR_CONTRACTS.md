@@ -48,6 +48,8 @@ The Rust-only [mode cue retry fixture](../fixtures/behavior/mode-cue-retry-v1.js
 
 The Rust-only [timed elimination fixture](../fixtures/behavior/script-timed-elimination-cues-v1.json) exercises an authored opponent filter, count window, and cue thresholds through the production VM. It checks same-frame eliminations, expiry, stale and missing settlement frames, and ineligible damage. Its policy and assets are synthetic.
 
+The restartable-wait VM regression checks message order immediately before, on, and after expiry. The room announcer regression checks that two kills on the deadline still select cues from the old streak, and that the following frame starts a fresh one.
+
 The room regression additionally retires a player body and reuses its wire ID inside the synthetic window. The replacement starts its own streak. A separate restartable Wait test checks the order of message actions, timer completion and re-entry at the exact deadline. Original-client elimination message timing still needs direct evidence.
 
 The [actor voice fixture](../fixtures/behavior/player-voice-v1.json) covers first-playable stimulus selection, skin overrides, and line variation. The Rust stock bot case runs an authored criteria action through the existing room cue queue and checks team and free-for-all audiences.

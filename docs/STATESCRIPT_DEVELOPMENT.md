@@ -1141,6 +1141,16 @@ it. Healing and VM-local changes without a sampled room frame leave
 it unavailable. Cue resources are supplied by authored content.
 [Synthetic timed elimination contract](../fixtures/behavior/script-timed-elimination-cues-v1.json)
 
+The 104319 map-script archive's shared graph `0215` sets its
+multi-elimination interval to two seconds. An eligible message increments
+the count, selects the cue, and starts a restartable wait. The wait clears
+the count when it finishes. On the expiry frame, the VM processes the
+message actions before the wait finishes and discards the pending reentry.
+The room announcer mirrors that order: eliminations on the deadline can
+announce from the old count, then the next frame starts a fresh streak.
+The original target filter and announcer-suppression conditions still need
+to be mapped to room facts.
+
 The 104319 hit-marker message updates the shooter's HUD. The damage
 feedback path uses the struck body's combat event for victim effects
 and audio. Keep speaker and recipient selection tied to the settled

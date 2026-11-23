@@ -816,6 +816,16 @@ fn multikill_window_is_unchanged_by_an_older_elimination() {
         .collect();
     assert_eq!(lines, [301, 302]);
 
+    // Both kills on the deadline announce against the old count. The next
+    // frame starts a fresh streak even after those two announcements.
+    room.record_enemy_elimination(killer, 65, 1, after + 1);
+    assert!(room.take_player_cues().is_empty());
+    room.record_enemy_elimination(killer, 66, 1, after + 2);
+    let cues = room.take_player_cues();
+    assert!(
+        matches!(&cues[..], [cue] if matches!(cue.notice, CombatNotice::Voice { line: 301, .. }))
+    );
+
     assert!(room.retire_player_body(body));
     let reuse = &contract["body_reuse"];
     let replacement = spawn_player(&mut room, reuse["generation"].as_u64().unwrap());

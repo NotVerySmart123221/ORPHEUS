@@ -637,6 +637,7 @@ struct RoomSpatialQueries {
 #[derive(Clone, Copy, Debug)]
 struct EliminationStreak {
     last_frame: u32,
+    expires_at: u32,
     count: u32,
 }
 

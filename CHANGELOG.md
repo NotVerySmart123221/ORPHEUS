@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Match the shared 104319 elimination graph at the multikill deadline. Kills on that frame still select cues from the old streak, and the finishing wait invalidates their attempted restart. The next frame starts a fresh streak. Passed 821 library tests, the prepared two-second announcer replay, and Clippy.
+
 - Retire observer projectile volleys whose flights are all due even when the launch packet has no acknowledgement yet. Stop launch retries before releasing the referenced entities. Keep independent retirement for acknowledged pellets. Passed both observer delivery cases, 821 library tests, and Clippy.
 
 - Cover bot projectile interception on an authored Practice Range firing lane. The prepared replay checks that the front bot takes the impact and the player behind it stays unharmed. In the same lane, a shot already in flight reaches the player if the front bot dies before contact. Both impacts coincide with observer projectile completion. The prepared lane and controlled stock-bot projectile regressions passed.
