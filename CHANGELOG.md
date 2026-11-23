@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Preserve the shared StateScript auxiliary presentation state's child and exit links when the server has no auxiliary view owner. The authored emote branch now enters this state. Passed 512 server and 302 StateScript library tests, the prepared 104319 wheel replay, and Clippy.
+
 - Describe Practice Range combat in terms of shared StateScript behavior and clarify the protocol contribution entry point in both READMEs.
 
 - Implement the shared StateScript CycleIndex action used by weapon cycling and the emote weapon branch. Evaluate each wrapped candidate in its own predicate context and preserve the authored fallback and output. Passed 512 server and 302 StateScript library tests, Clippy, and the prepared 104319 wheel replay. Four independent emote presentation states remain unsupported.

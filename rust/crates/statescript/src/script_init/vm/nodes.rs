@@ -1373,15 +1373,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             {
                 StateKind::Plain
             }
-            "STU_96333BBE" | "STU_E8D976BE"
+            "STU_96333BBE" | "STU_E8D976BE" | "STU_06AB2ECE"
                 if registration.shape(
                     self.world
                         .spatial_binding_owner_available(self.site(id, node))
                         == Some(false),
                 ) =>
             {
-                // 911920 and AE03F0 return before any binding/field access
-                // when 978A30 cannot resolve the auxiliary client owner.
+                // 911920, AE03F0 and 8E3B60 return before binding or
+                // evaluating authored fields if 978A30 finds no auxiliary owner.
                 StateKind::Plain
             }
             "STU_9028E035" | "STU_43994F1B" | "STU_93B8758C"
