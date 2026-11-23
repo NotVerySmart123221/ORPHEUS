@@ -88,7 +88,9 @@ fn weapon_queries_preserve_openings_in_the_prepared_combat_geometry() {
                 .unwrap()
                 .is_some()
         );
+        assert_eq!(fallback.combat_ray_geometry(), "movement");
         let (_, queries) = scene.bot_simulation();
+        assert_eq!(queries.combat_ray_geometry(), "expanded");
         let expected = row["distance"].as_f64();
         assert_eq!(
             queries.hitscan_wall(origin, direction, 4.0).unwrap(),

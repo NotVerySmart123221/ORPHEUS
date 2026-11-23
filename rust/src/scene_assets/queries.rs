@@ -197,6 +197,15 @@ impl<'a> BotQueries<'a> {
             .cast_ray(origin, direction, reach, MOVER_CATEGORY)
     }
 
+    #[cfg(any(test, feature = "inspector"))]
+    pub(crate) fn combat_ray_geometry(&self) -> &'static str {
+        if std::ptr::eq(self.combat_rays, self.ground) {
+            "movement"
+        } else {
+            "expanded"
+        }
+    }
+
     /// Sweep the authored terrain hull through the prepared combat geometry.
     /// A zero-radius call is also used for point visibility from a blast.
     pub(crate) fn projectile_wall(

@@ -594,6 +594,7 @@ impl RoomSpatialFrame {
             hit,
             target,
             critical: false,
+            surface: None,
             script: Some(crate::game_debug::DebugScriptRay {
                 graph: site.graph,
                 instance: site.instance,
@@ -1966,12 +1967,12 @@ impl RoomSimulation {
         #[cfg(any(test, feature = "inspector"))]
         let mut blocking_wall = None;
         let Some(impact) = ray.resolve_combat(candidates, |origin, direction, reach| {
-            let wall = queries.hitscan_wall(origin, direction, reach)?;
+            let wall = queries.combat_wall(origin, direction, reach)?;
             #[cfg(any(test, feature = "inspector"))]
             {
-                blocking_wall = wall.filter(|distance| *distance < reach);
+                blocking_wall = wall.filter(|hit| hit.distance < reach);
             }
-            Ok(wall)
+            Ok(wall.map(|hit| hit.distance))
         })?
         else {
             #[cfg(any(test, feature = "inspector"))]
@@ -1980,15 +1981,12 @@ impl RoomSimulation {
                 // wall along the full ray as well.
                 let wall = blocking_wall.or_else(|| {
                     queries
-                        .hitscan_wall(ray.origin, ray.direction, ray.reach)
+                        .combat_wall(ray.origin, ray.direction, ray.reach)
                         .ok()
                         .flatten()
                 });
                 let (hit, end) = match wall {
-                    Some(distance) => (
-                        "world",
-                        crate::static_ray::along(ray.origin, ray.direction, distance),
-                    ),
+                    Some(surface) => ("world", surface.point),
                     None => (
                         "none",
                         crate::static_ray::along(ray.origin, ray.direction, ray.reach),
@@ -2003,6 +2001,12 @@ impl RoomSimulation {
                     hit,
                     target: None,
                     critical: false,
+                    surface: wall.map(|surface| crate::game_debug::DebugRaySurface {
+                        geometry: queries.combat_ray_geometry(),
+                        mask: surface.mask,
+                        material: surface.surface,
+                        normal: surface.normal,
+                    }),
                     script: None,
                 });
             }
@@ -2018,6 +2022,7 @@ impl RoomSimulation {
             hit: "actor",
             target: Some(impact.entity),
             critical: impact.critical,
+            surface: None,
             script: None,
         });
         if self.players_by_wire.contains_key(&impact.entity) {
@@ -2785,6 +2790,7 @@ impl RoomSimulation {
                                         hit: "actor",
                                         target: Some(impact.entity),
                                         critical: impact.critical,
+                                        surface: None,
                                         script: None,
                                     });
                                     enemy_damage.push(crate::script_enemy::EnemyDamage {
@@ -2834,6 +2840,7 @@ impl RoomSimulation {
                                             hit,
                                             target: None,
                                             critical: false,
+                                            surface: None,
                                             script: None,
                                         });
                                     }

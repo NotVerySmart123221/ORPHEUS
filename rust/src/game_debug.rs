@@ -158,7 +158,18 @@ pub(crate) struct DebugRay {
     pub target: Option<u32>,
     pub critical: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface: Option<DebugRaySurface>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub script: Option<DebugScriptRay>,
+}
+
+#[cfg(any(test, feature = "inspector"))]
+#[derive(Clone, Copy, Debug, Serialize)]
+pub(crate) struct DebugRaySurface {
+    pub geometry: &'static str,
+    pub mask: u16,
+    pub material: u16,
+    pub normal: [f64; 3],
 }
 
 #[cfg(any(test, feature = "inspector"))]

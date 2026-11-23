@@ -155,3 +155,12 @@ rows show the sent activation, its active flag, and explicitly written
 ammunition. Delivery rows show whether the transport acknowledged each
 chunk. Record when the animation fails so the relevant rows can be matched
 to the same tap.
+
+For a railing or moving target, compare shots through an opening and
+into an adjacent solid surface. The Inspector's player hitscan entries
+include the origin and endpoint. A world hit includes the collision
+mask, material slot, normal and geometry source. `expanded` identifies
+the weapon ray cache. `movement` identifies the movement geometry
+fallback. Actor hits carry the target entity. The surface fields
+describe the blocking collision primitive and can be compared with
+the placement at the recorded coordinates.

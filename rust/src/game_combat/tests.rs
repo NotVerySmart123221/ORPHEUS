@@ -3267,13 +3267,22 @@ fn debug_physics_records_hitscan_rays_and_enforces_ring_cap() {
     assert_eq!(overlay.rays.len(), 4);
     assert_eq!(overlay.rays[0].hit, "actor");
     assert_eq!(overlay.rays[0].target, Some(target));
+    assert!(overlay.rays[0].surface.is_none());
     assert_eq!(overlay.rays[1].hit, "world");
     assert!((overlay.rays[1].end[0] - 10.0).abs() < 1e-6);
     assert_eq!(overlay.rays[2].hit, "none");
+    assert!(overlay.rays[2].surface.is_none());
     assert_eq!(overlay.rays[2].end, [-25.0, 1.0, 0.0]);
     assert_eq!(overlay.rays[3].hit, "world");
     assert!((overlay.rays[3].end[0] - 10.0).abs() < 1e-6);
     assert_eq!(overlay.rays[3].target, None);
+    for ray in [&overlay.rays[1], &overlay.rays[3]] {
+        let surface = ray.surface.unwrap();
+        assert_eq!(surface.geometry, "movement");
+        assert_eq!(surface.mask, 0x18);
+        assert_eq!(surface.material, 0);
+        assert_eq!(surface.normal.map(f64::abs), [1.0, 0.0, 0.0]);
+    }
     assert!(overlay.rays.iter().all(|ray| ray.script.is_none()));
 
     room.enable_spatial_queries(false, Arc::new(fixture_ground()), RoomSpatialNeeds::Queries);

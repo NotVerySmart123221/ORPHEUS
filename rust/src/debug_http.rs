@@ -790,6 +790,7 @@ mod tests {
                             hit: "actor",
                             target: Some(0xc000_1000),
                             critical: true,
+                            surface: None,
                             script: None,
                         }],
                         contact_normals: vec![DebugContactNormal {
