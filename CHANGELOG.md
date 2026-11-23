@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Dispatch ready communication-wheel selections and validated spray reports without waiting for another movement command. Keep confirmed selections tied to their original command view and wait for future commands. Passed 595 library tests, the prepared 104319 wheel replay, and Clippy.
+
 - Use the attacking body's sampled position for directional damage feedback when a scripted hit has no weapon geometry. The victim still receives the actual settled loss, and scripted hits leave the surface normal unset. Passed 595 library tests, the 104319 received-damage schema check, and Clippy.
 
 - Sample radius, height, and eye height from the same historical posture when rewinding hitscan. Use a measured crouched hurt profile when supplied and the sampled mover capsule otherwise. Passed 595 library tests, the two prepared bot and projectile checks, and Clippy.

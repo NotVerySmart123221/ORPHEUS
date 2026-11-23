@@ -3648,7 +3648,20 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
         );
         assert!(snapshot.instances[&1].states[&0].active);
     }
-    let action = 0x0a90_0000_0000_0171;
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/wheel-selection-ingress-v1.json"
+    ))
+    .unwrap();
+    let ready = &fixture["ready_selection"];
+    let action = u64::from_str_radix(
+        ready["action"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("0x")
+            .unwrap(),
+        16,
+    )
+    .unwrap();
     let request = |action| {
         ClientWheelAction::read(&Message {
             id: CLIENT_WHEEL_ACTION,
@@ -3744,6 +3757,7 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
             0
         );
         let selection = request(action);
+        let before_selection = runtime.snapshot().unwrap().now_ms;
         if graphs.has_asset_category_data() {
             assert_eq!(runtime.queue_wheel_selection(selection, None).unwrap(), 2);
         } else {
@@ -3756,13 +3770,14 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                     .unwrap(),
                 2
             );
+            runtime.component.run_now(&mut runtime.world).unwrap();
         }
-        runtime
-            .component
-            .advance_frame(FIRST_TICK + 1, &mut runtime.world)
-            .unwrap();
         let snapshot = runtime.component.snapshot().unwrap();
         if graphs.has_asset_category_data() {
+            assert_eq!(
+                Some(snapshot.now_ms - before_selection),
+                ready["elapsed_vm_ms"].as_u64()
+            );
             assert!(!snapshot.diagnostics.iter().any(|diagnostic| {
                 matches!(&diagnostic.issue, crate::script_init::Issue::Expression(crate::script_expr::EvalError::UnsupportedConfig(class))
                     if class == "STU_4460419A")
@@ -4070,7 +4085,6 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                     .unwrap(),
                 1
             );
-            runtime.component.run_now(&mut runtime.world).unwrap();
             assert_eq!(
                 runtime.component.snapshot().unwrap().instances[&spray_instance]
                     .variables
@@ -4085,6 +4099,7 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                         .advance_frame(frame, &mut runtime.world)
                         .unwrap();
                 }
+                runtime.frame = selection_frame;
                 let _ = runtime.take_script_requests();
                 runtime.set_wheel_cosmetics(crate::match_scene::WheelCosmetics {
                     voice_effects: [0, effect, 0, 0],
@@ -4097,10 +4112,6 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                         .unwrap(),
                     2
                 );
-                runtime
-                    .component
-                    .advance_frame(selection_frame + 1, &mut runtime.world)
-                    .unwrap();
                 let snapshot = runtime.component.snapshot().unwrap();
                 assert!(
                     snapshot.initialization_complete(),
@@ -4126,12 +4137,13 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                 let emote_frame = next_selection + 500;
                 let next_frame =
                     runtime.component.snapshot().unwrap().now_ms as u32 / FRAME_MS as u32 + 1;
-                for frame in next_frame..emote_frame {
+                for frame in next_frame..=emote_frame {
                     runtime
                         .component
                         .advance_frame(frame, &mut runtime.world)
                         .unwrap();
                 }
+                runtime.frame = emote_frame;
                 runtime.world.movement.yaw = 8192;
                 runtime.world.movement.pitch = 1024;
                 runtime.set_wheel_cosmetics(crate::match_scene::WheelCosmetics {
@@ -4145,10 +4157,6 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                         .unwrap(),
                     2
                 );
-                runtime
-                    .component
-                    .advance_frame(emote_frame, &mut runtime.world)
-                    .unwrap();
                 let snapshot = runtime.component.snapshot().unwrap();
                 let (&emote_instance, emote) = snapshot
                     .instances

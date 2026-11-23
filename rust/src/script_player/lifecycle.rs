@@ -146,6 +146,11 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         )?;
         if queued != 0 {
             self.wheel_delivery_frame = earliest;
+            // A reliable selection can arrive on its own. Dispatch it at the
+            // current VM time once its command frame has been simulated.
+            if earliest <= self.frame {
+                self.component.run_now(&mut self.world)?;
+            }
         }
         Ok(queued)
     }
@@ -172,8 +177,13 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         if !current && sent_instance_start != Some(instance.started_at_ms()) {
             return Ok(0);
         }
-        self.component
-            .queue_local_instance_message(report.instance, report.into_local_message())
+        let queued = self
+            .component
+            .queue_local_instance_message(report.instance, report.into_local_message())?;
+        if queued != 0 {
+            self.component.run_now(&mut self.world)?;
+        }
+        Ok(queued)
     }
 
     fn set_spatial_frame(&mut self, frame: Arc<crate::game_combat::RoomSpatialFrame>) {
