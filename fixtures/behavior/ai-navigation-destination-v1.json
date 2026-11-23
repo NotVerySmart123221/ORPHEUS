@@ -14,5 +14,13 @@
     "walking_target": [0.0, 0.0, 2.0],
     "vertical_target_y": 1.0,
     "walking_throttles": [127, 0]
+  },
+  "wall_return": {
+    "displaced_position": [0.0, 0.0, 8.0],
+    "destination": [0.0, 0.0, 0.0],
+    "wall_z": 4.0,
+    "wall_half_width": 1.5,
+    "speed": 4.5,
+    "tick_budget": 240
   }
 }

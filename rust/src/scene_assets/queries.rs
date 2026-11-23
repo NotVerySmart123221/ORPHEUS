@@ -59,11 +59,26 @@ impl<'a> BotQueries<'a> {
         self.attach_bot_mover(bot, MOVER_CATEGORY)
     }
 
-    pub(crate) fn attach_ai_walk_mover(&self, bot: &mut Bot) -> bool {
-        self.attach_bot_mover(
-            bot,
-            mover_category_for_team(self.free_for_all, bot.spawn.team),
-        )
+    pub(crate) fn step_ai_walk(&self, bot: &mut Bot, tick: u32, destination: Vec3, speed: f64) {
+        use crate::navigation::{PathOptions, find_path};
+
+        let category = mover_category_for_team(self.free_for_all, bot.spawn.team);
+        if bot.has_collision() || self.attach_bot_mover(bot, category) {
+            let agent = self
+                .movers
+                .for_body(Some(bot.spawn.body))
+                .nav_agent(category);
+            bot.follow_walk_request(tick, destination, speed, |start| {
+                find_path(
+                    self.ground,
+                    self.contacts.map(Arc::as_ref),
+                    &agent,
+                    start,
+                    destination,
+                    &PathOptions::default(),
+                )
+            });
+        }
     }
 
     fn attach_bot_mover(&self, bot: &mut Bot, category: u16) -> bool {

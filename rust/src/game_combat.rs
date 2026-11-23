@@ -1022,14 +1022,11 @@ impl RoomSimulation {
                     if let Some(contacts) = &contacts {
                         contacts.stage_bot(bot, tick);
                     }
-                    if bot.has_collision() || queries.attach_ai_walk_mover(bot) {
-                        // The steering request carries a destination, not an aim override.
-                        bot.walk_to(tick, destination, speed, false);
-                    }
+                    queries.step_ai_walk(bot, tick, destination, speed);
                 }
                 script.advance(tick, bot);
                 if prior_walk.is_some() && !bot.patrol_active() && script.walk_request().is_none() {
-                    bot.stop_objective(tick);
+                    bot.end_walk_request(tick);
                 }
                 launches.extend(script.take_projectiles(tick, &state.bot));
             }

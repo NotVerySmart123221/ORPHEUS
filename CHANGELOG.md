@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Route authored NPC walk requests through the shared static navigator, with one cached route per destination. Collision-resolved steering follows the waypoints while preserving aim. Clear the route on request exit or body displacement. Passed 592 library tests including the synthetic wall detour, two prepared bot return replays, and Clippy.
+
 - Publish NPC walk input from the horizontal travel resolved by the mover. Purely vertical motion releases walking input while preserving the last input frame and aim. The prepared knockback replay checks outgoing locomotion during the trip back and input release at the destination. Passed 592 library tests, two prepared bot return replays, and Clippy.
 
 - Select map ray and projectile geometry as a pair. Missing or rejected expanded caches use the movement geometry for both, preserving radius-aware projectile sweeps even in rooms without character movement contacts. Passed 591 library tests, two 104319 map checks covering expanded and fallback caches, and Clippy.

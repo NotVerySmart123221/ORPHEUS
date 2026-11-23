@@ -38,7 +38,7 @@ The Rust-only [room cue fixture](../fixtures/behavior/script-room-cue-v1.json) c
 
 The Rust-only [received damage audio fixture](../fixtures/behavior/received-damage-audio-v1.json) follows settled damage through the authored target filter, room routing, and reliable game frame. It verifies the victim connection, body replacement before reliable admission, and the decoded listener and line for a fresh hit.
 
-The Rust-only [AI navigation fixture](../fixtures/behavior/ai-navigation-destination-v1.json) follows a walk request from the authored navigation group to its active child and verifies retirement on group exit. The prepared Practice Range regression runs the stock firing placement, displaces its bot, and checks return and state release. It uses a clear route and leaves native-client presentation unverified.
+The Rust-only [AI navigation fixture](../fixtures/behavior/ai-navigation-destination-v1.json) follows a walk request from the authored navigation group to its active child and verifies retirement on group exit. The synthetic wall check follows the shared navigator around a solid obstacle and verifies movement input during the detour. The prepared Practice Range regression displaces a stock firing bot and checks return and input release on a clear route.
 
 The [NPC contact fixture](../fixtures/behavior/npc-contact-after-input-v1.json) moves a player toward an NPC and compares the response to two snapshots within one room tick. The earlier capsule permits overlap. The NPC phase's refreshed capsule clips the sweep at the player's resolved position.
 

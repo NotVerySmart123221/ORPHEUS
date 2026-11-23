@@ -386,6 +386,12 @@ impl PatrolCollision {
 }
 
 #[derive(Debug)]
+struct WalkRoute {
+    destination: [f64; 3],
+    waypoints: VecDeque<[f64; 3]>,
+}
+
+#[derive(Debug)]
 pub struct Bot {
     pub entity: u32,
     pub slot: Option<u8>,
@@ -403,6 +409,7 @@ pub struct Bot {
     wait: f64,
     target: Option<[f64; 3]>,
     waypoints: VecDeque<[f64; 3]>,
+    walk_route: Option<WalkRoute>,
     collision: Option<PatrolCollision>,
     movement_blockers: Option<(u32, Arc<[CapsulePose]>)>,
     plans: Option<Arc<PatrolPlans>>,
@@ -479,6 +486,7 @@ impl Bot {
             wait: 0.0,
             target: None,
             waypoints: VecDeque::new(),
+            walk_route: None,
             collision: None,
             movement_blockers: None,
             plans: None,
@@ -1015,6 +1023,7 @@ impl Bot {
 
     pub fn died(&mut self, tick: u32) {
         self.dead = true;
+        self.walk_route = None;
         self.movement_blockers = None;
         self.clear_velocity_changes();
         self.keys = false;
@@ -1195,6 +1204,9 @@ impl Bot {
             }
         };
         self.position = after;
+        if after != from {
+            self.walk_route = None;
+        }
         // The solver may move an overlapping capsule sideways to separate it.
         // That position correction must not create momentum for the next tick.
         self.velocity = velocity;
@@ -1298,6 +1310,7 @@ impl Bot {
         };
         self.position = after;
         if after != from {
+            self.walk_route = None;
             self.moved_tick = Some(tick);
         }
         true
@@ -1311,7 +1324,51 @@ impl Bot {
         self.walk_to(tick, target, speed, true);
     }
 
-    pub(crate) fn walk_to(&mut self, tick: u32, target: [f64; 3], speed: f64, face_target: bool) {
+    pub(crate) fn follow_walk_request(
+        &mut self,
+        tick: u32,
+        destination: [f64; 3],
+        speed: f64,
+        plan: impl FnOnce([f64; 3]) -> PathQuery,
+    ) {
+        if self.combat_motion_tick == Some(tick) {
+            return;
+        }
+        if self
+            .walk_route
+            .as_ref()
+            .is_some_and(|route| route.destination != destination)
+        {
+            self.walk_route = None;
+        }
+        let route = self.walk_route.get_or_insert_with(|| {
+            let waypoints = match plan(self.position) {
+                PathQuery::Found(path) => path.into_iter().skip(1).collect(),
+                _ => VecDeque::new(),
+            };
+            WalkRoute {
+                destination,
+                waypoints,
+            }
+        });
+        while route
+            .waypoints
+            .front()
+            .is_some_and(|&next| planar_distance(self.position, next) <= ARRIVED)
+        {
+            route.waypoints.pop_front();
+        }
+        // The graph's destination remains the last target of the mover.
+        let next = route.waypoints.front().copied().unwrap_or(destination);
+        self.walk_to(tick, next, speed, false);
+    }
+
+    pub(crate) fn end_walk_request(&mut self, tick: u32) {
+        self.walk_route = None;
+        self.stop_objective(tick);
+    }
+
+    fn walk_to(&mut self, tick: u32, target: [f64; 3], speed: f64, face_target: bool) {
         if self.combat_motion_tick == Some(tick) {
             return;
         }
@@ -2032,7 +2089,7 @@ mod tests {
     }
 
     #[test]
-    fn patrol_detour_routes_around_wide_wall_via_shared_navigation() {
+    fn patrol_and_scripted_return_share_navigation_around_wide_wall() {
         use crate::collision_cache::{CollisionCache, Mesh, Triangle};
         use serde_json::json;
         use std::collections::BTreeSet;
@@ -2101,13 +2158,51 @@ mod tests {
         let world = Arc::new(ContactWorld::from_movement_cache(cache, &ids).unwrap());
         let settings = MoverSettings::default();
         let mut bot = walker([0.0, 0.0, 8.0]);
-        bot.attach_scene_collision(&settings, Some(&scene), world, 0x18, |_, _, _, _| Some(0.0));
+        bot.attach_scene_collision(
+            &settings,
+            Some(&scene),
+            Arc::clone(&world),
+            0x18,
+            |_, _, _, _| Some(0.0),
+        );
         let plans = bot.plans.as_ref().expect("planned patrol legs");
         assert!(
             plans.first[0].is_some(),
             "shared navigation should compute a detour around the 3m-wide wall: {:?}",
             plans.first
         );
+
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/ai-navigation-destination-v1.json"
+        ))
+        .unwrap();
+        let input = &fixture["wall_return"];
+        let start = serde_json::from_value(input["displaced_position"].clone()).unwrap();
+        let destination = serde_json::from_value(input["destination"].clone()).unwrap();
+        let speed = input["speed"].as_f64().unwrap();
+        let wall = input["wall_z"].as_f64().unwrap();
+        let half_width = input["wall_half_width"].as_f64().unwrap();
+        let mut returning = walker(destination);
+        Arc::get_mut(&mut returning.spawn).unwrap().route.clear();
+        returning.position = start;
+        let movers = crate::mover_settings::MoverCatalog::default();
+        let queries = crate::scene_assets::BotQueries::new(false, &movers, &scene, Some(&world));
+        let mut crossed = false;
+        let tick_budget = input["tick_budget"].as_u64().unwrap() as u32;
+        for tick in 1..=tick_budget {
+            let prior = returning.position;
+            queries.step_ai_walk(&mut returning, tick, destination, speed);
+            if prior[2] >= wall && returning.position[2] < wall {
+                assert!(returning.position[0].abs() > half_width);
+                assert_ne!(returning.movement(tick).throttles, [0; 2]);
+                crossed = true;
+            }
+        }
+        assert!(crossed, "scripted walk stopped at {:?}", returning.position);
+        assert!(planar_distance(returning.position, destination) <= ARRIVED);
+        returning.end_walk_request(tick_budget + 1);
+        assert!(returning.walk_route.is_none());
+        assert_eq!(returning.movement(tick_budget + 1).throttles, [0; 2]);
     }
 
     #[test]
