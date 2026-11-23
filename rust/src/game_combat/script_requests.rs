@@ -585,18 +585,20 @@ impl RoomSimulation {
         let streak = self
             .elimination_streaks
             .entry(killer_wire)
-            .and_modify(|streak| {
-                if frame >= streak.last_frame && frame.saturating_sub(streak.last_frame) <= window {
-                    streak.count = streak.count.saturating_add(1);
-                } else {
-                    streak.count = 1;
-                }
-                streak.last_frame = frame;
-            })
             .or_insert(EliminationStreak {
                 last_frame: frame,
-                count: 1,
+                count: 0,
             });
+        let Some(gap) = frame.checked_sub(streak.last_frame) else {
+            // Older settlements cannot rewind the announcer's window.
+            return;
+        };
+        streak.count = if gap <= window {
+            streak.count.saturating_add(1)
+        } else {
+            1
+        };
+        streak.last_frame = frame;
         let count = streak.count;
         if let Some((stimulus, line)) = self.combat_voice.multikill_cue(count, count as usize) {
             self.player_cues.push(PlayerRoomCue {

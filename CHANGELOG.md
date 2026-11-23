@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Preserve the active multikill count and its expiry when an older elimination settles late. Independent eliminations at the same settlement frame still advance the count.
+
 - Verify multikill restart and expiry with the local prepared two-second combat voice catalog. Headless coverage checks double and triple cue delivery when each adjacent kill is just inside the window, then checks a reset just outside it. The synthetic catalog uses the same rehearsal. Exact expiry ordering and original-client playback remain unverified.
 
 - Correlate authored combat presentation with owner delivery in the opt-in Inspector playtest capture. Log the selected effect and the acknowledged action serial so server selection, network receipt, and original-client playback can be checked independently. The default build check and all 520 Inspector library tests passed, with the library tests run serially after two parallel loopback timeouts.

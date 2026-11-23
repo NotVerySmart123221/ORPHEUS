@@ -762,6 +762,61 @@ fn settled_health_facts_stay_with_the_original_target_generation() {
 }
 
 #[test]
+fn multikill_window_is_unchanged_by_an_older_elimination() {
+    use crate::{combat_voice::CombatVoiceCatalog, game_combat_messages::CombatNotice};
+    use serde_json::{Value as Json, json};
+
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/script-timed-elimination-cues-v1.json"
+    ))
+    .unwrap();
+    let stamp = |key: &str| {
+        contract["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|event| event["name"] == key)
+            .unwrap()["frame"]
+            .as_u64()
+            .unwrap() as u32
+    };
+    let window = contract["window_frames"].as_u64().unwrap();
+    let catalog = CombatVoiceCatalog::from_json(
+        &json!({
+            "multikill_window_ticks": window,
+            "multikills": {
+                "2": {"stimulus":"0x1","lines":["0x12d"]},
+                "3": {"stimulus":"0x2","lines":["0x12e"]},
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    let killer = spawn_player(&mut room, 1).entity;
+    room.set_combat_voice(Arc::new(catalog));
+    let effective = stamp("expired window");
+    let older = stamp("older damage arriving late");
+    let after = stamp("second opponent after reset");
+
+    room.record_enemy_elimination(killer, 61, 1, effective);
+    room.record_enemy_elimination(killer, 62, 1, older);
+    assert!(room.take_player_cues().is_empty());
+
+    room.record_enemy_elimination(killer, 63, 1, after);
+    room.record_enemy_elimination(killer, 64, 1, after);
+    let cues = room.take_player_cues();
+    let lines: Vec<_> = cues
+        .iter()
+        .map(|cue| match cue.notice {
+            CombatNotice::Voice { line, .. } => line,
+            _ => panic!("expected announcer voice"),
+        })
+        .collect();
+    assert_eq!(lines, [301, 302]);
+}
+
+#[test]
 fn lethal_health_change_notifies_source_with_settled_status_after_target_retirement() {
     use std::{io, sync::Mutex};
 
