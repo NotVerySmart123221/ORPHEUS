@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::Arc,
 };
 
@@ -134,6 +134,12 @@ pub(super) fn target_delta(origin: Vec3, target: TargetPose) -> Vec3 {
     ]
 }
 
+pub(super) struct CommandView {
+    frame: u32,
+    eye: Vec3,
+    direction: Vec3,
+}
+
 pub(super) struct BodyWorld {
     pub(super) graphs: Arc<GraphStore>,
     pub(super) spatial_frame: Option<Arc<crate::game_combat::RoomSpatialFrame>>,
@@ -152,6 +158,7 @@ pub(super) struct BodyWorld {
     pub(super) vitals: Vitals,
     pub(super) pool_types_known: bool,
     pub(super) target_tags: Option<BTreeSet<u64>>,
+    pub(super) command_views: VecDeque<CommandView>,
     pub(super) wheel_cosmetics: crate::match_scene::WheelCosmetics,
     pub(super) model_hardpoints: Option<Arc<BTreeSet<u64>>>,
     pub(super) target_tag_effects: TargetTagEffects,
@@ -168,11 +175,27 @@ pub(super) struct BodyWorld {
 }
 
 impl World for BodyWorld {
-    fn spray_placement(&self, reach: f64) -> Option<Option<crate::script_init::SprayPlacement>> {
-        let direction = direction_for_angles(self.movement.yaw, self.movement.pitch);
+    fn spray_placement(
+        &self,
+        reach: f64,
+        command_frame: Option<u32>,
+    ) -> Option<Option<crate::script_init::SprayPlacement>> {
+        let view = command_frame.and_then(|frame| {
+            self.command_views
+                .iter()
+                .rev()
+                .find(|view| view.frame == frame)
+        });
+        let (eye, direction) = match view {
+            Some(view) => (view.eye, view.direction),
+            None => (
+                self.eye_position?,
+                direction_for_angles(self.movement.yaw, self.movement.pitch),
+            ),
+        };
         self.spatial_frame
             .as_deref()?
-            .spray_placement(self.eye_position?, direction, reach)
+            .spray_placement(eye, direction, reach)
     }
 
     fn equipped_cosmetic(
@@ -1177,6 +1200,20 @@ impl World for BodyWorld {
 }
 
 impl BodyWorld {
+    pub(super) fn record_command_view(&mut self, frame: u32) {
+        const HISTORY_FRAMES: usize = 64;
+        if let Some(eye) = self.eye_position {
+            if self.command_views.len() == HISTORY_FRAMES {
+                self.command_views.pop_front();
+            }
+            self.command_views.push_back(CommandView {
+                frame,
+                eye,
+                direction: direction_for_angles(self.movement.yaw, self.movement.pitch),
+            });
+        }
+    }
+
     fn queue_velocity_change(&mut self, frame: u32, change: VelocityChange) -> bool {
         if !change.valid()
             || self.vitals.death().is_some()

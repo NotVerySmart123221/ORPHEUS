@@ -253,6 +253,7 @@ impl PlayerBodyFactory {
             },
             pool_types_known: self.pools.is_some() || has_authored_pools,
             target_tags: self.target_tags.clone(),
+            command_views: Default::default(),
             wheel_cosmetics: Default::default(),
             model_hardpoints: self
                 .graphs
@@ -305,6 +306,7 @@ impl PlayerBodyFactory {
             modifiers,
             leases,
             frame: spawn.frame,
+            wheel_delivery_frame: spawn.frame,
             charge_binding: self.charge_route.bind(self.mode, self.hero),
         };
         runtime

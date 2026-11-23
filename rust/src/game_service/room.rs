@@ -570,41 +570,39 @@ impl Room {
                     ..
                 } = peer;
                 let mut response_error = None;
-                let commands =
-                    ingress.receive(schemas, payload, |message| {
-                        match MessageKind::from(message.id) {
-                            MessageKind::Ping => {
-                                let received = wall_nanoseconds();
-                                if let Ok(pong) =
-                                    pong(&message.fields, received, wall_nanoseconds())
-                                {
-                                    let result = encode(schemas, pong.id, &pong.fields)
-                                        .map_err(RoomError::from)
-                                        .and_then(|bytes| {
-                                            egress.queue_reliable(bytes).map_err(RoomError::from)
-                                        });
-                                    if let Err(error) = result {
-                                        response_error.get_or_insert(error);
-                                    }
+                let commands = ingress.receive(schemas, payload, |message, command_frame| {
+                    match MessageKind::from(message.id) {
+                        MessageKind::Ping => {
+                            let received = wall_nanoseconds();
+                            if let Ok(pong) = pong(&message.fields, received, wall_nanoseconds()) {
+                                let result = encode(schemas, pong.id, &pong.fields)
+                                    .map_err(RoomError::from)
+                                    .and_then(|bytes| {
+                                        egress.queue_reliable(bytes).map_err(RoomError::from)
+                                    });
+                                if let Err(error) = result {
+                                    response_error.get_or_insert(error);
                                 }
                             }
-                            MessageKind::MapLoaded => {
-                                loading.mark_loaded(now);
-                            }
-                            MessageKind::GameMessage if room.world.is_some() => {
-                                world.queue_game_message(tick, now, message);
-                            }
-                            MessageKind::WheelAction => {
-                                if let Some(world_state) = &room.world {
-                                    world.queue_wheel_action(
-                                        world_state.scene.simulation(),
-                                        &message,
-                                    );
-                                }
-                            }
-                            _ => (),
                         }
-                    });
+                        MessageKind::MapLoaded => {
+                            loading.mark_loaded(now);
+                        }
+                        MessageKind::GameMessage if room.world.is_some() => {
+                            world.queue_game_message(tick, now, message);
+                        }
+                        MessageKind::WheelAction => {
+                            if let Some(world_state) = &room.world {
+                                world.queue_wheel_action(
+                                    world_state.scene.simulation(),
+                                    &message,
+                                    command_frame,
+                                );
+                            }
+                        }
+                        _ => (),
+                    }
+                });
                 if let Some(error) = response_error {
                     return Err(error);
                 }

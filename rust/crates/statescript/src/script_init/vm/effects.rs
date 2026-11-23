@@ -49,7 +49,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     && reach.is_finite()
                     && reach > 0.0 =>
             {
-                match self.world.spray_placement(reach) {
+                match self.world.spray_placement(reach, self.command_frame) {
                     Some(hit) => hit.map(|hit| (asset, hit)),
                     None => {
                         self.report(self.site(key.instance, node), Issue::ObservationUnavailable);

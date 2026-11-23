@@ -98,9 +98,9 @@ fn wheel_input_follows_reliable_order_and_current_body_generation() {
     let mut ingress = GameIngress::new();
     let mut receive = |world: &mut WorldDelivery, scene: &PreparedScene, packet: BitWriter| {
         ingress
-            .receive(&schemas, packet.as_bytes(), |message| {
+            .receive(&schemas, packet.as_bytes(), |message, command_frame| {
                 assert_eq!(MessageKind::from(message.id), MessageKind::WheelAction);
-                world.queue_wheel_action(scene.simulation(), &message);
+                world.queue_wheel_action(scene.simulation(), &message, command_frame);
             })
             .unwrap();
     };

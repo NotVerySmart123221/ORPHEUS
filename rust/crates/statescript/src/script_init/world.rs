@@ -905,7 +905,11 @@ pub trait World {
 
     /// A known model can confirm presence or absence. None means unavailable.
     /// Outer None means no query service. Inner None is a completed miss.
-    fn spray_placement(&self, _reach: f64) -> Option<Option<super::types::SprayPlacement>> {
+    fn spray_placement(
+        &self,
+        _reach: f64,
+        _command_frame: Option<u32>,
+    ) -> Option<Option<super::types::SprayPlacement>> {
         None
     }
 

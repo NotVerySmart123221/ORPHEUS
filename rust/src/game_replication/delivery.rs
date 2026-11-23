@@ -1466,7 +1466,12 @@ impl WorldDelivery {
         }
     }
 
-    pub(crate) fn queue_wheel_action(&mut self, simulation: &RoomSimulation, message: &Message) {
+    pub(crate) fn queue_wheel_action(
+        &mut self,
+        simulation: &RoomSimulation,
+        message: &Message,
+        command_frame: Option<u32>,
+    ) {
         let Some(body) = self
             .active_body_id()
             .filter(|&id| self.owner_body_ready(id))
@@ -1482,7 +1487,11 @@ impl WorldDelivery {
             return;
         }
         if let Some(action) = ClientWheelAction::read(message) {
-            self.input.push(InputWork::WheelAction { body, action });
+            self.input.push(InputWork::WheelAction {
+                body,
+                action,
+                command_frame,
+            });
         }
     }
 
@@ -1789,7 +1798,16 @@ impl WorldDelivery {
                     self.game_message(scene, viewer, tick, received, quanta, &message)?;
                     remaining -= 1;
                 }
-                InputWork::WheelAction { body, action } => {
+                InputWork::WheelAction {
+                    body,
+                    action,
+                    command_frame,
+                } => {
+                    let command_frame = command_frame.filter(|&frame| {
+                        self.input
+                            .admitted
+                            .is_some_and(|admitted| frame <= admitted)
+                    });
                     let runtime = self
                         .active_body_id()
                         .filter(|&active| active == body && self.owner_body_ready(active))
@@ -1799,7 +1817,7 @@ impl WorldDelivery {
                         .filter(|runtime| runtime.wheel_actions_available());
                     if let Some(runtime) = runtime {
                         // A full or halted VM queue rejects the request locally.
-                        let _ = runtime.queue_wheel_selection(action);
+                        let _ = runtime.queue_wheel_selection(action, command_frame);
                     }
                     remaining -= 1;
                 }

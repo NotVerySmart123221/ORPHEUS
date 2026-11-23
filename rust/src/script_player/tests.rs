@@ -3298,6 +3298,7 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
         vitals: Vitals::empty(),
         pool_types_known: true,
         target_tags: tagged.then(|| body.target_tags.clone().unwrap()),
+        command_views: Default::default(),
         wheel_cosmetics: Default::default(),
         model_hardpoints: None,
         target_tag_effects: TargetTagEffects::default(),
@@ -3614,6 +3615,7 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
             modifiers: None,
             leases: Default::default(),
             frame: FIRST_TICK,
+            wheel_delivery_frame: FIRST_TICK,
             charge_binding: None,
         };
         assert_eq!(
@@ -3622,15 +3624,15 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
         );
         assert_eq!(
             runtime
-                .queue_wheel_selection(request(0x0a90_0000_dead_beef))
+                .queue_wheel_selection(request(0x0a90_0000_dead_beef), None)
                 .unwrap(),
             0
         );
         let selection = request(action);
         if graphs.has_asset_category_data() {
-            assert_eq!(runtime.queue_wheel_selection(selection).unwrap(), 2);
+            assert_eq!(runtime.queue_wheel_selection(selection, None).unwrap(), 2);
         } else {
-            assert_eq!(runtime.queue_wheel_selection(selection).unwrap(), 0);
+            assert_eq!(runtime.queue_wheel_selection(selection, None).unwrap(), 0);
             let request = selection.into_local_message();
             assert_eq!(
                 runtime
@@ -3728,8 +3730,29 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
             runtime.world.eye_position = Some(vector(&spray_input["eye"]));
             runtime.world.movement.yaw = 0;
             runtime.world.movement.pitch = 0;
+            runtime.world.record_command_view(FIRST_TICK + 2);
+            runtime.world.movement.yaw = 32768;
 
-            assert_eq!(runtime.queue_wheel_selection(request(spray)).unwrap(), 2);
+            assert_eq!(
+                runtime
+                    .queue_wheel_selection(request(spray), Some(FIRST_TICK + 2))
+                    .unwrap(),
+                2
+            );
+            runtime.component.run_now(&mut runtime.world).unwrap();
+            assert!(
+                !runtime
+                    .component
+                    .snapshot()
+                    .unwrap()
+                    .instances
+                    .values()
+                    .any(|instance| {
+                        instance.states.values().any(|state| {
+                            state.active && matches!(state.kind, StateKind::SprayPlacement(Some(_)))
+                        })
+                    })
+            );
             runtime
                 .component
                 .advance_frame(FIRST_TICK + 2, &mut runtime.world)
@@ -3815,7 +3838,10 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
             }
             assert_eq!(runtime.queue_wheel_use(report).unwrap(), 1);
             runtime.world.movement.yaw = 32768;
-            assert_eq!(runtime.queue_wheel_selection(request(spray)).unwrap(), 2);
+            assert_eq!(
+                runtime.queue_wheel_selection(request(spray), None).unwrap(),
+                2
+            );
             runtime
                 .component
                 .advance_frame(FIRST_TICK + 3, &mut runtime.world)
@@ -3849,7 +3875,10 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                 "{:?}",
                 after_cooldown.diagnostics
             );
-            assert_eq!(runtime.queue_wheel_selection(request(spray)).unwrap(), 2);
+            assert_eq!(
+                runtime.queue_wheel_selection(request(spray), None).unwrap(),
+                2
+            );
             runtime
                 .component
                 .advance_frame(next_selection + 1, &mut runtime.world)
@@ -3883,7 +3912,12 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                     ..Default::default()
                 });
                 let action = 0x0a90_0000_0000_019d;
-                assert_eq!(runtime.queue_wheel_selection(request(action)).unwrap(), 2);
+                assert_eq!(
+                    runtime
+                        .queue_wheel_selection(request(action), None)
+                        .unwrap(),
+                    2
+                );
                 runtime
                     .component
                     .advance_frame(selection_frame + 1, &mut runtime.world)
@@ -3926,7 +3960,7 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                 });
                 assert_eq!(
                     runtime
-                        .queue_wheel_selection(request(emote_action))
+                        .queue_wheel_selection(request(emote_action), None)
                         .unwrap(),
                     2
                 );
@@ -4348,6 +4382,7 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             vitals: Vitals::empty(),
             pool_types_known: true,
             target_tags: body.target_tags.clone(),
+            command_views: Default::default(),
             wheel_cosmetics: Default::default(),
             model_hardpoints: None,
             target_tag_effects: TargetTagEffects::default(),

@@ -50,6 +50,10 @@ impl ClientWheelAction {
         Some(Self { action, confirmed })
     }
 
+    pub(crate) fn confirmed(self) -> bool {
+        self.confirmed
+    }
+
     pub(crate) fn asset(self) -> u64 {
         self.action
     }

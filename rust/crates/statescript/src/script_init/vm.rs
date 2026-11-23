@@ -51,6 +51,7 @@ pub(super) struct Vm<'graph, 'world, 'machine, W> {
     pub(super) parameters: Option<Arc<Variables>>,
     health_context: HostHealthContext,
     observed_input: Option<ObservationInput>,
+    pub(super) command_frame: Option<u32>,
     settled_damage_receiver: Option<u16>,
     pub(super) output_write_depth: usize,
 }
@@ -68,6 +69,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             parameters: None,
             health_context: HostHealthContext::default(),
             observed_input: None,
+            command_frame: None,
             settled_damage_receiver: None,
             output_write_depth: 0,
         }
@@ -1190,18 +1192,19 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 }
                 // Settle script work before the next input edge at this instant.
                 // A press and release can share a timestamp.
-                while let Some(event) =
-                    self.machine
-                        .queues
-                        .pop_due(id, self.machine.now_ms, |event| {
-                            !matches!(event, Event::Button(_))
-                        })
+                while let Some((event, command_frame)) = self
+                    .machine
+                    .queues
+                    .pop_due_with_command_frame(id, self.machine.now_ms, |event| {
+                        !matches!(event, Event::Button(_))
+                    })
                 {
                     if events == MAX_EVENTS_PER_UPDATE {
                         return Err(InitFault::EventBudget { instance: id });
                     }
                     events += 1;
                     self.spend("event dispatch")?;
+                    self.command_frame = command_frame;
                     let key = |raw| StateKey { instance: id, raw };
                     match event {
                         Event::Entry(position) => {
@@ -1263,19 +1266,19 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             settled_damage,
                             room_directed,
                         } => {
-                            if room_directed && self.machine.owner_dead {
-                                continue;
+                            if !room_directed || !self.machine.owner_dead {
+                                self.deliver(
+                                    id,
+                                    position,
+                                    sender,
+                                    parameters,
+                                    health_context,
+                                    settled_damage,
+                                )?;
                             }
-                            self.deliver(
-                                id,
-                                position,
-                                sender,
-                                parameters,
-                                health_context,
-                                settled_damage,
-                            )?;
                         }
                     }
+                    self.command_frame = None;
                 }
                 if !self.machine.snapshot.instances.contains_key(&id) {
                     break;
@@ -1394,9 +1397,19 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         delay_ms: u64,
         event: Event,
     ) -> Result<(), InitFault> {
-        self.machine
-            .queues
-            .push(id, self.machine.now_ms.saturating_add(delay_ms), event)?;
+        // Carry the input view through immediate graph work, including child
+        // startup. Later timers sample their own current frame.
+        let command_frame = if delay_ms == 0 {
+            self.command_frame
+        } else {
+            None
+        };
+        self.machine.queues.push_with_command_frame(
+            id,
+            self.machine.now_ms.saturating_add(delay_ms),
+            event,
+            command_frame,
+        )?;
         Ok(())
     }
 

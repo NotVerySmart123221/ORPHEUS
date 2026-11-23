@@ -126,7 +126,11 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
         Ok(0)
     }
     fn set_wheel_cosmetics(&mut self, _cosmetics: crate::match_scene::WheelCosmetics) {}
-    fn queue_wheel_selection(&mut self, _action: ClientWheelAction) -> Result<usize, InitFault> {
+    fn queue_wheel_selection(
+        &mut self,
+        _action: ClientWheelAction,
+        _command_frame: Option<u32>,
+    ) -> Result<usize, InitFault> {
         Ok(0)
     }
     fn queue_wheel_use(&mut self, _report: ClientWheelUse) -> Result<usize, InitFault> {

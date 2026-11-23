@@ -45,6 +45,7 @@ pub(crate) struct PlayerBodyRuntime {
     pub(super) modifiers: Option<BTreeMap<ModifierKey, Modifier>>,
     pub(super) leases: ProjectileLeases,
     pub(super) frame: u32,
+    pub(super) wheel_delivery_frame: u32,
     pub(super) charge_binding: Option<super::charge::ChargeBinding>,
 }
 
@@ -124,16 +125,27 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         self.world.graphs.has_asset_category_data() && self.component.snapshot().is_some()
     }
 
-    fn queue_wheel_selection(&mut self, action: ClientWheelAction) -> Result<usize, InitFault> {
+    fn queue_wheel_selection(
+        &mut self,
+        action: ClientWheelAction,
+        command_frame: Option<u32>,
+    ) -> Result<usize, InitFault> {
         if !self.world.graphs.has_asset_category_entry(action.asset()) {
             return Ok(0);
         }
-        let selection = action.into_local_message();
-        self.component.queue_entity_message_from(
-            self.world.entity,
-            selection.id,
-            selection.parameters,
-        )
+        let view_frame = command_frame.filter(|_| action.confirmed());
+        let earliest = self
+            .wheel_delivery_frame
+            .max(view_frame.unwrap_or(self.frame));
+        let queued = self.component.queue_command_message(
+            action.into_local_message(),
+            view_frame,
+            earliest,
+        )?;
+        if queued != 0 {
+            self.wheel_delivery_frame = earliest;
+        }
+        Ok(queued)
     }
 
     fn queue_wheel_use(&mut self, report: ClientWheelUse) -> Result<usize, InitFault> {
@@ -371,6 +383,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         // Command gaps and timer advances retain the last movement record.
         if step == BodyStep::Posed {
             self.world.movement = pose;
+            self.world.record_command_view(command.frame);
         }
         if step == BodyStep::Posed {
             self.world.throttles = [command.right, command.forward];

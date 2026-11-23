@@ -1121,6 +1121,24 @@ impl Component {
         )
     }
 
+    /// Deliver a local input message using the view of its originating command.
+    pub fn queue_command_message(
+        &mut self,
+        message: RoomMessage,
+        command_frame: Option<u32>,
+        earliest_frame: u32,
+    ) -> Result<usize, InitFault> {
+        if self.halted {
+            return Err(InitFault::Halted);
+        }
+        if !message.is_valid() {
+            return Ok(0);
+        }
+        let due_ms = self.machine.now_ms.max(frame_start(earliest_frame));
+        self.machine
+            .queue_command_entries(&self.graphs, message, command_frame, due_ms)
+    }
+
     pub fn queue_entity_frame_message(
         &mut self,
         frame: u32,

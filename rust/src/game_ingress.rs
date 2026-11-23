@@ -61,7 +61,8 @@ impl Error for IngressError {
 pub struct GameIngress {
     // Reliable ordinals increase throughout the session, unlike UDP packet numbers.
     expected_reliable: u64,
-    parked: HashMap<u32, Message>,
+    parked: HashMap<u32, (Message, Option<u32>)>,
+    last_command_frame: Option<u32>,
 }
 
 impl GameIngress {
@@ -70,33 +71,51 @@ impl GameIngress {
     }
 
     /// Decode a complete channel before changing its reliable state. Dispatch
-    /// newly available messages before parsing commands, since a game message
-    /// can change which player body should receive those commands.
+    /// newly available messages before returning commands to the room. Keep the
+    /// packet's command frame with wheel selections across reliable retries.
     pub fn receive(
         &mut self,
         schemas: &Schemas,
         payload: &[u8],
-        mut dispatch: impl FnMut(Message),
+        mut dispatch: impl FnMut(Message, Option<u32>),
     ) -> Result<Vec<Command>, IngressError> {
         let mut reader = BitReader::new(payload);
         let channel = read_channel(&mut reader, schemas).map_err(IngressError::Channel)?;
+        let commands = read_commands(&mut reader).map_err(IngressError::Commands);
+        let command_frame = commands
+            .as_ref()
+            .ok()
+            .and_then(|commands| commands.last())
+            .map(|command| command.frame);
+        let wheel_frame = command_frame.or(self.last_command_frame);
+        self.last_command_frame = self.last_command_frame.max(command_frame);
         for reliable in channel.reliable {
             if u64::from(reliable.sequence) < self.expected_reliable {
                 continue;
             }
-            self.parked.insert(reliable.sequence, reliable.message);
+            if reliable.message.id == CLIENT_WHEEL_ACTION {
+                self.parked
+                    .entry(reliable.sequence)
+                    .or_insert((reliable.message, wheel_frame));
+            } else {
+                self.parked
+                    .insert(reliable.sequence, (reliable.message, None));
+            }
             while let Ok(expected) = u32::try_from(self.expected_reliable) {
-                let Some(message) = self.parked.remove(&expected) else {
+                let Some((message, frame)) = self.parked.remove(&expected) else {
                     break;
                 };
                 self.expected_reliable += 1;
-                dispatch(message);
+                dispatch(message, frame);
             }
         }
         for message in channel.unreliable {
-            dispatch(message);
+            let frame = (message.id == CLIENT_WHEEL_ACTION)
+                .then_some(wheel_frame)
+                .flatten();
+            dispatch(message, frame);
         }
-        read_commands(&mut reader).map_err(IngressError::Commands)
+        commands
     }
 }
 
@@ -234,7 +253,7 @@ mod tests {
                     ]
                 },
                 "A7FBBD0C": {
-                    "21600":[], "21602":[], "21603":[], "21604":[], "21616":[]
+                    "21600":[], "21602":[], "21603":[], "21604":[], "21608":[], "21616":[]
                 }
             }"#,
         )
@@ -258,7 +277,7 @@ mod tests {
         let schemas = schemas();
         let mut ingress = GameIngress::new();
         let mut delivered = Vec::new();
-        let mut dispatch = |message: Message| delivered.push(message.id);
+        let mut dispatch = |message: Message, _| delivered.push(message.id);
         let first = channel(&schemas, &[(1, 21603), (2, 21604)], &[21602]);
         let second = channel(&schemas, &[(1, 21616)], &[]);
         let third = channel(&schemas, &[(0, 21600), (1, 21603)], &[21602]);
@@ -274,19 +293,79 @@ mod tests {
     }
 
     #[test]
+    fn wheel_retries_keep_the_command_frame_from_first_receipt() {
+        use serde_json::Value as Json;
+
+        let fixture: Json = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/wheel-spray-pose-v1.json"
+        ))
+        .unwrap();
+        let schemas = schemas();
+        let append_command = |packet: &mut BitWriter, supplied: Option<u64>| {
+            packet.bit(supplied.is_some());
+            if let Some(frame) = supplied {
+                // One command, with no throttle changes or click fields.
+                packet.bits(145, 32).unwrap();
+                packet.bits(0, 24).unwrap();
+                packet.bits(1, 8).unwrap();
+                packet.bits(frame, 32).unwrap();
+                packet.bit(false);
+                packet.bits(0, 32).unwrap();
+                packet.bits(0, 24).unwrap();
+                packet.bits(0, 8).unwrap();
+                packet.bits(0, 16).unwrap();
+            }
+        };
+        for (case, expected) in fixture["input"]["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(fixture["expected_command_frames"].as_array().unwrap())
+        {
+            let mut ingress = GameIngress::new();
+            let reliable = [];
+            let mut initial = channel(&schemas, &reliable, &[]);
+            append_command(&mut initial, case["last_frame"].as_u64());
+            ingress
+                .receive(&schemas, initial.as_bytes(), |_, _| unreachable!())
+                .unwrap();
+
+            let mut seen = Vec::new();
+            for packet in case["packets"].as_array().unwrap() {
+                let ordinal = packet[0].as_u64().unwrap() as u32;
+                let message = if packet[1].as_bool().unwrap() {
+                    CLIENT_WHEEL_ACTION
+                } else {
+                    21600
+                };
+                let mut frame = channel(&schemas, &[(ordinal, message)], &[]);
+                append_command(&mut frame, packet[2].as_u64());
+                ingress
+                    .receive(&schemas, frame.as_bytes(), |message, selected| {
+                        if message.id == CLIENT_WHEEL_ACTION {
+                            seen.push(selected.map(u64::from));
+                        }
+                    })
+                    .unwrap();
+            }
+            assert_eq!(seen, [expected.as_u64()], "{}", case["name"]);
+        }
+    }
+
+    #[test]
     fn a_truncated_channel_cannot_dispatch_its_valid_prefix() {
         let schemas = schemas();
         let mut ingress = GameIngress::new();
         let frame = channel(&schemas, &[(0, 21600), (1, 21603)], &[]).into_bytes();
         let bad = &frame[..frame.len() - 1];
         assert!(matches!(
-            ingress.receive(&schemas, bad, |_| panic!("unexpected message")),
+            ingress.receive(&schemas, bad, |_, _| panic!("unexpected message")),
             Err(IngressError::Channel(_))
         ));
 
         let mut delivered = Vec::new();
         ingress
-            .receive(&schemas, &frame, |message| delivered.push(message.id))
+            .receive(&schemas, &frame, |message, _| delivered.push(message.id))
             .unwrap();
         assert_eq!(delivered, [21600, 21603]);
     }
@@ -300,7 +379,7 @@ mod tests {
         let mut frame = channel(&schemas, &[(0, 21602)], &[]);
         frame.bit(true); // Presence bit without its 32-bit length.
         assert!(matches!(
-            ingress.receive(&schemas, frame.as_bytes(), |message| {
+            ingress.receive(&schemas, frame.as_bytes(), |message, _| {
                 assert_eq!(MessageKind::from(message.id), MessageKind::MapLoaded);
                 assert!(map.mark_loaded(now));
             }),
@@ -311,7 +390,9 @@ mod tests {
             Some(MapReadyStep::Ownership)
         );
         assert!(matches!(
-            ingress.receive(&schemas, frame.as_bytes(), |_| panic!("duplicate message")),
+            ingress.receive(&schemas, frame.as_bytes(), |_, _| panic!(
+                "duplicate message"
+            )),
             Err(IngressError::Commands(_))
         ));
     }
@@ -329,7 +410,7 @@ mod tests {
 
         let mut body = None;
         let commands = GameIngress::new()
-            .receive(&schemas, frame.as_bytes(), |message| {
+            .receive(&schemas, frame.as_bytes(), |message, _| {
                 assert_eq!(MessageKind::from(message.id), MessageKind::GameMessage);
                 body = Some(9);
             })
@@ -354,7 +435,7 @@ mod tests {
         let frame = channel(&schemas, &[(u32::MAX, 21600), (0, 21603)], &[]);
         let mut delivered = Vec::new();
         ingress
-            .receive(&schemas, frame.as_bytes(), |message| {
+            .receive(&schemas, frame.as_bytes(), |message, _| {
                 delivered.push(message.id)
             })
             .unwrap();
@@ -410,7 +491,7 @@ mod tests {
         let mut map = MapReadiness::default();
         let mut reply = None;
         let commands = GameIngress::new()
-            .receive(&schemas, &frame, |message| {
+            .receive(&schemas, &frame, |message, _| {
                 match MessageKind::from(message.id) {
                     MessageKind::MapLoaded => assert!(map.mark_loaded(Duration::ZERO)),
                     MessageKind::Ping => {

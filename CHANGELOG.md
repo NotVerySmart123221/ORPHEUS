@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Project sprays from the confirmed command view, preserving the first command frame when the reliable wheel message is retried. Use bounded body pose history for eye position and aim, falling back to the current view when the pose is unavailable. Reuses the behavior contract introduced by Aetheria-ona on Python. Passed 514 server and 303 StateScript library tests, the prepared 104319 wheel replay, and Clippy.
+
 - Synchronize the authored cosmetic resource state when its readiness output has no links. The client retains its existing resource wait and release lifecycle while owner and observer streams carry ordinary activation and removal. Passed 513 server and 303 StateScript library tests, the prepared 104319 wheel regression, and Clippy. Connected readiness outputs still require a completion signal.
 
 - Activate the authored emote animation-mode state through the ordinary owner stream. The owner receives activation and removal with an empty payload. Observer delivery omits the local state. Passed 513 server and 303 StateScript library tests, the prepared 104319 wheel replay, and Clippy.

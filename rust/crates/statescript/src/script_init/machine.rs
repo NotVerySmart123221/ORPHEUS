@@ -30,6 +30,7 @@ use super::{
 #[derive(Clone, Copy)]
 enum MessageDestination {
     Ordinary(Option<u16>, u64),
+    Command(u64, Option<u32>),
     SettledDamage(u16, u64),
     Room(u64),
     Host(HostEventKind),
@@ -38,9 +39,10 @@ enum MessageDestination {
 impl MessageDestination {
     fn topic(self) -> EntryTopic {
         match self {
-            Self::Ordinary(_, message) | Self::SettledDamage(_, message) | Self::Room(message) => {
-                EntryTopic::Message(message)
-            }
+            Self::Ordinary(_, message)
+            | Self::Command(message, _)
+            | Self::SettledDamage(_, message)
+            | Self::Room(message) => EntryTopic::Message(message),
             Self::Host(kind) => EntryTopic::Host(kind),
         }
     }
@@ -562,6 +564,23 @@ impl Machine {
         )
     }
 
+    pub(super) fn queue_command_entries(
+        &mut self,
+        graphs: &GraphStore,
+        message: RoomMessage,
+        command_frame: Option<u32>,
+        due_ms: u64,
+    ) -> Result<usize, InitFault> {
+        self.queue_message_entries(
+            graphs,
+            MessageDestination::Command(message.id, command_frame),
+            Some(self.snapshot.entity),
+            message.parameters,
+            due_ms,
+            HostHealthContext::default(),
+        )
+    }
+
     pub(super) fn queue_settled_damage_entries(
         &mut self,
         graphs: &GraphStore,
@@ -664,6 +683,7 @@ impl Machine {
                             || node.accepts_directed_numeric_message(&parameters)
                     }
                     MessageDestination::Ordinary(_, _)
+                    | MessageDestination::Command(_, _)
                     | MessageDestination::SettledDamage(_, _) => {
                         !node.declares_room_message_entry()
                             && (node.is_message_entry()
@@ -682,8 +702,12 @@ impl Machine {
             }
         }
         let parameters = Arc::new(parameters);
+        let command_frame = match destination {
+            MessageDestination::Command(_, frame) => frame,
+            _ => None,
+        };
         for &(instance, position) in &entries {
-            self.queues.push(
+            self.queues.push_with_command_frame(
                 instance,
                 due_ms,
                 Event::Message {
@@ -694,6 +718,7 @@ impl Machine {
                     settled_damage: matches!(destination, MessageDestination::SettledDamage(_, _)),
                     room_directed: matches!(destination, MessageDestination::Room(_)),
                 },
+                command_frame,
             )?;
         }
         Ok(entries.len())

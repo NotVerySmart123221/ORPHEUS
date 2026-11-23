@@ -396,6 +396,7 @@ pub(super) enum InputWork {
     WheelAction {
         body: BodyId,
         action: ClientWheelAction,
+        command_frame: Option<u32>,
     },
     WheelUse {
         body: BodyId,
