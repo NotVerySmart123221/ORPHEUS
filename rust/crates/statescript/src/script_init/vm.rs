@@ -2253,7 +2253,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         Ok(true)
     }
 
-    fn capture_callout(&mut self, id: u16, node: &Node) -> bool {
+    fn capture_frame_action(&mut self, id: u16, node: &Node) -> bool {
         use super::{FrameAction, FrameCallout};
 
         const HISTORY: usize = 32;
@@ -2267,10 +2267,6 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 .graph(id)
                 .remote_node(remote)
                 .is_none_or(|mapped| mapped.pos != node.pos)
-            || !matches!(
-                node.field("m_text").and_then(|text| text["$"].as_str()),
-                Some("STU_E7579408" | "STU_919FD47C" | "STUConfigVarExpression")
-            )
         {
             return false;
         }

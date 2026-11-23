@@ -176,7 +176,13 @@ integer-keyed parameter map. A networked `STU_7106C356` uses the authored
 `m_BF5B22B7` scope rows to capture its effective variables. The owner
 and observer streams send the captured values with the short action.
 An unacknowledged action keeps its initial stamp and values when a later
-selection arrives. Full baselines omit prior callouts. The client retains
+selection arrives. A networked `STUStatescriptActionEffect` with a literal
+effect and an authored owner selector uses the same short-action stream.
+The client graph supplies the effect asset and evaluates its authored
+DataFlow bindings using the synchronized variables. The prepared 104319
+shared combat graph declares remote slots and synchronized parameters for
+its hit effects. Original-client playback of these actions remains to be
+verified. Full baselines omit prior callouts. The client retains
 its existing text rendering and audience checks. `STU_1ECB66A0` looks up
 the complete communication action GUID in the optional `asset_textures`
 catalog. A missing key in a supplied catalog returns a zero texture

@@ -4,6 +4,10 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ## Unreleased
 
+### 2026-11-23
+
+- Capture networked StateScript effects with literal effect assets and an authored owner selector through the existing short-action stream. Capture the action's declared variables at execution for stable retries. Passed 520 Inspector library tests, including owner and observer loss and retry checks. Original-client playback and combat message integration remain pending.
+
 ### 2026-11-22
 
 - Add an opt-in Inspector playtest for native received-damage feedback after a nonlethal player health loss. Route it only to the victim's current body and keep it separate from the shooter's hit notice. Keep direction vectors neutral pending client verification. The victim-only routing and wire payload passed the synthetic and prepared 104319 schema regressions.

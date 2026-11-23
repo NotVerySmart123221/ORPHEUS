@@ -429,8 +429,19 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         && field(field(&node.fields, "m_effect"), "m_resourceKey").is_null()
                         && field(&node.fields, "m_dataFlow").is_null()) =>
             {
-                // Preserve the graph continuation without a server-side
-                // effect entity or a graph value to replicate.
+                let effect = field(&node.fields, "m_effect");
+                if field(&node.fields, "m_37B02425").is_null()
+                    && script_expr::native_shape(
+                        field(&node.fields, "m_3E3E203A"),
+                        "STU_B5A0CAF0",
+                        None,
+                    )
+                    && script_expr::native_shape(effect, "STUConfigVarEffect", Some("m_effect"))
+                    && asset_guid(field(effect, "m_effect"))
+                        .is_some_and(|guid| guid >> 48 == 0x0300)
+                {
+                    self.capture_frame_action(id, node);
+                }
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
@@ -791,7 +802,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             "STU_7106C356" => {
-                if !self.capture_callout(id, node) {
+                if !matches!(
+                    node.field("m_text").and_then(|text| text["$"].as_str()),
+                    Some("STU_E7579408" | "STU_919FD47C" | "STUConfigVarExpression")
+                ) || !self.capture_frame_action(id, node)
+                {
                     self.report(
                         self.site(id, node),
                         Issue::UnsupportedField("callout action"),
