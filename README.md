@@ -25,7 +25,7 @@
 Install **Git** and **stable Rust** (`>= 1.85.0`). On Windows, install the **x64 MSVC Build Tools** and **Windows SDK** for Rust's MSVC toolchain.
 
 ```powershell
-git clone --branch rust https://github.com/leafall903/ORPHEUS.git
+git clone https://github.com/leafall903/ORPHEUS.git
 cd ORPHEUS
 cargo test --locked --workspace --all-targets
 ```
@@ -79,12 +79,12 @@ These overrides apply only to card `0x3C` and do not affect default runs or othe
 
 ## Current Status
 
-| Area | Native Rust (`rust`) | Original-Client Status & Open Work |
+| Area | Implemented (`rust`) | Next Steps |
 | --- | --- | --- |
-| **Login, Profiles & Gallery** | Native Battle.net RPC, JAM lobby, profile settings persistence (`profile-settings-v1`), and Hero Gallery loadout previews (including 23 NPC previews). | Encrypted lobby login and Practice Range entry work; client Hero Gallery NPC framing & full live flows await retest. |
-| **Practice Range & Soldier: 76** | Loopback UDP rooms, Bevy ECS bots/projectiles, StateScript patrol decisions, authored rifle/reload/Sprint/Helix/Biotic Field VM & fixture combat. | Headless encrypted tests pass; live 104319 weapon attachment, Sprint/ammo sync, and upstairs patrol need client acceptance. |
-| **Junkenstein & Normal Cassidy** | All 14 cards load; Normal Cassidy Primary/Fan/Roll/Flashbang/Deadeye, ultimate charge (`0B8B`), team score, boss speech (`40E05F6B`), and gate stages pass headless replays. | Client Defeat heading verified; full Cassidy skills, Boss intro cameras/pursuit, recap timer, and natural Victory await live client acceptance. |
-| **Architecture & Isolation** | Independent `orpheus-wire`, `orpheus-collision`, `orpheus-runtime`, and `orpheus-statescript` workspace crates; modularized `game_combat/`, `scene_assets/`, and `game_service/` with room-level fault/panic isolation. | Further cross-map navigation and live behavior verification are tracked in the roadmap. |
+| **Login, Profiles & Gallery** | Native Battle.net RPC, JAM lobby, profile settings persistence (`profile-settings-v1`), and Hero Gallery loadout previews (including 23 NPC previews). | Expand lobby flows and polish Hero Gallery framing. |
+| **Practice Range & Combat** | Loopback UDP rooms, Bevy ECS bots and projectiles, StateScript patrol decisions, and StateScript-driven weapon and ability simulation. | Broaden hero ability coverage, refine movement and ammo sync, and improve upstairs navigation. |
+| **Junkenstein's Revenge** | All 14 cards load. Headless replays cover supported combat abilities, ultimate charge (`0B8B`), team score, boss speech (`40E05F6B`), and gate stages. | Expand the PvE hero roster and refine boss intro cameras, pursuit, and end-of-match flows. |
+| **Architecture & Isolation** | Independent `orpheus-wire`, `orpheus-collision`, `orpheus-runtime`, and `orpheus-statescript` workspace crates, plus modularized `game_combat/`, `scene_assets/`, and `game_service/` with room-level fault and panic isolation. | Extend cross-map navigation and multi-map simulation support. |
 
 See the [architecture](docs/NATIVE_SERVER_ARCHITECTURE.md), [evidence and status](docs/STATE.md), [behavior contracts](docs/BEHAVIOR_CONTRACTS.md), and [roadmap](docs/ROADMAP.md).
 
@@ -117,9 +117,9 @@ flowchart LR
 
 ## Contributing
 
-- **Rust and protocol.** Extend Soldier: 76 StateScript delivery coverage. [Open issue #166](https://github.com/leafall903/ORPHEUS/issues/166)
-- **Inspector, navigation and ECS.** The completed work in [#62](https://github.com/leafall903/ORPHEUS/issues/62), [#63](https://github.com/leafall903/ORPHEUS/issues/63) and [#65](https://github.com/leafall903/ORPHEUS/issues/65) is a starting point for follow-up contributions.
-- **Client testing.** Use your local 104319 client to verify Practice Range patrol and collision, Soldier: 76 Sprint and ammo sync, or Junkenstein flows. [Playtest checklist](docs/ROADMAP.md#original-client-acceptance-gates)
+- **Rust and protocol.** Extend hero ability and StateScript VM delivery coverage. [Start with issue #166](https://github.com/leafall903/ORPHEUS/issues/166)
+- **Inspector, navigation and ECS.** Build on the completed work. [#62](https://github.com/leafall903/ORPHEUS/issues/62) · [#63](https://github.com/leafall903/ORPHEUS/issues/63) · [#65](https://github.com/leafall903/ORPHEUS/issues/65)
+- **Client playtesting.** Run local 104319 sessions in the Practice Range and Junkenstein's Revenge to report protocol or behavior discrepancies. [Roadmap](docs/ROADMAP.md)
 
 See the [contribution guide](CONTRIBUTING.md), browse [open issues](https://github.com/leafall903/ORPHEUS/issues?q=is%3Aissue+is%3Aopen), or join [Discord](https://discord.gg/tqukqjAk7).
 

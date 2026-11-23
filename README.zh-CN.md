@@ -25,7 +25,7 @@
 安装 **Git** 与 **稳定版 Rust**（`>= 1.85.0`）。在 Windows 上还需安装 **x64 MSVC C++ Build Tools** 与 **Windows SDK**，供 Rust 的 MSVC 工具链使用。
 
 ```powershell
-git clone --branch rust https://github.com/leafall903/ORPHEUS.git
+git clone https://github.com/leafall903/ORPHEUS.git
 cd ORPHEUS
 cargo test --locked --workspace --all-targets
 ```
@@ -79,12 +79,12 @@ cargo run --locked --features inspector --bin orpheus_server -- --data-dir 'C:\p
 
 ## 当前进度
 
-| 模块 | Rust 服务端现状 | 104319 原版客户端情况与待办 |
+| 模块 | 已实现（`rust`） | 下一步 |
 | --- | --- | --- |
-| **登录、存档与画廊** | 原生 Battle.net / JAM 大厅、玩家设置持久化（`profile-settings-v1`）、饰品与 23 个 NPC 英雄画廊预览策略。 | 登录与靶场进图已跑通；最新 NPC 画廊预览与完整实机流程待复测。 |
-| **靶场与士兵 76** | 加密 UDP 房间、Bevy ECS Bot/投射物管理、StateScript 巡逻策略、步枪/换弹/疾跑/螺旋飞弹/生物力场仿真与靶场重生。 | 无客户端加密回环全部通过；客户端武器挂载、HUD 同步与二楼巡逻细节待实机复测。 |
-| **怪鼠复仇与卡西迪** | 全部 14 张卡牌初始化完成；普通难度卡西迪左/右键、翻滚、闪光弹、午时已到、`0B8B` 充能、计分、Boss 语音与城门阶段已通过离线回放。 | 已实机确认失败结算标题；卡西迪全部技能手感、Boss 登场镜头/追击、结算耗时与自然胜利待实机验收。 |
-| **底层架构与隔离** | `orpheus-wire`、`orpheus-collision`、`orpheus-runtime`、`orpheus-statescript` 已独立成 crate；`game_combat/`、`scene_assets/`、`game_service/` 完成模块化拆分及房间级 Panic 隔离。 | 跨地图导航与实机行为的后续验收见路线图。 |
+| **登录、存档与画廊** | 原生 Battle.net RPC、JAM 大厅、玩家设置持久化（`profile-settings-v1`），以及英雄画廊装备预览（含 23 个 NPC 预览）。 | 扩展大厅流程，优化英雄画廊的镜头构图。 |
+| **靶场与战斗** | 回环 UDP 房间、由 Bevy ECS 管理的机器人和投射物，以及由 StateScript 驱动的巡逻决策、武器和技能模拟。 | 扩大英雄技能覆盖，优化移动与弹药同步，改进二楼导航。 |
+| **怪鼠复仇** | 支持加载全部 14 张卡牌。无客户端回放覆盖已支持的战斗技能、终极技能充能（`0B8B`）、队伍计分、Boss 语音（`40E05F6B`）和城门阶段。 | 扩大 PvE 英雄阵容，完善 Boss 登场镜头、追击和对局结算。 |
+| **底层架构与隔离** | `orpheus-wire`、`orpheus-collision`、`orpheus-runtime` 和 `orpheus-statescript` 独立成 crate。`game_combat/`、`scene_assets/` 和 `game_service/` 已模块化，支持房间级错误与 panic 隔离。 | 扩展跨地图导航和多地图模拟。 |
 
 更多详情见 [架构与迁移](docs/NATIVE_SERVER_ARCHITECTURE.md) · [进度与对等状态](docs/STATE.md) · [行为契约](docs/BEHAVIOR_CONTRACTS.md) · [路线图](docs/ROADMAP.md)。
 
@@ -117,9 +117,9 @@ flowchart LR
 
 ## 参与贡献
 
-- **Rust 和协议。** 补齐士兵 76 StateScript 投递覆盖。[待办 #166](https://github.com/leafall903/ORPHEUS/issues/166)
-- **Inspector、导航和 ECS。** 已完成的 [#62](https://github.com/leafall903/ORPHEUS/issues/62)、[#63](https://github.com/leafall903/ORPHEUS/issues/63) 和 [#65](https://github.com/leafall903/ORPHEUS/issues/65) 可作为后续改进的参考。
-- **原版客户端测试。** 用本地 104319 客户端复测靶场巡逻和碰撞、士兵 76 疾跑和弹药同步，或怪鼠复仇流程。[实机验收清单](docs/ROADMAP.md#original-client-acceptance-gates)
+- **Rust 和协议。** 扩展英雄技能与 StateScript VM 的投递覆盖。[从 #166 入手](https://github.com/leafall903/ORPHEUS/issues/166)
+- **Inspector、导航和 ECS。** 在已完成的工作上继续改进。[#62](https://github.com/leafall903/ORPHEUS/issues/62) · [#63](https://github.com/leafall903/ORPHEUS/issues/63) · [#65](https://github.com/leafall903/ORPHEUS/issues/65)
+- **客户端试玩。** 用本地 104319 客户端体验靶场和怪鼠复仇，报告协议或玩法差异。[路线图](docs/ROADMAP.md)
 
 欢迎阅读[贡献指南](CONTRIBUTING.md)、查看[待处理 Issue](https://github.com/leafall903/ORPHEUS/issues?q=is%3Aissue+is%3Aopen)，或加入 [Discord](https://discord.gg/tqukqjAk7)。
 
