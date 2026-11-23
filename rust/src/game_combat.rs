@@ -460,6 +460,7 @@ impl RoomSpatialFrame {
                     direction: direction.map(|value| value as f32),
                     point: hit.point.map(|value| value as f32),
                     normal: hit.normal.map(|value| value as f32),
+                    attachment: None,
                 })
             })
     }

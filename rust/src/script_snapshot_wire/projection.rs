@@ -697,7 +697,7 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             let Some((unlock, hit)) = placement else {
                 return Some(StatePayload::new());
             };
-            StatePayload::from([
+            let mut payload = StatePayload::from([
                 ("unlock".into(), Value::Asset(unlock)),
                 (
                     "direction".into(),
@@ -709,7 +709,14 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
                     "activation".into(),
                     Value::Integer(i64::from(state.activation)),
                 ),
-            ])
+            ]);
+            if let Some(attachment) = hit.attachment {
+                payload.insert("entity".into(), Value::Entity(attachment.entity));
+                if let Some(key) = attachment.key {
+                    payload.insert("extra".into(), Value::Integer(i64::from(key.get())));
+                }
+            }
+            payload
         }
         (StateKind::ChaseVar, Some("chase")) => {
             let chase = state.chase.as_ref()?;

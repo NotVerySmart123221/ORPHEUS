@@ -3815,6 +3815,43 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                 );
                 assert!(stream.arrived(change.last).advanced);
             }
+            // Supply a synthetic anchored hit to the real codec and
+            // projection. The prepared collision cache only yields world hits.
+            let mut attached = snapshot.clone();
+            let state = attached
+                .instances
+                .get_mut(&spray_instance)
+                .unwrap()
+                .states
+                .get_mut(&spray_slot)
+                .unwrap();
+            let StateKind::SprayPlacement(Some((unlock, mut hit))) = state.kind else {
+                unreachable!()
+            };
+            let anchor = &spray_fixture["attachment"];
+            let anchor_id = anchor["entity"].as_u64().unwrap() as u32;
+            hit.point = vector(&anchor["point"]).map(|axis| axis as f32);
+            hit.normal = vector(&anchor["normal"]).map(|axis| axis as f32);
+            for case in anchor["cases"].as_array().unwrap() {
+                hit.attachment = Some(crate::script_init::SprayAttachment {
+                    entity: anchor_id,
+                    key: case["key"]
+                        .as_u64()
+                        .and_then(|key| std::num::NonZeroU32::new(key as u32)),
+                });
+                attached.instances[&spray_instance]
+                    .states
+                    .get_mut(&spray_slot)
+                    .unwrap()
+                    .kind = StateKind::SprayPlacement(Some((unlock, hit)));
+                for view in [View::Owner, View::Observer] {
+                    let projection = encoder.project(&attached, view).unwrap();
+                    let mut stream = BodyStream::new(attached.entity);
+                    stream.create_arrived();
+                    let frame = encoder.queue_full(&mut stream, &projection).unwrap();
+                    assert!(stream.arrived(frame.last).advanced);
+                }
+            }
             let report = ClientWheelUse {
                 entity: snapshot.entity,
                 instance: spray_instance,

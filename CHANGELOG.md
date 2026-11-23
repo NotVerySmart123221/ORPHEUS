@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Preserve an attached spray's entity, local point and normal, and optional anchor key in the owner and observer payloads. Reference fixtures cover root and keyed attachments and preserve static placement bytes. Live map ray queries still return static hits. Passed 514 server and 303 StateScript library tests, the prepared 104319 wheel replay, and Clippy.
+
 - Project sprays from the confirmed command view, preserving the first command frame when the reliable wheel message is retried. Use bounded body pose history for eye position and aim, falling back to the current view when the pose is unavailable. Reuses the behavior contract introduced by Aetheria-ona on Python. Passed 514 server and 303 StateScript library tests, the prepared 104319 wheel replay, and Clippy.
 
 - Synchronize the authored cosmetic resource state when its readiness output has no links. The client retains its existing resource wait and release lifecycle while owner and observer streams carry ordinary activation and removal. Passed 513 server and 303 StateScript library tests, the prepared 104319 wheel regression, and Clippy. Connected readiness outputs still require a completion signal.

@@ -26,9 +26,19 @@ use super::{
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SprayPlacement {
+    /// Point and normal are local to the attachment when one is present.
     pub point: [f32; 3],
     pub normal: [f32; 3],
+    /// The original spray direction stays in world space.
     pub direction: [f32; 3],
+    pub attachment: Option<SprayAttachment>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SprayAttachment {
+    pub entity: u32,
+    /// None selects the entity root transform.
+    pub key: Option<NonZeroU32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

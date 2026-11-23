@@ -692,7 +692,35 @@ fn project_spray(fields: &mut LayoutFields<'static>, vm: &Vm<'_>) -> Result<(), 
     ]) {
         fields.insert(key, FieldValue::Unsigned(u64::from(value)));
     }
-    fields.insert("has_entity", Value::Bool(false).into());
+    let entity = match vm.0.get("entity") {
+        None => None,
+        Some(Value::Entity(entity))
+            if entity & 0x8000_0000 != 0
+                && entity & 0x1fff_ffff != 0
+                && crate::script_expr::valid_entity(*entity) =>
+        {
+            Some(*entity)
+        }
+        _ => return Err(invalid_field("entity")),
+    };
+    let key = match vm.0.get("extra") {
+        None => None,
+        Some(Value::Integer(key)) if entity.is_some() => Some(
+            u32::try_from(*key)
+                .ok()
+                .filter(|&key| key != 0)
+                .ok_or_else(|| invalid_field("extra"))?,
+        ),
+        _ => return Err(invalid_field("extra")),
+    };
+    fields.insert("has_entity", Value::Bool(entity.is_some()).into());
+    if let Some(entity) = entity {
+        fields.insert("entity", Value::Entity(entity).into());
+        fields.insert("has_extra", Value::Bool(key.is_some()).into());
+        if let Some(key) = key {
+            fields.insert("extra", FieldValue::Unsigned(u64::from(key)));
+        }
+    }
     fields.insert("g", Value::Bool(false).into());
     Ok(())
 }
@@ -827,7 +855,7 @@ fn elapsed(frame_time: i64, frame_ms: u32, last: i64) -> Result<i64, PayloadErro
 #[cfg(test)]
 mod tests {
     #[test]
-    fn static_spray_payload_matches_verified_field_layout() {
+    fn static_and_attached_sprays_match_verified_field_layout() {
         let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../../fixtures/behavior/spray-surface-placement-v1.json"
@@ -839,7 +867,10 @@ mod tests {
                     {"op":"bits","n":16,"f":"v0"},{"op":"bits","n":16,"f":"v1"},
                     {"op":"bits","n":32,"f":"v2"},{"op":"bits","n":32,"f":"v3"},{"op":"bits","n":32,"f":"v4"},
                     {"op":"bits","n":16,"f":"v5"},{"op":"bits","n":16,"f":"v6"},
-                    {"op":"bits","n":1,"f":"has_entity"},{"op":"bits","n":1,"f":"g"}
+                    {"op":"bits","n":1,"f":"has_entity"},{"op":"if","c":"has_entity","then":[
+                        {"op":"entity_id","f":"entity"},{"op":"bits","n":1,"f":"has_extra"},
+                        {"op":"if","c":"has_extra","then":[{"op":"var_b","f":"extra"}],"else":[]}
+                    ],"else":[]},{"op":"bits","n":1,"f":"g"}
                 ],"else":[]}
             ]
         }}}"#).unwrap();
@@ -852,7 +883,17 @@ mod tests {
             ("point".into(), vector(&fixture["expected"]["point"])),
             ("normal".into(), vector(&fixture["expected"]["normal"])),
         ]);
-        let expected = fixture["expected"]["payload_hex"].as_str().unwrap();
+        let assert_wire = |payload: &StatePayload, expected: &serde_json::Value, mode| {
+            let encoded = codec.payload(payload, mode).unwrap();
+            let hex: String = encoded
+                .as_bytes()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            assert_eq!(hex, expected["payload_hex"].as_str().unwrap());
+            assert_eq!(encoded.bit_len() as u64, expected["bits"].as_u64().unwrap());
+        };
+        let attachment = &fixture["attachment"];
         for full in [false, true] {
             for mode in [
                 PayloadMode::Remote { full },
@@ -862,17 +903,33 @@ mod tests {
                     frame_ms: 16,
                 },
             ] {
-                let encoded = codec.payload(&payload, mode).unwrap();
-                let hex: String = encoded
-                    .as_bytes()
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect();
-                assert_eq!(hex, expected);
-                assert_eq!(
-                    encoded.bit_len() as u64,
-                    fixture["expected"]["bits"].as_u64().unwrap()
-                );
+                assert_wire(&payload, &fixture["expected"], mode);
+                for case in attachment["cases"].as_array().unwrap() {
+                    let mut attached = payload.clone();
+                    attached.insert("point".into(), vector(&attachment["point"]));
+                    attached.insert("normal".into(), vector(&attachment["normal"]));
+                    attached.insert(
+                        "entity".into(),
+                        Value::Entity(attachment["entity"].as_u64().unwrap() as u32),
+                    );
+                    if let Some(key) = case["key"].as_i64() {
+                        attached.insert("extra".into(), Value::Integer(key));
+                    }
+                    assert_wire(&attached, case, mode);
+                }
+                for (field, value) in [
+                    ("entity", Value::Entity(0x8000_0000)),
+                    ("entity", Value::Entity(0x9fff_ffff)),
+                    ("entity", Value::Entity(1)),
+                    ("extra", Value::Integer(311)),
+                ] {
+                    let mut invalid = payload.clone();
+                    invalid.insert(field.into(), value);
+                    assert_eq!(
+                        codec.payload(&invalid, mode).unwrap_err(),
+                        invalid_field(field)
+                    );
+                }
                 assert_eq!(
                     codec.payload(&StatePayload::new(), mode).unwrap().bit_len(),
                     1
