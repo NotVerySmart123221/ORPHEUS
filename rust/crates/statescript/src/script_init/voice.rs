@@ -366,6 +366,7 @@ pub(super) struct InstanceContext<'a, W> {
     pub(super) reads: Vec<VarKey>,
     pub(super) foreign_reads: Vec<(u32, u32)>,
     pub(super) parameters: Option<&'a Variables>,
+    pub(super) cycle_candidate: Option<i64>,
     pub(super) health_target_facts: Option<&'a HealthTargetFacts>,
     pub(super) observed_sample: Option<&'a ObservedSample>,
     pub(super) settled_damage: bool,
@@ -466,6 +467,9 @@ impl<W: World> Context for InstanceContext<'_, W> {
     }
 
     fn parameter(&mut self, id: u32) -> Value {
+        if let Some(candidate) = self.cycle_candidate {
+            return Value::Integer(candidate);
+        }
         self.parameters
             .and_then(|parameters| parameters.get(&id))
             .cloned()

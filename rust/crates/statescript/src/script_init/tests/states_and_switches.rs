@@ -2588,3 +2588,89 @@ fn wheel_actions_inherit_plain_action_continuation() {
         );
     }
 }
+
+#[test]
+fn cycle_index_steps_and_wraps_with_an_expression_local_candidate() {
+    let fixture: Json = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/statescript-cycle-index-v1.json"
+    )))
+    .unwrap();
+    for case in fixture["cases"].as_array().unwrap() {
+        let available = case["available"].as_array().unwrap();
+        let mut cycle = node(
+            1,
+            "STU_BC5E4622",
+            None,
+            json!({
+                "m_D10618D1": available.len(),
+                "m_339A63DB": var(30, true),
+                "m_C78954CB": case["reverse"],
+                "m_A53FE9DA": case["fail"],
+                "m_condition":{"$":"STU_919FD47C","m_expression":{
+                    "m_dynamicVars": [var(29, true), var(12, false)],
+                    "m_opcodes": [8, 0, 13, 1, 17, 0]
+                }},
+                "m_outPlug":plug(&[(2,"m_inPlug")],&[]),
+            }),
+        );
+        cycle["fields"]["m_ADEB6E05"] = json!(true);
+        let graphs = Arc::new(store(vec![graph(
+            39,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({"m_outPlug":plug(&[(1,"m_inPlug")],&[])}),
+                ),
+                cycle,
+                node(
+                    2,
+                    "STUStatescriptActionSetVar",
+                    None,
+                    json!({
+                        "m_out_Var":var(88, true), "m_value":true
+                    }),
+                ),
+            ],
+            json!([]),
+            json!([0]),
+        )]));
+        let vars = Variables::from([
+            (
+                29,
+                Value::Array(
+                    available
+                        .iter()
+                        .map(|item| Value::Bool(item.as_bool().unwrap()))
+                        .collect(),
+                ),
+            ),
+            (30, Value::Integer(case["start"].as_i64().unwrap())),
+        ]);
+        let component = Component::start(
+            graphs,
+            0xa000_0101,
+            vars,
+            vec![Root::new(1, 39)],
+            0,
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        let snapshot = component.snapshot().unwrap();
+        assert!(
+            snapshot.initialization_complete(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        assert_eq!(snapshot.variables[&88], Value::Bool(true));
+        assert_eq!(
+            snapshot.variables[&30],
+            Value::Integer(case["expected"].as_i64().unwrap()),
+            "{}",
+            case["name"]
+        );
+    }
+}

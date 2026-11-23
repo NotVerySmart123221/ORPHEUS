@@ -3929,6 +3929,9 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                 assert!(!snapshot.diagnostics.iter().any(|d| {
                     matches!(&d.issue, crate::script_init::Issue::Expression(crate::script_expr::EvalError::UnsupportedConfig(class)) if matches!(class.as_str(), "STU_DF7C7C63" | "STU_250DEABD" | "STUConfigVarAnimation"))
                 }), "{:?}", snapshot.diagnostics);
+                assert!(!snapshot.diagnostics.iter().any(|diagnostic| {
+                    matches!(&diagnostic.issue, crate::script_init::Issue::UnsupportedAction(class) if class == "STU_BC5E4622")
+                }), "{:?}", snapshot.diagnostics);
             }
         }
     }

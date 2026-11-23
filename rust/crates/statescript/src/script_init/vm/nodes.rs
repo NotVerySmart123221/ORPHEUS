@@ -390,6 +390,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
+            "STU_BC5E4622" if node.is_action() && node.remote == -1 => {
+                self.cycle_index(id, node, depth)
+            }
             "STUStatescriptActionSetVar" => {
                 if !self.store(id, node, &node.fields, true)? {
                     return Ok(false);
@@ -980,6 +983,66 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(false)
             }
         }
+    }
+
+    fn cycle_index(&mut self, id: u16, node: &Node, depth: usize) -> Result<bool, InitFault> {
+        let site = self.site(id, node);
+        let destination = match script_expr::dynamic(field(&node.fields, "m_339A63DB")) {
+            Ok(Some(variable)) => source_key(id, variable),
+            Ok(None) => return self.follow(id, node, "m_outPlug", None, depth),
+            Err(error) => {
+                self.report(site, Issue::Expression(error));
+                return Ok(false);
+            }
+        };
+        let Some(count) = self.evaluate(id, node, field(&node.fields, "m_D10618D1"), None) else {
+            return Ok(false);
+        };
+        let count = script_expr::to_int(&count, 0);
+        let mut selected = None;
+        if count > 0 {
+            let Some(backwards) = self.evaluate(id, node, field(&node.fields, "m_C78954CB"), None)
+            else {
+                return Ok(false);
+            };
+            let step = if truthy(&backwards) { -1 } else { 1 };
+            let mut candidate =
+                script_expr::to_int(&self.machine.value(destination, None), 0).clamp(0, count - 1);
+            for _ in 0..count {
+                self.spend("cycle index candidate")?;
+                candidate = (candidate + step).rem_euclid(count);
+                let condition = field(&node.fields, "m_condition");
+                let accepted = self.with_instance_context(site, None, |context| {
+                    context.cycle_candidate = Some(candidate);
+                    script_expr::evaluate(condition, context)
+                });
+                match accepted {
+                    Ok(value) if truthy(&value) => {
+                        selected = Some(candidate);
+                        break;
+                    }
+                    Ok(_) => (),
+                    Err(error) => {
+                        self.report(site, Issue::Expression(error));
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        let index = match selected {
+            Some(index) => index,
+            None if field(&node.fields, "m_A53FE9DA").is_null() => -1,
+            None => {
+                let Some(failed) = self.evaluate(id, node, field(&node.fields, "m_A53FE9DA"), None)
+                else {
+                    return Ok(false);
+                };
+                script_expr::to_int(&failed, -1)
+            }
+        };
+        self.write(destination, Value::Integer(index))?;
+        self.follow(id, node, "m_outPlug", None, depth)?;
+        Ok(true)
     }
 
     pub(super) fn assignment_value(

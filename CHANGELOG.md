@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Implement the shared StateScript CycleIndex action used by weapon cycling and the emote weapon branch. Evaluate each wrapped candidate in its own predicate context and preserve the authored fallback and output. Passed 512 server and 302 StateScript library tests, Clippy, and the prepared 104319 wheel replay. Four independent emote presentation states remain unsupported.
+
 - Resolve equipped emote animation aliases and blend trees from optional local untagged emote tables. The shared cosmetic query rejects unavailable owners and uses the same slot rules for sprays and emotes. The prepared 104319 wheel replay starts the authored emote graph and verifies the equipped blend tree was bound. Passed 512 server, 301 StateScript and 10 runtime library tests and Clippy. Emote presentation still reaches unsupported native states and an action.
 
 - Resolve equipped communication wheel voice slots from optional local voice effect metadata. Recognize the authored pulse by its client branch shape and reuse the skin-aware actor voice catalog and reliable room cue queue. An admitted room cue suppresses the matching client pulse. Passed 512 server, 300 StateScript and 10 runtime library tests, Clippy, and the prepared 104319 voice wheel replay with both optional catalogs.

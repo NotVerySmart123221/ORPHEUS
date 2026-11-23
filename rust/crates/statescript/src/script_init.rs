@@ -523,6 +523,7 @@ impl Component {
             },
             reads: Vec::new(),
             foreign_reads: Vec::new(),
+            cycle_candidate: None,
             parameters: None,
             health_target_facts: None,
             observed_sample: None,

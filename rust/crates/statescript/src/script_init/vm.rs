@@ -2546,6 +2546,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             reads: Vec::new(),
             foreign_reads: Vec::new(),
             parameters: self.parameters.as_deref(),
+            cycle_candidate: None,
             health_target_facts: self.health_context.target_facts.as_deref(),
             observed_sample: self
                 .observed_input
