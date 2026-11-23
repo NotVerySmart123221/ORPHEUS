@@ -571,24 +571,21 @@ impl RoomSimulation {
         }
         let owner = player.owner;
         let listener = player.id;
-        if let Some(target) = self.authored_elimination_target(victim_wire) {
-            if let Some(mut player) = self.world.get_mut::<PlayerBodyState>(entity) {
-                if let Some(runtime) = &mut player.runtime {
-                    let _ = runtime.receive_authored_elimination_feedback(target.into());
-                }
-            }
+        let target = self.authored_elimination_target(victim_wire);
+        let Some(mut player) = self.world.get_mut::<PlayerBodyState>(entity) else {
+            return;
+        };
+        if let Some((target, runtime)) = target.zip(player.runtime.as_mut()) {
+            let _ = runtime.receive_authored_elimination_feedback(target.into());
         }
         if self.combat_voice.is_empty() {
             return;
         }
         let window = self.combat_voice.multikill_window_ticks();
-        let streak = self
-            .elimination_streaks
-            .entry(killer_wire)
-            .or_insert(EliminationStreak {
-                last_frame: frame,
-                count: 0,
-            });
+        let streak = player.elimination_streak.get_or_insert(EliminationStreak {
+            last_frame: frame,
+            count: 0,
+        });
         let Some(gap) = frame.checked_sub(streak.last_frame) else {
             // Older settlements cannot rewind the announcer's window.
             return;

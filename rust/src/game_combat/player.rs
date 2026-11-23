@@ -6,9 +6,9 @@ use bevy_ecs::component::Component;
 
 use crate::{
     game_combat::{
-        AdmittedFlight, AppliedDamage, BioticField, BotHit, CombatError, HealingPulse,
-        HealthDamageEvidence, HealthEventContext, PosedHitscan, RoomSimulation, SampledBody,
-        eligible_target, eye_height, script_eye_position,
+        AdmittedFlight, AppliedDamage, BioticField, BotHit, CombatError, EliminationStreak,
+        HealingPulse, HealthDamageEvidence, HealthEventContext, PosedHitscan, RoomSimulation,
+        SampledBody, eligible_target, eye_height, script_eye_position,
     },
     game_combat_messages::CombatNotice,
     game_hitscan::{HurtPose, Impact, TargetHistory, TargetPose, ViewFrame},
@@ -68,6 +68,7 @@ pub(crate) struct PlayerBodyState {
     pub(crate) team: u8,
     pub(crate) hero: u64,
     pub(super) body_template: u64,
+    pub(super) elimination_streak: Option<EliminationStreak>,
     pub(crate) mover: Mover,
     pub(crate) history: TargetHistory,
     pub(crate) runtime: Option<Box<dyn OwnerBodyRuntime>>,
@@ -99,6 +100,7 @@ impl PlayerBodyState {
             team,
             hero,
             body_template: 0,
+            elimination_streak: None,
             mover,
             history: TargetHistory::new(None),
             runtime,

@@ -793,7 +793,8 @@ fn multikill_window_is_unchanged_by_an_older_elimination() {
     )
     .unwrap();
     let mut room = RoomSimulation::new(Vec::new()).unwrap();
-    let killer = spawn_player(&mut room, 1).entity;
+    let body = spawn_player(&mut room, 1);
+    let killer = body.entity;
     room.set_combat_voice(Arc::new(catalog));
     let effective = stamp("expired window");
     let older = stamp("older damage arriving late");
@@ -814,6 +815,18 @@ fn multikill_window_is_unchanged_by_an_older_elimination() {
         })
         .collect();
     assert_eq!(lines, [301, 302]);
+
+    assert!(room.retire_player_body(body));
+    let reuse = &contract["body_reuse"];
+    let replacement = spawn_player(&mut room, reuse["generation"].as_u64().unwrap());
+    assert_eq!(replacement.entity, killer);
+    room.record_enemy_elimination(killer, 65, 1, reuse["first_kill"].as_u64().unwrap() as u32);
+    assert!(room.take_player_cues().is_empty());
+    room.record_enemy_elimination(killer, 66, 1, reuse["second_kill"].as_u64().unwrap() as u32);
+    let cues = room.take_player_cues();
+    assert!(
+        matches!(&cues[..], [cue] if matches!(cue.notice, CombatNotice::Voice { line: 301, .. }) && cue.listener == replacement)
+    );
 }
 
 #[test]
