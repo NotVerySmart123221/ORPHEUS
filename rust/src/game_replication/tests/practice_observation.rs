@@ -175,11 +175,24 @@ fn prepare_owner(
 #[test]
 #[ignore = "requires the target-tagged 104319 Practice Range runtime"]
 fn prepared_final_blow_effect_survives_owner_egress_loss() {
+    exercise_final_blow_effect(false);
+}
+
+#[test]
+#[ignore = "requires the target-tagged 104319 Practice Range runtime"]
+fn prepared_projectile_final_blow_effect_survives_owner_egress_loss() {
+    exercise_final_blow_effect(true);
+}
+
+fn exercise_final_blow_effect(projectile: bool) {
     use crate::{
         game_bots::BOT_ENTITY,
         game_clock::TICK_PERIOD,
-        game_combat::ShotContext,
+        game_combat::{AdmittedFlight, FlightOutcome, ShotContext},
         game_hitscan::{DamageTags, HitDefinition},
+        game_projectiles::{OwnerProjectiles, ProjectileLeases},
+        projectile_flight::{ProjectileBallistics, ProjectileFlight},
+        script_init::ShotEvent,
         script_stream::OWNER_SETTLE_FRAMES,
     };
 
@@ -243,41 +256,104 @@ fn prepared_final_blow_effect_survives_owner_egress_loss() {
     let settle = |scene: &mut PreparedScene, tick, amount, killed| {
         let (simulation, queries) = scene.bot_simulation();
         simulation.activate_combat();
-        let hit = simulation
-            .hitscan(
-                &queries,
-                PosedHitscan {
-                    source: id.entity,
-                    command: Command {
+        let context = ShotContext {
+            team: 0,
+            quanta: RETAIL_QUANTA,
+            tick,
+            now: tick * TICK_PERIOD,
+        };
+        let hit = HitDefinition {
+            amount,
+            tags: DamageTags::EMPTY,
+            loadout: None,
+            critical: 1.0,
+            falloff: None,
+        };
+        let origin = [x, y + 1.0, z];
+        let direction = [-1.0, 0.0, 0.0];
+        let settled = if projectile && killed {
+            let template = 1;
+            let leases = ProjectileLeases::new(0, tick, [template]).unwrap();
+            let token = OwnerProjectiles::new(id.entity, leases)
+                .admit(
+                    ShotEvent {
+                        entity: id.entity,
+                        instance: 1,
+                        graph: 1,
+                        raw_state: 0,
                         frame: tick,
-                        ..Command::default()
+                        time_ms: 0,
+                        activation: 1,
+                        activation_ms: 0,
+                        ordinal: 0,
                     },
-                    shot_frame: tick,
-                    origin: [x, y + 1.0, z],
-                    direction: [-1.0, 0.0, 0.0],
-                    reach: 8.0,
-                    hit: HitDefinition {
-                        amount,
-                        tags: DamageTags::EMPTY,
-                        loadout: None,
-                        critical: 1.0,
-                        falloff: None,
-                    },
+                    template,
+                    3,
+                )
+                .unwrap();
+            let flight = ProjectileFlight::new(
+                ProjectileBallistics {
+                    speed: 300.0,
+                    lifetime: 0.03,
+                    max_distance: None,
+                    radius: 0.0,
+                    terrain_radius: 0.0,
+                    definition: Some(template),
+                    direct: Some(hit),
+                    blast: None,
+                    terrain_rebound: None,
                 },
-                ShotContext {
-                    team: 0,
-                    quanta: RETAIL_QUANTA,
-                    tick,
-                    now: tick * TICK_PERIOD,
-                },
-                |entity| entity == target,
+                origin,
+                direction,
+                None,
             )
-            .unwrap()
-            .expect("hit the stationary target");
+            .unwrap();
+            let (outcomes, mut hits) = simulation
+                .advance_projectiles(
+                    &queries,
+                    1,
+                    id,
+                    vec![AdmittedFlight {
+                        token,
+                        flight,
+                        stun: None,
+                        hit_effect: None,
+                    }],
+                    context,
+                )
+                .unwrap();
+            assert!(matches!(
+                outcomes.as_slice(),
+                [FlightOutcome::Ended { token: settled, impact: true, .. }] if *settled == token
+            ));
+            assert_eq!(hits.len(), 1);
+            hits.remove(0)
+        } else {
+            simulation
+                .hitscan(
+                    &queries,
+                    PosedHitscan {
+                        source: id.entity,
+                        command: Command {
+                            frame: tick,
+                            ..Command::default()
+                        },
+                        shot_frame: tick,
+                        origin,
+                        direction,
+                        reach: 8.0,
+                        hit,
+                    },
+                    context,
+                    |entity| entity == target,
+                )
+                .unwrap()
+                .expect("hit the stationary target")
+        };
         assert!(matches!(
-            hit.notices[0],
-            Some(crate::game_combat_messages::CombatNotice::Hit { killed: observed, .. })
-                if observed == killed
+            settled.notices[0],
+            Some(crate::game_combat_messages::CombatNotice::Hit { target: hit_target, killed: observed, .. })
+                if hit_target == target && observed == killed
         ));
     };
 

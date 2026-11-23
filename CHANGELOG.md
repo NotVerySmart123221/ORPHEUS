@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Extend the prepared final-blow presentation regression to a projectile flight. Both a hitscan final blow and a projectile that collides with the training bot queue one owner effect and retain it through a lost delivery.
+
 - Verify final-blow presentation through prepared practice-room damage, the player's running VM, and normal owner egress. A lost packet leaves the cue unacknowledged. Recovery acknowledges the same single action, and a nonlethal hit produces no elimination action.
 
 - Add the Inspector option `ORPHEUS_PLAYTEST_ELIMINATION=1` to queue the authored elimination effect on a room-confirmed enemy final blow. Select the shared receiver by its message contracts, and give it the defeated body's settled tag data. Passed 520 Inspector library tests and the prepared 104319 checks for shared effect selection and stationary-bot hits over encrypted UDP. Original-client playback, assist credit, the other elimination audio layers, and authentic multikill timing still need verification.
