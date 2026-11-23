@@ -3128,6 +3128,15 @@ impl RoomSimulation {
                 Ok(Some(end)) => {
                     let source = projectile.source;
                     let team = projectile.team;
+                    #[cfg(feature = "inspector")]
+                    crate::owner_trace::playtest(format_args!(
+                        "npc-projectile event=ended source={source:08x} tick={tick} contact={:?} point={:?} travelled_s={} expired={} impacts={}",
+                        end.contact,
+                        end.point,
+                        end.travelled,
+                        end.expired,
+                        end.impacts.len()
+                    ));
                     if end.expired {
                         if let Some(split) = projectile.split.take() {
                             children.extend(split.launch(source, team, end.point, tick));
@@ -3155,7 +3164,13 @@ impl RoomSimulation {
                         }
                     }
                 }
-                Err(_) => {}
+                Err(_error) => {
+                    #[cfg(feature = "inspector")]
+                    crate::owner_trace::playtest(format_args!(
+                        "npc-projectile event=failed source={:08x} tick={tick} reason={_error:?}",
+                        projectile.source
+                    ));
+                }
             }
             self.complete_observed_projectile(handle, tick);
             self.world.despawn(handle);

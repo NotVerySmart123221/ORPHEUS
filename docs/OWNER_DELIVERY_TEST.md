@@ -171,6 +171,12 @@ fallback. `cache_source` identifies a core mesh, hull, or map placement.
 Placement hits report the cache placement index, model index and mode group.
 Actor hits carry the target entity.
 
+For a training-bot shot that appears to pass through an actor, the playtest
+capture records `npc-projectile event=ended` with the shooter, terminal point,
+direct contact entity, and flight time. Match the contact against the room's
+damage settlement. A missing direct contact can be a terrain impact or an
+expiry. The separate failure record identifies a rejected collision query.
+
 For the prepared 104319 Practice Range cache, the main mesh has 51,276
 triangles in the movement cache and 312,867 in the expanded cache. The
 current weapon query category (`0x18`) selects the same 51,276 main-mesh

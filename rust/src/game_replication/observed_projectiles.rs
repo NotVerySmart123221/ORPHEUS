@@ -332,7 +332,7 @@ impl WorldDelivery {
                     // A launch can already be visible while its ACK is outstanding.
                     // Stop retrying it once the whole volley is due for retirement.
                     // Until then, a retry still needs every referenced entity.
-                    !live
+                    (!live && sent_at.is_none())
                         || expired
                         || sent_at.zip(completed).is_some_and(|(sent_at, end)| {
                             tick >= sent_at.saturating_add(end.saturating_sub(view.shot.launched))
@@ -341,12 +341,12 @@ impl WorldDelivery {
                 Phase::Visible { sent_at } => {
                     // The client can start tracing the projectile on receipt,
                     // before this room processes the packet acknowledgement.
-                    if !live || tick > sent_at {
+                    if tick > sent_at {
                         let through = view
                             .shot
                             .launched
                             .saturating_add(tick.saturating_sub(sent_at));
-                        view.retire(through, !live, &mut queue);
+                        view.retire(through, false, &mut queue);
                     }
                     false
                 }
@@ -490,19 +490,27 @@ mod tests {
 
     #[test]
     fn remote_projectiles_wait_for_creates_and_the_exact_volley_then_retry_launch() {
-        check_remote_projectile_delivery(true);
+        check_remote_projectile_delivery(true, false);
     }
 
     #[test]
     fn completed_remote_volley_retires_with_launch_ack_outstanding() {
-        check_remote_projectile_delivery(false);
+        check_remote_projectile_delivery(false, false);
     }
 
-    fn check_remote_projectile_delivery(ack_launch: bool) {
+    #[test]
+    fn transmitted_remote_flights_outlive_their_retired_shooter() {
+        for ack_launch in [false, true] {
+            check_remote_projectile_delivery(ack_launch, true);
+        }
+    }
+
+    fn check_remote_projectile_delivery(ack_launch: bool, retire_source: bool) {
         #[derive(Deserialize)]
         struct Fixture {
             case_id: String,
             input: Input,
+            shooter_retirement_ticks_after_transmission: u32,
         }
         let fixture: Fixture = serde_json::from_str(include_str!(
             "../../../fixtures/behavior/observed-projectile-delivery-v1.json"
@@ -669,6 +677,19 @@ mod tests {
         ]);
         world.advance_observed_projectiles(finished).unwrap();
         assert!(outgoing(&mut world).is_empty());
+        if ack_launch {
+            acknowledge(&mut world, vec![Arc::clone(&replay)], true);
+        }
+        if retire_source {
+            world.bots.remove(&input.source);
+            if !ack_launch {
+                acknowledge(&mut world, vec![Arc::clone(&replay)], false);
+            }
+            let retirement_tick = retry_tick + fixture.shooter_retirement_ticks_after_transmission;
+            assert!(retirement_tick < retry_tick + input.early_contact_ticks);
+            world.advance_observed_projectiles(retirement_tick).unwrap();
+            assert!(outgoing(&mut world).is_empty());
+        }
         if !ack_launch {
             let retire = retry_tick + input.flight_ticks;
             world.advance_observed_projectiles(retire - 1).unwrap();
@@ -687,7 +708,6 @@ mod tests {
             assert!(world.observed_projectiles.reserved.is_empty());
             return;
         }
-        acknowledge(&mut world, vec![replay], true);
         let mut settled = newer.clone();
         world.observed_projectiles.retain_volleys(&mut settled);
         assert_eq!(settled, newer);

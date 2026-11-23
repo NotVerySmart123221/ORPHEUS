@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Keep transmitted NPC projectiles active when the shooter body retires. Observer delivery still retires them on flight completion and cancels launches that were never sent. The opt-in playtest capture records NPC projectile terminal points, direct contacts, and query failures. Passed 596 library tests, the prepared NPC interception replay, and Clippy.
+
 - Retire a dead bot's overhead nameplate from its observer projection while retaining the parent script for death presentation. Discard an unsent live introduction and retry removal in delivery order. Passed 595 library tests, the prepared encrypted nameplate replay and respawn-presentation check, and Clippy.
 
 - Keep the owner StateScript running through repeated greetings and healing callouts. Sample the authored eye origin and heading for target tracking, and deliver parameterless routed notifications to their local listeners when no room route is available. Passed 899 library tests, the prepared 104319 wheel replay, and Clippy.
