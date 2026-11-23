@@ -3481,7 +3481,7 @@ fn prepared_shared_combat_graph_projects_hit_and_elimination_effects() {
 #[ignore = "requires a tagged separately prepared 104319 statescript catalog"]
 fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
     use crate::{
-        collision_cache::CollisionCache,
+        collision_cache::{CollisionCache, Mesh, Triangle},
         contact_world::ContactWorld,
         game_clock::FIRST_TICK,
         game_combat::{PlayerBodyState, RoomSimulation},
@@ -3491,6 +3491,7 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
         jam_codec::{Fields, Value as WireValue},
         mover_settings::MoverSettings,
         script_graph::RoomSpatialNeeds,
+        script_init::StateKind,
     };
 
     let root = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
@@ -3506,16 +3507,31 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
         })
         .unwrap()
     };
+    let spray_fixture: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/spray-surface-placement-v1.json"
+    ))
+    .unwrap();
+    let spray_input = &spray_fixture["input"];
+    let vector = |value: &Json| std::array::from_fn(|axis| value[axis].as_f64().unwrap());
     for with_room in [false, true] {
         let (component, mut world) = prepared_soldier_component(Arc::clone(&graphs), true);
         if with_room {
             let ground = CollisionScene::movement_probe(
                 &CollisionCache {
                     header: serde_json::from_str(
-                        r#"{"meshes":[],"hulls":0,"models":0,"placements":0,"identifiers":[]}"#,
+                        r#"{"meshes":[[6,2]],"hulls":0,"models":0,"placements":0,"identifiers":[]}"#,
                     )
                     .unwrap(),
-                    meshes: Vec::new(),
+                    meshes: vec![Mesh {
+                        vertices: ["excluded_wall_z", "spray_wall_z"].into_iter().flat_map(|key| {
+                            let z = spray_input[key].as_f64().unwrap() as f32;
+                            [[-4.0, 0.0, z], [-4.0, 8.0, z], [4.0, 0.0, z]]
+                        }).collect(),
+                        triangles: vec![
+                            Triangle { corners: [0,1,2], wings: [-1;3], mask: 0x18, surface: 0 },
+                            Triangle { corners: [3,4,5], wings: [-1;3], mask: 0x40, surface: 0 },
+                        ],
+                    }],
                     hulls: Vec::new(),
                     models: Vec::new(),
                     placements: Vec::new(),
@@ -3662,22 +3678,72 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
         let spray = 0x0a90_0000_0000_01a4;
         if with_room && graphs.has_asset_category_entry(spray) {
             runtime.set_equipped_sprays([0, 0, 0x0250_0000_0000_0009, 0]);
+            runtime.world.eye_position = Some(vector(&spray_input["eye"]));
+            runtime.world.movement.yaw = 0;
+            runtime.world.movement.pitch = 0;
+
             assert_eq!(runtime.queue_wheel_selection(request(spray)).unwrap(), 2);
             runtime
                 .component
                 .advance_frame(FIRST_TICK + 2, &mut runtime.world)
                 .unwrap();
             let snapshot = runtime.component.snapshot().unwrap();
-            let spray_wheel = snapshot
+            let (&spray_instance, spray_wheel) = snapshot
                 .instances
-                .values()
-                .find(|instance| instance.graph == 0x02cf)
+                .iter()
+                .find(|(_, instance)| instance.graph == 0x02cf)
                 .unwrap();
             assert_eq!(
                 spray_wheel.variables.get(&9259),
                 Some(&Value::Integer(2)),
                 "{:?}",
                 snapshot.diagnostics
+            );
+            let hit = spray_wheel
+                .states
+                .values()
+                .find_map(|state| match state.kind {
+                    StateKind::SprayPlacement(Some(hit)) if state.active => Some(hit),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing spray placement: {:?}", snapshot.diagnostics));
+            assert_eq!(hit.point, vector(&spray_fixture["expected"]["point"]));
+            assert_eq!(hit.normal, vector(&spray_fixture["expected"]["normal"]));
+            assert_eq!(hit.direction, vector(&spray_input["direction"]));
+            for diagnostic in snapshot
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.site.graph == 0x02cf)
+            {
+                eprintln!(
+                    "spray path {:?}: {:?}",
+                    diagnostic.site.node, diagnostic.issue
+                );
+            }
+            runtime.world.movement.yaw = 32768;
+            // Reopen the authored admission flag to exercise a second placement attempt.
+            runtime
+                .component
+                .set_instance_variable(spray_instance, 61, Value::Bool(false), &mut runtime.world)
+                .unwrap();
+            assert_eq!(runtime.queue_wheel_selection(request(spray)).unwrap(), 2);
+            runtime
+                .component
+                .advance_frame(FIRST_TICK + 3, &mut runtime.world)
+                .unwrap();
+            assert!(
+                runtime
+                    .component
+                    .snapshot()
+                    .unwrap()
+                    .instances
+                    .values()
+                    .find(|instance| instance.graph == 0x02cf)
+                    .unwrap()
+                    .states
+                    .values()
+                    .all(|state| !state.active
+                        || !matches!(state.kind, StateKind::SprayPlacement(_)))
             );
         }
     }

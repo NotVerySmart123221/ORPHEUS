@@ -1216,6 +1216,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             if kind == StateKind::ForCode {
                 self.publish_for_code(key, node)?;
             }
+            if matches!(kind, StateKind::SprayPlacement(_)) {
+                if let Some(state) = self.state_mut(key) {
+                    state.activation = state.activation.wrapping_add(1);
+                }
+                return self.place_spray(key, node, depth);
+            }
             if kind == StateKind::ExplosionContact {
                 self.refresh_contact(key, node)?;
             }
@@ -1506,6 +1512,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::Wait
             }
             "STUStatescriptStateShockwave" => StateKind::Shockwave { managed: false },
+            "STU_861D9015" => StateKind::SprayPlacement(None),
             "STU_4C96470A" => StateKind::PlacementSelector {
                 confirmed: false,
                 sampled: false,
@@ -1853,6 +1860,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             StateKind::ModifyHealth => self.begin_npc_health_change(key, node)?,
             StateKind::Shockwave { .. } => self.begin_shockwave(key, node)?,
             StateKind::PlacementSelector { .. } => self.begin_placement_selector(key, node)?,
+            StateKind::SprayPlacement(_) => self.place_spray(key, node, depth)?,
             StateKind::MoveTo { .. } => self.begin_move_to(key, node)?,
             StateKind::ShieldRecharge => self.begin_shield_recharge(key, node)?,
             StateKind::NamedShieldDecay => {

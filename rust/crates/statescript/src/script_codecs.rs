@@ -518,6 +518,7 @@ enum Family {
     LinkedTarget,
     Counter2,
     Pulser,
+    SprayPlacement,
 }
 
 impl Family {
@@ -544,6 +545,7 @@ impl Family {
             "linked_target" => Self::LinkedTarget,
             "counter2" => Self::Counter2,
             "pulser" => Self::Pulser,
+            "861D9015" => Self::SprayPlacement,
             _ => return None,
         })
     }
@@ -634,12 +636,65 @@ fn project(
                 fields.insert("values", FieldValue::Rows(vec![LayoutFields::new(); 7]));
             }
         }
+        Family::SprayPlacement => project_spray(&mut fields, &vm)?,
         Family::Pulser => {
             fields.insert("fresh", Value::Bool(vm.flag("fresh")).into());
             fields.insert("count", Value::Integer(vm.integer("count", 0)?).into());
         }
     }
     Ok(fields)
+}
+
+fn project_spray(fields: &mut LayoutFields<'static>, vm: &Vm<'_>) -> Result<(), PayloadError> {
+    if vm.0.is_empty() {
+        fields.insert("a", Value::Bool(false).into());
+        return Ok(());
+    }
+    let vector = |field| -> Result<[f32; 3], PayloadError> {
+        let Some(Value::Vector(value)) = vm.0.get(field) else {
+            return Err(invalid_field(field));
+        };
+        let vector = value.map(|value| value as f32);
+        vector
+            .iter()
+            .all(|part| part.is_finite())
+            .then_some(vector)
+            .ok_or_else(|| invalid_field(field))
+    };
+    let angles = |[x, y, z]: [f32; 3]| {
+        let yaw = if x == 0.0 && z == 0.0 {
+            0.0
+        } else {
+            f64::from(x).atan2(f64::from(z))
+        };
+        let pitch = if y.abs() > 0.999_845_5 {
+            std::f64::consts::FRAC_PI_2.copysign(f64::from(y))
+        } else {
+            f64::from(y).asin()
+        };
+        let quantize = |angle: f64, scale: f32| {
+            (32768.0 + (angle as f32 * scale).round()).clamp(0.0, 65535.0) as u32
+        };
+        [quantize(yaw, 10430.378), quantize(pitch, 20860.756)]
+    };
+    let [yaw, pitch] = angles(vector("direction")?);
+    let point = vector("point")?.map(f32::to_bits);
+    let [normal_yaw, normal_pitch] = angles(vector("normal")?);
+    fields.insert("a", Value::Bool(true).into());
+    for (key, value) in ["v0", "v1", "v2", "v3", "v4", "v5", "v6"].into_iter().zip([
+        yaw,
+        pitch,
+        point[0],
+        point[1],
+        point[2],
+        normal_yaw,
+        normal_pitch,
+    ]) {
+        fields.insert(key, FieldValue::Unsigned(u64::from(value)));
+    }
+    fields.insert("has_entity", Value::Bool(false).into());
+    fields.insert("g", Value::Bool(false).into());
+    Ok(())
 }
 
 fn project_volley(
@@ -771,6 +826,61 @@ fn elapsed(frame_time: i64, frame_ms: u32, last: i64) -> Result<i64, PayloadErro
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn static_spray_payload_matches_verified_field_layout() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../fixtures/behavior/spray-surface-placement-v1.json"
+        )))
+        .unwrap();
+        let table = CodecTable::from_json(r#"{"classes":{"861D9015":{
+            "name":"STU_861D9015","stec":false,"status":"VERIFIED","codec":"861D9015","layout":[
+                {"op":"bits","n":1,"f":"a"},{"op":"if","c":"a","then":[
+                    {"op":"bits","n":16,"f":"v0"},{"op":"bits","n":16,"f":"v1"},
+                    {"op":"bits","n":32,"f":"v2"},{"op":"bits","n":32,"f":"v3"},{"op":"bits","n":32,"f":"v4"},
+                    {"op":"bits","n":16,"f":"v5"},{"op":"bits","n":16,"f":"v6"},
+                    {"op":"bits","n":1,"f":"has_entity"},{"op":"bits","n":1,"f":"g"}
+                ],"else":[]}
+            ]
+        }}}"#).unwrap();
+        let codec = table.codec("STU_861D9015").unwrap();
+        let vector = |parts: &serde_json::Value| {
+            Value::Vector(std::array::from_fn(|axis| parts[axis].as_f64().unwrap()))
+        };
+        let payload = StatePayload::from([
+            ("direction".into(), vector(&fixture["input"]["direction"])),
+            ("point".into(), vector(&fixture["expected"]["point"])),
+            ("normal".into(), vector(&fixture["expected"]["normal"])),
+        ]);
+        let expected = fixture["expected"]["payload_hex"].as_str().unwrap();
+        for full in [false, true] {
+            for mode in [
+                PayloadMode::Remote { full },
+                PayloadMode::Owner {
+                    full,
+                    frame_time: 0,
+                    frame_ms: 16,
+                },
+            ] {
+                let encoded = codec.payload(&payload, mode).unwrap();
+                let hex: String = encoded
+                    .as_bytes()
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect();
+                assert_eq!(hex, expected);
+                assert_eq!(
+                    encoded.bit_len() as u64,
+                    fixture["expected"]["bits"].as_u64().unwrap()
+                );
+                assert_eq!(
+                    codec.payload(&StatePayload::new(), mode).unwrap().bit_len(),
+                    1
+                );
+            }
+        }
+    }
+
     use super::*;
     use serde_json::json;
 

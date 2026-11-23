@@ -642,6 +642,7 @@ fn state_kind_summary(kind: StateKind) -> (&'static str, Option<u8>) {
         StateKind::ProjectedSelfSend => ("ProjectedSelfSend", None),
         StateKind::PersistentSend(_) => ("PersistentSend", None),
         StateKind::CosmeticEntity => ("CosmeticEntity", None),
+        StateKind::SprayPlacement(_) => ("SprayPlacement", None),
         StateKind::ChaseVar => ("ChaseVar", None),
         StateKind::Watch => ("Watch", None),
         StateKind::Observe { .. } => ("Observe", None),

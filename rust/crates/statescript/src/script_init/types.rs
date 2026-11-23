@@ -25,6 +25,13 @@ use super::{
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SprayPlacement {
+    pub point: [f64; 3],
+    pub normal: [f64; 3],
+    pub direction: [f64; 3],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StateKind {
     RollMovementParameter,
     ExplosionContact,
@@ -136,6 +143,7 @@ pub enum StateKind {
     ProjectedSelfSend,
     PersistentSend(u64),
     CosmeticEntity,
+    SprayPlacement(Option<SprayPlacement>),
     ChaseVar,
     Watch,
     Observe {

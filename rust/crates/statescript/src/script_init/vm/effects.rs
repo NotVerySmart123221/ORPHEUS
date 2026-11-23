@@ -31,6 +31,46 @@ use super::super::{
 use super::Vm;
 
 impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
+    pub(in crate::script_init) fn place_spray(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+        depth: usize,
+    ) -> Result<(), InitFault> {
+        let unlock = self.evaluate(key.instance, node, field(&node.fields, "m_E441DC25"), None);
+        let reach = self
+            .evaluate(key.instance, node, field(&node.fields, "m_7F47658A"), None)
+            .as_ref()
+            .map_or(0.0, script_expr::to_float);
+        let valid = matches!(unlock, Some(Value::Asset(asset)) if asset >> 48 == 0x0250 && asset & 0x0000_ffff_ffff_ffff != 0)
+            && reach.is_finite()
+            && reach > 0.0;
+        let placement = if valid {
+            match self.world.spray_placement(reach) {
+                Some(hit) => hit,
+                None => {
+                    self.report(self.site(key.instance, node), Issue::ObservationUnavailable);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        if let Some(state) = self.state_mut(key) {
+            state.kind = StateKind::SprayPlacement(placement);
+        }
+        let plug = if placement.is_some() {
+            "m_A39D2005"
+        } else {
+            "m_9254FB21"
+        };
+        self.follow(key.instance, node, plug, Some(key), depth)?;
+        if placement.is_none() {
+            self.post(key.instance, Event::Abort(key.raw))?;
+        }
+        Ok(())
+    }
+
     pub(in crate::script_init) fn begin_target_tag(
         &mut self,
         key: StateKey,

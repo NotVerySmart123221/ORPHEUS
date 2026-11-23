@@ -168,6 +168,13 @@ pub(super) struct BodyWorld {
 }
 
 impl World for BodyWorld {
+    fn spray_placement(&self, reach: f64) -> Option<Option<crate::script_init::SprayPlacement>> {
+        let direction = direction_for_angles(self.movement.yaw, self.movement.pitch);
+        self.spatial_frame
+            .as_deref()?
+            .spray_placement(self.eye_position?, direction, reach)
+    }
+
     fn equipped_spray(&self, entity: u32, slot: usize) -> Option<u64> {
         if entity != self.entity && entity != self.controller {
             return None;

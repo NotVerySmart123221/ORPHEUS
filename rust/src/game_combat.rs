@@ -445,6 +445,24 @@ impl RoomSpatialFrame {
         Some(targets)
     }
 
+    pub(crate) fn spray_placement(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        reach: f64,
+    ) -> Option<Option<crate::script_init::SprayPlacement>> {
+        const SPRAY_SURFACE: u16 = 0x40;
+        self.ground
+            .checked_cast_ray(origin, direction, reach, SPRAY_SURFACE)
+            .map(|hit| {
+                hit.map(|hit| crate::script_init::SprayPlacement {
+                    direction,
+                    point: hit.point,
+                    normal: hit.normal,
+                })
+            })
+    }
+
     pub(crate) fn ray_cast(
         &self,
         site: crate::script_init::Site,

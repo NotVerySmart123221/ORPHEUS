@@ -2188,6 +2188,7 @@ impl GraphStore {
                     || node.directed_numeric_parameter().is_some()
                     || node.tracks_room_actor_identity()
                     || view_track.is_some()
+                    || node.class == "STU_861D9015"
                 {
                     requirements.needs = requirements.needs.max(RoomSpatialNeeds::Queries);
                 }

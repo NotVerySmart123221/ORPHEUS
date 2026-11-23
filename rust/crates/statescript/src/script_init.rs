@@ -245,6 +245,7 @@ mod voice;
 mod world;
 
 pub use knockback::Knockback;
+pub use types::SprayPlacement;
 pub use types::{
     AbilityCooldown, ChasePayload, Diagnostic, FrameAction, FrameCallout, InitFault, Instance,
     Issue, NodeObservations, PendingTimer, RandomCheckpoint, ReportedShot, ShotEvent, Snapshot,
