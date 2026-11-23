@@ -15,6 +15,13 @@
     "start_angles": [8192, 1024],
     "mouse_angles": [-16384, -2048]
   },
+  "rust_cosmetic_resource": {
+    "class": "STU_ABEDF4B8",
+    "graph": 61094,
+    "ready_plug": {"$": "STU_774760EA", "links": [], "m_FF3DAF1E": null},
+    "readiness_rva": "D3FC40",
+    "codec": "none"
+  },
   "rust_animation_mode": {
     "class": "STU_58E77FC5",
     "graph": 61093,

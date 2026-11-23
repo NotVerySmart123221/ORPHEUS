@@ -3013,17 +3013,36 @@ fn actual_shared_ui_graph_baselines_match_python() {
 }
 
 #[test]
-fn local_animation_mode_projects_only_owner_activation_and_removal() {
-    use crate::script_init::Component;
-    use std::sync::Arc;
-
+fn emote_presentation_projects_activation_and_removal_using_authored_scope() {
     let fixture: Json = serde_json::from_str(include_str!(
         "../../../fixtures/behavior/wheel-emote-presentation-v1.json"
     ))
     .unwrap();
-    let mode = &fixture["rust_animation_mode"];
+    check_emote_presentation_projection(&fixture["rust_animation_mode"], false, true);
+    let mut resource = fixture["rust_cosmetic_resource"].clone();
+    check_emote_presentation_projection(&resource, true, true);
+    resource["ready_plug"]["links"] = json!([[1, "m_abortPlug"]]);
+    check_emote_presentation_projection(&resource, true, false);
+}
+
+fn check_emote_presentation_projection(mode: &Json, observed: bool, supported: bool) {
+    use crate::script_init::Component;
+    use std::sync::Arc;
+
     let class = mode["class"].as_str().unwrap();
     let graph_id = u32::try_from(mode["graph"].as_u64().unwrap()).unwrap();
+    let fields = if observed {
+        json!({
+            "m_3DE788AE":mode["ready_plug"],
+            "m_18D94B00":{"$":"client_resource_expression"},
+        })
+    } else {
+        json!({"m_4DA577AC":{"$":"STUConfigVarInt","m_value":mode["literal_mode"]}})
+    };
+    let mut state = node(1, class, Some(0), fields);
+    if observed {
+        state["remote"] = json!(0);
+    }
     let graph = graph(
         graph_id,
         vec![
@@ -3033,16 +3052,11 @@ fn local_animation_mode_projects_only_owner_activation_and_removal() {
                 None,
                 json!({"m_outPlug":{"$":"Plug","links":[[1,"m_beginPlug"]],"m_FF3DAF1E":[]}}),
             ),
-            node(
-                1,
-                class,
-                Some(0),
-                json!({"m_4DA577AC":{"$":"STUConfigVarInt","m_value":mode["literal_mode"]}}),
-            ),
+            state,
         ],
         json!([1]),
         json!([0]),
-        json!([]),
+        if observed { json!([1]) } else { json!([]) },
         json!([]),
     );
     let graphs = Arc::new(
@@ -3055,7 +3069,7 @@ fn local_animation_mode_projects_only_owner_activation_and_removal() {
         .unwrap(),
     );
     let codecs = CodecTable::from_json(
-        &json!({"classes":{"58E77FC5":{
+        &json!({"classes":{(class.trim_start_matches("STU_")):{
             "name":class,"codec":mode["codec"],"stec":false,"status":"VERIFIED","layout":[],
         }}})
         .to_string(),
@@ -3073,17 +3087,30 @@ fn local_animation_mode_projects_only_owner_activation_and_removal() {
     )
     .unwrap();
     let snapshot = component.snapshot().unwrap();
+    if !supported {
+        assert!(matches!(
+            snapshot.diagnostics.as_slice(),
+            [Diagnostic { issue: Issue::UnsupportedState(rejected), .. }] if rejected == class
+        ));
+        assert!(snapshot.instances[&1].states.is_empty());
+        return;
+    }
     let owner = encoder.project(snapshot, View::Owner).unwrap();
     let state = &owner.instances[&1].states[&0];
     assert!(state.active && state.payload.is_empty() && state.link.is_none());
     let observer = encoder.project(snapshot, View::Observer).unwrap();
-    assert!(observer.instances[&1].states.is_empty());
+    assert_eq!(
+        observer.instances[&1].states.get(&0),
+        observed.then_some(state)
+    );
 
     component.debug_end_state(1, 0, &mut EmptyWorld).unwrap();
-    let owner = encoder
-        .project(component.snapshot().unwrap(), View::Owner)
-        .unwrap();
-    assert!(owner.instances[&1].states.is_empty());
+    for view in [View::Owner, View::Observer] {
+        let ended = encoder
+            .project(component.snapshot().unwrap(), view)
+            .unwrap();
+        assert!(ended.instances[&1].states.is_empty());
+    }
 }
 
 #[test]

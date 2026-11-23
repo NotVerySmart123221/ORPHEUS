@@ -16,14 +16,15 @@ use super::super::{
         array_field, array_insertion_index, case_path, configured, encounter_base_state_shape,
         equipped_voice_pulse_slot, excluded_target_tags, field, immediate_self_damage,
         is_bare_header_action, is_base_health_pool, is_cinematic_time_scale_envelope,
-        is_client_subgraph_controller, is_elapsed_wait, is_entry, is_horizontal_velocity_clamp,
-        is_literal_frame_wait, is_message_recipient_set, is_named_shield_decay,
-        is_networked_for_code_synced, is_owner_movement_sampler, is_parent_owned_timed_graph,
-        is_projected_self_message, is_self_shield_recharge, is_self_stat_timer, is_self_target,
-        is_stat_action, is_static_map_explosion, is_vertical_velocity_impulse, is_wave_health_pool,
-        living_body_array_shape, named_temporary_shield, parent_owned_graph_duration,
-        participant_filter, persistent_message, placement_collection_tag, pool_number, raw_indices,
-        registered_state, source_key, static_target_operand, stored,
+        is_client_subgraph_controller, is_elapsed_wait, is_empty_optional_plug, is_entry,
+        is_horizontal_velocity_clamp, is_literal_frame_wait, is_message_recipient_set,
+        is_named_shield_decay, is_networked_for_code_synced, is_owner_movement_sampler,
+        is_parent_owned_timed_graph, is_projected_self_message, is_self_shield_recharge,
+        is_self_stat_timer, is_self_target, is_stat_action, is_static_map_explosion,
+        is_vertical_velocity_impulse, is_wave_health_pool, living_body_array_shape,
+        named_temporary_shield, parent_owned_graph_duration, participant_filter,
+        persistent_message, placement_collection_tag, pool_number, raw_indices, registered_state,
+        source_key, static_target_operand, stored,
     },
     types::{InitFault, Issue, SpawnSearch, SpawnSearchKey, State, StateKind},
     world::{
@@ -1378,6 +1379,16 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             {
                 // 90CA80/90CDE0 set and clear a local animation mode. The
                 // owner's state stream carries activation with no payload.
+                StateKind::Plain
+            }
+            "STU_ABEDF4B8"
+                if registration.shape(is_empty_optional_plug(
+                    field(&node.fields, "m_3DE788AE"),
+                    "STU_774760EA",
+                )) =>
+            {
+                // D3FAB0/D3FC40 retain and poll client resources. Without a
+                // ready output, completing the request changes no graph state.
                 StateKind::Plain
             }
             "STUStatescriptStateAnimatedCamera"

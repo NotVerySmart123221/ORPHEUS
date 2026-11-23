@@ -681,8 +681,8 @@ pub(super) fn is_static_map_explosion(graph: &Graph, node: &Node, state: u16) ->
             || owner
                 .as_object()
                 .is_some_and(|item| item.len() == 1 && field(owner, "item").as_u64().is_some()))
-        && empty_explosion_plug(field(fields, "m_F198FD3A"), "STU_1CCEA5F7")
-        && empty_explosion_plug(field(fields, "m_subgraphPlug"), "STU_904BFCEC")
+        && is_empty_optional_plug(field(fields, "m_F198FD3A"), "STU_1CCEA5F7")
+        && is_empty_optional_plug(field(fields, "m_subgraphPlug"), "STU_904BFCEC")
         && explosion_position(position)
         && (direction.is_null() || explosion_direction(direction))
         && number(field(fields, "m_radius"))
@@ -698,7 +698,7 @@ pub(super) fn is_static_map_explosion(graph: &Graph, node: &Node, state: u16) ->
         && explosion_sync_matches(graph, fields)
 }
 
-fn empty_explosion_plug(config: &Json, class: &str) -> bool {
+pub(super) fn is_empty_optional_plug(config: &Json, class: &str) -> bool {
     let data = field(config, "m_FF3DAF1E");
     config.is_null()
         || (field(config, "$").as_str() == Some(class)

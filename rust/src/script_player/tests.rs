@@ -3512,6 +3512,26 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
             .filter(|&effect| catalog.equipped_options(SOLDIER, 0, effect).is_some())
             .min()
     });
+    let resource_graph = 0x1040;
+    if graphs.graph(resource_graph).is_some() {
+        let resource = Component::start(
+            Arc::clone(&graphs),
+            0xa000_0101,
+            Variables::new(),
+            vec![Root::listener(1, resource_graph, Some(0))],
+            0,
+            &mut crate::script_init::EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        let snapshot = resource.snapshot().unwrap();
+        assert!(
+            snapshot.diagnostics.is_empty(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        assert!(snapshot.instances[&1].states[&0].active);
+    }
     let action = 0x0a90_0000_0000_0171;
     let request = |action| {
         ClientWheelAction::read(&Message {
