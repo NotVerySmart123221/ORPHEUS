@@ -2306,7 +2306,7 @@ fn projectile_stun_applies_only_to_surviving_hits_and_expires_exclusively() {
     for value in [0.0, -1.0, f64::NAN, f64::INFINITY] {
         assert!(Stun::from_seconds(value).is_none());
     }
-    for amount in [25.0, 1000.0] {
+    for (amount, visible) in [(25.0, true), (1000.0, true), (25.0, false)] {
         let bots = fixture_bots();
         let victim = bots[0].entity;
         let unhit = bots[1].entity;
@@ -2341,13 +2341,19 @@ fn projectile_stun_applies_only_to_surviving_hits_and_expires_exclusively() {
         )
         .unwrap();
         let (_, hits) = room
-            .advance_projectiles(&queries, 7, owner, vec![launch], FIXTURE_CONTEXT)
+            .advance_projectiles(&queries, 7, owner, vec![launch], FIXTURE_CONTEXT, |wire| {
+                wire != victim || visible
+            })
             .unwrap();
         assert_eq!(hits.len(), 1);
+        assert_eq!(
+            hits[0].damage.target_facts.target,
+            if visible { victim } else { unhit }
+        );
         let bot = &state(&room, victim).unwrap().bot;
-        assert_eq!(bot.is_stunned(1049), amount == 25.0);
+        assert_eq!(bot.is_stunned(1049), visible && amount == 25.0);
         assert!(!bot.is_stunned(1050));
-        assert!(!state(&room, unhit).unwrap().bot.is_stunned(1001));
+        assert_eq!(state(&room, unhit).unwrap().bot.is_stunned(1001), !visible);
     }
 }
 
@@ -2499,7 +2505,7 @@ fn projectile_flights_keep_peer_generation_and_report_terminal_outcomes() {
     assert_eq!(token, second.token);
     for (connection, owner, flight) in [(7, owner, first), (8, other, second)] {
         let (outcomes, hits) = simulation
-            .advance_projectiles(&queries, connection, owner, vec![flight], context)
+            .advance_projectiles(&queries, connection, owner, vec![flight], context, |_| true)
             .unwrap();
         assert!(outcomes.is_empty() && hits.is_empty());
     }
@@ -2512,7 +2518,7 @@ fn projectile_flights_keep_peer_generation_and_report_terminal_outcomes() {
         ..owner
     };
     let (outcomes, hits) = simulation
-        .advance_projectiles(&queries, 7, owner, Vec::new(), context)
+        .advance_projectiles(&queries, 7, owner, Vec::new(), context, |_| true)
         .unwrap();
     assert!(outcomes.is_empty() && hits.is_empty());
     assert!(simulation.world.get::<AdmittedFlight>(old_handle).is_none());
@@ -2524,7 +2530,7 @@ fn projectile_flights_keep_peer_generation_and_report_terminal_outcomes() {
     );
 
     let (outcomes, hits) = simulation
-        .advance_projectiles(&queries, 8, other, Vec::new(), context)
+        .advance_projectiles(&queries, 8, other, Vec::new(), context, |_| true)
         .unwrap();
     assert!(hits.is_empty());
     assert!(matches!(
@@ -2541,7 +2547,7 @@ fn projectile_flights_keep_peer_generation_and_report_terminal_outcomes() {
 
     let too_far = flight_fixture(owner, 10_000_000.0);
     let (outcomes, hits) = simulation
-        .advance_projectiles(&queries, 7, owner, vec![too_far], context)
+        .advance_projectiles(&queries, 7, owner, vec![too_far], context, |_| true)
         .unwrap();
     assert!(hits.is_empty());
     assert!(matches!(outcomes.as_slice(), [FlightOutcome::Failed(observed)] if *observed == token));
@@ -2624,6 +2630,7 @@ fn missing_flight_component_is_explicit_and_retirement_is_idempotent() {
             owner,
             vec![flight_fixture(owner, 1.0)],
             FIXTURE_CONTEXT,
+            |_| true,
         )
         .unwrap();
     let entity = simulation.projectiles[&7].order[0];
@@ -2632,7 +2639,7 @@ fn missing_flight_component_is_explicit_and_retirement_is_idempotent() {
         .entity_mut(entity)
         .remove::<AdmittedFlight>();
     assert!(matches!(
-        simulation.advance_projectiles(&queries, 7, owner, Vec::new(), FIXTURE_CONTEXT),
+        simulation.advance_projectiles(&queries, 7, owner, Vec::new(), FIXTURE_CONTEXT, |_| true),
         Err(CombatError::MissingFlight { connection: 7, entity: missing }) if missing == entity
     ));
     simulation.retire_projectiles(7);
@@ -2666,6 +2673,7 @@ fn stale_generation_does_not_retire_or_advance_the_replacement_flight() {
             owner,
             vec![flight_fixture(owner, 1.0)],
             FIXTURE_CONTEXT,
+            |_| true,
         )
         .unwrap();
     let handle = simulation.projectiles[&7].order[0];
@@ -2674,7 +2682,14 @@ fn stale_generation_does_not_retire_or_advance_the_replacement_flight() {
         ..FIXTURE_CONTEXT
     };
     let (outcomes, hits) = simulation
-        .advance_projectiles(&queries, 7, old, vec![flight_fixture(old, 1.0)], later)
+        .advance_projectiles(
+            &queries,
+            7,
+            old,
+            vec![flight_fixture(old, 1.0)],
+            later,
+            |_| true,
+        )
         .unwrap();
     assert!(outcomes.is_empty() && hits.is_empty());
     assert_eq!(simulation.projectiles[&7].order, [handle]);
@@ -2688,12 +2703,13 @@ fn stale_generation_does_not_retire_or_advance_the_replacement_flight() {
                 ..owner
             },
             Vec::new(),
-            later
+            later,
+            |_| true
         ),
         Err(CombatError::FlightOwnerIdentity { .. })
     ));
     let (outcomes, hits) = simulation
-        .advance_projectiles(&queries, 7, owner, Vec::new(), later)
+        .advance_projectiles(&queries, 7, owner, Vec::new(), later, |_| true)
         .unwrap();
     assert!(hits.is_empty());
     assert!(

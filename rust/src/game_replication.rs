@@ -314,6 +314,7 @@ pub(crate) struct WorldDelivery {
     queued: Vec<Arc<Record>>,
     created: HashSet<u32>,
     bots: HashMap<u32, BotLifetime>,
+    pending_respawn_presentation: HashSet<u32>,
     bot_controllers: HashMap<u32, BotControllerState>,
     health_updates: HashMap<u32, u64>,
     health_revision: u64,

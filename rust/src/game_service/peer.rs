@@ -167,6 +167,7 @@ impl Peer {
         {
             // Intermediate generations held here were never published to this peer.
             pending.created = replacement.created;
+            pending.waits_for_presentation = replacement.waits_for_presentation;
         } else if self.world.tracks_current_bot(replacement.retired) {
             self.combat_ui
                 .replacements

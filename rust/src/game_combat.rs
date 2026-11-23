@@ -256,6 +256,7 @@ pub(crate) struct AppliedDamage {
 pub(crate) struct BotReplacement {
     pub retired: u32,
     pub created: EntityUpdate,
+    pub waits_for_presentation: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2139,6 +2140,7 @@ impl RoomSimulation {
         owner: BodyId,
         launches: Vec<AdmittedFlight>,
         context: ShotContext,
+        visible: impl Fn(u32) -> bool,
     ) -> Result<(Vec<FlightOutcome>, Vec<BotHit>), CombatError> {
         if !self.player_body_generation_current(owner) {
             return Ok((Vec::new(), Vec::new()));
@@ -2192,6 +2194,7 @@ impl RoomSimulation {
             let candidates: Vec<_> = self
                 .weapon_targets(queries)?
                 .iter()
+                .filter(|target| visible(target.wire))
                 .filter_map(|target| {
                     target.hostile_to(owner.entity, context.team, queries.free_for_all())
                 })
@@ -3173,18 +3176,16 @@ impl RoomSimulation {
                 previous,
                 fresh,
                 state.base_target_tags.clone(),
-                BotReplacement {
-                    retired: state.bot.entity,
-                    created,
-                },
+                state.bot.entity,
+                created,
             ));
         }
         let mut replacements = Vec::with_capacity(prepared.len());
-        for (slot, previous, fresh, base_target_tags, replacement) in prepared {
+        for (slot, previous, fresh, base_target_tags, retired, created) in prepared {
             let fresh_wire = fresh.entity;
             if !self.world.despawn(previous) {
                 return Err(CombatError::MissingBot {
-                    wire: replacement.retired,
+                    wire: retired,
                     entity: previous,
                 });
             }
@@ -3198,6 +3199,11 @@ impl RoomSimulation {
                     stock_bot::BodyEntry::Respawn,
                 );
             }
+            let waits_for_presentation = next_state
+                .stock_script
+                .as_ref()
+                .and_then(stock_bot::StockBotScript::projection)
+                .is_some();
             let entity = self.world.spawn(next_state).id();
             self.by_wire
                 .replace_index(slot, fresh_wire)
@@ -3209,10 +3215,13 @@ impl RoomSimulation {
                 .1 = entity;
             #[cfg(feature = "inspector")]
             crate::owner_trace::playtest(format_args!(
-                "bot-respawn event=created tick={tick} old={:08x} new={fresh_wire:08x}",
-                replacement.retired
+                "bot-respawn event=created tick={tick} old={retired:08x} new={fresh_wire:08x}"
             ));
-            replacements.push(replacement);
+            replacements.push(BotReplacement {
+                retired,
+                created,
+                waits_for_presentation,
+            });
         }
         self.next_bot = next_bot;
         Ok(replacements)

@@ -62,6 +62,8 @@ The Rust-only [health action fixture](../fixtures/behavior/script-health-change-
 
 The Rust-only [scripted training bot respawn fixture](../fixtures/behavior/training-bot-scripted-respawn-v1.json) checks the ordinary replacement deadline even when authored damage is processed before room combat starts. The [bot respawn delivery fixture](../fixtures/behavior/training-bot-respawn-delivery-v1.json) covers successive replacements behind delayed health or identity acknowledgements, while independent bots continue through their own delivery order.
 
+The [respawn weapon visibility fixture](../fixtures/behavior/respawn-weapon-visibility-v1.json) checks that create acknowledgement alone leaves a scripted replacement out of player weapon queries. Each observer independently admits the replacement after its first script snapshot is acknowledged, including after loss and retry. This verifies transport admission. The original client's rendered animation still needs a playtest.
+
 The Rust-only [stock bot script isolation fixture](../fixtures/behavior/stock-bot-script-isolation-v1.json) checks that a zeroed owner selector is valid and that an unsupported public selector suspends only the affected bot's script projection. Both physical bots remain in the room. The [mode presentation variables fixture](../fixtures/behavior/mode-presentation-variables-v1.json) checks mode selection and preservation of typed values in the mode bootstrap.
 
 The prepared Practice Range return probe applies a room impulse and steps the real map collision and stock body VM. It verifies that the bot actually moves away, requests a return, and settles near its starting position before ending that request.

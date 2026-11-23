@@ -58,6 +58,7 @@ fn enqueue(peer: &mut Peer, retired: u32, created: u32, now: Duration) {
         BotReplacement {
             retired,
             created: create_bot(created),
+            waits_for_presentation: false,
         },
         now + SILENCE_TIME,
     );

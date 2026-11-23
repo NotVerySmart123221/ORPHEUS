@@ -320,6 +320,7 @@ fn exercise_final_blow_effect(projectile: bool) {
                         hit_effect: None,
                     }],
                     context,
+                    |_| true,
                 )
                 .unwrap();
             assert!(matches!(

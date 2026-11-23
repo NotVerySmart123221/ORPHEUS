@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Hold scripted bot replacements out of a player's weapon queries until that player acknowledges the first observer script snapshot. Hitscan and projectile flight share this admission rule. The transport fixture covers two observers at different delivery stages and retry after a lost snapshot. Passed 516 server library tests and both prepared 104319 checks for the initial spawn animation snapshot and the death-to-respawn nameplate. Original-client respawn animation and physical contact still need verification.
+
 - Send a bounded owner correction when an opposing actor actually clips or redirects ordinary movement, including on bodies without an active owner script. The headless regression checks both scripted and detached bodies and confirms allied pass-through does not trigger this correction. Passed 515 server library and 68 collision tests. Original-client movement and allied separation remain open. Added Practice Range acceptance cases for the reported combat, animation, geometry, and communication-wheel gaps.
 
 - Preserve the active multikill count and its expiry when an older elimination settles late. Independent eliminations at the same settlement frame still advance the count.

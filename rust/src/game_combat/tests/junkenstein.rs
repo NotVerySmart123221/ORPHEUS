@@ -937,6 +937,7 @@ pub(super) fn normal_encounter_first_reaper_finishes_intro_and_pursues_live_defe
                     tick,
                     now: Duration::from_millis(u64::from(tick - FIRST_TICK) * 16),
                 },
+                |_| true,
             )
             .unwrap();
         for hit in hits {
@@ -1500,6 +1501,7 @@ fn admitted_flashbang_hits_deliver_effects_to_all_boss_pairs() {
                         tick,
                         now: Duration::from_millis(u64::from(tick) * 16),
                     },
+                    |_| true,
                 )
                 .unwrap();
             if !hits.is_empty() {

@@ -1044,8 +1044,14 @@ impl State {
                             return Ok(());
                         };
                         let (simulation, queries) = world.scene.bot_simulation();
-                        let (outcomes, hits) = simulation
-                            .advance_projectiles(&queries, connection, owner, launches, context)?;
+                        let (outcomes, hits) = simulation.advance_projectiles(
+                            &queries,
+                            connection,
+                            owner,
+                            launches,
+                            context,
+                            |entity| peer.world.weapon_target_ready(entity),
+                        )?;
                         peer.world.finish_projectiles(owner, room_tick, outcomes)?;
                         for hit in hits {
                             simulation

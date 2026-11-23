@@ -127,6 +127,7 @@ fn bot_health_replaces_stale_packets_and_respawn_keeps_creation_order() {
     world.replace_bot(BotReplacement {
         retired: old,
         created: create(new),
+        waits_for_presentation: false,
     });
     assert!(!world.identity_ready(old));
     let ready = world.ready();
@@ -3728,7 +3729,7 @@ fn death_and_respawn_preserve_friendly_passthrough_and_hostile_blocking() {
     // Projectile along the same ray also passes friendly + dead hostile and kills back hostile.
     let flight = fixture_projectile_flight(shooter_id, context.tick, 1000.0, Some(90.0));
     let (outcomes, hits) = simulation
-        .advance_projectiles(&queries, 7, shooter_id, vec![flight], context)
+        .advance_projectiles(&queries, 7, shooter_id, vec![flight], context, |_| true)
         .unwrap();
     assert_eq!(outcomes.len(), 1);
     assert_eq!(hits.len(), 1);
@@ -4106,7 +4107,7 @@ fn body_replacement_rejects_stale_generation_mutations() {
     };
     let stale_flight = fixture_projectile_flight(id1, context.tick, 20.0, None);
     let (outcomes, hits) = simulation
-        .advance_projectiles(&queries, 9, id1, vec![stale_flight], context)
+        .advance_projectiles(&queries, 9, id1, vec![stale_flight], context, |_| true)
         .unwrap();
     assert!(outcomes.is_empty() && hits.is_empty());
 
@@ -4234,6 +4235,7 @@ fn present_bot_controllers_sequences_creation_possession_and_respawn() {
     world.replace_bot(BotReplacement {
         retired: BOT_ENTITY,
         created: replacements[0].created.clone(),
+        waits_for_presentation: false,
     });
     // Possession waits until the respawned bot's create is acknowledged.
     world.present_bot_controllers(&scene).unwrap();

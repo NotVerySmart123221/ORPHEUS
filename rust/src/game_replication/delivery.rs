@@ -74,6 +74,7 @@ impl WorldDelivery {
             queued: Vec::new(),
             created: HashSet::new(),
             bots: HashMap::new(),
+            pending_respawn_presentation: HashSet::new(),
             bot_controllers: HashMap::new(),
             health_updates: HashMap::new(),
             health_revision: 0,
@@ -121,6 +122,7 @@ impl WorldDelivery {
         self.queued.clear();
         self.created.clear();
         self.bots.clear();
+        self.pending_respawn_presentation.clear();
         self.bot_controllers.clear();
         self.remote_players.clear();
         self.health_updates.clear();
@@ -172,6 +174,10 @@ impl WorldDelivery {
 
     pub(crate) fn identity_ready(&self, entity: u32) -> bool {
         self.world_started() && self.created.contains(&entity)
+    }
+
+    pub(crate) fn weapon_target_ready(&self, entity: u32) -> bool {
+        self.identity_ready(entity) && !self.pending_respawn_presentation.contains(&entity)
     }
 
     pub(crate) fn owner_body_ready(&self, id: BodyId) -> bool {
@@ -294,6 +300,10 @@ impl WorldDelivery {
         }
         self.bots.insert(old, BotLifetime::Retiring);
         self.bots.insert(new, BotLifetime::Live);
+        self.pending_respawn_presentation.remove(&old);
+        if replacement.waits_for_presentation {
+            self.pending_respawn_presentation.insert(new);
+        }
         self.created.remove(&old);
         self.health_updates.remove(&old);
         self.remove_stale();
@@ -459,6 +469,18 @@ impl WorldDelivery {
                         } else {
                             stream.lost(last)
                         };
+                        if delivery.advanced {
+                            let _presented = self
+                                .pending_respawn_presentation
+                                .remove(&record.update.entity);
+                            #[cfg(feature = "inspector")]
+                            if _presented {
+                                crate::owner_trace::playtest(format_args!(
+                                    "bot-respawn event=presentation-ack owner={:08x} packet={} new={:08x}",
+                                    self.owner, packet.sequence, record.update.entity
+                                ));
+                            }
+                        }
                         if delivery.retry {
                             retry.push(record);
                         }
