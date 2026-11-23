@@ -98,6 +98,17 @@ impl RoomSimulation {
         Some(Arc::clone(frame))
     }
 
+    /// NPC movement follows player input. Freeze the current player poses
+    /// before advancing any NPC so it cannot sweep into a player's new pose.
+    pub(crate) fn prepare_npc_movement_frame(&mut self, tick: u32) -> Result<(), CombatError> {
+        if !self.players_by_wire.is_empty() {
+            if let Some(contacts) = &mut self.movement_contacts {
+                contacts.frame = None;
+            }
+        }
+        self.prepare_movement_frame(tick)
+    }
+
     /// Freeze contacts before the first movement in this room tick.
     pub(crate) fn prepare_movement_frame(&mut self, tick: u32) -> Result<(), CombatError> {
         let Some(contacts) = self.movement_contacts.as_ref() else {

@@ -508,7 +508,7 @@ impl PreparedScene {
         tick: u32,
         patrol: &PatrolScript,
     ) -> Result<(), CombatError> {
-        self.simulation.prepare_movement_frame(tick)?;
+        self.simulation.prepare_npc_movement_frame(tick)?;
         let contacts = self.simulation.movement_contact_frame();
         let floor = self.ground.triangles();
         let map = &self.map;

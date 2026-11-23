@@ -4,12 +4,102 @@ use super::super::{PlayerBodyState, RoomSimulation, tests::fixture_bots};
 use crate::{
     collision_index::TriangleIndex,
     commands::Command,
+    contact_body::CharacterBody,
+    contact_triangle::{SKIN, TOUCH},
     contact_world::ContactWorld,
     game_replication::BodyId,
     mover::Mover,
     mover_modifiers::{Modifier, ModifierKey, Operation},
     mover_settings::{MoverCatalog, MoverSettings},
 };
+
+#[test]
+fn npc_sweep_blocks_against_the_pose_already_resolved_by_player_input() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/npc-contact-after-input-v1.json"
+    ))
+    .unwrap();
+    let input = &fixture["input"];
+    let tick = u32::try_from(input["tick"].as_u64().unwrap()).unwrap();
+    let vector = |key: &str| serde_json::from_value::<[f64; 3]>(input[key].clone()).unwrap();
+    let player = BodyId {
+        entity: 7,
+        generation: 1,
+    };
+    let settings = MoverSettings {
+        gravity_scale: 0.0,
+        ..MoverSettings::default()
+    };
+    let geometry = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+    let mut mover = Mover::new(settings, Arc::clone(&geometry), [0.0; 3], 0, 0x18).unwrap();
+    let displacement =
+        crate::script_init::SweptDisplacement::new(vector("player_displacement")).unwrap();
+    assert!(mover.queue_swept_displacement(tick, displacement));
+    let mut bots = fixture_bots();
+    bots.truncate(1);
+    bots[0].position = vector("npc_position");
+    let npc = bots[0].entity;
+    let capsule = bots[0].contact_capsule(&settings);
+    let mut room = RoomSimulation::new(bots).unwrap();
+    room.enable_movement_contacts(false, Arc::new(MoverCatalog::default()));
+    room.spawn_player_body(PlayerBodyState::new(
+        player,
+        6,
+        0,
+        0,
+        1,
+        mover,
+        None,
+        tick - 1,
+        None,
+    ))
+    .unwrap();
+    room.prepare_movement_frame(tick).unwrap();
+    let before = room.movement_contact_frame().unwrap();
+    let state = room.player_body_mut(player).unwrap();
+    state
+        .mover
+        .step_against(
+            &TriangleIndex::new([]).unwrap(),
+            Command {
+                frame: tick,
+                ..Command::default()
+            },
+            0.016,
+            &before.blockers(player.entity, 0),
+            |_, _| {},
+        )
+        .unwrap();
+    let player_capsule = state.mover.contact_capsule();
+
+    room.prepare_npc_movement_frame(tick).unwrap();
+    let after = room.movement_contact_frame().unwrap();
+    assert_eq!(after.blockers(npc, 1), [player_capsule]);
+    assert_ne!(before.blockers(npc, 1), after.blockers(npc, 1));
+    let separation = |frame: &super::MovementContactFrame| {
+        let mut bot = CharacterBody::new(Arc::clone(&geometry), capsule, 0x18);
+        let motion = bot
+            .move_capsule_against(
+                vector("npc_displacement").map(|axis| axis as f32),
+                0.016,
+                &frame.blockers(npc, 1),
+            )
+            .unwrap();
+        (
+            motion.position[0] - player_capsule.position[0],
+            motion.actor_contact,
+        )
+    };
+    let touching = capsule.radius + player_capsule.radius;
+    let (stale_gap, _) = separation(&before);
+    let (resolved_gap, clipped) = separation(&after);
+    assert!(stale_gap < touching - 0.1, "{stale_gap}");
+    assert!(clipped);
+    assert!(
+        resolved_gap >= touching - 2.0 * SKIN - TOUCH,
+        "{resolved_gap}"
+    );
+}
 
 #[test]
 fn movement_snapshot_honors_base_and_next_pose_contact_participation() {
