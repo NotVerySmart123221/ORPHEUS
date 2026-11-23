@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Verify final-blow presentation through prepared practice-room damage, the player's running VM, and normal owner egress. A lost packet leaves the cue unacknowledged. Recovery acknowledges the same single action, and a nonlethal hit produces no elimination action.
+
 - Add the Inspector option `ORPHEUS_PLAYTEST_ELIMINATION=1` to queue the authored elimination effect on a room-confirmed enemy final blow. Select the shared receiver by its message contracts, and give it the defeated body's settled tag data. Passed 520 Inspector library tests and the prepared 104319 checks for shared effect selection and stationary-bot hits over encrypted UDP. Original-client playback, assist credit, the other elimination audio layers, and authentic multikill timing still need verification.
 
 - Load authored target tags for stationary bots even when they have no running script, preserve those base tags across respawn, and reuse active script tag effects when available. Skip optional hit presentation when the target facts are unavailable. Passed 520 Inspector library tests and the two prepared 104319 checks for stationary-bot hits over encrypted UDP and authored effect selection. Original-client Practice Range logs confirm repeated Soldier: 76 body hits and critical hits on the previously affected bot without the owner VM stopping. Elimination audio is still inaudible in that playtest.

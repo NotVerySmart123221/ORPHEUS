@@ -174,6 +174,163 @@ fn prepare_owner(
 
 #[test]
 #[ignore = "requires the target-tagged 104319 Practice Range runtime"]
+fn prepared_final_blow_effect_survives_owner_egress_loss() {
+    use crate::{
+        game_bots::BOT_ENTITY,
+        game_clock::TICK_PERIOD,
+        game_combat::ShotContext,
+        game_hitscan::{DamageTags, HitDefinition},
+        script_stream::OWNER_SETTLE_FRAMES,
+    };
+
+    let runtime = std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap();
+    let assets = SceneAssets::load(runtime).unwrap();
+    let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
+    let [x, y, z] = scene.map().spawn_point(0, 0).unwrap().0;
+    let target = BOT_ENTITY + 5;
+    let simulation = scene.simulation_mut();
+    simulation.enable_authored_elimination_feedback();
+    simulation.body_mut(target).unwrap().position = [x - 4.0, y, z];
+
+    let mut world = WorldDelivery::new(OWNER);
+    let mut egress = GameEgress::default();
+    let mut start = prepare_owner(&mut scene, &mut world, &mut egress);
+    assert!(deliver_until(
+        &mut world,
+        &mut scene,
+        &mut egress,
+        &mut start,
+        |world| {
+            world
+                .body_script
+                .as_ref()
+                .is_some_and(|script| script.stream.base().is_some())
+        }
+    ));
+    let id = world.active_body_id().unwrap();
+    let viewer = PlayerAppearance {
+        entity: OWNER,
+        slot: 0,
+        team: 0,
+        card: &PlayerCard::default(),
+    };
+    let acknowledged = |world: &WorldDelivery| {
+        world
+            .body_script
+            .as_ref()
+            .unwrap()
+            .stream
+            .base()
+            .unwrap()
+            .1
+            .acknowledged_callout()
+    };
+    let advance = |world: &mut WorldDelivery, scene: &mut PreparedScene, tick| {
+        world.queue_commands(
+            tick,
+            &[Command {
+                frame: tick,
+                yaw: -16384,
+                ..Command::default()
+            }],
+        );
+        let (_, left) = world
+            .advance_input(scene, &viewer, RETAIL_QUANTA, 16)
+            .unwrap();
+        assert!(!left);
+        assert_eq!(world.input.processed, Some(tick));
+    };
+    let settle = |scene: &mut PreparedScene, tick, amount, killed| {
+        let (simulation, queries) = scene.bot_simulation();
+        simulation.activate_combat();
+        let hit = simulation
+            .hitscan(
+                &queries,
+                PosedHitscan {
+                    source: id.entity,
+                    command: Command {
+                        frame: tick,
+                        ..Command::default()
+                    },
+                    shot_frame: tick,
+                    origin: [x, y + 1.0, z],
+                    direction: [-1.0, 0.0, 0.0],
+                    reach: 8.0,
+                    hit: HitDefinition {
+                        amount,
+                        tags: DamageTags::EMPTY,
+                        loadout: None,
+                        critical: 1.0,
+                        falloff: None,
+                    },
+                },
+                ShotContext {
+                    team: 0,
+                    quanta: RETAIL_QUANTA,
+                    tick,
+                    now: tick * TICK_PERIOD,
+                },
+                |entity| entity == target,
+            )
+            .unwrap()
+            .expect("hit the stationary target");
+        assert!(matches!(
+            hit.notices[0],
+            Some(crate::game_combat_messages::CombatNotice::Hit { killed: observed, .. })
+                if observed == killed
+        ));
+    };
+
+    let before = acknowledged(&world);
+    let lethal_tick = start + OWNER_SETTLE_FRAMES + 4;
+    for tick in start + 1..=lethal_tick + 8 {
+        advance(&mut world, &mut scene, tick);
+        if tick == start + 1 {
+            settle(&mut scene, tick, 20.0, false);
+        } else if tick == lethal_tick {
+            settle(&mut scene, tick, 500.0, true);
+        }
+        let runtime = scene
+            .simulation()
+            .player_body(id)
+            .unwrap()
+            .runtime
+            .as_ref()
+            .unwrap();
+        let snapshot = runtime.snapshot().unwrap();
+        assert!(snapshot.diagnostics.is_empty());
+        let actions = snapshot
+            .frame_actions
+            .iter()
+            .filter(|action| action.callout.serial > before);
+        assert_eq!(actions.count(), usize::from(tick > lethal_tick));
+
+        let sequence = tick - FIRST_TICK;
+        let (_, frame) = transmit(
+            &mut world,
+            Some(scene.simulation_mut()),
+            &mut egress,
+            tick,
+            sequence,
+        );
+        let delivered = tick != lethal_tick + 1;
+        let report = egress.acknowledge(frame.sequence + 1, u64::from(delivered));
+        if !delivered {
+            assert!(report.packets.iter().flat_map(|packet| &packet.records).any(|record| {
+                matches!(record.delivery, Delivery::BodyScript { id: sent, delta: true, .. } if sent == id)
+            }));
+        }
+        world.acknowledge(report, Duration::ZERO);
+        assert_eq!(
+            acknowledged(&world),
+            before + u32::from(tick > lethal_tick + 1)
+        );
+    }
+    assert!(world.owner_script_fault.is_none());
+}
+
+#[test]
+#[ignore = "requires the target-tagged 104319 Practice Range runtime"]
 fn stock_practice_owner_observes_processed_commands_and_rifle_state() {
     let runtime = std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap();
     let assets = SceneAssets::load(runtime).unwrap();
