@@ -188,8 +188,16 @@ impl<'a> BotQueries<'a> {
         body: u64,
         pose: crate::game_hitscan::TargetPose,
     ) -> crate::game_hitscan::HurtPose {
-        self.hurt_volumes
-            .map_or_else(|| pose.into(), |volumes| volumes.pose(body, pose))
+        let Some(volumes) = self.hurt_volumes else {
+            return pose.into();
+        };
+        let settings = self.movers.for_body(Some(body));
+        // Rewound hitscan poses carry their sampled mover dimensions.
+        let crouched = pose.height == settings.crouch_height
+            && pose.radius == settings.crouch_radius
+            && (settings.crouch_height, settings.crouch_radius)
+                != (settings.stand_height, settings.stand_radius);
+        volumes.pose(body, pose, crouched)
     }
 
     pub(crate) fn hitscan_wall(

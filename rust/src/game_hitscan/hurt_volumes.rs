@@ -8,7 +8,7 @@ use crate::{
     static_ray::{SurfaceHit, Vec3, capsule_entry_hit, norm, segment_separation},
 };
 
-/// Sampled movement pose plus the optional local, standing combat profile.
+/// Sampled movement pose plus an optional combat profile for that posture.
 #[derive(Clone, Copy)]
 pub(crate) struct HurtPose {
     movement: TargetPose,
@@ -184,9 +184,23 @@ struct HurtProfile {
     head: Option<LocalCapsule>,
 }
 
+impl HurtProfile {
+    fn valid(&self) -> bool {
+        self.body.valid() && self.head.is_none_or(LocalCapsule::valid)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BodyProfiles {
+    body: LocalCapsule,
+    head: Option<LocalCapsule>,
+    crouched: Option<HurtProfile>,
+}
+
 #[derive(Default)]
 pub(crate) struct HurtVolumeCatalog {
-    by_body: BTreeMap<u64, HurtProfile>,
+    by_body: BTreeMap<u64, BodyProfiles>,
 }
 
 impl HurtVolumeCatalog {
@@ -203,7 +217,7 @@ impl HurtVolumeCatalog {
         #[serde(deny_unknown_fields)]
         struct Data {
             version: u32,
-            bodies: BTreeMap<String, HurtProfile>,
+            bodies: BTreeMap<String, BodyProfiles>,
         }
 
         let invalid = |message: &str| io::Error::new(io::ErrorKind::InvalidData, message);
@@ -217,7 +231,10 @@ impl HurtVolumeCatalog {
             let body = parse_guid(&key)
                 .filter(|body| *body != 0)
                 .ok_or_else(|| invalid("invalid combat hurt volume body GUID"))?;
-            if !profile.body.valid() || profile.head.is_some_and(|head| !head.valid()) {
+            if !profile.body.valid()
+                || profile.head.is_some_and(|head| !head.valid())
+                || profile.crouched.as_ref().is_some_and(|pose| !pose.valid())
+            {
                 return Err(invalid("invalid combat hurt volume capsule"));
             }
             if by_body.insert(body, profile).is_some() {
@@ -227,10 +244,20 @@ impl HurtVolumeCatalog {
         Ok(Self { by_body })
     }
 
-    pub(crate) fn pose(&self, body: u64, movement: TargetPose) -> HurtPose {
+    pub(crate) fn pose(&self, body: u64, movement: TargetPose, crouched: bool) -> HurtPose {
+        let calibrated = self.by_body.get(&body).and_then(|profiles| {
+            if crouched {
+                profiles.crouched
+            } else {
+                Some(HurtProfile {
+                    body: profiles.body,
+                    head: profiles.head,
+                })
+            }
+        });
         HurtPose {
             movement,
-            calibrated: self.by_body.get(&body).copied(),
+            calibrated,
         }
     }
 }
@@ -243,7 +270,52 @@ mod tests {
     use crate::{
         game_hitscan::{DamageTags, HitDefinition, HitscanShot},
         projectile_flight::{ProjectileBallistics, ProjectileFlight},
+        scene_assets::PreparedScene,
     };
+
+    #[test]
+    fn crouched_hurt_pose_uses_matching_calibration_or_mover_shape() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../fixtures/behavior/combat-hurt-volumes-v1.json"
+        ))
+        .unwrap();
+        let input = &fixture["input"];
+        let crouched = &fixture["crouched"];
+        let key = input["body"].as_str().unwrap();
+        let body = parse_guid(key).unwrap();
+        let pose = TargetPose {
+            feet: serde_json::from_value(input["movement"]["feet"].clone()).unwrap(),
+            height: crouched["height"].as_f64().unwrap(),
+            radius: input["movement"]["radius"].as_f64().unwrap(),
+            eye: crouched["eye"].as_f64().unwrap(),
+        };
+        let mut scene = PreparedScene::fixture_for_bots(Vec::new());
+        let direction = [0.0, 0.0, 1.0];
+        let standing_ray = serde_json::from_value(crouched["standing_head_ray"].clone()).unwrap();
+        let crouched_ray = serde_json::from_value(crouched["crouched_head_ray"].clone()).unwrap();
+        let mut data = input["catalog"].clone();
+        for custom in [false, true] {
+            if custom {
+                data["bodies"][key]["crouched"] = crouched["profile"].clone();
+            }
+            let catalog = HurtVolumeCatalog::from_json(&data.to_string()).unwrap();
+            scene.fixture_set_hurt_volumes(catalog);
+            let (_, queries) = scene.bot_simulation();
+            let sampled = queries.hurt_pose(body, pose);
+            assert_eq!(sampled.calibrated.is_some(), custom);
+            assert!(
+                sampled
+                    .contact(standing_ray, direction, 10.0, 0.0)
+                    .is_none()
+            );
+            assert!(
+                sampled
+                    .contact(crouched_ray, direction, 10.0, 0.0)
+                    .unwrap()
+                    .head
+            );
+        }
+    }
 
     #[test]
     fn calibrated_combat_volumes_distinguish_head_body_and_empty_space() {
@@ -262,8 +334,8 @@ mod tests {
             eye: mover["eye"].as_f64().unwrap(),
         };
         let profile = HurtVolumeCatalog::from_json(&input["catalog"].to_string()).unwrap();
-        let target = profile.pose(body, movement);
-        let compatibility = profile.pose(body + 1, movement);
+        let target = profile.pose(body, movement, false);
+        let compatibility = profile.pose(body + 1, movement, false);
         let direction = [0.0, 0.0, 1.0];
         let hit = HitDefinition {
             tags: DamageTags::EMPTY,

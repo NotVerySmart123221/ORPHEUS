@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Sample radius, height, and eye height from the same historical posture when rewinding hitscan. Use a measured crouched hurt profile when supplied and the sampled mover capsule otherwise. Passed 595 library tests, the two prepared bot and projectile checks, and Clippy.
+
 - Use calibrated combat volumes for a projectile owner's self-splash, matching enemy and NPC target selection. Aim the prepared rifle-respawn replay through the target's calibrated head, where the existing critical assertions apply. Passed 594 library tests, both prepared rifle respawn and projectile self-splash checks, and Clippy.
 
 - Publish weapon damage to NPC health through the shared room queue, so the shooter and observing clients receive the same settled health. Keep the hit marker and elimination notices scoped to the shooter. Passed 593 library tests and the prepared encrypted nameplate check. The prepared rifle-respawn check reports the same body-hit versus critical-hit mismatch on the baseline and this change.

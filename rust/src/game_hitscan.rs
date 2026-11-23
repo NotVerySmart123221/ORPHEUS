@@ -217,15 +217,10 @@ impl TargetHistory {
                     feet: std::array::from_fn(|axis| {
                         earlier.feet[axis] + (later.feet[axis] - earlier.feet[axis]) * share
                     }),
-                    height: posture.height,
-                    eye: posture.eye,
-                    ..current
+                    ..posture
                 }
             }
-            (Some(&(_, pose)), None) | (None, Some(&(_, pose))) => TargetPose {
-                radius: current.radius,
-                ..pose
-            },
+            (Some(&(_, pose)), None) | (None, Some(&(_, pose))) => pose,
             (None, None) => current,
         };
         Some(sampled)
@@ -565,6 +560,7 @@ mod tests {
         let before = standing(8.0, 0.0);
         let crouched = TargetPose {
             height: 1.2,
+            radius: 0.3,
             eye: 1.05,
             ..standing(12.0, 0.0)
         };
@@ -573,10 +569,10 @@ mod tests {
         history.record(1, crouched);
         history.record(0, standing(50.0, 0.0)); // a late sample cannot reorder the history
         let pose = history
-            .at(ViewFrame::from_command(&command, 16_000), crouched)
+            .at(ViewFrame::from_command(&command, 16_000), before)
             .unwrap();
         assert_eq!(pose.feet, [10.5, 0.0, 0.0]);
-        assert_eq!((pose.height, pose.eye), (1.2, 1.05));
+        assert_eq!((pose.height, pose.radius, pose.eye), (1.2, 0.3, 1.05));
         assert!(
             shot.resolve([(7, pose)], |_, _, _| Ok(None))
                 .unwrap()
@@ -595,7 +591,7 @@ mod tests {
     }
 
     #[test]
-    fn history_clamps_to_retained_samples_and_keeps_current_radius() {
+    fn history_clamps_to_retained_samples_with_their_original_radius() {
         let mut history = TargetHistory::new(None);
         for tick in 0..70 {
             history.record(tick, standing(f64::from(tick), 0.0));
@@ -618,7 +614,7 @@ mod tests {
                 )
                 .unwrap()
         };
-        assert_eq!((seen(0).feet[0], seen(0).radius), (6.0, 0.4));
+        assert_eq!((seen(0).feet[0], seen(0).radius), (6.0, 0.5));
         assert_eq!(seen(69).feet, [69.0, 0.0, 0.0]);
         assert_eq!(seen(100).feet, [69.0, 0.0, 0.0]);
     }
