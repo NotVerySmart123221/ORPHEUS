@@ -1058,7 +1058,14 @@ impl RoomSimulation {
             return Ok(None);
         };
         self.scripted_health.push(health.clone());
-        self.record_actor_hurt_voice(id.entity, false, impact.critical, killed, context.tick);
+        self.record_actor_hurt_voice(
+            id.entity,
+            false,
+            source,
+            impact.critical,
+            killed,
+            context.tick,
+        );
         let self_hit = source == id.entity;
         if killed {
             self.player_deaths.push(PlayerDeath {

@@ -61,6 +61,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
     );
     let target = BOT_ENTITY + if hit_effect { 5 } else { 1 };
     let mut nameplate_target_health = None;
+    let mut allied_nameplates = HashSet::new();
     let collection = Collection::new(
         &RetailTemplates::load(data.join("retail_templates.json")).unwrap(),
         Arc::new(ItemDb::load(&data).unwrap()),
@@ -127,6 +128,15 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
                 }
                 let [x, y, z] = scene.map().spawn_point(0, 0).unwrap().0;
                 let (bots, _) = scene.bot_simulation();
+                if matches!(fixture, PreparedFixture::StockNameplate { .. }) {
+                    allied_nameplates.extend(
+                        bots.bodies()
+                            .unwrap()
+                            .filter(|bot| bot.spawn.team == 0)
+                            .map(|bot| bot.entity),
+                    );
+                    assert!(!allied_nameplates.is_empty());
+                }
                 let bot = bots.body_mut(target).unwrap();
                 bot.position = [x - 4.0, y, z];
                 nameplate_target_health = Some(bot.spawn.health);
@@ -382,6 +392,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
                         assert_eq!(npc_full_parents[&record.entity].get(&parent), Some(&0x0c18));
                         assert_eq!(state, 3);
                         target_nameplate |= record.entity == target;
+                        allied_nameplates.remove(&record.entity);
                     }
                 }
             }
@@ -405,6 +416,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
             && controller
             && moving_bot
             && target_nameplate
+            && allied_nameplates.is_empty()
             && bot_possessions.len() == 15
         {
             let possessed_bodies: HashSet<_> = bot_possessions.values().copied().collect();
@@ -414,7 +426,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
         }
         assert!(
             Instant::now() < deadline,
-            "waiting for world and script baselines"
+            "waiting for world and script baselines; allied nameplates pending: {allied_nameplates:?}"
         );
     }
     match fixture {

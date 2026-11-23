@@ -2091,13 +2091,10 @@ impl RoomSimulation {
             if healed <= 0.0 {
                 continue;
             }
-            let component = state.vitals.component();
-            state.vitals.clear_changed();
-            updates.push(EntityUpdate {
-                entity: bot.entity,
-                operation: Some(Operation::Update(vec![component])),
-                ..EntityUpdate::default()
-            });
+            if let Some(script) = &mut state.stock_script {
+                script.on_heal(state.vitals.total());
+            }
+            updates.push(bot_health_update(state, false));
             let target = SampledBody { wire, entity };
             let room_status = self.sample_health_target_room_status(target);
             self.health_events.stage(
@@ -2451,7 +2448,14 @@ impl RoomSimulation {
                 frame: Some(context.tick),
             }),
         );
-        self.record_actor_hurt_voice(entity, true, impact.critical, result.killed, context.tick);
+        self.record_actor_hurt_voice(
+            entity,
+            true,
+            source,
+            impact.critical,
+            result.killed,
+            context.tick,
+        );
         if result.killed {
             self.record_enemy_elimination(source, entity, victim_team, context.tick);
         }

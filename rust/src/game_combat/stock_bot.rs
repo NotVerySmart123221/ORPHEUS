@@ -580,15 +580,29 @@ impl StockBotScript {
         if current > remaining_health {
             self.world.vitals.damage(current - remaining_health, source);
         }
-        let health = Value::Float(remaining_health);
-        let result = self
-            .component
+        let result = self.publish_health(remaining_health);
+        self.check_projection(result);
+    }
+
+    pub(super) fn on_heal(&mut self, current_health: f64) {
+        if self.faulted || self.world.dead {
+            return;
+        }
+        self.world
+            .vitals
+            .heal(current_health - self.world.vitals.total());
+        let result = self.publish_health(current_health);
+        self.check_projection(result);
+    }
+
+    fn publish_health(&mut self, health: f64) -> Result<(), InitFault> {
+        let health = Value::Float(health);
+        self.component
             .set_entity_variable(OWNER_HEALTH, health.clone(), &mut self.world)
             .and_then(|()| {
                 self.component
                     .set_entity_variable(HUD_HEALTH, health, &mut self.world)
-            });
-        self.check_projection(result);
+            })
     }
 
     pub(super) fn on_death(&mut self, source: Death, critical: bool, loadout: Option<u64>) {
@@ -603,14 +617,7 @@ impl StockBotScript {
             return;
         }
         self.frame = next_frame;
-        let death_health = self
-            .component
-            .set_entity_variable(OWNER_HEALTH, Value::Float(0.0), &mut self.world)
-            .and_then(|()| {
-                self.component
-                    .set_entity_variable(HUD_HEALTH, Value::Float(0.0), &mut self.world)
-            });
-        if let Err(error) = death_health {
+        if let Err(error) = self.publish_health(0.0) {
             self.stop_script(error);
             return;
         }

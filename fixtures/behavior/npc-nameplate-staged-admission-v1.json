@@ -6,6 +6,11 @@
     "lost_introduction": true,
     "concurrent_entity_variable": 12345
   },
+  "allied_health": {
+    "bot_damage": 17,
+    "script_heal": 6,
+    "field_heal": 4
+  },
   "expected": {
     "parent_baseline_has_nameplate": false,
     "introduction_has_nameplate": true,

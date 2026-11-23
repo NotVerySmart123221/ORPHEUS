@@ -498,11 +498,17 @@ impl RoomSimulation {
         &mut self,
         speaker_wire: u32,
         is_bot: bool,
+        attacker: u32,
         critical: bool,
         killed: bool,
         frame: u32,
     ) {
-        if !self.combat_voice.has_hurt_cues() || !crate::script_expr::valid_entity(speaker_wire) {
+        if !self.combat_voice.has_hurt_cues()
+            || !crate::script_expr::valid_entity(speaker_wire)
+            || (is_bot
+                && crate::script_expr::valid_entity(attacker)
+                && !self.players_by_wire.contains_key(&attacker))
+        {
             return;
         }
         let prev = self.hurt_voice_history.get(&speaker_wire).copied();

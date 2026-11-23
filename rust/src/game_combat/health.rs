@@ -88,6 +88,11 @@ impl RoomSimulation {
                 HealthEffect::Heal(_) => (0.0, false, None),
             };
             if delta != 0.0 {
+                if delta > 0.0 {
+                    if let Some(script) = &mut state.stock_script {
+                        script.on_heal(state.vitals.total());
+                    }
+                }
                 let update = super::bot_health_update(state, killed);
                 self.scripted_health.push(update);
                 self.record_health_applied(
@@ -104,7 +109,14 @@ impl RoomSimulation {
                         }),
                 );
                 if delta < 0.0 || killed {
-                    self.record_actor_hurt_voice(wire, true, critical, killed, source.frame);
+                    self.record_actor_hurt_voice(
+                        wire,
+                        true,
+                        source.killer,
+                        critical,
+                        killed,
+                        source.frame,
+                    );
                 }
                 if killed {
                     self.record_enemy_elimination(source.killer, wire, victim_team, source.frame);
@@ -137,6 +149,7 @@ impl RoomSimulation {
                         self.record_actor_hurt_voice(
                             wire,
                             false,
+                            source.killer,
                             critical,
                             outcome.killed,
                             source.frame,
@@ -632,6 +645,7 @@ mod tests {
 
         let bots = fixture_bots();
         let bot = bots[1].entity;
+        let npc_attacker = bots[0].entity;
         let mut room = RoomSimulation::new(bots).unwrap();
         let (factory, spawn) = fixture_body_factory();
         let mover = Mover::new(
@@ -675,6 +689,19 @@ mod tests {
             frame: 10,
             killer: player.entity,
         };
+        assert!(
+            room.settle_health(
+                bot,
+                HealthEffect::Damage(10.0),
+                Death {
+                    killer: npc_attacker,
+                    ..dealer
+                },
+                Duration::from_millis(155),
+            )
+            .unwrap()
+        );
+        assert!(room.take_player_cues().is_empty());
         assert!(
             room.settle_health(
                 bot,

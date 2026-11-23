@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Suppress room-wide hurt voice for NPC-versus-NPC damage while keeping player damage feedback. Synchronize stock NPC HUD health after both scripted and area healing. The prepared encrypted replay now requires the staged nameplate on each allied bot as well as on the enemy target. Passed 592 library tests, three prepared 104319 checks, and Clippy.
+
 - Gate owner movement against remote player capsules on the same creation acknowledgment used for weapon targeting. The room replay covers missing and acknowledged delivery with and without an owner StateScript. Passed 592 library tests and Clippy.
 
 - Route authored NPC walk requests through the shared static navigator, with one cached route per destination. Collision-resolved steering follows the waypoints while preserving aim. Clear the route on request exit or body displacement. Passed 592 library tests including the synthetic wall detour, two prepared bot return replays, and Clippy.

@@ -340,6 +340,87 @@ fn stock_bot_weapon_placement_uses_map_graphs_and_body_slot_bindings() {
 }
 
 #[test]
+#[ignore = "requires a prepared 104319 Practice Range pack with friendly bot graphs"]
+fn prepared_friendly_bot_nameplate_uses_settled_damage_and_healing() {
+    use crate::{
+        game_combat::{HealingPulse, health::HealthEffect},
+        game_content::GameMap,
+        scene_assets::SceneAssets,
+    };
+    use std::time::Duration;
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/npc-nameplate-staged-admission-v1.json"
+    ))
+    .unwrap();
+    let values = &fixture["allied_health"];
+    let damage = values["bot_damage"].as_f64().unwrap();
+    let scripted = values["script_heal"].as_f64().unwrap();
+    let field = values["field_heal"].as_f64().unwrap();
+    let path = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let assets = SceneAssets::load(path).unwrap();
+    let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
+    let (room, queries) = scene.bot_simulation();
+    let (wire, team, position, maximum, attacker) = {
+        let bots: Vec<_> = room.bodies().unwrap().collect();
+        let ally = bots.iter().find(|bot| bot.spawn.team == 0).unwrap();
+        let enemy = bots
+            .iter()
+            .find(|bot| bot.spawn.team != ally.spawn.team)
+            .unwrap();
+        (
+            ally.entity,
+            ally.spawn.team,
+            ally.position,
+            ally.spawn.health,
+            enemy.entity,
+        )
+    };
+    let source = Death {
+        time: 0.0,
+        frame: crate::game_clock::FIRST_TICK,
+        killer: attacker,
+    };
+    let check = |room: &mut RoomSimulation, expected| {
+        let state = room.state_mut(wire).unwrap().unwrap();
+        assert_eq!(state.vitals.total(), expected);
+        let script = state.stock_script.as_ref().unwrap();
+        assert_eq!(script.world.vitals.total(), expected);
+        let snapshot = script.projection().unwrap().snapshot;
+        assert!(
+            snapshot
+                .instances
+                .values()
+                .any(|instance| instance.graph == 0x0d24)
+        );
+        assert_eq!(
+            snapshot.variables.get(&HUD_HEALTH),
+            Some(&Value::Float(expected))
+        );
+    };
+    room.settle_health(wire, HealthEffect::Damage(damage), source, Duration::ZERO)
+        .unwrap();
+    check(room, maximum - damage);
+    room.settle_health(wire, HealthEffect::Heal(scripted), source, Duration::ZERO)
+        .unwrap();
+    check(room, maximum - damage + scripted);
+    let updates = room
+        .heal_allies(
+            &queries,
+            team,
+            None,
+            None,
+            &[HealingPulse {
+                centre: position,
+                amount: field,
+            }],
+        )
+        .unwrap();
+    assert!(updates.iter().any(|update| update.entity == wire));
+    check(room, maximum - damage + scripted + field);
+}
+
+#[test]
 #[ignore = "requires a prepared 104319 Practice Range pack"]
 fn prepared_bot_respawn_projects_its_authored_animation_in_the_first_frame() {
     let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
