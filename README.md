@@ -82,7 +82,7 @@ These overrides apply only to card `0x3C` and do not affect default runs or othe
 | Area | Implemented (`rust`) | Next Steps |
 | --- | --- | --- |
 | **Login, Profiles & Gallery** | Native Battle.net RPC, JAM lobby, profile settings persistence (`profile-settings-v1`), and Hero Gallery loadout previews (including 23 NPC previews). | Expand lobby flows and polish Hero Gallery framing. |
-| **Practice Range & Combat** | Local UDP rooms with Bevy ECS simulation for bots and projectiles. Shared StateScript systems drive patrol decisions and supported weapon and ability behaviors. | Extend shared behavior across the roster, improve movement and ammo synchronization, and refine map navigation. |
+| **Practice Range & Combat** | Local UDP rooms use Bevy ECS to simulate bots and projectiles. StateScript drives patrol decisions and supported weapon and ability behavior. | Expand hero ability coverage, improve movement and ammo synchronization, and refine upstairs navigation. |
 | **Junkenstein's Revenge** | All 14 cards load. Headless replays cover supported combat abilities, ultimate charge (`0B8B`), team score, boss speech (`40E05F6B`), and gate stages. | Expand the PvE hero roster and refine boss intro cameras, pursuit, and end-of-match flows. |
 | **Architecture & Isolation** | Independent `orpheus-wire`, `orpheus-collision`, `orpheus-runtime`, and `orpheus-statescript` workspace crates, plus modularized `game_combat/`, `scene_assets/`, and `game_service/` with room-level fault and panic isolation. | Extend cross-map navigation and multi-map simulation support. |
 
@@ -117,9 +117,9 @@ flowchart LR
 
 ## Contributing
 
-- **Rust and protocol.** Extend shared weapon and ability behavior and cover delivery of StateScript state to clients. [Example delivery task (#166)](https://github.com/leafall903/ORPHEUS/issues/166)
-- **Inspector, navigation and ECS.** Build on the completed work. [#62](https://github.com/leafall903/ORPHEUS/issues/62) · [#63](https://github.com/leafall903/ORPHEUS/issues/63) · [#65](https://github.com/leafall903/ORPHEUS/issues/65)
-- **Gameplay feedback.** Share reproducible behavior reports from the Practice Range or Junkenstein's Revenge. [Roadmap](docs/ROADMAP.md)
+- **Rust and protocol.** Extend shared hero abilities and the delivery of StateScript state to clients. [Delivery coverage example (#166)](https://github.com/leafall903/ORPHEUS/issues/166)
+- **Inspector, navigation and ECS.** Build on the completed work in [#62](https://github.com/leafall903/ORPHEUS/issues/62), [#63](https://github.com/leafall903/ORPHEUS/issues/63), and [#65](https://github.com/leafall903/ORPHEUS/issues/65).
+- **Gameplay feedback.** Play the Practice Range or Junkenstein's Revenge locally with build 104319 and report reproducible gameplay or protocol discrepancies. [Roadmap](docs/ROADMAP.md)
 
 See the [contribution guide](CONTRIBUTING.md), browse [open issues](https://github.com/leafall903/ORPHEUS/issues?q=is%3Aissue+is%3Aopen), or join [Discord](https://discord.gg/tqukqjAk7).
 
