@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Cover bot projectile interception on an authored Practice Range firing lane. The prepared replay checks that the front bot takes the impact and the player behind it stays unharmed. In the same lane, a shot already in flight reaches the player if the front bot dies before contact. Both impacts coincide with observer projectile completion. The prepared lane and controlled stock-bot projectile regressions passed.
+
 - Resolve each pellet of an authored uniform-cone hitscan volley with its own deterministic direction. One shot report still owns the volley, so pellet expansion leaves the existing ammunition and cadence logic intact. Passed 820 library tests and the prepared 104319 ring-spread and burst-falloff replays. The full Tracer startup probe remains blocked by four existing StateScript initialization diagnostics.
 
 - Resolve every pellet from authored ring-spread hitscan volleys using the same direction generator for players and NPCs. Each pellet uses the shared collision and damage path while the original shot determines ammo and cadence. Passed 819 library tests, the prepared 104319 ring-spread and burst-falloff regressions, and Clippy.

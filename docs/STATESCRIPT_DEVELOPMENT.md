@@ -91,8 +91,12 @@ slot binding. The body's ordinary logical-button dispatcher receives the
 input. The headless probes check press, release, and projectile flight admission.
 Flight uses the room's existing hostile-target and collision queries.
 A controlled room fixture verifies damage to a live bot and a player
-while a same-team target remains unharmed. Client presentation remains
-a separate acceptance check.
+while a same-team target remains unharmed. A prepared-room replay also
+finds an opposed firing lane from the actual map spawns and places a
+player 1.5 metres behind its front bot. With the front bot alive, that bot
+takes the hit. If the front bot dies after the shot launches, the player
+behind it takes the hit. The replay checks observer projectile completion
+on the same simulation tick as each impact.
 The earlier spawn-reset and button lifecycle are documented in the
 [Python bot host](https://github.com/leafall903/ORPHEUS/blob/299b44111fc3e3dddcc5a691859b7a6c3ac661a6/src/ow174/game/script/bot.py).
 

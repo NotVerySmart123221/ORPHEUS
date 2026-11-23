@@ -381,6 +381,134 @@ fn normal_cassidy_primary_and_fan_damage_all_boss_bodies() {
 }
 
 #[test]
+#[ignore = "requires the prepared 104319 Practice Range runtime"]
+fn prepared_practice_firing_lane_stops_at_the_front_bot() {
+    use crate::{
+        game_hitscan::direction_for_angles,
+        static_ray::{along, norm},
+    };
+
+    let assets = SceneAssets::load(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap()).unwrap();
+    let scene = assets.prepare(GameMap::practice_range()).unwrap();
+    let bots: Vec<_> = scene.bots().unwrap().collect();
+    let (shooter, front, rear_position) = bots
+        .iter()
+        .filter(|bot| bot.spawn.team == 1 && !bot.spawn.placement_graphs.is_empty())
+        .find_map(|shooter| {
+            let direction = direction_for_angles(shooter.spawn.yaw, 0);
+            bots.iter()
+                .filter(|bot| bot.spawn.team == 0 && bot.spawn.placement_graphs.is_empty())
+                .find_map(|target| {
+                    let delta: [f64; 3] =
+                        std::array::from_fn(|axis| target.position[axis] - shooter.position[axis]);
+                    let distance: f64 = delta.into_iter().zip(direction).map(|(a, b)| a * b).sum();
+                    let miss = std::array::from_fn(|axis| delta[axis] - direction[axis] * distance);
+                    (distance > 0.0 && norm(miss) < 0.05).then(|| {
+                        (
+                            shooter.entity,
+                            target.entity,
+                            along(target.position, direction, 1.5),
+                        )
+                    })
+                })
+        })
+        .expect("an authored enemy firing lane through a friendly bot");
+
+    check_practice_firing_lane(scene, shooter, front, rear_position, true);
+    check_practice_firing_lane(
+        assets.prepare(GameMap::practice_range()).unwrap(),
+        shooter,
+        front,
+        rear_position,
+        false,
+    );
+}
+
+fn check_practice_firing_lane(
+    mut scene: PreparedScene,
+    shooter: u32,
+    front: u32,
+    rear_position: [f64; 3],
+    live_cover: bool,
+) {
+    use crate::{
+        game_clock::{FIRST_TICK, TICK_PERIOD},
+        game_combat::{ObservedProjectileEvent, PlayerBodyState},
+        game_replication::BodyId,
+        mover_settings::MoverSettings,
+        script_player::fixture_body_factory,
+    };
+
+    let (room, queries) = scene.bot_simulation();
+    let (factory, mut spawn) = fixture_body_factory();
+    spawn.frame = FIRST_TICK;
+    spawn.pose.position = rear_position;
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        rear_position,
+        0,
+        MOVER_CATEGORY,
+    )
+    .unwrap();
+    let rear = BodyId {
+        entity: spawn.entity,
+        generation: 1,
+    };
+    let state = PlayerBodyState::new(
+        rear,
+        spawn.controller,
+        spawn.slot,
+        0,
+        crate::game_heroes::SOLDIER,
+        mover,
+        Some(Box::new(factory.start(spawn).unwrap())),
+        FIRST_TICK,
+        None,
+    );
+    let rear_health = state.vitals().unwrap().total();
+    room.spawn_player_body(state).unwrap();
+    let front_health = room.body_healths().unwrap()[&front];
+    let mut lane_flights = BTreeSet::new();
+    let mut cover_down = false;
+    for tick in FIRST_TICK + 1..=FIRST_TICK + 800 {
+        let elapsed = TICK_PERIOD * (tick - FIRST_TICK);
+        room.finish_tick(&queries, tick, elapsed).unwrap();
+        let mut completed = false;
+        for event in room.take_projectile_reports() {
+            match event {
+                ObservedProjectileEvent::Launched {
+                    id, presentation, ..
+                } if presentation.volley.event.entity == shooter => {
+                    lane_flights.insert(id);
+                    if !live_cover && !cover_down {
+                        room.kill_bot_for_test(front, tick, elapsed);
+                        cover_down = true;
+                    }
+                }
+                ObservedProjectileEvent::Completed { id, .. } if lane_flights.remove(&id) => {
+                    completed = true;
+                }
+                _ => {}
+            }
+        }
+        let player_hp = room.player_body(rear).unwrap().vitals().unwrap().total();
+        if live_cover {
+            assert_eq!(player_hp, rear_health);
+            let health = room.body_healths().unwrap()[&front];
+            if health < front_health {
+                assert!(health > 0.0 && completed);
+                return;
+            }
+        } else if player_hp < rear_health {
+            assert!(cover_down && room.is_bot_dead(front) && completed);
+            return;
+        }
+    }
+    panic!("the authored lane did not settle the expected impact with live_cover={live_cover}");
+}
+
+#[test]
 #[ignore = "requires the local 104319 Practice Range runtime with authored mode rules"]
 fn prepared_reaper_primary_projects_the_authored_pellet_count() {
     use crate::{
