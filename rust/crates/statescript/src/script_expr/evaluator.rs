@@ -484,7 +484,9 @@ impl Evaluator {
         let value = child(config, "m_value");
         let nested = depth + 1;
         let result = match class {
-            "STU_CC53F52B" | "STU_7BE6D76D" if native_shape(config, class, Some("m_entity")) => {
+            "STU_CC53F52B" | "STU_7BE6D76D" | "STU_40AC5AE4"
+                if native_shape(config, class, Some("m_entity")) =>
+            {
                 let target = self.scalar_config(
                     child(config, "m_entity"),
                     context,

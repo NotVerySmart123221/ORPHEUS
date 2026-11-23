@@ -167,7 +167,7 @@ pub(super) struct BodyWorld {
     pub(super) sightings: Vec<DefenderSighting>,
     pub(super) sighting_source: Option<SightingSource>,
     pub(super) death_source: Option<crate::game_combat::DeathSourceFacts>,
-    pub(super) cinematic_aim: Option<(Site, [i32; 2])>,
+    pub(super) cinematic_aim: indexmap::IndexMap<Site, [i32; 2]>,
     pub(super) facing_claims: indexmap::IndexMap<Site, crate::script_init::AiFacing>,
     pub(super) deadeye_scene: DeadeyeScene,
     pub(super) velocity_changes: Vec<(u32, crate::mover::VelocityChange)>,
@@ -350,9 +350,25 @@ impl World for BodyWorld {
             return false;
         }
         if active {
-            self.cinematic_aim = Some((site, [self.movement.yaw, self.movement.pitch]));
-        } else if self.cinematic_aim.is_some_and(|(owner, _)| owner == site) {
-            self.cinematic_aim = None;
+            self.cinematic_aim
+                .insert(site, [self.movement.yaw, self.movement.pitch]);
+        } else {
+            self.cinematic_aim.shift_remove(&site);
+        }
+        true
+    }
+
+    fn set_captured_aim_lock(&mut self, site: Site, degrees: Option<[f64; 2]>) -> bool {
+        if !self.is_player_site(site) {
+            return false;
+        }
+        if let Some(degrees) = degrees {
+            let Some(aim) = crate::linked_aim::unparented_lock(degrees) else {
+                return false;
+            };
+            self.cinematic_aim.insert(site, aim);
+        } else {
+            self.cinematic_aim.shift_remove(&site);
         }
         true
     }

@@ -1431,7 +1431,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::Registered { next: None }
             }
             "STU_9935FBC8"
-                if registration.permits(registered_state(self.graph(id), node).is_some()) =>
+                if registration.shape(registered_state(self.graph(id), node).is_some()) =>
             {
                 StateKind::Registered { next: None }
             }

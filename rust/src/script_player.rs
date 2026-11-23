@@ -266,7 +266,7 @@ impl PlayerBodyFactory {
             sightings: Vec::new(),
             sighting_source: None,
             death_source: None,
-            cinematic_aim: None,
+            cinematic_aim: Default::default(),
             facing_claims: Default::default(),
             deadeye_scene: DeadeyeScene::default(),
             velocity_changes: Vec::new(),

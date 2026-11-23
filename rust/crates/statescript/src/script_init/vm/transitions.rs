@@ -18,9 +18,9 @@ use super::super::{
         UnavailableSample, VarKey,
     },
     shapes::{
-        array_field, branch_path, case_path, configured, field, is_unlinked_plug,
-        parent_owned_graph_duration, pool_number, raw_indices, registered_state, same, source_key,
-        stored,
+        array_field, branch_path, captured_aim_lock_shape, case_path, configured, field,
+        is_unlinked_plug, parent_owned_graph_duration, pool_number, raw_indices, registered_state,
+        same, source_key, stored,
     },
     types::{InitFault, Issue, StateKind},
     world::{Site, World},
@@ -1427,7 +1427,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             return Ok(());
         }
         if entry.class == RegisteredClass::CinematicAim {
-            let accepted = if (site.graph, site.node) == (0x224e, Some(34)) {
+            let accepted = if captured_aim_lock_shape(node) {
                 let mut degrees = [0.0; 2];
                 for (out, name) in degrees.iter_mut().zip(["m_A53161C8", "m_AB37A892"]) {
                     let Some(value) = self.evaluate_at_with_initial(
@@ -1438,7 +1438,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     ) else {
                         return Ok(());
                     };
-                    *out = script_expr::to_float(&value);
+                    *out = match value {
+                        Value::Integer(value) => value as f64,
+                        Value::Float(value) if value.is_finite() => value,
+                        _ => {
+                            self.report(site, Issue::UnsupportedField("captured aim lock pose"));
+                            return Ok(());
+                        }
+                    };
                 }
                 self.world.set_captured_aim_lock(site, Some(degrees))
             } else {
@@ -1463,7 +1470,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         };
         if entry.class == RegisteredClass::CinematicAim {
             let site = self.site(key.instance, node);
-            if (site.graph, site.node) == (0x224e, Some(34)) {
+            if captured_aim_lock_shape(node) {
                 self.world.set_captured_aim_lock(site, None);
             } else {
                 self.world.set_cinematic_aim_lock(site, false);

@@ -140,7 +140,7 @@ pub(super) fn registered_state(graph: &Graph, node: &Node) -> Option<RegisteredS
         && flag("m_7E42F868", true)
         && registered_state_fields(node, "m_7E42F868");
     let class = match node.class.as_str() {
-        "STU_9935FBC8" if placement == (0x224e, 34) && captured_aim_lock_shape(node) => {
+        "STU_9935FBC8" if has_remote_state_slot() && captured_aim_lock_shape(node) => {
             RegisteredClass::CinematicAim
         }
         "STU_9935FBC8"
@@ -228,12 +228,10 @@ pub(super) fn captured_aim_lock_shape(node: &Node) -> bool {
     let fields = &node.fields;
     field(fields, "m_93CDFD2F").as_u64() == Some(1)
         && field(fields, "m_4BE66EFF").is_null()
-        && [("m_A53161C8", 501), ("m_AB37A892", 502)]
-            .iter()
-            .all(|(name, id)| {
-                matches!(script_expr::dynamic(field(fields,name)), Ok(Some(variable))
-                if variable.scope == Scope::Instance && variable.id == *id)
-            })
+        && ["m_A53161C8", "m_AB37A892"].iter().all(|name| {
+            matches!(script_expr::dynamic(field(fields,name)), Ok(Some(variable))
+                if variable.scope == Scope::Instance)
+        })
         && ["m_C33684DE", "m_8FA7FF85", "m_D6119DFB", "m_83221709"]
             .iter()
             .all(|name| {

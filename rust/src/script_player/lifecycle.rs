@@ -223,7 +223,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
     }
 
     fn cinematic_aim(&self) -> Option<[i32; 2]> {
-        self.world.cinematic_aim.map(|(_, aim)| aim)
+        self.world.cinematic_aim.last().map(|(_, aim)| *aim)
     }
 
     fn authored_facing(&self) -> Option<[i32; 2]> {
