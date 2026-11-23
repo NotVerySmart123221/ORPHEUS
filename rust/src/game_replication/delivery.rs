@@ -1778,7 +1778,7 @@ impl WorldDelivery {
                         .filter(|runtime| runtime.wheel_actions_available());
                     if let Some(runtime) = runtime {
                         // A full or halted VM queue rejects the request locally.
-                        let _ = runtime.queue_local_message(action.into_local_message());
+                        let _ = runtime.queue_wheel_selection(action);
                     }
                     remaining -= 1;
                 }

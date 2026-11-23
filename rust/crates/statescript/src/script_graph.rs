@@ -2258,6 +2258,12 @@ impl GraphStore {
             .is_some_and(|rows| !rows.is_empty())
     }
 
+    pub fn has_asset_category_entry(&self, asset: u64) -> bool {
+        self.asset_categories
+            .as_ref()
+            .is_some_and(|rows| rows.contains_key(&asset))
+    }
+
     /// Whether any server graph uses the room's living body snapshot.
     pub fn uses_room_spatial_frame(&self) -> bool {
         self.room_spatial_needs != RoomSpatialNeeds::None

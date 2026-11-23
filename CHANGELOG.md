@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Route context-free communication wheel selections to the current player's authored body VM when the prepared catalog contains the selected asset. Keep the client's confirmation flag and the existing reliable-order, possession and body-generation checks. Passed 516 server library tests and a prepared 104319 check that drives both authored receivers through the live runtime entry and produces a callout in a solo room. Contextual requests and original-client presentation remain open.
+
 - Time remote projectile retirement from the send frame of the acknowledged launch. Keep the encoded launch and projectile IDs stable across loss. Passed 516 server library tests, including a lost launch, a later retry, and retirement timed from that retry's send frame. Original-client impact presentation remains open.
 
 - Hold scripted bot replacements out of a player's weapon queries until that player acknowledges the first observer script snapshot. Hitscan and projectile flight share this admission rule. The transport fixture covers two observers at different delivery stages and retry after a lost snapshot. Passed 516 server library tests and both prepared 104319 checks for the initial spawn animation snapshot and the death-to-respawn nameplate. Original-client respawn animation and physical contact still need verification.

@@ -16,6 +16,7 @@ use crate::{
     game_heroes::CASSIDY,
     game_hitscan::{HitDefinition, aim_direction},
     game_instance::TeamMemberCounts,
+    game_parameters::ClientWheelAction,
     game_projectiles::{
         ImpactSpawn, ProjectileLeases, authored_number, local_prediction, predicted_sync,
     },
@@ -113,6 +114,22 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         message: RoomMessage,
     ) -> Result<usize, InitFault> {
         self.component.queue_room_message_from(sender, message)
+    }
+
+    fn wheel_actions_available(&self) -> bool {
+        self.world.graphs.has_asset_category_data() && self.component.snapshot().is_some()
+    }
+
+    fn queue_wheel_selection(&mut self, action: ClientWheelAction) -> Result<usize, InitFault> {
+        if !self.world.graphs.has_asset_category_entry(action.asset()) {
+            return Ok(0);
+        }
+        let selection = action.into_local_message();
+        self.component.queue_entity_message_from(
+            self.world.entity,
+            selection.id,
+            selection.parameters,
+        )
     }
 
     fn set_spatial_frame(&mut self, frame: Arc<crate::game_combat::RoomSpatialFrame>) {

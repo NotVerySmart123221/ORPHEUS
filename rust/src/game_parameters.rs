@@ -49,6 +49,10 @@ impl ClientWheelAction {
         Some(Self { action, confirmed })
     }
 
+    pub(crate) fn asset(self) -> u64 {
+        self.action
+    }
+
     pub(crate) fn into_local_message(self) -> RoomMessage {
         RoomMessage {
             id: WHEEL_SELECTION,

@@ -148,8 +148,11 @@ a matching pair returns false. Keep the extracted catalog in the private
 runtime bundle. The [wheel input contract](../fixtures/behavior/wheel-selection-ingress-v1.json)
 uses synthetic input and generation changes. The build-specific wire layout
 and category fields are documented in the [Python reference](https://github.com/leafall903/ORPHEUS/blob/499b9871b1ff9bf3d86715b7648626b18b154f0d/docs/COMMUNICATION_WHEEL.txt).
-Live owner wheel input stays disabled pending validation of the native sight
-profiles and the remaining wheel receivers. The `TrackTargets` view shape
+The live owner accepts context-free wheel selections from a living,
+acknowledged body when the selected asset has authored category data.
+It passes the selection and confirmation flag straight to the body's
+authored handlers. The contextual target marker still requires native
+validation. The `TrackTargets` view shape
 passes its origin, offset, radius, aperture, limit, filter masks, ranking and
 sight profile to the room. A frozen room with no other living player bodies
 returns an empty result. Bots may obstruct sight when the supplied profile
@@ -189,8 +192,8 @@ its existing text rendering and audience checks. `STU_1ECB66A0` looks up
 the complete communication action GUID in the optional `asset_textures`
 catalog. A missing key in a supplied catalog returns a zero texture
 reference. If the catalog is absent, the VM reports the lookup as
-unavailable. Action `STU_71FE9852`, live wheel input and original-client
-presentation verification remain open.
+unavailable. Action `STU_71FE9852`, sight profiles for occupied rooms and
+original-client presentation verification remain open.
 The pair and opcode behavior follows the [pinned Python reference for pairs](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/script/play.py#L81-L93)
 and [expression maps](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/script/expr.py#L832-L835).
 The synchronized variable capture follows the [pinned Python frame-action reference](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/script/driver.py#L781-L811).

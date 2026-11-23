@@ -1252,8 +1252,11 @@ impl OwnerBodyRuntime for SyntheticOwner {
         Ok(1)
     }
 
-    fn queue_local_message(&mut self, message: RoomMessage) -> Result<usize, InitFault> {
-        self.receive_room_message(self.component.snapshot().unwrap().entity, message)
+    fn queue_wheel_selection(&mut self, action: ClientWheelAction) -> Result<usize, InitFault> {
+        self.receive_room_message(
+            self.component.snapshot().unwrap().entity,
+            action.into_local_message(),
+        )
     }
 
     fn wheel_actions_available(&self) -> bool {

@@ -3495,17 +3495,18 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
     let root = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
     let graphs = Arc::new(GraphStore::load(root.join("data/game_graphs_174.json.gz")).unwrap());
     let action = 0x0a90_0000_0000_0171;
-    let request = ClientWheelAction::read(&Message {
-        id: CLIENT_WHEEL_ACTION,
-        fields: Fields::from([
-            (0x78, WireValue::Unsigned(action)),
-            (0x80, WireValue::Bool(true)),
-        ]),
-    })
-    .unwrap()
-    .into_local_message();
+    let request = |action| {
+        ClientWheelAction::read(&Message {
+            id: CLIENT_WHEEL_ACTION,
+            fields: Fields::from([
+                (0x78, WireValue::Unsigned(action)),
+                (0x80, WireValue::Bool(true)),
+            ]),
+        })
+        .unwrap()
+    };
     for with_room in [false, true] {
-        let (mut component, mut world) = prepared_soldier_component(Arc::clone(&graphs), true);
+        let (component, mut world) = prepared_soldier_component(Arc::clone(&graphs), true);
         if with_room {
             let ground = CollisionScene::movement_probe(
                 &CollisionCache {
@@ -3549,14 +3550,44 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
             world.spatial_frame = room.capture_spatial_frame(FIRST_TICK + 1).unwrap();
             assert!(world.spatial_frame.is_some());
         }
+        let mut runtime = PlayerBodyRuntime {
+            component,
+            world,
+            codecs: Arc::new(CodecTable::from_json(r#"{"classes":{}}"#).unwrap()),
+            modifiers: None,
+            leases: Default::default(),
+            frame: FIRST_TICK,
+            charge_binding: None,
+        };
         assert_eq!(
-            component
-                .queue_entity_message_from(world.entity, request.id, request.parameters.clone())
-                .unwrap(),
-            2
+            runtime.wheel_actions_available(),
+            graphs.has_asset_category_data()
         );
-        component.advance_frame(FIRST_TICK + 1, &mut world).unwrap();
-        let snapshot = component.snapshot().unwrap();
+        assert_eq!(
+            runtime
+                .queue_wheel_selection(request(0x0a90_0000_dead_beef))
+                .unwrap(),
+            0
+        );
+        let request = request(action);
+        if graphs.has_asset_category_data() {
+            assert_eq!(runtime.queue_wheel_selection(request).unwrap(), 2);
+        } else {
+            assert_eq!(runtime.queue_wheel_selection(request).unwrap(), 0);
+            let request = request.into_local_message();
+            assert_eq!(
+                runtime
+                    .component
+                    .queue_entity_message_from(runtime.world.entity, request.id, request.parameters)
+                    .unwrap(),
+                2
+            );
+        }
+        runtime
+            .component
+            .advance_frame(FIRST_TICK + 1, &mut runtime.world)
+            .unwrap();
+        let snapshot = runtime.component.snapshot().unwrap();
         if graphs.has_asset_category_data() {
             assert!(!snapshot.diagnostics.iter().any(|diagnostic| {
                 matches!(&diagnostic.issue, crate::script_init::Issue::Expression(crate::script_expr::EvalError::UnsupportedConfig(class))
