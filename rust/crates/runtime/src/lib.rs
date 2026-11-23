@@ -44,6 +44,8 @@ pub const BNET_DESCRIPTORS: &str = "bnet/descriptors.pb";
 pub const JUNKENSTEIN_MAP_WORLD: &str = "data/junkenstein/junkenstein-map-world.json";
 pub const JUNKENSTEIN_NPCS: &str = "data/junkenstein/junkenstein-npcs.json";
 pub const COMBAT_HURT_VOLUMES: &str = "data/combat_hurt_volumes.json";
+pub const WHEEL_EMOTE_ALIASES: &str = "data/emote_aliases_174.json";
+pub const WHEEL_EMOTE_BLEND_TREES: &str = "data/emote_blend_trees_174.json";
 pub const WHEEL_VOICE_EFFECTS: &str = "data/voice_effects_174.json";
 pub const ACTOR_VOICE_CATALOG: &str = "data/player_voice_174.json";
 pub const COMBAT_VOICE_CATALOG: &str = "data/combat_voice_174.json";
@@ -270,6 +272,8 @@ fn inputs(
         COMBAT_HURT_VOLUMES,
         ACTOR_VOICE_CATALOG,
         WHEEL_VOICE_EFFECTS,
+        WHEEL_EMOTE_ALIASES,
+        WHEEL_EMOTE_BLEND_TREES,
         COMBAT_VOICE_CATALOG,
         MAP_ENVIRONMENT,
     ] {

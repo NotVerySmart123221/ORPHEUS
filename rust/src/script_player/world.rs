@@ -175,11 +175,22 @@ impl World for BodyWorld {
             .spray_placement(self.eye_position?, direction, reach)
     }
 
-    fn equipped_spray(&self, entity: u32, slot: usize) -> Option<u64> {
+    fn equipped_cosmetic(
+        &self,
+        entity: u32,
+        slot: usize,
+        cosmetic: crate::script_expr::EquippedCosmetic,
+    ) -> Option<u64> {
+        use crate::script_expr::EquippedCosmetic;
         if entity != self.entity && entity != self.controller {
             return None;
         }
-        self.wheel_cosmetics.sprays.get(slot).copied()
+        let slots = match cosmetic {
+            EquippedCosmetic::Spray => &self.wheel_cosmetics.sprays,
+            EquippedCosmetic::EmoteAlias => &self.wheel_cosmetics.emote_aliases,
+            EquippedCosmetic::EmoteBlendTree => &self.wheel_cosmetics.emote_blend_trees,
+        };
+        slots.get(slot).copied()
     }
 
     fn local_command_present(&self, site: Site) -> Option<bool> {

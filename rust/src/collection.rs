@@ -272,9 +272,15 @@ impl Collection {
             }
             Ok(slots)
         };
+        let emotes = read_slots(0x88)?;
+        let resolve = |catalog: &HashMap<u64, u64>| {
+            emotes.map(|unlock| catalog.get(&unlock).copied().unwrap_or(0))
+        };
         Ok(WheelCosmetics {
             sprays: read_slots(0x58)?,
-            emotes: read_slots(0x88)?,
+            emotes,
+            emote_aliases: resolve(&self.items.emote_aliases),
+            emote_blend_trees: resolve(&self.items.emote_blend_trees),
             voice_effects: read_slots(0x70)?.map(|unlock| {
                 self.items
                     .wheel_voice_effects

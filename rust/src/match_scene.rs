@@ -74,6 +74,8 @@ pub struct PlayerCard {
 pub(crate) struct WheelCosmetics {
     pub sprays: [u64; 4],
     pub emotes: [u64; 4],
+    pub emote_aliases: [u64; 4],
+    pub emote_blend_trees: [u64; 4],
     pub voice_effects: [u64; 4],
 }
 

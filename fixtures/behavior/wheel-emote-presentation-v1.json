@@ -15,6 +15,10 @@
     "start_angles": [8192, 1024],
     "mouse_angles": [-16384, -2048]
   },
+  "rust_asset_lookup": {
+    "alias": "0x0C80000000000091",
+    "blend_tree": "0x0040000000000052"
+  },
   "expected": {
     "controller_cosmetics_update_hex": "014102e001c304095002c3e20b50020000",
     "package_slot": [1],

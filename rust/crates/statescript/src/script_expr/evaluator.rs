@@ -963,30 +963,55 @@ impl Evaluator {
                         .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
                 )
             }
-            "STU_17B517B9"
-                if native_fields(config, &["m_entity", "m_slot", "m_resourceKey"])
-                    && child(config, "m_resourceKey").is_null() =>
-            {
-                let entity = self.config(child(config, "m_entity"), context, nested)?;
+            "STU_17B517B9" | "STU_DF7C7C63" | "STU_250DEABD" => {
+                let (cosmetic, owner) = match class {
+                    "STU_250DEABD"
+                        if native_fields(config, &["m_target", "m_slot", "m_resourceKey"])
+                            && child(config, "m_resourceKey").is_null()
+                            && native_shape(
+                                child(config, "m_target"),
+                                "STU_33980609",
+                                Some("m_entity"),
+                            ) =>
+                    {
+                        (
+                            EquippedCosmetic::EmoteAlias,
+                            child(child(config, "m_target"), "m_entity"),
+                        )
+                    }
+                    "STU_DF7C7C63" | "STU_17B517B9"
+                        if native_fields(config, &["m_entity", "m_slot", "m_resourceKey"])
+                            && child(config, "m_resourceKey").is_null() =>
+                    {
+                        let cosmetic = if class == "STU_17B517B9" {
+                            EquippedCosmetic::Spray
+                        } else {
+                            EquippedCosmetic::EmoteBlendTree
+                        };
+                        (cosmetic, child(config, "m_entity"))
+                    }
+                    _ => return Err(EvalError::UnsupportedConfig(class.into())),
+                };
+                let entity = self.config(owner, context, nested)?;
                 let slot = self.config(child(config, "m_slot"), context, nested)?;
                 match (entity, slot) {
                     (Value::Entity(entity), Value::Integer(slot)) if valid_entity(entity) => {
-                        let spray = usize::try_from(slot)
+                        let asset = usize::try_from(slot)
                             .ok()
                             .filter(|&slot| slot < 4)
                             .map(|slot| {
                                 context
-                                    .equipped_spray(entity, slot)
+                                    .equipped_cosmetic(entity, slot, cosmetic)
                                     .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))
                             })
                             .transpose()?
                             .unwrap_or(0);
-                        Value::Asset(spray)
+                        Value::Asset(asset)
                     }
                     (Value::Null | Value::Entity(_), Value::Null | Value::Integer(_)) => {
                         Value::Asset(0)
                     }
-                    _ => return Err(EvalError::MalformedConfig("equipped spray operands")),
+                    _ => return Err(EvalError::MalformedConfig("equipped cosmetic operands")),
                 }
             }
             "STU_1ECB66A0"
@@ -1033,6 +1058,17 @@ impl Evaluator {
             }
             "STU_8556841E" => literal_asset(config, class, "m_entityDef", 0x0400)
                 .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
+            "STUConfigVarAnimation"
+                if native_fields(config, &["m_animation", "m_resourceKey"])
+                    && child(config, "m_resourceKey").is_null() =>
+            {
+                if child(config, "m_animation").is_null() {
+                    Value::Asset(0)
+                } else {
+                    literal_asset(config, class, "m_animation", 0x0a00)
+                        .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?
+                }
+            }
             "STUConfigVarBone" => literal_asset(config, class, "m_bone", 0x0880)
                 .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
             "STU_1A3FA5B0" if native_shape(config, class, Some("m_entity")) => {

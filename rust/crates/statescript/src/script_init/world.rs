@@ -909,7 +909,12 @@ pub trait World {
         None
     }
 
-    fn equipped_spray(&self, _entity: u32, _slot: usize) -> Option<u64> {
+    fn equipped_cosmetic(
+        &self,
+        _entity: u32,
+        _slot: usize,
+        _cosmetic: script_expr::EquippedCosmetic,
+    ) -> Option<u64> {
         None
     }
 

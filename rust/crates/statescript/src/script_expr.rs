@@ -256,6 +256,13 @@ pub enum OnFire {
     NoStats,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EquippedCosmetic {
+    Spray,
+    EmoteAlias,
+    EmoteBlendTree,
+}
+
 pub trait Context {
     /// Signed native index; -1 means known no team, None means unavailable.
     fn entity_team(&mut self, _entity: u32) -> Option<i8> {
@@ -431,7 +438,12 @@ pub trait Context {
     }
 
     /// Some(0) is an empty slot; None means the entity loadout is unavailable.
-    fn equipped_spray(&mut self, _entity: u32, _slot: usize) -> Option<u64> {
+    fn equipped_cosmetic(
+        &mut self,
+        _entity: u32,
+        _slot: usize,
+        _cosmetic: EquippedCosmetic,
+    ) -> Option<u64> {
         None
     }
 

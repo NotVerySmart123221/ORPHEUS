@@ -20,7 +20,13 @@ fn wheel_selection_resolves_authored_slot_and_equipped_spray() {
             Value::Entity(0xa000_0101)
         }
 
-        fn equipped_spray(&mut self, entity: u32, slot: usize) -> Option<u64> {
+        fn equipped_cosmetic(
+            &mut self,
+            entity: u32,
+            slot: usize,
+            cosmetic: EquippedCosmetic,
+        ) -> Option<u64> {
+            assert_eq!(cosmetic, EquippedCosmetic::Spray);
             (entity == 0xa000_0101).then_some(if slot == self.slot { self.spray } else { 0 })
         }
     }
@@ -61,6 +67,67 @@ fn wheel_selection_resolves_authored_slot_and_equipped_spray() {
             Ok(Value::Asset(parse_asset(&case["expected"])))
         );
     }
+}
+
+#[test]
+fn emote_lookups_read_the_selected_body_slot() {
+    struct Equipped {
+        alias: u64,
+        blend_tree: u64,
+    }
+    impl Context for Equipped {
+        fn owner(&mut self) -> Value {
+            Value::Entity(0xa000_0101)
+        }
+
+        fn equipped_cosmetic(
+            &mut self,
+            entity: u32,
+            slot: usize,
+            cosmetic: EquippedCosmetic,
+        ) -> Option<u64> {
+            if entity != 0xa000_0101 {
+                return None;
+            }
+            Some(match (cosmetic, slot) {
+                (EquippedCosmetic::EmoteAlias, 1) => self.alias,
+                (EquippedCosmetic::EmoteBlendTree, 1) => self.blend_tree,
+                _ => 0,
+            })
+        }
+    }
+    let fixture: Json = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/wheel-emote-presentation-v1.json"
+    )))
+    .unwrap();
+    let asset = |key| {
+        orpheus_runtime::format::parse_guid(fixture["rust_asset_lookup"][key].as_str().unwrap())
+            .unwrap()
+    };
+    let mut context = Equipped {
+        alias: asset("alias"),
+        blend_tree: asset("blend_tree"),
+    };
+    let owner = json!({"$":"STU_B5A0CAF0"});
+    let slot = json!({"$":"STU_3E7F59D8","m_548E5344":{
+        "$":"STU_B70476F3","m_548E5344":fixture["input"]["chosen_action"]
+    }});
+    let alias =
+        json!({"$":"STU_250DEABD","m_target":{"$":"STU_33980609","m_entity":owner},"m_slot":slot});
+    let no_animation = json!({"$":"STUConfigVarAnimation","m_animation":null,"m_resourceKey":null});
+    assert_eq!(evaluate(&no_animation, &mut context), Ok(Value::Asset(0)));
+    let mut blend = json!({"$":"STU_DF7C7C63","m_resourceKey":null,"m_entity":owner,"m_slot":slot});
+    assert_eq!(
+        evaluate(&alias, &mut context),
+        Ok(Value::Asset(context.alias))
+    );
+    assert_eq!(
+        evaluate(&blend, &mut context),
+        Ok(Value::Asset(context.blend_tree))
+    );
+    blend["m_slot"] = json!({"$":"STUConfigVarInt","m_value":-1});
+    assert_eq!(evaluate(&blend, &mut context), Ok(Value::Asset(0)));
 }
 
 struct CatalogContext(GraphStore);

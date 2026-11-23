@@ -3888,6 +3888,48 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                 ));
                 assert_eq!(runtime.take_script_requests().len(), 1);
             }
+            let emote_action = 0x0a90_0000_0000_01a1;
+            if graphs.has_asset_category_entry(emote_action) {
+                let emote_frame = next_selection + 500;
+                let next_frame =
+                    runtime.component.snapshot().unwrap().now_ms as u32 / FRAME_MS as u32 + 1;
+                for frame in next_frame..emote_frame {
+                    runtime
+                        .component
+                        .advance_frame(frame, &mut runtime.world)
+                        .unwrap();
+                }
+                runtime.set_wheel_cosmetics(crate::match_scene::WheelCosmetics {
+                    emote_aliases: [0, 0x0c80_0000_0000_0091, 0, 0],
+                    emote_blend_trees: [0, 0x0040_0000_0000_0052, 0, 0],
+                    ..Default::default()
+                });
+                assert_eq!(
+                    runtime
+                        .queue_wheel_selection(request(emote_action))
+                        .unwrap(),
+                    2
+                );
+                runtime
+                    .component
+                    .advance_frame(emote_frame, &mut runtime.world)
+                    .unwrap();
+                let snapshot = runtime.component.snapshot().unwrap();
+                let emote = snapshot
+                    .instances
+                    .values()
+                    .find(|instance| instance.graph == 0x023a)
+                    .unwrap_or_else(|| {
+                        panic!("emote graph did not start: {:?}", snapshot.diagnostics)
+                    });
+                assert_eq!(
+                    emote.variables.get(&8908),
+                    Some(&Value::Asset(0x0040_0000_0000_0052))
+                );
+                assert!(!snapshot.diagnostics.iter().any(|d| {
+                    matches!(&d.issue, crate::script_init::Issue::Expression(crate::script_expr::EvalError::UnsupportedConfig(class)) if matches!(class.as_str(), "STU_DF7C7C63" | "STU_250DEABD" | "STUConfigVarAnimation"))
+                }), "{:?}", snapshot.diagnostics);
+            }
         }
     }
 }
