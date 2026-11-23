@@ -15,7 +15,7 @@ mod knockback_tests;
 use crate::{
     collision_index::IndexError,
     game_clock::TICK_PERIOD,
-    game_hitscan::{HitDefinition, HurtPose, Impact, TargetPose},
+    game_hitscan::{HitDefinition, HurtPose, Impact, ImpactGeometry, TargetPose},
     game_projectiles::authored_number,
     script_expr::EvalError,
     script_graph::Node,
@@ -543,6 +543,10 @@ impl ProjectileFlight {
                 critical,
                 loadout: direct.loadout,
                 impulse: None,
+                geometry: Some(ImpactGeometry::Direct {
+                    point,
+                    direction: self.direction,
+                }),
             });
         }
         let origin = match wall_hit {
@@ -634,6 +638,7 @@ impl ProjectileFlight {
                     critical: false,
                     loadout: blast.hit.loadout,
                     impulse,
+                    geometry: Some(ImpactGeometry::Blast { origin: point }),
                 });
             }
         }
@@ -856,6 +861,13 @@ mod tests {
                 panic!("expected one direct projectile impact");
             };
             assert!((impact.damage - case.damage).abs() < EPSILON);
+            assert_eq!(
+                impact.geometry,
+                Some(ImpactGeometry::Direct {
+                    point: end.point,
+                    direction: [0.0, 0.0, 1.0],
+                })
+            );
         }
     }
 
@@ -1404,6 +1416,10 @@ mod tests {
             };
             assert_eq!(near.entity, 1);
             assert_eq!(near.damage, input["damage"].as_f64().unwrap());
+            assert_eq!(
+                near.geometry,
+                Some(ImpactGeometry::Blast { origin: end.point })
+            );
             let [x, y, z] = near.impulse.unwrap();
             assert_eq!(x, side * input["horizontal_impulse"].as_f64().unwrap());
             assert_eq!(y, input["upward_impulse"].as_f64().unwrap());

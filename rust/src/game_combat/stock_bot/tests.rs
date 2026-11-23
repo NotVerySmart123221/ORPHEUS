@@ -479,6 +479,7 @@ fn prepared_stock_death_delivers_critical_and_normal_kills_with_the_pulse() {
                     critical,
                     loadout: Some(loadout),
                     impulse: None,
+                    geometry: None,
                 },
             )
             .unwrap()

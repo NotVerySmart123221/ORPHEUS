@@ -96,6 +96,8 @@ The Rust-only [combat ray geometry fixture](../fixtures/behavior/map-combat-ray-
 
 The Rust-only [combat hurt volumes fixture](../fixtures/behavior/combat-hurt-volumes-v1.json) checks head and body classification, lateral contact, open space, and wall occlusion. Hitscan and projectiles use the same combat shape. Projectile direct hits carry the head result into damage settlement when the hit definition supplies a critical multiplier above one. Bodies without an optional hurt profile keep the compatibility proxy.
 
+The hitscan contact, projectile falloff and glancing blast tests verify the geometry kept with the settled damage. Direct contacts carry the point and incoming direction from the collision query. Blast damage carries the explosion origin.
+
 The Rust-only [NPC weapon targeting fixture](../fixtures/behavior/npc-projectile-targeting-v1.json) checks that both NPC hitscan and flight use the live room's body-specific combat volumes. It covers an exposed head above the movement capsule, empty space, and same-team admission in team and free-for-all modes. The firing body's own contact is excluded in both modes.
 
 The Rust-only [projectile self-splash fixture](../fixtures/behavior/projectile-self-splash-v1.json) covers the authored scale, visibility checks, and absent configuration. The owner can take splash without blocking their own projectile. A room regression covers health and death feedback.

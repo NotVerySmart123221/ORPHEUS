@@ -1582,6 +1582,7 @@ pub(super) fn fixture_impact(entity: u32, damage: f64) -> Impact {
         critical: false,
         loadout: None,
         impulse: None,
+        geometry: None,
     }
 }
 

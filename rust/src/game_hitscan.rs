@@ -13,7 +13,7 @@ use crate::{
     commands::Command,
     script_expr::{EvalError, to_float},
     script_wire::Value,
-    static_ray::Vec3,
+    static_ray::{Vec3, along},
 };
 
 mod hurt_volumes;
@@ -248,6 +248,19 @@ pub struct Impact {
     pub critical: bool,
     pub loadout: Option<u64>,
     pub impulse: Option<Vec3>,
+    pub geometry: Option<ImpactGeometry>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ImpactGeometry {
+    /// The point on the ray or swept sphere's centre path where it first contacts the body.
+    Direct {
+        point: Vec3,
+        direction: Vec3,
+    },
+    Blast {
+        origin: Vec3,
+    },
 }
 
 impl HitscanShot {
@@ -319,6 +332,10 @@ impl HitscanShot {
             critical: head && self.hit.critical > 1.0,
             loadout: self.hit.loadout,
             impulse: None,
+            geometry: Some(ImpactGeometry::Direct {
+                point: along(self.origin, self.direction, distance),
+                direction: self.direction,
+            }),
         }))
     }
 }
@@ -456,6 +473,10 @@ mod tests {
                 critical: false,
                 loadout: RIFLE.loadout,
                 impulse: None,
+                geometry: Some(ImpactGeometry::Direct {
+                    point: [0.0, 1.0, 9.5],
+                    direction: [0.0, 0.0, 1.0],
+                }),
             }
         );
         assert_eq!(resolve(&coincident), Some(hit));

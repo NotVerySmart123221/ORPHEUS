@@ -1194,6 +1194,14 @@ and flags. Compare the client response when an NPC hits the player with the
 response when the player hits the NPC. Verify directional indicators and
 audible cues independently.
 
+The existing playtest settlement trace includes the geometry available at the
+point of damage. A direct hitscan or projectile hit records its contact point
+and incoming direction. For an expanded projectile sweep, this point lies
+on the projectile centre path. Splash records its blast origin. Health
+changes that lack a weapon impact have no geometry. The 104319 damage
+message continues to use neutral vectors pending a verified mapping of its
+three vector fields.
+
 Current hit feedback is scoped to settled weapon impacts with a hit
 classification. A generic scripted health change has no hit classification,
 so it can still send victim feedback on a positive nonlethal loss without

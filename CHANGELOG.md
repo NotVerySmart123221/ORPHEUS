@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Preserve contact points and incoming directions for direct weapon impacts and the blast origin for splash damage. Expose the captured geometry in the optional Inspector playtest settlement trace. The victim notice keeps neutral vectors until the client field roles are verified. Passed 822 library tests, the prepared 104319 victim-message replay, and Clippy.
+
 - Apply the authored vertical launch bias to NPC direct projectiles before sweeping for collision. Share the existing player calculation and preserve the base heading for weapons without the field. Passed 822 library tests, the prepared Practice Range firing-lane replay, and Clippy. Documented the multikill cue gates and their remaining room bindings.
 
 - Bind multikill target-tag exclusions from the authored filter linked to the configured cue switch. Excluded targets keep their ordinary elimination feedback without advancing or extending the announcer streak. Passed 821 library tests, both prepared multikill replays, and Clippy.
