@@ -2004,8 +2004,9 @@ impl RoomSimulation {
                     surface: wall.map(|surface| crate::game_debug::DebugRaySurface {
                         geometry: queries.combat_ray_geometry(),
                         mask: surface.mask,
-                        material: surface.surface,
+                        surface_flags: surface.surface,
                         normal: surface.normal,
+                        cache_source: queries.combat_ray_source(surface),
                     }),
                     script: None,
                 });

@@ -159,8 +159,8 @@ to the same tap.
 For a railing or moving target, compare shots through an opening and
 into an adjacent solid surface. The Inspector's player hitscan entries
 include the origin and endpoint. A world hit includes the collision
-mask, material slot, normal and geometry source. `expanded` identifies
+mask, surface flags, normal and cache source. `expanded` identifies
 the weapon ray cache. `movement` identifies the movement geometry
-fallback. Actor hits carry the target entity. The surface fields
-describe the blocking collision primitive and can be compared with
-the placement at the recorded coordinates.
+fallback. `cache_source` identifies a core mesh, hull, or map placement.
+Placement hits report the cache placement index, model index and mode group.
+Actor hits carry the target entity.

@@ -3280,7 +3280,11 @@ fn debug_physics_records_hitscan_rays_and_enforces_ring_cap() {
         let surface = ray.surface.unwrap();
         assert_eq!(surface.geometry, "movement");
         assert_eq!(surface.mask, 0x18);
-        assert_eq!(surface.material, 0);
+        assert_eq!(surface.surface_flags, 0);
+        assert!(matches!(
+            surface.cache_source,
+            Some(crate::collision_scene::StaticRaySource::Mesh { .. })
+        ));
         assert_eq!(surface.normal.map(f64::abs), [1.0, 0.0, 0.0]);
     }
     assert!(overlay.rays.iter().all(|ray| ray.script.is_none()));

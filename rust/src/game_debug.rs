@@ -168,8 +168,10 @@ pub(crate) struct DebugRay {
 pub(crate) struct DebugRaySurface {
     pub geometry: &'static str,
     pub mask: u16,
-    pub material: u16,
+    pub surface_flags: u16,
     pub normal: [f64; 3],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_source: Option<crate::collision_scene::StaticRaySource>,
 }
 
 #[cfg(any(test, feature = "inspector"))]

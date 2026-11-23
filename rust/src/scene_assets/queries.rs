@@ -206,6 +206,14 @@ impl<'a> BotQueries<'a> {
         }
     }
 
+    #[cfg(any(test, feature = "inspector"))]
+    pub(crate) fn combat_ray_source(
+        &self,
+        hit: crate::collision_index::RayHit,
+    ) -> Option<crate::collision_scene::StaticRaySource> {
+        self.combat_rays.ray_source(hit)
+    }
+
     /// Sweep the authored terrain hull through the prepared combat geometry.
     /// A zero-radius call is also used for point visibility from a blast.
     pub(crate) fn projectile_wall(

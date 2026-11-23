@@ -8,11 +8,13 @@ use std::collections::{BTreeSet, HashMap, hash_map::Entry};
 use std::error::Error;
 use std::fmt;
 
+use serde::Serialize;
+
 use crate::collision_cache::{
     CacheError, CollisionCache, Hull, Mesh, Placement, RayCacheIdentity, Shape,
 };
 use crate::collision_grid::cell;
-use crate::collision_index::{IndexError, RayHit, SceneTriangle, TriangleIndex};
+use crate::collision_index::{IndexError, RayHit, RayPrimitive, SceneTriangle, TriangleIndex};
 use crate::static_ray::{Vec3, norm, round_hit};
 
 const PRISM_SIDES: usize = 12;
@@ -101,7 +103,25 @@ impl RoundProp {
 #[derive(Debug)]
 pub struct CollisionScene {
     triangles: TriangleIndex,
-    round_props: Vec<RoundProp>,
+    triangle_sources: Vec<(usize, StaticRaySource)>,
+    round_props: Vec<(RoundProp, StaticRaySource)>,
+}
+
+/// Location of a static ray primitive in the loaded collision cache.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StaticRaySource {
+    Mesh {
+        index: usize,
+    },
+    Hull {
+        index: usize,
+    },
+    Placement {
+        index: usize,
+        model: u32,
+        group: u16,
+    },
 }
 
 impl CollisionScene {
@@ -131,15 +151,18 @@ impl CollisionScene {
     ) -> Result<Self, SceneError> {
         let groups = cache.header.placement_groups(identifiers);
         let mut triangles = Vec::new();
+        let mut triangle_sources = Vec::new();
         let mut round_props = Vec::new();
-        for mesh in &cache.meshes {
+        for (index, mesh) in cache.meshes.iter().enumerate() {
             append_mesh(&mut triangles, mesh, true)?;
+            triangle_sources.push((triangles.len(), StaticRaySource::Mesh { index }));
         }
-        for hull in &cache.hulls {
+        for (index, hull) in cache.hulls.iter().enumerate() {
             append_hull(&mut triangles, hull)?;
+            triangle_sources.push((triangles.len(), StaticRaySource::Hull { index }));
         }
         let mut local_models = HashMap::new();
-        for placement in &cache.placements {
+        for (index, placement) in cache.placements.iter().enumerate() {
             if !groups.contains(&placement.group) {
                 continue;
             }
@@ -160,21 +183,30 @@ impl CollisionScene {
             if triangles.len() + local.len() > MAX_SCENE_SHAPES {
                 return Err(SceneError::ExpansionLimit);
             }
+            let source = StaticRaySource::Placement {
+                index,
+                model: placement.model,
+                group: placement.group,
+            };
             triangles.extend(local.iter().map(|triangle| SceneTriangle {
                 vertices: triangle.vertices.map(|point| transform.place(point)),
                 ..*triangle
             }));
+            if !local.is_empty() {
+                triangle_sources.push((triangles.len(), source));
+            }
             if analytic {
                 for shape in model.iter().filter_map(RoundProp::from_shape) {
                     if round_props.len() >= MAX_SCENE_SHAPES {
                         return Err(SceneError::ExpansionLimit);
                     }
-                    round_props.push(shape.placed(transform));
+                    round_props.push((shape.placed(transform), source));
                 }
             }
         }
         Ok(Self {
             triangles: TriangleIndex::new(triangles)?,
+            triangle_sources,
             round_props,
         })
     }
@@ -252,7 +284,7 @@ impl CollisionScene {
             .triangles
             .cast_ray(origin, direction, length, category)?;
         let mut best = hit.map_or(length, |hit| hit.distance);
-        for prop in &self.round_props {
+        for (index, (prop, _)) in self.round_props.iter().enumerate() {
             if prop.mask & category == 0 {
                 continue;
             }
@@ -268,10 +300,24 @@ impl CollisionScene {
                     normal: surface.normal,
                     mask: prop.mask,
                     surface: 0,
+                    primitive: RayPrimitive::Round(index),
                 });
             }
         }
         Ok(hit)
+    }
+
+    /// Resolve a hit from this scene to its source mesh, hull or map placement.
+    pub fn ray_source(&self, hit: RayHit) -> Option<StaticRaySource> {
+        match hit.primitive {
+            RayPrimitive::Round(index) => self.round_props.get(index).map(|&(_, source)| source),
+            RayPrimitive::Triangle(index) => {
+                let span = self
+                    .triangle_sources
+                    .partition_point(|&(end, _)| end <= index as usize);
+                self.triangle_sources.get(span).map(|&(_, source)| source)
+            }
+        }
     }
 }
 
@@ -616,6 +662,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!((core.distance, core.surface), (5.0, 11));
+        assert_eq!(
+            baseline.ray_source(core),
+            Some(StaticRaySource::Mesh { index: 1 })
+        );
 
         let mode = CollisionScene::expanded_rays(&cache, &BTreeSet::from([MODE_PROP]), identity())
             .unwrap();
@@ -624,16 +674,27 @@ mod tests {
             (round.distance, round.point, round.normal, round.surface),
             (1.0, FORWARD, [0.0, 0.0, -1.0], 0)
         );
+        let placed = Some(StaticRaySource::Placement {
+            index: 0,
+            model: 0,
+            group: 1,
+        });
+        assert_eq!(mode.ray_source(round), placed);
         let tie = mode
             .cast_ray(ORIGIN, FORWARD, 8.0, TEAM0 | TEAM1)
             .unwrap()
             .unwrap();
         assert_eq!((tie.distance, tie.surface), (1.0, 7));
+        assert_eq!(
+            mode.ray_source(tie),
+            Some(StaticRaySource::Mesh { index: 0 })
+        );
         let mesh = mode
             .cast_ray([4.0, 0.0, 0.0], FORWARD, 8.0, EXTRA)
             .unwrap()
             .unwrap();
         assert_eq!((mesh.distance, mesh.mask, mesh.surface), (3.0, EXTRA, 23));
+        assert_eq!(mode.ray_source(mesh), placed);
     }
 
     #[test]

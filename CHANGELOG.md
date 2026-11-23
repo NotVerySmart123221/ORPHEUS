@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Identify the cache mesh, hull or map placement behind a blocking player hitscan ray in the Inspector. Placement hits carry the original cache placement index, model index and mode group. Passed 509 Inspector-enabled server and 69 collision library tests. Weapon ray admission stays unchanged while the original-client filter is investigated.
+
 - Move the default patrol policy to a room-local StateScript graph. The graph chooses waits and cyclic route slots. Rust continues to drive map navigation, facing, collision, and movement. Lua overrides and hot reload now require the optional `lua-debug` feature. Passed the default workspace suite, the 519-test Lua debug server suite, and the prepared 104319 roster and patrol-frame comparison for all 15 Practice Range bots.
 
 - Use the combined geometric radius when upright actor capsules sweep against one another. The shared solver blocks grazing penetration and allows tangent motion to continue. Existing team and collision-participation rules still select the blockers. Passed 519 server and 69 collision library tests. Original-client collision prediction and the remaining Practice Range shot blockers still need playtest evidence.

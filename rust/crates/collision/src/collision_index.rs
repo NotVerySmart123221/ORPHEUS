@@ -47,6 +47,13 @@ pub struct RayHit {
     pub normal: Vec3,
     pub mask: u16,
     pub surface: u16,
+    pub(crate) primitive: RayPrimitive,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RayPrimitive {
+    Triangle(u32),
+    Round(usize),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -322,7 +329,7 @@ impl TriangleIndex {
                 };
                 if distance < best && distance <= length {
                     best = distance;
-                    hit = Some(candidate);
+                    hit = Some((number, candidate));
                 }
             }
             if best <= end || next_x.min(next_z) > length {
@@ -344,7 +351,7 @@ impl TriangleIndex {
                 return Err(IndexError::RayTraversalLimit);
             }
         }
-        Ok(hit.map(|candidate| {
+        Ok(hit.map(|(number, candidate)| {
             let normal = candidate.normal;
             let side = if dot(normal, direction) > 0.0 {
                 -1.0
@@ -357,6 +364,7 @@ impl TriangleIndex {
                 normal: normal.map(|component| side * component),
                 mask: candidate.triangle.mask,
                 surface: candidate.triangle.surface,
+                primitive: RayPrimitive::Triangle(number),
             }
         }))
     }
