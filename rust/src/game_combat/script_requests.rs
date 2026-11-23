@@ -454,6 +454,9 @@ impl RoomSimulation {
         let Some(source) = self.sample_health_body(source) else {
             return;
         };
+        let origin = geometry
+            .map(ImpactGeometry::origin)
+            .or_else(|| source.position(&self.world));
         self.player_cues.push(PlayerRoomCue {
             owner,
             listener: victim,
@@ -462,7 +465,7 @@ impl RoomSimulation {
                 source: source.wire,
                 victim: victim.entity,
                 dealt,
-                origin: geometry.map(ImpactGeometry::origin),
+                origin,
                 normal: geometry.and_then(ImpactGeometry::surface_normal),
             },
         });

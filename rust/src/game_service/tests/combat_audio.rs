@@ -368,8 +368,15 @@ fn native_received_damage_is_delivered_only_to_the_body_that_lost_health() {
     let ray_distance = contract["input"]["ray_distance"].as_f64().unwrap();
     let normal =
         serde_json::from_value(contract["expected"]["direct_hit_outward_normal"].clone()).unwrap();
-    assert_native_received_damage(&schemas, damage, Some((ray_distance, normal)));
-    assert_native_received_damage(&schemas, damage, None);
+    let source_position =
+        serde_json::from_value(contract["input"]["script_source_position"].clone()).unwrap();
+    assert_native_received_damage(
+        &schemas,
+        damage,
+        Some((ray_distance, normal)),
+        source_position,
+    );
+    assert_native_received_damage(&schemas, damage, None, source_position);
 }
 
 #[test]
@@ -377,10 +384,22 @@ fn native_received_damage_is_delivered_only_to_the_body_that_lost_health() {
 fn prepared_native_received_damage_uses_the_104319_schema() {
     let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
     let schemas = Schemas::load(runtime.join("data/game_schemas_174.json")).unwrap();
-    assert_native_received_damage(&schemas, 9.0, Some((4.0, [-1.0, 0.0, 0.0])));
+    let source_position = [-6.25, 0.5, 8.75];
+    assert_native_received_damage(
+        &schemas,
+        9.0,
+        Some((4.0, [-1.0, 0.0, 0.0])),
+        source_position,
+    );
+    assert_native_received_damage(&schemas, 9.0, None, source_position);
 }
 
-fn assert_native_received_damage(schemas: &Schemas, damage: f64, ray: Option<(f64, [f64; 3])>) {
+fn assert_native_received_damage(
+    schemas: &Schemas,
+    damage: f64,
+    ray: Option<(f64, [f64; 3])>,
+    source_position: [f64; 3],
+) {
     let graph = feedback_graph(109, 207, CueTrigger::EliminationDealt);
     let (mut room, [source, victim], mut sequence) = feedback_room(graph, [0, 1]);
     let source_create = room
@@ -398,6 +417,21 @@ fn assert_native_received_damage(schemas: &Schemas, damage: f64, ray: Option<(f6
             _ => None,
         })
         .expect("source observer create");
+    room.world
+        .as_mut()
+        .unwrap()
+        .scene
+        .simulation_mut()
+        .player_body_mut(source)
+        .unwrap()
+        .mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        source_position,
+        0,
+        0x18,
+    )
+    .unwrap();
     let tick = FIRST_TICK + 1;
     apply_and_advance(&mut room, [source, victim], tick, damage);
     for member in room.members.values() {
@@ -476,7 +510,7 @@ fn assert_native_received_damage(schemas: &Schemas, damage: f64, ray: Option<(f6
         Some(origin)
     } else {
         apply_and_advance(&mut room, [source, victim], hit_tick, damage);
-        None
+        Some(source_position)
     };
     assert!(
         room.members[&1]

@@ -4,7 +4,8 @@
   "evidence": "synthetic-rust",
   "input": {
     "damage": 9,
-    "ray_distance": 4
+    "ray_distance": 4,
+    "script_source_position": [-6.25, 0.5, 8.75]
   },
   "expected": {
     "direct_hit_outward_normal": [-1.0, 0.0, 0.0]

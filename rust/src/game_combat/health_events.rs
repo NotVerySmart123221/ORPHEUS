@@ -45,6 +45,16 @@ impl SampledBody {
         }
     }
 
+    pub(super) fn position(self, world: &World) -> Option<[f64; 3]> {
+        let position = if let Some(state) = world.get::<BotState>(self.entity) {
+            (state.bot.entity == self.wire).then_some(state.bot.position)?
+        } else {
+            let state = world.get::<PlayerBodyState>(self.entity)?;
+            (state.id.entity == self.wire).then(|| state.mover.pose().position)?
+        };
+        position.into_iter().all(f64::is_finite).then_some(position)
+    }
+
     fn room_status(self, world: &World, free_for_all: bool) -> Option<RoomEntityStatus> {
         let (team, alive) = if let Some(state) = world.get::<BotState>(self.entity) {
             (state.bot.entity == self.wire).then_some((

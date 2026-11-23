@@ -1210,7 +1210,8 @@ the local damage event. The victim's active body and the source generation must
 still match when delivered. The client copies the position at offset
 `0x9c` to its combat event and subtracts its view origin before projecting
 the result onto the view axes. The server supplies the settled weapon
-source point for this field. The native contact effect consumes the
+source point for this field and falls back to the attacking body's position
+for settled damage without weapon geometry. The native contact effect consumes the
 negated surface normal from offset `0x84`, falling back to the
 direction from source to impact when the normal is absent. Direct weapon
 contacts supply the outward hurt-volume normal. The hit-position field
@@ -1224,7 +1225,7 @@ projectile segment, the target surface contact point and normal, and
 the incoming direction. An expanded projectile sweep keeps the
 projectile centre separately for its own completion. Splash records the
 blast origin and leaves the surface normal unset. Damage without weapon
-geometry uses neutral message fields. The prepared Practice Range firing
+geometry leaves the surface normal and contact position unset. The prepared Practice Range firing
 lane confirms that a live front bot prevents player damage feedback.
 When the bot dies while the shot is in flight, the shot reaches the
 player and their notice carries the NPC origin and outward normal.

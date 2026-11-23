@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Use the attacking body's sampled position for directional damage feedback when a scripted hit has no weapon geometry. The victim still receives the actual settled loss, and scripted hits leave the surface normal unset. Passed 595 library tests, the 104319 received-damage schema check, and Clippy.
+
 - Sample radius, height, and eye height from the same historical posture when rewinding hitscan. Use a measured crouched hurt profile when supplied and the sampled mover capsule otherwise. Passed 595 library tests, the two prepared bot and projectile checks, and Clippy.
 
 - Use calibrated combat volumes for a projectile owner's self-splash, matching enemy and NPC target selection. Aim the prepared rifle-respawn replay through the target's calibrated head, where the existing critical assertions apply. Passed 594 library tests, both prepared rifle respawn and projectile self-splash checks, and Clippy.
