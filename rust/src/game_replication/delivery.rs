@@ -2183,7 +2183,9 @@ impl WorldDelivery {
         self.push(Record {
             update: EntityUpdate {
                 entity: self.owner,
-                operation: Some(Operation::Update(possession.components().into())),
+                operation: Some(Operation::Update(
+                    viewer.card.possession_components(possession),
+                )),
                 ..EntityUpdate::default()
             },
             delivery: Delivery::Possession(id),

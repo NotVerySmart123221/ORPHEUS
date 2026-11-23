@@ -305,6 +305,15 @@ fn open_with_card(
                         .map(|skin| (hero.guid, skin))
                 })
                 .collect::<io::Result<_>>()?,
+            wheel_cosmetics: assets
+                .heroes()
+                .heroes()
+                .map(|hero| {
+                    collection
+                        .equipped_wheel_cosmetics(&profile, hero.guid)
+                        .map(|cosmetics| (hero.guid, cosmetics))
+                })
+                .collect::<io::Result<_>>()?,
             ..PlayerCard::default()
         }
     };

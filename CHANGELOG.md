@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Replicate the selected hero's equipped sprays and emotes on the player controller with each possession. Keep saved slot order and explicitly clear unequipped slots when changing heroes. Passed 511 Inspector-enabled server tests, including the byte-exact cosmetics component fixture, plus the prepared 104319 wheel binding probe and Clippy.
+
 - Keep each elimination streak on its live player body. A replacement using the same network entity ID starts a fresh streak. Add a synthetic StateScript regression for elimination-style message actions at the restartable Wait deadline. Keep the authored two-second window. Passed 509 Inspector-enabled server tests, 296 StateScript library tests, and the prepared 104319 multikill replay.
 
 - Record authored owner ammo writes in the bounded playtest log. The prepared 104319 rifle tap check now covers a lost press update followed by the authoritative ammo count on release. Passed 509 Inspector-enabled server tests. Original-client HUD timing remains open.
