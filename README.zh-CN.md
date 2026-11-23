@@ -82,7 +82,7 @@ cargo run --locked --features inspector --bin orpheus_server -- --data-dir 'C:\p
 | 模块 | 已实现（`rust`） | 下一步 |
 | --- | --- | --- |
 | **登录、存档与画廊** | 原生 Battle.net RPC、JAM 大厅、玩家设置持久化（`profile-settings-v1`），以及英雄画廊装备预览（含 23 个 NPC 预览）。 | 扩展大厅流程，优化英雄画廊的镜头构图。 |
-| **靶场与战斗** | 回环 UDP 房间、由 Bevy ECS 管理的机器人和投射物，以及由 StateScript 驱动的巡逻决策、武器和技能模拟。 | 扩大英雄技能覆盖，优化移动与弹药同步，改进二楼导航。 |
+| **靶场与战斗** | 本地 UDP 房间通过 Bevy ECS 模拟机器人和投射物。共用的 StateScript 系统驱动巡逻决策以及已支持的武器和技能行为。 | 将通用行为扩展到更多英雄，改善移动和弹药同步，完善地图导航。 |
 | **怪鼠复仇** | 支持加载全部 14 张卡牌。无客户端回放覆盖已支持的战斗技能、终极技能充能（`0B8B`）、队伍计分、Boss 语音（`40E05F6B`）和城门阶段。 | 扩大 PvE 英雄阵容，完善 Boss 登场镜头、追击和对局结算。 |
 | **底层架构与隔离** | `orpheus-wire`、`orpheus-collision`、`orpheus-runtime` 和 `orpheus-statescript` 独立成 crate。`game_combat/`、`scene_assets/` 和 `game_service/` 已模块化，支持房间级错误与 panic 隔离。 | 扩展跨地图导航和多地图模拟。 |
 
@@ -117,7 +117,7 @@ flowchart LR
 
 ## 参与贡献
 
-- **Rust 和协议。** 扩展英雄技能与 StateScript VM 的投递覆盖。[从 #166 入手](https://github.com/leafall903/ORPHEUS/issues/166)
+- **Rust 和协议。** 扩展通用武器与技能行为，补充 StateScript 状态的客户端投递覆盖。[投递任务示例（#166）](https://github.com/leafall903/ORPHEUS/issues/166)
 - **Inspector、导航和 ECS。** 在已完成的工作上继续改进。[#62](https://github.com/leafall903/ORPHEUS/issues/62) · [#63](https://github.com/leafall903/ORPHEUS/issues/63) · [#65](https://github.com/leafall903/ORPHEUS/issues/65)
 - **玩法反馈。** 提交靶场或怪鼠复仇中可复现的玩法问题。[路线图](docs/ROADMAP.md)
 
