@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Activate the authored emote animation-mode state through the ordinary owner stream. The owner receives activation and removal with an empty payload. Observer delivery omits the local state. Passed 513 server and 303 StateScript library tests, the prepared 104319 wheel replay, and Clippy.
+
 - Register authored animation blend-tree states through the shared StateScript link codec. Preserve overlapping state order and remove stale links when a state or graph exits. The prepared 104319 wheel replay verifies entry to the blend-tree state and its authored output. Passed 512 server and 303 StateScript library tests and Clippy.
 
 - Preserve the shared StateScript auxiliary presentation state's child and exit links when the server has no auxiliary view owner. The authored emote branch now enters this state. Passed 512 server and 302 StateScript library tests, the prepared 104319 wheel replay, and Clippy.

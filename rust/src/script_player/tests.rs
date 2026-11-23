@@ -3929,6 +3929,8 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                 assert_eq!(emote.states[&24].kind, StateKind::Plain);
                 assert!(emote.states[&24].active);
                 assert!(emote.states[&19].active);
+                assert_eq!(emote.states[&37].kind, StateKind::Plain);
+                assert!(emote.states[&37].active);
                 assert_eq!(emote.states[&19].kind, StateKind::Registered { next: None });
                 assert_eq!(emote.variables.get(&2291), Some(&Value::Bool(true)));
                 assert!(!snapshot.diagnostics.iter().any(|d| {

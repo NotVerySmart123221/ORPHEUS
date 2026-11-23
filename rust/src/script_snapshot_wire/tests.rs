@@ -3013,6 +3013,80 @@ fn actual_shared_ui_graph_baselines_match_python() {
 }
 
 #[test]
+fn local_animation_mode_projects_only_owner_activation_and_removal() {
+    use crate::script_init::Component;
+    use std::sync::Arc;
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/wheel-emote-presentation-v1.json"
+    ))
+    .unwrap();
+    let mode = &fixture["rust_animation_mode"];
+    let class = mode["class"].as_str().unwrap();
+    let graph_id = u32::try_from(mode["graph"].as_u64().unwrap()).unwrap();
+    let graph = graph(
+        graph_id,
+        vec![
+            node(
+                0,
+                "STUStatescriptEntry",
+                None,
+                json!({"m_outPlug":{"$":"Plug","links":[[1,"m_beginPlug"]],"m_FF3DAF1E":[]}}),
+            ),
+            node(
+                1,
+                class,
+                Some(0),
+                json!({"m_4DA577AC":{"$":"STUConfigVarInt","m_value":mode["literal_mode"]}}),
+            ),
+        ],
+        json!([1]),
+        json!([0]),
+        json!([]),
+        json!([]),
+    );
+    let graphs = Arc::new(
+        GraphStore::from_json(
+            &serde_json::to_vec(&json!({
+                "version": 1, "graphs": [graph], "bodies": {}, "missing": [],
+            }))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    let codecs = CodecTable::from_json(
+        &json!({"classes":{"58E77FC5":{
+            "name":class,"codec":mode["codec"],"stec":false,"status":"VERIFIED","layout":[],
+        }}})
+        .to_string(),
+    )
+    .unwrap();
+    let encoder = SnapshotEncoder::new(&graphs, &codecs);
+    let mut component = Component::start(
+        Arc::clone(&graphs),
+        ENTITY,
+        Variables::new(),
+        vec![Root::new(1, graph_id)],
+        0,
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let snapshot = component.snapshot().unwrap();
+    let owner = encoder.project(snapshot, View::Owner).unwrap();
+    let state = &owner.instances[&1].states[&0];
+    assert!(state.active && state.payload.is_empty() && state.link.is_none());
+    let observer = encoder.project(snapshot, View::Observer).unwrap();
+    assert!(observer.instances[&1].states.is_empty());
+
+    component.debug_end_state(1, 0, &mut EmptyWorld).unwrap();
+    let owner = encoder
+        .project(component.snapshot().unwrap(), View::Owner)
+        .unwrap();
+    assert!(owner.instances[&1].states.is_empty());
+}
+
+#[test]
 fn synthetic_two_instance_registered_state_link_encodes_for_owner_and_observer() {
     let registered_graph = |index,
                             items,

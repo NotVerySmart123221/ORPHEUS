@@ -1368,6 +1368,18 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             // Build 104319 resolves E9485CAF through the base State typeinfo:
             // registration 160, constructor AA826B0, vtable 8B6BC800.
             "STU_E9485CAF" => StateKind::Plain,
+            "STU_58E77FC5"
+                if registration.shape({
+                    let mode = field(&node.fields, "m_4DA577AC");
+                    node.remote == -1
+                        && script_expr::native_shape(mode, "STUConfigVarInt", Some("m_value"))
+                        && matches!(field(mode, "m_value").as_i64(), Some(0..=3))
+                }) =>
+            {
+                // 90CA80/90CDE0 set and clear a local animation mode. The
+                // owner's state stream carries activation with no payload.
+                StateKind::Plain
+            }
             "STUStatescriptStateAnimatedCamera"
                 if registration.permits((self.graph(id).index, node.pos) == (0x0ca5, 43)) =>
             {
