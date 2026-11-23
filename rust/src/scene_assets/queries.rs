@@ -60,25 +60,40 @@ impl<'a> BotQueries<'a> {
     }
 
     pub(crate) fn step_ai_walk(&self, bot: &mut Bot, tick: u32, destination: Vec3, speed: f64) {
-        use crate::navigation::{PathOptions, find_path};
-
         let category = mover_category_for_team(self.free_for_all, bot.spawn.team);
         if bot.has_collision() || self.attach_bot_mover(bot, category) {
-            let agent = self
-                .movers
-                .for_body(Some(bot.spawn.body))
-                .nav_agent(category);
+            let body = bot.spawn.body;
             bot.follow_walk_request(tick, destination, speed, |start| {
-                find_path(
-                    self.ground,
-                    self.contacts.map(Arc::as_ref),
-                    &agent,
-                    start,
-                    destination,
-                    &PathOptions::default(),
-                )
+                self.plan_walk(body, category, start, destination)
             });
         }
+    }
+
+    pub(crate) fn rejoin_patrol(&self, bot: &mut Bot, tick: u32, category: u16) {
+        let body = bot.spawn.body;
+        bot.rejoin_patrol(tick, |start, destination| {
+            self.plan_walk(body, category, start, destination)
+        });
+    }
+
+    fn plan_walk(
+        &self,
+        body: u64,
+        category: u16,
+        start: Vec3,
+        destination: Vec3,
+    ) -> crate::navigation::PathQuery {
+        use crate::navigation::{PathOptions, find_path};
+
+        let agent = self.movers.for_body(Some(body)).nav_agent(category);
+        find_path(
+            self.ground,
+            self.contacts.map(Arc::as_ref),
+            &agent,
+            start,
+            destination,
+            &PathOptions::default(),
+        )
     }
 
     fn attach_bot_mover(&self, bot: &mut Bot, category: u16) -> bool {

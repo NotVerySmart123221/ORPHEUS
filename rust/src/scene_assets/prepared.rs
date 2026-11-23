@@ -514,6 +514,7 @@ impl PreparedScene {
         let map = &self.map;
         let movers = &self.movers;
         let world = self.contacts.as_ref();
+        let queries = BotQueries::new(map.free_for_all, movers, &self.ground, world);
         self.simulation.for_each_body_mut(|bot| {
             let combat_motion = bot.has_combat_motion();
             if let Some(contacts) = contacts
@@ -533,6 +534,7 @@ impl PreparedScene {
                     return;
                 }
             }
+            queries.rejoin_patrol(bot, tick, category);
             if let Err(error) = bot.step(tick, patrol, ground) {
                 eprintln!(
                     "Patrol for bot {:08x} stopped at frame {tick}: {error}",

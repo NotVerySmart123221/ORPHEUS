@@ -410,6 +410,7 @@ pub struct Bot {
     target: Option<[f64; 3]>,
     waypoints: VecDeque<[f64; 3]>,
     walk_route: Option<WalkRoute>,
+    patrol_rejoin: Option<[f64; 3]>,
     collision: Option<PatrolCollision>,
     movement_blockers: Option<(u32, Arc<[CapsulePose]>)>,
     plans: Option<Arc<PatrolPlans>>,
@@ -487,6 +488,7 @@ impl Bot {
             target: None,
             waypoints: VecDeque::new(),
             walk_route: None,
+            patrol_rejoin: None,
             collision: None,
             movement_blockers: None,
             plans: None,
@@ -1024,6 +1026,7 @@ impl Bot {
     pub fn died(&mut self, tick: u32) {
         self.dead = true;
         self.walk_route = None;
+        self.patrol_rejoin = None;
         self.movement_blockers = None;
         self.clear_velocity_changes();
         self.keys = false;
@@ -1206,6 +1209,12 @@ impl Bot {
         self.position = after;
         if after != from {
             self.walk_route = None;
+            if self.patrol_active() {
+                // Keep the authored leg in progress. During a wait, return to
+                // the position the bot was holding before the impulse.
+                let destination = self.target.map_or(from, |_| self.spawn.route[self.index]);
+                self.patrol_rejoin.get_or_insert(destination);
+            }
         }
         // The solver may move an overlapping capsule sideways to separate it.
         // That position correction must not create momentum for the next tick.
@@ -1217,6 +1226,26 @@ impl Bot {
             self.moved_tick = Some(tick);
         }
         true
+    }
+
+    pub(crate) fn rejoin_patrol(
+        &mut self,
+        tick: u32,
+        plan: impl FnOnce([f64; 3], [f64; 3]) -> PathQuery,
+    ) {
+        if self.has_combat_motion() || self.is_stunned(tick) {
+            return;
+        }
+        let Some(destination) = self.patrol_rejoin.take() else {
+            return;
+        };
+        if let PathQuery::Found(path) = plan(self.position, destination) {
+            self.waypoints = path.into_iter().skip(1).collect();
+            self.target = Some(self.waypoints.pop_front().unwrap_or(destination));
+            self.start = self.position;
+            self.keys = true;
+            self.turning = 0.0;
+        }
     }
 
     /// Freeze the room's actor-contact admission for this update tick.
@@ -2203,6 +2232,36 @@ mod tests {
         returning.end_walk_request(tick_budget + 1);
         assert!(returning.walk_route.is_none());
         assert_eq!(returning.movement(tick_budget + 1).throttles, [0; 2]);
+
+        let mut patrol_bot = walker(start);
+        patrol_bot.position = start;
+        patrol_bot.target = Some(destination);
+        patrol_bot.keys = true;
+        let mut ground = |_, _, top, bottom| (bottom <= 0.0 && 0.0 <= top).then_some(0.0);
+        patrol_bot.attach_collision(&settings, Arc::clone(&world), 0x18, ground);
+        let impulse = serde_json::from_value(input["patrol_impulse"].clone()).unwrap();
+        patrol_bot.queue_velocity_changes(vec![(1, VelocityChange::Impulse(impulse))]);
+        let patrol = PatrolScript::load().unwrap();
+        let mut crossed = false;
+        for tick in 1..=tick_budget {
+            if patrol_bot.step_combat_motion(tick, &settings, &mut ground) {
+                continue;
+            }
+            let prior = patrol_bot.position;
+            queries.rejoin_patrol(&mut patrol_bot, tick, 0x18);
+            patrol_bot.step(tick, &patrol, ground).unwrap();
+            if prior[2] >= wall && patrol_bot.position[2] < wall {
+                assert!(patrol_bot.position[0].abs() > half_width);
+                assert_ne!(patrol_bot.movement(tick).throttles, [0; 2]);
+                crossed = true;
+            }
+            if planar_distance(patrol_bot.position, destination) <= ARRIVED && !patrol_bot.keys {
+                break;
+            }
+        }
+        assert!(crossed, "patrol stopped at {:?}", patrol_bot.position);
+        assert!(planar_distance(patrol_bot.position, destination) <= ARRIVED);
+        assert_eq!(patrol_bot.index, 0, "the authored patrol leg is retained");
     }
 
     #[test]

@@ -21,6 +21,7 @@
     "wall_z": 4.0,
     "wall_half_width": 1.5,
     "speed": 4.5,
-    "tick_budget": 240
+    "tick_budget": 240,
+    "patrol_impulse": [2.0, 0.0, 0.0]
   }
 }

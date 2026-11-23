@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Replan a patrol after combat displacement from its resolved landing position to the existing authored waypoint or waiting spot. The shared map navigator routes around obstacles and the ordinary patrol mover publishes return strides. Passed 596 library tests, the prepared firing-bot recovery replay, and Clippy.
+
 - Keep transmitted NPC projectiles active when the shooter body retires. Observer delivery still retires them on flight completion and cancels launches that were never sent. The opt-in playtest capture records NPC projectile terminal points, direct contacts, and query failures. Passed 596 library tests, the prepared NPC interception replay, and Clippy.
 
 - Retire a dead bot's overhead nameplate from its observer projection while retaining the parent script for death presentation. Discard an unsent live introduction and retry removal in delivery order. Passed 595 library tests, the prepared encrypted nameplate replay and respawn-presentation check, and Clippy.
