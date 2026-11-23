@@ -436,7 +436,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         "STU_B5A0CAF0",
                         None,
                     )
-                    && script_expr::native_shape(effect, "STUConfigVarEffect", Some("m_effect"))
+                    && effect["$"] == "STUConfigVarEffect"
+                    && script_expr::native_fields(effect, &["m_effect", "m_resourceKey"])
+                    && field(effect, "m_resourceKey").is_null()
                     && asset_guid(field(effect, "m_effect"))
                         .is_some_and(|guid| guid >> 48 == 0x0300)
                 {

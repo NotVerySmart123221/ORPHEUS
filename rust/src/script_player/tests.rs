@@ -3344,6 +3344,87 @@ fn prepared_soldier_without_target_tags_reports_unavailable_filter() {
 
 #[test]
 #[ignore = "requires a tagged separately prepared 104319 statescript catalog"]
+fn prepared_shared_hit_graph_projects_each_authored_effect() {
+    use crate::script_init::{HealthTargetFacts, RoomEntityStatus};
+
+    let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let graphs = Arc::new(GraphStore::load(runtime.join("data/game_graphs_174.json.gz")).unwrap());
+    let (mut component, mut world) = prepared_soldier_component(Arc::clone(&graphs), true);
+    let instance = component
+        .snapshot()
+        .unwrap()
+        .instances
+        .iter()
+        .find(|(_, instance)| instance.graph == 0x01c7)
+        .map(|(&id, _)| id)
+        .unwrap();
+    let target = 0xc000_0001;
+    let target_facts = Arc::new(HealthTargetFacts {
+        target,
+        filter_flags: Some(crate::match_scene::team_bit(1).unwrap()),
+        room_status: Some(RoomEntityStatus {
+            team: Some(1),
+            alive: true,
+        }),
+        tags: TargetTagEffects::default().snapshot(Some(&Default::default())),
+        script_state: crate::script_entity_state::EntityScriptState::Absent,
+    });
+    // These inputs exercise the authored switch. They do not assign the native 0724 scalar
+    // a gameplay meaning or derive it from a physical hit.
+    for (critical, scalar, effect_index) in [
+        (false, 1.0, 0x0206),
+        (true, 1.0, 0x183b),
+        (false, 0.0, 0x2894),
+        (true, 0.0, 0x2892),
+        (false, 2.0, 0x2893),
+        (true, 2.0, 0x2891),
+    ] {
+        let before = component.snapshot().unwrap().frame_actions.len();
+        assert_eq!(
+            component
+                .queue_settled_damage_message(
+                    instance,
+                    0x0240_0000_0000_0012,
+                    Variables::from([
+                        (0x13, Value::Float(9.0)),
+                        (0x15, Value::Entity(target)),
+                        (0x3d, Value::Array(Vec::new())),
+                        (0x95, Value::Bool(critical)),
+                        (0x724, Value::Float(scalar)),
+                    ]),
+                    Arc::clone(&target_facts),
+                )
+                .unwrap(),
+            1,
+        );
+        component.run_now(&mut world).unwrap();
+        let snapshot = component.snapshot().unwrap();
+        let actions = &snapshot.frame_actions;
+        assert_eq!(
+            actions.len(),
+            before + 1,
+            "critical={critical} scalar={scalar}: {:?}",
+            snapshot
+                .diagnostics
+                .iter()
+                .filter(|item| item.site.graph == 0x01c7)
+                .collect::<Vec<_>>(),
+        );
+        let action = actions.back().unwrap();
+        assert_eq!(action.callout.instance, instance);
+        let graph = graphs.graph(snapshot.instances[&instance].graph).unwrap();
+        let node = graph.node(action.callout.position).unwrap();
+        assert_eq!(
+            crate::script_graph::asset_guid(&node.fields["m_effect"]["m_effect"]),
+            Some(0x0300_0000_0000_0000 | effect_index),
+            "critical={critical} scalar={scalar}",
+        );
+        assert!(action.values.contains_key(&(instance, 18702)));
+    }
+}
+
+#[test]
+#[ignore = "requires a tagged separately prepared 104319 statescript catalog"]
 fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
     use crate::{
         collision_cache::CollisionCache,

@@ -11,7 +11,7 @@ fn authored_effect_retries_with_its_own_values_in_both_body_streams() {
     assert_authored_action_retry(
         "STUStatescriptActionEffect",
         json!({
-            "m_effect":{"$":"STUConfigVarEffect","m_effect":"0x0300000000000001"},
+            "m_effect":{"$":"STUConfigVarEffect","m_effect":"0x0300000000000001","m_resourceKey":null},
             "m_3E3E203A":{"$":"STU_B5A0CAF0"},
             "m_dataFlow":[{"$":"STU_13D35171",
                 "m_5A6D4FBD":{"$":"STUConfigVarDataFlow","m_5A6D4FBD":"0x0480000000000001"}}]
