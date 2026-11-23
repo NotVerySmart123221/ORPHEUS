@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Resolve each pellet of an authored uniform-cone hitscan volley with its own deterministic direction. One shot report still owns the volley, so pellet expansion leaves the existing ammunition and cadence logic intact. Passed 820 library tests and the prepared 104319 ring-spread and burst-falloff replays. The full Tracer startup probe remains blocked by four existing StateScript initialization diagnostics.
+
 - Resolve every pellet from authored ring-spread hitscan volleys using the same direction generator for players and NPCs. Each pellet uses the shared collision and damage path while the original shot determines ammo and cadence. Passed 819 library tests, the prepared 104319 ring-spread and burst-falloff regressions, and Clippy.
 
 - Verify the authored Cassidy alternate-fire burst through room hitscan and HP settlement at 15, 20, 30, 40, and 55 metres. The controlled six-contact burst deals 195 damage at 30 metres and 90 at the two far distances against a fresh 200 HP bot. Passed the prepared 104319 regression and 818 server and StateScript library tests.

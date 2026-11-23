@@ -36,7 +36,7 @@ use crate::{
     script_snapshot_wire::SnapshotEncoder,
     script_wire::Value,
     vitals::{Damage, Death, Vitals},
-    weapon_spread::{authored_hitscan_direction, authored_ring_directions},
+    weapon_spread::for_each_authored_hitscan_direction,
     world::Component as EntityComponent,
 };
 
@@ -616,23 +616,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                     hit,
                 })));
             };
-            if node
-                .field("m_5EC1EB38")
-                .and_then(|launch| launch["$"].as_str())
-                == Some("STU_613BDDB0")
-            {
-                for direction in authored_ring_directions(
-                    &node.fields,
-                    aim_direction(&command),
-                    &shot,
-                    node.pos,
-                    &mut evaluate,
-                )? {
-                    push_hitscan(direction);
-                }
-                return Some(());
-            }
-            let direction = if (shot.graph, node.pos) == (DEADEYE_TARGET_EFFECT, 14) {
+            if (shot.graph, node.pos) == (DEADEYE_TARGET_EFFECT, 14) {
                 let snapshot = self.component.snapshot()?;
                 let Value::Entity(entity) = *snapshot
                     .instances
@@ -648,11 +632,20 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                 if !visible.contains(&Value::Entity(entity)) {
                     return None;
                 }
-                DeadeyeScene::shot_direction(&self.world.deadeye_scene, origin, entity)?
+                push_hitscan(DeadeyeScene::shot_direction(
+                    &self.world.deadeye_scene,
+                    origin,
+                    entity,
+                )?);
             } else {
-                authored_hitscan_direction(node, &report, aim_direction(&command), &mut evaluate)
-            };
-            push_hitscan(direction);
+                for_each_authored_hitscan_direction(
+                    node,
+                    &report,
+                    aim_direction(&command),
+                    &mut evaluate,
+                    push_hitscan,
+                );
+            }
             Some(())
         };
         for report in shots {

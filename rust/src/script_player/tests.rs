@@ -3306,6 +3306,51 @@ fn player_volley_projects_each_authored_ring_pellet_once() {
 }
 
 #[test]
+fn player_volley_projects_each_uniform_cone_pellet_from_one_report() {
+    use serde_json::json;
+
+    let (_, spawn) = fixture_body_factory();
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        spawn.pose.position,
+        0,
+        0x18,
+    )
+    .unwrap();
+    let fire = Command {
+        frame: spawn.frame + 1,
+        buttons: crate::commands::SECONDARY,
+        ..Command::default()
+    };
+    let fields = json!({
+        "m_A17BE89B": 1, "m_numShotsPerSecond": 1, "m_FEC435C6": 100,
+        "m_6396149F": {"m_modifyHealth": {"m_amount": 4}},
+        "m_numProjectilesPerShot": 2,
+        "m_5EC1EB38": {"$": "STU_239B571E", "m_7F0FED02": 6, "m_429A6C85": 6}
+    });
+    let mut runtime = fixture_volley_factory(29, false, fields)
+        .start(spawn)
+        .unwrap();
+    runtime.advance(fire, &mover, BodyStep::Posed).unwrap();
+    let shots = runtime.take_shots(Some(fire), &mover);
+    assert_eq!(shots.len(), 2);
+    let mut directions = BTreeSet::new();
+    for shot in shots {
+        let PosedShot::Hitscan(shot) = shot else {
+            panic!("expected a hitscan pellet");
+        };
+        assert_eq!(shot.source, spawn.entity);
+        assert_eq!(shot.shot_frame, fire.frame);
+        assert_eq!(shot.hit.amount, 4.0);
+        assert!(shot.direction[2] >= 6.0_f64.to_radians().cos() - 1e-6);
+        directions.insert(shot.direction.map(f64::to_bits));
+    }
+    assert_eq!(directions.len(), 2);
+    assert!(runtime.take_shots(Some(fire), &mover).is_empty());
+}
+
+#[test]
 fn unsupported_projectile_modes_do_not_become_hitscan_or_straight_damage() {
     use serde_json::json;
 

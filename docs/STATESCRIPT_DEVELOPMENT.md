@@ -1172,8 +1172,13 @@ queuing a shooter hit effect. The victim path can queue once per eligible
 health settlement. Authored concentric pellet volleys now use the same
 pattern parser for player hitscan and NPC weapons. Each ray goes through the
 shared combat query and settlement, while the VM still owns the single shot
-event and its ammunition. The original-client feedback cadence for pellet
-impacts and recurring damage remains an acceptance gap.
+event and its ammunition. Uniform-cone hitscan uses the authored pellet
+count and a per-pellet seed offset. An explicit launch vector
+(`m_E2FD6F04`) still requires its own direction semantics. The 104319 Tracer
+startup probe stops before firing with four initialization diagnostics
+(`0024:63`, `0024:9`, `0034:51`, `001A:5`), so its two-ray volley is
+covered by a separate synthetic weapon graph. Feedback cadence for pellet
+impacts and recurring damage remains open.
 
 Weapon notifications carry the target's captured filter flags, target
 tags, and script variables. A room-settled health change from a distinct

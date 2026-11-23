@@ -1,4 +1,4 @@
-//! Deterministic rotation of the 104319 authored concentric pellet rings.
+//! Deterministic directions for authored weapon spread.
 
 use std::{f64::consts::TAU, sync::OnceLock};
 
@@ -75,12 +75,12 @@ fn cross([ax, ay, az]: Vec3, [bx, by, bz]: Vec3) -> Vec3 {
     [ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx]
 }
 
-fn spread_index(shot: &crate::script_init::ShotEvent, state: u16) -> usize {
+fn spread_index(shot: &crate::script_init::ShotEvent, state: u16, pellet: usize) -> usize {
     let seed = (shot.entity as u16)
         .wrapping_add(shot.instance.wrapping_mul(23))
         .wrapping_add(state.wrapping_mul(7))
         .wrapping_add(shot.activation & 63);
-    let key = (usize::from(seed) * 131 + shot.ordinal as usize * 23) & TABLE_MASK;
+    let key = (usize::from(seed) * 131 + shot.ordinal as usize * 23 + pellet * 3) & TABLE_MASK;
     uniform_table()[key] as usize & TABLE_MASK
 }
 
@@ -93,17 +93,18 @@ fn rotate(vector: Vec3, axis: Vec3, angle: f64) -> Vec3 {
     })
 }
 
-/// The single-projectile uniform cone uses the volley state slot, not its node position.
+/// The uniform cone uses the volley state slot and a distinct seed per pellet.
 fn direct_cone_direction(
     forward: Vec3,
     spread_degrees: f32,
     shot: &crate::script_init::ShotEvent,
+    pellet: usize,
 ) -> Vec3 {
     if spread_degrees == 0.0 {
         return forward;
     }
     let table = uniform_table();
-    let index = spread_index(shot, shot.raw_state);
+    let index = spread_index(shot, shot.raw_state, pellet);
     let angle = f64::from((table[index] as f32 * std::f32::consts::TAU) * (1.0 / 4_294_967_296.0));
     let radians = spread_degrees * (std::f64::consts::PI / 180.0) as f32;
     let radius = (table[(index + 1) & TABLE_MASK] as f32 * radians) * (1.0 / 4_294_967_296.0);
@@ -122,14 +123,25 @@ fn direct_cone_direction(
     rotate(forward, axis, f64::from(radius)).map(|value| f64::from(value as f32))
 }
 
-pub(crate) fn authored_hitscan_direction(
+pub(crate) fn for_each_authored_hitscan_direction(
     node: &Node,
     shot: &ReportedShot,
     forward: Vec3,
     mut evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
-) -> Vec3 {
+    mut emit: impl FnMut(Vec3),
+) {
+    let launch = node.field("m_5EC1EB38");
+    if launch.is_some_and(|launch| launch["$"] == "STU_613BDDB0") {
+        if let Some(directions) =
+            authored_ring_directions(&node.fields, forward, &shot.event, node.pos, &mut evaluate)
+        {
+            directions.into_iter().for_each(emit);
+        }
+        return;
+    }
     let Some(normalized) = shot.normalized_spread else {
-        return forward;
+        emit(forward);
+        return;
     };
     let mut degrees = |key: &str| {
         node.field(key)
@@ -141,13 +153,25 @@ pub(crate) fn authored_hitscan_direction(
         degrees("m_5EC1EB38.m_7F0FED02"),
         degrees("m_5EC1EB38.m_429A6C85"),
     ) else {
-        return forward;
+        emit(forward);
+        return;
     };
     let spread = low + (high - low) * normalized;
-    if (0.0..90.0).contains(&spread) {
-        direct_cone_direction(forward, spread, &shot.event)
-    } else {
-        forward
+    if !(0.0..90.0).contains(&spread) {
+        emit(forward);
+        return;
+    }
+    let count = launch
+        .filter(|launch| launch["$"] == "STU_239B571E" && launch["m_E2FD6F04"].is_null())
+        .and_then(|_| node.field("m_numProjectilesPerShot"))
+        .filter(|value| !value.is_null())
+        .map_or(1, |value| {
+            evaluate(value).map_or(0, |value| to_int(&value, 0))
+        });
+    if (1..=32).contains(&count) {
+        for pellet in 0..count as usize {
+            emit(direct_cone_direction(forward, spread, &shot.event, pellet));
+        }
     }
 }
 
@@ -188,7 +212,7 @@ fn ring_directions<'a>(
     node: u16,
 ) -> impl Iterator<Item = Vec3> + use<'a> {
     let table = uniform_table();
-    let phase = f64::from(table[spread_index(shot, node)]) * TAU / 4_294_967_296.0;
+    let phase = f64::from(table[spread_index(shot, node, 0)]) * TAU / 4_294_967_296.0;
     let right = cross(forward, [0.0, 1.0, 0.0]);
     let length = norm(right);
     let right = if length == 0.0 {
@@ -239,13 +263,16 @@ mod tests {
         for row in source["rounds"].as_array().unwrap() {
             shot.ordinal = row["ordinal"].as_u64().unwrap() as u32;
             let degrees = row["degrees"].as_f64().unwrap() as f32;
-            let bits: [String; 3] = serde_json::from_value(row["bits"].clone()).unwrap();
-            assert_eq!(
-                direct_cone_direction(forward, degrees, &shot).map(|axis| (axis as f32).to_bits()),
-                bits.map(|hex| u32::from_str_radix(&hex, 16).unwrap())
-            );
+            for (pellet, key) in ["bits", "second_pellet_bits"].into_iter().enumerate() {
+                let bits: [String; 3] = serde_json::from_value(row[key].clone()).unwrap();
+                assert_eq!(
+                    direct_cone_direction(forward, degrees, &shot, pellet)
+                        .map(|axis| (axis as f32).to_bits()),
+                    bits.map(|hex| u32::from_str_radix(&hex, 16).unwrap())
+                );
+            }
         }
-        assert_eq!(direct_cone_direction(forward, 0.0, &shot), forward);
+        assert_eq!(direct_cone_direction(forward, 0.0, &shot, 0), forward);
     }
 
     #[test]
