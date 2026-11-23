@@ -433,6 +433,10 @@ impl<W: World> Context for InstanceContext<'_, W> {
         self.graphs.asset_has_category(asset, kind, id)
     }
 
+    fn equipped_spray(&mut self, entity: u32, slot: usize) -> Option<u64> {
+        self.world.equipped_spray(entity, slot)
+    }
+
     fn asset_texture(&mut self, action: u64) -> Option<u64> {
         self.graphs.asset_texture(action)
     }

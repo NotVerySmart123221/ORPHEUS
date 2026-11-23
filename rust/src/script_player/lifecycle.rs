@@ -116,6 +116,10 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         self.component.queue_room_message_from(sender, message)
     }
 
+    fn set_equipped_sprays(&mut self, sprays: [u64; 4]) {
+        self.world.wheel_sprays = sprays;
+    }
+
     fn wheel_actions_available(&self) -> bool {
         self.world.graphs.has_asset_category_data() && self.component.snapshot().is_some()
     }

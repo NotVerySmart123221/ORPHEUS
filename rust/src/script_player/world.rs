@@ -152,6 +152,7 @@ pub(super) struct BodyWorld {
     pub(super) vitals: Vitals,
     pub(super) pool_types_known: bool,
     pub(super) target_tags: Option<BTreeSet<u64>>,
+    pub(super) wheel_sprays: [u64; 4],
     pub(super) model_hardpoints: Option<Arc<BTreeSet<u64>>>,
     pub(super) target_tag_effects: TargetTagEffects,
     pub(super) controller_on_fire: bool,
@@ -167,6 +168,13 @@ pub(super) struct BodyWorld {
 }
 
 impl World for BodyWorld {
+    fn equipped_spray(&self, entity: u32, slot: usize) -> Option<u64> {
+        if entity != self.entity && entity != self.controller {
+            return None;
+        }
+        self.wheel_sprays.get(slot).copied()
+    }
+
     fn local_command_present(&self, site: Site) -> Option<bool> {
         self.is_player_site(site).then_some(false)
     }

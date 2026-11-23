@@ -3298,6 +3298,7 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
         vitals: Vitals::empty(),
         pool_types_known: true,
         target_tags: tagged.then(|| body.target_tags.clone().unwrap()),
+        wheel_sprays: [0; 4],
         model_hardpoints: None,
         target_tag_effects: TargetTagEffects::default(),
         controller_on_fire: false,
@@ -3569,12 +3570,12 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                 .unwrap(),
             0
         );
-        let request = request(action);
+        let selection = request(action);
         if graphs.has_asset_category_data() {
-            assert_eq!(runtime.queue_wheel_selection(request).unwrap(), 2);
+            assert_eq!(runtime.queue_wheel_selection(selection).unwrap(), 2);
         } else {
-            assert_eq!(runtime.queue_wheel_selection(request).unwrap(), 0);
-            let request = request.into_local_message();
+            assert_eq!(runtime.queue_wheel_selection(selection).unwrap(), 0);
+            let request = selection.into_local_message();
             assert_eq!(
                 runtime
                     .component
@@ -3657,6 +3658,27 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
             if graph == 0x05ad {
                 assert_eq!(instance.variables[&9253], Value::Bool(true));
             }
+        }
+        let spray = 0x0a90_0000_0000_01a4;
+        if with_room && graphs.has_asset_category_entry(spray) {
+            runtime.set_equipped_sprays([0, 0, 0x0250_0000_0000_0009, 0]);
+            assert_eq!(runtime.queue_wheel_selection(request(spray)).unwrap(), 2);
+            runtime
+                .component
+                .advance_frame(FIRST_TICK + 2, &mut runtime.world)
+                .unwrap();
+            let snapshot = runtime.component.snapshot().unwrap();
+            let spray_wheel = snapshot
+                .instances
+                .values()
+                .find(|instance| instance.graph == 0x02cf)
+                .unwrap();
+            assert_eq!(
+                spray_wheel.variables.get(&9259),
+                Some(&Value::Integer(2)),
+                "{:?}",
+                snapshot.diagnostics
+            );
         }
     }
 }
@@ -4045,6 +4067,7 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             vitals: Vitals::empty(),
             pool_types_known: true,
             target_tags: body.target_tags.clone(),
+            wheel_sprays: [0; 4],
             model_hardpoints: None,
             target_tag_effects: TargetTagEffects::default(),
             controller_on_fire: false,

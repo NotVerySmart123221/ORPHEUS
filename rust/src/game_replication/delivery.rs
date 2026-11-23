@@ -2091,7 +2091,18 @@ impl WorldDelivery {
                     quanta,
                 },
             )
-            .and_then(|runtime| {
+            .and_then(|mut runtime| {
+                if let Some(runtime) = &mut runtime {
+                    runtime.set_equipped_sprays(
+                        viewer
+                            .card
+                            .wheel_cosmetics
+                            .get(&hero.guid)
+                            .copied()
+                            .unwrap_or_default()
+                            .sprays,
+                    );
+                }
                 let script = runtime
                     .as_deref()
                     .map(|runtime| {

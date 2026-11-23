@@ -3,8 +3,11 @@
   "case_id": "wheel-selection-ingress-v1",
   "target_build": 104319,
   "source": {
-    "paths": ["docs/COMMUNICATION_WHEEL.txt", "src/ow174/game/match.py"],
-    "notes": "The input and VM message layouts follow the Python reference. The actor identities, confirmation order, and generation replacement are synthetic."
+    "paths": [
+      "docs/COMMUNICATION_WHEEL.txt",
+      "src/ow174/game/match.py"
+    ],
+    "notes": "The input and VM message layouts follow the Python reference. The actor identities, confirmation order, and generation replacement are synthetic. The shared slot indexes follow the recorded 104319 input tables. The equipped spray GUID is synthetic."
   },
   "evidence": "synthetic-reference",
   "client_acceptance": "pending",
@@ -12,7 +15,10 @@
     "action": "0x0A9000000000016B",
     "foreign_asset": "0x02E000000000016B",
     "unvalidated_marker": 2684354817,
-    "confirmed": [false, true]
+    "confirmed": [
+      false,
+      true
+    ]
   },
   "expected": {
     "topic": "0x02400000000002A3",
@@ -20,5 +26,33 @@
     "confirmed_parameter": 993,
     "delivered_with_current_body": 2,
     "delivered_to_replacement": 0
+  },
+  "slot_cases": {
+    "emote": {
+      "action": "0x0A9000000000019F",
+      "index": 3
+    },
+    "voice": {
+      "action": "0x0A9000000000019D",
+      "index": 1
+    },
+    "spray": {
+      "equipped": "0x0250000000000009",
+      "slot": 2,
+      "cases": [
+        {
+          "action": "0x0A900000000001A4",
+          "expected": "0x0250000000000009"
+        },
+        {
+          "action": "0x0A900000000001A5",
+          "expected": "0x0"
+        },
+        {
+          "action": "0x0A9000000000019D",
+          "expected": "0x0"
+        }
+      ]
+    }
   }
 }

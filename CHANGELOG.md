@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Resolve authored emote, voice-line and spray selections through shared 104319 slot tables. The spray asset expression now reads the current body's equipped slot. A prepared 104319 wheel replay confirms that a selected spray reaches the expected slot in the authored graph. Spray surface placement and emote or voice playback remain separate work. Passed 511 Inspector-enabled server tests, 297 default StateScript library tests, and Clippy.
+
 - Replicate the selected hero's equipped sprays and emotes on the player controller with each possession. Keep saved slot order and explicitly clear unequipped slots when changing heroes. Passed 511 Inspector-enabled server tests, including the byte-exact cosmetics component fixture, plus the prepared 104319 wheel binding probe and Clippy.
 
 - Keep each elimination streak on its live player body. A replacement using the same network entity ID starts a fresh streak. Add a synthetic StateScript regression for elimination-style message actions at the restartable Wait deadline. Keep the authored two-second window. Passed 509 Inspector-enabled server tests, 296 StateScript library tests, and the prepared 104319 multikill replay.

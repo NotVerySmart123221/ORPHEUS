@@ -8,6 +8,61 @@ use crate::script_graph::GraphStore;
 mod degree_trigonometry;
 mod entity_ray_cast;
 
+#[test]
+fn wheel_selection_resolves_authored_slot_and_equipped_spray() {
+    struct Equipped {
+        slot: usize,
+        spray: u64,
+    }
+
+    impl Context for Equipped {
+        fn owner(&mut self) -> Value {
+            Value::Entity(0xa000_0101)
+        }
+
+        fn equipped_spray(&mut self, entity: u32, slot: usize) -> Option<u64> {
+            (entity == 0xa000_0101).then_some(if slot == self.slot { self.spray } else { 0 })
+        }
+    }
+
+    let fixture: Json = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/wheel-selection-ingress-v1.json"
+    )))
+    .unwrap();
+    let cases = &fixture["slot_cases"];
+    let spray = &cases["spray"];
+    let parse_asset =
+        |value: &Json| orpheus_runtime::format::parse_guid(value.as_str().unwrap()).unwrap();
+    let mut host = Equipped {
+        slot: usize::try_from(spray["slot"].as_u64().unwrap()).unwrap(),
+        spray: parse_asset(&spray["equipped"]),
+    };
+    let selection = |class: &str, guid: &Json| {
+        json!({
+            "$":class,
+            "m_548E5344":{"$":"STU_B70476F3","m_548E5344":guid,"m_resourceKey":null}
+        })
+    };
+    for (kind, class) in [("emote", "STU_3E7F59D8"), ("voice", "STU_955C40AE")] {
+        let case = &cases[kind];
+        assert_eq!(
+            evaluate(&selection(class, &case["action"]), &mut host),
+            Ok(Value::Integer(case["index"].as_i64().unwrap()))
+        );
+    }
+    for case in spray["cases"].as_array().unwrap() {
+        let equipped = json!({
+            "$":"STU_17B517B9","m_entity":{"$":"STU_B5A0CAF0"},
+            "m_slot":selection("STU_2E708EC1", &case["action"]),"m_resourceKey":null
+        });
+        assert_eq!(
+            evaluate(&equipped, &mut host),
+            Ok(Value::Asset(parse_asset(&case["expected"])))
+        );
+    }
+}
+
 struct CatalogContext(GraphStore);
 
 impl Context for CatalogContext {

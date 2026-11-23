@@ -430,6 +430,11 @@ pub trait Context {
         None
     }
 
+    /// Some(0) is an empty slot; None means the entity loadout is unavailable.
+    fn equipped_spray(&mut self, _entity: u32, _slot: usize) -> Option<u64> {
+        None
+    }
+
     fn asset_texture(&mut self, _action: u64) -> Option<u64> {
         None
     }

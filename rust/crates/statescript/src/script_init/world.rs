@@ -904,6 +904,10 @@ pub trait World {
     }
 
     /// A known model can confirm presence or absence. None means unavailable.
+    fn equipped_spray(&self, _entity: u32, _slot: usize) -> Option<u64> {
+        None
+    }
+
     fn body_has_hardpoint(&self, _site: Site, _entity: u32, _hardpoint: u64) -> Option<bool> {
         None
     }

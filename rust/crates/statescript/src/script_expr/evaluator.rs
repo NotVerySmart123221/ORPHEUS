@@ -1,4 +1,40 @@
+use std::sync::OnceLock;
+
 use super::{helpers::*, *};
+
+#[derive(serde::Deserialize)]
+struct WheelSlots {
+    emote: [String; 4],
+    voice: [String; 4],
+    spray: [String; 4],
+}
+
+fn wheel_slot(class: &str, action: Value) -> Option<i64> {
+    static SLOTS: OnceLock<Option<WheelSlots>> = OnceLock::new();
+    let slots = SLOTS
+        .get_or_init(|| serde_json::from_str(include_str!("wheel_slots.json")).ok())
+        .as_ref()?;
+    let actions = match class {
+        "STU_3E7F59D8" => &slots.emote,
+        "STU_955C40AE" => &slots.voice,
+        "STU_2E708EC1" => &slots.spray,
+        _ => return None,
+    };
+    let action = match &action {
+        Value::Asset(action) => *action,
+        Value::Array(items) => match items.as_slice() {
+            [Value::Asset(action)] => *action,
+            _ => return Some(-1),
+        },
+        _ => return Some(-1),
+    };
+    Some(
+        actions
+            .iter()
+            .position(|guid| orpheus_runtime::format::parse_guid(guid) == Some(action))
+            .map_or(-1, |slot| slot as i64),
+    )
+}
 
 pub(super) struct Fold {
     count: usize,
@@ -917,6 +953,42 @@ impl Evaluator {
             }
             "STU_B70476F3" => literal_asset(config, class, "m_548E5344", 0x0a90)
                 .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
+            "STU_3E7F59D8" | "STU_955C40AE" | "STU_2E708EC1"
+                if native_fields(config, &["m_548E5344", "m_resourceKey"])
+                    && child(config, "m_resourceKey").is_null() =>
+            {
+                let action = self.config(child(config, "m_548E5344"), context, nested)?;
+                Value::Integer(
+                    wheel_slot(class, action)
+                        .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
+                )
+            }
+            "STU_17B517B9"
+                if native_fields(config, &["m_entity", "m_slot", "m_resourceKey"])
+                    && child(config, "m_resourceKey").is_null() =>
+            {
+                let entity = self.config(child(config, "m_entity"), context, nested)?;
+                let slot = self.config(child(config, "m_slot"), context, nested)?;
+                match (entity, slot) {
+                    (Value::Entity(entity), Value::Integer(slot)) if valid_entity(entity) => {
+                        let spray = usize::try_from(slot)
+                            .ok()
+                            .filter(|&slot| slot < 4)
+                            .map(|slot| {
+                                context
+                                    .equipped_spray(entity, slot)
+                                    .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))
+                            })
+                            .transpose()?
+                            .unwrap_or(0);
+                        Value::Asset(spray)
+                    }
+                    (Value::Null | Value::Entity(_), Value::Null | Value::Integer(_)) => {
+                        Value::Asset(0)
+                    }
+                    _ => return Err(EvalError::MalformedConfig("equipped spray operands")),
+                }
+            }
             "STU_1ECB66A0"
                 if native_fields(config, &["m_548E5344", "m_resourceKey"])
                     && child(config, "m_resourceKey").is_null() =>
