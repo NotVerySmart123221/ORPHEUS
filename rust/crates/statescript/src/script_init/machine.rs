@@ -90,6 +90,7 @@ pub(super) enum RegisteredClass {
     CinematicAim,
     EntityControl,
     State9028E035,
+    AnimationBlendTree,
     State43994F1B,
     State93B8758C,
 }

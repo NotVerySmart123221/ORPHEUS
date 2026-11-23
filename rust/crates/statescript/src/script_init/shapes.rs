@@ -126,14 +126,17 @@ pub(super) fn registered_state(graph: &Graph, node: &Node) -> Option<RegisteredS
                 .is_some_and(|linked| linked.pos == node.pos)
     };
     let has_local_state_slot = || node.remote == -1 && has_raw_state_slot();
+    let has_remote_state_slot = || {
+        has_raw_state_slot()
+            && usize::try_from(node.remote)
+                .ok()
+                .and_then(|slot| graph.remote_node(slot))
+                .is_some_and(|linked| linked.pos == node.pos)
+    };
     // The static form has only the protected-entity rule. A phase-model rule
     // or any other configured field needs its own verified consumer.
     let suppresses_model = node.class == "STU_33A46033"
-        && has_raw_state_slot()
-        && usize::try_from(node.remote)
-            .ok()
-            .and_then(|slot| graph.remote_node(slot))
-            .is_some_and(|linked| linked.pos == node.pos)
+        && has_remote_state_slot()
         && flag("m_7E42F868", true)
         && registered_state_fields(node, "m_7E42F868");
     let class = match node.class.as_str() {
@@ -154,6 +157,9 @@ pub(super) fn registered_state(graph: &Graph, node: &Node) -> Option<RegisteredS
         {
             RegisteredClass::State9028E035
         }
+        // CBAD60/CBADC0 use the shared linked-state registry. The client
+        // resolves its authored blend tree and level from the active chain.
+        "STU_A875CA49" if has_remote_state_slot() => RegisteredClass::AnimationBlendTree,
         "STU_43994F1B" | "STU_93B8758C" if has_local_state_slot() => {
             resource_free_linked_class(node)?
         }

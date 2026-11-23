@@ -1384,7 +1384,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 // evaluating authored fields if 978A30 finds no auxiliary owner.
                 StateKind::Plain
             }
-            "STU_9028E035" | "STU_43994F1B" | "STU_93B8758C"
+            "STU_9028E035" | "STU_43994F1B" | "STU_93B8758C" | "STU_A875CA49"
                 if registration.shape(registered_state(self.graph(id), node).is_some()) =>
             {
                 StateKind::Registered { next: None }

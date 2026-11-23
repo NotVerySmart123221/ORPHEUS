@@ -3928,6 +3928,9 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                 );
                 assert_eq!(emote.states[&24].kind, StateKind::Plain);
                 assert!(emote.states[&24].active);
+                assert!(emote.states[&19].active);
+                assert_eq!(emote.states[&19].kind, StateKind::Registered { next: None });
+                assert_eq!(emote.variables.get(&2291), Some(&Value::Bool(true)));
                 assert!(!snapshot.diagnostics.iter().any(|d| {
                     matches!(&d.issue, crate::script_init::Issue::Expression(crate::script_expr::EvalError::UnsupportedConfig(class)) if matches!(class.as_str(), "STU_DF7C7C63" | "STU_250DEABD" | "STUConfigVarAnimation"))
                 }), "{:?}", snapshot.diagnostics);

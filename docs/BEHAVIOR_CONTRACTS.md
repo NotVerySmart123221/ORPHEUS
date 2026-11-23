@@ -156,7 +156,7 @@ The [tagged target pair fixture](../fixtures/behavior/script-tagged-target-pair-
 The [voice projection fixture](../fixtures/behavior/statescript-voice-empty-projection-v1.json) checks lifecycle, owner and observer projection, and rejection of missing host facts or an incompatible codec.
 
 The [linked state fixture](../fixtures/behavior/script-linked-state-lifecycle-v1.json)
-covers cross-instance link order, server-only entries, retirement, and invalid types.
+covers cross-instance link order, server-only entries, retirement, and invalid types. The animation blend-tree state STU_A875CA49 uses the same registry writer and reader (1B72A80 and 1B71D80). The Rust VM follows its authored subgraph and publishes the typed state link with its own class registry. The fixture exercises overlapping states with different blend levels, then checks relinking after state and graph retirement. The prepared wheel replay checks the equipped blend-tree variable and the authored animation branch output.
 The [static model protection fixture](../fixtures/behavior/script-static-model-protection-v1.json)
 covers authored slot validation, host admission, and restoration after the last state retires.
 The [self shield recharge fixture](../fixtures/behavior/script-self-shield-recharge-v1.json)
