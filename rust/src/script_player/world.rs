@@ -337,7 +337,7 @@ impl World for BodyWorld {
         self.is_player_site(site).then_some(false)
     }
 
-    fn script_category_service_available(&self, site: Site) -> Option<bool> {
+    fn voice_category_service_available(&self, site: Site) -> Option<bool> {
         self.is_player_site(site).then_some(false)
     }
 

@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Identify the native emote exit operand as a voice category, and extend the prepared wheel replay to verify that repeated use replaces the cosmetic preload. Immediate release of the preload on interruption remains open.
+
 - Refine the English and Simplified Chinese README status and contribution sections around shared hero behavior, completed infrastructure, and reproducible gameplay reports.
 
 - Project authored self-targeted playback messages through reliable body actions. Reevaluate animation transitions when their watched values change, and preserve the emote parent continuation when the native script-category service is absent. The prepared wheel replay acknowledges playback in both streams and verifies that the authored interruption removes the emote and its aim lock. Passed 823 library tests and Clippy.

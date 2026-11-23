@@ -222,6 +222,24 @@ to full texture GUIDs under `assets`. The public fixture uses synthetic
 keys. The native resource shape and offline checks are described in the
 [pinned wheel research](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/docs/COMMUNICATION_WHEEL.txt#L537-L543).
 
+### Emote preload lifetime
+
+The prepared wheel replay observes a separate cosmetic preload graph.
+Interrupting the emote releases its aim lock and retires the emote, while
+the preload remains active. The next selection replaces it through the
+authored PlayScript policy and the replay verifies that only one preload
+remains.
+
+The earlier [wheel research](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/docs/COMMUNICATION_WHEEL.txt#L261-L265)
+associated the preload with the exit action by comparing two numeric
+values. The build 104319 schema declares the exit operand of
+`STU_3D419B63` as a reference to `STUVoiceCategory`. Handler `CB9C70`
+sends it and each resolved entity to the voice service. The other value,
+`m_7E0BC920`, belongs to the nested editor `STUGraph` and tracks above
+the numeric editor item IDs. Treating it as a runtime voice category
+would match unrelated graphs. The native preload release condition
+after interruption is still open.
+
 ## Supply actor voice criteria
 
 Place the optional catalog at `data/player_voice_174.json` in the private

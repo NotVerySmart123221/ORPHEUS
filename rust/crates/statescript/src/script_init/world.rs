@@ -806,8 +806,8 @@ pub trait World {
     fn spatial_binding_owner_available(&self, _site: Site) -> Option<bool> {
         None
     }
-    /// Whether the native script-category controller is available to this VM.
-    fn script_category_service_available(&self, _site: Site) -> Option<bool> {
+    /// Whether the native voice-category service is available to this VM.
+    fn voice_category_service_available(&self, _site: Site) -> Option<bool> {
         None
     }
     /// Whether the bound controller exposes a player stats record to this VM.

@@ -4157,6 +4157,11 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                     .unwrap_or_else(|| {
                         panic!("emote graph did not start: {:?}", snapshot.diagnostics)
                     });
+                let (&resource_instance, _) = snapshot
+                    .instances
+                    .iter()
+                    .find(|(_, instance)| instance.graph == 0x1040)
+                    .expect("authored emote resource preload");
                 assert!(
                     snapshot.initialization_complete(),
                     "{:?}",
@@ -4264,6 +4269,40 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                     stopped.instances.get(&emote_instance)
                 );
                 assert_eq!(runtime.cinematic_aim(), None);
+
+                let replay_frame = playback_frame + 500;
+                for frame in playback_frame + 2..replay_frame {
+                    runtime
+                        .component
+                        .advance_frame(frame, &mut runtime.world)
+                        .unwrap();
+                }
+                assert_eq!(
+                    runtime
+                        .queue_wheel_selection(request(emote_action), None)
+                        .unwrap(),
+                    2
+                );
+                runtime
+                    .component
+                    .advance_frame(replay_frame, &mut runtime.world)
+                    .unwrap();
+                let replayed = runtime.component.snapshot().unwrap();
+                assert!(
+                    replayed.initialization_complete(),
+                    "{:?}",
+                    replayed.diagnostics
+                );
+                assert!(!replayed.instances.contains_key(&resource_instance));
+                assert_eq!(
+                    replayed
+                        .instances
+                        .values()
+                        .filter(|instance| instance.graph == 0x1040)
+                        .count(),
+                    1,
+                    "the authored PlayScript replacement keeps a single preload"
+                );
             }
         }
     }

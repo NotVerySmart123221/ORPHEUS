@@ -884,12 +884,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             .is_some_and(|category| category >> 48 == 0x01e0)
                         && self
                             .world
-                            .script_category_service_available(self.site(id, node))
+                            .voice_category_service_available(self.site(id, node))
                             == Some(false),
                 ) =>
             {
-                // The native category action exits before applying the category
-                // when its service is missing. The graph still owns its continuation.
+                // This operand is a voice category. With no native voice service,
+                // the host has no category operation to apply.
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }
