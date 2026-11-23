@@ -633,6 +633,11 @@ impl Component {
         if source != Some(owner)
             || target == owner
             || target_facts.target != target
+            || !target_facts.tags.has_known_base()
+            || matches!(
+                target_facts.script_state,
+                crate::script_entity_state::EntityScriptState::Unavailable
+            )
             || !damage.is_finite()
             || damage <= 0.0
             || !variant.is_finite()

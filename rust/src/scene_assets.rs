@@ -494,6 +494,7 @@ impl SceneAssets {
         let junkenstein_anchors = Arc::new(junkenstein_anchors);
         let mut simulation = RoomSimulation::new(bots).map_err(io::Error::other)?;
         simulation.set_free_for_all(map.free_for_all);
+        simulation.load_bot_target_tags(&self.graphs);
         simulation.set_combat_voice(Arc::clone(&self.combat_voice));
         if cfg!(feature = "inspector")
             && std::env::var_os("ORPHEUS_PLAYTEST_RECEIVED_DAMAGE")

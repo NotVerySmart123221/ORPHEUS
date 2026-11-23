@@ -847,13 +847,8 @@ impl RoomSimulation {
         let state = self
             .world
             .get::<super::BotState>(*self.by_wire.get(&wire)?)?;
-        let mut target = state.health_target_facts();
-        if let Some(script) = &state.stock_script {
-            target.tags = script.target_tags();
-            target.script_state = script.script_state();
-        }
         Some(super::DeathSourceFacts {
-            target,
+            target: state.health_target_facts(),
             velocity: state.bot.velocity,
         })
     }

@@ -803,6 +803,7 @@ impl RoomSimulation {
             history: TargetHistory::new(None),
             respawn_at: None,
             stock_script: None,
+            base_target_tags: Default::default(),
             enemy: Some(EnemyState {
                 scripts,
                 binding,
@@ -877,6 +878,16 @@ impl RoomSimulation {
                 Ok(update)
             })
             .collect()
+    }
+
+    pub(crate) fn load_bot_target_tags(&mut self, graphs: &crate::script_graph::GraphStore) {
+        for &entity in self.by_wire.values() {
+            if let Some(mut state) = self.world.get_mut::<BotState>(entity) {
+                let body = graphs.entity_body(state.bot.spawn.body);
+                state.base_target_tags = crate::script_init::TargetTagEffects::default()
+                    .snapshot(body.and_then(|body| body.target_tags.as_ref()));
+            }
+        }
     }
 
     pub(crate) fn enable_stock_bot_scripts(
@@ -1206,9 +1217,7 @@ impl RoomSimulation {
             let team = (!queries.free_for_all).then_some(bot.spawn.team);
             if let Some(facts) = &mut entity_facts {
                 let tags = if include_tags {
-                    state.enemy.as_ref().map_or_else(Default::default, |enemy| {
-                        enemy.scripts.target_tags(&enemy.graphs, &enemy.binding)
-                    })
+                    state.target_tags()
                 } else {
                     Default::default()
                 };
@@ -2532,9 +2541,7 @@ impl RoomSimulation {
                                     1 | (0x0080_0000 << state.bot.spawn.team)
                                         | if state.bot.dead { 0x10 } else { 0 },
                                 ),
-                                tags: state.enemy.as_ref().map_or_else(Default::default, |enemy| {
-                                    enemy.scripts.target_tags(&enemy.graphs, &enemy.binding)
-                                }),
+                                tags: state.target_tags(),
                                 health: Some(state.vitals.total()),
                                 velocity: Some(state.bot.velocity),
                                 script_state: state.script_state(),
@@ -3165,6 +3172,7 @@ impl RoomSimulation {
                 slot,
                 previous,
                 fresh,
+                state.base_target_tags.clone(),
                 BotReplacement {
                     retired: state.bot.entity,
                     created,
@@ -3172,7 +3180,7 @@ impl RoomSimulation {
             ));
         }
         let mut replacements = Vec::with_capacity(prepared.len());
-        for (slot, previous, fresh, replacement) in prepared {
+        for (slot, previous, fresh, base_target_tags, replacement) in prepared {
             let fresh_wire = fresh.entity;
             if !self.world.despawn(previous) {
                 return Err(CombatError::MissingBot {
@@ -3181,6 +3189,7 @@ impl RoomSimulation {
                 });
             }
             let mut next_state = BotState::new(fresh, Some(tick));
+            next_state.base_target_tags = base_target_tags;
             if let Some(catalog) = &self.stock_bots {
                 next_state.stock_script = stock_bot::StockBotScript::start(
                     catalog,

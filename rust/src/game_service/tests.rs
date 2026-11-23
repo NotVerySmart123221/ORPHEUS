@@ -408,7 +408,13 @@ fn prepared_worker_retries_the_stock_soldier_vm_on_encrypted_loopback() {
 #[test]
 #[ignore = "requires a tagged 104319 Practice Range scene with stock bot VM graphs"]
 fn prepared_worker_delivers_a_stock_nameplate_and_nonlethal_hit_over_encrypted_udp() {
-    exercise_prepared_world(PreparedFixture::StockNameplate);
+    exercise_prepared_world(PreparedFixture::StockNameplate { hit_effect: false });
+}
+
+#[test]
+#[ignore = "requires a tagged 104319 Practice Range scene with stock bot definitions"]
+fn prepared_worker_keeps_owner_vm_active_after_hitting_stationary_bot() {
+    exercise_prepared_world(PreparedFixture::StockNameplate { hit_effect: true });
 }
 
 #[test]

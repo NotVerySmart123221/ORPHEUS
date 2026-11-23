@@ -275,6 +275,57 @@ impl WorldRecord {
     }
 }
 
+fn skip_projectile_launches(reader: &mut BitReader<'_>) {
+    if !reader.bit().unwrap() {
+        return;
+    }
+    let mut first = true;
+    while reader.bit().unwrap() {
+        if first {
+            reader.var_b().unwrap();
+            first = false;
+        } else {
+            let width = if !reader.bit().unwrap() {
+                4
+            } else if !reader.bit().unwrap() {
+                8
+            } else {
+                32
+            };
+            reader.advance(width).unwrap();
+        }
+        skip_projectile_escape(reader, 4, 8);
+        assert_eq!(reader.bits(2).unwrap(), 0); // no spread, volley form
+        reader.w_u16().unwrap(); // instance
+        reader.w_u16().unwrap(); // state
+        reader.advance(6).unwrap(); // activation
+        if !reader.bit().unwrap() {
+            reader.w_u16().unwrap(); // volley count
+        }
+        reader.w_u16().unwrap(); // counter
+        reader.advance(96 + 32).unwrap(); // origin and direction
+        if reader.bit().unwrap() {
+            let count = reader.w_u16().unwrap();
+            reader.advance(2).unwrap(); // projectile ID namespace
+            skip_projectile_escape(reader, 8, 16);
+            for _ in 1..count {
+                if !reader.bit().unwrap() {
+                    reader.advance(1).unwrap(); // sign
+                    skip_projectile_escape(reader, 4, 8);
+                }
+            }
+        }
+    }
+}
+
+fn skip_projectile_escape(reader: &mut BitReader<'_>, short: usize, middle: usize) {
+    if !reader.bit().unwrap() {
+        reader.advance(short).unwrap();
+    } else if reader.bits(middle).unwrap() == (1 << middle) - 1 {
+        reader.advance(32).unwrap();
+    }
+}
+
 pub fn world_records(schemas: &Schemas, packet: &Packet) -> Vec<WorldRecord> {
     let mut reader = BitReader::new(&packet.payload);
     let tick = reader.var_a().unwrap();
@@ -322,7 +373,7 @@ pub fn world_records(schemas: &Schemas, packet: &Packet) -> Vec<WorldRecord> {
             if !reader.bit().unwrap() {
                 return record;
             }
-            assert!(!reader.bit().unwrap()); // no channel-2 launch events
+            skip_projectile_launches(&mut reader);
             if reader.bit().unwrap() {
                 assert_eq!(reader.var_b().unwrap(), u32::MAX);
                 record.projectile_release = Some(reader.var_b().unwrap());

@@ -425,6 +425,10 @@ pub struct TargetTagSnapshot {
 }
 
 impl TargetTagSnapshot {
+    pub(super) fn has_known_base(&self) -> bool {
+        self.base.is_some()
+    }
+
     pub fn presence(&self, tag: u64) -> Option<bool> {
         self.overrides
             .get(&tag)
