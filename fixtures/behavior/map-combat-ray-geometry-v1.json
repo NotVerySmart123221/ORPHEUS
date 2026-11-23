@@ -31,6 +31,10 @@
     "clear_radius": 0.003,
     "blocked_radius": 0.009
   },
+  "movement_fallback": [
+    {"expanded_cache": "missing", "mover_contacts": false},
+    {"expanded_cache": "rejected", "mover_contacts": true}
+  ],
   "rays": [
     {"origin": [0, 0.5, 0], "distance": null, "narrow_sweep_blocked": false, "wide_sweep_blocked": true},
     {"origin": [-1, 0.5, 0], "distance": 2, "narrow_sweep_blocked": true, "wide_sweep_blocked": true},

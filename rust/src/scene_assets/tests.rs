@@ -148,6 +148,44 @@ fn prepared_map_selects_the_validated_combat_ray_side_cache() {
 }
 
 #[test]
+#[ignore = "requires prepared 104319 Practice Range movement geometry"]
+fn prepared_map_fallback_preserves_projectile_sweeps_without_mover_contacts() {
+    let input: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/map-combat-ray-geometry-v1.json"
+    ))
+    .unwrap();
+    let dir = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let mut assets = SceneAssets::load(&dir).unwrap();
+    let map = GameMap::practice_range();
+    let movement_name = format!("{:04X}.col", map.map_guid as u32);
+    let isolated = tempfile::tempdir().unwrap();
+    let collision = isolated.path().join("collision");
+    fs::create_dir(&collision).unwrap();
+    let data = isolated.path().join("data");
+    fs::create_dir(&data).unwrap();
+    let keys = "collision_keys_174.json";
+    fs::copy(dir.join("data").join(keys), data.join(keys)).unwrap();
+    let movement = collision.join(&movement_name);
+    fs::copy(assets.collision.join(movement_name), &movement).unwrap();
+    assets.collision = collision;
+
+    for case in input["movement_fallback"].as_array().unwrap() {
+        if case["expanded_cache"] == "rejected" {
+            fs::write(movement.with_extension("rays.col"), b"incomplete cache").unwrap();
+        }
+        let mover_contacts = case["mover_contacts"].as_bool().unwrap();
+        let prepared = assets.map_collision(&map, mover_contacts).unwrap();
+        assert!(Arc::ptr_eq(&prepared.combat_rays, &prepared.ground));
+        let sweeps = prepared.combat_sweeps.as_ref().unwrap();
+        assert!(!sweeps.shapes().is_empty());
+        assert_eq!(prepared.contacts.is_some(), mover_contacts);
+        if let Some(contacts) = prepared.contacts {
+            assert!(Arc::ptr_eq(&contacts, sweeps));
+        }
+    }
+}
+
+#[test]
 fn practice_only_omits_owner_runtime_when_all_owner_content_is_absent() {
     use serde_json::json;
 

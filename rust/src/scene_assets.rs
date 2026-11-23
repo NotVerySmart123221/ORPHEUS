@@ -600,11 +600,11 @@ impl SceneAssets {
         Ok((shared, encounter))
     }
 
-    fn map_collision(&self, map: &GameMap, contacts: bool) -> io::Result<MapCollision> {
+    fn map_collision(&self, map: &GameMap, mover_contacts: bool) -> io::Result<MapCollision> {
         let key = CollisionKey {
             map: map.map_guid,
             mode: map.mode_guid,
-            contacts,
+            contacts: mover_contacts,
         };
         let mut last = self
             .last_collision
@@ -630,34 +630,25 @@ impl SceneAssets {
         let identifiers = self.mode_props.get(&map.mode_guid).unwrap_or(&empty);
         let ground =
             Arc::new(CollisionScene::movement_probe(&cache, identifiers).map_err(invalid)?);
-        let contacts = contacts
+        let expanded = match load_combat_geometry(&path, map.map_guid, identifiers) {
+            Ok(expanded) => expanded,
+            Err(error) => {
+                eprintln!(
+                    "{} expanded combat geometry unavailable: {error}; using movement geometry",
+                    map.name
+                );
+                None
+            }
+        };
+        let movement_contacts = (mover_contacts || expanded.is_none())
             .then(|| ContactWorld::from_movement_cache(cache, identifiers).map(Arc::new))
             .transpose()
             .map_err(invalid)?;
-        let (combat_rays, combat_sweeps) =
-            match load_combat_geometry(&path, map.map_guid, identifiers) {
-                Ok(Some((rays, sweeps))) => (
-                    Arc::new(rays),
-                    match sweeps {
-                        Ok(sweeps) => Some(Arc::new(sweeps)),
-                        Err(error) => {
-                            eprintln!(
-                                "{} combat sweeps unavailable: {error}; using movement contacts",
-                                map.name
-                            );
-                            None
-                        }
-                    },
-                ),
-                Ok(None) => (Arc::clone(&ground), None),
-                Err(error) => {
-                    eprintln!(
-                        "{} combat ray cache unavailable: {error}; using movement probes",
-                        map.name
-                    );
-                    (Arc::clone(&ground), None)
-                }
-            };
+        let (combat_rays, combat_sweeps) = match expanded {
+            Some((rays, sweeps)) => (Arc::new(rays), Some(Arc::new(sweeps))),
+            None => (Arc::clone(&ground), movement_contacts.clone()),
+        };
+        let contacts = movement_contacts.filter(|_| mover_contacts);
         let collision = MapCollision {
             movement_cache,
             ground,
@@ -793,7 +784,7 @@ fn load_combat_geometry(
     movement_path: &Path,
     map_guid: u64,
     identifiers: &BTreeSet<u64>,
-) -> io::Result<Option<(CollisionScene, io::Result<ContactWorld>)>> {
+) -> io::Result<Option<(CollisionScene, ContactWorld)>> {
     let file = match File::open(movement_path.with_extension("rays.col")) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -826,7 +817,7 @@ fn load_combat_geometry(
     let cache = read_ray_cache(BufReader::new(file), identity).map_err(invalid)?;
     let rays = CollisionScene::expanded_rays(&cache, identifiers, identity).map_err(invalid)?;
     let sweeps =
-        ContactWorld::from_expanded_ray_cache(cache, identifiers, identity).map_err(invalid);
+        ContactWorld::from_expanded_ray_cache(cache, identifiers, identity).map_err(invalid)?;
     Ok(Some((rays, sweeps)))
 }
 

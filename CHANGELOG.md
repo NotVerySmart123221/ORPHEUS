@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Select map ray and projectile geometry as a pair. Missing or rejected expanded caches use the movement geometry for both, preserving radius-aware projectile sweeps even in rooms without character movement contacts. Passed 591 library tests, two 104319 map checks covering expanded and fallback caches, and Clippy.
+
 - Sweep projectiles using their authored terrain radius without character movement padding. The shared gap fixture reproduces a small projectile stopped by the previous minimum radius and verifies that a wider projectile still strikes the edge. Passed 591 library tests, two prepared collision and NPC projectile checks, and Clippy.
 
 - Keep a projectile's sweep radius in world units at nonuniformly scaled or mirrored meshes in the expanded combat cache. Prepare the scaled vertices once per mesh and scale, and retain their face filters. A synthetic gap fixture checks a point ray, a grazing projectile, and a projectile that clears the gap. Passed 591 library tests and the prepared 104319 combat cache check.
