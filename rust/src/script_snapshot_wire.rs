@@ -73,6 +73,8 @@ impl FrozenVolley {
 }
 
 impl ProjectedSnapshot {
+    const PRACTICE_NAMEPLATE: u32 = 0x0d24;
+
     pub fn entity(&self) -> u32 {
         self.entity
     }
@@ -103,23 +105,25 @@ impl ProjectedSnapshot {
         self
     }
 
-    #[cfg(test)]
     pub(crate) fn has_graph(&self, graph: u32) -> bool {
         self.instances
             .values()
             .any(|instance| instance.graph == graph)
     }
 
+    pub(crate) fn has_practice_nameplate(&self) -> bool {
+        self.has_graph(Self::PRACTICE_NAMEPLATE)
+    }
+
     /// Introduce a Practice Range nameplate after the viewer has acknowledged
     /// both the mode HUD and its body-script parent. The introducing delta
     /// changes only the deferred subtree.
     pub(crate) fn stage_practice_nameplates(&mut self, base: Option<&Self>, can_introduce: bool) {
-        const PRACTICE_NAMEPLATE: u32 = 0x0d24;
         let mut unseen: BTreeSet<_> = self
             .instances
             .iter()
             .filter_map(|(&id, instance)| {
-                (instance.graph == PRACTICE_NAMEPLATE
+                (instance.graph == Self::PRACTICE_NAMEPLATE
                     && base.is_none_or(|base| !base.instances.contains_key(&id)))
                 .then_some(id)
             })

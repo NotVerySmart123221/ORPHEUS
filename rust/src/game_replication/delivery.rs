@@ -1236,8 +1236,20 @@ impl WorldDelivery {
         if self.created.contains(&entity) {
             stream.create_arrived();
         }
-        if stream.pending().next().is_some() {
-            return Ok(());
+        let pending = stream
+            .pending()
+            .next()
+            .map(|(last, snapshot, _)| (last, bot_dead && snapshot.has_practice_nameplate()));
+        if let Some((last, stale_nameplate)) = pending {
+            // Replace an unsent live projection on death. A transmitted
+            // delta retains its normal acknowledgment and retry ordering.
+            if !stale_nameplate || !stream.discard_unsent(last) {
+                return Ok(());
+            }
+            self.queued.retain(|record| {
+                record.update.entity != entity
+                    || !matches!(record.delivery, Delivery::SceneScript { last: queued } if queued == last)
+            });
         }
         let encoder = projection.encoder;
         let chunk = if let Some((_, base)) = stream.base() {
@@ -1245,7 +1257,7 @@ impl WorldDelivery {
                 .project_next(projection.snapshot, base)
                 .map_err(invalid)?;
             if bot {
-                snapshot.stage_practice_nameplates(Some(base), can_introduce);
+                snapshot.stage_practice_nameplates((!bot_dead).then_some(base), can_introduce);
                 self.observed_projectiles.retain_volleys(&mut snapshot);
             }
             encoder

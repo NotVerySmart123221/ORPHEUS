@@ -421,7 +421,8 @@ fn bot_practice_nameplates_wait_for_mode_and_body_acknowledgments() {
     assert!(live_base.has_graph(0x0c18));
     assert!(!live_base.has_graph(0x0d24));
 
-    // Once mode_ready() flips true, live bot receives 0x0D24 via observer delta.
+    // Once mode_ready() flips true, a live bot can stage the introduction.
+    // Death before transmission supersedes that pending projection.
     let mode_chunk = world.mode.full(&crate::bits::BitWriter::new()).unwrap();
     assert!(world.mode.arrived(mode_chunk.last));
     assert!(world.mode_ready());
@@ -436,10 +437,24 @@ fn bot_practice_nameplates_wait_for_mode_and_body_acknowledgments() {
         )
         .unwrap();
     let live_delta_record = world.ready()[0].tracked();
-    world.sent(&eligible(&world));
-    world.acknowledge(outcome(live_delta_record, true), Duration::ZERO);
+    world
+        .present_scene_script_with_dead(
+            SceneProjection {
+                snapshot: &live,
+                encoder: SnapshotEncoder::new(&graphs, &codecs),
+            },
+            true,
+        )
+        .unwrap();
+    assert_eq!(
+        world
+            .ready()
+            .iter()
+            .any(|record| Arc::ptr_eq(&live_delta_record, &record.tracked())),
+        expected("unsent_introduction_remains_queued_after_death")
+    );
     let (_, live_after) = world.scene_views[&live_entity].base().unwrap();
-    assert!(live_after.has_graph(0x0d24));
+    assert!(!live_after.has_graph(0x0d24));
 
     // Mode was ready before this bot's first script frame. Its parent still
     // needs an ACK before the nameplate can use that baseline.
@@ -503,6 +518,28 @@ fn bot_practice_nameplates_wait_for_mode_and_body_acknowledgments() {
     assert_eq!(
         caught_up.entity_variables().contains_key(&unrelated),
         expected("following_delta_has_concurrent_entity_variable")
+    );
+
+    world
+        .present_scene_script_with_dead(
+            SceneProjection {
+                snapshot: &later_live,
+                encoder: SnapshotEncoder::new(&graphs, &codecs),
+            },
+            true,
+        )
+        .unwrap();
+    let retirement = world.ready()[0].tracked();
+    world.sent(&eligible(&world));
+    world.acknowledge(outcome(Arc::clone(&retirement), false), Duration::ZERO);
+    assert!(Arc::ptr_eq(&retirement, &world.ready()[0].tracked()));
+    world.sent(&eligible(&world));
+    world.acknowledge(outcome(retirement, true), Duration::ZERO);
+    let (_, corpse) = world.scene_views[&later_live_entity].base().unwrap();
+    assert!(corpse.has_graph(0x0c18));
+    assert_eq!(
+        corpse.has_graph(0x0d24),
+        expected("acknowledged_nameplate_survives_death_delta")
     );
 
     // An already-dead bot without a prior 0x0D24 never gets one even after mode_ready().

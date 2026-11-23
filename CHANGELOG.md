@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Retire a dead bot's overhead nameplate from its observer projection while retaining the parent script for death presentation. Discard an unsent live introduction and retry removal in delivery order. Passed 595 library tests, the prepared encrypted nameplate replay and respawn-presentation check, and Clippy.
+
 - Keep the owner StateScript running through repeated greetings and healing callouts. Sample the authored eye origin and heading for target tracking, and deliver parameterless routed notifications to their local listeners when no room route is available. Passed 899 library tests, the prepared 104319 wheel replay, and Clippy.
 
 - Dispatch ready communication-wheel selections and validated spray reports without waiting for another movement command. Keep confirmed selections tied to their original command view and wait for future commands. Passed 595 library tests, the prepared 104319 wheel replay, and Clippy.

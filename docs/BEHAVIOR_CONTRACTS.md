@@ -144,7 +144,7 @@ The Rust-only [impact-spawn fixture](../fixtures/behavior/projectile-impact-spaw
 
 The Rust-only [unposed owner volley fixture](../fixtures/behavior/owner-unposed-volley-v1.json) checks that a due round with no pose is skipped at its authored time and a later posed round in the same volley still fires and spends ammunition.
 
-The Rust-only [staged nameplate fixture](../fixtures/behavior/npc-nameplate-staged-admission-v1.json) checks admission after the mode and bot body acknowledgments, exactly retried introduction, and lifetime protection for a bot that died before admission.
+The Rust-only [staged nameplate fixture](../fixtures/behavior/npc-nameplate-staged-admission-v1.json) checks admission after the mode and bot body acknowledgments and exact retries. A settled bot death drops an unsent introduction or removes the acknowledged nameplate subtree in the next observer delta. The parent and its remaining states stay available to the death presentation.
 
 The Rust-only [combat feedback fixture](../fixtures/behavior/combat-feedback-owner-body-v1.json) checks reliable hit and elimination admission after shooter possession, replacement of the shooter before acknowledgment, and independent target health delivery.
 

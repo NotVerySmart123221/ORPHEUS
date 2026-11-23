@@ -16,6 +16,8 @@
     "introduction_has_nameplate": true,
     "introduction_has_concurrent_entity_variable": false,
     "following_delta_has_concurrent_entity_variable": true,
+    "unsent_introduction_remains_queued_after_death": false,
+    "acknowledged_nameplate_survives_death_delta": false,
     "dead_baseline_has_nameplate": false
   }
 }
