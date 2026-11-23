@@ -339,7 +339,13 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
     }
 
     fn take_health_update(&mut self) -> Option<EntityComponent> {
-        self.world.vitals.take_cumulative_update()
+        let update = self.world.vitals.take_cumulative_update()?;
+        if self.component.snapshot().is_some() {
+            if let Err(error) = self.component.sync_body_health(&mut self.world) {
+                eprintln!("Owner health synchronization failed: {error}");
+            }
+        }
+        Some(update)
     }
 
     fn snapshot(&self) -> Option<&Snapshot> {

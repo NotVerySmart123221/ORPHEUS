@@ -40,7 +40,7 @@
         "delta": -25.0,
         "killed": false,
         "hit_tags": null,
-        "target_facts": {"filter_flags": 8388609, "owner_health": 200.0}
+        "target_facts": {"filter_flags": 8388609, "owner_health": 175.0}
       },
       {
         "target": "player",

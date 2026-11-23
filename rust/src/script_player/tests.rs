@@ -1376,6 +1376,62 @@ fn health_queries_read_the_authoritative_vitals() {
 }
 
 #[test]
+fn settled_player_pools_update_the_owner_health_projection() {
+    use crate::{
+        script_init::{HUD_HEALTH, HUD_MAX_HEALTH, OWNER_HEALTH},
+        script_snapshot_wire::View,
+        vitals::Death,
+    };
+
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/player-health-presentation-v1.json"
+    ))
+    .unwrap();
+    let input = |key: &str| contract["input"][key].as_f64().unwrap();
+    let expected = |key: &str| Value::Float(contract["expected"][key].as_f64().unwrap());
+    let (factory, spawn) = fixture_body_factory();
+    let mut body = factory.start(spawn).unwrap();
+    let source = Death {
+        time: 0.0,
+        frame: spawn.frame,
+        killer: spawn.entity + 1,
+    };
+    let assert_health = |body: &PlayerBodyRuntime, stage| {
+        let snapshot = body.snapshot().unwrap();
+        assert_eq!(
+            snapshot.variables.get(&OWNER_HEALTH),
+            Some(&expected(stage))
+        );
+        let owner = body.encoder().project(snapshot, View::Owner).unwrap();
+        assert_eq!(
+            owner.entity_variables().get(&HUD_HEALTH),
+            Some(&expected(stage))
+        );
+        assert_eq!(
+            owner.entity_variables().get(&HUD_MAX_HEALTH),
+            Some(&expected("maximum"))
+        );
+    };
+
+    assert_health(&body, "initial");
+    assert_eq!(
+        body.receive_damage(input("damage"), source).dealt,
+        input("damage")
+    );
+    assert!(body.take_health_update().is_some());
+    assert_health(&body, "after_damage");
+
+    assert_eq!(body.heal(input("heal")), input("heal"));
+    assert!(body.take_health_update().is_some());
+    assert_health(&body, "after_heal");
+
+    assert!(body.receive_damage(input("lethal_damage"), source).killed);
+    assert!(body.take_health_update().is_some());
+    assert_health(&body, "after_death");
+    assert!(body.take_health_update().is_none());
+}
+
+#[test]
 fn typed_health_queries_read_the_live_distribution_after_damage() {
     use crate::script_expr::EvalError;
     use serde_json::json;

@@ -14,6 +14,8 @@ The [meter activity contract](../fixtures/behavior/script-meter-body-activity-v1
 
 The [synchronous owner halt contract](../fixtures/behavior/owner-synchronous-script-halt-v1.json) triggers a native script fault from defender and sighting messages. It checks room-side effect cleanup, retained health, generation-specific publication, and replacement of older queued health. The owner can retire the script before the actor identity acknowledgement.
 
+The Rust-only [player health presentation fixture](../fixtures/behavior/player-health-presentation-v1.json) checks that settled damage, healing, and death update the owner StateScript projection from the same health pools as the health component. It checks current and maximum HUD values through the production owner projection.
+
 The [owner fault shield contract](../fixtures/behavior/owner-fault-temporary-shields-v1.json) covers stacked and depleted temporary grants during owner VM unload. The owner and observers receive explicit clears through the health component. A lost owner update retries the same record. Permanent pool IDs, maximums and current amounts survive the unload.
 
 The Rust-only [base action fixture](../fixtures/behavior/script-base-action-placement-v1.json) runs the same valid continuation at two original placements. It also checks malformed action markers and an invalid remote slot on an action.

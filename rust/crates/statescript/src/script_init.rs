@@ -213,7 +213,8 @@ pub fn player_roots(body: &Body, graphs: &GraphStore) -> Result<Vec<Root>, InitF
 
 #[doc(hidden)]
 pub const OWNER_HEALTH: u32 = 253;
-const HUD_HEALTH: u32 = 1732;
+#[doc(hidden)]
+pub const HUD_HEALTH: u32 = 1732;
 #[doc(hidden)]
 pub const HUD_MAX_HEALTH: u32 = 1737;
 
@@ -545,6 +546,17 @@ impl Component {
             self.machine
                 .allows_stack(VarKey::Entity(id), priority, None)
         })
+    }
+
+    /// Publish authoritative totals after the host settles a health-pool change.
+    pub fn sync_body_health(&mut self, world: &mut impl World) -> Result<(), InitFault> {
+        let site = Site {
+            entity: self.machine.snapshot.entity,
+            instance: 0,
+            graph: 0,
+            node: None,
+        };
+        self.run(world, |vm| vm.publish_health_totals(site))
     }
 
     pub fn set_entity_variable(
