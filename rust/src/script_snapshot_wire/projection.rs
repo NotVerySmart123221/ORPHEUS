@@ -685,16 +685,18 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
         (StateKind::Plain | StateKind::PhaseScriptList, Some("hits"))
         | (StateKind::PhaseTransition, Some("bit")) => StatePayload::new(),
         (StateKind::EmptyTargets, Some("targets")) => StatePayload::new(),
-        (StateKind::TrackedTargets, Some("targets")) => StatePayload::from([(
-            "targets".into(),
-            Value::Array(
-                state
-                    .tracked_targets
-                    .iter()
-                    .map(|entity| Value::Array(vec![Value::Entity(*entity), Value::Integer(0)]))
-                    .collect(),
-            ),
-        )]),
+        (StateKind::TrackedTargets | StateKind::ViewTargets { .. }, Some("targets")) => {
+            StatePayload::from([(
+                "targets".into(),
+                Value::Array(
+                    state
+                        .tracked_targets
+                        .iter()
+                        .map(|entity| Value::Array(vec![Value::Entity(*entity), Value::Integer(0)]))
+                        .collect(),
+                ),
+            )])
+        }
         (StateKind::SprayPlacement(placement), Some("861D9015")) => {
             let Some((unlock, hit)) = placement else {
                 return Some(StatePayload::new());

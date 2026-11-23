@@ -67,6 +67,7 @@
     "explicit_eye_order": [41]
   },
   "expected": {
+    "wire_targets": [[9403, 0], [9402, 0]],
     "output_variable": 64,
     "period_frames": 6,
     "profile": "0x069000000000FF11",

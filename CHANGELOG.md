@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Encode native view tracking in the owner StateScript snapshot using the existing target list codec. The snapshot keeps the selected order and sends an empty list when the view clears. This fixes the owner script stop observed when the active tracker entered the playtest snapshot. Passed 599 library tests, a prepared 104319 wheel check and target codec round trip, and Clippy.
+
 - Keep a completed NPC projectile launch retryable while its source is live and its delivery grace period is open. A loss report can arrive after a short flight has already ended. Record remote projectile sends, acknowledgements, and losses in the opt-in playtest capture. Passed 598 library tests, the prepared 104319 encrypted two-team launch and firing-lane interception checks, and Clippy.
 
 - Read an optional weapon terrain category from the validated expanded map collision cache. Use it for point hits and projectile sweeps through detailed meshes that coexist with mover proxies. A local 104319 replay cleared 32 recorded Practice Range shots at one hollow prop and retained 11 blockers at a second prop across three candidate categories. The native category still needs confirmation because those categories differ on base map geometry. Passed 598 library tests, two prepared map collision checks, and Clippy.

@@ -2766,6 +2766,96 @@ fn authored_server_meter_leaves_both_wire_views_and_public_child_identity_unchan
 }
 
 #[test]
+fn view_tracker_encodes_the_current_owner_target_list() {
+    use crate::script_init::{Component, ViewTargetQuery};
+
+    struct Targets(Vec<u32>);
+    impl crate::script_init::World for Targets {
+        fn entity_variable(&mut self, _: u32, _: u32) -> Option<Value> {
+            None
+        }
+
+        fn position(&mut self, _: u32) -> Option<[f64; 3]> {
+            None
+        }
+
+        fn view_targets(&self, _: Site, _: &ViewTargetQuery<'_>) -> Option<Vec<u32>> {
+            Some(self.0.clone())
+        }
+    }
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-view-targets-v1.json"
+    ))
+    .unwrap();
+    let mut tracker = node(1, "STUStatescriptStateTrackTargets", Some(0), json!({}));
+    tracker["fields"] = fixture["input"]["field_shape"].clone();
+    let index = 607;
+    let graphs = std::sync::Arc::new(
+        GraphStore::from_json(
+            &serde_json::to_vec(&json!({
+                "version":1,"bodies":{},"missing":[],
+                "graphs":[graph(
+                    index,
+                    vec![
+                        node(0, "STUStatescriptEntry", None,
+                             json!({"m_outPlug":{"$":"Plug","links":[[1,"m_beginPlug"]]}})),
+                        tracker,
+                    ],
+                    json!([1]), json!([0]), json!([]), json!([]),
+                )]
+            }))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    let mut world = Targets(serde_json::from_value(fixture["input"]["targets"].clone()).unwrap());
+    let owner = serde_json::from_value(fixture["input"]["owner"].clone()).unwrap();
+    let period: u32 = serde_json::from_value(fixture["expected"]["period_frames"].clone()).unwrap();
+    let mut component = Component::start(
+        std::sync::Arc::clone(&graphs),
+        owner,
+        Variables::new(),
+        vec![Root::new(1, index)],
+        10,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let codecs = CodecTable::from_json(CODECS).unwrap();
+    let encoder = SnapshotEncoder::new(&graphs, &codecs);
+    let before = component.snapshot().unwrap().clone();
+    world.0.clear();
+    component.advance_frame(10 + period, &mut world).unwrap();
+    let expected: Vec<(u32, i64)> =
+        serde_json::from_value(fixture["expected"]["wire_targets"].clone()).unwrap();
+    let expected = Value::Array(
+        expected
+            .into_iter()
+            .map(|(entity, age)| Value::Array(vec![Value::Entity(entity), Value::Integer(age)]))
+            .collect(),
+    );
+    let base = encoder.project(&before, View::Owner).unwrap();
+    assert_eq!(
+        base.instances[&1].states[&0].payload.get("targets"),
+        Some(&expected)
+    );
+    let next = encoder
+        .project_next(component.snapshot().unwrap(), &base)
+        .unwrap();
+    assert_eq!(
+        next.instances[&1].states[&0].payload.get("targets"),
+        Some(&Value::Array(Vec::new()))
+    );
+    assert_ne!(
+        encoder.full(&base).unwrap().as_bytes(),
+        encoder.full(&next).unwrap().as_bytes()
+    );
+    let observer = encoder.project(&before, View::Observer).unwrap();
+    assert!(observer.instances[&1].states.is_empty());
+}
+
+#[test]
 fn quick_melee_hit_list_projects_empty_hits_payload() {
     let mut melee = graph(
         0x0043,
