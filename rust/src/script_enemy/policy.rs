@@ -1248,11 +1248,16 @@ pub(crate) fn projectile_pattern(
     evaluate: &mut impl FnMut(&Json) -> Result<Value, ShotConfigError>,
 ) -> Option<ProjectilePattern> {
     let ballistics = ProjectileBallistics::from_fields(fields, &mut *evaluate).ok()??;
-    let directions = match fields["m_5EC1EB38"]["$"].as_str()? {
+    let launch = &fields["m_5EC1EB38"];
+    let directions = match launch["$"].as_str()? {
         "STU_613BDDB0" => crate::weapon_spread::authored_ring_directions(
             fields, forward, shot, position, evaluate,
         )?,
-        "STU_239B571E" => vec![forward],
+        "STU_239B571E" => vec![crate::projectile_flight::direct_projectile_direction(
+            launch,
+            forward,
+            &mut *evaluate,
+        )?],
         _ => return None,
     };
     Some(ProjectilePattern {

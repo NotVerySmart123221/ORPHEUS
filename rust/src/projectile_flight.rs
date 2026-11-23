@@ -658,7 +658,7 @@ impl ProjectileFlight {
 pub(crate) fn posed_projectile_direction(
     node: &Node,
     direction: Vec3,
-    mut evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
+    evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
 ) -> Option<Vec3> {
     let launch = node.field("m_5EC1EB38").filter(|config| !config.is_null());
     let direct = launch.is_some_and(|config| config["$"] == "STU_239B571E");
@@ -673,16 +673,22 @@ pub(crate) fn posed_projectile_direction(
             return None;
         }
     }
-    match launch
-        .map(|config| &config["m_22CE7F30"])
-        .filter(|lift| !lift.is_null())
-    {
-        Some(lift) => lifted_direction(
-            direction,
-            crate::script_expr::to_float(&evaluate(lift).ok()?),
-        ),
-        None => Some(direction),
+    direct_projectile_direction(launch.unwrap_or(&Json::Null), direction, evaluate)
+}
+
+pub(crate) fn direct_projectile_direction(
+    launch: &Json,
+    direction: Vec3,
+    mut evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
+) -> Option<Vec3> {
+    let lift = &launch["m_22CE7F30"];
+    if lift.is_null() {
+        return Some(direction);
     }
+    lifted_direction(
+        direction,
+        crate::script_expr::to_float(&evaluate(lift).ok()?),
+    )
 }
 
 /// Native launch bias: float32 add to Y followed by normalization.

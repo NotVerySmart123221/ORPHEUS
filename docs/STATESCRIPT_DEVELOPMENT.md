@@ -1157,6 +1157,13 @@ feedback path can still run for excluded bodies. Packs without a matching
 graph retain the catalog's affiliation check. The other authored filter
 fields and announcer-suppression conditions still need room bindings.
 
+The cue gate in `0215` follows the count increment and wait rearm. One
+input is set while the `069C` message provider is present. The 104319 archive
+lists providers for Junkenstein's Revenge, King's Row Archives, and
+Rialto Archives. The Practice Range lists the shared receiver and has no
+matching publisher in its map index. The other input checks membership
+in selection `21925`; its room interpretation remains unresolved.
+
 The 104319 hit-marker message updates the shooter's HUD. The damage
 feedback path uses the struck body's combat event for victim effects
 and audio. Keep speaker and recipient selection tied to the settled

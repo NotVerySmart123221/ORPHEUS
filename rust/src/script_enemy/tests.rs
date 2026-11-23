@@ -2,6 +2,76 @@ use super::{policy::*, *};
 use crate::script_control::LEGACY_PROJECTILE_CONTROL;
 
 #[test]
+fn npc_direct_projectile_uses_the_resolved_launch_lift_in_its_sweep() {
+    use crate::script_expr::{EmptyContext, evaluate};
+    use serde_json::json;
+
+    let mut fields = json!({
+        "m_projectileSpeed": 30, "m_projectileLifetime": 2,
+        "m_5EC1EB38": {
+            "$": "STU_239B571E",
+            "m_22CE7F30": {"$":"STUConfigVarDynamic", "m_identifier": 42}
+        }
+    });
+    let shot = script_init::ShotEvent {
+        entity: 0xc000_1000,
+        instance: 1,
+        graph: 44,
+        raw_state: 3,
+        frame: 100,
+        time_ms: 0,
+        activation: 1,
+        activation_ms: 0,
+        ordinal: 0,
+    };
+    let forward = [0.0, 0.0, 1.0];
+    let mut resolve = |config: &Json| {
+        if config["m_identifier"] == 42 {
+            Ok(Value::Float(0.125))
+        } else {
+            evaluate(config, &mut EmptyContext)
+        }
+    };
+    let mut projectile = projectile_pattern(&fields, forward, &shot, 22, &mut resolve)
+        .unwrap()
+        .launch(shot.entity, 1, [0.0; 3], shot.frame)
+        .next()
+        .unwrap();
+    let mut swept = None;
+    projectile
+        .flight
+        .advance(shot.frame + 1, &[], |_, direction, _| {
+            swept = Some(direction);
+            Ok(None)
+        })
+        .unwrap();
+    let [x, y, z] = swept.unwrap();
+    assert_eq!(x, 0.0);
+    assert!((y / z - 0.125).abs() < 1e-7);
+    assert!((y * y + z * z - 1.0).abs() < 1e-7);
+
+    assert!(
+        projectile_pattern(&fields, forward, &shot, 22, &mut |cfg| {
+            if cfg["m_identifier"] == 42 {
+                Err(crate::script_expr::EvalError::MalformedConfig(
+                    "test launch lift",
+                ))
+            } else {
+                evaluate(cfg, &mut EmptyContext)
+            }
+        })
+        .is_none()
+    );
+    fields["m_5EC1EB38"]["m_22CE7F30"] = Json::Null;
+    assert_eq!(
+        projectile_pattern(&fields, forward, &shot, 22, &mut resolve)
+            .unwrap()
+            .directions,
+        [forward]
+    );
+}
+
+#[test]
 fn authored_pose_queries_read_live_npc_pose_with_static_fallback() {
     let (graphs, _, definition, _) = fixture(false);
     let gate = EnemyGate {

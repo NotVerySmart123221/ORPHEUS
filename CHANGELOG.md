@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Apply the authored vertical launch bias to NPC direct projectiles before sweeping for collision. Share the existing player calculation and preserve the base heading for weapons without the field. Passed 822 library tests, the prepared Practice Range firing-lane replay, and Clippy. Documented the multikill cue gates and their remaining room bindings.
+
 - Bind multikill target-tag exclusions from the authored filter linked to the configured cue switch. Excluded targets keep their ordinary elimination feedback without advancing or extending the announcer streak. Passed 821 library tests, both prepared multikill replays, and Clippy.
 
 - Match the shared 104319 elimination graph at the multikill deadline. Kills on that frame still select cues from the old streak, and the finishing wait invalidates their attempted restart. The next frame starts a fresh streak. Passed 821 library tests, the prepared two-second announcer replay, and Clippy.
