@@ -883,11 +883,42 @@ fn confirmed_headshot_cue_reaches_only_the_shooter_connection() {
 
 #[test]
 fn multikill_announcer_cues_emit_from_mode_entity_across_bot_eliminations() {
-    use crate::{
-        combat_voice::CombatVoiceCatalog,
-        game_bots::{BotCatalog, BotWalk},
-    };
+    use crate::combat_voice::CombatVoiceCatalog;
 
+    let voice = CombatVoiceCatalog::from_json(
+        r#"{
+            "multikill_window_ticks": 3,
+            "multikills": {
+                "2": { "stimulus": "0x0EE0000000000102", "lines": ["0x0760000000000202"] },
+                "3": { "stimulus": "0x0EE0000000000103", "lines": ["0x0760000000000203"] }
+            }
+        }"#,
+    )
+    .unwrap();
+    assert_multikill_announcer_cues(voice);
+}
+
+#[test]
+#[ignore = "requires a prepared combat voice catalog using the authored two-second interval"]
+fn prepared_multikill_announcer_restarts_the_two_second_interval() {
+    let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let voice =
+        crate::combat_voice::CombatVoiceCatalog::load(runtime.join("data/combat_voice_174.json"))
+            .unwrap();
+    assert_eq!(
+        voice.multikill_window_ticks() * TICK_PERIOD,
+        Duration::from_secs(2)
+    );
+    assert_multikill_announcer_cues(voice);
+}
+
+fn assert_multikill_announcer_cues(voice: crate::combat_voice::CombatVoiceCatalog) {
+    use crate::game_bots::{BotCatalog, BotWalk};
+
+    let window = voice.multikill_window_ticks();
+    assert!(window > 2);
+    let (_, double) = voice.multikill_cue(2, 2).unwrap();
+    let (_, triple) = voice.multikill_cue(3, 3).unwrap();
     let bots = BotCatalog::from_json(
         r#"{
             "heroes": {"0x01": {"name": "Target", "body": "0x02", "health": 50}},
@@ -908,16 +939,6 @@ fn multikill_announcer_cues_emit_from_mode_entity_across_bot_eliminations() {
         .map(|bot| (bot.entity, bot.spawn.position))
         .collect();
     let (mut room, [shooter], mut sequence) = feedback_room_with_bots(Vec::new(), [0], bots);
-    let voice = CombatVoiceCatalog::from_json(
-        r#"{
-            "multikill_window_ticks": 3,
-            "multikills": {
-                "2": { "stimulus": "0x0EE0000000000102", "lines": ["0x0760000000000202"] },
-                "3": { "stimulus": "0x0EE0000000000103", "lines": ["0x0760000000000203"] }
-            }
-        }"#,
-    )
-    .unwrap();
     room.world
         .as_mut()
         .unwrap()
@@ -966,7 +987,12 @@ fn multikill_announcer_cues_emit_from_mode_entity_across_bot_eliminations() {
         advance_feedback(room, [shooter], tick);
     };
 
-    kill_bot(&mut room, targets[0].0, targets[0].1, FIRST_TICK + 1);
+    let first = FIRST_TICK + 1;
+    let second = first + window - 1;
+    let third = second + window - 1;
+    let expired = third + window + 1;
+    let next = expired + window - 1;
+    kill_bot(&mut room, targets[0].0, targets[0].1, first);
     assert_eq!(
         room.members[&1]
             .peer
@@ -977,27 +1003,27 @@ fn multikill_announcer_cues_emit_from_mode_entity_across_bot_eliminations() {
         0
     );
 
-    kill_bot(&mut room, targets[1].0, targets[1].1, FIRST_TICK + 3);
+    kill_bot(&mut room, targets[1].0, targets[1].1, second);
     assert_reliable_voice_cue(
         &mut room,
         1,
         GAME_MODE_ENTITY,
         shooter,
         &mut sequence[0],
-        FIRST_TICK + 4,
-        0x0760_0000_0000_0202,
+        second + 1,
+        double,
         0,
     );
 
-    kill_bot(&mut room, targets[2].0, targets[2].1, FIRST_TICK + 5);
+    kill_bot(&mut room, targets[2].0, targets[2].1, third);
     assert_reliable_voice_cue(
         &mut room,
         1,
         GAME_MODE_ENTITY,
         shooter,
         &mut sequence[0],
-        FIRST_TICK + 6,
-        0x0760_0000_0000_0203,
+        third + 1,
+        triple,
         1,
     );
 
@@ -1007,7 +1033,7 @@ fn multikill_announcer_cues_emit_from_mode_entity_across_bot_eliminations() {
         .unwrap()
         .scene
         .simulation_mut()
-        .kill_bot_for_test(targets[5].0, FIRST_TICK + 6, (FIRST_TICK + 6) * TICK_PERIOD);
+        .kill_bot_for_test(targets[5].0, third + 1, (third + 1) * TICK_PERIOD);
     assert_eq!(
         room.members[&1]
             .peer
@@ -1019,10 +1045,7 @@ fn multikill_announcer_cues_emit_from_mode_entity_across_bot_eliminations() {
     );
 
     // Expiring the multikill window resets the streak back to 1 (no announcement).
-    for gap_tick in [FIRST_TICK + 7, FIRST_TICK + 9] {
-        advance_feedback(&mut room, [shooter], gap_tick);
-    }
-    kill_bot(&mut room, targets[3].0, targets[3].1, FIRST_TICK + 11);
+    kill_bot(&mut room, targets[3].0, targets[3].1, expired);
     assert_eq!(
         room.members[&1]
             .peer
@@ -1033,15 +1056,15 @@ fn multikill_announcer_cues_emit_from_mode_entity_across_bot_eliminations() {
         0
     );
 
-    kill_bot(&mut room, targets[4].0, targets[4].1, FIRST_TICK + 13);
+    kill_bot(&mut room, targets[4].0, targets[4].1, next);
     assert_reliable_voice_cue(
         &mut room,
         1,
         GAME_MODE_ENTITY,
         shooter,
         &mut sequence[0],
-        FIRST_TICK + 14,
-        0x0760_0000_0000_0202,
+        next + 1,
+        double,
         2,
     );
 }
