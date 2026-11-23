@@ -2520,3 +2520,71 @@ fn queued_messages_abort_and_rearm_waits_without_crossing_instance_scope() {
     assert!(component.snapshot().is_none());
     assert_eq!(component.run_now(&mut EmptyWorld), Err(InitFault::Halted));
 }
+
+#[test]
+fn wheel_actions_inherit_plain_action_continuation() {
+    let fixture: Json = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/wheel-base-actions-v1.json"
+    )))
+    .unwrap();
+    for case in fixture["input"].as_array().unwrap() {
+        let index = u32::try_from(case["graph"].as_u64().unwrap()).unwrap();
+        let class = case["class"].as_str().unwrap();
+        let continuation = case["continuation"].as_i64().unwrap();
+        let mut inherited = node(
+            1,
+            class,
+            None,
+            json!({
+                "m_E6525980": {"$":"UnsupportedCosmeticPayload"},
+                "m_06B5A4F1": {"$":"UnsupportedCosmeticTarget"},
+                "m_outPlug": plug(&[(2, "m_inPlug")], &[]),
+            }),
+        );
+        inherited["fields"]["m_ADEB6E05"] = json!(true);
+        let graphs = Arc::new(store(vec![graph(
+            index,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({"m_outPlug":plug(&[(1,"m_inPlug")],&[])}),
+                ),
+                inherited,
+                node(
+                    2,
+                    "STUStatescriptActionSetVar",
+                    None,
+                    json!({
+                        "m_out_Var": var(1, false),
+                        "m_value": {"$":"STUConfigVarInt","m_value":continuation}
+                    }),
+                ),
+            ],
+            json!([]),
+            json!([0]),
+        )]));
+        let component = Component::start(
+            graphs,
+            0xa000_0101,
+            Variables::new(),
+            vec![Root::new(1, index)],
+            0,
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        let snapshot = component.snapshot().unwrap();
+        assert!(
+            snapshot.initialization_complete(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        assert_eq!(
+            snapshot.instances[&1].variables[&1],
+            Value::Integer(continuation)
+        );
+    }
+}

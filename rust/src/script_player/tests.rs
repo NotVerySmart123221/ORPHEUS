@@ -3492,6 +3492,8 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
         mover_settings::MoverSettings,
         script_graph::RoomSpatialNeeds,
         script_init::StateKind,
+        script_snapshot_wire::{SnapshotEncoder, View},
+        script_stream::{BodyStream, ChangeKey, DeltaKind},
     };
 
     let root = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
@@ -3677,6 +3679,10 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
         }
         let spray = 0x0a90_0000_0000_01a4;
         if with_room && graphs.has_asset_category_entry(spray) {
+            let codecs = CodecTable::load(root.join("data/statescript_codecs_174.json")).unwrap();
+            let encoder = SnapshotEncoder::new(&graphs, &codecs);
+            let before =
+                [View::Owner, View::Observer].map(|view| encoder.project(&snapshot, view).unwrap());
             runtime.set_equipped_sprays([0, 0, 0x0250_0000_0000_0009, 0]);
             runtime.world.eye_position = Some(vector(&spray_input["eye"]));
             runtime.world.movement.yaw = 0;
@@ -3699,26 +3705,42 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                 "{:?}",
                 snapshot.diagnostics
             );
-            let hit = spray_wheel
+            let (spray_slot, hit) = spray_wheel
                 .states
-                .values()
-                .find_map(|state| match state.kind {
-                    StateKind::SprayPlacement(Some(hit)) if state.active => Some(hit),
+                .iter()
+                .find_map(|(&slot, state)| match state.kind {
+                    StateKind::SprayPlacement(Some(hit)) if state.active => Some((slot, hit)),
                     _ => None,
                 })
                 .unwrap_or_else(|| panic!("missing spray placement: {:?}", snapshot.diagnostics));
             assert_eq!(hit.point, vector(&spray_fixture["expected"]["point"]));
             assert_eq!(hit.normal, vector(&spray_fixture["expected"]["normal"]));
             assert_eq!(hit.direction, vector(&spray_input["direction"]));
-            for diagnostic in snapshot
-                .diagnostics
-                .iter()
-                .filter(|diagnostic| diagnostic.site.graph == 0x02cf)
-            {
-                eprintln!(
-                    "spray path {:?}: {:?}",
-                    diagnostic.site.node, diagnostic.issue
+            assert!(
+                snapshot.initialization_complete(),
+                "{:?}",
+                snapshot.diagnostics
+            );
+            for previous in before {
+                let mut stream = BodyStream::new(snapshot.entity);
+                stream.create_arrived();
+                let base = encoder.queue_full(&mut stream, &previous).unwrap();
+                assert!(stream.arrived(base.last).advanced);
+                let next = encoder.project_next(&snapshot, &previous).unwrap();
+                let kind = match previous.view() {
+                    View::Owner => DeltaKind::InitialOwner(snapshot.now_ms.try_into().unwrap()),
+                    View::Observer => DeltaKind::Observer { resend: false },
+                };
+                let change = encoder
+                    .queue_delta(&mut stream, &next, kind, 16)
+                    .unwrap()
+                    .unwrap();
+                assert!(
+                    stream
+                        .touched()
+                        .contains(&ChangeKey::State(spray_instance, spray_slot))
                 );
+                assert!(stream.arrived(change.last).advanced);
             }
             runtime.world.movement.yaw = 32768;
             // Reopen the authored admission flag to exercise a second placement attempt.

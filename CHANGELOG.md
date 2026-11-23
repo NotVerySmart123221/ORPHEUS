@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Follow authored continuations for the three communication wheel classes that inherit the 104319 base Action. The prepared wheel replay now completes the solo callout and encodes and acknowledges the static spray placement in owner and observer deltas. Passed 511 server library tests and 300 StateScript library tests. Moving spray attachments and client cosmetic use reports remain open.
+
 - Implement the authored spray placement state's static surface query and owner and observer payload. The prepared replay uses the supplied eye ray and authored reach, skips movement-only geometry, and clears the placement on a miss after reopening the authored input gate. Passed 511 server and 299 StateScript library tests, the prepared 104319 wheel probe, and Clippy. The stock success path still reaches unsupported action STU_71FE9852 before live snapshot delivery. Moving surfaces and cosmetic use reports remain open.
 
 - Resolve authored emote, voice-line and spray selections through shared 104319 slot tables. The spray asset expression now reads the current body's equipped slot. A prepared 104319 wheel replay confirms that a selected spray reaches the expected slot in the authored graph. Spray surface placement and emote or voice playback remain separate work. Passed 511 Inspector-enabled server tests, 297 default StateScript library tests, and Clippy.

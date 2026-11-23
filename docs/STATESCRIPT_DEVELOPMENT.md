@@ -195,8 +195,12 @@ its existing text rendering and audience checks. `STU_1ECB66A0` looks up
 the complete communication action GUID in the optional `asset_textures`
 catalog. A missing key in a supplied catalog returns a zero texture
 reference. If the catalog is absent, the VM reports the lookup as
-unavailable. Action `STU_71FE9852`, sight profiles for occupied rooms and
-original-client presentation verification remain open.
+unavailable. The 104319 PC registration list has 1,735 entries.
+`STU_631D36C3` (typeinfo `2DF7B50`), `STU_71FE9852` (`2DE36F8`)
+and `STU_94771561` (`2DF3C18`) first match the same parent Action
+`2DD5430` at record 165, with constructor `1B72650`. The shared path
+follows the authored output plug without reading cosmetic fields.
+Sight profiles for occupied rooms and original-client presentation remain open.
 The pair and opcode behavior follows the [pinned Python reference for pairs](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/script/play.py#L81-L93)
 and [expression maps](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/script/expr.py#L832-L835).
 The synchronized variable capture follows the [pinned Python frame-action reference](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/script/driver.py#L781-L811).

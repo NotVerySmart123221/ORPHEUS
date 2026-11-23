@@ -822,6 +822,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
+            "STU_631D36C3" | "STU_71FE9852" | "STU_94771561"
+                if node.is_action() && node.remote == -1 =>
+            {
+                // These classes inherit the native Action handler. Its prediction
+                // notification does not read their cosmetic payload.
+                self.follow(id, node, "m_outPlug", caller, depth)?;
+                Ok(true)
+            }
             "STU_545AB3B8" => {
                 // The captured 104319 registry has no exact action binding:
                 // its Action base forwards without evaluating loadout/target.
