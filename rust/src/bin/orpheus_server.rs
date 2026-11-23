@@ -18,7 +18,8 @@ in a binary built with --features inspector (disabled by default).
 --debug-control enables opt-in local room pause/resume/step POST commands
 (requires --features inspector and --debug-port; disabled by default).
 --junkenstein-validation loads explicit local Normal Cassidy acceptance settings.
---ai-script enables an opt-in Lua patrol script override and 'reload' command.
+--ai-script overrides StateScript patrol decisions with local Lua and enables
+the 'reload' command (requires --features lua-debug).
 Press Enter in the terminal to stop.";
 
 fn main() -> ExitCode {
@@ -73,6 +74,11 @@ fn run() -> io::Result<()> {
                 config.junkenstein_validation = Some(PathBuf::from(value));
             }
             Some("--ai-script") => {
+                if !cfg!(feature = "lua-debug") {
+                    return Err(usage_error(
+                        "--ai-script requires a build with --features lua-debug",
+                    ));
+                }
                 config.ai_script = Some(PathBuf::from(value));
             }
             _ => return Err(usage_error("unknown option")),

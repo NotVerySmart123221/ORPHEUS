@@ -5,7 +5,7 @@
 
 use std::{
     collections::{HashMap, VecDeque},
-    fs, io,
+    io,
     net::SocketAddr,
     path::Path,
     sync::{
@@ -16,6 +16,9 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(feature = "lua-debug")]
+use std::fs;
 
 use indexmap::IndexMap;
 use mio::{Events, Interest, Poll, Token, Waker, net::UdpSocket};
@@ -49,6 +52,14 @@ mod peer;
 mod room;
 mod state;
 mod worker;
+
+#[cfg(not(feature = "lua-debug"))]
+pub(crate) fn lua_debug_required() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Lua AI overrides require a build with --features lua-debug",
+    )
+}
 
 #[cfg(test)]
 mod tests;
@@ -136,6 +147,7 @@ enum Request {
         skin: SkinTheme,
         reply: mpsc::SyncSender<()>,
     },
+    #[cfg(feature = "lua-debug")]
     ReloadAiScript {
         source: String,
         reply: mpsc::SyncSender<io::Result<AiReloadReport>>,
@@ -373,12 +385,19 @@ impl GameService {
         })
     }
 
+    #[cfg(feature = "lua-debug")]
     pub fn reload_ai_script(&self, source: impl Into<String>) -> io::Result<AiReloadReport> {
         let source = source.into();
         crate::ai_script::validate_ai_source_bounds(&source).map_err(io::Error::from)?;
         self.request(|reply| Request::ReloadAiScript { source, reply })?
     }
 
+    #[cfg(not(feature = "lua-debug"))]
+    pub fn reload_ai_script(&self, _source: impl Into<String>) -> io::Result<AiReloadReport> {
+        Err(lua_debug_required())
+    }
+
+    #[cfg(feature = "lua-debug")]
     pub fn reload_ai_script_file(&self, path: &Path) -> io::Result<AiReloadReport> {
         let metadata = fs::metadata(path)?;
         let max_bytes = crate::ai_script::AI_MAX_SOURCE_BYTES;
@@ -392,6 +411,11 @@ impl GameService {
         }
         let source = fs::read_to_string(path)?;
         self.reload_ai_script(source)
+    }
+
+    #[cfg(not(feature = "lua-debug"))]
+    pub fn reload_ai_script_file(&self, _path: &Path) -> io::Result<AiReloadReport> {
+        Err(lua_debug_required())
     }
 
     pub fn ai_policy_status(&self) -> io::Result<AiPolicyStatus> {

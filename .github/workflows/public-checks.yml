@@ -42,7 +42,7 @@ jobs:
     timeout-minutes: 10
     strategy:
       matrix:
-        features: [default, inspector]
+        features: [default, inspector, lua-debug]
     steps:
       - uses: actions/checkout@v6.0.2
         with:
@@ -62,6 +62,12 @@ jobs:
       - name: Lint Inspector code
         if: matrix.features == 'inspector'
         run: cargo +stable clippy --locked -p orpheus --features inspector --lib -- -D warnings
+      - name: Lint optional Lua override
+        if: matrix.features == 'lua-debug'
+        run: cargo +stable clippy --locked -p orpheus --all-targets --features lua-debug -- -D warnings
+      - name: Run optional Lua override regressions
+        if: matrix.features == 'lua-debug'
+        run: cargo +stable test --locked -p orpheus --features lua-debug --lib --quiet
       - name: Run Rust protocol regressions
         if: matrix.features == 'default'
         run: |

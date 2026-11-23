@@ -14,7 +14,6 @@ use std::{
 use serde::Deserialize;
 
 use crate::accounts::parse_guid;
-use crate::ai_script::{AiActorSnapshot, AiPatrolSnapshot};
 use crate::collision_scene::CollisionScene;
 use crate::commands::Command;
 use crate::contact_body::CharacterBody;
@@ -30,7 +29,7 @@ use crate::mover_kinematics::{Ground, MotionInput, VelocityStep};
 use crate::mover_posture::{IN_AIR, snap};
 use crate::mover_settings::MoverSettings;
 use crate::navigation::{PathOptions, PathQuery, find_path};
-use crate::patrol_script::{PatrolScript, WaitEvent};
+use crate::patrol_script::{AiActorSnapshot, AiPatrolSnapshot, PatrolScript, WaitEvent};
 use crate::script_init::ScriptedMotion;
 use crate::world::{Movement, NO_INPUT};
 
@@ -2152,6 +2151,7 @@ mod tests {
         assert!(fresh.walking());
     }
 
+    #[cfg(feature = "lua-debug")]
     #[test]
     fn failed_patrol_decision_leaves_the_route_unmodified_and_only_stops_that_body() {
         let patrol = PatrolScript::from_source(
@@ -2196,6 +2196,7 @@ mod tests {
         assert!(fresh.walking());
     }
 
+    #[cfg(feature = "lua-debug")]
     #[test]
     fn failed_release_does_not_publish_an_unapplied_input() {
         let patrol = PatrolScript::from_source(

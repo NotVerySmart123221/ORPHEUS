@@ -9,6 +9,7 @@ use crate::{
     game_clock::TICK_PERIOD,
     game_combat::{PlayerBodyState, RoomSimulation},
     game_replication::BodyId,
+    patrol_script::{AiActorSnapshot, AiPatrolSnapshot},
 };
 
 /// Version of the bounded Lua AI `think(snapshot, events) -> commands` ABI.
@@ -45,50 +46,6 @@ pub(crate) const AI_MAX_SOURCE_BYTES: usize = 64 * 1024;
 pub(crate) enum TargetRole {
     Enemy,
     Ally,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct AiPatrolSnapshot {
-    pub(crate) route_index: usize,
-    pub(crate) route_count: usize,
-    pub(crate) wait_seconds: f64,
-    pub(crate) walking: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct AiActorSnapshot {
-    pub(crate) entity: u32,
-    pub(crate) generation: Option<u64>,
-    pub(crate) team: u8,
-    pub(crate) position: [f64; 3],
-    pub(crate) yaw: f64,
-    pub(crate) alive: bool,
-    pub(crate) health: f64,
-    pub(crate) max_health: f64,
-    pub(crate) stunned: bool,
-    pub(crate) patrol: Option<AiPatrolSnapshot>,
-}
-
-impl AiActorSnapshot {
-    pub(crate) fn patrol_fixture(route_index: usize, route_count: usize) -> Self {
-        Self {
-            entity: 0xc000_1000,
-            generation: None,
-            team: 1,
-            position: [0.0; 3],
-            yaw: 0.0,
-            alive: true,
-            health: 200.0,
-            max_health: 200.0,
-            stunned: false,
-            patrol: Some(AiPatrolSnapshot {
-                route_index,
-                route_count,
-                wait_seconds: 0.0,
-                walking: false,
-            }),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

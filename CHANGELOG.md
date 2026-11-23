@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Move the default patrol policy to a room-local StateScript graph. The graph chooses waits and cyclic route slots. Rust continues to drive map navigation, facing, collision, and movement. Lua overrides and hot reload now require the optional `lua-debug` feature. Passed the default workspace suite, the 519-test Lua debug server suite, and the prepared 104319 roster and patrol-frame comparison for all 15 Practice Range bots.
+
 - Use the combined geometric radius when upright actor capsules sweep against one another. The shared solver blocks grazing penetration and allows tangent motion to continue. Existing team and collision-participation rules still select the blockers. Passed 519 server and 69 collision library tests. Original-client collision prediction and the remaining Practice Range shot blockers still need playtest evidence.
 
 - Freeze the shot's authored presentation values without carrying over live stack bindings from another state. Observer projectile launch waits for a snapshot that acknowledges those literal values. The normal projection restores live bindings after the launch. Passed 519 server tests and the 104319 firing projection check for both bot teams.

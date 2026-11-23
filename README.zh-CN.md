@@ -15,13 +15,15 @@ ORPHEUS 是面向 **《守望先锋 1》1.74.0.0.104319** 版本的独立开源�
 
 ## 运行公开 Rust 测试（无需游戏本体）
 
-安装 **Git** 与 **稳定版 Rust**（`>= 1.85.0`）。在 Windows 上还需安装 **x64 MSVC C++ Build Tools** 与 **Windows SDK**，以编译内置的 Lua 5.4 运行时。
+安装 **Git** 与 **稳定版 Rust**（`>= 1.85.0`）。在 Windows 上还需安装 **x64 MSVC C++ Build Tools** 与 **Windows SDK**，供 Rust 的 MSVC 工具链使用。
 
 ```powershell
 git clone --branch rust https://github.com/leafall903/ORPHEUS.git
 cd ORPHEUS
 cargo test --locked --workspace --all-targets
 ```
+
+服务端默认用 StateScript 决定巡逻的等待时长和下一个路点，路点来自地图。Rust 在房间模拟中负责寻路、转向、碰撞和逐帧移动。需要在本地调试 Lua 覆盖策略时，用 `--features lua-debug` 编译，并传入 `--ai-script <文件>`。仅启用 Feature 时仍使用 StateScript。
 
 公开测试套全部基于合成 JSON 数据运行。Clippy、CI 校验命令与 38 个 StateScript 共享契约跑法详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
@@ -61,7 +63,7 @@ cargo run --locked --features inspector --bin orpheus_server -- --data-dir 'C:\p
 | 模块 | Rust 服务端现状 | 104319 原版客户端情况与待办 |
 | --- | --- | --- |
 | **登录、存档与画廊** | 原生 Battle.net / JAM 大厅、玩家设置持久化（`profile-settings-v1`）、饰品与 23 个 NPC 英雄画廊预览策略。 | 登录与靶场进图已跑通；最新 NPC 画廊预览与完整实机流程待复测。 |
-| **靶场与士兵 76** | 加密 UDP 房间、Bevy ECS Bot/投射物管理、Lua 巡逻策略、步枪/换弹/疾跑/螺旋飞弹/生物力场仿真与靶场重生。 | 无客户端加密回环全部通过；客户端武器挂载、HUD 同步与二楼巡逻细节待实机复测。 |
+| **靶场与士兵 76** | 加密 UDP 房间、Bevy ECS Bot/投射物管理、StateScript 巡逻策略、步枪/换弹/疾跑/螺旋飞弹/生物力场仿真与靶场重生。 | 无客户端加密回环全部通过；客户端武器挂载、HUD 同步与二楼巡逻细节待实机复测。 |
 | **怪鼠复仇与卡西迪** | 全部 14 张卡牌初始化完成；普通难度卡西迪左/右键、翻滚、闪光弹、午时已到、`0B8B` 充能、计分、Boss 语音与城门阶段已通过离线回放。 | 已实机确认失败结算标题；卡西迪全部技能手感、Boss 登场镜头/追击、结算耗时与自然胜利待实机验收。 |
 | **底层架构与隔离** | `orpheus-wire`、`orpheus-collision`、`orpheus-runtime` 已独立成 Crate；`script_init/`、`game_combat/`、`scene_assets/`、`game_service/` 完成模块化拆分及房间级 Panic 隔离。 | 剩余大文件拆分（#60）、双向契约补齐（#61）、3D Inspector 增强（#62）、通用 NavMesh（#63）、独立 `statescript` Crate（#64）与全 ECS 统一（#65）已建 Issue 跟进。 |
 
@@ -77,7 +79,7 @@ cargo run --locked --features inspector --bin orpheus_server -- --data-dir 'C:\p
 | `rust/crates/wire/`（`orpheus-wire`） | JAM 加密流、分帧协议、编解码与输入命令报文 |
 | `rust/crates/collision/`（`orpheus-collision`） | 碰撞缓存解码、空间三角索引、射线查询与 GJK/EPA 接触求解器 |
 | `rust/crates/runtime/`（`orpheus-runtime`） | 运行时清单校验、`--check-runtime` 自检与 `prepare_server_runtime` 打包工具 |
-| `rust/scripts/` | Lua 巡逻策略脚本（`patrol.lua`） |
+| `rust/scripts/` | StateScript 巡逻策略和 Lua 调试覆盖示例 |
 | `rust/assets/inspector/`、`rust/tests/` | 3D 调试前端页面与跨模块集成测试（`world_queries`、`profile_settings`、`protocol`、`runtime_preflight`） |
 | `fixtures/behavior/`、`scripts/` | 48 个 JSON 行为夹具（包含仅用于 Rust 的回归契约）及跨语言校验脚本 |
 | `relay/` | Windows C++ 客户端 TLS 中继源码 |

@@ -9,7 +9,7 @@ This document defines the Rust workspace boundaries, simulation authorities, scr
 
 1. **Dedicated server authority:** Rust owns sockets, encryption, protocol codecs, tick scheduling, lifetimes, collision queries, and command validation.
 2. **One room authority:** Keep bots, player bodies (`PlayerBodyState`), physical projectiles, and Junkenstein gate/encounter state (`GateComponent`, `EncounterComponent`) under `RoomSimulation`'s room-local `bevy_ecs::world::World` with generation-safe handles and explicit stage order ([#65](https://github.com/leafall903/ORPHEUS/issues/65)).
-3. **Data & script-driven gameplay:** Use authored StateScript graphs (`orpheus-statescript` under `rust/crates/statescript/`) for hero/mode logic and vendored Lua 5.4 (`mlua`) for hot-reloadable patrol/AI decisions bounded per room.
+3. **Data & script-driven gameplay:** Use authored StateScript graphs (`orpheus-statescript` under `rust/crates/statescript/`) for hero and mode logic. The server-owned patrol policy graph chooses the next route slot and wait duration. Rust owns pathfinding, steering, collision, and per-tick movement. The optional `lua-debug` feature enables local patrol overrides.
 4. **Fault isolation:** Errors and panics in one room retire only that room and revoke its links (`game_service/room.rs`), leaving sibling rooms running (`fixtures/behavior/room-isolation-v1.json`).
 5. **Non-intrusive diagnostics:** The loopback web inspector (`--features inspector`) reads bounded, tick-stamped projections off the simulation thread without mutating match state.
 6. **MSRV, portability & parity:** Keep the workspace compiling cleanly on Rust **1.85.0**, keep `orpheus-wire`, `orpheus-collision`, `orpheus-runtime`, and `orpheus-statescript` Linux-portable and free of server/ECS/socket deps, and verify shared semantics via `fixtures/behavior/*.json` ([BEHAVIOR_CONTRACTS.md](BEHAVIOR_CONTRACTS.md)).
@@ -26,7 +26,7 @@ The Cargo workspace separates portable protocol/physics/packing kernels from the
 | `orpheus-collision` | `rust/crates/collision/` | `lzma-rust2`, `sha2`, `serde` | `.col`/`.rays.col` cache decoding, spatial triangle grid, static rays, GJK/EPA solver |
 | `orpheus-runtime` | `rust/crates/runtime/` | `flate2`, `roxmltree`, `serde_json`, `sha2` | Pack manifest validation, `--check-runtime`, `prepare_server_runtime` binary |
 | `orpheus-statescript` | `rust/crates/statescript/` | `orpheus-runtime`, `orpheus-wire`, `flate2`, `indexmap`, `serde` | Portable StateScript graph loader, expression evaluator, codec tables, and decoupled VM core |
-| `orpheus` (root) | `rust/src/` | Workspace crates + `bevy_ecs`, `mio`, `mlua`, `prost` | Lobby/BNet services, UDP worker, replication, host adapters, room simulation |
+| `orpheus` (root) | `rust/src/` | Workspace crates + `bevy_ecs`, `mio`, `prost`; optional `mlua` | Lobby/BNet services, UDP worker, replication, host adapters, room simulation |
 
 Verify crate dependency boundaries at any time with:
 
@@ -52,8 +52,8 @@ Remaining boundary cleanups:
 
 | Current Gap | Impact | Tracked Issue |
 | --- | --- | --- |
-| Player bodies (`PlayerBodyState`), Junkenstein gate/encounter state (`GateComponent`, `EncounterComponent`), Practice Range patrol (`AI_ABI_VERSION = 2` in `rust/src/ai_script.rs`), and safe-boundary Lua hot reload with rollback now live under `RoomSimulation` ECS and the bounded Lua host. | Closed in [#65](https://github.com/leafall903/ORPHEUS/issues/65) and [#120](https://github.com/leafall903/ORPHEUS/pull/120). | [#65](https://github.com/leafall903/ORPHEUS/issues/65) |
-| Navigation relies on Practice Range Lua hints (`patrol.lua`) and Junkenstein searches rather than a general NavMesh. | Maps without cached nav data (e.g. King's Row) lack general AI pathfinding. | [#63](https://github.com/leafall903/ORPHEUS/issues/63) |
+| Player bodies and Junkenstein gate and encounter state live under `RoomSimulation` ECS. StateScript selects Practice Range patrol decisions. Local Lua overrides support safe-boundary reload and rollback. | Closed in [#65](https://github.com/leafall903/ORPHEUS/issues/65) and [#120](https://github.com/leafall903/ORPHEUS/pull/120). | [#65](https://github.com/leafall903/ORPHEUS/issues/65) |
+| Navigation relies on Practice Range map hints and Junkenstein searches rather than a general NavMesh. | Maps without cached nav data (e.g. King's Row) lack general AI pathfinding. | [#63](https://github.com/leafall903/ORPHEUS/issues/63) |
 | Combat wall queries use legacy `CollisionScene` while movement uses `ContactWorld`. | Discrepancies between contact bounds and wall rays must be diagnosed via inspector before changing masks. | [#62](https://github.com/leafall903/ORPHEUS/issues/62) |
 
 ---
@@ -73,12 +73,13 @@ Remaining boundary cleanups:
 
 ---
 
-## Lua Script Host (`ai_script.rs` / `patrol.lua`)
+## Patrol policy and optional Lua host
 
-- Each room creates an isolated `!Send` vendored Lua 5.4 VM (`mlua 0.11.6`, `StdLib::NONE`, `ChunkMode::Text`, empty `_ENV` table) on the single-threaded `orpheus-game` worker with filesystem, sockets, dynamic libraries, and wall-clock time disabled.
+- Each prepared room runs the bundled `patrol.statescript.json` policy in an isolated StateScript component. It receives spawn, release, and next-waypoint notifications and returns a wait or map route slot. The policy preserves the server's existing cadence and cyclic route selection.
+- With `--features lua-debug` and `--ai-script <file>`, each room creates an isolated `!Send` vendored Lua 5.4 VM (`mlua 0.11.6`, `StdLib::NONE`, `ChunkMode::Text`, empty `_ENV` table) on the single-threaded `orpheus-game` worker with filesystem, sockets, dynamic libraries, and wall-clock time disabled.
 - `rust/src/ai_script.rs` defines the versioned `think(snapshot, events) -> commands` bridge (`AI_ABI_VERSION = 2`) with named, documented caps (`AI_MEMORY_LIMIT_BYTES` = 256 KiB, `AI_INSTRUCTION_HOOK_INTERVAL` = 64, `AI_INIT_HOOK_BUDGET` = 32 hooks, `AI_THINK_HOOK_BUDGET` = 64 hooks, `AI_MAX_SNAPSHOT_TARGETS` = 32, `AI_MAX_EVENTS_PER_TICK` = 16, `AI_MAX_COMMANDS_PER_TICK` = 8, `AI_MAX_WAIT_SECONDS` = 60.0) and raw-table validation returning deterministic `AiScriptError` values without panicking or hanging.
 - `validate_player_body_handle` / `query_body_handle` reject stale, zero-generation, and unknown `BodyId` handles against `RoomSimulation`'s Stage 1 generation model without mutating ECS state, and Lua faults disable only the failing bot or faulted room while sibling rooms keep running.
-- `rust/src/patrol_script.rs` adapts `rust/scripts/patrol.lua` onto `AiScript` (`DEFAULT_SOURCE`, `from_source_checked`) to drive Practice Range bot patrol decisions without rewriting authored StateScript graphs; future AI policies can use `AiScript` directly, and safe-boundary Lua hot reload with pre-activation validation and rollback landed in [#120](https://github.com/leafall903/ORPHEUS/pull/120).
+- `rust/src/patrol_script.rs` dispatches both backends through the same wait and route-choice interface. `rust/scripts/patrol.lua` is an example override. The Lua reload path validates replacements before installing them at a safe boundary. [#120](https://github.com/leafall903/ORPHEUS/pull/120)
 
 ---
 

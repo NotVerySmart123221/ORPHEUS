@@ -15,6 +15,7 @@ pub use orpheus_wire::{bits, commands, game_link, jam_cipher, jam_codec, jam_fra
 
 pub mod accounts;
 mod actor_voice;
+#[cfg(feature = "lua-debug")]
 mod ai_script;
 pub mod battle_tag_query;
 pub mod bnet_protocol;

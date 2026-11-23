@@ -14,6 +14,7 @@ pub(super) struct RoomWorld {
     pub(super) scene: Box<PreparedScene>,
     pub(super) card: PlayerCard,
     pub(super) patrol: PatrolScript,
+    #[cfg(any(test, feature = "inspector", feature = "lua-debug"))]
     pub(super) patrol_generation: u64,
 }
 

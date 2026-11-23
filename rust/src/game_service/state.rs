@@ -1,7 +1,10 @@
 //! Shared routing and scheduling. All mutable gameplay belongs to a room.
 
 use super::*;
-use crate::{ai_script::AiScriptError, game_egress::SendError, patrol_script};
+#[cfg(feature = "lua-debug")]
+use crate::ai_script::AiScriptError;
+use crate::{game_egress::SendError, patrol_script};
+#[cfg(feature = "lua-debug")]
 use sha2::{Digest, Sha256};
 
 const MAX_RECENT_FAULTS: usize = 64;
@@ -9,7 +12,8 @@ const MAX_RECENT_FAULTS: usize = 64;
 pub(super) struct State {
     pub(super) schemas: Arc<Schemas>,
     pub(super) preloaded_patrol: Option<PatrolScript>,
-    pub(super) active_patrol_source: Arc<str>,
+    #[cfg(feature = "lua-debug")]
+    pub(super) active_patrol_source: Option<Arc<str>>,
     pub(super) patrol_policy_digest: [u8; 32],
     pub(super) patrol_reload_generation: u64,
     pub(super) clock: GameClock,
@@ -58,7 +62,8 @@ impl State {
         Self {
             schemas,
             preloaded_patrol: Some(patrol),
-            active_patrol_source: Arc::from(patrol_script::DEFAULT_SOURCE),
+            #[cfg(feature = "lua-debug")]
+            active_patrol_source: None,
             patrol_policy_digest,
             patrol_reload_generation: 0,
             clock: GameClock::default(),
@@ -118,15 +123,24 @@ impl State {
             injection: None,
         };
         let preloaded = world.as_ref().and_then(|_| self.preloaded_patrol.take());
-        let active_source = Arc::clone(&self.active_patrol_source);
+        #[cfg(feature = "lua-debug")]
+        let active_source = self.active_patrol_source.clone();
+        #[cfg(any(test, feature = "inspector", feature = "lua-debug"))]
         let patrol_generation = self.patrol_reload_generation;
         let schemas = Arc::clone(&self.schemas);
         let prepared = guard_room(&mut room, RoomStage::Admission, |room| {
             if let Some(WorldStart { mut scene, card }) = world {
-                let patrol = match preloaded {
-                    Some(patrol) => patrol,
-                    None => PatrolScript::from_source(&active_source)?,
-                };
+                let patrol = preloaded.map_or_else(
+                    || {
+                        #[cfg(feature = "lua-debug")]
+                        if let Some(source) = &active_source {
+                            return PatrolScript::from_source_checked(source)
+                                .map_err(io::Error::from);
+                        }
+                        PatrolScript::load()
+                    },
+                    Ok,
+                )?;
                 scene
                     .simulation_mut()
                     .set_team_member_counts(room.team_member_counts());
@@ -137,6 +151,7 @@ impl State {
                     scene,
                     card,
                     patrol,
+                    #[cfg(any(test, feature = "inspector", feature = "lua-debug"))]
                     patrol_generation,
                 });
             }
@@ -418,6 +433,7 @@ impl State {
                 }
                 let _ = reply.send(());
             }
+            #[cfg(feature = "lua-debug")]
             Request::ReloadAiScript { source, reply } => {
                 let result = self.reload_patrol(&source);
                 let _ = reply.send(result);
@@ -558,7 +574,7 @@ impl State {
             timing: self.timing.clone(),
             ai_policy: Some(game_debug::AiPolicy {
                 generation: self.patrol_reload_generation,
-                abi_version: crate::ai_script::AI_ABI_VERSION,
+                abi_version: self.patrol_policy_abi(),
                 digest: patrol_script::format_digest(&self.patrol_policy_digest),
             }),
             faults,
@@ -573,18 +589,28 @@ impl State {
             .count();
         AiPolicyStatus {
             generation: self.patrol_reload_generation,
-            abi_version: crate::ai_script::AI_ABI_VERSION,
+            abi_version: self.patrol_policy_abi(),
             digest: patrol_script::format_digest(&self.patrol_policy_digest),
             active_rooms,
         }
     }
 
+    fn patrol_policy_abi(&self) -> u32 {
+        #[cfg(feature = "lua-debug")]
+        if self.active_patrol_source.is_some() {
+            return crate::ai_script::AI_ABI_VERSION;
+        }
+        patrol_script::STATESCRIPT_ABI
+    }
+
+    #[cfg(feature = "lua-debug")]
     pub(super) fn reload_patrol(&mut self, source: &str) -> io::Result<AiReloadReport> {
         self.reload_patrol_with(source, |_, candidate| {
             PatrolScript::from_source_checked(candidate)
         })
     }
 
+    #[cfg(feature = "lua-debug")]
     pub(super) fn reload_patrol_with(
         &mut self,
         source: &str,
@@ -625,7 +651,7 @@ impl State {
         // Phase 4: infallible atomic swap.
         let active_source: Arc<str> = Arc::from(source);
         let next_generation = self.patrol_reload_generation + 1;
-        self.active_patrol_source = active_source;
+        self.active_patrol_source = Some(active_source);
         self.preloaded_patrol = Some(next_preloaded);
         self.patrol_policy_digest = digest;
         self.patrol_reload_generation = next_generation;

@@ -27,7 +27,7 @@ ORPHEUS builds on community Overwatch 1.74 research, preservation tooling, and o
 ## Rust Runtime Dependencies
 
 - **[Bevy ECS](https://github.com/bevyengine/bevy/tree/v0.16.1/crates/bevy_ecs)** (`0.16.1`, `std` only) — room-local ECS storage for bots and projectiles.
-- **[mlua](https://github.com/mlua-rs/mlua/tree/v0.11.6)** (`0.11.6`) & **[Lua 5.4](https://www.lua.org/)** — sandboxed vendored script host for `patrol.lua`.
+- **[mlua](https://github.com/mlua-rs/mlua/tree/v0.11.6)** (`0.11.6`) & **[Lua 5.4](https://www.lua.org/)** — sandboxed script host for the optional `lua-debug` override.
 - **[RustCrypto](https://github.com/RustCrypto)** (`aes-gcm`, `hmac`, `sha2`), **[getrandom](https://github.com/rust-random/getrandom)**, **[Prost](https://github.com/tokio-rs/prost)** / **[prost-reflect](https://github.com/andrewhickman/prost-reflect)**, **[Tungstenite](https://github.com/snapview/tungstenite-rs)**, **[lzma-rust2](https://github.com/hasenbanck/lzma-rust2)**, **[Mio](https://github.com/tokio-rs/mio)**, **[flate2](https://docs.rs/flate2/)**, and **[roxmltree](https://github.com/RazrFalcon/roxmltree)** — cryptography, protobuf reflection, WebSocket/UDP I/O, compression, and DragonML parsing.
 - **SplitMix64** — deterministic PRNG algorithm from [Sebastiano Vigna](https://prng.di.unimi.it/splitmix.c) for local StateScript random expressions.
 

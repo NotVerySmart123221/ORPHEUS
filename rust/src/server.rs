@@ -97,6 +97,10 @@ impl Server {
     /// Validate the data before starting the loopback listeners. This entry
     /// point serves the base graph bundle and contains no client launcher.
     pub fn start(config: ServerConfig) -> io::Result<Self> {
+        #[cfg(not(feature = "lua-debug"))]
+        if config.ai_script.is_some() {
+            return Err(crate::game_service::lua_debug_required());
+        }
         if config.debug_port.is_some() && !cfg!(feature = "inspector") {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
