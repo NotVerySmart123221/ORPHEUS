@@ -1210,18 +1210,21 @@ the local damage event. The victim's active body and the source generation must
 still match when delivered. The client copies the position at offset
 `0x9c` to its combat event and subtracts its view origin before projecting
 the result onto the view axes. The server supplies the settled weapon
-source point for this field. The other vectors and flags retain their
-neutral values. The prepared schema replay verifies the encoded position
-on the struck player's connection. The directional indicator and any
-pose reaction still need separate verification.
+source point for this field. The native contact effect consumes the
+negated surface normal from offset `0x84`, falling back to the
+direction from source to impact when the normal is absent. Direct weapon
+contacts supply the outward hurt-volume normal. The hit-position field
+and flags retain neutral values. The prepared schema replay checks both
+geometry fields on the struck player's connection. The directional
+indicator and pose reaction remain separate validation tasks.
 
 The existing playtest settlement trace includes the geometry available at the
 point of damage. Direct hits record the start of the ray or contacting
-projectile segment, its contact point, and its incoming direction. For an
-expanded projectile sweep, the recorded contact point is on the projectile
-centre path. Splash records the blast origin. A health change without a
-weapon impact has no source point in this path and uses the neutral
-message fields.
+projectile segment, the target surface contact point and normal, and
+the incoming direction. An expanded projectile sweep keeps the
+projectile centre separately for its own completion. Splash records the
+blast origin and leaves the surface normal unset. Damage without weapon
+geometry uses neutral message fields.
 
 The 104319 victim event also has a compact contact-set operand. The
 client expands it to a `.049` asset and carries it into its contact effect

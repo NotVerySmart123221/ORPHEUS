@@ -256,9 +256,10 @@ pub enum ImpactGeometry {
     Direct {
         /// The ray origin or the start of the contacting projectile segment.
         origin: Vec3,
-        /// First contact along the ray or swept sphere's centre path.
+        /// Point on the target's hurt volume at the first contact.
         point: Vec3,
         direction: Vec3,
+        normal: Vec3,
     },
     Blast {
         origin: Vec3,
@@ -266,6 +267,13 @@ pub enum ImpactGeometry {
 }
 
 impl ImpactGeometry {
+    pub(crate) fn surface_normal(self) -> Option<Vec3> {
+        match self {
+            Self::Direct { normal, .. } => Some(normal),
+            Self::Blast { .. } => None,
+        }
+    }
+
     pub(crate) fn origin(self) -> Vec3 {
         match self {
             Self::Direct { origin, .. } | Self::Blast { origin } => origin,
@@ -310,24 +318,29 @@ impl HitscanShot {
         if !self.hit.amount.is_finite() || self.hit.amount <= 0.0 {
             return Ok(None);
         }
-        let mut nearest = None;
+        let mut nearest: Option<(u32, hurt_volumes::HurtContact)> = None;
         for (entity, pose) in targets {
-            let length = nearest.map_or(self.reach, |(distance, _, _)| distance);
-            if let Some((distance, head)) =
-                pose.into()
-                    .contact(self.origin, self.direction, length, 0.0)
+            let length = nearest
+                .as_ref()
+                .map_or(self.reach, |(_, contact)| contact.hit.distance);
+            if let Some(contact) = pose
+                .into()
+                .contact(self.origin, self.direction, length, 0.0)
             {
+                let distance = contact.hit.distance;
                 if nearest.is_none() || distance < length {
-                    nearest = Some((distance, entity, head));
+                    nearest = Some((entity, contact));
                     if distance == 0.0 {
                         break;
                     }
                 }
             }
         }
-        let Some((distance, entity, head)) = nearest else {
+        let Some((entity, contact)) = nearest else {
             return Ok(None);
         };
+        let distance = contact.hit.distance;
+        let head = contact.head;
         if distance > 0.0
             && wall_distance(self.origin, self.direction, distance)?
                 .is_some_and(|wall| wall < distance)
@@ -344,8 +357,9 @@ impl HitscanShot {
             impulse: None,
             geometry: Some(ImpactGeometry::Direct {
                 origin: self.origin,
-                point: along(self.origin, self.direction, distance),
+                point: contact.point_on_body(along(self.origin, self.direction, distance)),
                 direction: self.direction,
+                normal: contact.hit.normal,
             }),
         }))
     }
@@ -488,6 +502,7 @@ mod tests {
                     origin: [0.0, 1.0, 0.0],
                     point: [0.0, 1.0, 9.5],
                     direction: [0.0, 0.0, 1.0],
+                    normal: [0.0, 0.0, -1.0],
                 }),
             }
         );

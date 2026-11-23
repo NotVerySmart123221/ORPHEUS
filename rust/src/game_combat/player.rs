@@ -11,7 +11,7 @@ use crate::{
         SampledBody, eligible_target, eye_height, script_eye_position,
     },
     game_combat_messages::CombatNotice,
-    game_hitscan::{HurtPose, Impact, ImpactGeometry, TargetHistory, TargetPose, ViewFrame},
+    game_hitscan::{HurtPose, Impact, TargetHistory, TargetPose, ViewFrame},
     game_instance::TeamMemberCounts,
     game_projectiles::ProjectileToken,
     game_replication::{BodyId, OwnerBodyRuntime, OwnerRoomActivity},
@@ -832,9 +832,7 @@ impl RoomSimulation {
                 id,
                 source.killer,
                 outcome.dealt as f32,
-                impact
-                    .and_then(|(impact, _)| impact.geometry)
-                    .map(ImpactGeometry::origin),
+                impact.and_then(|(impact, _)| impact.geometry),
             );
         }
         if let Some(error) = death_script_fault {

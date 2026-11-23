@@ -6,6 +6,9 @@
     "damage": 9,
     "ray_distance": 4
   },
+  "expected": {
+    "direct_hit_outward_normal": [-1.0, 0.0, 0.0]
+  },
   "jam_schema": {
     "8F89E0DF": {
       "25000": [

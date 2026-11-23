@@ -29,6 +29,7 @@ pub enum CombatNotice {
         victim: u32,
         dealt: f32,
         origin: Option<Vec3>,
+        normal: Option<Vec3>,
     },
     Death {
         source: u32,
@@ -115,26 +116,27 @@ impl CombatNotice {
                 victim,
                 dealt,
                 origin,
+                normal,
             } => {
-                let vector = |xyz: [f32; 3]| {
-                    let [x, y, z] = xyz.map(Value::Float32);
+                let vector = |xyz: Option<Vec3>| {
+                    let [x, y, z] = xyz
+                        .map(|xyz| xyz.map(|value| value as f32))
+                        .filter(|xyz| xyz.iter().all(|value| value.is_finite()))
+                        .unwrap_or_default()
+                        .map(Value::Float32);
                     Value::Struct(Fields::from([(0, x), (4, y), (8, z)]))
                 };
-                let zero_vector = vector([0.0; 3]);
-                // The client subtracts its view position from this world point.
-                let origin = origin
-                    .map(|xyz| xyz.map(|value| value as f32))
-                    .filter(|xyz| xyz.iter().all(|value| value.is_finite()))
-                    .map_or_else(|| zero_vector.clone(), vector);
                 (
                     RECEIVED_DAMAGE,
                     Fields::from([
                         (0x78, Value::Signed(1)),
                         (0x7c, entity(source)),
                         (0x80, entity(victim)),
-                        (0x84, zero_vector.clone()),
-                        (0x90, zero_vector.clone()),
-                        (0x9c, origin),
+                        // The contact effect turns the outward normal inward.
+                        (0x84, vector(normal)),
+                        (0x90, vector(None)),
+                        // The direction indicator subtracts the view position.
+                        (0x9c, vector(origin)),
                         (0xa8, Value::Array(vec![Value::Unsigned(0); 3])),
                         (0xc0, Value::Float32(dealt)),
                         (0xc4, Value::Unsigned(0)),

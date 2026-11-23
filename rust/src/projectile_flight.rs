@@ -460,13 +460,14 @@ impl ProjectileFlight {
         let reach = range_left.map_or(step, |range| step.min(range));
         let mut closest = None;
         for &(entity, target) in targets {
-            if let Some((distance, head)) =
+            if let Some(contact) =
                 target
                     .into()
                     .contact(self.position, self.direction, reach, self.ballistics.radius)
             {
-                if closest.is_none_or(|(best, _)| distance < best) {
-                    closest = Some((distance, Some((entity, head))));
+                let distance = contact.hit.distance;
+                if closest.as_ref().is_none_or(|(best, _)| distance < *best) {
+                    closest = Some((distance, Some((entity, contact))));
                 }
             }
         }
@@ -478,7 +479,9 @@ impl ProjectileFlight {
         )?
         .filter(|hit| {
             (0.0..=reach).contains(&hit.distance)
-                && closest.is_none_or(|(best, _)| hit.distance < best)
+                && closest
+                    .as_ref()
+                    .is_none_or(|(best, _)| hit.distance < *best)
         });
         if let Some(hit) = wall_hit {
             closest = Some((hit.distance, None));
@@ -530,14 +533,14 @@ impl ProjectileFlight {
             return Ok(Segment::Rebounded(spent.min(duration)));
         }
         let mut impacts = Vec::new();
-        if let (Some((entity, head)), Some(direct)) = (
-            target,
+        if let (Some((entity, contact)), Some(direct)) = (
+            target.as_ref(),
             self.ballistics.direct.filter(|hit| hit.amount > 0.0),
         ) {
-            let critical = head && direct.critical > 1.0;
+            let critical = contact.head && direct.critical > 1.0;
             impacts.push(Impact {
                 tags: direct.tags,
-                entity,
+                entity: *entity,
                 distance,
                 damage: direct.damage_at(self.distance_travelled + distance, critical),
                 critical,
@@ -545,8 +548,9 @@ impl ProjectileFlight {
                 impulse: None,
                 geometry: Some(ImpactGeometry::Direct {
                     origin: self.position,
-                    point,
+                    point: contact.point_on_body(point),
                     direction: self.direction,
+                    normal: contact.hit.normal,
                 }),
             });
         }
@@ -869,9 +873,34 @@ mod tests {
                     origin: segment_origin,
                     point: end.point,
                     direction: [0.0, 0.0, 1.0],
+                    normal: [0.0, 0.0, -1.0],
                 })
             );
         }
+    }
+
+    #[test]
+    fn expanded_projectile_records_the_target_surface_separately_from_the_sweep_centre() {
+        let profile = ProjectileBallistics {
+            radius: 0.25,
+            ..helix()
+        };
+        let mut flight =
+            ProjectileFlight::new(profile, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], Some(10)).unwrap();
+        let end = flight
+            .advance(15, &[(1, target(0.0, 3.0))], |_, _, _| Ok(None))
+            .unwrap()
+            .unwrap();
+        assert_eq!(end.point, [0.0, 1.0, 2.25]);
+        assert_eq!(
+            end.impacts[0].geometry,
+            Some(ImpactGeometry::Direct {
+                origin: [0.0, 1.0, 0.0],
+                point: [0.0, 1.0, 2.5],
+                direction: [0.0, 0.0, 1.0],
+                normal: [0.0, 0.0, -1.0],
+            })
+        );
     }
 
     #[test]

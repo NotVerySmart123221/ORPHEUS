@@ -5,7 +5,7 @@ use serde::Deserialize;
 use super::{HEAD_BELOW_EYE, TargetPose};
 use crate::{
     accounts::parse_guid,
-    static_ray::{Vec3, capsule_entry_distance, norm, segment_separation},
+    static_ray::{SurfaceHit, Vec3, capsule_entry_hit, norm, segment_separation},
 };
 
 /// Sampled movement pose plus the optional local, standing combat profile.
@@ -65,23 +65,21 @@ impl HurtPose {
         direction: Vec3,
         reach: f64,
         padding: f64,
-    ) -> Option<(f64, bool)> {
-        let (distance, head) = self
+    ) -> Option<HurtContact> {
+        let mut contact = self
             .capsules()
             .filter_map(|(capsule, head)| {
                 let [a, b] = capsule.ends;
-                capsule_entry_distance(origin, direction, reach, a, b, capsule.radius + padding)
-                    .map(|distance| (distance, head))
+                capsule_entry_hit(origin, direction, reach, a, b, capsule.radius + padding)
+                    .map(|hit| HurtContact { capsule, hit, head })
             })
-            .min_by(|(a, _), (b, _)| a.total_cmp(b))?;
-        let head = if self.calibrated.is_some() {
-            head
-        } else {
+            .min_by(|a, b| a.hit.distance.total_cmp(&b.hit.distance))?;
+        if self.calibrated.is_none() {
             // Compatibility for bodies that have no separately measured combat profile.
-            let impact_y = origin[1] + direction[1] * distance;
-            impact_y >= self.movement.feet[1] + self.movement.eye - HEAD_BELOW_EYE
-        };
-        Some((distance, head))
+            let impact_y = origin[1] + direction[1] * contact.hit.distance;
+            contact.head = impact_y >= self.movement.feet[1] + self.movement.eye - HEAD_BELOW_EYE;
+        }
+        Some(contact)
     }
 
     pub(crate) fn nearest_surface(self, point: Vec3, origin: Vec3) -> Option<Surface> {
@@ -124,6 +122,22 @@ impl Surface {
         }
         let toward = self.from_axis.map(|axis| -axis / self.axis_distance);
         Ok(cast(toward, reach)?.is_none_or(|hit| hit + EPSILON >= reach))
+    }
+}
+
+pub(crate) struct HurtContact {
+    capsule: Capsule,
+    pub(crate) hit: SurfaceHit,
+    pub(crate) head: bool,
+}
+
+impl HurtContact {
+    pub(crate) fn point_on_body(&self, sweep_centre: Vec3) -> Vec3 {
+        let [a, b] = self.capsule.ends;
+        let separation = segment_separation(sweep_centre, a, b);
+        std::array::from_fn(|axis| {
+            sweep_centre[axis] - separation[axis] + self.hit.normal[axis] * self.capsule.radius
+        })
     }
 }
 

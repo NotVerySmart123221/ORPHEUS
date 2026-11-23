@@ -6,6 +6,7 @@ use super::{
 };
 use crate::{
     game_combat_messages::CombatNotice,
+    game_hitscan::ImpactGeometry,
     game_replication::BodyId,
     script_init::{RoomBodyIdentity, RoomCue, RoomCueSpeaker, RoomMessage},
     vitals::Death,
@@ -441,7 +442,7 @@ impl RoomSimulation {
         victim: BodyId,
         source: u32,
         dealt: f32,
-        origin: Option<Vec3>,
+        geometry: Option<ImpactGeometry>,
     ) {
         if !self.received_damage_feedback
             || victim.entity == source
@@ -461,7 +462,8 @@ impl RoomSimulation {
                 source: source.wire,
                 victim: victim.entity,
                 dealt,
-                origin,
+                origin: geometry.map(ImpactGeometry::origin),
+                normal: geometry.and_then(ImpactGeometry::surface_normal),
             },
         });
     }

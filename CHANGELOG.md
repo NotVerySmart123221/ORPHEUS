@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Preserve the first target surface point and outward normal for hitscan and projectile impacts. Keep the projectile centre for flight completion and send the normal in the opt-in victim feedback event. Splash keeps its blast origin, and the hit-position field awaits a verified coordinate binding. Passed 825 library tests, the prepared 104319 victim-message replay, and Clippy.
+
 - Resolve literal contact-set states from their authored resource, source and synchronized target binding. Player and NPC hosts share the state path, with the target list refreshed by the existing VM watcher. Passed 824 library tests, Clippy, and a prepared 104319 replay that loads two distinct contact sets. The full Junkenstein room replay stops at map setup because the local catalog lacks spawn rows.
 
 - Send the settled weapon origin in the opt-in victim damage feedback event. The client uses this world point for view-relative direction. The synthetic and prepared 104319 replays verify victim-only delivery, and the synthetic replay also checks neutral fields for damage without weapon geometry. Passed 823 library tests and Clippy.

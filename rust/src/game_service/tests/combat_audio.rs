@@ -366,7 +366,9 @@ fn native_received_damage_is_delivered_only_to_the_body_that_lost_health() {
     let damage = contract["input"]["damage"].as_f64().unwrap();
     let schemas = Schemas::from_json(&contract["jam_schema"].to_string()).unwrap();
     let ray_distance = contract["input"]["ray_distance"].as_f64().unwrap();
-    assert_native_received_damage(&schemas, damage, Some(ray_distance));
+    let normal =
+        serde_json::from_value(contract["expected"]["direct_hit_outward_normal"].clone()).unwrap();
+    assert_native_received_damage(&schemas, damage, Some((ray_distance, normal)));
     assert_native_received_damage(&schemas, damage, None);
 }
 
@@ -375,10 +377,10 @@ fn native_received_damage_is_delivered_only_to_the_body_that_lost_health() {
 fn prepared_native_received_damage_uses_the_104319_schema() {
     let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
     let schemas = Schemas::load(runtime.join("data/game_schemas_174.json")).unwrap();
-    assert_native_received_damage(&schemas, 9.0, Some(4.0));
+    assert_native_received_damage(&schemas, 9.0, Some((4.0, [-1.0, 0.0, 0.0])));
 }
 
-fn assert_native_received_damage(schemas: &Schemas, damage: f64, ray_distance: Option<f64>) {
+fn assert_native_received_damage(schemas: &Schemas, damage: f64, ray: Option<(f64, [f64; 3])>) {
     let graph = feedback_graph(109, 207, CueTrigger::EliminationDealt);
     let (mut room, [source, victim], mut sequence) = feedback_room(graph, [0, 1]);
     let source_create = room
@@ -427,7 +429,7 @@ fn assert_native_received_damage(schemas: &Schemas, damage: f64, ray_distance: O
         0
     );
     let hit_tick = tick + 4;
-    let origin = if let Some(distance) = ray_distance {
+    let origin = if let Some((distance, _)) = ray {
         let scene = &mut room.world.as_mut().unwrap().scene;
         let [x, y, z] = scene
             .simulation()
@@ -484,6 +486,7 @@ fn assert_native_received_damage(schemas: &Schemas, damage: f64, ray_distance: O
             .pending_combat_notices()
             .all(|notice| !matches!(notice, CombatNotice::DamageReceived { .. }))
     );
+    let normal = ray.map(|(_, normal)| normal);
     let simulation = room.world.as_ref().unwrap().scene.simulation();
     let peer = room.members.get_mut(&2).unwrap().peer.as_mut().unwrap();
     assert_eq!(
@@ -493,6 +496,7 @@ fn assert_native_received_damage(schemas: &Schemas, damage: f64, ray_distance: O
             victim: victim.entity,
             dealt: damage as f32,
             origin,
+            normal,
         }]
     );
     peer.flush_combat(schemas, (tick + 4) * TICK_PERIOD, Some(simulation))
@@ -522,7 +526,7 @@ fn assert_native_received_damage(schemas: &Schemas, damage: f64, ray_distance: O
                 assert_eq!(event.message.id, 25000);
                 assert_eq!(event.message.fields[&0x78], Value::Signed(1));
                 for (offset, xyz) in [
-                    (0x84, [0.0; 3]),
+                    (0x84, normal.unwrap_or_default()),
                     (0x90, [0.0; 3]),
                     (0x9c, origin.unwrap_or_default()),
                 ] {
