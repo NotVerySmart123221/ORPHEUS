@@ -165,21 +165,22 @@ fn bot_hit_feedback_waits_for_possession_and_keeps_its_shooter_generation() {
                 victim: target,
             }),
         ],
-        health: EntityUpdate {
-            entity: target,
-            operation: Some(Operation::Update(vec![health(
-                0.0,
-                amount as f32,
-                0.0,
-                0.0,
-            )])),
-            ..EntityUpdate::default()
-        },
     };
     // Only the envelope is needed to exercise reliable admission.
     let schemas = Schemas::from_json(r#"{"8F89E0DF":{"25001":[],"25005":[]}}"#).unwrap();
     let stale = pick_body(&mut peer, &mut scene, &viewer, first_hero);
     peer.bot_hit(hit(stale));
+    assert!(!peer.world.health_pending(target));
+    peer.world.queue_health(EntityUpdate {
+        entity: target,
+        operation: Some(Operation::Update(vec![health(
+            0.0,
+            amount as f32,
+            0.0,
+            0.0,
+        )])),
+        ..EntityUpdate::default()
+    });
     peer.flush_combat(&schemas, Duration::ZERO, None).unwrap();
     assert_eq!(
         peer.pending_combat_notices().count() as u64,

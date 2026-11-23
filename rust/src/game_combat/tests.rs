@@ -2782,7 +2782,7 @@ fn bot_damage_history_and_respawn_follow_identity_after_scene_reorder() {
         },
         context.quanta,
     );
-    assert_eq!(result.health.entity, first);
+    assert_eq!(result.damage.target_facts.target, first);
     assert_eq!(
         result.notices[1],
         Some(CombatNotice::Elimination {
@@ -3062,7 +3062,7 @@ fn repeated_rifle_hits_retire_and_respawn_only_the_hit_bot() {
             .unwrap()
             .unwrap();
         let terminal = index == 4;
-        assert_eq!(result.health.entity, entity);
+        assert_eq!(result.damage.target_facts.target, entity);
         assert_eq!(
             result.notices[0],
             Some(CombatNotice::Hit {

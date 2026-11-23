@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Publish weapon damage to NPC health through the shared room queue, so the shooter and observing clients receive the same settled health. Keep the hit marker and elimination notices scoped to the shooter. Passed 593 library tests and the prepared encrypted nameplate check. The prepared rifle-respawn check reports the same body-hit versus critical-hit mismatch on the baseline and this change.
+
 - Broadcast settled field healing through room health updates so the affected ally and other observers receive the same values. Preserve pending updates on zero-heal pulses and retire stale updates on body replacement. Adapted the Phase 2 change from `a25a1402`. Passed 592 library tests, the prepared ally health and encrypted field checks, and Clippy.
 
 - Suppress room-wide hurt voice for NPC-versus-NPC damage while keeping player damage feedback. Synchronize stock NPC HUD health after both scripted and area healing. The prepared encrypted replay now requires the staged nameplate on each allied bot as well as on the enemy target. Passed 592 library tests, three prepared 104319 checks, and Clippy.

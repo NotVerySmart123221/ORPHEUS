@@ -239,7 +239,6 @@ pub(crate) struct ShotContext {
 pub(crate) struct BotHit {
     pub damage: AppliedDamage,
     pub notices: [Option<CombatNotice>; 2],
-    pub health: EntityUpdate,
 }
 
 #[derive(Clone)]
@@ -2436,8 +2435,8 @@ impl RoomSimulation {
                     victim: entity,
                 }),
             ],
-            health,
         };
+        self.scripted_health.push(health);
         self.record_health_applied(
             source,
             entity,

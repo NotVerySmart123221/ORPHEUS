@@ -696,7 +696,7 @@ pub(super) fn verify_normal_cassidy_damage_and_charge(heroes: &[u64], variants: 
                         continue;
                     }
                     let hit = hit.expect("visible Boss on the street must be hit");
-                    assert_eq!(hit.health.entity, entity);
+                    assert_eq!(hit.damage.target_facts.target, entity);
                     let before_credit =
                         crate::script_expr::to_float(&owner.snapshot().unwrap().variables[&342]);
                     let mut stale_source = hit.damage.clone();
@@ -789,7 +789,11 @@ pub(super) fn verify_normal_cassidy_damage_and_charge(heroes: &[u64], variants: 
                         .health
                         .unwrap();
                     assert!((current - (maximum - total_dealt)).abs() < 0.001);
-                    let Some(crate::world::Operation::Update(components)) = hit.health.operation
+                    let Some(crate::world::Operation::Update(components)) = room
+                        .take_scripted_health()
+                        .into_iter()
+                        .rfind(|update| update.entity == entity)
+                        .and_then(|update| update.operation)
                     else {
                         panic!("missing health component update")
                     };
@@ -1620,9 +1624,9 @@ fn normal_cassidy_charges_locks_and_fires_the_authored_deadeye() {
                 .unwrap()
             {
                 last_damage = Some(impact.damage.clone());
+                hit_entities.push(impact.damage.target_facts.target);
                 owner.receive_applied_damage(impact.damage).unwrap();
                 assert_eq!(charge(&*owner), 0.0, "Deadeye must not recharge itself");
-                hit_entities.push(impact.health.entity);
             }
         }
     }

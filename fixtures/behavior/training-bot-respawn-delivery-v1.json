@@ -14,7 +14,8 @@
       3221233169
     ],
     "replacement_interval_ms": 3000,
-    "notice_grace_ms": 10000
+    "notice_grace_ms": 10000,
+    "room_weapon_hit": 40
   },
   "expected": {
     "independent_transition": [

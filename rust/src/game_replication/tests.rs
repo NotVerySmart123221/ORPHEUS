@@ -1703,7 +1703,7 @@ fn queued_hitscan_settles_before_a_hero_or_skin_replacement() {
                 )
                 .unwrap()
                 .unwrap();
-            assert_eq!(hit.health.entity, target.entity);
+            assert_eq!(hit.damage.target_facts.target, target.entity);
 
             assert_eq!(
                 world
@@ -1899,7 +1899,7 @@ fn successful_hitscan_survives_owner_vm_fault_before_body_replacement() {
                     .hitscan(&queries, shot, context, |entity| entity == target.entity)
                     .unwrap()
                     .unwrap();
-                assert_eq!(hit.health.entity, target.entity);
+                assert_eq!(hit.damage.target_facts.target, target.entity);
                 settled += 1;
             }
         }
@@ -3472,7 +3472,9 @@ fn owner_and_observer_share_one_authoritative_room_body() {
     assert_eq!(observer_movements.len(), 1);
     assert_eq!(observer_movements[0].movement, Some(moved_pose));
 
-    observer_world.queue_health(hit.health);
+    for update in simulation.take_scripted_health() {
+        observer_world.queue_health(update);
+    }
     assert!(observer_world.health_pending(id.entity));
     let observer_update_sent = observer_world
         .send_frame(

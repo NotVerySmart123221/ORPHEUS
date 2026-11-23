@@ -142,7 +142,6 @@ impl Peer {
     }
 
     pub(super) fn bot_hit(&mut self, hit: BotHit) {
-        self.world.queue_health(hit.health);
         if let Some(body) = self
             .world
             .active_body_id()

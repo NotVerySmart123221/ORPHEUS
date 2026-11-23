@@ -1061,7 +1061,7 @@ impl RoomSimulation {
         }) else {
             return Ok(None);
         };
-        self.scripted_health.push(health.clone());
+        self.scripted_health.push(health);
         self.record_actor_hurt_voice(
             id.entity,
             false,
@@ -1104,7 +1104,6 @@ impl RoomSimulation {
                     victim: id.entity,
                 }),
             ],
-            health,
         }))
     }
 
