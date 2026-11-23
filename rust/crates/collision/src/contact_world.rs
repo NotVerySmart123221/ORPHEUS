@@ -452,9 +452,6 @@ fn placed_geometry(
     let scale = placement.scale;
     match shape {
         Shape::Mesh { mask, mesh } => {
-            let raw = raw_meshes
-                .entry((placement.model, slot))
-                .or_insert_with(|| Arc::new(mesh.clone()));
             // Expanded rays select individual faces. Their sweep must admit the same
             // face categories before the mesh query applies the per-face filter.
             let mask = if expanded_rays {
@@ -462,10 +459,22 @@ fn placed_geometry(
             } else {
                 *mask
             };
+            // A sphere stays round in placed space. The raw-mesh sweep can only
+            // convert its scalar radius directly for a positive uniform scale.
+            let (mesh, scale) = if expanded_rays && (scale[0] <= 0.0 || scale != [scale[0]; 3]) {
+                let mut scaled = mesh.clone();
+                for vertex in &mut scaled.vertices {
+                    *vertex = mul(*vertex, scale);
+                }
+                (Arc::new(scaled), [1.0; 3])
+            } else {
+                let raw = raw_meshes
+                    .entry((placement.model, slot))
+                    .or_insert_with(|| Arc::new(mesh.clone()));
+                (Arc::clone(raw), scale)
+            };
             Ok(StaticGeometry::Mesh(Arc::new(ContactMesh::new(
-                Arc::clone(raw),
-                scale,
-                mask,
+                mesh, scale, mask,
             )?)))
         }
         Shape::Hull(hull) => {

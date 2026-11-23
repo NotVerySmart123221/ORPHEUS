@@ -729,6 +729,50 @@ mod tests {
     }
 
     #[test]
+    fn expanded_sphere_keeps_its_world_radius_at_a_scaled_placement() {
+        use crate::{contact_gjk::sweep::MeshProbe, contact_world::ContactWorld};
+
+        let fixture_data: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../fixtures/behavior/map-combat-ray-geometry-v1.json"
+        )))
+        .unwrap();
+        let contract = &fixture_data["scaled_placed_mesh_sweep"];
+        let mut cache = fixture(true);
+        cache.placements[0].scale = serde_json::from_value(contract["scale"].clone()).unwrap();
+        let radius = serde_json::from_value(contract["radius"].clone()).unwrap();
+        let mode = BTreeSet::from([MODE_PROP]);
+        let rays = CollisionScene::expanded_rays(&cache, &mode, identity()).unwrap();
+        let sweeps = ContactWorld::from_expanded_ray_cache(cache, &mode, identity()).unwrap();
+
+        for path in contract["paths"].as_array().unwrap() {
+            let origin: [f32; 3] = serde_json::from_value(path["origin"].clone()).unwrap();
+            let ray = rays
+                .cast_ray(origin.map(f64::from), FORWARD, 8.0, EXTRA)
+                .unwrap();
+            let sweep = sweeps
+                .scene_sweep(MeshProbe {
+                    points: &[[0.0; 3]],
+                    radius,
+                    start: origin,
+                    end: [origin[0], origin[1], 8.0],
+                    category: EXTRA,
+                })
+                .unwrap();
+            assert_eq!(
+                ray.is_some(),
+                path["point_blocked"].as_bool().unwrap(),
+                "{origin:?}"
+            );
+            assert_eq!(
+                sweep.is_some(),
+                path["sphere_blocked"].as_bool().unwrap(),
+                "{origin:?}"
+            );
+        }
+    }
+
+    #[test]
     fn movement_and_nonuniform_placement_keep_prisms_and_movement_strips_prop_surfaces() {
         let mode = BTreeSet::from([MODE_PROP]);
         let probe = CollisionScene::movement_probe(&fixture(false), &mode).unwrap();

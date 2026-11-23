@@ -17,6 +17,15 @@
     "excluded_category": 8,
     "radius": 0.2
   },
+  "scaled_placed_mesh_sweep": {
+    "scale": [1.0, 0.5, 3.0],
+    "radius": 0.2,
+    "paths": [
+      {"origin": [2.0, 0.65, 0.0], "point_blocked": false, "sphere_blocked": true},
+      {"origin": [2.0, 0.80, 0.0], "point_blocked": false, "sphere_blocked": false},
+      {"origin": [2.0, 0.0, 0.0], "point_blocked": true, "sphere_blocked": true}
+    ]
+  },
   "rays": [
     {"origin": [0, 0.5, 0], "distance": null, "narrow_sweep_blocked": false, "wide_sweep_blocked": true},
     {"origin": [-1, 0.5, 0], "distance": 2, "narrow_sweep_blocked": true, "wide_sweep_blocked": true},

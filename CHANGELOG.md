@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Keep a projectile's sweep radius in world units at nonuniformly scaled or mirrored meshes in the expanded combat cache. Prepare the scaled vertices once per mesh and scale, and retain their face filters. A synthetic gap fixture checks a point ray, a grazing projectile, and a projectile that clears the gap. Passed 591 library tests and the prepared 104319 combat cache check.
+
 - Admit placed meshes to expanded combat sweeps using the union of their face categories. Individual faces retain their authored filters. The synthetic gap and placement tests cover the sweep and ray behavior; movement keeps its proxy mask. Record the equivalent Practice Range main-mesh selection under the current weapon category. Passed 590 library tests, the prepared 104319 cache check, and Clippy.
 
 - Extend the prepared Practice Range firing lane to check that a living blocker prevents victim feedback and that a later NPC impact delivers the settled origin and surface normal after the blocker dies. Record the native hit-position transform and remaining material and reaction bindings.
