@@ -1448,6 +1448,15 @@ impl WorldDelivery {
     }
 
     pub(crate) fn queue_game_message(&mut self, tick: u32, received: Duration, message: Message) {
+        if let Some(report) = ClientGameMessage::read(&message).and_then(ClientWheelUse::read) {
+            if let Some(body) = self
+                .active_body_id()
+                .filter(|&id| id.entity == report.entity && self.owner_body_ready(id))
+            {
+                self.input.push(InputWork::WheelUse { body, report });
+            }
+            return;
+        }
         if self.can_handle_game_message() {
             self.input.push(InputWork::Message {
                 message,
@@ -1791,6 +1800,19 @@ impl WorldDelivery {
                     if let Some(runtime) = runtime {
                         // A full or halted VM queue rejects the request locally.
                         let _ = runtime.queue_wheel_selection(action);
+                    }
+                    remaining -= 1;
+                }
+                InputWork::WheelUse { body, report } => {
+                    if self.active_body_id() == Some(body) && self.owner_body_ready(body) {
+                        if let Some(runtime) = scene
+                            .simulation_mut()
+                            .player_body_mut(body)
+                            .filter(|state| state.owner == self.owner && state.alive())
+                            .and_then(|state| state.runtime.as_mut())
+                        {
+                            let _ = runtime.queue_wheel_use(report);
+                        }
                     }
                     remaining -= 1;
                 }

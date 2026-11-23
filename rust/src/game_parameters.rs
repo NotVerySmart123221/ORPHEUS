@@ -10,6 +10,7 @@ use crate::{
 
 pub const CLIENT_GAME_MESSAGE: u32 = 21616;
 pub(crate) const CLIENT_WHEEL_ACTION: u32 = 21608;
+const WHEEL_USE: u64 = 0x0240_0000_0000_1313;
 pub const PICK_HERO: u64 = 0x0240_0000_0000_1361;
 pub const OPEN_OR_CLOSE: u64 = 0x0240_0000_0000_1360;
 const HERO_ASSET_TYPE: u16 = 0x02e0;
@@ -60,6 +61,40 @@ impl ClientWheelAction {
                 (0x08fc, ScriptValue::Asset(self.action)),
                 (0x03e1, ScriptValue::Bool(self.confirmed)),
             ]),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ClientWheelUse {
+    pub entity: u32,
+    pub instance: u16,
+    pub unlock: u64,
+}
+
+impl ClientWheelUse {
+    pub(crate) fn read(message: ClientGameMessage<'_>) -> Option<Self> {
+        if message.guid != WHEEL_USE {
+            return None;
+        }
+        // Default header and one compact 053B Asset parameter, followed by
+        // the original sender and target placeholders.
+        const PREFIX: &[u8] = &[0, 0, 0, 0, 1, 0xc3, 0x3b, 0x05, 0x40, 0x0a, 4];
+        let (body, [0, 0]) = message.parameters.split_entity_tail()? else {
+            return None;
+        };
+        let unlock = u64::from_le_bytes(body.strip_prefix(PREFIX)?.try_into().ok()?);
+        (unlock >> 48 == 0x0250 && unlock & 0x0000_ffff_ffff_ffff != 0).then_some(Self {
+            entity: message.entity,
+            instance: u16::try_from(message.instance).ok()?,
+            unlock,
+        })
+    }
+
+    pub(crate) fn into_local_message(self) -> RoomMessage {
+        RoomMessage {
+            id: WHEEL_USE,
+            parameters: Variables::from([(0x053b, ScriptValue::Asset(self.unlock))]),
         }
     }
 }
@@ -191,6 +226,61 @@ mod tests {
         game_messages::read_channel,
         jam_codec::{Fields, Schemas},
     };
+
+    #[test]
+    fn spray_use_report_requires_the_exact_asset_parameter() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/wheel-spray-use-report-v1.json"
+        ))
+        .unwrap();
+        let input = &fixture["input"];
+        let parse = |value: &serde_json::Value| {
+            crate::accounts::parse_guid(value.as_str().unwrap()).unwrap()
+        };
+        let expected = ClientWheelUse {
+            entity: u32::try_from(parse(&input["entity"])).unwrap(),
+            instance: u16::try_from(input["instance"].as_u64().unwrap()).unwrap(),
+            unlock: parse(&input["unlock"]),
+        };
+        let raw = input["parameters_hex"].as_str().unwrap().as_bytes();
+        let mut parameters: Vec<_> = raw
+            .chunks_exact(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+            .collect();
+        let read = |parameters: &[u8], instance| {
+            ClientWheelUse::read(ClientGameMessage {
+                entity: expected.entity,
+                guid: WHEEL_USE,
+                instance,
+                parameters: Parameters::new(parameters),
+            })
+        };
+        let accepted = read(&parameters, expected.instance as i16).unwrap();
+        assert_eq!(accepted, expected);
+        assert_eq!(
+            accepted.into_local_message().parameters[&0x053b],
+            ScriptValue::Asset(expected.unlock)
+        );
+        assert_eq!(
+            read(
+                &parameters[..parameters.len() - 1],
+                expected.instance as i16
+            ),
+            None
+        );
+        assert_eq!(read(&parameters, -1), None);
+        for change in input["invalid_byte_changes"].as_array().unwrap() {
+            let index = usize::try_from(change[0].as_u64().unwrap()).unwrap();
+            let original = parameters[index];
+            parameters[index] = u8::try_from(change[1].as_u64().unwrap()).unwrap();
+            assert_eq!(
+                read(&parameters, expected.instance as i16),
+                None,
+                "byte {index}"
+            );
+            parameters[index] = original;
+        }
+    }
 
     #[test]
     fn envelope_uses_the_client_message_id_and_fixed_width_fields() {

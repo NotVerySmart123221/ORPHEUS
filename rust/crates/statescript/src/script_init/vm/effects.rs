@@ -42,19 +42,22 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .evaluate(key.instance, node, field(&node.fields, "m_7F47658A"), None)
             .as_ref()
             .map_or(0.0, script_expr::to_float);
-        let valid = matches!(unlock, Some(Value::Asset(asset)) if asset >> 48 == 0x0250 && asset & 0x0000_ffff_ffff_ffff != 0)
-            && reach.is_finite()
-            && reach > 0.0;
-        let placement = if valid {
-            match self.world.spray_placement(reach) {
-                Some(hit) => hit,
-                None => {
-                    self.report(self.site(key.instance, node), Issue::ObservationUnavailable);
-                    None
+        let placement = match unlock {
+            Some(Value::Asset(asset))
+                if asset >> 48 == 0x0250
+                    && asset & 0x0000_ffff_ffff_ffff != 0
+                    && reach.is_finite()
+                    && reach > 0.0 =>
+            {
+                match self.world.spray_placement(reach) {
+                    Some(hit) => hit.map(|hit| (asset, hit)),
+                    None => {
+                        self.report(self.site(key.instance, node), Issue::ObservationUnavailable);
+                        None
+                    }
                 }
             }
-        } else {
-            None
+            _ => None,
         };
         if let Some(state) = self.state_mut(key) {
             state.kind = StateKind::SprayPlacement(placement);

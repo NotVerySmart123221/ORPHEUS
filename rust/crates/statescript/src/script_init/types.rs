@@ -26,9 +26,9 @@ use super::{
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SprayPlacement {
-    pub point: [f64; 3],
-    pub normal: [f64; 3],
-    pub direction: [f64; 3],
+    pub point: [f32; 3],
+    pub normal: [f32; 3],
+    pub direction: [f32; 3],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -143,7 +143,7 @@ pub enum StateKind {
     ProjectedSelfSend,
     PersistentSend(u64),
     CosmeticEntity,
-    SprayPlacement(Option<SprayPlacement>),
+    SprayPlacement(Option<(u64, SprayPlacement)>),
     ChaseVar,
     Watch,
     Observe {

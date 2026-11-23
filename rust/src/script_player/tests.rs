@@ -3486,7 +3486,7 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
         game_clock::FIRST_TICK,
         game_combat::{PlayerBodyState, RoomSimulation},
         game_messages::Message,
-        game_parameters::{CLIENT_WHEEL_ACTION, ClientWheelAction},
+        game_parameters::{CLIENT_WHEEL_ACTION, ClientWheelAction, ClientWheelUse},
         game_replication::BodyId,
         jam_codec::{Fields, Value as WireValue},
         mover_settings::MoverSettings,
@@ -3709,13 +3709,22 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                 .states
                 .iter()
                 .find_map(|(&slot, state)| match state.kind {
-                    StateKind::SprayPlacement(Some(hit)) if state.active => Some((slot, hit)),
+                    StateKind::SprayPlacement(Some((_, hit))) if state.active => Some((slot, hit)),
                     _ => None,
                 })
                 .unwrap_or_else(|| panic!("missing spray placement: {:?}", snapshot.diagnostics));
-            assert_eq!(hit.point, vector(&spray_fixture["expected"]["point"]));
-            assert_eq!(hit.normal, vector(&spray_fixture["expected"]["normal"]));
-            assert_eq!(hit.direction, vector(&spray_input["direction"]));
+            assert_eq!(
+                hit.point.map(f64::from),
+                vector(&spray_fixture["expected"]["point"])
+            );
+            assert_eq!(
+                hit.normal.map(f64::from),
+                vector(&spray_fixture["expected"]["normal"])
+            );
+            assert_eq!(
+                hit.direction.map(f64::from),
+                vector(&spray_input["direction"])
+            );
             assert!(
                 snapshot.initialization_complete(),
                 "{:?}",
@@ -3742,16 +3751,67 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                 );
                 assert!(stream.arrived(change.last).advanced);
             }
+            let report = ClientWheelUse {
+                entity: snapshot.entity,
+                instance: spray_instance,
+                unlock: 0x0250_0000_0000_0009,
+            };
+            for wrong in [
+                ClientWheelUse {
+                    entity: report.entity + 1,
+                    ..report
+                },
+                ClientWheelUse {
+                    instance: 0,
+                    ..report
+                },
+                ClientWheelUse {
+                    unlock: report.unlock + 1,
+                    ..report
+                },
+            ] {
+                assert_eq!(runtime.queue_wheel_use(wrong).unwrap(), 0);
+            }
+            assert_eq!(runtime.queue_wheel_use(report).unwrap(), 1);
             runtime.world.movement.yaw = 32768;
-            // Reopen the authored admission flag to exercise a second placement attempt.
-            runtime
-                .component
-                .set_instance_variable(spray_instance, 61, Value::Bool(false), &mut runtime.world)
-                .unwrap();
             assert_eq!(runtime.queue_wheel_selection(request(spray)).unwrap(), 2);
             runtime
                 .component
                 .advance_frame(FIRST_TICK + 3, &mut runtime.world)
+                .unwrap();
+            let during_cooldown = &runtime.component.snapshot().unwrap().instances[&spray_instance];
+            assert_eq!(during_cooldown.variables.get(&61), Some(&Value::Bool(true)));
+            assert!(during_cooldown.states[&spray_slot].active);
+            assert_eq!(
+                during_cooldown.variables.get(&8022),
+                Some(&Value::Asset(report.unlock)),
+            );
+            assert!(
+                runtime
+                    .component
+                    .snapshot()
+                    .unwrap()
+                    .initialization_complete()
+            );
+
+            let next_selection = FIRST_TICK + 2 + 1_000_u32.div_ceil(FRAME_MS as u32);
+            for frame in FIRST_TICK + 4..=next_selection {
+                runtime
+                    .component
+                    .advance_frame(frame, &mut runtime.world)
+                    .unwrap();
+            }
+            let after_cooldown = runtime.component.snapshot().unwrap();
+            assert_eq!(
+                after_cooldown.instances[&spray_instance].variables.get(&61),
+                Some(&Value::Bool(false)),
+                "{:?}",
+                after_cooldown.diagnostics
+            );
+            assert_eq!(runtime.queue_wheel_selection(request(spray)).unwrap(), 2);
+            runtime
+                .component
+                .advance_frame(next_selection + 1, &mut runtime.world)
                 .unwrap();
             assert!(
                 runtime
@@ -3767,6 +3827,7 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                     .all(|state| !state.active
                         || !matches!(state.kind, StateKind::SprayPlacement(_)))
             );
+            assert_eq!(runtime.queue_wheel_use(report).unwrap(), 0);
         }
     }
 }

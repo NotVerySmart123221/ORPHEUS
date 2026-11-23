@@ -397,6 +397,10 @@ pub(super) enum InputWork {
         body: BodyId,
         action: ClientWheelAction,
     },
+    WheelUse {
+        body: BodyId,
+        report: ClientWheelUse,
+    },
     Skin {
         hero: u64,
         tick: u32,

@@ -1059,6 +1059,28 @@ impl Component {
         }
     }
 
+    /// Queue an authenticated client report for an instance on this body.
+    pub fn queue_local_instance_message(
+        &mut self,
+        instance: u16,
+        message: RoomMessage,
+    ) -> Result<usize, InitFault> {
+        if self.halted {
+            return Err(InitFault::Halted);
+        }
+        if !message.is_valid() {
+            return Ok(0);
+        }
+        self.machine.queue_entries_from(
+            &self.graphs,
+            Some(instance),
+            Some(self.machine.snapshot.entity),
+            message.id,
+            message.parameters,
+            self.machine.now_ms,
+        )
+    }
+
     pub fn queue_entity_message(
         &mut self,
         message: u64,

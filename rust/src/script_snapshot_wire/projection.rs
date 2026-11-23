@@ -694,13 +694,17 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             ),
         )]),
         (StateKind::SprayPlacement(placement), Some("861D9015")) => {
-            let Some(hit) = placement else {
+            let Some((unlock, hit)) = placement else {
                 return Some(StatePayload::new());
             };
             StatePayload::from([
-                ("direction".into(), Value::Vector(hit.direction)),
-                ("point".into(), Value::Vector(hit.point)),
-                ("normal".into(), Value::Vector(hit.normal)),
+                ("unlock".into(), Value::Asset(unlock)),
+                (
+                    "direction".into(),
+                    Value::Vector(hit.direction.map(f64::from)),
+                ),
+                ("point".into(), Value::Vector(hit.point.map(f64::from))),
+                ("normal".into(), Value::Vector(hit.normal.map(f64::from))),
                 (
                     "activation".into(),
                     Value::Integer(i64::from(state.activation)),

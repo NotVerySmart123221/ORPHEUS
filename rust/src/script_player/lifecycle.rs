@@ -16,7 +16,7 @@ use crate::{
     game_heroes::CASSIDY,
     game_hitscan::{HitDefinition, aim_direction},
     game_instance::TeamMemberCounts,
-    game_parameters::ClientWheelAction,
+    game_parameters::{ClientWheelAction, ClientWheelUse},
     game_projectiles::{
         ImpactSpawn, ProjectileLeases, authored_number, local_prediction, predicted_sync,
     },
@@ -134,6 +134,28 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
             selection.id,
             selection.parameters,
         )
+    }
+
+    fn queue_wheel_use(&mut self, report: ClientWheelUse) -> Result<usize, InitFault> {
+        use crate::script_init::StateKind;
+        if report.entity != self.world.entity {
+            return Ok(0);
+        }
+        let Some(instance) = self
+            .component
+            .snapshot()
+            .and_then(|snapshot| snapshot.instances.get(&report.instance))
+        else {
+            return Ok(0);
+        };
+        let states = || instance.states.values().filter(|state| state.active);
+        if !states().any(|state| matches!(state.kind, StateKind::SprayPlacement(Some((unlock, _))) if unlock == report.unlock))
+            || !states().any(|state| matches!(state.kind, StateKind::ClientPulse { .. }))
+        {
+            return Ok(0);
+        }
+        self.component
+            .queue_local_instance_message(report.instance, report.into_local_message())
     }
 
     fn set_spatial_frame(&mut self, frame: Arc<crate::game_combat::RoomSpatialFrame>) {

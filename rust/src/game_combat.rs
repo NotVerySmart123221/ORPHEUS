@@ -456,9 +456,9 @@ impl RoomSpatialFrame {
             .checked_cast_ray(origin, direction, reach, SPRAY_SURFACE)
             .map(|hit| {
                 hit.map(|hit| crate::script_init::SprayPlacement {
-                    direction,
-                    point: hit.point,
-                    normal: hit.normal,
+                    direction: direction.map(|value| value as f32),
+                    point: hit.point.map(|value| value as f32),
+                    normal: hit.normal.map(|value| value as f32),
                 })
             })
     }
