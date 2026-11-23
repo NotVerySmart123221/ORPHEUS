@@ -426,11 +426,12 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
     }
 
     fn take_shots(&mut self, command: Option<Command>, mover: &Mover) -> Vec<PosedShot> {
-        let shots = self.component.take_shots().unwrap_or_default();
+        let shots = self.component.take_reported_shots().unwrap_or_default();
         #[cfg(feature = "inspector")]
         if !shots.is_empty() && crate::owner_trace::enabled() {
             let pose_frame = command.map(|command| command.frame);
-            for shot in &shots {
+            for report in &shots {
+                let shot = report.event;
                 crate::owner_trace::record(format_args!(
                     "owner-volley vm-shot body={:08x} shot_frame={} pose_frame={pose_frame:?} instance={} state={} counter={} start_ms={} ordinal={}",
                     shot.entity,
@@ -451,7 +452,8 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         let origin = [x, y + eye_height(hero, mover.crouched()), z];
         shots
             .into_iter()
-            .filter_map(|shot| {
+            .filter_map(|report| {
+                let shot = report.event;
                 let node = self.component.shot_node(&shot)?;
                 let flashbang = LEGACY_PROJECTILE_CONTROL.matches_shot(hero, shot.graph, node.pos);
                 let stun_duration = flashbang
@@ -578,7 +580,12 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                     }
                     DeadeyeScene::shot_direction(&self.world.deadeye_scene, origin, entity)?
                 } else {
-                    aim_direction(&command)
+                    crate::weapon_spread::authored_hitscan_direction(
+                        node,
+                        &report,
+                        aim_direction(&command),
+                        &mut evaluate,
+                    )
                 };
                 Some(PosedShot::Hitscan(Box::new(PosedHitscan {
                     source: shot.entity,

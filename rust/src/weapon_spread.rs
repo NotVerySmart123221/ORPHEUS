@@ -2,7 +2,14 @@
 
 use std::{f64::consts::TAU, sync::OnceLock};
 
-use crate::static_ray::{Vec3, norm};
+use crate::{
+    script_expr::{EvalError, to_float},
+    script_graph::Node,
+    script_init::ReportedShot,
+    script_wire::Value,
+    static_ray::{Vec3, norm},
+};
+use serde_json::Value as Json;
 
 const TABLE_SIZE: usize = 16_384;
 const TABLE_MASK: usize = TABLE_SIZE - 1;
@@ -68,6 +75,82 @@ fn cross([ax, ay, az]: Vec3, [bx, by, bz]: Vec3) -> Vec3 {
     [ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx]
 }
 
+fn spread_index(shot: &crate::script_init::ShotEvent, state: u16) -> usize {
+    let seed = (shot.entity as u16)
+        .wrapping_add(shot.instance.wrapping_mul(23))
+        .wrapping_add(state.wrapping_mul(7))
+        .wrapping_add(shot.activation & 63);
+    let key = (usize::from(seed) * 131 + shot.ordinal as usize * 23) & TABLE_MASK;
+    uniform_table()[key] as usize & TABLE_MASK
+}
+
+fn rotate(vector: Vec3, axis: Vec3, angle: f64) -> Vec3 {
+    let (sin, cos) = angle.sin_cos();
+    let parallel: f64 = axis.into_iter().zip(vector).map(|(a, v)| a * v).sum();
+    let perpendicular = cross(axis, vector);
+    std::array::from_fn(|i| {
+        vector[i] * cos + perpendicular[i] * sin + axis[i] * parallel * (1.0 - cos)
+    })
+}
+
+/// The single-projectile uniform cone uses the volley state slot, not its node position.
+fn direct_cone_direction(
+    forward: Vec3,
+    spread_degrees: f32,
+    shot: &crate::script_init::ShotEvent,
+) -> Vec3 {
+    if spread_degrees == 0.0 {
+        return forward;
+    }
+    let table = uniform_table();
+    let index = spread_index(shot, shot.raw_state);
+    let angle = f64::from((table[index] as f32 * std::f32::consts::TAU) * (1.0 / 4_294_967_296.0));
+    let radians = spread_degrees * (std::f64::consts::PI / 180.0) as f32;
+    let radius = (table[(index + 1) & TABLE_MASK] as f32 * radians) * (1.0 / 4_294_967_296.0);
+    let forward = forward.map(|axis| f64::from(axis as f32));
+    let right = cross(forward, [0.0, 1.0, 0.0]);
+    let squared = right
+        .into_iter()
+        .map(|axis| f64::from((axis * axis) as f32))
+        .sum::<f64>() as f32;
+    let right = if squared >= 1.175_494_35e-36 {
+        right.map(|axis| axis / f64::from(squared).sqrt())
+    } else {
+        [1.0, 0.0, 0.0]
+    };
+    let axis = rotate(right, forward, angle);
+    rotate(forward, axis, f64::from(radius)).map(|value| f64::from(value as f32))
+}
+
+pub(crate) fn authored_hitscan_direction(
+    node: &Node,
+    shot: &ReportedShot,
+    forward: Vec3,
+    mut evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
+) -> Vec3 {
+    let Some(normalized) = shot.normalized_spread else {
+        return forward;
+    };
+    let mut degrees = |key: &str| {
+        node.field(key)
+            .filter(|value| !value.is_null())
+            .map(|value| evaluate(value).map(|value| to_float(&value) as f32))
+            .unwrap_or(Ok(0.0))
+    };
+    let (Ok(low), Ok(high)) = (
+        degrees("m_5EC1EB38.m_7F0FED02"),
+        degrees("m_5EC1EB38.m_429A6C85"),
+    ) else {
+        return forward;
+    };
+    let spread = low + (high - low) * normalized;
+    if (0.0..90.0).contains(&spread) {
+        direct_cone_direction(forward, spread, &shot.event)
+    } else {
+        forward
+    }
+}
+
 pub(crate) fn ring_directions<'a>(
     forward: Vec3,
     cone: f64,
@@ -76,12 +159,7 @@ pub(crate) fn ring_directions<'a>(
     node: u16,
 ) -> impl Iterator<Item = Vec3> + use<'a> {
     let table = uniform_table();
-    let seed = (shot.entity as u16)
-        .wrapping_add(shot.instance.wrapping_mul(23))
-        .wrapping_add(node.wrapping_mul(7))
-        .wrapping_add(shot.activation & 63);
-    let key = (usize::from(seed) * 131 + shot.ordinal as usize * 23) & TABLE_MASK;
-    let phase = f64::from(table[table[key] as usize & TABLE_MASK]) * TAU / 4_294_967_296.0;
+    let phase = f64::from(table[spread_index(shot, node)]) * TAU / 4_294_967_296.0;
     let right = cross(forward, [0.0, 1.0, 0.0]);
     let length = norm(right);
     let right = if length == 0.0 {
@@ -109,6 +187,37 @@ mod tests {
     use super::*;
     use crate::script_init::ShotEvent;
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn direct_launch_cone_matches_the_reference_using_the_raw_state_slot() {
+        let fixture: Json = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/direct-weapon-cone-v1.json"
+        ))
+        .unwrap();
+        let source = &fixture["input"];
+        let mut shot = ShotEvent {
+            entity: source["entity"].as_u64().unwrap() as u32,
+            instance: source["instance"].as_u64().unwrap() as u16,
+            graph: 42,
+            raw_state: source["raw_state"].as_u64().unwrap() as u16,
+            frame: 0,
+            time_ms: 0,
+            activation: source["activation"].as_u64().unwrap() as u16,
+            activation_ms: 0,
+            ordinal: 0,
+        };
+        let forward = serde_json::from_value(source["forward"].clone()).unwrap();
+        for row in source["rounds"].as_array().unwrap() {
+            shot.ordinal = row["ordinal"].as_u64().unwrap() as u32;
+            let degrees = row["degrees"].as_f64().unwrap() as f32;
+            let bits: [String; 3] = serde_json::from_value(row["bits"].clone()).unwrap();
+            assert_eq!(
+                direct_cone_direction(forward, degrees, &shot).map(|axis| (axis as f32).to_bits()),
+                bits.map(|hex| u32::from_str_radix(&hex, 16).unwrap())
+            );
+        }
+        assert_eq!(direct_cone_direction(forward, 0.0, &shot), forward);
+    }
 
     #[test]
     fn reaper_rings_match_the_reference_table_and_directions() {

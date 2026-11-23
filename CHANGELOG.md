@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Apply authored circular spread to direct hitscan volleys with a supported ramp. Sample spread at each round's authored time and seed its direction with the raw volley state slot. Each ray computes damage using its own hit distance. Passed 517 server and 295 StateScript library tests plus the prepared 104319 check for Cassidy's six directions and damage at 15, 30, and 50 metres. Original-client aim agreement and optional between-shot decay remain open.
+
 - Route context-free communication wheel selections to the current player's authored body VM when the prepared catalog contains the selected asset. Keep the client's confirmation flag and the existing reliable-order, possession and body-generation checks. Passed 516 server library tests and a prepared 104319 check that drives both authored receivers through the live runtime entry and produces a callout in a solo room. Contextual requests and original-client presentation remain open.
 
 - Time remote projectile retirement from the send frame of the acknowledged launch. Keep the encoded launch and projectile IDs stable across loss. Passed 516 server library tests, including a lost launch, a later retry, and retirement timed from that retry's send frame. Original-client impact presentation remains open.

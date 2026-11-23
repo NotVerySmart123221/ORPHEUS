@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "case_id": "direct-weapon-cone-v1",
+  "evidence": "reference-derived",
+  "source": {
+    "revision": "9ed63eed1dc5f82f333bd227a5e97b252f91ca8a",
+    "path": "src/ow174/game/weapon_spread.py"
+  },
+  "input": {
+    "entity": 2684354819,
+    "instance": 7,
+    "raw_state": 15,
+    "activation": 2,
+    "forward": [0.0, 0.0, 1.0],
+    "rounds": [
+      {"ordinal": 0, "degrees": 6.0, "bits": ["3c94036d", "3b55e15a", "3f7ff4f4"]},
+      {"ordinal": 1, "degrees": 6.0, "bits": ["3bda91b8", "3c5cfa6e", "3f7ff895"]},
+      {"ordinal": 5, "degrees": 6.0, "bits": ["3b913b77", "bcd89155", "3f7fe873"]},
+      {"ordinal": 2, "degrees": 1.5, "bits": ["3b285b0e", "3bbb9f7d", "3f7ffeb6"]}
+    ]
+  }
+}

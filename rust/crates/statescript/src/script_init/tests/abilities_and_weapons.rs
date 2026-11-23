@@ -837,6 +837,7 @@ fn volley_reports_exact_times_and_bakes_linked_ammo_on_finish() {
                     "m_numShotsPerSecond":9,
                     "m_24E351A4":var(53,false),
                     "m_3FFC9EB9":var(231,false),
+                    "m_5EC1EB38":{"$":"STU_239B571E","m_AC20B1C1":4},
                     "m_FEC435C6":180
                 }),
             ),
@@ -858,9 +859,13 @@ fn volley_reports_exact_times_and_bakes_linked_ammo_on_finish() {
     )
     .unwrap();
     let mut shots = Vec::new();
+    let mut spread = Vec::new();
     for frame in 0..=14 {
         component.advance_frame(frame, &mut EmptyWorld).unwrap();
-        shots.extend(component.take_shots().unwrap());
+        for report in component.take_reported_shots().unwrap() {
+            shots.push(report.event);
+            spread.push(report.normalized_spread);
+        }
         if frame == 6 {
             let snapshot = component.snapshot().unwrap();
             assert!(snapshot.bindings.is_empty());
@@ -876,6 +881,7 @@ fn volley_reports_exact_times_and_bakes_linked_ammo_on_finish() {
             .collect::<Vec<_>>(),
         [(0, 0, 0), (6, 111, 1), (13, 222, 2)]
     );
+    assert_eq!(spread, [Some(0.5), Some(0.5), Some(0.75)]);
     assert!(
         shots
             .iter()

@@ -1849,6 +1849,20 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         } else {
             (ammo0 / per_shot).min(i64::from(maximum)) as u32
         };
+        let launch = field(&node.fields, "m_5EC1EB38");
+        let spread_ramp = if launch["$"] == "STU_239B571E" && field(launch, "m_23C72C36").is_null()
+        {
+            let config = field(launch, "m_AC20B1C1");
+            if config.is_null() {
+                Some(0.0)
+            } else {
+                self.evaluate(id, node, config, None)
+                    .map(|value| script_expr::to_float(&value) as f32)
+                    .filter(|ramp| ramp.is_finite() && *ramp >= 0.0)
+            }
+        } else {
+            None
+        };
         let start_ms = self.machine.now_ms;
         self.state_mut(key).expect("active volley").kind = StateKind::WeaponVolley {
             volleys: 1,
@@ -1864,6 +1878,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 per_shot,
                 rate,
                 spread,
+                spread_ramp,
                 planned,
                 reported: 0,
                 unposed_rounds: 0,
@@ -1964,6 +1979,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let mut ordinal = volley.reported;
         let planned = volley.planned;
         let mut presentation = None;
+        let spread = (volley.spread, volley.spread_ramp);
         while ordinal < planned {
             let time_ms = start_ms.saturating_add(shot_delay(ordinal, rate));
             if time_ms > self.machine.now_ms {
@@ -1986,6 +2002,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     ordinal,
                 },
                 presentation: presentation.clone(),
+                normalized_spread: Volley::normalized_shot_spread(
+                    spread.0,
+                    spread.1,
+                    time_ms - start_ms,
+                    rate,
+                ),
             });
             ordinal += 1;
         }

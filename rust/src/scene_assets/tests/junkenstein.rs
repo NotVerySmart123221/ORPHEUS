@@ -691,6 +691,10 @@ pub(super) fn verify_normal_cassidy_damage_and_charge(heroes: &[u64], variants: 
                         assert!(hit.is_none(), "dead Boss received another hit");
                         continue;
                     }
+                    if fan && hit.is_none() {
+                        // The burst consumes the round even when its authored cone misses.
+                        continue;
+                    }
                     let hit = hit.expect("visible Boss on the street must be hit");
                     assert_eq!(hit.health.entity, entity);
                     let before_credit =

@@ -132,6 +132,7 @@ pub(super) struct Volley {
     pub(super) per_shot: i64,
     pub(super) rate: f64,
     pub(super) spread: f64,
+    pub(super) spread_ramp: Option<f32>,
     pub(super) planned: u32,
     // Index of the next due round, including rounds skipped without a pose.
     pub(super) reported: u32,
@@ -140,14 +141,32 @@ pub(super) struct Volley {
 }
 
 impl Volley {
+    pub(super) fn normalized_shot_spread(
+        initial: f64,
+        ramp: Option<f32>,
+        elapsed_ms: u64,
+        rate: f64,
+    ) -> Option<f32> {
+        let ramp = ramp?;
+        Some(if ramp < 1.0e-7 {
+            1.0
+        } else {
+            (Self::due_shots(elapsed_ms, rate) as f32 / ramp + initial as f32).min(1.0)
+        })
+    }
+
+    fn due_shots(elapsed_ms: u64, rate: f64) -> i64 {
+        let seconds = f64::from(elapsed_ms as f32 * 0.001_f32);
+        let ordinal = ((seconds * rate) as f32).floor() as i64;
+        ordinal.saturating_add(1)
+    }
+
     fn ammo_at(&self, now_ms: u64, permit_shots: bool) -> i64 {
         let Some(elapsed) = now_ms.checked_sub(self.start_ms) else {
             return self.ammo0;
         };
         let due = if permit_shots {
-            let seconds = f64::from(elapsed as f32 * 0.001_f32);
-            let ordinal = ((seconds * self.rate) as f32).floor() as i64;
-            ordinal.saturating_add(1)
+            Self::due_shots(elapsed, self.rate)
         } else {
             i64::from(self.reported)
         };

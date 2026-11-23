@@ -379,6 +379,69 @@ fn normal_cassidy_primary_and_fan_damage_all_boss_bodies() {
 }
 
 #[test]
+#[ignore = "requires the local 104319 Practice Range runtime"]
+fn prepared_cassidy_fan_uses_authored_cone_and_falloff() {
+    use crate::{
+        commands::{Command, SECONDARY},
+        game_clock::FIRST_TICK,
+        game_combat::PosedShot,
+        game_replication::BodyStep,
+    };
+
+    let assets = SceneAssets::load(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap()).unwrap();
+    let scene = assets.prepare(GameMap::practice_range()).unwrap();
+    let hero = scene.heroes().find_hero("Cassidy").unwrap();
+    let mover = Mover::new(
+        *scene.movers.for_body(Some(hero.body)),
+        Arc::clone(scene.contacts.as_ref().unwrap()),
+        [0.0; 3],
+        0,
+        MOVER_CATEGORY,
+    )
+    .unwrap();
+    let mut owner = scene
+        .owner_body_runtime(
+            hero,
+            OwnerBodySpawn {
+                slot: 0,
+                controller: 0xa000_0100,
+                entity: 0xa000_0101,
+                body_filter: team_bit(0).unwrap(),
+                frame: FIRST_TICK,
+                pose: mover.pose(),
+                eye_position: script_eye_position(hero.guid, &mover),
+                skin: 0,
+                quanta: RETAIL_QUANTA,
+            },
+        )
+        .unwrap()
+        .unwrap();
+    let mut directions = BTreeSet::new();
+    let mut count = 0;
+    for frame in FIRST_TICK + 1..=FIRST_TICK + 90 {
+        let command = Command {
+            frame,
+            buttons: SECONDARY,
+            ..Command::default()
+        };
+        owner.advance(command, &mover, BodyStep::Posed).unwrap();
+        for shot in owner.take_shots(Some(command), &mover) {
+            let PosedShot::Hitscan(shot) = shot else {
+                panic!("expected hitscan from the authored alternate fire");
+            };
+            count += 1;
+            directions.insert(shot.direction.map(f64::to_bits));
+            assert!(shot.direction[2] >= 6.0_f64.to_radians().cos() - 1e-6);
+            assert_eq!(shot.hit.damage_at(15.0, false), 50.0);
+            assert!((shot.hit.damage_at(30.0, false) - 32.5).abs() < 1e-5);
+            assert!((shot.hit.damage_at(50.0, false) - 15.0).abs() < 1e-5);
+        }
+    }
+    assert_eq!(count, 6);
+    assert_eq!(directions.len(), count);
+}
+
+#[test]
 #[ignore = "requires separately prepared 104319 Junkenstein runtime"]
 fn normal_cassidy_common_npc_damage_charge_and_retirement() {
     use crate::junkenstein_navigation::{SHOCK_TIRE, ZOMBARDIER};
