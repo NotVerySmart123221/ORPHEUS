@@ -2,7 +2,7 @@ use super::*;
 use crate::{script_enemy::fixture, script_snapshot_wire::SceneProjection, world::frame};
 
 #[test]
-fn scripted_respawn_becomes_a_weapon_target_after_its_observer_baseline() {
+fn scripted_respawn_admits_owner_movement_and_weapon_contact_at_the_same_ack() {
     use crate::world::Create;
 
     let contract: serde_json::Value = serde_json::from_str(include_str!(
@@ -15,6 +15,32 @@ fn scripted_respawn_becomes_a_weapon_target_after_its_observer_baseline() {
     let replacement = number("replacement");
     let tick = number("first_tick");
     let expected = |phase: &str| contract["expected"][phase].as_bool().unwrap();
+    let mut replacement_bot = crate::game_bots::Bot::fixture_walker([4.0, 0.0, 0.0]);
+    replacement_bot.entity = replacement;
+    replacement_bot.position = [2.0, 0.0, 0.0];
+    let mut simulation = RoomSimulation::new(vec![replacement_bot]).unwrap();
+    simulation.enable_movement_contacts(
+        false,
+        Arc::new(crate::mover_settings::MoverCatalog::default()),
+    );
+    simulation.prepare_movement_frame(tick).unwrap();
+    let contacts = simulation.movement_contact_frame().unwrap();
+    let check = |world: &WorldDelivery, phase: &str| {
+        let admitted = expected(phase);
+        assert_eq!(world.actor_contact_ready(replacement), admitted, "{phase}");
+        assert_eq!(
+            world
+                .owner_movement_blockers(&contacts, world.owner(), 0)
+                .len(),
+            usize::from(admitted),
+            "{phase}"
+        );
+        assert!(
+            world
+                .owner_movement_blockers(&contacts, world.owner(), 1)
+                .is_empty()
+        );
+    };
     let (graphs, codecs, _, _) = fixture(false);
     let script = Component::start(
         Arc::clone(&graphs),
@@ -53,36 +79,21 @@ fn scripted_respawn_becomes_a_weapon_target_after_its_observer_baseline() {
     let mut fast_egress = GameEgress::default();
     let mut slow_egress = GameEgress::default();
     for (world, egress) in [(&mut fast, &mut fast_egress), (&mut slow, &mut slow_egress)] {
-        assert!(!world.weapon_target_ready(retired));
-        assert_eq!(
-            world.weapon_target_ready(replacement),
-            expected("weapon_target_before_create_ack")
-        );
+        assert!(!world.actor_contact_ready(retired));
+        check(world, "weapon_target_before_create_ack");
         transmit(world, None, egress, tick, 0);
         transport_outcome(world, egress, 0, true);
         assert!(world.identity_ready(replacement));
-        assert_eq!(
-            world.weapon_target_ready(replacement),
-            expected("weapon_target_after_create_ack")
-        );
+        check(world, "weapon_target_after_create_ack");
         transmit(world, None, egress, tick + 1, 1);
     }
     transport_outcome(&mut fast, &mut fast_egress, 1, true);
     transport_outcome(&mut slow, &mut slow_egress, 1, false);
-    assert_eq!(
-        fast.weapon_target_ready(replacement),
-        expected("weapon_target_after_animation_ack")
-    );
-    assert_eq!(
-        slow.weapon_target_ready(replacement),
-        expected("weapon_target_after_animation_loss")
-    );
+    check(&fast, "weapon_target_after_animation_ack");
+    check(&slow, "weapon_target_after_animation_loss");
     transmit(&mut slow, None, &mut slow_egress, tick + 2, 2);
     transport_outcome(&mut slow, &mut slow_egress, 2, true);
-    assert_eq!(
-        slow.weapon_target_ready(replacement),
-        expected("weapon_target_after_animation_ack")
-    );
+    check(&slow, "weapon_target_after_animation_ack");
 }
 
 #[test]

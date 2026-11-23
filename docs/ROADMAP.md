@@ -30,6 +30,7 @@ Target build: **Overwatch 1 retail 1.74.0.0.104319**.
 - [ ] Verify upstairs patrol route geometry matches contact solver bounds and hitscan wall queries (use `--features inspector` to diagnose).
 - [ ] Verify hostile character blocking without rubber-banding and allied pass-through with separation. Check the downed interval and the first frame of the authored bot respawn animation separately for movement and weapon contact.
 - [ ] Compare allied and hostile bot firing animation, projectile interception, and the walk-back animation after displacement. Check weapon occlusion through a recorded railing gap against a shot into the adjacent solid bar.
+- [ ] Compare initial placement and breakage in the original client's Practice Range. Reproduce the missing green bottles at their starting positions, and check whether the reported computer screens register weapon hits and play their authored break effects.
 - [ ] Compare effective weapon damage on both sides of the authored falloff thresholds, including Cassidy's alternate fire.
 - [ ] Verify directional hit reactions and human and nonhuman impact effects from authored body data. Verify the communication wheel, emotes and voice lines, and spawn voice cues in the original client.
 - [ ] Compare the Practice Range multikill expiry and elimination eligibility against the authored graph. Verify emplaced-weapon elimination audio once the original Torbjörn turret is usable.

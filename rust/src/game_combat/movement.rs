@@ -25,10 +25,19 @@ pub(crate) struct MovementContactFrame {
 impl MovementContactFrame {
     /// Wire ordering is stable even when the ECS reuses a body slot.
     pub(crate) fn blockers(&self, source: u32, team: u8) -> Vec<CapsulePose> {
+        self.blockers_where(source, team, |_| true)
+    }
+
+    pub(crate) fn blockers_where(
+        &self,
+        source: u32,
+        team: u8,
+        mut visible: impl FnMut(u32) -> bool,
+    ) -> Vec<CapsulePose> {
         self.actors
             .iter()
             .filter_map(|(&entity, &(other_team, pose))| {
-                (entity != source && other_team != Some(team)).then_some(pose)
+                (entity != source && other_team != Some(team) && visible(entity)).then_some(pose)
             })
             .collect()
     }

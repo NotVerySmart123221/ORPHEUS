@@ -688,7 +688,7 @@ impl Room {
                     bots.activate_combat();
                     for shot in shots {
                         if let Some(hit) = bots.hitscan(&queries, shot, context, |entity| {
-                            peer.world.weapon_target_ready(entity)
+                            peer.world.actor_contact_ready(entity)
                         })? {
                             bots.deliver_applied_damage(peer.world.owner(), hit.damage.clone());
                             peer.bot_hit(hit);

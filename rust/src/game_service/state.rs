@@ -1076,7 +1076,7 @@ impl State {
                             owner,
                             launches,
                             context,
-                            |entity| peer.world.weapon_target_ready(entity),
+                            |entity| peer.world.actor_contact_ready(entity),
                         )?;
                         peer.world.finish_projectiles(owner, room_tick, outcomes)?;
                         for hit in hits {

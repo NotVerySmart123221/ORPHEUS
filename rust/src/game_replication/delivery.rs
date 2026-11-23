@@ -176,8 +176,20 @@ impl WorldDelivery {
         self.world_started() && self.created.contains(&entity)
     }
 
-    pub(crate) fn weapon_target_ready(&self, entity: u32) -> bool {
+    pub(crate) fn actor_contact_ready(&self, entity: u32) -> bool {
         self.identity_ready(entity) && !self.pending_respawn_presentation.contains(&entity)
+    }
+
+    pub(super) fn owner_movement_blockers(
+        &self,
+        frame: &crate::game_combat::MovementContactFrame,
+        source: u32,
+        team: u8,
+    ) -> Vec<crate::contact_cache::CapsulePose> {
+        frame.blockers_where(source, team, |entity| {
+            // The room can spawn a replacement before this observer receives it.
+            !self.bots.contains_key(&entity) || self.actor_contact_ready(entity)
+        })
     }
 
     pub(crate) fn owner_body_ready(&self, id: BodyId) -> bool {
@@ -1847,6 +1859,9 @@ impl WorldDelivery {
         let mut used = 0;
         let mut fault = None;
         let team = state.team;
+        let blockers = motion_frame.as_ref().map_or_else(Vec::new, |frame| {
+            self.owner_movement_blockers(frame, id.entity, team)
+        });
         let previously_processed = self.input.processed;
         let script = &mut self.body_script;
         let detached_motion = &mut self.detached_motion;
@@ -1892,11 +1907,7 @@ impl WorldDelivery {
             &mut pending.poses,
             f64::from(frame_us) / 1_000_000.0,
             budget - used,
-            || {
-                motion_frame
-                    .as_ref()
-                    .map_or_else(Vec::new, |frame| frame.blockers(id.entity, team))
-            },
+            || &blockers,
             |mover, command| {
                 if script.is_none()
                     && frame_us != 0

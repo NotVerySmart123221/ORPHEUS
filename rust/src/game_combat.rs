@@ -275,6 +275,7 @@ mod environment;
 mod health;
 mod health_events;
 mod movement;
+pub(crate) use movement::MovementContactFrame;
 mod observed_projectiles;
 mod player;
 mod script_requests;
