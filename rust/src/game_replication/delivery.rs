@@ -108,6 +108,7 @@ impl WorldDelivery {
             scene_views: BTreeMap::new(),
             observed_projectiles: Default::default(),
             bot_chunk_waited: false,
+            last_sent_remote_movement: None,
             gate: None,
             next_biotic_view: FIRST_BIOTIC_VIEW,
         }
@@ -143,6 +144,7 @@ impl WorldDelivery {
         self.scene_views.clear();
         self.observed_projectiles = Default::default();
         self.bot_chunk_waited = false;
+        self.last_sent_remote_movement = None;
         self.gate = None;
         self.input.clear();
     }
@@ -855,6 +857,9 @@ impl WorldDelivery {
                 history.candidate(tick, self.created.contains(&id.entity))
             })
         };
+        if let Some(last) = self.last_sent_remote_movement {
+            movements.sort_unstable_by_key(|record| (record.entity <= last, record.entity));
+        }
         let owner_index = correction.map(|correction| {
             let index = movements.len();
             movements.push(correction.update());
@@ -905,6 +910,14 @@ impl WorldDelivery {
             send,
         )?;
         let indexes = Self::sent_indices(&queued, &sent.records);
+        if let Some(entity) = sent.records.iter().rev().find_map(|source| match *source {
+            RecordSource::Movement(index) if Some(index) != owner_index => {
+                Some(movements[index].entity)
+            }
+            _ => None,
+        }) {
+            self.last_sent_remote_movement = Some(entity);
+        }
         for &index in &indexes {
             if let Delivery::ObservedProjectile {
                 id,

@@ -361,6 +361,7 @@ pub(crate) struct WorldDelivery {
     scene_views: BTreeMap<u32, BodyStream<ProjectedSnapshot>>,
     observed_projectiles: observed_projectiles::ObservedProjectiles,
     bot_chunk_waited: bool,
+    last_sent_remote_movement: Option<u32>,
     gate: Option<u32>,
     next_biotic_view: u32,
 }

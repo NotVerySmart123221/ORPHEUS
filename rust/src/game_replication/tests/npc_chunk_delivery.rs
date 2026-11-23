@@ -2,6 +2,75 @@ use super::*;
 use crate::{script_enemy::fixture, script_snapshot_wire::SceneProjection, world::frame};
 
 #[test]
+fn crowded_observer_frames_rotate_walking_npc_records() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/npc-script-packet-isolation-v1.json"
+    ))
+    .unwrap();
+    let input = &fixture["movement_budget"];
+    let count = input["actors"].as_u64().unwrap() as usize;
+    let spare = input["bytes_available_before_movement"].as_u64().unwrap() as usize;
+    let throttles = serde_json::from_value(input["walking_throttles"].clone()).unwrap();
+    let movements: Vec<_> = (0..count)
+        .map(|index| EntityUpdate {
+            entity: 0xc000_1000 + index as u32,
+            movement: Some(Movement {
+                position: [90.0 + index as f64, -2.0, -40.0],
+                yaw: 12000,
+                velocity: [1.0, 0.0, -3.0],
+                throttles,
+                ..Movement::default()
+            }),
+            ..Default::default()
+        })
+        .collect();
+    let mut world = WorldDelivery::new(OWNER);
+    let mut egress = GameEgress::default();
+    let message = crate::game_messages::EncodedMessage::from_bytes(vec![
+        1;
+        crate::world::MAX_PAYLOAD
+            - spare
+    ]);
+    let mut visited = 0;
+    for sequence in 0..count as u32 {
+        let tick = 1000 + sequence;
+        let ordinal = egress.queue_reliable(message.clone()).unwrap();
+        let mut payload = Vec::new();
+        let send = world
+            .send_frame(tick, movements.clone(), false, None, &mut egress, |bytes| {
+                payload = bytes;
+                Ok::<_, ()>(sequence)
+            })
+            .unwrap();
+        let selected = send.records.len();
+        assert!((1..count).contains(&selected));
+        let expected: Vec<_> = movements
+            .iter()
+            .cycle()
+            .skip(visited)
+            .take(selected)
+            .collect();
+        assert_eq!(
+            payload,
+            frame(
+                tick,
+                world.command_ack(tick),
+                &[(ordinal, message.clone())],
+                &[],
+                &expected
+            )
+            .unwrap()
+        );
+        transport_outcome(&mut world, &mut egress, sequence, true);
+        visited += selected;
+        if visited >= count {
+            return;
+        }
+    }
+    panic!("not all NPCs got movement room in a crowded stream");
+}
+
+#[test]
 fn scripted_respawn_admits_owner_movement_and_weapon_contact_at_the_same_ack() {
     use crate::world::Create;
 

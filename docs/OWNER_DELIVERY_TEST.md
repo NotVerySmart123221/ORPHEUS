@@ -177,6 +177,11 @@ direct contact entity, and flight time. Match the contact against the room's
 damage settlement. A missing direct contact can be a terrain impact or an
 expiry. The separate failure record identifies a rejected collision query.
 
+The observer packet regression also places walking bots behind reliable
+traffic in a tight packet budget. Each peer resumes after the last remote
+movement it sent, so later bots still get their velocity and throttle updates.
+The original client still needs to render the return stride in a playtest.
+
 For the prepared 104319 Practice Range cache, the main mesh has 51,276
 triangles in the movement cache and 312,867 in the expanded cache. The
 current weapon query category (`0x18`) selects the same 51,276 main-mesh
