@@ -11,6 +11,14 @@
     "notes": "The envelope and single asset parameter follow the pinned reference. The entity, instance, unlock and malformed payloads are synthetic."
   },
   "evidence": "synthetic-reference",
+  "sent_history": {
+    "graph": 61095,
+    "state": 3,
+    "instance_start_ms": 1440,
+    "sent_frame": 100,
+    "last_eligible_frame": 225,
+    "first_expired_frame": 226
+  },
   "input": {
     "entity": "0xA0000101",
     "instance": 31,

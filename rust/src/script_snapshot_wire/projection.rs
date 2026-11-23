@@ -147,6 +147,7 @@ impl<'a> SnapshotEncoder<'a> {
                 id,
                 ProjectedInstance {
                     graph: instance.graph,
+                    start_ms: instance.started_at_ms(),
                     parent: instance.parent,
                     variables,
                     states,
@@ -471,6 +472,7 @@ impl<'a> SnapshotEncoder<'a> {
                 id,
                 ProjectedInstance {
                     graph: instance.graph,
+                    start_ms: instance.started_at_ms(),
                     parent,
                     variables,
                     states,

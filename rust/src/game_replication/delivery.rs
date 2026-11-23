@@ -1822,6 +1822,11 @@ impl WorldDelivery {
                     remaining -= 1;
                 }
                 InputWork::WheelUse { body, report } => {
+                    let sent_instance_start = self
+                        .body_script
+                        .as_ref()
+                        .filter(|script| script.id == body)
+                        .and_then(|script| script.sent_spray_origin(report));
                     if self.active_body_id() == Some(body) && self.owner_body_ready(body) {
                         if let Some(runtime) = scene
                             .simulation_mut()
@@ -1829,7 +1834,7 @@ impl WorldDelivery {
                             .filter(|state| state.owner == self.owner && state.alive())
                             .and_then(|state| state.runtime.as_mut())
                         {
-                            let _ = runtime.queue_wheel_use(report);
+                            let _ = runtime.queue_wheel_use(report, sent_instance_start);
                         }
                     }
                     remaining -= 1;

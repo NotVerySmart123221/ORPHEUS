@@ -133,7 +133,11 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
     ) -> Result<usize, InitFault> {
         Ok(0)
     }
-    fn queue_wheel_use(&mut self, _report: ClientWheelUse) -> Result<usize, InitFault> {
+    fn queue_wheel_use(
+        &mut self,
+        _report: ClientWheelUse,
+        _sent_instance_start: Option<u64>,
+    ) -> Result<usize, InitFault> {
         Ok(0)
     }
     fn wheel_actions_available(&self) -> bool {

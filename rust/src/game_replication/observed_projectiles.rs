@@ -410,6 +410,7 @@ mod tests {
                 input.instance,
                 ProjectedInstance {
                     graph: input.graph,
+                    start_ms,
                     parent: None,
                     variables: Default::default(),
                     states: BTreeMap::from([(

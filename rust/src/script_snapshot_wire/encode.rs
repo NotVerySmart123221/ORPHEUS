@@ -218,6 +218,7 @@ impl<'a> SnapshotEncoder<'a> {
         let graph = self.graph(1, 0x0258)?;
         let mut instance = ProjectedInstance {
             graph: graph.index,
+            start_ms: 0,
             parent: None,
             variables: ProjectedVariables::default(),
             states: BTreeMap::new(),

@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Admit delayed spray use reports for up to two seconds of body simulation after a matching owner frame was transmitted. Keep the bounded send history with the body generation, and match the script instance start and unlock before dispatching to the authored listener. Passed 515 server and 303 StateScript library tests, the prepared 104319 wheel replay, and Clippy.
+
 - Preserve an attached spray's entity, local point and normal, and optional anchor key in the owner and observer payloads. Reference fixtures cover root and keyed attachments and preserve static placement bytes. Live map ray queries still return static hits. Passed 514 server and 303 StateScript library tests, the prepared 104319 wheel replay, and Clippy.
 
 - Project sprays from the confirmed command view, preserving the first command frame when the reliable wheel message is retried. Use bounded body pose history for eye position and aim, falling back to the current view when the pose is unavailable. Reuses the behavior contract introduced by Aetheria-ona on Python. Passed 514 server and 303 StateScript library tests, the prepared 104319 wheel replay, and Clippy.

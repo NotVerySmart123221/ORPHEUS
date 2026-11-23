@@ -148,7 +148,11 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         Ok(queued)
     }
 
-    fn queue_wheel_use(&mut self, report: ClientWheelUse) -> Result<usize, InitFault> {
+    fn queue_wheel_use(
+        &mut self,
+        report: ClientWheelUse,
+        sent_instance_start: Option<u64>,
+    ) -> Result<usize, InitFault> {
         use crate::script_init::StateKind;
         if report.entity != self.world.entity {
             return Ok(0);
@@ -161,9 +165,9 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
             return Ok(0);
         };
         let states = || instance.states.values().filter(|state| state.active);
-        if !states().any(|state| matches!(state.kind, StateKind::SprayPlacement(Some((unlock, _))) if unlock == report.unlock))
-            || !states().any(|state| matches!(state.kind, StateKind::ClientPulse { .. }))
-        {
+        let current = states().any(|state| matches!(state.kind, StateKind::SprayPlacement(Some((unlock, _))) if unlock == report.unlock))
+            && states().any(|state| matches!(state.kind, StateKind::ClientPulse { .. }));
+        if !current && sent_instance_start != Some(instance.started_at_ms()) {
             return Ok(0);
         }
         self.component

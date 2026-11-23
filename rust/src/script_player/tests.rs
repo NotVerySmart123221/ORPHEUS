@@ -3794,6 +3794,7 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                 "{:?}",
                 snapshot.diagnostics
             );
+            let mut sent_spray = None;
             for previous in before {
                 let mut stream = BodyStream::new(snapshot.entity);
                 stream.create_arrived();
@@ -3801,7 +3802,9 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                 assert!(stream.arrived(base.last).advanced);
                 let next = encoder.project_next(&snapshot, &previous).unwrap();
                 let kind = match previous.view() {
-                    View::Owner => DeltaKind::InitialOwner(snapshot.now_ms.try_into().unwrap()),
+                    View::Owner => {
+                        DeltaKind::InitialOwner((snapshot.now_ms / FRAME_MS).try_into().unwrap())
+                    }
                     View::Observer => DeltaKind::Observer { resend: false },
                 };
                 let change = encoder
@@ -3813,6 +3816,9 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                         .touched()
                         .contains(&ChangeKey::State(spray_instance, spray_slot))
                 );
+                if let Some(sent) = stream.sent(change.last) {
+                    sent_spray = sent.snapshot.active_spray(spray_instance, spray_slot);
+                }
                 assert!(stream.arrived(change.last).advanced);
             }
             // Supply a synthetic anchored hit to the real codec and
@@ -3871,9 +3877,9 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                     ..report
                 },
             ] {
-                assert_eq!(runtime.queue_wheel_use(wrong).unwrap(), 0);
+                assert_eq!(runtime.queue_wheel_use(wrong, None).unwrap(), 0);
             }
-            assert_eq!(runtime.queue_wheel_use(report).unwrap(), 1);
+            assert_eq!(runtime.queue_wheel_use(report, None).unwrap(), 1);
             runtime.world.movement.yaw = 32768;
             assert_eq!(
                 runtime.queue_wheel_selection(request(spray), None).unwrap(),
@@ -3934,7 +3940,28 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                     .all(|state| !state.active
                         || !matches!(state.kind, StateKind::SprayPlacement(_)))
             );
-            assert_eq!(runtime.queue_wheel_use(report).unwrap(), 0);
+            let start =
+                runtime.component.snapshot().unwrap().instances[&spray_instance].started_at_ms();
+            assert_eq!(runtime.queue_wheel_use(report, None).unwrap(), 0);
+            assert_eq!(runtime.queue_wheel_use(report, Some(start + 1)).unwrap(), 0);
+            assert_eq!(sent_spray, Some((start, report.unlock)));
+            runtime
+                .component
+                .set_instance_variable(spray_instance, 8022, Value::Asset(0), &mut runtime.world)
+                .unwrap();
+            assert_eq!(
+                runtime
+                    .queue_wheel_use(report, sent_spray.map(|(start, _)| start))
+                    .unwrap(),
+                1
+            );
+            runtime.component.run_now(&mut runtime.world).unwrap();
+            assert_eq!(
+                runtime.component.snapshot().unwrap().instances[&spray_instance]
+                    .variables
+                    .get(&8022),
+                Some(&Value::Asset(report.unlock))
+            );
             if let Some(effect) = voice_effect {
                 let selection_frame = next_selection + 160;
                 for frame in next_selection + 2..=selection_frame {

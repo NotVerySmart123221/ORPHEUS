@@ -22,10 +22,27 @@ pub(super) struct BodyScript {
     pub(super) stream: BodyStream<ProjectedSnapshot>,
     pub(super) frame: u32,
     pub(super) unsent_delta: Option<(u32, DeltaKind)>,
+    sent_sprays: VecDeque<SentSpray>,
     pub(super) corrections: Option<CorrectionHistory>,
     continuous_corrections: bool,
     processed_at_spawn: Option<u32>,
     pub(super) projectiles: Option<OwnerProjectiles>,
+}
+
+#[derive(Clone, Copy)]
+struct SentSpray {
+    instance: u16,
+    start_ms: u64,
+    unlock: u64,
+    frame: u32,
+}
+
+impl SentSpray {
+    fn within_report_window(&self, now: u32) -> bool {
+        const WINDOW_MS: u64 = 2_000;
+        now.checked_sub(self.frame)
+            .is_some_and(|frames| u64::from(frames) * crate::script_runtime::FRAME_MS <= WINDOW_MS)
+    }
 }
 
 fn startup_snapshot(runtime: &dyn OwnerBodyRuntime, entity: u32) -> io::Result<&Snapshot> {
@@ -87,6 +104,7 @@ impl BodyScript {
             stream: BodyStream::new(body.id.entity),
             frame,
             unsent_delta: None,
+            sent_sprays: VecDeque::new(),
             corrections,
             continuous_corrections,
             processed_at_spawn,
@@ -346,8 +364,39 @@ impl BodyScript {
         Ok(Some((record, replaced)))
     }
 
+    pub(super) fn sent_spray_origin(&self, report: ClientWheelUse) -> Option<u64> {
+        if report.entity != self.id.entity {
+            return None;
+        }
+        self.sent_sprays.iter().rev().find_map(|sent| {
+            (sent.instance == report.instance
+                && sent.unlock == report.unlock
+                && sent.within_report_window(self.frame))
+            .then_some(sent.start_ms)
+        })
+    }
+
     pub(super) fn sent(&mut self, last: u32) {
         if let Some(report) = self.stream.sent(last) {
+            const MAX_SENT_SPRAYS: usize = 128;
+            self.sent_sprays
+                .retain(|placement| placement.within_report_window(self.frame));
+            for key in report.changes {
+                let ChangeKey::State(instance, raw) = *key else {
+                    continue;
+                };
+                if let Some((start_ms, unlock)) = report.snapshot.active_spray(instance, raw) {
+                    if self.sent_sprays.len() == MAX_SENT_SPRAYS {
+                        self.sent_sprays.pop_front();
+                    }
+                    self.sent_sprays.push_back(SentSpray {
+                        instance,
+                        start_ms,
+                        unlock,
+                        frame: report.command_frame,
+                    });
+                }
+            }
             #[cfg(feature = "inspector")]
             {
                 let detailed = crate::owner_trace::enabled();

@@ -32,6 +32,107 @@ struct Expected {
 }
 
 #[test]
+fn delayed_spray_reports_require_a_recent_owner_transmission() {
+    use crate::script_snapshot_wire::{ProjectedInstance, ProjectedState};
+    use serde_json::Value as Json;
+    use std::collections::BTreeSet;
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/wheel-spray-use-report-v1.json"
+    ))
+    .unwrap();
+    let history = &fixture["sent_history"];
+    let input = &fixture["input"];
+    let guid = |value: &Json| {
+        u64::from_str_radix(value.as_str().unwrap().trim_start_matches("0x"), 16).unwrap()
+    };
+    let report = ClientWheelUse {
+        entity: guid(&input["entity"]) as u32,
+        instance: input["instance"].as_u64().unwrap() as u16,
+        unlock: guid(&input["unlock"]),
+    };
+    let raw = history["state"].as_u64().unwrap() as u16;
+    let start_ms = history["instance_start_ms"].as_u64().unwrap();
+    let sent_frame = history["sent_frame"].as_u64().unwrap() as u32;
+    let id = BodyId {
+        entity: report.entity,
+        generation: 1,
+    };
+    let runtime = synthetic_owner_with_vitals(id.entity, sent_frame, Arc::default(), None);
+    let mut script = BodyScript::new(body(id), sent_frame, None, &runtime).unwrap();
+    let empty = ProjectedSnapshot {
+        entity: id.entity,
+        view: View::Owner,
+        entity_exclusions: BTreeSet::new(),
+        variables: Default::default(),
+        instances: BTreeMap::new(),
+        callout: 0,
+        callouts: Vec::new(),
+        emit_events: true,
+    };
+    let bits = BitWriter::new();
+    script.stream.create_arrived();
+    let baseline = script.stream.full(&bits, empty.clone()).unwrap();
+    script.sent(baseline.last);
+    assert!(script.stream.arrived(baseline.last).advanced);
+
+    let mut active = empty;
+    active.instances.insert(
+        report.instance,
+        ProjectedInstance {
+            graph: history["graph"].as_u64().unwrap() as u32,
+            start_ms,
+            parent: None,
+            variables: Default::default(),
+            states: BTreeMap::from([(
+                raw,
+                ProjectedState {
+                    active: true,
+                    payload: BTreeMap::from([("unlock".into(), ScriptValue::Asset(report.unlock))]),
+                    link: None,
+                    volley: None,
+                },
+            )]),
+            events: Vec::new(),
+        },
+    );
+    let chunk = script
+        .stream
+        .delta(
+            &bits,
+            active,
+            BTreeSet::from([ChangeKey::State(report.instance, raw)]),
+            DeltaKind::InitialOwner(sent_frame),
+        )
+        .unwrap();
+    assert_eq!(script.sent_spray_origin(report), None);
+    script.sent(chunk.last);
+    assert!(script.stream.arrived(chunk.last).advanced);
+    assert_eq!(script.sent_spray_origin(report), Some(start_ms));
+    for wrong in [
+        ClientWheelUse {
+            unlock: report.unlock + 1,
+            ..report
+        },
+        ClientWheelUse {
+            entity: report.entity + 1,
+            ..report
+        },
+        ClientWheelUse {
+            instance: report.instance + 1,
+            ..report
+        },
+    ] {
+        assert_eq!(script.sent_spray_origin(wrong), None);
+    }
+
+    script.frame = history["last_eligible_frame"].as_u64().unwrap() as u32;
+    assert_eq!(script.sent_spray_origin(report), Some(start_ms));
+    script.frame = history["first_expired_frame"].as_u64().unwrap() as u32;
+    assert_eq!(script.sent_spray_origin(report), None);
+}
+
+#[test]
 fn wheel_input_follows_reliable_order_and_current_body_generation() {
     let fixture: Fixture = serde_json::from_str(include_str!(
         "../../../../fixtures/behavior/wheel-selection-ingress-v1.json"

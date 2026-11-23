@@ -189,6 +189,15 @@ impl ProjectedSnapshot {
         }
     }
 
+    pub(crate) fn active_spray(&self, instance: u16, state: u16) -> Option<(u64, u64)> {
+        let owner = self.instances.get(&instance)?;
+        let state = owner.states.get(&state)?;
+        match state.payload.get("unlock") {
+            Some(Value::Asset(unlock)) if state.active => Some((owner.start_ms, *unlock)),
+            _ => None,
+        }
+    }
+
     /// The activation counter and absolute start in milliseconds from this frame.
     pub fn volley_identity(&self, instance: u16, state: u16) -> Option<(u16, u64)> {
         self.instances
@@ -368,6 +377,7 @@ pub(crate) struct FrozenVolley {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct ProjectedInstance {
     pub(super) graph: u32,
+    pub(super) start_ms: u64,
     pub(super) parent: Option<(u16, u16)>,
     pub(super) variables: ProjectedVariables,
     pub(super) states: BTreeMap<u16, ProjectedState>,

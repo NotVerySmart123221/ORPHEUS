@@ -365,6 +365,10 @@ pub struct Instance {
 }
 
 impl Instance {
+    pub fn started_at_ms(&self) -> u64 {
+        self.start_ms
+    }
+
     pub fn is_server_only(&self) -> bool {
         self.scope.is_server_only()
     }
