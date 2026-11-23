@@ -1153,6 +1153,15 @@ and flags. Compare the client response when an NPC hits the player with the
 response when the player hits the NPC. Verify directional indicators and
 audible cues independently.
 
+Current hit feedback is scoped to settled weapon impacts with a hit
+classification. A generic scripted health change has no hit classification,
+so it can still send victim feedback on a positive nonlethal loss without
+queuing a shooter hit effect. The victim path can queue once per eligible
+health settlement. Player hitscan currently produces one ray per authored
+shot, while the NPC weapon path resolves each authored pellet independently.
+Player shotgun bursts and original-client feedback cadence for pellet impacts
+and recurring damage remain acceptance gaps.
+
 Weapon notifications carry the target's captured filter flags, target
 tags, and script variables. A room-settled health change from a distinct
 sampled source can carry the same facts after applying the signed pool
