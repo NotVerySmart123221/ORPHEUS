@@ -896,6 +896,15 @@ impl WorldDelivery {
             send,
         )?;
         let indexes = Self::sent_indices(&queued, &sent.records);
+        for &index in &indexes {
+            if let Delivery::ObservedProjectile {
+                id,
+                step: super::observed_projectiles::ProjectileDelivery::Launch,
+            } = self.queued[index].delivery
+            {
+                self.observed_projectiles.launch_sent(id, tick);
+            }
+        }
         #[cfg(feature = "inspector")]
         if crate::owner_trace::playtest_enabled() {
             for &index in &indexes {

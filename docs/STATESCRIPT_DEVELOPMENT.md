@@ -109,8 +109,10 @@ visible projectile entities after the source baseline is acknowledged,
 then sends the channel 2 launch after both those creates and the
 matching volley projection are acknowledged. Interrupted delivery
 retries the same record and entity IDs. The room's flight completion
-drives retirement, allowing the acknowledged launch time to elapse on
-the observer. The source, flight definition, and shot timing come from
+drives retirement. Once the launch is acknowledged, the retirement
+deadline uses the send frame of that launch plus the server flight
+duration. It does not restart at the acknowledgement frame. The source,
+flight definition, and shot timing come from
 the authored volley and shared simulation.
 
 A single-shot activation can start and end within one VM tick. The

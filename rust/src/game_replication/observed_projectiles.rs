@@ -32,8 +32,8 @@ pub(super) enum ProjectileDelivery {
 enum Phase {
     AwaitingSource,
     Creating,
-    Launching,
-    Visible { since: Option<u32> },
+    Launching { sent_at: Option<u32> },
+    Visible { sent_at: u32 },
     Retiring,
 }
 
@@ -57,7 +57,7 @@ impl ProjectileView {
             | (Phase::Retiring, ProjectileDelivery::Destroy(entity)) => {
                 self.pending.contains(&entity)
             }
-            (Phase::Launching, ProjectileDelivery::Launch) => true,
+            (Phase::Launching { .. }, ProjectileDelivery::Launch) => true,
             _ => false,
         }
     }
@@ -114,7 +114,22 @@ impl ObservedProjectiles {
             ProjectileDelivery::Create(entity) | ProjectileDelivery::Destroy(entity) => {
                 view.pending.remove(&entity);
             }
-            ProjectileDelivery::Launch => view.phase = Phase::Visible { since: None },
+            ProjectileDelivery::Launch => {
+                if let Phase::Launching {
+                    sent_at: Some(sent_at),
+                } = view.phase
+                {
+                    view.phase = Phase::Visible { sent_at };
+                }
+            }
+        }
+    }
+
+    pub(super) fn launch_sent(&mut self, id: u64, tick: u32) {
+        if let Some(view) = self.views.get_mut(&id) {
+            if let Phase::Launching { sent_at } = &mut view.phase {
+                *sent_at = Some(tick);
+            }
         }
     }
 
@@ -171,7 +186,7 @@ impl ObservedProjectiles {
                 && !view.cancelled
                 && matches!(
                     view.phase,
-                    Phase::AwaitingSource | Phase::Creating | Phase::Launching
+                    Phase::AwaitingSource | Phase::Creating | Phase::Launching { .. }
                 )
         }) {
             let volley = &view.shot.volley;
@@ -253,19 +268,19 @@ impl WorldDelivery {
                                 "remote projectile launch exceeds the datagram budget",
                             )?;
                             queue(update, ProjectileDelivery::Launch);
-                            view.phase = Phase::Launching;
+                            view.phase = Phase::Launching { sent_at: None };
                         }
                         false
                     }
                 }
-                Phase::Launching => !live || expired,
-                Phase::Visible { since } => {
-                    let since = since.unwrap_or(tick);
-                    view.phase = Phase::Visible { since: Some(since) };
+                Phase::Launching { .. } => !live || expired,
+                Phase::Visible { sent_at } => {
+                    // The client can start tracing the projectile on receipt,
+                    // before this room processes the packet acknowledgement.
                     !live
                         || view.finished.is_some_and(|finished| {
                             let elapsed = finished.saturating_sub(view.shot.launched).max(1);
-                            tick.saturating_sub(since) >= elapsed
+                            tick.saturating_sub(sent_at) >= elapsed
                         })
                 }
                 Phase::Retiring => {
@@ -397,6 +412,24 @@ mod tests {
         );
     }
 
+    fn send_launch(world: &mut WorldDelivery, tick: u32, sequence: u32) -> Arc<Record> {
+        let ready = world.ready();
+        assert_eq!(ready.len(), 1);
+        let record = ready[0].tracked();
+        let sent = world
+            .send_frame(
+                tick,
+                Vec::new(),
+                false,
+                None,
+                &mut super::super::GameEgress::default(),
+                |_| Ok::<_, ()>(sequence),
+            )
+            .unwrap();
+        assert_eq!(sent.records, [super::super::RecordSource::Queued(0)]);
+        record
+    }
+
     #[test]
     fn remote_projectiles_wait_for_creates_and_the_exact_volley_then_retry_launch() {
         #[derive(Deserialize)]
@@ -519,17 +552,17 @@ mod tests {
                 .advanced
         );
         world.advance_observed_projectiles(launch + 5).unwrap();
-        let launched = outgoing(&mut world);
-        assert_eq!(launched.len(), 1);
-        assert_eq!(launched[0].update.entity, input.source);
-        let bits = launched[0].update.ch2.as_ref().unwrap();
+        let launched = send_launch(&mut world, launch + 5, 1);
+        assert_eq!(launched.update.entity, input.source);
+        let bits = launched.update.ch2.as_ref().unwrap();
         let mut reader = BitReader::new(bits.as_bytes());
         assert!(reader.bit().unwrap());
         assert!(reader.bit().unwrap());
         assert_eq!(reader.var_b().unwrap(), launch);
-        acknowledge(&mut world, launched.clone(), false);
-        let replay = outgoing(&mut world);
-        assert_eq!(replay[0].update, launched[0].update);
+        acknowledge(&mut world, vec![Arc::clone(&launched)], false);
+        let retry_tick = launch + 6;
+        let replay = send_launch(&mut world, retry_tick, 2);
+        assert_eq!(replay.update, launched.update);
 
         world.observe_projectiles(&[ObservedProjectileEvent::Completed {
             id,
@@ -537,19 +570,16 @@ mod tests {
         }]);
         world.advance_observed_projectiles(finished).unwrap();
         assert!(outgoing(&mut world).is_empty());
-        acknowledge(&mut world, replay, true);
+        acknowledge(&mut world, vec![replay], true);
         let mut settled = newer.clone();
         world.observed_projectiles.retain_volleys(&mut settled);
         assert_eq!(settled, newer);
         let arrival = finished + 1;
+        let retire = retry_tick + input.flight_ticks;
         world.advance_observed_projectiles(arrival).unwrap();
-        world
-            .advance_observed_projectiles(arrival + input.flight_ticks - 1)
-            .unwrap();
+        world.advance_observed_projectiles(retire - 1).unwrap();
         assert!(outgoing(&mut world).is_empty());
-        world
-            .advance_observed_projectiles(arrival + input.flight_ticks)
-            .unwrap();
+        world.advance_observed_projectiles(retire).unwrap();
         let destroys = outgoing(&mut world);
         assert_eq!(
             destroys
@@ -564,9 +594,7 @@ mod tests {
                 .all(|record| matches!(record.update.operation, Some(Operation::Destroy)))
         );
         acknowledge(&mut world, destroys, true);
-        world
-            .advance_observed_projectiles(arrival + input.flight_ticks + 1)
-            .unwrap();
+        world.advance_observed_projectiles(retire + 1).unwrap();
         assert!(world.observed_projectiles.views.is_empty());
         assert!(world.observed_projectiles.reserved.is_empty());
     }
