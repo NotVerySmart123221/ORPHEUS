@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Add an Inspector playtest path from settled weapon damage to the authored hit effects. Select the recipient by the native message parameter contract and supply the variants explicitly through ORPHEUS_PLAYTEST_HIT_VARIANT. Passed 520 Inspector library tests, the prepared shared-graph probe, and the prepared UDP nonlethal hit and nameplate regression with the playtest enabled. The retail source of the variant and original-client audio acceptance remain pending.
+
 - Capture networked StateScript effects with literal effect assets and an authored owner selector through the existing short-action stream. Capture the action's declared variables at execution for stable retries. Passed 520 Inspector library tests, including owner and observer loss and retry checks. Prepared 104319 tests exercise the six hit-effect variants and verify that an absent hit variant parameter selects the zero branch. They also verify which elimination effect the authored graph chooses for final-blow and nonfinal credit in two modes. Original-client playback and combat message integration remain pending.
 
 ### 2026-11-22

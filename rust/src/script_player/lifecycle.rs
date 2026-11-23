@@ -189,6 +189,16 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         self.component.queue_host_event_with_context(event, context)
     }
 
+    fn receive_authored_hit_feedback(
+        &mut self,
+        event: HostEvent,
+        context: &HostHealthContext,
+        variant: f32,
+    ) -> Result<usize, InitFault> {
+        self.component
+            .queue_authored_hit_feedback(event, context, variant)
+    }
+
     fn heal(&mut self, amount: f64) -> f64 {
         self.world.vitals.heal(amount)
     }

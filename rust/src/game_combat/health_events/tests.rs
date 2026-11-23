@@ -782,6 +782,7 @@ fn lethal_health_change_notifies_source_with_settled_status_after_target_retirem
     struct HealthListener {
         runtime: Box<dyn OwnerBodyRuntime>,
         notification: Arc<Mutex<Option<Notification>>>,
+        hit_feedback: Arc<Mutex<Option<(HostEvent, f32)>>>,
     }
 
     impl OwnerBodyRuntime for HealthListener {
@@ -795,6 +796,23 @@ fn lethal_health_change_notifies_source_with_settled_status_after_target_retirem
                     .lock()
                     .unwrap()
                     .replace((event, context.target_facts))
+                    .is_none()
+            );
+            Ok(1)
+        }
+
+        fn receive_authored_hit_feedback(
+            &mut self,
+            event: HostEvent,
+            context: &HostHealthContext,
+            variant: f32,
+        ) -> Result<usize, InitFault> {
+            assert!(context.critical_hit.is_some());
+            assert!(
+                self.hit_feedback
+                    .lock()
+                    .unwrap()
+                    .replace((event, variant))
                     .is_none()
             );
             Ok(1)
@@ -828,22 +846,24 @@ fn lethal_health_change_notifies_source_with_settled_status_after_target_retirem
     let Contract { input, expected } = contract();
     let ground = Arc::new(fixture_ground());
     let movers = MoverCatalog::default();
-    for (room_mode, expected_status, weapon_impact) in [
-        (Some(false), Some((Some(1), false)), true),
-        (Some(true), Some((None, false)), true),
-        (None, None, true),
-        (Some(false), Some((Some(1), false)), false),
+    for (room_mode, expected_status, weapon_impact, hit_variant) in [
+        (Some(false), Some((Some(1), false)), true, Some(1.0)),
+        (Some(true), Some((None, false)), true, Some(2.0)),
+        (None, None, true, None),
+        (Some(false), Some((Some(1), false)), false, Some(1.0)),
     ] {
         let bots = fixture_bots();
         let target = bots[0].entity;
         let mut room = RoomSimulation::new(bots).unwrap();
         let source = spawn_player(&mut room, 1);
         let notification = Arc::new(Mutex::new(None));
+        let hit_feedback = Arc::new(Mutex::new(None));
         let state = room.player_body_mut(source).unwrap();
         let runtime = state.runtime.take().unwrap();
         state.runtime = Some(Box::new(HealthListener {
             runtime,
             notification: Arc::clone(&notification),
+            hit_feedback: Arc::clone(&hit_feedback),
         }));
         if let Some(free_for_all) = room_mode {
             room.enable_spatial_queries(
@@ -853,7 +873,11 @@ fn lethal_health_change_notifies_source_with_settled_status_after_target_retirem
             );
         }
         room.activate_combat();
-        room.enable_host_health_events();
+        if let Some(variant) = hit_variant {
+            room.enable_authored_hit_feedback(variant);
+        } else {
+            room.enable_host_health_events();
+        }
         room.prepare_spatial_frame(FIXTURE_CONTEXT.tick).unwrap();
 
         if weapon_impact {
@@ -916,6 +940,12 @@ fn lethal_health_change_notifies_source_with_settled_status_after_target_retirem
                 killed: true,
                 hit_tags: weapon_impact.then_some(HitTags::EMPTY),
             }
+        );
+        assert_eq!(
+            hit_feedback.lock().unwrap().take(),
+            hit_variant
+                .filter(|_| weapon_impact)
+                .map(|variant| (event, variant)),
         );
         let facts = facts.unwrap();
         assert_eq!(facts.target, target);

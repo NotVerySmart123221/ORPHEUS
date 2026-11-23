@@ -3345,7 +3345,9 @@ fn prepared_soldier_without_target_tags_reports_unavailable_filter() {
 #[test]
 #[ignore = "requires a tagged separately prepared 104319 statescript catalog"]
 fn prepared_shared_combat_graph_projects_hit_and_elimination_effects() {
-    use crate::script_init::{HealthTargetFacts, RoomEntityStatus};
+    use crate::script_init::{
+        HealthTargetFacts, HitTags, HostEvent, HostHealthContext, RoomEntityStatus,
+    };
 
     let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
     let graphs = Arc::new(GraphStore::load(runtime.join("data/game_graphs_174.json.gz")).unwrap());
@@ -3405,26 +3407,40 @@ fn prepared_shared_combat_graph_projects_hit_and_elimination_effects() {
         (false, None, 0x2894),
     ] {
         let before = component.snapshot().unwrap().frame_actions.len();
-        let mut parameters = Variables::from([
-            (0x13, Value::Float(9.0)),
-            (0x15, Value::Entity(target)),
-            (0x3d, Value::Array(Vec::new())),
-            (0x95, Value::Bool(critical)),
-        ]);
-        if let Some(scalar) = scalar {
-            parameters.insert(0x724, Value::Float(scalar));
-        }
-        assert_eq!(
-            component
-                .queue_settled_damage_message(
-                    instance,
-                    0x0240_0000_0000_0012,
-                    parameters,
-                    Arc::clone(&target_facts),
-                )
-                .unwrap(),
-            1,
-        );
+        let queued = if let Some(scalar) = scalar {
+            let event = HostEvent::HealthApplied {
+                source: Some(world.entity),
+                target,
+                delta: -9.0,
+                killed: false,
+                hit_tags: Some(HitTags::EMPTY),
+            };
+            let mut context = HostHealthContext {
+                target_facts: Some(Arc::clone(&target_facts)),
+                ..HostHealthContext::default()
+            };
+            assert_eq!(
+                component
+                    .queue_authored_hit_feedback(event, &context, scalar)
+                    .unwrap(),
+                0,
+            );
+            context.critical_hit = Some(critical);
+            component.queue_authored_hit_feedback(event, &context, scalar)
+        } else {
+            component.queue_settled_damage_message(
+                instance,
+                0x0240_0000_0000_0012,
+                Variables::from([
+                    (0x13, Value::Float(9.0)),
+                    (0x15, Value::Entity(target)),
+                    (0x3d, Value::Array(Vec::new())),
+                    (0x95, Value::Bool(critical)),
+                ]),
+                Arc::clone(&target_facts),
+            )
+        };
+        assert_eq!(queued.unwrap(), 1);
         component.run_now(&mut world).unwrap();
         assert!(expect_effect(
             component.snapshot().unwrap(),

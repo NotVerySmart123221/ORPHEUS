@@ -602,6 +602,93 @@ impl Component {
         )
     }
 
+    /// Route a confirmed impact to the active native hit-presentation entry.
+    pub fn queue_authored_hit_feedback(
+        &mut self,
+        event: HostEvent,
+        context: &HostHealthContext,
+        variant: f32,
+    ) -> Result<usize, InitFault> {
+        use crate::script_graph::{EntryTopic, message_parameter_id};
+
+        const HIT_MESSAGE: u64 = 0x0240_0000_0000_0012;
+        const HIT_PARAMETERS: [u32; 5] = [0x13, 0x15, 0x3d, 0x95, 0x724];
+
+        let HostEvent::HealthApplied {
+            source,
+            target,
+            delta,
+            hit_tags,
+            ..
+        } = event;
+        let Some((tags, critical, target_facts)) = hit_tags
+            .zip(context.critical_hit)
+            .zip(context.target_facts.as_ref())
+            .map(|((tags, critical), facts)| (tags, critical, facts))
+        else {
+            return Ok(0);
+        };
+        let owner = self.machine.snapshot.entity;
+        let damage = -(delta as f32);
+        if source != Some(owner)
+            || target == owner
+            || target_facts.target != target
+            || !damage.is_finite()
+            || damage <= 0.0
+            || !variant.is_finite()
+            || variant < 0.0
+        {
+            return Ok(0);
+        }
+
+        let mut receivers = self
+            .machine
+            .snapshot
+            .instances
+            .iter()
+            .filter_map(|(&id, instance)| {
+                if instance.is_server_only() {
+                    return None;
+                }
+                let graph = self.graphs.graph(instance.graph)?;
+                let mut entries = graph.entry_handlers(EntryTopic::Message(HIT_MESSAGE));
+                let entry = entries.next()?;
+                let params = entry.field("m_params")?.as_array()?;
+                (entry.server_only
+                    && !entry.client_only
+                    && entries.next().is_none()
+                    && params.len() == HIT_PARAMETERS.len()
+                    && HIT_PARAMETERS.iter().all(|key| {
+                        params
+                            .iter()
+                            .any(|parameter| message_parameter_id(parameter) == *key)
+                    }))
+                .then_some(id)
+            });
+        let Some(instance) = receivers.next() else {
+            return Ok(0);
+        };
+        if receivers.next().is_some() {
+            return Ok(0);
+        }
+
+        self.queue_settled_damage_message(
+            instance,
+            HIT_MESSAGE,
+            Variables::from([
+                (0x13, Value::Float(f64::from(damage))),
+                (0x15, Value::Entity(target)),
+                (
+                    0x3d,
+                    Value::Array(tags.as_slice().iter().copied().map(Value::Asset).collect()),
+                ),
+                (0x95, Value::Bool(critical)),
+                (0x724, Value::Float(f64::from(variant))),
+            ]),
+            Arc::clone(target_facts),
+        )
+    }
+
     pub fn queue_frame_message(
         &mut self,
         frame: u32,

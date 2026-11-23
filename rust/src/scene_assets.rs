@@ -501,6 +501,13 @@ impl SceneAssets {
         {
             simulation.enable_received_damage_feedback();
         }
+        if let Some(variant) = std::env::var("ORPHEUS_PLAYTEST_HIT_VARIANT")
+            .ok()
+            .and_then(|value| value.parse::<f32>().ok())
+            .filter(|value| cfg!(feature = "inspector") && value.is_finite() && *value >= 0.0)
+        {
+            simulation.enable_authored_hit_feedback(variant);
+        }
         simulation.set_environment(self.environment.for_map(map.map_guid));
         if self.graphs.uses_host_health_events() {
             simulation.enable_host_health_events();

@@ -117,6 +117,7 @@ impl HealthApplied {
 #[derive(Default)]
 pub(super) struct RoomHealthEvents {
     enabled: bool,
+    authored_hit_variant: Option<f32>,
     pending: VecDeque<HealthApplied>,
 }
 
@@ -174,6 +175,11 @@ impl RoomHealthEvents {
 impl RoomSimulation {
     pub(crate) fn enable_host_health_events(&mut self) {
         self.health_events.enabled = true;
+    }
+
+    pub(crate) fn enable_authored_hit_feedback(&mut self, variant: f32) {
+        self.health_events.authored_hit_variant = Some(variant);
+        self.enable_host_health_events();
     }
 
     pub(super) fn record_health_applied(
@@ -302,6 +308,14 @@ impl RoomSimulation {
         if let Some(mut state) = self.world.get_mut::<PlayerBodyState>(entity) {
             if state.alive() {
                 if let Some(runtime) = &mut state.runtime {
+                    if let Some(variant) = self.health_events.authored_hit_variant.filter(|_| {
+                        context.critical_hit.is_some()
+                            && context
+                                .source_body
+                                .is_some_and(|source| source.generation == entity.to_bits())
+                    }) {
+                        let _ = runtime.receive_authored_hit_feedback(event, &context, variant);
+                    }
                     let _ = runtime.receive_host_event(event, context);
                 }
             }

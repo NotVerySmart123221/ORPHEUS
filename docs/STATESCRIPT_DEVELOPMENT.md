@@ -1127,8 +1127,16 @@ The 104319 hit-marker message updates the shooter's HUD. The damage
 feedback path uses the struck body's combat event for victim effects
 and audio. Keep speaker and recipient selection tied to the settled
 source or victim for each cue. A severe victim cue does not establish
-the shooter's native headshot sound. That sound still needs a verified
-104319 playback trigger.
+the shooter's native headshot sound.
+
+Set `ORPHEUS_PLAYTEST_HIT_VARIANT` to a finite, nonnegative number when
+running an Inspector build to exercise authored hit effects. The room
+routes confirmed source impacts to the active graph whose damage entry
+declares the five native presentation parameters. The graph receives the
+settled amount, target, hit tags, critical flag and the configured value
+of parameter 0724. Use 1 to exercise the ordinary and critical default
+variants. The retail source of 0724 and original-client playback and
+audience acceptance remain open.
 
 For a received-damage client comparison, set
 `ORPHEUS_PLAYTEST_RECEIVED_DAMAGE=1` on an Inspector server using the prepared
