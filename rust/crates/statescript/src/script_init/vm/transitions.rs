@@ -728,13 +728,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 );
             }
         }
-        if self.state(key).is_some_and(|state| state.active) {
+        if let Some(state) = self.state(key).filter(|state| state.active) {
             let graph = self.graph(key.instance);
-            if graph.index == 0x0c8c {
-                if let Some(node) = graph.state(usize::from(key.raw)) {
-                    if matches!(node.pos, 33 | 275) {
-                        self.try_complete(key, node, 0)?;
-                    }
+            if let Some(node) = graph.state(usize::from(key.raw)) {
+                if state.kind == StateKind::Anim
+                    || (graph.index == 0x0c8c && matches!(node.pos, 33 | 275))
+                {
+                    self.try_complete(key, node, 0)?;
                 }
             }
         }

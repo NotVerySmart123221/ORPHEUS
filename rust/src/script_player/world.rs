@@ -337,6 +337,10 @@ impl World for BodyWorld {
         self.is_player_site(site).then_some(false)
     }
 
+    fn script_category_service_available(&self, site: Site) -> Option<bool> {
+        self.is_player_site(site).then_some(false)
+    }
+
     fn outline_context_available(&self, site: Site) -> Option<bool> {
         // The headless body has no local outline presentation context.
         self.is_player_site(site).then_some(false)

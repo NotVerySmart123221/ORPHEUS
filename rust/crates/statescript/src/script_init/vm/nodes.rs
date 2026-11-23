@@ -610,6 +610,25 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
+            "STU_100EF8C2"
+                if registration.shape(
+                    node.literal_game_message_id().is_some()
+                        && is_self_target(node, "m_targets")
+                        && field(&node.fields, "m_condition").is_null()
+                        && field(&node.fields, "m_params").is_null()
+                        && field(&node.fields, "m_8B34E9C3").is_null(),
+                ) =>
+            {
+                if !self.capture_frame_action(id, node) {
+                    self.report(
+                        self.site(id, node),
+                        Issue::UnsupportedField("client message projection"),
+                    );
+                    return Ok(false);
+                }
+                self.follow(id, node, "m_outPlug", caller, depth)?;
+                Ok(true)
+            }
             // These placements resolve to the 104319 base action.
             "STU_0FC6DAEA"
                 if registration
@@ -854,6 +873,24 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             {
                 self.post(id, Event::ExitInstance)?;
                 self.follow(id, node, "m_outPlug", None, depth)?;
+                Ok(true)
+            }
+            "STU_3D419B63"
+                if registration.shape(
+                    is_self_target(node, "m_targets")
+                        && node
+                            .field("m_category")
+                            .and_then(asset_guid)
+                            .is_some_and(|category| category >> 48 == 0x01e0)
+                        && self
+                            .world
+                            .script_category_service_available(self.site(id, node))
+                            == Some(false),
+                ) =>
+            {
+                // The native category action exits before applying the category
+                // when its service is missing. The graph still owns its continuation.
+                self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }
             "STU_12F5D52D" => {

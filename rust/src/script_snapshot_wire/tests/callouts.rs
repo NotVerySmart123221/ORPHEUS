@@ -7,6 +7,17 @@ fn authored_callout_retries_with_its_own_values_in_both_body_streams() {
 }
 
 #[test]
+fn authored_self_client_message_uses_the_existing_reliable_action_stream() {
+    assert_authored_action_retry(
+        "STU_100EF8C2",
+        json!({
+            "m_gameMessage":{"$":"STUConfigVarGameMessage","m_gameMessage":"0x0240000000000001"},
+            "m_targets":{"$":"STU_B5A0CAF0"}
+        }),
+    );
+}
+
+#[test]
 fn authored_effect_retries_with_its_own_values_in_both_body_streams() {
     assert_authored_action_retry(
         "STUStatescriptActionEffect",

@@ -4184,7 +4184,7 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                 assert!(!snapshot.diagnostics.iter().any(|diagnostic| {
                     matches!(&diagnostic.issue, crate::script_init::Issue::UnsupportedAction(class) if class == "STU_BC5E4622")
                 }), "{:?}", snapshot.diagnostics);
-                for view in [View::Owner, View::Observer] {
+                let before_playback = [View::Owner, View::Observer].map(|view| {
                     let projected = encoder.project(snapshot, view).unwrap();
                     assert!(
                         projected
@@ -4193,11 +4193,76 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                             .contains(&36)
                     );
                     encoder.full(&projected).unwrap();
+                    projected
+                });
+                let playback_frame = emote_frame + 20;
+                for frame in emote_frame + 1..=playback_frame {
+                    runtime
+                        .component
+                        .advance_frame(frame, &mut runtime.world)
+                        .unwrap();
                 }
+                let playing = runtime.component.snapshot().unwrap();
+                assert!(
+                    playing.initialization_complete(),
+                    "{:?}",
+                    playing.diagnostics
+                );
+                let cue = playing
+                    .frame_actions
+                    .iter()
+                    .find(|action| {
+                        action.callout.instance == emote_instance && action.callout.position == 11
+                    })
+                    .expect("the authored client playback message");
+                for previous in before_playback {
+                    let mut stream = BodyStream::new(playing.entity);
+                    stream.create_arrived();
+                    let base = encoder.queue_full(&mut stream, &previous).unwrap();
+                    assert!(stream.arrived(base.last).advanced);
+                    let kind = match previous.view() {
+                        View::Owner => DeltaKind::InitialOwner(playback_frame),
+                        View::Observer => DeltaKind::Observer { resend: false },
+                    };
+                    let next = encoder.project_next(playing, &previous).unwrap();
+                    let delta = encoder
+                        .queue_delta(&mut stream, &next, kind, 16)
+                        .unwrap()
+                        .unwrap();
+                    assert!(stream.arrived(delta.last).advanced);
+                    assert_eq!(
+                        stream.base().unwrap().1.acknowledged_callout(),
+                        cue.callout.serial
+                    );
+                }
+                assert_eq!(
+                    runtime
+                        .component
+                        .queue_local_instance_message(
+                            emote_instance,
+                            crate::script_init::RoomMessage {
+                                id: 0x0240_0000_0000_083a,
+                                parameters: Variables::new(),
+                            }
+                        )
+                        .unwrap(),
+                    1
+                );
                 runtime
                     .component
-                    .debug_end_state(emote_instance, 2, &mut runtime.world)
+                    .advance_frame(playback_frame + 1, &mut runtime.world)
                     .unwrap();
+                let stopped = runtime.component.snapshot().unwrap();
+                assert!(
+                    stopped.initialization_complete(),
+                    "{:?}",
+                    stopped.diagnostics
+                );
+                assert!(
+                    !stopped.instances.contains_key(&emote_instance),
+                    "emote still running: {:?}",
+                    stopped.instances.get(&emote_instance)
+                );
                 assert_eq!(runtime.cinematic_aim(), None);
             }
         }
