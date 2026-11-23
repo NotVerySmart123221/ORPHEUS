@@ -1181,6 +1181,15 @@ pub trait World {
     }
 
     /// Whether this actor has a room-backed voice catalog.
+    fn queue_equipped_voice(
+        &mut self,
+        _site: Site,
+        _slot: usize,
+        _choose: &mut dyn FnMut(usize) -> usize,
+    ) -> bool {
+        false
+    }
+
     fn actor_voice_available(&self, _site: Site) -> bool {
         false
     }

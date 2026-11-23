@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Resolve equipped communication wheel voice slots from optional local voice effect metadata. Recognize the authored pulse by its client branch shape and reuse the skin-aware actor voice catalog and reliable room cue queue. An admitted room cue suppresses the matching client pulse. Passed 512 server, 300 StateScript and 10 runtime library tests, Clippy, and the prepared 104319 voice wheel replay with both optional catalogs.
+
 - Route typed spray use reports to the current body's matching authored instance. Verify the report against the active placement and feedback pulse. The prepared replay now exercises the native one-second cooldown without editing VM variables and verifies that a miss invalidates the previous report. Passed 512 server and 300 StateScript library tests, the prepared 104319 wheel replay, and Clippy. Delayed reports for replaced placements and voice-line use reports remain open.
 
 - Follow authored continuations for the three communication wheel classes that inherit the 104319 base Action. The prepared wheel replay now completes the solo callout and encodes and acknowledges the static spray placement in owner and observer deltas. Passed 511 server library tests and 300 StateScript library tests. Moving spray attachments and client cosmetic use reports remain open.

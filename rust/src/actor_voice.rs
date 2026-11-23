@@ -50,6 +50,8 @@ pub(crate) struct ActorVoiceCatalog {
     #[serde(default)]
     skins: BTreeMap<Guid, BTreeMap<Guid, Guid>>,
     sets: BTreeMap<Guid, VoiceSet>,
+    #[serde(default)]
+    equipped: BTreeMap<Guid, Guid>,
 }
 
 impl ActorVoiceCatalog {
@@ -73,7 +75,23 @@ impl ActorVoiceCatalog {
     }
 
     pub(crate) fn options(&self, hero: u64, skin: u64, criterion: u64) -> Option<VoiceOptions<'_>> {
-        let requested = self.criteria.get(&Guid(criterion))?;
+        self.options_for(hero, skin, self.criteria.get(&Guid(criterion))?)
+    }
+
+    pub(crate) fn equipped_options(
+        &self,
+        hero: u64,
+        skin: u64,
+        effect: u64,
+    ) -> Option<VoiceOptions<'_>> {
+        self.options_for(
+            hero,
+            skin,
+            std::slice::from_ref(self.equipped.get(&Guid(effect))?),
+        )
+    }
+
+    fn options_for(&self, hero: u64, skin: u64, requested: &[Guid]) -> Option<VoiceOptions<'_>> {
         let base = self.heroes.get(&Guid(hero))?;
         let selected = self
             .skins
@@ -118,6 +136,7 @@ mod tests {
             .unwrap()
             .push(json!(text("alternate_line")));
         data["sets"][&base] = json!({(stimulus.clone()): [text("stock_line")]});
+        data["equipped"] = json!({(text("equipped_effect")): stimulus});
         let catalog: ActorVoiceCatalog = serde_json::from_value(data).unwrap();
         let guid = |value| parse_guid(value).unwrap();
         assert_eq!(
@@ -138,6 +157,18 @@ mod tests {
             Some((guid(&stimulus), guid(text("stock_line"))))
         );
         assert!(catalog.options(1, guid(skin), guid(key)).is_none());
+        assert_eq!(
+            catalog
+                .equipped_options(guid(hero), guid(skin), guid(text("equipped_effect")))
+                .unwrap()
+                .choose(&mut |_| 1),
+            Some((guid(&stimulus), guid(text("alternate_line"))))
+        );
+        assert!(
+            catalog
+                .equipped_options(guid(hero), guid(skin), 1)
+                .is_none()
+        );
     }
 
     #[test]

@@ -116,8 +116,8 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         self.component.queue_room_message_from(sender, message)
     }
 
-    fn set_equipped_sprays(&mut self, sprays: [u64; 4]) {
-        self.world.wheel_sprays = sprays;
+    fn set_wheel_cosmetics(&mut self, cosmetics: crate::match_scene::WheelCosmetics) {
+        self.world.wheel_cosmetics = cosmetics;
     }
 
     fn wheel_actions_available(&self) -> bool {

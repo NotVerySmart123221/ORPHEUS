@@ -2115,14 +2115,13 @@ impl WorldDelivery {
             )
             .and_then(|mut runtime| {
                 if let Some(runtime) = &mut runtime {
-                    runtime.set_equipped_sprays(
+                    runtime.set_wheel_cosmetics(
                         viewer
                             .card
                             .wheel_cosmetics
                             .get(&hero.guid)
                             .copied()
-                            .unwrap_or_default()
-                            .sprays,
+                            .unwrap_or_default(),
                     );
                 }
                 let script = runtime

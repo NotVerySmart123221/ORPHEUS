@@ -125,7 +125,7 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
     ) -> Result<usize, InitFault> {
         Ok(0)
     }
-    fn set_equipped_sprays(&mut self, _sprays: [u64; 4]) {}
+    fn set_wheel_cosmetics(&mut self, _cosmetics: crate::match_scene::WheelCosmetics) {}
     fn queue_wheel_selection(&mut self, _action: ClientWheelAction) -> Result<usize, InitFault> {
         Ok(0)
     }

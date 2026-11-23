@@ -91,6 +91,8 @@ A valid point-ray view remains usable if its sweep view cannot be built.
 | `data/junkenstein/junkenstein-npcs.json` | Explicit NPC definitions required for Junkenstein enemy tests/runs |
 | `data/combat_hurt_volumes.json` | Optional local measurements of standing bot combat regions, packed and hashed when present |
 | `data/combat_voice_174.json` | Optional local multikill and actor hurt/death voice catalog, packed and hashed when present |
+| `data/player_voice_174.json` | Optional actor voice catalog. Its `equipped` table maps playback effects to voice stimuli. |
+| `data/voice_effects_174.json` | Optional mapping from equipped voice unlocks to playback effects, preserved by the packer. Generate locally with `tools/extract_voice_effects.py` on the Python reference branch. |
 
 To enable actor hurt and death voice cues, provide locally verified entries in
 `hurt.minor`, `hurt.severe`, `hurt.death`, or `hurt.bot_death` and a positive

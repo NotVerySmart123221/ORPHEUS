@@ -44,6 +44,7 @@ pub const BNET_DESCRIPTORS: &str = "bnet/descriptors.pb";
 pub const JUNKENSTEIN_MAP_WORLD: &str = "data/junkenstein/junkenstein-map-world.json";
 pub const JUNKENSTEIN_NPCS: &str = "data/junkenstein/junkenstein-npcs.json";
 pub const COMBAT_HURT_VOLUMES: &str = "data/combat_hurt_volumes.json";
+pub const WHEEL_VOICE_EFFECTS: &str = "data/voice_effects_174.json";
 pub const ACTOR_VOICE_CATALOG: &str = "data/player_voice_174.json";
 pub const COMBAT_VOICE_CATALOG: &str = "data/combat_voice_174.json";
 pub const MAP_ENVIRONMENT: &str = "data/map_environment_174.json";
@@ -268,6 +269,7 @@ fn inputs(
     for name in [
         COMBAT_HURT_VOLUMES,
         ACTOR_VOICE_CATALOG,
+        WHEEL_VOICE_EFFECTS,
         COMBAT_VOICE_CATALOG,
         MAP_ENVIRONMENT,
     ] {

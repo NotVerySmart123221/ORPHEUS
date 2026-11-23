@@ -3298,7 +3298,7 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
         vitals: Vitals::empty(),
         pool_types_known: true,
         target_tags: tagged.then(|| body.target_tags.clone().unwrap()),
-        wheel_sprays: [0; 4],
+        wheel_cosmetics: Default::default(),
         model_hardpoints: None,
         target_tag_effects: TargetTagEffects::default(),
         controller_on_fire: false,
@@ -3498,6 +3498,20 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
 
     let root = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
     let graphs = Arc::new(GraphStore::load(root.join("data/game_graphs_174.json.gz")).unwrap());
+    let voice_catalog = crate::actor_voice::ActorVoiceCatalog::load(
+        &root.join(crate::runtime::ACTOR_VOICE_CATALOG),
+    )
+    .unwrap()
+    .map(Arc::new);
+    let items = crate::catalog::ItemDb::load(&root.join("data")).unwrap();
+    let voice_effect = voice_catalog.as_ref().and_then(|catalog| {
+        items
+            .wheel_voice_effects
+            .values()
+            .copied()
+            .filter(|&effect| catalog.equipped_options(SOLDIER, 0, effect).is_some())
+            .min()
+    });
     let action = 0x0a90_0000_0000_0171;
     let request = |action| {
         ClientWheelAction::read(&Message {
@@ -3543,6 +3557,10 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
             .unwrap();
             let mut room = RoomSimulation::new(Vec::new()).unwrap();
             room.enable_spatial_queries(false, Arc::new(ground), RoomSpatialNeeds::Queries);
+            if let Some(catalog) = &voice_catalog {
+                room.enable_actor_voice(Arc::clone(catalog));
+            }
+
             let mover = Mover::new(
                 MoverSettings::default(),
                 Arc::new(ContactWorld::new(Vec::new()).unwrap()),
@@ -3683,7 +3701,10 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
             let encoder = SnapshotEncoder::new(&graphs, &codecs);
             let before =
                 [View::Owner, View::Observer].map(|view| encoder.project(&snapshot, view).unwrap());
-            runtime.set_equipped_sprays([0, 0, 0x0250_0000_0000_0009, 0]);
+            runtime.set_wheel_cosmetics(crate::match_scene::WheelCosmetics {
+                sprays: [0, 0, 0x0250_0000_0000_0009, 0],
+                ..Default::default()
+            });
             runtime.world.eye_position = Some(vector(&spray_input["eye"]));
             runtime.world.movement.yaw = 0;
             runtime.world.movement.pitch = 0;
@@ -3828,6 +3849,45 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                         || !matches!(state.kind, StateKind::SprayPlacement(_)))
             );
             assert_eq!(runtime.queue_wheel_use(report).unwrap(), 0);
+            if let Some(effect) = voice_effect {
+                let selection_frame = next_selection + 160;
+                for frame in next_selection + 2..=selection_frame {
+                    runtime
+                        .component
+                        .advance_frame(frame, &mut runtime.world)
+                        .unwrap();
+                }
+                let _ = runtime.take_script_requests();
+                runtime.set_wheel_cosmetics(crate::match_scene::WheelCosmetics {
+                    voice_effects: [0, effect, 0, 0],
+                    ..Default::default()
+                });
+                let action = 0x0a90_0000_0000_019d;
+                assert_eq!(runtime.queue_wheel_selection(request(action)).unwrap(), 2);
+                runtime
+                    .component
+                    .advance_frame(selection_frame + 1, &mut runtime.world)
+                    .unwrap();
+                let snapshot = runtime.component.snapshot().unwrap();
+                assert!(
+                    snapshot.initialization_complete(),
+                    "{:?}",
+                    snapshot.diagnostics
+                );
+                let callout = snapshot
+                    .instances
+                    .values()
+                    .find(|instance| instance.graph == 0x0686)
+                    .unwrap();
+                assert!(matches!(
+                    callout.states[&13].kind,
+                    StateKind::ClientPulse {
+                        count: 0,
+                        fresh_at: None
+                    }
+                ));
+                assert_eq!(runtime.take_script_requests().len(), 1);
+            }
         }
     }
 }
@@ -4216,7 +4276,7 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             vitals: Vitals::empty(),
             pool_types_known: true,
             target_tags: body.target_tags.clone(),
-            wheel_sprays: [0; 4],
+            wheel_cosmetics: Default::default(),
             model_hardpoints: None,
             target_tag_effects: TargetTagEffects::default(),
             controller_on_fire: false,

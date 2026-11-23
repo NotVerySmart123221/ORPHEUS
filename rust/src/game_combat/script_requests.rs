@@ -29,6 +29,11 @@ pub(super) struct RoomScriptTarget {
     pub(super) voice: Option<(u64, u64)>,
 }
 
+pub(crate) enum ActorVoiceQuery {
+    Criterion(u64),
+    EquippedEffect(u64),
+}
+
 impl RoomSpatialFrame {
     pub(crate) fn actor_voice_available(&self, source: u32) -> bool {
         self.actor_voice.is_some()
@@ -41,18 +46,24 @@ impl RoomSpatialFrame {
     pub(crate) fn actor_voice_request(
         &self,
         source: u32,
-        criterion: u64,
+        query: ActorVoiceQuery,
         choose: &mut dyn FnMut(usize) -> usize,
     ) -> Option<(RoomCue, Vec<u32>)> {
         let catalog = self.actor_voice.as_ref()?;
         let (actor, source_body) = self.actor_sample(source)?;
         let (hero, skin) = source_body.voice?;
-        let options = catalog.options(hero, skin, criterion)?;
+        let options = match query {
+            ActorVoiceQuery::Criterion(criterion) => catalog.options(hero, skin, criterion),
+            ActorVoiceQuery::EquippedEffect(effect) => catalog.equipped_options(hero, skin, effect),
+        }?;
+        let team_only = matches!(query, ActorVoiceQuery::Criterion(_));
         let listeners: Vec<_> = self
             .candidates
             .iter()
             .filter(|listener| {
-                (listener.entity == source || actor.team.is_some() && actor.team == listener.team)
+                (!team_only
+                    || listener.entity == source
+                    || actor.team.is_some() && actor.team == listener.team)
                     && self
                         .script_targets
                         .get(&listener.entity)

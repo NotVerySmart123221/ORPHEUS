@@ -152,7 +152,7 @@ pub(super) struct BodyWorld {
     pub(super) vitals: Vitals,
     pub(super) pool_types_known: bool,
     pub(super) target_tags: Option<BTreeSet<u64>>,
-    pub(super) wheel_sprays: [u64; 4],
+    pub(super) wheel_cosmetics: crate::match_scene::WheelCosmetics,
     pub(super) model_hardpoints: Option<Arc<BTreeSet<u64>>>,
     pub(super) target_tag_effects: TargetTagEffects,
     pub(super) controller_on_fire: bool,
@@ -179,7 +179,7 @@ impl World for BodyWorld {
         if entity != self.entity && entity != self.controller {
             return None;
         }
-        self.wheel_sprays.get(slot).copied()
+        self.wheel_cosmetics.sprays.get(slot).copied()
     }
 
     fn local_command_present(&self, site: Site) -> Option<bool> {
@@ -535,6 +535,27 @@ impl World for BodyWorld {
             })
     }
 
+    fn queue_equipped_voice(
+        &mut self,
+        site: Site,
+        slot: usize,
+        choose: &mut dyn FnMut(usize) -> usize,
+    ) -> bool {
+        let Some(&effect) = self.wheel_cosmetics.voice_effects.get(slot) else {
+            return false;
+        };
+        let Some((cue, listeners)) = self.spatial_frame.as_deref().and_then(|frame| {
+            frame.actor_voice_request(
+                site.entity,
+                crate::game_combat::ActorVoiceQuery::EquippedEffect(effect),
+                choose,
+            )
+        }) else {
+            return false;
+        };
+        self.queue_room_cue(site, &listeners, cue)
+    }
+
     fn actor_voice_available(&self, site: Site) -> bool {
         self.is_player_site(site)
             && self
@@ -549,11 +570,13 @@ impl World for BodyWorld {
         criterion: u64,
         choose: &mut dyn FnMut(usize) -> usize,
     ) {
-        if let Some((cue, listeners)) = self
-            .spatial_frame
-            .as_deref()
-            .and_then(|frame| frame.actor_voice_request(site.entity, criterion, choose))
-        {
+        if let Some((cue, listeners)) = self.spatial_frame.as_deref().and_then(|frame| {
+            frame.actor_voice_request(
+                site.entity,
+                crate::game_combat::ActorVoiceQuery::Criterion(criterion),
+                choose,
+            )
+        }) {
             self.queue_room_cue(site, &listeners, cue);
         }
     }

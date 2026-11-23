@@ -17,6 +17,49 @@ use super::{
     types::Snapshot,
 };
 
+/// Find the equipped voice slot in the pulse's authored client fallback.
+pub(super) fn equipped_voice_pulse_slot<'a>(graph: &'a Graph, pulse: &Node) -> Option<&'a Json> {
+    let single_link = |node: &Node, path| {
+        let mut links = node.links(path);
+        let (position, "m_inPlug") = links.next()? else {
+            return None;
+        };
+        let target = graph.node(position?)?;
+        (links.next().is_none() && target.client_only).then_some(target)
+    };
+    let filter = single_link(pulse, "m_B6A27F9A")?;
+    let condition = filter.field("m_condition")?;
+    if filter.class != "STU_3387AB5D"
+        || !script_expr::native_shape(condition, "STU_7F6B4BDE", Some("m_entity"))
+        || !script_expr::native_shape(field(condition, "m_entity"), "STU_B5A0CAF0", None)
+    {
+        return None;
+    }
+    let assignment = single_link(filter, "m_falsePlug")?;
+    let effect = assignment.field("m_value")?;
+    let own_controller = |target| {
+        script_expr::native_shape(target, "STU_F7262B36", Some("m_801B298F"))
+            && script_expr::native_shape(field(target, "m_801B298F"), "STU_B5A0CAF0", None)
+    };
+    if assignment.class != "STUStatescriptActionSetVar"
+        || !script_expr::native_fields(effect, &["m_hero", "m_target", "m_slot", "m_resourceKey"])
+        || field(effect, "$").as_str() != Some("STU_2977339D")
+        || !field(effect, "m_resourceKey").is_null()
+        || !own_controller(field(effect, "m_target"))
+    {
+        return None;
+    }
+    let hero = field(effect, "m_hero");
+    if !script_expr::native_fields(hero, &["m_entity", "m_resourceKey"])
+        || field(hero, "$").as_str() != Some("STU_93DCDDFD")
+        || !field(hero, "m_resourceKey").is_null()
+        || !own_controller(field(hero, "m_entity"))
+    {
+        return None;
+    }
+    effect.get("m_slot")
+}
+
 pub(super) fn participant_filter(node: &Node) -> Option<&Json> {
     let filter = field(&node.fields, "m_filter");
     (filter.get("$").and_then(Json::as_str) == Some("STUConfigVarFilter")

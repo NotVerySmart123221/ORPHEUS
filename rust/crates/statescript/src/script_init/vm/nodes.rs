@@ -14,13 +14,13 @@ use super::super::{
     machine::{ArrayInsertion, Event, StateKey},
     shapes::{
         array_field, array_insertion_index, case_path, configured, encounter_base_state_shape,
-        excluded_target_tags, field, immediate_self_damage, is_bare_header_action,
-        is_base_health_pool, is_cinematic_time_scale_envelope, is_client_subgraph_controller,
-        is_elapsed_wait, is_entry, is_horizontal_velocity_clamp, is_literal_frame_wait,
-        is_message_recipient_set, is_named_shield_decay, is_networked_for_code_synced,
-        is_owner_movement_sampler, is_parent_owned_timed_graph, is_projected_self_message,
-        is_self_shield_recharge, is_self_stat_timer, is_self_target, is_stat_action,
-        is_static_map_explosion, is_vertical_velocity_impulse, is_wave_health_pool,
+        equipped_voice_pulse_slot, excluded_target_tags, field, immediate_self_damage,
+        is_bare_header_action, is_base_health_pool, is_cinematic_time_scale_envelope,
+        is_client_subgraph_controller, is_elapsed_wait, is_entry, is_horizontal_velocity_clamp,
+        is_literal_frame_wait, is_message_recipient_set, is_named_shield_decay,
+        is_networked_for_code_synced, is_owner_movement_sampler, is_parent_owned_timed_graph,
+        is_projected_self_message, is_self_shield_recharge, is_self_stat_timer, is_self_target,
+        is_stat_action, is_static_map_explosion, is_vertical_velocity_impulse, is_wave_health_pool,
         living_body_array_shape, named_temporary_shield, parent_owned_graph_duration,
         participant_filter, persistent_message, placement_collection_tag, pool_number, raw_indices,
         registered_state, source_key, static_target_operand, stored,
@@ -1189,7 +1189,28 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         Ok(true)
     }
 
-    pub(in crate::script_init) fn client_pulse(&self, id: u16, count: u8) -> StateKind {
+    pub(in crate::script_init) fn client_pulse(
+        &mut self,
+        id: u16,
+        node: &Node,
+        count: u8,
+    ) -> StateKind {
+        if let Some(slot) = equipped_voice_pulse_slot(self.graph(id), node) {
+            let site = self.site(id, node);
+            if let Some(Value::Integer(slot)) = self.evaluate(id, node, slot, None) {
+                if let Ok(slot) = usize::try_from(slot) {
+                    if self.world.queue_equipped_voice(site, slot, &mut |count| {
+                        ((u128::from(self.machine.random_u64()) * count as u128) >> 64) as usize
+                    }) {
+                        return StateKind::ClientPulse {
+                            count,
+                            fresh_at: None,
+                        };
+                    }
+                }
+            }
+        }
+
         let now = self.machine.now_ms;
         let start = self.machine.snapshot.instances[&id].start_ms;
         StateKind::ClientPulse {
@@ -1237,7 +1258,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.refresh_phase_scripts(key, node)?;
             }
             if let StateKind::ClientPulse { count, .. } = kind {
-                let pulse = self.client_pulse(id, count);
+                let pulse = self.client_pulse(id, node, count);
                 self.state_mut(key).expect("active client pulser").kind = pulse;
             }
             if configured(node, "m_0DBAFD7F") {
@@ -1633,7 +1654,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     Some(StateKind::ClientPulse { count, .. }) => count,
                     _ => 0,
                 };
-                self.client_pulse(id, count)
+                self.client_pulse(id, node, count)
             }
             "STUStatescriptStateTrackTargets"
                 if registration.shape(node.contact_volume_bindings().is_some()) =>

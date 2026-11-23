@@ -111,11 +111,13 @@ impl World for StockBotWorld {
         criterion: u64,
         choose: &mut dyn FnMut(usize) -> usize,
     ) {
-        if let Some((cue, listeners)) = self
-            .spatial_frame
-            .as_deref()
-            .and_then(|frame| frame.actor_voice_request(site.entity, criterion, choose))
-        {
+        if let Some((cue, listeners)) = self.spatial_frame.as_deref().and_then(|frame| {
+            frame.actor_voice_request(
+                site.entity,
+                crate::game_combat::ActorVoiceQuery::Criterion(criterion),
+                choose,
+            )
+        }) {
             self.queue_room_cue(site, &listeners, cue);
         }
     }

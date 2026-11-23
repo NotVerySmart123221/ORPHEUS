@@ -279,6 +279,7 @@ pub(crate) use movement::MovementContactFrame;
 mod observed_projectiles;
 mod player;
 mod script_requests;
+pub(crate) use script_requests::ActorVoiceQuery;
 mod stock_bot;
 mod view_targeting;
 pub(crate) use encounter::{

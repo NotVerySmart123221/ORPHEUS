@@ -253,7 +253,7 @@ impl PlayerBodyFactory {
             },
             pool_types_known: self.pools.is_some() || has_authored_pools,
             target_tags: self.target_tags.clone(),
-            wheel_sprays: [0; 4],
+            wheel_cosmetics: Default::default(),
             model_hardpoints: self
                 .graphs
                 .bodies()

@@ -52,6 +52,8 @@ The room regression additionally retires a player body and reuses its wire ID in
 
 The [actor voice fixture](../fixtures/behavior/player-voice-v1.json) covers first-playable stimulus selection, skin overrides, and line variation. The Rust stock bot case runs an authored criteria action through the existing room cue queue and checks team and free-for-all audiences.
 
+The same actor voice fixture covers the equipped effect lookup and skin-specific line selection. A wheel pulse whose authored client branch resolves an equipped voice slot can submit its cue through the existing room queue. The equipped voice uses the room audience. Criteria voice keeps its existing team filter. A successfully queued reliable voice takes the place of that selection's client pulse. [Pinned equipped voice reference](https://github.com/leafall903/ORPHEUS/blob/cedec602/src/ow174/game/voicelines.py#L188-L217).
+
 The [directed room message fixture](../fixtures/behavior/script-room-message-v1.json) also runs through two stock bot VMs. The room test checks typed bindings, delivery on the next receiver frame, isolation from ordinary entries, and a recipient who dies after a message was admitted.
 
 The Rust-only [wheel selection fixture](../fixtures/behavior/wheel-selection-ingress-v1.json) covers typed client input, reliable ordering and retries, possession admission, and an actor replacement with the same wire ID. The prepared 104319 probe checks parameter binding in both authored receivers.

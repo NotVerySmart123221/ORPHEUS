@@ -74,6 +74,7 @@ pub struct PlayerCard {
 pub(crate) struct WheelCosmetics {
     pub sprays: [u64; 4],
     pub emotes: [u64; 4],
+    pub voice_effects: [u64; 4],
 }
 
 impl PlayerCard {

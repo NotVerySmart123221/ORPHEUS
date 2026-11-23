@@ -275,6 +275,13 @@ impl Collection {
         Ok(WheelCosmetics {
             sprays: read_slots(0x58)?,
             emotes: read_slots(0x88)?,
+            voice_effects: read_slots(0x70)?.map(|unlock| {
+                self.items
+                    .wheel_voice_effects
+                    .get(&unlock)
+                    .copied()
+                    .unwrap_or(0)
+            }),
         })
     }
 

@@ -34,6 +34,7 @@ pub struct ItemDb {
     pub hero_names: IndexMap<u64, String>,
     pub hero_classes: IndexMap<u64, Option<String>>,
     pub(crate) npc_heroes: Vec<u64>,
+    pub(crate) wheel_voice_effects: HashMap<u64, u64>,
     team_skin_pairs: HashMap<u64, u64>,
 }
 
@@ -136,7 +137,24 @@ impl ItemDb {
             read_optional(&data_dir.join("extracted_items.json"))?;
         let general: RawGroups = read_optional(&data_dir.join("extracted_general_unlocks.json"))?;
 
-        let mut catalog = Self::default();
+        let effects: HashMap<String, String> =
+            read_optional(&data_dir.join("voice_effects_174.json"))?;
+        let wheel_voice_effects = effects
+            .into_iter()
+            .map(|(unlock, effect)| {
+                let unlock = crate::runtime::format::parse_guid(&unlock)
+                    .filter(|&id| id >> 48 == 0x0250 && id != UNLOCK_BASE)
+                    .ok_or_else(|| invalid_guid("voice unlock", &unlock))?;
+                let effect = crate::runtime::format::parse_guid(&effect)
+                    .filter(|&id| id >> 48 == 0x0300 && id != 0x0300_0000_0000_0000)
+                    .ok_or_else(|| invalid_guid("voice playback effect", &effect))?;
+                Ok((unlock, effect))
+            })
+            .collect::<io::Result<_>>()?;
+        let mut catalog = Self {
+            wheel_voice_effects,
+            ..Self::default()
+        };
         for (guid, hero) in heroes {
             let Some(name) = hero.name.filter(|name| !name.is_empty()) else {
                 continue;
