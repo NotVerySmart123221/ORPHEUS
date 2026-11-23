@@ -119,7 +119,7 @@ flowchart LR
 
 - **Rust and protocol.** Extend hero ability and StateScript VM delivery coverage. [Start with issue #166](https://github.com/leafall903/ORPHEUS/issues/166)
 - **Inspector, navigation and ECS.** Build on the completed work. [#62](https://github.com/leafall903/ORPHEUS/issues/62) · [#63](https://github.com/leafall903/ORPHEUS/issues/63) · [#65](https://github.com/leafall903/ORPHEUS/issues/65)
-- **Client playtesting.** Run local 104319 sessions in the Practice Range and Junkenstein's Revenge to report protocol or behavior discrepancies. [Roadmap](docs/ROADMAP.md)
+- **Gameplay feedback.** Share reproducible behavior reports from the Practice Range or Junkenstein's Revenge. [Roadmap](docs/ROADMAP.md)
 
 See the [contribution guide](CONTRIBUTING.md), browse [open issues](https://github.com/leafall903/ORPHEUS/issues?q=is%3Aissue+is%3Aopen), or join [Discord](https://discord.gg/tqukqjAk7).
 

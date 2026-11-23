@@ -119,7 +119,7 @@ flowchart LR
 
 - **Rust 和协议。** 扩展英雄技能与 StateScript VM 的投递覆盖。[从 #166 入手](https://github.com/leafall903/ORPHEUS/issues/166)
 - **Inspector、导航和 ECS。** 在已完成的工作上继续改进。[#62](https://github.com/leafall903/ORPHEUS/issues/62) · [#63](https://github.com/leafall903/ORPHEUS/issues/63) · [#65](https://github.com/leafall903/ORPHEUS/issues/65)
-- **客户端试玩。** 用本地 104319 客户端体验靶场和怪鼠复仇，报告协议或玩法差异。[路线图](docs/ROADMAP.md)
+- **玩法反馈。** 提交靶场或怪鼠复仇中可复现的玩法问题。[路线图](docs/ROADMAP.md)
 
 欢迎阅读[贡献指南](CONTRIBUTING.md)、查看[待处理 Issue](https://github.com/leafall903/ORPHEUS/issues?q=is%3Aissue+is%3Aopen)，或加入 [Discord](https://discord.gg/tqukqjAk7)。
 
