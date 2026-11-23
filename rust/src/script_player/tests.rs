@@ -3344,7 +3344,7 @@ fn prepared_soldier_without_target_tags_reports_unavailable_filter() {
 
 #[test]
 #[ignore = "requires a tagged separately prepared 104319 statescript catalog"]
-fn prepared_shared_hit_graph_projects_each_authored_effect() {
+fn prepared_shared_combat_graph_projects_hit_and_elimination_effects() {
     use crate::script_init::{HealthTargetFacts, RoomEntityStatus};
 
     let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
@@ -3369,57 +3369,102 @@ fn prepared_shared_hit_graph_projects_each_authored_effect() {
         tags: TargetTagEffects::default().snapshot(Some(&Default::default())),
         script_state: crate::script_entity_state::EntityScriptState::Absent,
     });
+    let expect_effect =
+        |snapshot: &crate::script_init::Snapshot, before: usize, effect_index: u64| {
+            let actions = &snapshot.frame_actions;
+            assert_eq!(
+                actions.len(),
+                before + 1,
+                "{:?}",
+                snapshot
+                    .diagnostics
+                    .iter()
+                    .filter(|item| item.site.graph == 0x01c7)
+                    .collect::<Vec<_>>(),
+            );
+            let action = actions.back().unwrap();
+            assert_eq!(action.callout.instance, instance);
+            let graph = graphs.graph(snapshot.instances[&instance].graph).unwrap();
+            let node = graph.node(action.callout.position).unwrap();
+            assert_eq!(
+                crate::script_graph::asset_guid(&node.fields["m_effect"]["m_effect"]),
+                Some(0x0300_0000_0000_0000 | effect_index),
+            );
+            action.values.contains_key(&(instance, 18702))
+        };
+
     // These inputs exercise the authored switch. They do not assign the native 0724 scalar
     // a gameplay meaning or derive it from a physical hit.
     for (critical, scalar, effect_index) in [
-        (false, 1.0, 0x0206),
-        (true, 1.0, 0x183b),
-        (false, 0.0, 0x2894),
-        (true, 0.0, 0x2892),
-        (false, 2.0, 0x2893),
-        (true, 2.0, 0x2891),
+        (false, Some(1.0), 0x0206),
+        (true, Some(1.0), 0x183b),
+        (false, Some(0.0), 0x2894),
+        (true, Some(0.0), 0x2892),
+        (false, Some(2.0), 0x2893),
+        (true, Some(2.0), 0x2891),
+        (false, None, 0x2894),
     ] {
         let before = component.snapshot().unwrap().frame_actions.len();
+        let mut parameters = Variables::from([
+            (0x13, Value::Float(9.0)),
+            (0x15, Value::Entity(target)),
+            (0x3d, Value::Array(Vec::new())),
+            (0x95, Value::Bool(critical)),
+        ]);
+        if let Some(scalar) = scalar {
+            parameters.insert(0x724, Value::Float(scalar));
+        }
         assert_eq!(
             component
                 .queue_settled_damage_message(
                     instance,
                     0x0240_0000_0000_0012,
-                    Variables::from([
-                        (0x13, Value::Float(9.0)),
-                        (0x15, Value::Entity(target)),
-                        (0x3d, Value::Array(Vec::new())),
-                        (0x95, Value::Bool(critical)),
-                        (0x724, Value::Float(scalar)),
-                    ]),
+                    parameters,
                     Arc::clone(&target_facts),
                 )
                 .unwrap(),
             1,
         );
         component.run_now(&mut world).unwrap();
-        let snapshot = component.snapshot().unwrap();
-        let actions = &snapshot.frame_actions;
-        assert_eq!(
-            actions.len(),
-            before + 1,
-            "critical={critical} scalar={scalar}: {:?}",
-            snapshot
-                .diagnostics
-                .iter()
-                .filter(|item| item.site.graph == 0x01c7)
-                .collect::<Vec<_>>(),
-        );
-        let action = actions.back().unwrap();
-        assert_eq!(action.callout.instance, instance);
-        let graph = graphs.graph(snapshot.instances[&instance].graph).unwrap();
-        let node = graph.node(action.callout.position).unwrap();
-        assert_eq!(
-            crate::script_graph::asset_guid(&node.fields["m_effect"]["m_effect"]),
-            Some(0x0300_0000_0000_0000 | effect_index),
-            "critical={critical} scalar={scalar}",
-        );
-        assert!(action.values.contains_key(&(instance, 18702)));
+        assert!(expect_effect(
+            component.snapshot().unwrap(),
+            before,
+            effect_index
+        ));
+    }
+
+    let mut retired = (*target_facts).clone();
+    retired.room_status.as_mut().unwrap().alive = false;
+    let retired = Arc::new(retired);
+    // The two modes take opposite branches of the authored mode flag.
+    for (mode, effect_index) in [
+        (PRACTICE_RANGE_MODE, 0x00ee),
+        (0x0230_0000_0000_0003, 0x2939),
+    ] {
+        world.mode = mode;
+        for final_blow in [true, false] {
+            let before = component.snapshot().unwrap().frame_actions.len();
+            assert_eq!(
+                component
+                    .queue_settled_damage_message(
+                        instance,
+                        0x0240_0000_0000_0093,
+                        Variables::from([
+                            (0x15, Value::Entity(target)),
+                            (0x91, Value::Bool(final_blow)),
+                        ]),
+                        Arc::clone(&retired),
+                    )
+                    .unwrap(),
+                1,
+            );
+            component.run_now(&mut world).unwrap();
+            assert!(!expect_effect(
+                component.snapshot().unwrap(),
+                before,
+                effect_index
+            ));
+        }
     }
 }
 

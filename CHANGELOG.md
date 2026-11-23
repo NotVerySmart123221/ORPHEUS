@@ -6,7 +6,7 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
-- Capture networked StateScript effects with literal effect assets and an authored owner selector through the existing short-action stream. Capture the action's declared variables at execution for stable retries. Passed 520 Inspector library tests, including owner and observer loss and retry checks. A prepared 104319 test drives the six authored hit-effect variants with explicit parameters and verifies their captured frame actions. Original-client playback and combat message integration remain pending.
+- Capture networked StateScript effects with literal effect assets and an authored owner selector through the existing short-action stream. Capture the action's declared variables at execution for stable retries. Passed 520 Inspector library tests, including owner and observer loss and retry checks. Prepared 104319 tests exercise the six hit-effect variants and verify that an absent hit variant parameter selects the zero branch. They also verify which elimination effect the authored graph chooses for final-blow and nonfinal credit in two modes. Original-client playback and combat message integration remain pending.
 
 ### 2026-11-22
 
