@@ -418,6 +418,10 @@ impl RoomSimulation {
         let id = state.id;
         if self.players_by_wire.get(&id.entity).copied() == Some(handle.entity) {
             self.players_by_wire.shift_remove(&id.entity);
+            self.scripted_health
+                .retain(|update| update.entity != id.entity);
+            self.observer_player_health
+                .retain(|(_, update)| update.entity != id.entity);
         }
         if self
             .players_by_owner
@@ -1110,7 +1114,6 @@ impl RoomSimulation {
         skip_wire: Option<u32>,
         source: Option<SampledBody>,
         pulses: &[HealingPulse],
-        updates: &mut Vec<EntityUpdate>,
     ) {
         for (&wire, &entity) in &self.players_by_wire {
             if Some(wire) == skip_wire {
@@ -1127,29 +1130,30 @@ impl RoomSimulation {
             if amount <= 0.0 {
                 continue;
             }
-            if state.vitals().is_some() {
-                let healed = state.heal(amount);
-                if let Some(component) = state.take_health_update() {
-                    updates.push(EntityUpdate {
-                        entity: wire,
-                        operation: Some(Operation::Update(vec![component])),
-                        ..EntityUpdate::default()
-                    });
-                }
-                let target = SampledBody { wire, entity };
-                let room_status = self.sample_health_target_room_status(target);
-                self.health_events.stage(
-                    source,
-                    target,
-                    healed,
-                    false,
-                    HealthEventContext {
-                        world: &self.world,
-                        damage: None,
-                    },
-                    room_status,
-                );
+            let healed = state.heal(amount);
+            if healed <= 0.0 {
+                continue;
             }
+            if let Some(component) = state.take_health_update() {
+                self.scripted_health.push(EntityUpdate {
+                    entity: wire,
+                    operation: Some(Operation::Update(vec![component])),
+                    ..EntityUpdate::default()
+                });
+            }
+            let target = SampledBody { wire, entity };
+            let room_status = self.sample_health_target_room_status(target);
+            self.health_events.stage(
+                source,
+                target,
+                healed,
+                false,
+                HealthEventContext {
+                    world: &self.world,
+                    damage: None,
+                },
+                room_status,
+            );
         }
     }
 

@@ -2056,7 +2056,9 @@ impl RoomSimulation {
         team: u8,
         pulses: &[HealingPulse],
     ) -> Result<Vec<EntityUpdate>, CombatError> {
-        self.heal_allies(queries, team, None, None, pulses)
+        let start = self.scripted_health.len();
+        self.heal_allies(queries, team, None, None, pulses)?;
+        Ok(self.scripted_health.split_off(start))
     }
 
     pub(crate) fn heal_allies(
@@ -2066,15 +2068,14 @@ impl RoomSimulation {
         skip_player_wire: Option<u32>,
         field_owner: Option<BodyId>,
         pulses: &[HealingPulse],
-    ) -> Result<Vec<EntityUpdate>, CombatError> {
+    ) -> Result<(), CombatError> {
         if queries.free_for_all() || pulses.is_empty() {
-            return Ok(Vec::new());
+            return Ok(());
         }
         self.activate_combat();
         let source = field_owner
             .filter(|&id| self.player_body(id).is_some())
             .and_then(|id| self.sample_health_body(id.entity));
-        let mut updates = Vec::new();
         for (&wire, &entity) in &self.by_wire {
             let state = self
                 .world
@@ -2094,7 +2095,7 @@ impl RoomSimulation {
             if let Some(script) = &mut state.stock_script {
                 script.on_heal(state.vitals.total());
             }
-            updates.push(bot_health_update(state, false));
+            self.scripted_health.push(bot_health_update(state, false));
             let target = SampledBody { wire, entity };
             let room_status = self.sample_health_target_room_status(target);
             self.health_events.stage(
@@ -2109,8 +2110,8 @@ impl RoomSimulation {
                 room_status,
             );
         }
-        self.heal_player_bodies(team, skip_player_wire, source, pulses, &mut updates);
-        Ok(updates)
+        self.heal_player_bodies(team, skip_player_wire, source, pulses);
+        Ok(())
     }
 
     fn weapon_targets(&self, queries: &BotQueries<'_>) -> Result<Vec<WeaponTarget>, CombatError> {

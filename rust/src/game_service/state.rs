@@ -1048,17 +1048,14 @@ impl State {
                             .world
                             .advance_fields(world.scene.simulation_mut(), room_tick)?
                         {
-                            let skip_wire = peer.world.spawned_body();
-                            let (bots, queries) = world.scene.bot_simulation();
-                            for update in bots.heal_allies(
+                            let (simulation, queries) = world.scene.bot_simulation();
+                            simulation.heal_allies(
                                 &queries,
                                 context.team,
-                                skip_wire,
+                                Some(source.entity),
                                 Some(source),
                                 &pulses,
-                            )? {
-                                peer.world.queue_health(update);
-                            }
+                            )?;
                         }
                         peer.world
                             .advance_biotic_views(world.scene.simulation(), room_tick)?;
@@ -1164,11 +1161,6 @@ impl State {
                             peer.world.create_bot(record.clone());
                         }
                     }
-                    if let Some(records) = scripted_health.get(&id) {
-                        for record in records {
-                            peer.world.queue_health(record.clone());
-                        }
-                    }
                     if let Some(events) = player_events.get(&id) {
                         for event in events {
                             match event {
@@ -1195,6 +1187,12 @@ impl State {
                             if *owner != peer.world.owner() {
                                 peer.world.queue_health(record.clone());
                             }
+                        }
+                    }
+                    // Settled room health takes precedence over earlier owner snapshots.
+                    if let Some(records) = scripted_health.get(&id) {
+                        for record in records {
+                            peer.world.queue_health(record.clone());
                         }
                     }
                     // A synchronous script stop is newer than the health

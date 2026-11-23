@@ -404,18 +404,19 @@ fn prepared_friendly_bot_nameplate_uses_settled_damage_and_healing() {
     room.settle_health(wire, HealthEffect::Heal(scripted), source, Duration::ZERO)
         .unwrap();
     check(room, maximum - damage + scripted);
-    let updates = room
-        .heal_allies(
-            &queries,
-            team,
-            None,
-            None,
-            &[HealingPulse {
-                centre: position,
-                amount: field,
-            }],
-        )
-        .unwrap();
+    room.take_scripted_health();
+    room.heal_allies(
+        &queries,
+        team,
+        None,
+        None,
+        &[HealingPulse {
+            centre: position,
+            amount: field,
+        }],
+    )
+    .unwrap();
+    let updates = room.take_scripted_health();
     assert!(updates.iter().any(|update| update.entity == wire));
     check(room, maximum - damage + scripted + field);
 }

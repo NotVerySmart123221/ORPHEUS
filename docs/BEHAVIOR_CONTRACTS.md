@@ -202,7 +202,7 @@ native child, an optional ability inhibit, and rejection of conflicting
 authored charge configuration. Integration validation is pending.
 [Synthetic charge compatibility fixture](../fixtures/behavior/script-charge-compatibility-v1.json)
 
-The Rust-only [local health outcomes fixture](../fixtures/behavior/script-local-health-outcomes-v1.json) checks actual damage from AI callbacks and capped field healing. Room tests also exercise source provenance across body replacement.
+The Rust-only [local health outcomes fixture](../fixtures/behavior/script-local-health-outcomes-v1.json) checks actual damage from AI callbacks and capped field healing. The field queues settled bot and ally health for room delivery. A pulse that heals nothing leaves any existing update pending, and a replaced player body drops updates addressed to its old generation.
 The Rust-only [directed charge sender fixture](../fixtures/behavior/script-directed-charge-sender-v1.json) checks that both supported server-only target operands use the same finite numeric delivery route and bind on the receiver's next VM frame.
 
 The [settled bonus fixture](../fixtures/behavior/script-settled-bonus-v1.json) follows actual room healing through a configured directed numeric message and an authored recipient meter. It checks frame order, recipients, capping, same-wire replacement on both sides of request admission, a stale reply to an already replaced source, and awards from fresh events after replacement.

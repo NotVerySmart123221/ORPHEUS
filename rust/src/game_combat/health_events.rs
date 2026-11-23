@@ -584,9 +584,12 @@ mod tests {
         use crate::{
             contact_world::ContactWorld,
             game_combat::{BioticField, BotQueries, FIELD_DELAY, tests::fixture_ground},
+            game_heroes::SOLDIER,
             game_replication::BodyId,
             mover::Mover,
             mover_settings::{MoverCatalog, MoverSettings},
+            script_player::fixture_body_factory,
+            world::Operation,
         };
         use std::sync::Arc;
 
@@ -604,26 +607,50 @@ mod tests {
         let deltas: [f64; 2] =
             serde_json::from_value(fixture["expected"]["field"]["actual_deltas"].clone()).unwrap();
         let elapsed = u32::try_from(field["pulse_ticks_elapsed"].as_u64().unwrap()).unwrap();
+        let dirty_full_ally_wound = field["dirty_full_ally_wound"].as_f64().unwrap();
 
-        let bots = fixture_bots();
-        let targets = [bots[0].entity, bots[1].entity];
+        let mut bots = fixture_bots();
+        bots.truncate(1);
+        let (ally_factory, mut ally_spawn) = fixture_body_factory();
+        ally_spawn.pose.position = [0.0; 3];
+        ally_spawn.body_filter = crate::match_scene::team_bit(1).unwrap();
+        ally_spawn.slot = 1;
+        let targets = [bots[0].entity, ally_spawn.entity];
         let mut room = RoomSimulation::new(bots).unwrap();
         let owner = BodyId {
             entity: 702,
             generation: 1,
         };
-        let owner_body = |id| {
-            let mover = Mover::new(
+        let ally = BodyId {
+            entity: ally_spawn.entity,
+            generation: 1,
+        };
+        let mover = || {
+            Mover::new(
                 MoverSettings::default(),
                 Arc::new(ContactWorld::new(Vec::new()).unwrap()),
                 [0.0; 3],
                 0,
                 0x08,
             )
-            .unwrap();
-            PlayerBodyState::new(id, 701, 0, 1, 703, mover, None, 100, None)
+            .unwrap()
+        };
+        let owner_body = |id| PlayerBodyState::new(id, 701, 0, 1, 703, mover(), None, 100, None);
+        let ally_body = |id| {
+            PlayerBodyState::new(
+                id,
+                ally_spawn.controller,
+                ally_spawn.slot,
+                1,
+                SOLDIER,
+                mover(),
+                Some(Box::new(ally_factory.start(ally_spawn).unwrap())),
+                ally_spawn.frame,
+                None,
+            )
         };
         room.spawn_player_body(owner_body(owner)).unwrap();
+        room.spawn_player_body(ally_body(ally)).unwrap();
         room.enable_host_health_events();
         let mut field = BioticField::new([0.0; 3]);
         assert!(field.advance(100).0.is_none());
@@ -639,28 +666,54 @@ mod tests {
         let movers = MoverCatalog::default();
         let queries = BotQueries::new(false, &movers, &ground, None);
 
-        let wound = |room: &mut RoomSimulation, target, amount| {
-            room.state_mut(target).unwrap().unwrap().vitals.damage(
-                amount,
-                Death {
-                    killer: owner.entity,
-                    frame: 100,
-                    time: 1.6,
-                },
-            );
+        let dealer = Death {
+            killer: owner.entity,
+            frame: 100,
+            time: 1.6,
         };
-        for (target, amount) in targets.into_iter().zip(wounds) {
-            wound(&mut room, target, amount);
-        }
-        let updates = room
-            .heal_allies(&queries, 1, Some(owner.entity), Some(owner), &pulses)
+        let wound_bot = |room: &mut RoomSimulation| {
+            room.state_mut(targets[0])
+                .unwrap()
+                .unwrap()
+                .vitals
+                .damage(wounds[0], dealer);
+        };
+        wound_bot(&mut room);
+        room.player_body_mut(ally)
+            .unwrap()
+            .runtime
+            .as_mut()
+            .unwrap()
+            .receive_damage(wounds[1], dealer);
+        room.heal_allies(&queries, 1, Some(owner.entity), Some(owner), &pulses)
             .unwrap();
+        let updates = room.take_scripted_health();
         assert_eq!(
             updates
                 .iter()
                 .map(|update| update.entity)
                 .collect::<Vec<_>>(),
             targets
+        );
+        let bot_health = room
+            .state_mut(targets[0])
+            .unwrap()
+            .unwrap()
+            .vitals
+            .component();
+        let ally_health = room
+            .player_body(ally)
+            .unwrap()
+            .vitals()
+            .unwrap()
+            .cumulative_component();
+        assert_eq!(
+            updates[0].operation,
+            Some(Operation::Update(vec![bot_health]))
+        );
+        assert_eq!(
+            updates[1].operation,
+            Some(Operation::Update(vec![ally_health.clone()]))
         );
         for (wire, delta) in targets.into_iter().zip(deltas) {
             let event = room.health_events.pending.pop_front().unwrap();
@@ -685,12 +738,50 @@ mod tests {
             );
         }
         assert!(room.health_events.pending.is_empty());
-        assert!(
-            room.heal_allies(&queries, 1, Some(owner.entity), Some(owner), &pulses)
-                .unwrap()
-                .is_empty()
+
+        // This body returned to full health with a separate pending update.
+        let ally_state = room.player_body_mut(ally).unwrap();
+        assert!(ally_state.take_health_update().is_none());
+        let ally_runtime = ally_state.runtime.as_mut().unwrap();
+        assert_eq!(
+            ally_runtime
+                .receive_damage(dirty_full_ally_wound, dealer)
+                .dealt,
+            dirty_full_ally_wound
         );
+        assert_eq!(
+            ally_runtime.heal(dirty_full_ally_wound),
+            dirty_full_ally_wound
+        );
+        room.heal_allies(&queries, 1, Some(owner.entity), Some(owner), &pulses)
+            .unwrap();
+        assert!(room.take_scripted_health().is_empty());
         assert!(room.health_events.pending.is_empty());
+        assert_eq!(
+            room.player_body_mut(ally).unwrap().take_health_update(),
+            Some(ally_health)
+        );
+
+        room.player_body_mut(ally)
+            .unwrap()
+            .runtime
+            .as_mut()
+            .unwrap()
+            .receive_damage(dirty_full_ally_wound, dealer);
+        room.heal_allies(&queries, 1, Some(owner.entity), Some(owner), &pulses)
+            .unwrap();
+        let before_replacement = room.scripted_health.last().unwrap().clone();
+        assert_eq!(before_replacement.entity, ally.entity);
+        room.record_observer_player_health(ally_spawn.controller, before_replacement);
+        room.spawn_player_body(ally_body(BodyId {
+            generation: 2,
+            ..ally
+        }))
+        .unwrap();
+        assert!(room.take_scripted_health().is_empty());
+        assert!(room.take_observer_player_health().is_empty());
+        let original_ally_event = room.health_events.pending.pop_front().unwrap();
+        assert!(original_ally_event.resolve(&room).is_none());
 
         room.spawn_player_body(owner_body(BodyId {
             generation: 2,
@@ -701,7 +792,7 @@ mod tests {
             room.advance_player_fields(owner, 100 + FIELD_DELAY + elapsed)
                 .is_none()
         );
-        wound(&mut room, targets[0], wounds[0]);
+        wound_bot(&mut room);
         room.heal_allies(&queries, 1, Some(owner.entity), Some(owner), &pulses)
             .unwrap();
         let event = room.health_events.pending.pop_front().unwrap();

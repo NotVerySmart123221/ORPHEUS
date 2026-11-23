@@ -228,6 +228,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
                 | PreparedFixture::StockNameplate { .. }
                 | PreparedFixture::StockProjectile
                 | PreparedFixture::StockSelfProjectile(_)
+                | PreparedFixture::StockBiotic
         )
     {
         assert_eq!(result.err().unwrap().kind(), io::ErrorKind::Unsupported);
@@ -463,7 +464,6 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
             exercise_stock_self_splash(&mut client, &schemas, &server, launch, shot);
         }
         PreparedFixture::StockBiotic => {
-            assert!(!scripted_bots);
             let frame = exercise_owner_vm(&mut client, &schemas, false);
             let launch = wait_for_stock_weapon(&mut client, &schemas, frame + 1);
             exercise_stock_biotic(&mut client, &schemas, launch);

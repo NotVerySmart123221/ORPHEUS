@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Broadcast settled field healing through room health updates so the affected ally and other observers receive the same values. Preserve pending updates on zero-heal pulses and retire stale updates on body replacement. Adapted the Phase 2 change from `a25a1402`. Passed 592 library tests, the prepared ally health and encrypted field checks, and Clippy.
+
 - Suppress room-wide hurt voice for NPC-versus-NPC damage while keeping player damage feedback. Synchronize stock NPC HUD health after both scripted and area healing. The prepared encrypted replay now requires the staged nameplate on each allied bot as well as on the enemy target. Passed 592 library tests, three prepared 104319 checks, and Clippy.
 
 - Gate owner movement against remote player capsules on the same creation acknowledgment used for weapon targeting. The room replay covers missing and acknowledged delivery with and without an owner StateScript. Passed 592 library tests and Clippy.

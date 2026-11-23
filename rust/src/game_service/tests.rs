@@ -453,7 +453,7 @@ fn prepared_worker_applies_stock_particle_splash_damage_and_launch() {
 }
 
 #[test]
-#[ignore = "requires a tagged 104319 Practice Range scene without bot VM graphs"]
+#[ignore = "requires a prepared 104319 Practice Range scene with compatible owner graph metadata"]
 fn prepared_worker_delivers_stock_biotic_canister_and_field() {
     exercise_prepared_world(PreparedFixture::StockBiotic);
 }
