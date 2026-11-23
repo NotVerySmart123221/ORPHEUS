@@ -1,5 +1,22 @@
 use super::*;
 
+fn remote_contact_delivery(id: BodyId, world: &mut WorldDelivery, arrived: bool) {
+    let update = EntityUpdate {
+        entity: id.entity,
+        operation: Some(Operation::Create(Box::new(crate::world::Create::new(
+            1,
+            Vec::new(),
+        )))),
+        ..Default::default()
+    };
+    world.create_remote_player(id, update.clone());
+    let create = Record {
+        update,
+        delivery: Delivery::RemotePlayerCreate(id),
+    };
+    world.acknowledge(outcome(Arc::new(create), arrived), Duration::ZERO);
+}
+
 #[test]
 fn hostile_actor_contact_corrects_ordinary_movement_with_or_without_an_owner_script() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
@@ -18,7 +35,14 @@ fn hostile_actor_contact_corrects_ordinary_movement_with_or_without_an_owner_scr
         team: 0,
         card: &card,
     };
-    for (team, scripted) in [(1, true), (1, false), (0, true), (0, false)] {
+    for (team, scripted, delivered) in [
+        (1, true, true),
+        (1, false, true),
+        (0, true, true),
+        (0, false, true),
+        (1, true, false),
+        (1, false, false),
+    ] {
         let mut scene = PreparedScene::fixture_for_bots(Vec::new());
         let mut world = WorldDelivery::new(OWNER);
         let mut egress = GameEgress::default();
@@ -63,6 +87,8 @@ fn hostile_actor_contact_corrects_ordinary_movement_with_or_without_an_owner_scr
             outcome(Arc::new(record(id.entity, Delivery::CreateBody(id))), true),
             Duration::ZERO,
         );
+        remote_contact_delivery(target, &mut world, delivered);
+        assert_eq!(world.actor_contact_ready(target.entity), delivered);
         for frame in start + 1..=last {
             scene
                 .simulation_mut()
@@ -89,7 +115,8 @@ fn hostile_actor_contact_corrects_ordinary_movement_with_or_without_an_owner_scr
             0,
         );
         let corrected = sent.records.contains(&RecordSource::Movement(0));
-        if team == 1 {
+        let blocked = team == 1 && delivered;
+        if blocked {
             assert!(
                 pose.position[0] > 0.0 && pose.position[0] < position[0],
                 "{pose:?}"
@@ -97,7 +124,7 @@ fn hostile_actor_contact_corrects_ordinary_movement_with_or_without_an_owner_scr
         } else {
             assert!(pose.position[0] > position[0], "{pose:?}");
         }
-        assert_eq!(corrected, team == 1);
+        assert_eq!(corrected, blocked);
     }
 }
 
@@ -280,6 +307,7 @@ fn player_displacement_uses_room_actor_contacts_for_the_authoritative_pose() {
         target.entity += 0x100;
         world.started = Some(100);
         activate_script(&mut world, room, id, 7, Arc::default());
+        remote_contact_delivery(target, &mut world, true);
         room.spawn_player_body(PlayerBodyState::new(
             target,
             OWNER + 0x100,

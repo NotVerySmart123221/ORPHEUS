@@ -186,10 +186,7 @@ impl WorldDelivery {
         source: u32,
         team: u8,
     ) -> Vec<crate::contact_cache::CapsulePose> {
-        frame.blockers_where(source, team, |entity| {
-            // The room can spawn a replacement before this observer receives it.
-            !self.bots.contains_key(&entity) || self.actor_contact_ready(entity)
-        })
+        frame.blockers_where(source, team, |entity| self.actor_contact_ready(entity))
     }
 
     pub(crate) fn owner_body_ready(&self, id: BodyId) -> bool {

@@ -3,7 +3,7 @@
   "case_id": "owner-actor-contact.synthetic.v1",
   "evidence": "synthetic-rust",
   "source": {
-    "basis": "Ordinary movement against a frozen actor capsule and owner delivery."
+    "basis": "Ordinary movement against a frozen actor capsule and owner delivery. A remote body joins owner contact only after its creation is acknowledged, matching weapon target admission."
   },
   "input": {
     "start_frame": 100,

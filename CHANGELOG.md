@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Gate owner movement against remote player capsules on the same creation acknowledgment used for weapon targeting. The room replay covers missing and acknowledged delivery with and without an owner StateScript. Passed 592 library tests and Clippy.
+
 - Route authored NPC walk requests through the shared static navigator, with one cached route per destination. Collision-resolved steering follows the waypoints while preserving aim. Clear the route on request exit or body displacement. Passed 592 library tests including the synthetic wall detour, two prepared bot return replays, and Clippy.
 
 - Publish NPC walk input from the horizontal travel resolved by the mover. Purely vertical motion releases walking input while preserving the last input frame and aim. The prepared knockback replay checks outgoing locomotion during the trip back and input release at the destination. Passed 592 library tests, two prepared bot return replays, and Clippy.
