@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Retire observer projectile volleys whose flights are all due even when the launch packet has no acknowledgement yet. Stop launch retries before releasing the referenced entities. Keep independent retirement for acknowledged pellets. Passed both observer delivery cases, 821 library tests, and Clippy.
+
 - Cover bot projectile interception on an authored Practice Range firing lane. The prepared replay checks that the front bot takes the impact and the player behind it stays unharmed. In the same lane, a shot already in flight reaches the player if the front bot dies before contact. Both impacts coincide with observer projectile completion. The prepared lane and controlled stock-bot projectile regressions passed.
 
 - Resolve each pellet of an authored uniform-cone hitscan volley with its own deterministic direction. One shot report still owns the volley, so pellet expansion leaves the existing ammunition and cadence logic intact. Passed 820 library tests and the prepared 104319 ring-spread and burst-falloff replays. The full Tracer startup probe remains blocked by four existing StateScript initialization diagnostics.

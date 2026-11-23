@@ -108,16 +108,18 @@ be off when the server captures the frame. Its activation identity
 remains available for the observer's projectile launch record.
 
 For authored predicted projectiles, observer delivery retains the exact
-volley activation until the launch is acknowledged. It creates the
+volley activation while the launch can be retried. It creates the
 visible projectile entities after the source baseline is acknowledged,
 then sends the channel 2 launch after both those creates and the
 matching volley projection are acknowledged. Interrupted delivery
 retries the same record and entity IDs. The room's flight completion
-drives retirement. Once the launch is acknowledged, the retirement
-deadline uses the send frame of that launch plus the server flight
-duration. It does not restart at the acknowledgement frame. The source,
-flight definition, and shot timing come from
-the authored volley and shared simulation.
+drives retirement. Acknowledged volleys retire projectiles individually
+at the launch send frame plus each server flight duration. While the
+launch acknowledgement is outstanding, the observer keeps the referenced
+entities available for retries until every flight in the volley is due
+for retirement. At that point it queues their destroys and discards
+further launch retries. The source, flight definition, and shot timing
+come from the authored volley and shared simulation.
 
 A single-shot activation can start and end within one VM tick. The
 shot report captures active remote data-flow inputs sourced from the

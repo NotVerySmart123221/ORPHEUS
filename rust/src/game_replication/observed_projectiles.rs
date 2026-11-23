@@ -288,8 +288,8 @@ impl WorldDelivery {
                 .get(&source)
                 .and_then(|stream| stream.base())
                 .map(|(_, base)| base);
-            let deadline = view
-                .completed_at()
+            let completed = view.completed_at();
+            let deadline = completed
                 .unwrap_or_else(|| view.shot.launched.saturating_add(view.shot.lifetime_ticks))
                 .saturating_add(DELIVERY_GRACE);
             let expired = tick >= deadline;
@@ -328,7 +328,16 @@ impl WorldDelivery {
                         false
                     }
                 }
-                Phase::Launching { .. } => !live || expired,
+                Phase::Launching { sent_at } => {
+                    // A launch can already be visible while its ACK is outstanding.
+                    // Stop retrying it once the whole volley is due for retirement.
+                    // Until then, a retry still needs every referenced entity.
+                    !live
+                        || expired
+                        || sent_at.zip(completed).is_some_and(|(sent_at, end)| {
+                            tick >= sent_at.saturating_add(end.saturating_sub(view.shot.launched))
+                        })
+                }
                 Phase::Visible { sent_at } => {
                     // The client can start tracing the projectile on receipt,
                     // before this room processes the packet acknowledgement.
@@ -481,6 +490,15 @@ mod tests {
 
     #[test]
     fn remote_projectiles_wait_for_creates_and_the_exact_volley_then_retry_launch() {
+        check_remote_projectile_delivery(true);
+    }
+
+    #[test]
+    fn completed_remote_volley_retires_with_launch_ack_outstanding() {
+        check_remote_projectile_delivery(false);
+    }
+
+    fn check_remote_projectile_delivery(ack_launch: bool) {
         #[derive(Deserialize)]
         struct Fixture {
             case_id: String,
@@ -651,6 +669,24 @@ mod tests {
         ]);
         world.advance_observed_projectiles(finished).unwrap();
         assert!(outgoing(&mut world).is_empty());
+        if !ack_launch {
+            let retire = retry_tick + input.flight_ticks;
+            world.advance_observed_projectiles(retire - 1).unwrap();
+            assert!(outgoing(&mut world).is_empty());
+            world.advance_observed_projectiles(retire).unwrap();
+            acknowledge(&mut world, vec![replay], false);
+            let destroys = outgoing(&mut world);
+            assert_eq!(destroys.len(), entities.len());
+            for (destroy, entity) in destroys.iter().zip(entities) {
+                assert_eq!(destroy.update.entity, entity);
+                assert!(matches!(destroy.update.operation, Some(Operation::Destroy)));
+            }
+            acknowledge(&mut world, destroys, true);
+            world.advance_observed_projectiles(retire + 1).unwrap();
+            assert!(world.observed_projectiles.views.is_empty());
+            assert!(world.observed_projectiles.reserved.is_empty());
+            return;
+        }
         acknowledge(&mut world, vec![replay], true);
         let mut settled = newer.clone();
         world.observed_projectiles.retain_volleys(&mut settled);
