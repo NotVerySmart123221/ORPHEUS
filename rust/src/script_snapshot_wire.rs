@@ -288,6 +288,8 @@ impl ProjectedSnapshot {
         chunk: u32,
         frame: u32,
         changes: &BTreeSet<crate::script_stream::ChangeKey>,
+        detailed: bool,
+        playtest: bool,
     ) {
         use crate::script_expr::Scope;
         use crate::script_stream::ChangeKey;
@@ -311,12 +313,19 @@ impl ProjectedSnapshot {
                         _ => None,
                     }
                 });
-                if sent_state || written_ammo.is_some() {
+                if detailed && (sent_state || written_ammo.is_some()) {
                     let (counter, start_ms) = volley.identity;
                     let introduced = changes.contains(&ChangeKey::VolleyIntroduction(id, raw));
                     crate::owner_trace::record(format_args!(
                         "owner-volley delta body={:08x} chunk={chunk} frame={frame} instance={id} state={raw} sent_state={sent_state} active={} counter={counter} start_ms={start_ms} introduced={introduced} written_ammo={written_ammo:?}",
                         self.entity, state.active
+                    ));
+                }
+                if let Some(ammo) = written_ammo.filter(|_| playtest) {
+                    let (counter, start_ms) = volley.identity;
+                    crate::owner_trace::playtest(format_args!(
+                        "owner-ammo body={:08x} chunk={chunk} frame={frame} instance={id} state={raw} active={} counter={counter} start_ms={start_ms} sent_ammo={ammo}",
+                        self.entity, state.active,
                     ));
                 }
             }

@@ -132,9 +132,15 @@ cargo test --locked -p orpheus --lib stock_practice_owner_rifle_batched_tap_deli
 
 The probe submits adjacent press and release commands in one input batch.
 It checks the posed shot and the acknowledged owner projection after the
-batch. An inactive volley and lower ammunition in the final projection are
-compatible with an earlier shot on the batch's press frame. The probe
-cannot verify first-person animation, which the client draws locally.
+batch. It also sends the next tap as separate press and release packets
+and drops the press packet. The active volley carries the pre-shot value
+for prediction. The release carries the lower authoritative value without
+emitting a second shot. The probe does not render the original HUD.
+
+An Inspector build with bounded playtest capture records `owner-ammo`
+rows when an owner packet writes an authored volley's ammo variable.
+Each row includes the command frame, volley activation, active flag, and
+wire value. High-frequency owner tracing is optional for this capture.
 
 The prepared `stock_practice_owner_gap_does_not_charge_for_an_unposed_rifle_round`
 probe covers the next rifle round falling exactly on a missing command

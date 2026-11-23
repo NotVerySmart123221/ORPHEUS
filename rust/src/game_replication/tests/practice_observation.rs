@@ -567,6 +567,59 @@ fn stock_practice_owner_rifle_batched_tap_delivers_terminal_ammo() {
         snapshot.volley_identity(rifle_id, 10),
         Some((1, u64::from(press) * FRAME_MS))
     );
+
+    // Send the next press and release separately. The press can seed the
+    // client's volley with the count before the shot. Lose that packet and
+    // prove the release carries the post-shot count without another shot.
+    let next_press = release + 24;
+    let next_release = next_press + 1;
+    for (frame, buttons, arrived, wire_ammo) in
+        [(next_press, FIRE, false, 29), (next_release, 0, true, 28)]
+    {
+        world.queue_commands(
+            frame,
+            &[Command {
+                frame,
+                buttons,
+                ..Command::default()
+            }],
+        );
+        assert!(
+            !world
+                .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 32)
+                .unwrap()
+                .1
+        );
+        let shots = world.take_hitscan(scene.simulation_mut());
+        assert_eq!(shots.len(), usize::from(buttons == FIRE));
+        assert_eq!(
+            rifle_state(scene.simulation().player_body(id).unwrap()).0,
+            28
+        );
+        let (_, sent) = transmit(
+            &mut world,
+            Some(scene.simulation_mut()),
+            &mut egress,
+            frame,
+            frame - FIRST_TICK,
+        );
+        let stream = &world.body_script.as_ref().unwrap().stream;
+        assert_eq!(stream.command_frame(), frame);
+        assert_eq!(
+            stream
+                .latest_snapshot()
+                .unwrap()
+                .instance_variables(rifle_id)
+                .unwrap()[&53],
+            ScriptValue::Integer(wire_ammo),
+        );
+        transport_outcome(&mut world, &mut egress, sent.sequence, arrived);
+    }
+    let (_, confirmed) = world.body_script.as_ref().unwrap().stream.base().unwrap();
+    assert_eq!(
+        confirmed.instance_variables(rifle_id).unwrap()[&53],
+        ScriptValue::Integer(28)
+    );
 }
 
 #[test]

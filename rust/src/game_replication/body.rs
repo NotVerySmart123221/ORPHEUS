@@ -349,12 +349,18 @@ impl BodyScript {
     pub(super) fn sent(&mut self, last: u32) {
         if let Some(report) = self.stream.sent(last) {
             #[cfg(feature = "inspector")]
-            if crate::owner_trace::enabled() {
-                report.snapshot.trace_owner_volley_delta(
-                    last,
-                    report.command_frame,
-                    report.changes,
-                );
+            {
+                let detailed = crate::owner_trace::enabled();
+                let playtest = crate::owner_trace::playtest_enabled();
+                if detailed || playtest {
+                    report.snapshot.trace_owner_volley_delta(
+                        last,
+                        report.command_frame,
+                        report.changes,
+                        detailed,
+                        playtest,
+                    );
+                }
             }
             if let Some(projectiles) = self.projectiles.as_mut() {
                 projectiles.owner_sent(
