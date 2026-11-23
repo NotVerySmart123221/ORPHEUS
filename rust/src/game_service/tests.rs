@@ -7,6 +7,7 @@ mod death_notice;
 mod harness;
 mod isolation;
 mod junkenstein_validation;
+mod npc_fire;
 mod same_schedule;
 mod world_harness;
 

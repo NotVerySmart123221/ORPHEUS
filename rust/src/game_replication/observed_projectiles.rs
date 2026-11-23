@@ -329,14 +329,16 @@ impl WorldDelivery {
                     }
                 }
                 Phase::Launching { sent_at } => {
-                    // A launch can already be visible while its ACK is outstanding.
-                    // Stop retrying it once the whole volley is due for retirement.
-                    // Until then, a retry still needs every referenced entity.
-                    (!live && sent_at.is_none())
-                        || expired
-                        || sent_at.zip(completed).is_some_and(|(sent_at, end)| {
-                            tick >= sent_at.saturating_add(end.saturating_sub(view.shot.launched))
-                        })
+                    // A short flight can finish before transport reports a lost
+                    // launch. Keep the shot and its entities retryable until the
+                    // delivery deadline while its source can still receive it.
+                    expired
+                        || (!live
+                            && (sent_at.is_none()
+                                || sent_at.zip(completed).is_some_and(|(sent_at, end)| {
+                                    tick >= sent_at
+                                        .saturating_add(end.saturating_sub(view.shot.launched))
+                                })))
                 }
                 Phase::Visible { sent_at } => {
                     // The client can start tracing the projectile on receipt,
@@ -494,7 +496,7 @@ mod tests {
     }
 
     #[test]
-    fn completed_remote_volley_retires_with_launch_ack_outstanding() {
+    fn completed_remote_volley_retries_late_loss_until_the_delivery_deadline() {
         check_remote_projectile_delivery(false, false);
     }
 
@@ -511,6 +513,7 @@ mod tests {
             case_id: String,
             input: Input,
             shooter_retirement_ticks_after_transmission: u32,
+            loss_report_ticks_after_visual_end: u32,
         }
         let fixture: Fixture = serde_json::from_str(include_str!(
             "../../../fixtures/behavior/observed-projectile-delivery-v1.json"
@@ -691,11 +694,22 @@ mod tests {
             assert!(outgoing(&mut world).is_empty());
         }
         if !ack_launch {
-            let retire = retry_tick + input.flight_ticks;
+            let visual_end = retry_tick + input.flight_ticks;
+            let (retire, last_launch) = if retire_source {
+                (visual_end, replay)
+            } else {
+                let report_tick = visual_end + fixture.loss_report_ticks_after_visual_end;
+                world.advance_observed_projectiles(report_tick).unwrap();
+                assert!(outgoing(&mut world).is_empty());
+                acknowledge(&mut world, vec![Arc::clone(&replay)], false);
+                let late_retry = send_launch(&mut world, report_tick, 3);
+                assert_eq!(late_retry.update, replay.update);
+                (finished + DELIVERY_GRACE, late_retry)
+            };
             world.advance_observed_projectiles(retire - 1).unwrap();
             assert!(outgoing(&mut world).is_empty());
             world.advance_observed_projectiles(retire).unwrap();
-            acknowledge(&mut world, vec![replay], false);
+            acknowledge(&mut world, vec![last_launch], false);
             let destroys = outgoing(&mut world);
             assert_eq!(destroys.len(), entities.len());
             for (destroy, entity) in destroys.iter().zip(entities) {

@@ -3,6 +3,7 @@
   "case_id": "observed-projectile-delivery-v1",
   "evidence": "rust-headless-synthetic",
   "shooter_retirement_ticks_after_transmission": 1,
+  "loss_report_ticks_after_visual_end": 3,
   "input": {
     "source": 3221229590,
     "graph": 907,

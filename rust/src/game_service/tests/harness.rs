@@ -209,6 +209,7 @@ pub struct WorldRecord {
     pub movement_frame: Option<u32>,
     pub skin: Option<(u32, bool)>,
     pub script: Option<ReceivedChunk>,
+    pub has_projectile_launch: bool,
     pub projectile_release: Option<u32>,
     pub base_health: Option<f32>,
     pub total_health: Option<f32>,
@@ -275,9 +276,9 @@ impl WorldRecord {
     }
 }
 
-fn skip_projectile_launches(reader: &mut BitReader<'_>) {
+fn read_projectile_launch_presence(reader: &mut BitReader<'_>) -> bool {
     if !reader.bit().unwrap() {
-        return;
+        return false;
     }
     let mut first = true;
     while reader.bit().unwrap() {
@@ -316,6 +317,7 @@ fn skip_projectile_launches(reader: &mut BitReader<'_>) {
             }
         }
     }
+    !first
 }
 
 fn skip_projectile_escape(reader: &mut BitReader<'_>, short: usize, middle: usize) {
@@ -343,6 +345,7 @@ pub fn world_records(schemas: &Schemas, packet: &Packet) -> Vec<WorldRecord> {
                 movement_frame: None,
                 skin: None,
                 script: None,
+                has_projectile_launch: false,
                 projectile_release: None,
                 base_health: None,
                 total_health: None,
@@ -373,7 +376,7 @@ pub fn world_records(schemas: &Schemas, packet: &Packet) -> Vec<WorldRecord> {
             if !reader.bit().unwrap() {
                 return record;
             }
-            skip_projectile_launches(&mut reader);
+            record.has_projectile_launch = read_projectile_launch_presence(&mut reader);
             if reader.bit().unwrap() {
                 assert_eq!(reader.var_b().unwrap(), u32::MAX);
                 record.projectile_release = Some(reader.var_b().unwrap());

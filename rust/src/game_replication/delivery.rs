@@ -678,6 +678,12 @@ impl WorldDelivery {
                     id.entity
                 ));
             }
+            Delivery::ObservedProjectile { id, step } => {
+                crate::owner_trace::playtest(format_args!(
+                    "npc-projectile event={event} owner={:08x} packet={sequence} batch={id} step={step:?} entity={entity:08x}",
+                    self.owner
+                ));
+            }
             _ => {}
         }
     }
