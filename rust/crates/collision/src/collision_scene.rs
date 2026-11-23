@@ -695,6 +695,37 @@ mod tests {
             .unwrap();
         assert_eq!((mesh.distance, mesh.mask, mesh.surface), (3.0, EXTRA, 23));
         assert_eq!(mode.ray_source(mesh), placed);
+
+        use crate::{contact_gjk::sweep::MeshProbe, contact_world::ContactWorld};
+        let fixture_data: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../fixtures/behavior/map-combat-ray-geometry-v1.json"
+        )))
+        .unwrap();
+        let sweep_contract = &fixture_data["placed_mesh_sweep"];
+        let category = sweep_contract["query_category"].as_u64().unwrap() as u16;
+        let excluded = sweep_contract["excluded_category"].as_u64().unwrap() as u16;
+        let radius = sweep_contract["radius"].as_f64().unwrap() as f32;
+        let identifiers = BTreeSet::from([MODE_PROP]);
+        let sweep = |world: &ContactWorld, category| {
+            world
+                .scene_sweep(MeshProbe {
+                    points: &[[0.0; 3]],
+                    radius,
+                    start: [4.0, 0.0, 0.0],
+                    end: [4.0, 0.0, 8.0],
+                    category,
+                })
+                .unwrap()
+        };
+        let expanded =
+            ContactWorld::from_expanded_ray_cache(cache, &identifiers, identity()).unwrap();
+        assert_eq!(category, mesh.mask);
+        let hit = sweep(&expanded, category).expect("same placed face as the point ray");
+        assert_eq!(hit.triangle, Some(0));
+        assert!(sweep(&expanded, excluded).is_none());
+        let movement = ContactWorld::from_movement_cache(fixture(false), &identifiers).unwrap();
+        assert!(sweep(&movement, category).is_none());
     }
 
     #[test]

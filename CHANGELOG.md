@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Admit placed meshes to expanded combat sweeps using the union of their face categories. Individual faces retain their authored filters. The synthetic gap and placement tests cover the sweep and ray behavior; movement keeps its proxy mask. Record the equivalent Practice Range main-mesh selection under the current weapon category. Passed 590 library tests, the prepared 104319 cache check, and Clippy.
+
 - Extend the prepared Practice Range firing lane to check that a living blocker prevents victim feedback and that a later NPC impact delivers the settled origin and surface normal after the blocker dies. Record the native hit-position transform and remaining material and reaction bindings.
 
 - Preserve the first target surface point and outward normal for hitscan and projectile impacts. Keep the projectile centre for flight completion and send the normal in the opt-in victim feedback event. Splash keeps its blast origin, and the hit-position field awaits a verified coordinate binding. Passed 825 library tests, the prepared 104319 victim-message replay, and Clippy.

@@ -271,7 +271,7 @@ impl ContactWorld {
         identifiers: &BTreeSet<u64>,
     ) -> Result<Self, ContactWorldError> {
         cache.header.check_movement()?;
-        Self::from_static_cache(cache, identifiers)
+        Self::from_static_cache(cache, identifiers, false)
     }
 
     /// Prepare swept queries over the same verified geometry as combat rays.
@@ -281,12 +281,13 @@ impl ContactWorld {
         identity: RayCacheIdentity<'_>,
     ) -> Result<Self, ContactWorldError> {
         cache.header.check_ray(identity)?;
-        Self::from_static_cache(cache, identifiers)
+        Self::from_static_cache(cache, identifiers, true)
     }
 
     fn from_static_cache(
         cache: CollisionCache,
         identifiers: &BTreeSet<u64>,
+        expanded_rays: bool,
     ) -> Result<Self, ContactWorldError> {
         let groups = cache.header.placement_groups(identifiers);
         let mut shapes = Vec::new();
@@ -318,9 +319,13 @@ impl ContactWorld {
                 let key = (placement.model, slot, placement.scale.map(f32::to_bits));
                 let geometry = match scaled.entry(key) {
                     Entry::Occupied(found) => found.into_mut(),
-                    Entry::Vacant(slot_entry) => {
-                        slot_entry.insert(placed_geometry(shape, placement, slot, &mut raw_meshes)?)
-                    }
+                    Entry::Vacant(slot_entry) => slot_entry.insert(placed_geometry(
+                        shape,
+                        placement,
+                        slot,
+                        &mut raw_meshes,
+                        expanded_rays,
+                    )?),
                 };
                 shapes.push(StaticShape::new(geometry.clone(), Some(frame))?);
             }
@@ -442,6 +447,7 @@ fn placed_geometry(
     placement: Placement,
     slot: usize,
     raw_meshes: &mut HashMap<(u32, usize), Arc<Mesh>>,
+    expanded_rays: bool,
 ) -> Result<StaticGeometry, ContactWorldError> {
     let scale = placement.scale;
     match shape {
@@ -449,10 +455,17 @@ fn placed_geometry(
             let raw = raw_meshes
                 .entry((placement.model, slot))
                 .or_insert_with(|| Arc::new(mesh.clone()));
+            // Expanded rays select individual faces. Their sweep must admit the same
+            // face categories before the mesh query applies the per-face filter.
+            let mask = if expanded_rays {
+                mesh.triangles.iter().fold(0, |mask, face| mask | face.mask)
+            } else {
+                *mask
+            };
             Ok(StaticGeometry::Mesh(Arc::new(ContactMesh::new(
                 Arc::clone(raw),
                 scale,
-                *mask,
+                mask,
             )?)))
         }
         Shape::Hull(hull) => {

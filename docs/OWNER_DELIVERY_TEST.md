@@ -170,3 +170,17 @@ the weapon ray cache. `movement` identifies the movement geometry
 fallback. `cache_source` identifies a core mesh, hull, or map placement.
 Placement hits report the cache placement index, model index and mode group.
 Actor hits carry the target entity.
+
+For the prepared 104319 Practice Range cache, the main mesh has 51,276
+triangles in the movement cache and 312,867 in the expanded cache. The
+current weapon query category (`0x18`) selects the same 51,276 main-mesh
+triangles in both, with identical vertices and masks. Expanded cache
+admission alone therefore does not explain a different result at a gap
+in that mesh. Check the source of the specific blocked shot and the
+retail weapon category before changing the filter.
+
+Expanded sweeps use the union of each placed mesh's face categories
+for admission, then filter the individual faces. This matches the
+point-ray category lookup. The prepared Practice Range and Kanezaka
+caches each contain a placed mesh with face category bits absent from
+the proxy mask. Movement contacts still use the movement proxy filter.
