@@ -3653,15 +3653,10 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
     ))
     .unwrap();
     let ready = &fixture["ready_selection"];
-    let action = u64::from_str_radix(
-        ready["action"]
-            .as_str()
-            .unwrap()
-            .strip_prefix("0x")
-            .unwrap(),
-        16,
-    )
-    .unwrap();
+    let asset = |value: &Json| {
+        u64::from_str_radix(value.as_str().unwrap().strip_prefix("0x").unwrap(), 16).unwrap()
+    };
+    let action = asset(&ready["action"]);
     let request = |action| {
         ClientWheelAction::read(&Message {
             id: CLIENT_WHEEL_ACTION,
@@ -4310,6 +4305,72 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                         .count(),
                     1,
                     "the authored PlayScript replacement keeps a single preload"
+                );
+            }
+        }
+        if with_room && graphs.has_asset_category_data() {
+            let (component, mut world) = prepared_soldier_component(Arc::clone(&graphs), true);
+            world.spatial_frame = runtime.world.spatial_frame.take();
+            world.eye_position = Some(vector(&spray_input["eye"]));
+            runtime.component = component;
+            runtime.world = world;
+            runtime.frame = FIRST_TICK;
+            runtime.wheel_delivery_frame = FIRST_TICK;
+            let callouts = &fixture["repeated_callouts"];
+            let rest = callouts["rest_frames"].as_u64().unwrap() as u32;
+            let receiver = callouts["healing_receiver_output"].as_u64().unwrap() as u32;
+            let advance = |runtime: &mut PlayerBodyRuntime, frames| {
+                let start = (runtime.snapshot().unwrap().now_ms / FRAME_MS) as u32;
+                for frame in start + 1..=start + frames {
+                    runtime
+                        .component
+                        .advance_frame(frame, &mut runtime.world)
+                        .unwrap();
+                    runtime.frame = frame;
+                }
+            };
+            for key in ["greeting", "need_healing", "greeting"] {
+                assert_eq!(
+                    runtime
+                        .queue_wheel_selection(request(asset(&callouts[key])), None)
+                        .unwrap(),
+                    2
+                );
+                advance(&mut runtime, 10);
+                let snapshot = runtime.snapshot().unwrap();
+                assert!(
+                    snapshot.initialization_complete(),
+                    "{key}: {:?}",
+                    snapshot.diagnostics
+                );
+                if key == "need_healing" {
+                    let receiver = snapshot
+                        .instances
+                        .values()
+                        .find(|instance| instance.graph == 0x05ad)
+                        .unwrap()
+                        .variables
+                        .get(&receiver);
+                    assert!(
+                        receiver.is_some(),
+                        "the authored local receiver did not run"
+                    );
+                } else {
+                    assert!(
+                        snapshot
+                            .instances
+                            .values()
+                            .any(|instance| instance.graph == 0x0341),
+                        "greeting did not start at frame {}",
+                        runtime.frame
+                    );
+                }
+                advance(&mut runtime, rest);
+                let snapshot = runtime.snapshot().unwrap();
+                assert!(
+                    snapshot.initialization_complete(),
+                    "{key} follow-up: {:?}",
+                    snapshot.diagnostics
                 );
             }
         }

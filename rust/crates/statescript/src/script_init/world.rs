@@ -42,6 +42,8 @@ pub struct ContactTarget {
 pub struct ViewTargetQuery<'a> {
     pub source: u32,
     pub offset: [f64; 3],
+    /// When set, the vector is a world-space eye origin and the heading is in degrees.
+    pub eye_heading: Option<f64>,
     pub range: f64,
     pub aperture: f64,
     pub limit: usize,

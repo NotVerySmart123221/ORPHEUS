@@ -494,13 +494,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 let Some(parameters) = self.game_message_parameters(id, node)? else {
                     return Ok(false);
                 };
-                let Some(message) = message
-                    .filter(|&message| self.world.route_game_message(site, message, &parameters))
-                else {
+                let Some(message) = message else {
                     self.report(site, Issue::UnsupportedField("routed game message targets"));
                     return Ok(false);
                 };
-                if result {
+                let routed = self.world.route_game_message(site, message, &parameters);
+                // A parameterless notification can feed a listener on this
+                // component even when there is no external route.
+                let local = if (result && routed) || (!routed && parameters.is_empty()) {
                     self.machine.queue_entries_from(
                         self.graphs,
                         None,
@@ -508,7 +509,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         message,
                         parameters,
                         self.machine.now_ms,
-                    )?;
+                    )? != 0
+                } else {
+                    false
+                };
+                if !routed && !local {
+                    self.report(site, Issue::UnsupportedField("routed game message targets"));
+                    return Ok(false);
                 }
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)

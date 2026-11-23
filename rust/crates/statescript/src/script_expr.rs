@@ -185,6 +185,7 @@ pub enum HealthQuery {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FilterRelation {
     Hostile,
+    Friendly,
     FriendlyOther,
 }
 

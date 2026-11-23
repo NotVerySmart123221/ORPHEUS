@@ -1730,6 +1730,7 @@ impl Evaluator {
             let friendly = source.trailing_zeros() == target.trailing_zeros();
             if match policy.relation {
                 FilterRelation::Hostile => friendly,
+                FilterRelation::Friendly => !friendly,
                 FilterRelation::FriendlyOther => !friendly || entity == owner,
             } {
                 return Ok(Value::Bool(false));

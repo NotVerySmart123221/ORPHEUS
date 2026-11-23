@@ -58,6 +58,7 @@ fn frozen_view_query_only_reports_empty_when_no_other_actor_can_match() {
     let query = ViewTargetQuery {
         source: 9,
         offset: [0.0; 3],
+        eye_heading: None,
         range: 10.0,
         aperture: 22.0,
         limit: 4,

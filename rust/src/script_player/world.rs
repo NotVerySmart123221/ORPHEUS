@@ -1004,6 +1004,19 @@ impl World for BodyWorld {
         site: Site,
         filter: &Json,
     ) -> Option<crate::script_expr::SceneFilterPolicy> {
+        use crate::script_expr::{FilterPredicate, FilterRelation, SceneFilterPolicy};
+        if self.is_player_site(site)
+            && filter["m_66747E7D"] == 1
+            && filter
+                .get("m_89831602")
+                .is_none_or(|v| v.is_null() || v == 0)
+            && filter.get("m_condition").is_none_or(Json::is_null)
+        {
+            return Some(SceneFilterPolicy {
+                relation: FilterRelation::Friendly,
+                predicate: FilterPredicate::None,
+            });
+        }
         let source = self.death_source.as_ref()?;
         self.settled_scene_filter_policy(site, filter, &source.target)
     }
