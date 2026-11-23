@@ -6,6 +6,8 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ### 2026-11-23
 
+- Extend the prepared Practice Range firing lane to check that a living blocker prevents victim feedback and that a later NPC impact delivers the settled origin and surface normal after the blocker dies. Record the native hit-position transform and remaining material and reaction bindings.
+
 - Preserve the first target surface point and outward normal for hitscan and projectile impacts. Keep the projectile centre for flight completion and send the normal in the opt-in victim feedback event. Splash keeps its blast origin, and the hit-position field awaits a verified coordinate binding. Passed 825 library tests, the prepared 104319 victim-message replay, and Clippy.
 
 - Resolve literal contact-set states from their authored resource, source and synchronized target binding. Player and NPC hosts share the state path, with the target list refreshed by the existing VM watcher. Passed 824 library tests, Clippy, and a prepared 104319 replay that loads two distinct contact sets. The full Junkenstein room replay stops at map setup because the local catalog lacks spawn rows.

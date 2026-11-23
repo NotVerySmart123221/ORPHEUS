@@ -434,9 +434,11 @@ fn check_practice_firing_lane(
     use crate::{
         game_clock::{FIRST_TICK, TICK_PERIOD},
         game_combat::{ObservedProjectileEvent, PlayerBodyState},
+        game_combat_messages::CombatNotice,
         game_replication::BodyId,
         mover_settings::MoverSettings,
         script_player::fixture_body_factory,
+        static_ray::norm,
     };
 
     let (room, queries) = scene.bot_simulation();
@@ -468,6 +470,7 @@ fn check_practice_firing_lane(
     );
     let rear_health = state.vitals().unwrap().total();
     room.spawn_player_body(state).unwrap();
+    room.enable_received_damage_feedback();
     let front_health = room.body_healths().unwrap()[&front];
     let mut lane_flights = BTreeSet::new();
     let mut cover_down = false;
@@ -492,9 +495,15 @@ fn check_practice_firing_lane(
                 _ => {}
             }
         }
+        let cues: Vec<_> = room
+            .take_player_cues()
+            .into_iter()
+            .filter(|cue| matches!(cue.notice, CombatNotice::DamageReceived { .. }))
+            .collect();
         let player_hp = room.player_body(rear).unwrap().vitals().unwrap().total();
         if live_cover {
             assert_eq!(player_hp, rear_health);
+            assert!(cues.is_empty());
             let health = room.body_healths().unwrap()[&front];
             if health < front_health {
                 assert!(health > 0.0 && completed);
@@ -502,6 +511,30 @@ fn check_practice_firing_lane(
             }
         } else if player_hp < rear_health {
             assert!(cover_down && room.is_bot_dead(front) && completed);
+            let [cue] = cues.as_slice() else {
+                panic!("expected one received-damage cue after the lethal cover was removed");
+            };
+            assert_eq!(cue.listener, rear);
+            let CombatNotice::DamageReceived {
+                source,
+                victim,
+                dealt,
+                origin: Some(origin),
+                normal: Some(normal),
+            } = cue.notice
+            else {
+                panic!("expected a damage cue with the settled NPC hit geometry");
+            };
+            assert_eq!(source, shooter);
+            assert_eq!(victim, rear.entity);
+            assert!((f64::from(dealt) - (rear_health - player_hp)).abs() < 1e-6);
+            assert!((norm(normal) - 1.0).abs() < 1e-8);
+            let dot: f64 = normal
+                .into_iter()
+                .zip(origin.into_iter().zip(rear_position))
+                .map(|(axis, (source, victim))| axis * (source - victim))
+                .sum();
+            assert!(dot > 0.0);
             return;
         }
     }

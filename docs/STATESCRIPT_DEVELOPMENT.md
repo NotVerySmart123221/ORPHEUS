@@ -1224,7 +1224,16 @@ projectile segment, the target surface contact point and normal, and
 the incoming direction. An expanded projectile sweep keeps the
 projectile centre separately for its own completion. Splash records the
 blast origin and leaves the surface normal unset. Damage without weapon
-geometry uses neutral message fields.
+geometry uses neutral message fields. The prepared Practice Range firing
+lane confirms that a live front bot prevents player damage feedback.
+When the bot dies while the shot is in flight, the shot reaches the
+player and their notice carries the NPC origin and outward normal.
+
+The hit-position decoder uses three basis vectors and a translation
+from the local entity's transform path when that transform is available.
+It passes the position through when the transform cannot be resolved.
+The headless room has the world contact point. The exact local transform
+and its sampling frame need to be established before filling that field.
 
 The 104319 victim event also has a compact contact-set operand. The
 client expands it to a `.049` asset and carries it into its contact effect
@@ -1232,7 +1241,16 @@ request. This is a contact-set selector. The local `STUContactSet` schema
 maps contact type and material to authored responses, and actor and
 projectile components use contact sets for different purposes. A body's
 default set alone does not identify the material or the contact response
-for an incoming hit.
+for an incoming hit. The local contact sets refer to both `.04A` and
+`.00D` responses. Sampled `.04A` rows use different audio events for
+different material IDs, so a material-specific sound does not establish
+the particle used for the hit. Actor `STUModelLook` records also have
+material-effect selectors and variants. Their connection to weapon-hit
+particles remains unverified. The map-script archive lists
+`m_hitReactions` on `STU_F3104738` with AI damage ranges, tags and
+priorities. Its listings classify those nodes as plain State on the
+examined path, so their authored rows alone do not establish a runtime
+binding for the player's flinch.
 
 For the authored `STU_23A00A53` state, the VM reads the literal
 `m_contactSet`, verifies a networked self source with a synchronized
