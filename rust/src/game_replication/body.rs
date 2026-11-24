@@ -319,9 +319,10 @@ impl BodyScript {
         } else {
             let replace_initial =
                 matches!(self.unsent_delta, Some((_, DeltaKind::InitialOwner(_))));
+            let same_frame_refresh = self.frame > 0 && self.frame == self.stream.command_frame();
             let Some(kind) = self
                 .stream
-                .owner_kind(self.frame, false, replace_initial)
+                .owner_kind(self.frame, same_frame_refresh, replace_initial)
                 .map_err(invalid)?
             else {
                 return Ok(None);
@@ -331,6 +332,9 @@ impl BodyScript {
                 .base()
                 .expect("owner delta requires the baseline");
             let snapshot = encoder.project_next(snapshot, base).map_err(invalid)?;
+            if same_frame_refresh && &snapshot == self.stream.latest_snapshot().unwrap_or(base) {
+                return Ok(None);
+            }
             let chunk = encoder
                 .queue_delta(&mut self.stream, &snapshot, kind, runtime.frame_ms())
                 .map_err(invalid)?

@@ -54,6 +54,16 @@ pub(crate) struct PlayerBodyRuntime {
 pub(super) const DEADEYE_GRAPH: u32 = 0x022f;
 pub(super) const DEADEYE_TARGET_EFFECT: u32 = 0x01ee;
 
+impl PlayerBodyRuntime {
+    fn sync_body_health_logged(&mut self) {
+        if self.component.snapshot().is_some() {
+            if let Err(error) = self.component.sync_body_health(&mut self.world) {
+                eprintln!("Owner health synchronization failed: {error}");
+            }
+        }
+    }
+}
+
 impl OwnerBodyRuntime for PlayerBodyRuntime {
     fn set_room_activity(&mut self, activity: OwnerRoomActivity) {
         self.world.room_activity = Some(activity);
@@ -289,6 +299,13 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         let result = self
             .component
             .queue_authored_elimination_feedback(target, true);
+        let result = match result {
+            Ok(queued) if queued > 0 => {
+                self.component.run_now(&mut self.world)?;
+                Ok(queued)
+            }
+            other => other,
+        };
         #[cfg(feature = "inspector")]
         if crate::owner_trace::playtest_enabled() {
             crate::owner_trace::playtest(format_args!(
@@ -300,7 +317,11 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
     }
 
     fn heal(&mut self, amount: f64) -> f64 {
-        self.world.vitals.heal(amount)
+        let healed = self.world.vitals.heal(amount);
+        if healed > 0.0 {
+            Self::sync_body_health_logged(self);
+        }
+        healed
     }
 
     fn receive_damage(&mut self, amount: f64, source: Death) -> Damage {
@@ -313,6 +334,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                 eprintln!("Owner death charge cleanup failed: {error}");
             }
         }
+        Self::sync_body_health_logged(self);
         result
     }
 
@@ -340,11 +362,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
 
     fn take_health_update(&mut self) -> Option<EntityComponent> {
         let update = self.world.vitals.take_cumulative_update()?;
-        if self.component.snapshot().is_some() {
-            if let Err(error) = self.component.sync_body_health(&mut self.world) {
-                eprintln!("Owner health synchronization failed: {error}");
-            }
-        }
+        Self::sync_body_health_logged(self);
         Some(update)
     }
 

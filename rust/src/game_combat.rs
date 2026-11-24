@@ -390,8 +390,15 @@ impl RoomSpatialFrame {
         self.entity_facts.as_ref()
     }
 
+    pub(crate) fn terrain_category(&self) -> u16 {
+        self.ground
+            .weapon_terrain_category()
+            .unwrap_or(MOVER_CATEGORY)
+    }
+
     pub(crate) fn line_clear(&self, origin: Vec3, target: Vec3) -> Option<bool> {
-        self.ground.segment_clear(origin, target, MOVER_CATEGORY)
+        self.ground
+            .segment_clear(origin, target, self.terrain_category())
     }
 
     pub(crate) fn hostile_contact_targets(
@@ -476,7 +483,7 @@ impl RoomSpatialFrame {
         let _ = (site, vm_frame);
         let result = self
             .ground
-            .checked_cast_ray(origin, direction, max_distance, MOVER_CATEGORY)
+            .checked_cast_ray(origin, direction, max_distance, self.terrain_category())
             .map(|hit| {
                 hit.map(|hit| crate::script_expr::SpatialRayHit {
                     distance: hit.distance,
@@ -519,9 +526,12 @@ impl RoomSpatialFrame {
         // candidate list still returns unavailable, including in diagnostics.
         let result = (|| {
             let capsules = self.actor_capsules.as_ref()?;
-            let wall =
-                self.ground
-                    .checked_cast_ray(origin, direction, max_distance, MOVER_CATEGORY)?;
+            let wall = self.ground.checked_cast_ray(
+                origin,
+                direction,
+                max_distance,
+                self.terrain_category(),
+            )?;
             let mut nearest: Option<crate::script_expr::SpatialActorRayHit> = None;
             for &entity in targets {
                 let target = self.script_targets.get(&entity)?;
@@ -996,6 +1006,18 @@ impl RoomSimulation {
             .get(&wire)
             .and_then(|&entity| self.world.get::<BotState>(entity))
             .is_some_and(|state| state.bot.dead)
+    }
+
+    pub(crate) fn tracks_living_actor(&self, wire: u32) -> bool {
+        self.by_wire
+            .get(&wire)
+            .and_then(|&entity| self.world.get::<BotState>(entity))
+            .is_some_and(|state| !state.bot.dead)
+            || self
+                .players_by_wire
+                .get(&wire)
+                .and_then(|&entity| self.world.get::<PlayerBodyState>(entity))
+                .is_some_and(|state| state.id.entity == wire && state.alive())
     }
 
     fn advance_stock_bots(

@@ -3657,3 +3657,123 @@ fn debug_scripts_is_read_only_and_enforces_summary_caps() {
     assert_eq!(inst_summary.active_states[0].flags, Some(7));
     assert!(inst_summary.active_states.iter().all(|s| s.raw != 1));
 }
+
+#[test]
+fn spatial_frame_honors_weapon_terrain_category() {
+    use crate::collision_cache::{CollisionCache, Mesh, RayCacheIdentity, Triangle};
+    use serde_json::json;
+    use std::collections::BTreeSet;
+
+    let triangles = [
+        [[-1.0, 0.0, 2.0], [1.0, 0.0, 2.0], [0.0, 3.0, 2.0]],
+        [[-1.0, 0.0, 6.0], [1.0, 0.0, 6.0], [0.0, 3.0, 6.0]],
+    ];
+    let header = json!({
+        "meshes": [[6, 2]],
+        "hulls": 0,
+        "models": 0,
+        "placements": 0,
+        "identifiers": [],
+        "weapon_terrain_category": 0x0200,
+        "geometry": "expanded-static-rays",
+        "category_mask": 65535,
+        "prop_scope": "indexed-static-models",
+        "map": "0x0800000000004242",
+        "chunk": "0x0DD0001100004242",
+        "ckey": "synthetic-map"
+    });
+    let cache = CollisionCache {
+        header: serde_json::from_value(header).unwrap(),
+        meshes: vec![Mesh {
+            vertices: triangles.iter().flatten().copied().collect(),
+            triangles: vec![
+                Triangle {
+                    corners: [0, 2, 1],
+                    wings: [-1; 3],
+                    mask: MOVER_CATEGORY,
+                    surface: 0,
+                },
+                Triangle {
+                    corners: [3, 5, 4],
+                    wings: [-1; 3],
+                    mask: 0x0200,
+                    surface: 0,
+                },
+            ],
+        }],
+        hulls: vec![],
+        models: vec![],
+        placements: vec![],
+    };
+    let identity = RayCacheIdentity {
+        map_guid: 0x0800_0000_0000_4242,
+        collision_ckey: "synthetic-map",
+        placement_ckey: None,
+        prop_records_sha256: None,
+    };
+    let ground =
+        Arc::new(CollisionScene::expanded_rays(&cache, &BTreeSet::new(), identity).unwrap());
+    let target = 0xc000_0001;
+    let frame = RoomSpatialFrame {
+        candidates: vec![SpatialCandidate {
+            entity: target,
+            position: [0.0, 0.0, 4.0],
+            team: Some(1),
+        }],
+        actor_capsules: Some(BTreeMap::from([(
+            target,
+            TargetPose {
+                feet: [0.0, 0.0, 4.0],
+                height: 2.0,
+                eye: 1.5,
+                radius: 0.5,
+            },
+        )])),
+        entity_facts: None,
+        script_targets: HashMap::from([(
+            target,
+            RoomScriptTarget {
+                entity: Entity::from_raw(target),
+                candidate_index: 0,
+                health: true,
+                angles: [0, 0],
+                eye_position: Some([0.0, 1.5, 4.0]),
+                filter_flags: Some(0),
+                messages: false,
+                cue_listener: true,
+                voice: None,
+            },
+        )]),
+        player_wires: HashMap::new(),
+        ground,
+        actor_voice: None,
+        #[cfg(any(test, feature = "inspector"))]
+        captured_tick: 1,
+        #[cfg(any(test, feature = "inspector"))]
+        debug_rays: Arc::default(),
+    };
+    assert_eq!(
+        frame.line_clear([0.0, 1.0, 0.0], [0.0, 1.0, 4.0]),
+        Some(true)
+    );
+    assert_eq!(
+        frame.line_clear([0.0, 1.0, 0.0], [0.0, 1.0, 8.0]),
+        Some(false)
+    );
+    let site = crate::script_init::Site {
+        entity: target,
+        instance: 0,
+        graph: 0,
+        node: None,
+    };
+    let world_hit = frame
+        .ray_cast(site, 1, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], 10.0)
+        .unwrap()
+        .unwrap();
+    assert!((world_hit.distance - 6.0).abs() < 1e-4);
+    let actor_hit = frame
+        .actor_ray_cast(site, 1, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], 10.0, &[target])
+        .unwrap()
+        .unwrap();
+    assert_eq!(actor_hit.entity, target);
+}

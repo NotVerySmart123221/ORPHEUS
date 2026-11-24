@@ -202,9 +202,16 @@ impl CombatVoiceCatalog {
                     .iter()
                     .filter_map(move |node| multikill_exclusions(graph, node, cues))
             });
-        let Some(tags) = resolved.next() else { return };
-        if resolved.all(|other| other == tags) {
+        let Some((tags, window_ticks)) = resolved.next() else {
+            return;
+        };
+        if resolved
+            .all(|(other_tags, other_window)| other_tags == tags && other_window == window_ticks)
+        {
             self.multikill_exclusions = tags;
+            if let Some(ticks) = window_ticks.filter(|&ticks| ticks > 0) {
+                self.multikill_window_ticks = ticks;
+            }
         }
     }
 
@@ -257,7 +264,7 @@ fn multikill_exclusions(
     graph: &Graph,
     node: &Node,
     cues: &BTreeMap<u32, VoiceCueEntry>,
-) -> Option<BTreeSet<u64>> {
+) -> Option<(BTreeSet<u64>, Option<u32>)> {
     let condition = node.field("m_condition")?;
     if node.class != "STU_3387AB5D"
         || condition["$"] != "STU_AC829876"
@@ -284,6 +291,8 @@ fn multikill_exclusions(
         .filter_map(|(pos, _)| pos)
         .collect();
     let mut visited = BTreeSet::new();
+    let mut matched_switch = false;
+    let mut window_ticks = None;
     while let Some(pos) = frontier.pop() {
         let Some(branch) = graph.node(pos).filter(|_| visited.insert(pos)) else {
             continue;
@@ -292,7 +301,16 @@ fn multikill_exclusions(
             "STUStatescriptActionSetVar" => &["m_outPlug"],
             "STU_3387AB5D" => &["m_truePlug", "m_falsePlug"],
             "STUStatescriptActionSwitch" if matches_cues(graph, branch, cues) => {
-                return Some(tags);
+                matched_switch = true;
+                continue;
+            }
+            "STUStatescriptStateWait"
+                if branch.field("m_0DBAFD7F").and_then(|v| v.as_u64()) == Some(1) =>
+            {
+                if window_ticks.is_none() {
+                    window_ticks = resolve_wait_ticks(graph, branch);
+                }
+                continue;
             }
             _ => continue,
         };
@@ -303,7 +321,35 @@ fn multikill_exclusions(
                 .filter_map(|(pos, _)| pos),
         );
     }
-    None
+    matched_switch.then_some((tags, window_ticks))
+}
+
+fn resolve_wait_ticks(graph: &Graph, wait: &Node) -> Option<u32> {
+    let timeout = wait.field("m_timeout")?;
+    let seconds = match timeout["$"].as_str()? {
+        "STUConfigVarInt" | "STUConfigVarFloat" => timeout["m_value"].as_f64(),
+        "STUConfigVarDynamic" => {
+            let var_id = timeout["m_identifier"].as_u64()?;
+            let mut found = graph.nodes.iter().filter_map(|n| {
+                if n.class == "STUStatescriptActionSetVar"
+                    && n.field("m_out_Var.m_identifier").and_then(|v| v.as_u64()) == Some(var_id)
+                {
+                    let val = n.field("m_value")?;
+                    if matches!(
+                        val["$"].as_str(),
+                        Some("STUConfigVarInt" | "STUConfigVarFloat")
+                    ) {
+                        return val["m_value"].as_f64();
+                    }
+                }
+                None
+            });
+            let first = found.next()?;
+            found.all(|other| other == first).then_some(first)
+        }
+        _ => None,
+    }?;
+    (seconds.is_finite() && seconds > 0.0).then_some(((seconds * 1000.0) / 16.0).round() as u32)
 }
 
 fn matches_cues(graph: &Graph, node: &Node, cues: &BTreeMap<u32, VoiceCueEntry>) -> bool {
@@ -463,5 +509,79 @@ mod tests {
             full.hurt_cue(None, true, false, true, 0),
             Some((0x0EE0_0000_0000_0001, 0x0760_0000_0000_819E))
         );
+    }
+
+    #[test]
+    fn bind_multikill_exclusions_extracts_authored_restartable_wait_timeout() {
+        let mut voice = CombatVoiceCatalog::from_json(
+            r#"{
+                "multikill_window_ticks": 999,
+                "multikills": {
+                    "2": { "stimulus": "0x0EE000000000058A", "lines": ["0x0760000000007F74"] }
+                }
+            }"#,
+        )
+        .unwrap();
+        let make_node = |pos: u16, class: &str, fields: serde_json::Value| {
+            serde_json::json!({
+                "pos": pos, "class": class, "uid": pos, "rid": pos,
+                "remote": -1, "state": null, "client_only": false, "server_only": false,
+                "fields": fields,
+            })
+        };
+        let bundle = serde_json::json!({
+            "version": 1,
+            "bodies": {},
+            "missing": [],
+            "graphs": [{
+                "index": 533,
+                "items": 5,
+                "states": [],
+                "entries": [],
+                "remote": [],
+                "sync_vars": [],
+                "containers": {},
+                "unknown_nodes": [],
+                "fields": {},
+                "header": {
+                    "m_nodesBitCount": 4, "m_statesBitCount": 4,
+                    "m_remoteSyncNodesBitCount": 4, "m_syncVarsBitCount": 4
+                },
+                "nodes": [
+                    make_node(0, "STU_3387AB5D", serde_json::json!({
+                        "m_condition": {
+                            "$": "STU_AC829876",
+                            "m_filter": {
+                                "$": "STUConfigVarFilter",
+                                "m_8B2A4DF3": { "$": "STU_357DABBB", "m_7D7C86A1": "0x0D600000000006AD" }
+                            }
+                        },
+                        "m_truePlug": { "$": "STUStatescriptOutputPlug", "links": [[1, "m_inPlug"], [2, "m_inPlug"]] }
+                    })),
+                    make_node(1, "STUStatescriptActionSetVar", serde_json::json!({
+                        "m_out_Var": { "$": "STUConfigVarDynamic", "m_identifier": 2036 },
+                        "m_value": { "$": "STUConfigVarInt", "m_value": 2 },
+                        "m_outPlug": { "$": "STUStatescriptOutputPlug", "links": [[3, "m_beginPlug"]] }
+                    })),
+                    make_node(2, "STUStatescriptActionSwitch", serde_json::json!({
+                        "m_FDD34C25": [{
+                            "m_value": { "m_value": 2 },
+                            "links": [[4, "m_inPlug"]]
+                        }]
+                    })),
+                    make_node(3, "STUStatescriptStateWait", serde_json::json!({
+                        "m_0DBAFD7F": 1,
+                        "m_timeout": { "$": "STUConfigVarDynamic", "m_identifier": 2036 }
+                    })),
+                    make_node(4, "STUStatescriptActionSetVar", serde_json::json!({
+                        "m_value": { "m_voiceStimulus": "0x0EE000000000058A" }
+                    }))
+                ]
+            }]
+        });
+        let graphs = GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap();
+        voice.bind_multikill_exclusions(&graphs);
+        assert_eq!(voice.multikill_window_ticks(), 125);
+        assert!(voice.has_multikill_exclusions());
     }
 }

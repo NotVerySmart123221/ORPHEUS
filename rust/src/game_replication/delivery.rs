@@ -106,6 +106,7 @@ impl WorldDelivery {
             projectile_destroys: HashMap::new(),
             biotic_views: BTreeMap::new(),
             scene_views: BTreeMap::new(),
+            retiring_nameplate_chunks: HashSet::new(),
             observed_projectiles: Default::default(),
             bot_chunk_waited: false,
             last_sent_remote_movement: None,
@@ -142,6 +143,7 @@ impl WorldDelivery {
         self.projectile_destroys.clear();
         self.biotic_views.clear();
         self.scene_views.clear();
+        self.retiring_nameplate_chunks.clear();
         self.observed_projectiles = Default::default();
         self.bot_chunk_waited = false;
         self.last_sent_remote_movement = None;
@@ -471,6 +473,10 @@ impl WorldDelivery {
                 }
                 match (packet.arrived, record.delivery) {
                     (arrived, Delivery::SceneScript { last }) => {
+                        if arrived {
+                            self.retiring_nameplate_chunks
+                                .remove(&(record.update.entity, last));
+                        }
                         let stream = self
                             .scene_views
                             .get_mut(&record.update.entity)
@@ -563,6 +569,8 @@ impl WorldDelivery {
                         self.bots.remove(&record.update.entity);
                         self.created.remove(&record.update.entity);
                         self.scene_views.remove(&record.update.entity);
+                        self.retiring_nameplate_chunks
+                            .retain(|&(entity, _)| entity != record.update.entity);
                     }
                     (true, Delivery::BotControllerCreate) => {
                         self.created.insert(record.update.entity);
@@ -570,7 +578,15 @@ impl WorldDelivery {
                             state.created = true;
                         }
                     }
-                    (true, Delivery::BotPossession { .. }) => {}
+                    (true, Delivery::BotPossession { body }) => {
+                        if let Some(state) = self
+                            .bot_controllers
+                            .values_mut()
+                            .find(|state| state.possessed == Some(body))
+                        {
+                            state.possessed_acked = Some(body);
+                        }
+                    }
                     (true, Delivery::RemotePlayerCreate(id)) => {
                         self.created.insert(id.entity);
                         if let Some(stream) = self.scene_views.get_mut(&id.entity) {
@@ -874,9 +890,15 @@ impl WorldDelivery {
         let mut queued = self.ready();
         let is_bot_chunk = |item: &Ready<'_>| {
             let record = item.record;
-            matches!(record.delivery, Delivery::SceneScript { .. })
-                && record.update.chunk.is_some()
-                && self.bots.contains_key(&record.update.entity)
+            matches!(
+                record.delivery,
+                Delivery::SceneScript { last }
+                    if record.update.chunk.is_some()
+                        && self.bots.contains_key(&record.update.entity)
+                        && !self
+                            .retiring_nameplate_chunks
+                            .contains(&(record.update.entity, last))
+            )
         };
         // A mixed packet can be acknowledged even when the receiver drops
         // the NPC chunk. Give each class a send opportunity under sustained
@@ -1247,7 +1269,15 @@ impl WorldDelivery {
             return Ok(());
         }
         let bot = self.bots.contains_key(&entity);
-        let can_introduce = self.mode_ready() && !bot_dead;
+        let controller_ready = !self
+            .bot_controllers
+            .values()
+            .any(|state| state.possessed == Some(entity))
+            || self
+                .bot_controllers
+                .values()
+                .any(|state| state.possessed_acked == Some(entity));
+        let can_introduce = self.mode_ready() && !bot_dead && controller_ready;
         let stream = self
             .scene_views
             .entry(entity)
@@ -1255,20 +1285,24 @@ impl WorldDelivery {
         if self.created.contains(&entity) {
             stream.create_arrived();
         }
-        let pending = stream
+        let pending: Vec<_> = stream
             .pending()
-            .next()
-            .map(|(last, snapshot, _)| (last, bot_dead && snapshot.has_practice_nameplate()));
-        if let Some((last, stale_nameplate)) = pending {
-            // Replace an unsent live projection on death. A transmitted
-            // delta retains its normal acknowledgment and retry ordering.
-            if !stale_nameplate || !stream.discard_unsent(last) {
+            .map(|(last, snapshot, _)| (last, snapshot.has_practice_nameplate()))
+            .collect();
+        if !pending.is_empty() {
+            let allow_pipeline =
+                bot_dead && stream.base().is_some() && pending.iter().all(|&(_, has_np)| has_np);
+            if !allow_pipeline {
                 return Ok(());
             }
-            self.queued.retain(|record| {
-                record.update.entity != entity
-                    || !matches!(record.delivery, Delivery::SceneScript { last: queued } if queued == last)
-            });
+            for (last, _) in pending {
+                if stream.discard_unsent(last) {
+                    self.queued.retain(|record| {
+                        record.update.entity != entity
+                            || !matches!(record.delivery, Delivery::SceneScript { last: queued } if queued == last)
+                    });
+                }
+            }
         }
         let encoder = projection.encoder;
         let chunk = if let Some((_, base)) = stream.base() {
@@ -1297,6 +1331,9 @@ impl WorldDelivery {
                 &chunk.update,
                 "scene script chunk exceeds the datagram budget",
             )?;
+            if bot && bot_dead {
+                self.retiring_nameplate_chunks.insert((entity, chunk.last));
+            }
             self.push(Record {
                 update: chunk.update,
                 delivery: Delivery::SceneScript { last: chunk.last },
@@ -1515,6 +1552,11 @@ impl WorldDelivery {
             return;
         }
         if let Some(action) = ClientWheelAction::read(message) {
+            if let Some(target) = action.target() {
+                if target == body.entity || !simulation.tracks_living_actor(target) {
+                    return;
+                }
+            }
             self.input.push(InputWork::WheelAction {
                 body,
                 action,

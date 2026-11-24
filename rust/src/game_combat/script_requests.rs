@@ -586,7 +586,7 @@ impl RoomSimulation {
         let Some(player) = self
             .world
             .get::<PlayerBodyState>(entity)
-            .filter(|player| player.id.entity == killer_wire && player.alive())
+            .filter(|player| player.id.entity == killer_wire)
         else {
             return;
         };

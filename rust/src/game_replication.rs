@@ -93,6 +93,7 @@ struct Body {
 struct BotControllerState {
     created: bool,
     possessed: Option<u32>,
+    possessed_acked: Option<u32>,
 }
 
 /// A running owner VM and the authored data used to encode its snapshots.
@@ -359,6 +360,7 @@ pub(crate) struct WorldDelivery {
     projectile_destroys: HashMap<u32, (BodyId, ProjectileToken)>,
     biotic_views: BTreeMap<u32, BioticView>,
     scene_views: BTreeMap<u32, BodyStream<ProjectedSnapshot>>,
+    retiring_nameplate_chunks: HashSet<(u32, u32)>,
     observed_projectiles: observed_projectiles::ObservedProjectiles,
     bot_chunk_waited: bool,
     last_sent_remote_movement: Option<u32>,

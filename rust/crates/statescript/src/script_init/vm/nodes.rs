@@ -5,7 +5,7 @@ use serde_json::Value as Json;
 use crate::{
     script_expr::{self, EntityRelation, EvalError, equal, truthy},
     script_graph::{Node, asset_guid},
-    script_runtime::{ENCOUNTER_RESULT, FRAME_MS, POST_MATCH_COMPLETE, VICTORY_VIEW},
+    script_runtime::{ENCOUNTER_RESULT, FRAME_MS, POST_MATCH_COMPLETE},
     script_wire::Value,
 };
 
@@ -482,12 +482,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     .and_then(asset_guid);
                 let result =
                     (site.graph, node.pos, message) == (0x0c8c, 84, Some(ENCOUNTER_RESULT));
-                let victory_view = site.graph == 0x0cec
-                    && matches!(site.node, Some(2 | 3))
-                    && message == Some(VICTORY_VIEW);
-                if (!result && !victory_view && !field(&node.fields, "m_params").is_null())
-                    || !field(&node.fields, "m_8B34E9C3").is_null()
-                {
+                if !field(&node.fields, "m_8B34E9C3").is_null() {
                     self.report(site, Issue::UnsupportedField("routed game message targets"));
                     return Ok(false);
                 }

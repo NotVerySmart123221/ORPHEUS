@@ -21,6 +21,7 @@ const WHEEL_SELECTION: u64 = 0x0240_0000_0000_02a3;
 pub(crate) struct ClientWheelAction {
     action: u64,
     confirmed: bool,
+    target: Option<u32>,
 }
 
 impl ClientWheelAction {
@@ -37,17 +38,20 @@ impl ClientWheelAction {
         if action & !u64::from(u32::MAX) != WHEEL_ACTION_PREFIX || action == WHEEL_ACTION_PREFIX {
             return None;
         }
-        // Contextual targeting needs its own room validation. Accept only
-        // the context-free request while that path is unavailable.
-        match message.fields.get(&0x84) {
-            None => (),
-            Some(Value::Struct(marker))
-                if marker
-                    .get(&0)
-                    .is_none_or(|value| *value == Value::Unsigned(0)) => {}
+        let target = match message.fields.get(&0x84) {
+            None => None,
+            Some(Value::Struct(marker)) => match marker.get(&0) {
+                None | Some(Value::Unsigned(0)) => None,
+                Some(Value::Unsigned(entity)) => Some(u32::try_from(*entity).ok()?),
+                _ => return None,
+            },
             _ => return None,
-        }
-        Some(Self { action, confirmed })
+        };
+        Some(Self {
+            action,
+            confirmed,
+            target,
+        })
     }
 
     pub(crate) fn confirmed(self) -> bool {
@@ -56,6 +60,10 @@ impl ClientWheelAction {
 
     pub(crate) fn asset(self) -> u64 {
         self.action
+    }
+
+    pub(crate) fn target(self) -> Option<u32> {
+        self.target
     }
 
     pub(crate) fn into_local_message(self) -> RoomMessage {
@@ -342,6 +350,30 @@ mod tests {
         assert_eq!(
             known.hero_select(&heroes),
             Some(HeroSelectRequest::Pick(Some(heroes.get(SOLDIER).unwrap())))
+        );
+    }
+
+    #[test]
+    fn wheel_action_parses_optional_contextual_target_marker() {
+        use crate::jam_codec::Value as WireValue;
+
+        let make = |marker| Message {
+            id: CLIENT_WHEEL_ACTION,
+            fields: Fields::from([
+                (0x78, WireValue::Unsigned(0x0a90_0000_0000_016b)),
+                (0x80, WireValue::Bool(true)),
+                (
+                    0x84,
+                    WireValue::Struct(Fields::from([(0, WireValue::Unsigned(marker))])),
+                ),
+            ]),
+        };
+        assert_eq!(ClientWheelAction::read(&make(0)).unwrap().target(), None);
+        assert_eq!(
+            ClientWheelAction::read(&make(0xc000_1005))
+                .unwrap()
+                .target(),
+            Some(0xc000_1005)
         );
     }
 

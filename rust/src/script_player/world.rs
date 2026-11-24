@@ -240,6 +240,15 @@ impl World for BodyWorld {
         self.team_member_counts?.count(team)
     }
 
+    fn route_game_message(
+        &mut self,
+        site: Site,
+        _message: u64,
+        _parameters: &crate::script_wire::Variables,
+    ) -> bool {
+        self.is_player_site(site)
+    }
+
     fn engine_setting(&self, _site: Site, key: u32) -> crate::script_expr::EngineSetting {
         crate::body_ruleset::engine_setting(&self.graphs, self.mode, key)
     }
@@ -647,7 +656,22 @@ impl World for BodyWorld {
         if !self.is_player_site(site) || query.source != site.entity {
             return None;
         }
-        self.spatial_frame.as_deref()?.view_targets(query)
+        let frame = self.spatial_frame.as_deref()?;
+        if query.sight.is_none() && query.eye_heading.is_none() {
+            if let Some(empty) = frame.empty_view_targets(query) {
+                return Some(empty);
+            }
+            let fallback = crate::script_init::ViewSightProfile {
+                static_mask: frame.terrain_category(),
+                block_actor_flags: 0,
+                samples: vec![0.5],
+            };
+            return frame.view_targets(&crate::script_init::ViewTargetQuery {
+                sight: Some(&fallback),
+                ..*query
+            });
+        }
+        frame.view_targets(query)
     }
 
     fn room_entities(&self) -> Option<&BTreeMap<u32, RoomEntityFacts>> {
