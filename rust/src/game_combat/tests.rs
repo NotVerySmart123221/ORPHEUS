@@ -337,6 +337,37 @@ fn owner_startup_spatial_frame_excludes_the_frozen_body_on_each_replacement() {
         vitals: Option<Vitals>,
     }
     impl OwnerBodyRuntime for FrameProbe {
+        fn receive_applied_damage(&mut self, _: AppliedDamage) -> io::Result<()> {
+            Ok(())
+        }
+        fn receive_room_message(
+            &mut self,
+            _: u32,
+            _: crate::script_init::RoomMessage,
+        ) -> Result<usize, crate::script_init::InitFault> {
+            Ok(0)
+        }
+        fn receive_host_event(
+            &mut self,
+            _: crate::script_init::HostEvent,
+            _: crate::script_init::HostHealthContext,
+        ) -> Result<usize, crate::script_init::InitFault> {
+            Ok(0)
+        }
+        fn receive_authored_hit_feedback(
+            &mut self,
+            _: crate::script_init::HostEvent,
+            _: &crate::script_init::HostHealthContext,
+            _: f32,
+        ) -> Result<usize, crate::script_init::InitFault> {
+            Ok(0)
+        }
+        fn receive_authored_elimination_feedback(
+            &mut self,
+            _: Arc<HealthTargetFacts>,
+        ) -> Result<usize, crate::script_init::InitFault> {
+            Ok(0)
+        }
         fn set_spatial_frame(&mut self, frame: Arc<RoomSpatialFrame>) {
             *self.view.lock().unwrap() = Some(frame);
         }

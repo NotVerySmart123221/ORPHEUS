@@ -1264,6 +1264,34 @@ struct SyntheticOwner {
 }
 
 impl OwnerBodyRuntime for SyntheticOwner {
+    fn receive_applied_damage(&mut self, _: crate::game_combat::AppliedDamage) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn receive_host_event(
+        &mut self,
+        _: crate::script_init::HostEvent,
+        _: crate::script_init::HostHealthContext,
+    ) -> Result<usize, InitFault> {
+        Ok(0)
+    }
+
+    fn receive_authored_hit_feedback(
+        &mut self,
+        _: crate::script_init::HostEvent,
+        _: &crate::script_init::HostHealthContext,
+        _: f32,
+    ) -> Result<usize, InitFault> {
+        Ok(0)
+    }
+
+    fn receive_authored_elimination_feedback(
+        &mut self,
+        _: Arc<crate::script_init::HealthTargetFacts>,
+    ) -> Result<usize, InitFault> {
+        Ok(0)
+    }
+
     fn authored_facing(&self) -> Option<[i32; 2]> {
         *self.authored_facing.lock().unwrap()
     }

@@ -106,10 +106,8 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
     }
     fn receive_applied_damage(
         &mut self,
-        _damage: crate::game_combat::AppliedDamage,
-    ) -> io::Result<()> {
-        Ok(())
-    }
+        damage: crate::game_combat::AppliedDamage,
+    ) -> io::Result<()>;
     fn take_velocity_changes(&mut self) -> Vec<(u32, crate::mover::VelocityChange)> {
         Vec::new()
     }
@@ -121,11 +119,9 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
     }
     fn receive_room_message(
         &mut self,
-        _sender: u32,
-        _message: RoomMessage,
-    ) -> Result<usize, InitFault> {
-        Ok(0)
-    }
+        sender: u32,
+        message: RoomMessage,
+    ) -> Result<usize, InitFault>;
     fn set_wheel_cosmetics(&mut self, _cosmetics: crate::match_scene::WheelCosmetics) {}
     fn queue_wheel_selection(
         &mut self,
@@ -146,25 +142,19 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
     }
     fn receive_host_event(
         &mut self,
-        _event: HostEvent,
-        _context: HostHealthContext,
-    ) -> Result<usize, InitFault> {
-        Ok(0)
-    }
+        event: HostEvent,
+        context: HostHealthContext,
+    ) -> Result<usize, InitFault>;
     fn receive_authored_hit_feedback(
         &mut self,
-        _event: HostEvent,
-        _context: &HostHealthContext,
-        _variant: f32,
-    ) -> Result<usize, InitFault> {
-        Ok(0)
-    }
+        event: HostEvent,
+        context: &HostHealthContext,
+        variant: f32,
+    ) -> Result<usize, InitFault>;
     fn receive_authored_elimination_feedback(
         &mut self,
-        _target: Arc<crate::script_init::HealthTargetFacts>,
-    ) -> Result<usize, InitFault> {
-        Ok(0)
-    }
+        target: Arc<crate::script_init::HealthTargetFacts>,
+    ) -> Result<usize, InitFault>;
     fn set_spatial_frame(&mut self, _frame: Arc<crate::game_combat::RoomSpatialFrame>) {}
     fn set_defenders(&mut self, _defenders: Arc<[u32]>) {}
     fn set_team_member_counts(&mut self, _counts: crate::game_instance::TeamMemberCounts) {}

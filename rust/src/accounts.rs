@@ -396,22 +396,35 @@ fn sanitize_saved_settings(data: &mut Value) {
     *entries = kept;
 }
 
-fn read_profile(path: &Path) -> io::Result<(Profile, bool)> {
+fn read_profile(path: &Path) -> io::Result<(Profile, Option<String>, bool)> {
     let mut data: Value = serde_json::from_slice(&fs::read(path)?).map_err(json_error)?;
+    let account_name = data
+        .get("account_name")
+        .and_then(Value::as_str)
+        .map(trim_name)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned);
     let migrate = data.get(UNLOCKS_RESET_MARKER) != Some(&Value::Bool(true));
     sanitize_saved_settings(&mut data);
     let mut profile = Profile::from_json(data)?;
     if migrate {
         profile.unlocked_items.clear();
     }
-    Ok((profile, migrate))
+    Ok((profile, account_name, migrate))
 }
 
-fn write_profile(profile: &Profile, path: &Path, replace: bool) -> io::Result<()> {
+fn write_profile_with_account(
+    profile: &Profile,
+    account_name: Option<&str>,
+    path: &Path,
+    replace: bool,
+) -> io::Result<()> {
     #[derive(Serialize)]
     struct SavedProfile<'a> {
         #[serde(flatten)]
         profile: &'a Profile,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        account_name: Option<&'a str>,
         unlocks_reset_v2: bool,
     }
 
@@ -421,6 +434,7 @@ fn write_profile(profile: &Profile, path: &Path, replace: bool) -> io::Result<()
         .unwrap_or_else(|| Path::new("."));
     let bytes = serde_json::to_vec_pretty(&SavedProfile {
         profile,
+        account_name,
         unlocks_reset_v2: true,
     })
     .map_err(json_error)?;
@@ -437,21 +451,53 @@ fn write_profile(profile: &Profile, path: &Path, replace: bool) -> io::Result<()
 }
 
 pub fn save_profile(profile: &Profile, path: &Path) -> io::Result<()> {
-    write_profile(profile, path, true)
+    write_profile_with_account(profile, None, path, true)
 }
 
-fn load_existing_profile(path: &Path) -> io::Result<Profile> {
+fn backup_corrupt_profile(path: &Path) -> io::Result<PathBuf> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("profile");
+    let stamp = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    for attempt in 0u32.. {
+        let suffix = if attempt == 0 {
+            format!("{stem}.corrupt.{stamp}.json.bak")
+        } else {
+            format!("{stem}.corrupt.{stamp}-{attempt}.json.bak")
+        };
+        let backup = parent.join(suffix);
+        if !backup.try_exists()? {
+            fs::copy(path, &backup)?;
+            return Ok(backup);
+        }
+    }
+    unreachable!("u32 attempt range exhausted")
+}
+
+fn load_existing_profile(path: &Path) -> io::Result<(Profile, Option<String>)> {
     match read_profile(path) {
-        Ok((profile, migrate)) => {
+        Ok((profile, account_name, migrate)) => {
             if migrate {
-                save_profile(&profile, path)?;
+                write_profile_with_account(&profile, account_name.as_deref(), path, true)?;
             }
-            Ok(profile)
+            Ok((profile, account_name))
         }
         Err(error) if error.kind() == io::ErrorKind::InvalidData => {
-            let profile = new_profile();
-            save_profile(&profile, path)?;
-            Ok(profile)
+            if let Ok(backup) = backup_corrupt_profile(path) {
+                eprintln!(
+                    "[accounts] corrupt profile {} backed up to {}: {error}",
+                    path.display(),
+                    backup.display()
+                );
+            }
+            Err(error)
         }
         Err(error) => Err(error),
     }
@@ -459,16 +505,21 @@ fn load_existing_profile(path: &Path) -> io::Result<Profile> {
 
 pub fn load_or_create_profile(path: &Path) -> io::Result<Profile> {
     match load_existing_profile(path) {
+        Ok((profile, _)) => Ok(profile),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            create_profile(new_profile(), path)
+            create_profile(new_profile(), None, path).map(|(profile, _)| profile)
         }
-        result => result,
+        Err(error) => Err(error),
     }
 }
 
-fn create_profile(profile: Profile, path: &Path) -> io::Result<Profile> {
-    match write_profile(&profile, path, false) {
-        Ok(()) => Ok(profile),
+fn create_profile(
+    profile: Profile,
+    account_name: Option<&str>,
+    path: &Path,
+) -> io::Result<(Profile, Option<String>)> {
+    match write_profile_with_account(&profile, account_name, path, false) {
+        Ok(()) => Ok((profile, account_name.map(str::to_owned))),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => load_existing_profile(path),
         Err(error) => Err(error),
     }
@@ -479,17 +530,25 @@ pub struct Account {
     pub account_lo: u32,
     pub path: Option<PathBuf>,
     pub created: i64,
+    saved_account_name: Option<String>,
     profile: Mutex<Profile>,
     status: AtomicU8,
 }
 
 impl Account {
-    fn new(name: String, profile: Profile, path: Option<PathBuf>, created: i64) -> Self {
+    fn new(
+        name: String,
+        profile: Profile,
+        path: Option<PathBuf>,
+        created: i64,
+        saved_account_name: Option<String>,
+    ) -> Self {
         Self {
             account_lo: account_id_for(&name),
             name,
             path,
             created,
+            saved_account_name,
             profile: Mutex::new(profile),
             status: AtomicU8::new(1),
         }
@@ -526,7 +585,12 @@ impl Account {
 
     pub fn save(&self) -> io::Result<()> {
         if let Some(path) = &self.path {
-            save_profile(&self.profile(), path)?;
+            write_profile_with_account(
+                &self.profile(),
+                self.saved_account_name.as_deref(),
+                path,
+                true,
+            )?;
         }
         Ok(())
     }
@@ -541,7 +605,7 @@ impl Account {
             return Ok(None);
         };
         if let Some(path) = &self.path {
-            save_profile(&edited, path)?;
+            write_profile_with_account(&edited, self.saved_account_name.as_deref(), path, true)?;
         }
         *profile = edited;
         Ok(Some(result))
@@ -569,7 +633,7 @@ impl Accounts {
             directory,
             template: template.into(),
             by_name: Mutex::new(HashMap::new()),
-            bot: Arc::new(Account::new(BOT_NAME.into(), bot, None, 0)),
+            bot: Arc::new(Account::new(BOT_NAME.into(), bot, None, 0, None)),
         })
     }
 
@@ -583,11 +647,12 @@ impl Accounts {
         if let Some(account) = accounts.get(&key) {
             return Ok(Arc::clone(account));
         }
-        let path = self.path_for(name)?;
-        let profile = match load_existing_profile(&path) {
+        let (path, disambiguated) = self.path_for(name)?;
+        let saved_account_name = disambiguated.then(|| name.to_owned());
+        let (profile, loaded_account_name) = match load_existing_profile(&path) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 let mut profile = match read_profile(&self.template) {
-                    Ok((profile, _)) => profile,
+                    Ok((profile, _, _)) => profile,
                     Err(error)
                         if matches!(
                             error.kind(),
@@ -599,12 +664,18 @@ impl Accounts {
                     Err(error) => return Err(error),
                 };
                 profile.player_name = name.into();
-                create_profile(profile, &path)?
+                create_profile(profile, saved_account_name.as_deref(), &path)?
             }
             result => result?,
         };
         let created = creation_seconds(&fs::metadata(&path)?);
-        let account = Arc::new(Account::new(name.into(), profile, Some(path), created));
+        let account = Arc::new(Account::new(
+            name.into(),
+            profile,
+            Some(path),
+            created,
+            loaded_account_name.or(saved_account_name),
+        ));
         accounts.insert(key, Arc::clone(&account));
         Ok(account)
     }
@@ -612,7 +683,12 @@ impl Accounts {
     pub fn all_saved(&self) -> io::Result<Vec<String>> {
         let mut names: HashSet<_> = self
             .saved_paths()?
-            .filter_map(|path| path.file_stem()?.to_str().map(str::to_owned))
+            .filter_map(|path| {
+                if let Ok((_, Some(account_name), _)) = read_profile(&path) {
+                    return Some(account_name);
+                }
+                path.file_stem()?.to_str().map(str::to_owned)
+            })
             .collect();
         names.extend(
             self.by_name
@@ -664,21 +740,27 @@ impl Accounts {
         Ok(None)
     }
 
-    fn path_for(&self, name: &str) -> io::Result<PathBuf> {
-        let safe: String = name
+    fn path_for(&self, name: &str) -> io::Result<(PathBuf, bool)> {
+        let trimmed = trim_name(name);
+        let safe: String = trimmed
             .chars()
             .filter(|character| character.is_alphanumeric() || matches!(character, '-' | '_' | ' '))
             .collect();
         let safe = trim_name(&safe);
+        let disambiguated = safe.is_empty() || !safe.eq_ignore_ascii_case(trimmed);
         let safe = if safe.is_empty() { "player" } else { safe };
-        let filename = format!("{safe}.json");
+        let filename = if disambiguated {
+            format!("{safe}-{:08x}.json", account_id_for(trimmed))
+        } else {
+            format!("{safe}.json")
+        };
         let path = self.directory.join(&filename);
         if path.try_exists()? {
-            return Ok(path);
+            return Ok((path, disambiguated));
         }
         let key = filename.to_lowercase();
         // Find profiles created with a different letter case even on case-sensitive filesystems.
-        Ok(self
+        let existing = self
             .saved_paths()?
             .find(|saved| {
                 saved
@@ -686,7 +768,8 @@ impl Accounts {
                     .and_then(|name| name.to_str())
                     .is_some_and(|name| name.to_lowercase() == key)
             })
-            .unwrap_or(path))
+            .unwrap_or(path);
+        Ok((existing, disambiguated))
     }
 
     fn saved_paths(&self) -> io::Result<impl Iterator<Item = PathBuf>> {
@@ -827,12 +910,75 @@ mod tests {
         let profiles = directory.path().join("profiles");
         let registry = Accounts::new(&profiles, directory.path().join("missing.json")).unwrap();
         let account = registry.get("../ A/B\\ ? ").unwrap();
+        let expected_id = account_id_for("../ A/B\\ ? ");
+        let expected_file = format!("AB-{expected_id:08x}.json");
         assert_eq!(
             account.path.as_deref(),
-            Some(profiles.join("AB.json").as_path())
+            Some(profiles.join(expected_file).as_path())
         );
         assert_eq!(account.profile().player_name, "../ A/B\\ ?");
+        let plain = registry.get("AB").unwrap();
+        assert_ne!(account.path, plain.path);
+        assert_ne!(account.account_lo, plain.account_lo);
         assert_eq!(registry.all_saved().unwrap().len(), 2);
         assert_eq!(account.profile().loot_boxes.len(), 140);
+    }
+
+    #[test]
+    fn corrupt_profile_is_backed_up_and_not_overwritten_by_default() {
+        let directory = tempfile::tempdir().unwrap();
+        let profiles = directory.path().join("profiles");
+        fs::create_dir_all(&profiles).unwrap();
+        let path = profiles.join("CorruptUser.json");
+        let raw_corrupt = b"{not valid json";
+        fs::write(&path, raw_corrupt).unwrap();
+        let registry = Accounts::new(&profiles, directory.path().join("missing.json")).unwrap();
+        let err = match registry.get("CorruptUser") {
+            Ok(_) => panic!("corrupt profile must fail instead of resetting to default"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(fs::read(&path).unwrap(), raw_corrupt);
+        let backups: Vec<_> = fs::read_dir(&profiles)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("CorruptUser.corrupt.") && n.ends_with(".bak"))
+            })
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(fs::read(&backups[0]).unwrap(), raw_corrupt);
+    }
+
+    #[test]
+    fn equipped_loadout_and_loot_box_count_persist_across_accounts_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let profiles = directory.path().join("profiles");
+        let template = directory.path().join("template.json");
+        let registry = Accounts::new(&profiles, &template).unwrap();
+        let account = registry.get("rust").unwrap();
+        let initial_boxes = account.profile().loot_boxes.len();
+        account
+            .edit_profile(|profile| {
+                profile.loot_boxes.pop();
+                profile.loadouts.insert(
+                    "0x02E0000000000003".into(),
+                    json!({ "+0x38": "0x0250000000004D33" }),
+                );
+                Ok(Some(()))
+            })
+            .unwrap();
+        drop(registry);
+
+        let reopened = Accounts::new(&profiles, &template).unwrap();
+        let reloaded = reopened.get("rust").unwrap();
+        assert_eq!(reloaded.profile().loot_boxes.len(), initial_boxes - 1);
+        assert_eq!(
+            reloaded.profile().loadouts["0x02E0000000000003"]["+0x38"],
+            json!("0x0250000000004D33")
+        );
     }
 }

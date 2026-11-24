@@ -236,9 +236,7 @@ impl<'a> BotQueries<'a> {
     }
 
     fn weapon_terrain_category(&self) -> u16 {
-        self.combat_rays
-            .weapon_terrain_category()
-            .unwrap_or(MOVER_CATEGORY)
+        super::weapon_terrain_category(self.combat_rays)
     }
 
     #[cfg(any(test, feature = "inspector"))]

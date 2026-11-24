@@ -34,7 +34,7 @@ use crate::{
     match_scene::bot_create,
     mover::Mover,
     projectile_flight::{ProjectileBallistics, ProjectileFlight},
-    scene_assets::{BotQueries, MOVER_CATEGORY},
+    scene_assets::BotQueries,
     script_expr::{RoomEntityFacts, SpatialCandidate},
     script_graph::RoomSpatialNeeds,
     script_init::{HealthTargetFacts, ShotEvent},
@@ -391,9 +391,7 @@ impl RoomSpatialFrame {
     }
 
     pub(crate) fn terrain_category(&self) -> u16 {
-        self.ground
-            .weapon_terrain_category()
-            .unwrap_or(MOVER_CATEGORY)
+        crate::scene_assets::weapon_terrain_category(&self.ground)
     }
 
     pub(crate) fn line_clear(&self, origin: Vec3, target: Vec3) -> Option<bool> {

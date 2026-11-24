@@ -17,7 +17,6 @@ use crate::{
     game_replication::OwnerRoomActivity,
     junkenstein_messages::{self, DefenderSighting, SIGHTING, SIGHTING_TAGS, SightingSource},
     mover::{VelocityChange, sample_movement_flags},
-    scene_assets::MOVER_CATEGORY,
     script_expr::{EntityRelation, OnFire, RoomEntityFacts, native_shape, valid_entity},
     script_graph::GraphStore,
     script_init::{
@@ -88,7 +87,12 @@ impl DeadeyeScene {
         };
         reach <= 1e-9
             || collision
-                .cast_ray(origin, direction, reach, MOVER_CATEGORY)
+                .cast_ray(
+                    origin,
+                    direction,
+                    reach,
+                    crate::scene_assets::weapon_terrain_category(collision),
+                )
                 .is_ok_and(|hit| hit.is_none_or(|hit| hit.distance + 1e-9 >= reach))
     }
 

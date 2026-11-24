@@ -74,6 +74,10 @@ use crate::{debug_geometry::DebugGeometry, game_debug::Actor};
 pub(crate) const MOVER_CATEGORY: u16 = 0x18;
 const OWNER_PROBE_CONTROLLER: u32 = 0xa000_0100;
 
+pub(crate) fn weapon_terrain_category(scene: &CollisionScene) -> u16 {
+    scene.weapon_terrain_category().unwrap_or(MOVER_CATEGORY)
+}
+
 fn mover_category(map: &GameMap, team: u8) -> u16 {
     mover_category_for_team(map.free_for_all, team)
 }
@@ -496,22 +500,24 @@ impl SceneAssets {
         simulation.set_free_for_all(map.free_for_all);
         simulation.load_bot_target_tags(&self.graphs);
         simulation.set_combat_voice(Arc::clone(&self.combat_voice));
-        if cfg!(feature = "inspector")
-            && std::env::var_os("ORPHEUS_PLAYTEST_RECEIVED_DAMAGE")
-                .is_some_and(|value| value == "1")
-        {
+        if std::env::var_os("ORPHEUS_PLAYTEST_RECEIVED_DAMAGE").is_none_or(|value| value != "0") {
             simulation.enable_received_damage_feedback();
         }
-        if let Some(variant) = std::env::var("ORPHEUS_PLAYTEST_HIT_VARIANT")
-            .ok()
-            .and_then(|value| value.parse::<f32>().ok())
-            .filter(|value| cfg!(feature = "inspector") && value.is_finite() && *value >= 0.0)
-        {
+        let hit_variant = match std::env::var("ORPHEUS_PLAYTEST_HIT_VARIANT") {
+            Ok(value) if value == "0" || value.eq_ignore_ascii_case("off") => None,
+            Ok(value) => Some(
+                value
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|v| v.is_finite() && *v >= 0.0)
+                    .unwrap_or(1.0),
+            ),
+            Err(_) => Some(1.0),
+        };
+        if let Some(variant) = hit_variant {
             simulation.enable_authored_hit_feedback(variant);
         }
-        if cfg!(feature = "inspector")
-            && std::env::var_os("ORPHEUS_PLAYTEST_ELIMINATION").is_some_and(|value| value == "1")
-        {
+        if std::env::var_os("ORPHEUS_PLAYTEST_ELIMINATION").is_none_or(|value| value != "0") {
             simulation.enable_authored_elimination_feedback();
         }
         simulation.set_environment(self.environment.for_map(map.map_guid));

@@ -940,6 +940,21 @@ fn lethal_health_change_notifies_source_with_settled_status_after_target_retirem
     }
 
     impl OwnerBodyRuntime for HealthListener {
+        fn receive_applied_damage(
+            &mut self,
+            _: crate::game_combat::AppliedDamage,
+        ) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn receive_room_message(
+            &mut self,
+            _: u32,
+            _: crate::script_init::RoomMessage,
+        ) -> Result<usize, InitFault> {
+            Ok(0)
+        }
+
         fn receive_host_event(
             &mut self,
             event: HostEvent,
