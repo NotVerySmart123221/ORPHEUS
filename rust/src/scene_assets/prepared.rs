@@ -11,6 +11,7 @@ pub struct PreparedScene {
     pub(super) combat_rays: Arc<CollisionScene>,
     pub(super) combat_sweeps: Option<Arc<ContactWorld>>,
     pub(super) contacts: Option<Arc<ContactWorld>>,
+    pub(super) breakables: Arc<crate::collision_scene::BreakableState>,
     pub(super) controller: Controller,
     pub(super) mode_ui: BitWriter,
     pub(super) initial_board: Component,
@@ -87,6 +88,7 @@ impl PreparedScene {
             placements: vec![],
         };
         let ground = Arc::new(CollisionScene::movement_probe(&cache, &BTreeSet::new()).unwrap());
+        let breakables = Arc::new(crate::collision_scene::BreakableState::new());
         Self {
             junkenstein_validation: None,
             map: GameMap::practice_range(),
@@ -96,6 +98,7 @@ impl PreparedScene {
             combat_sweeps: None,
             ground,
             contacts: None,
+            breakables,
             controller: Controller::fixture_for_test(),
             mode_ui: BitWriter::new(),
             initial_board: Component {
@@ -191,14 +194,16 @@ impl PreparedScene {
                 "the scene has no native player collision",
             )
         })?;
-        Mover::new(
+        let mut mover = Mover::new(
             *self.movers.for_body(Some(body)),
             Arc::clone(contacts),
             position,
             yaw,
             mover_category(&self.map, team),
         )
-        .map_err(invalid)
+        .map_err(invalid)?;
+        mover.set_breakables(Arc::clone(&self.breakables));
+        Ok(mover)
     }
 
     pub(crate) fn owner_body_runtime(
@@ -486,6 +491,7 @@ impl PreparedScene {
                 self.contacts.as_ref(),
             )
             .with_combat_geometry(&self.combat_rays, self.combat_sweeps.as_ref())
+            .with_breakables(&self.breakables)
             .with_hurt_volumes(&self.hurt_volumes),
         )
     }
@@ -514,7 +520,8 @@ impl PreparedScene {
         let map = &self.map;
         let movers = &self.movers;
         let world = self.contacts.as_ref();
-        let queries = BotQueries::new(map.free_for_all, movers, &self.ground, world);
+        let queries = BotQueries::new(map.free_for_all, movers, &self.ground, world)
+            .with_breakables(&self.breakables);
         self.simulation.for_each_body_mut(|bot| {
             let combat_motion = bot.has_combat_motion();
             if let Some(contacts) = contacts
@@ -529,6 +536,7 @@ impl PreparedScene {
                 let settings = movers.for_body(Some(bot.spawn.body));
                 if let Some(world) = world.filter(|_| !bot.has_collision()) {
                     bot.attach_collision(settings, Arc::clone(world), category, &mut ground);
+                    bot.set_breakables(Arc::clone(&self.breakables));
                 }
                 if bot.step_combat_motion(tick, settings, &mut ground) {
                     return;

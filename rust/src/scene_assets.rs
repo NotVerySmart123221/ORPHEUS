@@ -466,6 +466,7 @@ impl SceneAssets {
                 || map.is_junkenstein()
                 || bots.iter().any(|bot| !bot.spawn.route.is_empty()),
         )?;
+        let breakables = Arc::new(crate::collision_scene::BreakableState::new());
         if let Some(world) = &contacts {
             for bot in bots.iter_mut().filter(|bot| !bot.spawn.route.is_empty()) {
                 let category = mover_category(&map, bot.spawn.team);
@@ -476,6 +477,7 @@ impl SceneAssets {
                     category,
                     ground_height(ground.triangles(), category),
                 );
+                bot.set_breakables(Arc::clone(&breakables));
                 if self.trace_contacts {
                     bot.enable_contact_trace();
                 }
@@ -530,6 +532,7 @@ impl SceneAssets {
                 Arc::clone(&combat_rays),
                 self.graphs.room_spatial_needs(),
             );
+            simulation.set_breakables(Arc::clone(&breakables));
             if let Some(catalog) = &self.actor_voice {
                 simulation.enable_actor_voice(Arc::clone(catalog));
             }
@@ -564,6 +567,7 @@ impl SceneAssets {
             combat_rays,
             combat_sweeps,
             contacts,
+            breakables,
             controller,
             mode_ui,
             junkenstein_validation: None,

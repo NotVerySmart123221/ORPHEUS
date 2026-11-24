@@ -2332,19 +2332,60 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         ) else {
             return;
         };
-        let speaker = self.evaluate_with_context(
-            site,
-            field(&node.fields, "m_targets"),
-            None,
-            Value::Null,
-            false,
-        );
-        if speaker != Ok(Value::Entity(site.entity)) {
+        let targets_field = field(&node.fields, "m_targets");
+        let speaker = if script_expr::assignment_group_source(targets_field).is_some() {
+            self.assignment_group(id, node, targets_field)
+                .ok()
+                .flatten()
+        } else {
+            self.evaluate_with_context(site, targets_field, None, Value::Null, false)
+                .ok()
+        };
+        let self_targeted = match speaker {
+            Some(Value::Entity(entity)) => entity == site.entity,
+            Some(Value::Array(items)) => items.contains(&Value::Entity(site.entity)),
+            _ => false,
+        };
+        if !self_targeted {
             return;
         }
-        self.world.queue_actor_voice(site, criterion, &mut |count| {
-            ((u128::from(self.machine.random_u64()) * count as u128) >> 64) as usize
-        });
+        let audience_field = field(&node.fields, "m_297E0B63");
+        let explicit_audience = if audience_field.is_null() {
+            None
+        } else {
+            let evaluated = if script_expr::assignment_group_source(audience_field).is_some() {
+                self.assignment_group(id, node, audience_field)
+                    .ok()
+                    .flatten()
+            } else {
+                self.evaluate_with_context(site, audience_field, None, Value::Null, false)
+                    .ok()
+            };
+            match evaluated {
+                Some(Value::Entity(entity)) if script_expr::valid_entity(entity) => {
+                    Some(vec![entity])
+                }
+                Some(Value::Array(items)) => {
+                    let list: Vec<u32> = items
+                        .into_iter()
+                        .filter_map(|item| match item {
+                            Value::Entity(entity) if script_expr::valid_entity(entity) => {
+                                Some(entity)
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    (!list.is_empty()).then_some(list)
+                }
+                _ => None,
+            }
+        };
+        self.world.queue_actor_voice_with_audience(
+            site,
+            criterion,
+            explicit_audience.as_deref(),
+            &mut |count| ((u128::from(self.machine.random_u64()) * count as u128) >> 64) as usize,
+        );
     }
 
     fn send_room_cue(

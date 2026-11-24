@@ -78,6 +78,15 @@ impl ActorVoiceCatalog {
         self.options_for(hero, skin, self.criteria.get(&Guid(criterion))?)
     }
 
+    pub(crate) fn stimulus_options(
+        &self,
+        hero: u64,
+        skin: u64,
+        stimulus: u64,
+    ) -> Option<VoiceOptions<'_>> {
+        self.options_for(hero, skin, &[Guid(stimulus)])
+    }
+
     pub(crate) fn equipped_options(
         &self,
         hero: u64,
@@ -167,6 +176,18 @@ mod tests {
         assert!(
             catalog
                 .equipped_options(guid(hero), guid(skin), 1)
+                .is_none()
+        );
+        assert_eq!(
+            catalog
+                .stimulus_options(guid(hero), guid(skin), guid(&stimulus))
+                .unwrap()
+                .choose(&mut |_| 1),
+            Some((guid(&stimulus), guid(text("alternate_line"))))
+        );
+        assert!(
+            catalog
+                .stimulus_options(guid(hero), guid(skin), 1)
                 .is_none()
         );
     }

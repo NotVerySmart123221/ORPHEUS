@@ -185,6 +185,21 @@ impl TriangleIndex {
         self.triangles.len()
     }
 
+    pub fn triangle_aabb_within_radius(&self, index: usize, center: Vec3, radius_sq: f64) -> bool {
+        let Some(tri) = self.triangles.get(index) else {
+            return false;
+        };
+        let dist2: f64 = (0..3)
+            .map(|axis| {
+                let c = center[axis];
+                let clamped = c.clamp(tri.bounds.min[axis], tri.bounds.max[axis]);
+                let d = c - clamped;
+                d * d
+            })
+            .sum();
+        dist2 <= radius_sq
+    }
+
     pub fn scene_bounds(&self) -> Option<(Vec3, Vec3)> {
         self.scene_bounds
     }
@@ -287,6 +302,21 @@ impl TriangleIndex {
         length: f64,
         category: u16,
     ) -> Result<Option<RayHit>, IndexError> {
+        self.cast_ray_filtered(origin, direction, length, category, |_| true)
+    }
+
+    /// First triangle hit along a unit direction matching `allow_triangle`.
+    pub fn cast_ray_filtered<F>(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        length: f64,
+        category: u16,
+        allow_triangle: F,
+    ) -> Result<Option<RayHit>, IndexError>
+    where
+        F: Fn(u32) -> bool,
+    {
         if category == 0
             || self.triangles.is_empty()
             || length <= 0.0
@@ -319,6 +349,7 @@ impl TriangleIndex {
                     || candidate.bounds.max[1] < low
                     || candidate.bounds.min[1] > high
                     || !seen.insert(number)
+                    || !allow_triangle(number)
                 {
                     continue;
                 }

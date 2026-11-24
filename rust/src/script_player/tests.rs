@@ -3483,6 +3483,7 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
         deadeye_scene: DeadeyeScene::default(),
         velocity_changes: Vec::new(),
         scripted_motion: None,
+        voice_variant_counter: 0,
     };
     let mut component = Component::start(
         graphs,
@@ -4831,6 +4832,7 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             deadeye_scene: DeadeyeScene::default(),
             velocity_changes: Vec::new(),
             scripted_motion: None,
+            voice_variant_counter: 0,
         };
         let component = Component::start(
             Arc::clone(&graphs),
@@ -4857,4 +4859,221 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
         );
         assert_eq!(world.vitals.component(), pools.vitals().component());
     }
+}
+
+#[test]
+fn voice_stimulus_state_and_array_criteria_emit_room_cues() {
+    use crate::{
+        actor_voice::ActorVoiceCatalog,
+        game_clock::FIRST_TICK,
+        game_combat::{CombatError, RoomSimulation},
+        game_combat_messages::CombatNotice,
+        game_replication::BodyId,
+        script_graph::RoomSpatialNeeds,
+    };
+    use serde_json::json;
+    use std::collections::BTreeSet;
+
+    let graphs = Arc::new(
+            GraphStore::from_json(
+                json!({
+                    "version": 1,
+                    "bodies": {},
+                    "entities": {},
+                    "roots": {},
+                    "missing": [],
+                    "graphs": [{
+                        "index": 0x0999,
+                        "items": 3,
+                        "states": [2],
+                        "entries": [0],
+                        "remote": [],
+                        "sync_vars": [],
+                        "containers": {},
+                        "unknown_nodes": [],
+                        "fields": {},
+                        "header": {
+                            "m_nodesBitCount": 4,
+                            "m_statesBitCount": 4,
+                            "m_remoteSyncNodesBitCount": 4,
+                            "m_syncVarsBitCount": 4
+                        },
+                        "nodes": [
+                            {
+                                "pos": 0, "uid": 0, "rid": 0, "remote": -1,
+                                "class": "STUStatescriptEntry",
+                                "state": null, "server_only": false, "client_only": false,
+                                "fields": {
+                                    "m_outPlug": { "$": "STUStatescriptOutputPlug", "links": [[1, "m_inPlug"]] }
+                                }
+                            },
+                            {
+                                "pos": 1, "uid": 1, "rid": 1, "remote": -1,
+                                "class": "STUStatescriptActionCriteria",
+                                "state": null, "server_only": true, "client_only": false,
+                                "fields": {
+                                    "m_identifier": {
+                                        "$": "STUConfigVarIdentifier",
+                                        "m_identifier": "0x0D80000000000720"
+                                    },
+                                    "m_targets": {
+                                        "$": "STU_06610EBC",
+                                        "m_configVars": [{ "$": "STU_B5A0CAF0" }]
+                                    },
+                                    "m_297E0B63": { "$": "STU_B5A0CAF0" },
+                                    "m_outPlug": { "$": "STUStatescriptOutputPlug", "links": [[2, "m_beginPlug"]] }
+                                }
+                            },
+                            {
+                                "pos": 2, "uid": 2, "rid": 2, "remote": -1,
+                                "class": "STU_40E05F6B",
+                                "state": 0, "server_only": false, "client_only": false,
+                                "fields": {
+                                    "m_2BBEEAB8": 1,
+                                    "m_beginPlug": { "$": "STUStatescriptInputPlug", "links": [] },
+                                    "m_stimulus": {
+                                        "$": "STUConfigVarVoiceStimulus",
+                                        "m_voiceStimulus": "0x0EE0000000000042"
+                                    },
+                                    "m_targets": { "$": "STU_B5A0CAF0" }
+                                }
+                            }
+                        ]
+                    }]
+                })
+                .to_string()
+                .as_bytes(),
+            )
+            .unwrap(),
+        );
+    let catalog = Arc::new(
+        serde_json::from_value::<ActorVoiceCatalog>(json!({
+            "criteria": {
+                "0x0D80000000000720": ["0x0EE0000000000040"]
+            },
+            "heroes": {
+                "0x02E000000000006E": "0x05F0000000000001"
+            },
+            "skins": {},
+            "sets": {
+                "0x05F0000000000001": {
+                    "0x0EE0000000000040": ["0x0760000000001001"],
+                    "0x0EE0000000000042": ["0x0760000000001002"]
+                }
+            },
+            "equipped": {}
+        }))
+        .unwrap(),
+    );
+
+    let cache = crate::collision_cache::CollisionCache {
+        header: serde_json::from_value(json!({
+            "meshes": [[3, 1]], "hulls": 0, "models": 0, "placements": 0, "identifiers": []
+        }))
+        .unwrap(),
+        meshes: vec![crate::collision_cache::Mesh {
+            vertices: vec![[-1.0, 0.0, 0.0], [-1.0, 2.0, 0.0], [-1.0, 0.0, 1.0]],
+            triangles: vec![crate::collision_cache::Triangle {
+                corners: [0, 1, 2],
+                wings: [-1; 3],
+                mask: 0x18,
+                surface: 0,
+            }],
+        }],
+        hulls: vec![],
+        models: vec![],
+        placements: vec![],
+    };
+    let ground = Arc::new(
+        crate::collision_scene::CollisionScene::movement_probe(&cache, &BTreeSet::new()).unwrap(),
+    );
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    let owner = BodyId {
+        entity: 0xa000_0101,
+        generation: 1,
+    };
+    let mover = crate::mover::Mover::new(
+        crate::mover_settings::MoverSettings::default(),
+        Arc::new(crate::contact_world::ContactWorld::new(Vec::new()).unwrap()),
+        [0.0; 3],
+        0,
+        0x18,
+    )
+    .unwrap();
+    room.spawn_player_body(crate::game_combat::PlayerBodyState::new(
+        owner, 1, 0, 0, SOLDIER, mover, None, 1, None,
+    ))
+    .unwrap();
+    room.enable_spatial_queries(false, ground, RoomSpatialNeeds::Queries);
+    room.enable_actor_voice(catalog);
+    room.prepare_spatial_frame(1).unwrap();
+    let frame = room.spatial_frame();
+
+    let mut world = BodyWorld {
+        spatial_frame: frame,
+        team_member_counts: None,
+        room_activity: None,
+        script_requests: Default::default(),
+        graphs: Arc::clone(&graphs),
+        controller: 1,
+        entity: owner.entity,
+        body_filter: crate::match_scene::team_bit(0).unwrap(),
+        position: [0.0; 3],
+        eye_position: None,
+        movement: Movement::default(),
+        throttles: [0; 2],
+        mode: PRACTICE_RANGE_MODE,
+        hero: SOLDIER,
+        vitals: Vitals::empty(),
+        pool_types_known: true,
+        target_tags: None,
+        command_views: Default::default(),
+        wheel_cosmetics: Default::default(),
+        model_hardpoints: None,
+        target_tag_effects: TargetTagEffects::default(),
+        controller_on_fire: false,
+        defenders: Arc::default(),
+        sightings: Vec::new(),
+        sighting_source: None,
+        death_source: None,
+        cinematic_aim: Default::default(),
+        facing_claims: Default::default(),
+        deadeye_scene: DeadeyeScene::default(),
+        velocity_changes: Vec::new(),
+        scripted_motion: None,
+        voice_variant_counter: 0,
+    };
+    let mut component = Component::start(
+        Arc::clone(&graphs),
+        world.entity,
+        Variables::default(),
+        vec![crate::script_init::Root::new(1, 0x0999)],
+        FIRST_TICK,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    component.advance_frame(FIRST_TICK + 1, &mut world).unwrap();
+    component.poll_voice(&mut world).unwrap();
+    let requests = world.script_requests.take();
+    room.settle_test_script_requests(owner.entity, requests, FIRST_TICK + 1)
+        .map_err(|e: CombatError| e)
+        .unwrap();
+    let cues: Vec<_> = room
+        .take_player_cues()
+        .into_iter()
+        .filter_map(|cue| match cue.notice {
+            CombatNotice::Voice { stimulus, line, .. } => Some((stimulus, line)),
+            _ => None,
+        })
+        .collect();
+    let diag = component.snapshot().unwrap().diagnostics.clone();
+    assert_eq!(
+        cues,
+        vec![
+            (0x0EE0_0000_0000_0040, 0x0760_0000_0000_1001),
+            (0x0EE0_0000_0000_0042, 0x0760_0000_0000_1002),
+        ],
+        "diagnostics: {diag:?}"
+    );
 }

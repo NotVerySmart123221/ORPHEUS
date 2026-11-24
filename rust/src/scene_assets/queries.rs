@@ -15,6 +15,7 @@ pub(crate) struct BotQueries<'a> {
     combat_rays: &'a CollisionScene,
     combat_sweeps: Option<&'a Arc<ContactWorld>>,
     contacts: Option<&'a Arc<ContactWorld>>,
+    breakables: Option<&'a Arc<crate::collision_scene::BreakableState>>,
     hurt_volumes: Option<&'a HurtVolumeCatalog>,
 }
 
@@ -32,17 +33,26 @@ impl<'a> BotQueries<'a> {
             combat_rays: ground,
             combat_sweeps: contacts,
             contacts,
+            breakables: None,
             hurt_volumes: None,
         }
     }
 
-    pub(super) fn with_combat_geometry(
+    pub(crate) fn with_combat_geometry(
         mut self,
         rays: &'a CollisionScene,
         sweeps: Option<&'a Arc<ContactWorld>>,
     ) -> Self {
         self.combat_rays = rays;
         self.combat_sweeps = sweeps.or(self.combat_sweeps);
+        self
+    }
+
+    pub(crate) fn with_breakables(
+        mut self,
+        breakables: &'a Arc<crate::collision_scene::BreakableState>,
+    ) -> Self {
+        self.breakables = Some(breakables);
         self
     }
 
@@ -106,6 +116,9 @@ impl<'a> BotQueries<'a> {
             category,
             ground_height(self.ground.triangles(), category),
         );
+        if let Some(breakables) = self.breakables {
+            bot.set_breakables(Arc::clone(breakables));
+        }
         true
     }
 
@@ -231,8 +244,46 @@ impl<'a> BotQueries<'a> {
         direction: [f64; 3],
         reach: f64,
     ) -> Result<Option<crate::collision_index::RayHit>, crate::collision_index::IndexError> {
-        self.combat_rays
-            .cast_ray(origin, direction, reach, self.weapon_terrain_category())
+        self.combat_rays.cast_ray_with_breakables(
+            origin,
+            direction,
+            reach,
+            self.weapon_terrain_category(),
+            self.breakables.map(Arc::as_ref),
+        )
+    }
+
+    pub(crate) fn combat_weapon_ray(
+        &self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        reach: f64,
+    ) -> Result<crate::collision_scene::WeaponRayHit, crate::collision_index::IndexError> {
+        self.combat_rays.cast_weapon_ray(
+            origin,
+            direction,
+            reach,
+            self.weapon_terrain_category(),
+            self.breakables.map(Arc::as_ref),
+        )
+    }
+
+    pub(crate) fn mark_breakable(&self, placement: usize) {
+        if let Some(breakables) = self.breakables {
+            breakables.mark_broken(placement);
+        }
+    }
+
+    pub(crate) fn break_in_sphere(&self, center: [f64; 3], radius: f64) {
+        let Some(breakables) = self.breakables else {
+            return;
+        };
+        for placement in
+            self.combat_rays
+                .breakables_in_sphere(center, radius, Some(breakables.as_ref()))
+        {
+            breakables.mark_broken(placement);
+        }
     }
 
     fn weapon_terrain_category(&self) -> u16 {
@@ -275,25 +326,38 @@ impl<'a> BotQueries<'a> {
                 return Err(IndexError::InvalidSweep);
             }
             return world
-                .projectile_sweep(MeshProbe {
-                    points: &[[0.0; 3]],
-                    radius,
-                    start,
-                    end,
-                    category: self.weapon_terrain_category(),
-                })
+                .projectile_sweep_with_breakables(
+                    MeshProbe {
+                        points: &[[0.0; 3]],
+                        radius,
+                        start,
+                        end,
+                        category: self.weapon_terrain_category(),
+                    },
+                    self.breakables.map(Arc::as_ref),
+                )
                 .map(|hit| {
-                    hit.map(|result| SurfaceHit {
-                        distance: reach * f64::from(result.hit.fraction),
-                        normal: result.hit.normal.map(f64::from),
+                    hit.map(|result| {
+                        if let Some(placement) = world.shape_breakable_placement(result.shape) {
+                            self.mark_breakable(placement);
+                        }
+                        SurfaceHit {
+                            distance: reach * f64::from(result.hit.fraction),
+                            normal: result.hit.normal.map(f64::from),
+                        }
                     })
                 })
                 .map_err(|_| IndexError::InvalidSweep);
         }
         self.combat_wall(origin, direction, reach).map(|hit| {
-            hit.map(|hit| SurfaceHit {
-                distance: hit.distance,
-                normal: hit.normal,
+            hit.map(|hit| {
+                if let Some(placement) = self.combat_rays.ray_hit_breakable_placement(hit) {
+                    self.mark_breakable(placement);
+                }
+                SurfaceHit {
+                    distance: hit.distance,
+                    normal: hit.normal,
+                }
             })
         })
     }

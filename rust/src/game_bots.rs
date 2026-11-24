@@ -509,6 +509,15 @@ impl Bot {
         }
     }
 
+    pub(crate) fn set_breakables(
+        &mut self,
+        breakables: Arc<crate::collision_scene::BreakableState>,
+    ) {
+        if let Some(collision) = &mut self.collision {
+            collision.body.set_breakables(breakables);
+        }
+    }
+
     pub(crate) fn attach_collision(
         &mut self,
         settings: &MoverSettings,

@@ -183,6 +183,13 @@ impl Mover {
         self.body.capsule_pose()
     }
 
+    pub(crate) fn set_breakables(
+        &mut self,
+        breakables: Arc<crate::collision_scene::BreakableState>,
+    ) {
+        self.body.set_breakables(breakables);
+    }
+
     #[cfg(any(test, feature = "inspector"))]
     pub(crate) fn debug_ground_probe(
         &self,

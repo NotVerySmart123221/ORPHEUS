@@ -106,6 +106,10 @@ pub struct CacheHeader {
     /// Optional verified terrain query category for the expanded weapon geometry.
     #[serde(default)]
     pub weapon_terrain_category: Option<NonZeroU16>,
+    /// Optional map of model index -> shape slot indices built from retail
+    /// breakable holders (`STU_E62A2EFC`, motion = 2, body category 0x80).
+    #[serde(default)]
+    pub breakable_model_shapes: BTreeMap<u32, Vec<usize>>,
     /// The input catalog's provenance fields, retained without reinterpretation.
     #[serde(flatten)]
     pub source: BTreeMap<String, Value>,
@@ -139,6 +143,12 @@ pub fn chunk_guid(map_guid: u64) -> u64 {
 }
 
 impl CacheHeader {
+    pub fn is_breakable_shape(&self, model: u32, shape_slot: usize) -> bool {
+        self.breakable_model_shapes
+            .get(&model)
+            .is_some_and(|slots| slots.contains(&shape_slot))
+    }
+
     pub fn placement_groups(&self, identifiers: &BTreeSet<u64>) -> BTreeSet<u16> {
         let mut groups = BTreeSet::from([0]);
         for (index, identifier) in self.identifiers.iter().enumerate() {

@@ -45,6 +45,8 @@ use crate::{
 
 #[cfg(any(test, feature = "inspector"))]
 use crate::game_debug::{Actor, ActorKind};
+#[cfg(test)]
+use crate::scene_assets::MOVER_CATEGORY;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CombatError {
@@ -331,6 +333,7 @@ pub(crate) struct RoomSpatialFrame {
     script_targets: HashMap<u32, RoomScriptTarget>,
     player_wires: HashMap<u32, u32>,
     ground: Arc<CollisionScene>,
+    breakables: Option<Arc<crate::collision_scene::BreakableState>>,
     actor_voice: Option<Arc<ActorVoiceCatalog>>,
     #[cfg(any(test, feature = "inspector"))]
     captured_tick: u32,
@@ -395,8 +398,12 @@ impl RoomSpatialFrame {
     }
 
     pub(crate) fn line_clear(&self, origin: Vec3, target: Vec3) -> Option<bool> {
-        self.ground
-            .segment_clear(origin, target, self.terrain_category())
+        self.ground.segment_clear_with_breakables(
+            origin,
+            target,
+            self.terrain_category(),
+            self.breakables.as_deref(),
+        )
     }
 
     pub(crate) fn hostile_contact_targets(
@@ -415,6 +422,14 @@ impl RoomSpatialFrame {
         {
             return None;
         }
+        if let Some(breakables) = self.breakables.as_deref() {
+            for placement in self
+                .ground
+                .breakables_in_sphere(centre, radius, Some(breakables))
+            {
+                breakables.mark_broken(placement);
+            }
+        }
         let mut targets = Vec::new();
         for candidate in &self.candidates {
             if candidate.entity == source.entity
@@ -431,7 +446,13 @@ impl RoomSpatialFrame {
             if !surface
                 .visible(|direction, reach| {
                     self.ground
-                        .checked_cast_ray(origin, direction, reach, category)
+                        .checked_cast_ray_with_breakables(
+                            origin,
+                            direction,
+                            reach,
+                            category,
+                            self.breakables.as_deref(),
+                        )
                         .map(|hit| hit.map(|hit| hit.distance))
                         .ok_or(())
                 })
@@ -458,7 +479,13 @@ impl RoomSpatialFrame {
     ) -> Option<Option<crate::script_init::SprayPlacement>> {
         const SPRAY_SURFACE: u16 = 0x40;
         self.ground
-            .checked_cast_ray(origin, direction, reach, SPRAY_SURFACE)
+            .checked_cast_ray_with_breakables(
+                origin,
+                direction,
+                reach,
+                SPRAY_SURFACE,
+                self.breakables.as_deref(),
+            )
             .map(|hit| {
                 hit.map(|hit| crate::script_init::SprayPlacement {
                     direction: direction.map(|value| value as f32),
@@ -481,7 +508,13 @@ impl RoomSpatialFrame {
         let _ = (site, vm_frame);
         let result = self
             .ground
-            .checked_cast_ray(origin, direction, max_distance, self.terrain_category())
+            .checked_cast_ray_with_breakables(
+                origin,
+                direction,
+                max_distance,
+                self.terrain_category(),
+                self.breakables.as_deref(),
+            )
             .map(|hit| {
                 hit.map(|hit| crate::script_expr::SpatialRayHit {
                     distance: hit.distance,
@@ -524,11 +557,12 @@ impl RoomSpatialFrame {
         // candidate list still returns unavailable, including in diagnostics.
         let result = (|| {
             let capsules = self.actor_capsules.as_ref()?;
-            let wall = self.ground.checked_cast_ray(
+            let wall = self.ground.checked_cast_ray_with_breakables(
                 origin,
                 direction,
                 max_distance,
                 self.terrain_category(),
+                self.breakables.as_deref(),
             )?;
             let mut nearest: Option<crate::script_expr::SpatialActorRayHit> = None;
             for &entity in targets {
@@ -636,6 +670,7 @@ impl RoomSpatialFrame {
 struct RoomSpatialQueries {
     free_for_all: bool,
     ground: Arc<CollisionScene>,
+    breakables: Option<Arc<crate::collision_scene::BreakableState>>,
     needs: RoomSpatialNeeds,
     actor_movers: Option<Arc<crate::mover_settings::MoverCatalog>>,
     actor_voice: Option<Arc<ActorVoiceCatalog>>,
@@ -1207,10 +1242,20 @@ impl RoomSimulation {
         self.spatial_queries = Some(RoomSpatialQueries {
             free_for_all,
             ground,
+            breakables: None,
             needs,
             actor_movers: None,
             actor_voice: None,
         });
+    }
+
+    pub(crate) fn set_breakables(
+        &mut self,
+        breakables: Arc<crate::collision_scene::BreakableState>,
+    ) {
+        if let Some(queries) = &mut self.spatial_queries {
+            queries.breakables = Some(breakables);
+        }
     }
 
     pub(crate) fn enable_actor_voice(&mut self, catalog: Arc<ActorVoiceCatalog>) {
@@ -1368,12 +1413,20 @@ impl RoomSimulation {
             script_targets,
             player_wires,
             ground: Arc::clone(&queries.ground),
+            breakables: queries.breakables.as_ref().map(Arc::clone),
             actor_voice,
             #[cfg(any(test, feature = "inspector"))]
             captured_tick: frame,
             #[cfg(any(test, feature = "inspector"))]
             debug_rays: Arc::clone(&self.debug_rays),
         })))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn spatial_frame(&self) -> Option<Arc<RoomSpatialFrame>> {
+        self.spatial_frame
+            .as_ref()
+            .map(|(_, frame)| Arc::clone(frame))
     }
 
     /// Read the frozen room frame without the owner's captured body generation.
@@ -2002,25 +2055,32 @@ impl RoomSimulation {
         );
         #[cfg(any(test, feature = "inspector"))]
         let mut blocking_wall = None;
+        let mut breakable_hits = Vec::new();
         let Some(impact) = ray.resolve_combat(candidates, |origin, direction, reach| {
-            let wall = queries.combat_wall(origin, direction, reach)?;
+            let weapon_hit = queries.combat_weapon_ray(origin, direction, reach)?;
+            breakable_hits = weapon_hit.breakables;
             #[cfg(any(test, feature = "inspector"))]
             {
-                blocking_wall = wall.filter(|hit| hit.distance < reach);
+                blocking_wall = weapon_hit.wall.filter(|hit| hit.distance < reach);
             }
-            Ok(wall.map(|hit| hit.distance))
+            Ok(weapon_hit.wall.map(|hit| hit.distance))
         })?
         else {
+            let wall = queries
+                .combat_weapon_ray(ray.origin, ray.direction, ray.reach)
+                .ok()
+                .and_then(|hit| {
+                    for (dist, placement) in hit.breakables {
+                        let limit = hit.wall.map_or(ray.reach, |w| w.distance);
+                        if dist <= limit {
+                            queries.mark_breakable(placement);
+                        }
+                    }
+                    hit.wall
+                });
             #[cfg(any(test, feature = "inspector"))]
             {
-                // An occluder already found before the actor is the first
-                // wall along the full ray as well.
-                let wall = blocking_wall.or_else(|| {
-                    queries
-                        .combat_wall(ray.origin, ray.direction, ray.reach)
-                        .ok()
-                        .flatten()
-                });
+                let wall = blocking_wall.or(wall);
                 let (hit, end) = match wall {
                     Some(surface) => ("world", surface.point),
                     None => (
@@ -2047,8 +2107,14 @@ impl RoomSimulation {
                     script: None,
                 });
             }
+            let _ = wall;
             return Ok(None);
         };
+        for (dist, placement) in breakable_hits {
+            if dist <= impact.distance {
+                queries.mark_breakable(placement);
+            }
+        }
         #[cfg(any(test, feature = "inspector"))]
         self.record_debug_ray(crate::game_debug::DebugRay {
             tick: context.tick,
@@ -2277,6 +2343,9 @@ impl RoomSimulation {
                     continue;
                 }
                 Ok(Some(end)) => {
+                    if end.impact {
+                        queries.break_in_sphere(end.point, 1.0);
+                    }
                     #[cfg(feature = "inspector")]
                     {
                         let surface = if end.expired {
@@ -3146,6 +3215,9 @@ impl RoomSimulation {
                     continue;
                 }
                 Ok(Some(end)) => {
+                    if end.impact {
+                        queries.break_in_sphere(end.point, 1.0);
+                    }
                     let source = projectile.source;
                     let team = projectile.team;
                     #[cfg(feature = "inspector")]

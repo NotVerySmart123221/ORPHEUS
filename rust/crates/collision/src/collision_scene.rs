@@ -4,9 +4,13 @@
 //! triangulation and placement math from `ow174/game/props.py`. Movement
 //! contacts have their own f32 representation and solver.
 
-use std::collections::{BTreeSet, HashMap, hash_map::Entry};
+use std::collections::{BTreeSet, HashMap, HashSet, hash_map::Entry};
 use std::error::Error;
 use std::fmt;
+use std::sync::{
+    RwLock,
+    atomic::{AtomicBool, Ordering},
+};
 
 use serde::Serialize;
 
@@ -100,12 +104,66 @@ impl RoundProp {
     }
 }
 
+/// Per-room mutable state tracking which breakable map placements have been destroyed.
+#[derive(Debug, Default)]
+pub struct BreakableState {
+    any_broken: AtomicBool,
+    broken: RwLock<HashSet<usize>>,
+}
+
+impl BreakableState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn is_broken(&self, placement: usize) -> bool {
+        if !self.any_broken.load(Ordering::Acquire) {
+            return false;
+        }
+        self.broken
+            .read()
+            .expect("breakable state lock")
+            .contains(&placement)
+    }
+
+    pub fn mark_broken(&self, placement: usize) -> bool {
+        let mut guard = self.broken.write().expect("breakable state lock");
+        let inserted = guard.insert(placement);
+        if inserted {
+            self.any_broken.store(true, Ordering::Release);
+        }
+        inserted
+    }
+
+    pub fn clear(&self) {
+        let mut guard = self.broken.write().expect("breakable state lock");
+        guard.clear();
+        self.any_broken.store(false, Ordering::Release);
+    }
+
+    pub fn broken_count(&self) -> usize {
+        if !self.any_broken.load(Ordering::Acquire) {
+            return 0;
+        }
+        self.broken.read().expect("breakable state lock").len()
+    }
+}
+
+/// Result of a weapon terrain ray that may pierce intact breakable panels.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WeaponRayHit {
+    pub wall: Option<RayHit>,
+    /// Intact breakable placements intersected before `wall` (or `length`), sorted by distance.
+    pub breakables: Vec<(f64, usize)>,
+}
+
 #[derive(Debug)]
 pub struct CollisionScene {
     triangles: TriangleIndex,
     weapon_terrain_category: Option<u16>,
-    triangle_sources: Vec<(usize, StaticRaySource)>,
-    round_props: Vec<(RoundProp, StaticRaySource)>,
+    triangle_sources: Vec<(usize, StaticRaySource, bool)>,
+    round_props: Vec<(RoundProp, StaticRaySource, bool)>,
+    has_breakables: bool,
 }
 
 /// Location of a static ray primitive in the loaded collision cache.
@@ -156,13 +214,14 @@ impl CollisionScene {
         let mut round_props = Vec::new();
         for (index, mesh) in cache.meshes.iter().enumerate() {
             append_mesh(&mut triangles, mesh, true)?;
-            triangle_sources.push((triangles.len(), StaticRaySource::Mesh { index }));
+            triangle_sources.push((triangles.len(), StaticRaySource::Mesh { index }, false));
         }
         for (index, hull) in cache.hulls.iter().enumerate() {
             append_hull(&mut triangles, hull)?;
-            triangle_sources.push((triangles.len(), StaticRaySource::Hull { index }));
+            triangle_sources.push((triangles.len(), StaticRaySource::Hull { index }, false));
         }
         let mut local_models = HashMap::new();
+        let mut has_breakables = false;
         for (index, placement) in cache.placements.iter().enumerate() {
             if !groups.contains(&placement.group) {
                 continue;
@@ -181,7 +240,8 @@ impl CollisionScene {
                 Entry::Occupied(entry) => entry.into_mut(),
                 Entry::Vacant(entry) => entry.insert(model_triangles(model, expanded, analytic)?),
             };
-            if triangles.len() + local.len() > MAX_SCENE_SHAPES {
+            let local_count: usize = local.iter().map(|(_, tris)| tris.len()).sum();
+            if triangles.len() + local_count > MAX_SCENE_SHAPES {
                 return Err(SceneError::ExpansionLimit);
             }
             let source = StaticRaySource::Placement {
@@ -189,19 +249,29 @@ impl CollisionScene {
                 model: placement.model,
                 group: placement.group,
             };
-            triangles.extend(local.iter().map(|triangle| SceneTriangle {
-                vertices: triangle.vertices.map(|point| transform.place(point)),
-                ..*triangle
-            }));
-            if !local.is_empty() {
-                triangle_sources.push((triangles.len(), source));
+            for (slot, slot_tris) in local.iter() {
+                if slot_tris.is_empty() {
+                    continue;
+                }
+                let breakable = cache.header.is_breakable_shape(placement.model, *slot);
+                has_breakables |= breakable;
+                triangles.extend(slot_tris.iter().map(|triangle| SceneTriangle {
+                    vertices: triangle.vertices.map(|point| transform.place(point)),
+                    ..*triangle
+                }));
+                triangle_sources.push((triangles.len(), source, breakable));
             }
             if analytic {
-                for shape in model.iter().filter_map(RoundProp::from_shape) {
+                for (slot, shape) in model.iter().enumerate() {
+                    let Some(round) = RoundProp::from_shape(shape) else {
+                        continue;
+                    };
                     if round_props.len() >= MAX_SCENE_SHAPES {
                         return Err(SceneError::ExpansionLimit);
                     }
-                    round_props.push((shape.placed(transform), source));
+                    let breakable = cache.header.is_breakable_shape(placement.model, slot);
+                    has_breakables |= breakable;
+                    round_props.push((round.placed(transform), source, breakable));
                 }
             }
         }
@@ -214,6 +284,7 @@ impl CollisionScene {
                 .map(|category| category.get()),
             triangle_sources,
             round_props,
+            has_breakables,
         })
     }
 
@@ -228,6 +299,17 @@ impl CollisionScene {
     /// Whether geometry leaves the segment clear before its target endpoint.
     /// None means the endpoints or the ray traversal are outside the query domain.
     pub fn segment_clear(&self, origin: Vec3, target: Vec3, category: u16) -> Option<bool> {
+        self.segment_clear_with_breakables(origin, target, category, None)
+    }
+
+    /// Whether geometry leaves the segment clear, skipping placements marked broken in `breakables`.
+    pub fn segment_clear_with_breakables(
+        &self,
+        origin: Vec3,
+        target: Vec3,
+        category: u16,
+        breakables: Option<&BreakableState>,
+    ) -> Option<bool> {
         for point in [origin, target] {
             if !point.into_iter().all(f64::is_finite) {
                 return None;
@@ -250,7 +332,7 @@ impl CollisionScene {
             return None;
         }
         let direction = scaled.map(|component| component / magnitude);
-        self.cast_ray(origin, direction, length, category)
+        self.cast_ray_with_breakables(origin, direction, length, category, breakables)
             .ok()
             .map(|hit| hit.is_none_or(|hit| hit.distance >= length))
     }
@@ -263,6 +345,18 @@ impl CollisionScene {
         direction: Vec3,
         length: f64,
         category: u16,
+    ) -> Option<Option<RayHit>> {
+        self.checked_cast_ray_with_breakables(origin, direction, length, category, None)
+    }
+
+    /// A bounded query along a unit direction, skipping broken placements in `breakables`.
+    pub fn checked_cast_ray_with_breakables(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        length: f64,
+        category: u16,
+        breakables: Option<&BreakableState>,
     ) -> Option<Option<RayHit>> {
         if length <= 0.0
             || !length.is_finite()
@@ -279,7 +373,8 @@ impl CollisionScene {
             cell(point[0])?;
             cell(point[2])?;
         }
-        self.cast_ray(origin, direction, length, category).ok()
+        self.cast_ray_with_breakables(origin, direction, length, category, breakables)
+            .ok()
     }
 
     /// First static hit along a unit direction. Triangles win exact ties.
@@ -290,12 +385,182 @@ impl CollisionScene {
         length: f64,
         category: u16,
     ) -> Result<Option<RayHit>, IndexError> {
-        let mut hit = self
-            .triangles
-            .cast_ray(origin, direction, length, category)?;
+        self.cast_ray_with_breakables(origin, direction, length, category, None)
+    }
+
+    /// First static hit along a unit direction, skipping placements marked broken in `breakables`.
+    pub fn cast_ray_with_breakables(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        length: f64,
+        category: u16,
+        breakables: Option<&BreakableState>,
+    ) -> Result<Option<RayHit>, IndexError> {
+        let Some(breakables) = breakables.filter(|_| self.has_breakables) else {
+            return self.cast_ray_filtered(origin, direction, length, category, |_| true, |_| true);
+        };
+        self.cast_ray_filtered(
+            origin,
+            direction,
+            length,
+            category,
+            |tri| {
+                self.triangle_breakable_placement(tri)
+                    .is_none_or(|placement| !breakables.is_broken(placement))
+            },
+            |round| {
+                self.round_breakable_placement(round)
+                    .is_none_or(|placement| !breakables.is_broken(placement))
+            },
+        )
+    }
+
+    /// Cast a weapon ray that pierces intact breakable panels and reports them before the first solid wall.
+    pub fn cast_weapon_ray(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        length: f64,
+        category: u16,
+        breakables: Option<&BreakableState>,
+    ) -> Result<WeaponRayHit, IndexError> {
+        if !self.has_breakables {
+            return Ok(WeaponRayHit {
+                wall: self.cast_ray(origin, direction, length, category)?,
+                breakables: Vec::new(),
+            });
+        }
+        let wall = self.cast_ray_filtered(
+            origin,
+            direction,
+            length,
+            category,
+            |tri| self.triangle_breakable_placement(tri).is_none(),
+            |round| self.round_breakable_placement(round).is_none(),
+        )?;
+        let max_dist = wall.map_or(length, |hit| hit.distance);
+        let mut hit_breakables = Vec::new();
+        let mut skip_placements = HashSet::new();
+        for _ in 0..16 {
+            let Some(hit) = self.cast_ray_filtered(
+                origin,
+                direction,
+                max_dist,
+                category,
+                |tri| match self.triangle_breakable_placement(tri) {
+                    Some(placement) => {
+                        !skip_placements.contains(&placement)
+                            && !breakables.is_some_and(|state| state.is_broken(placement))
+                    }
+                    None => false,
+                },
+                |round| match self.round_breakable_placement(round) {
+                    Some(placement) => {
+                        !skip_placements.contains(&placement)
+                            && !breakables.is_some_and(|state| state.is_broken(placement))
+                    }
+                    None => false,
+                },
+            )?
+            else {
+                break;
+            };
+            let Some(placement) = self.ray_hit_breakable_placement(hit) else {
+                break;
+            };
+            if hit.distance < max_dist && skip_placements.insert(placement) {
+                hit_breakables.push((hit.distance, placement));
+            } else {
+                break;
+            }
+        }
+        hit_breakables.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        Ok(WeaponRayHit {
+            wall,
+            breakables: hit_breakables,
+        })
+    }
+
+    /// Collect intact breakable placement indices whose breakable geometry overlaps `sphere`.
+    pub fn breakables_in_sphere(
+        &self,
+        center: Vec3,
+        radius: f64,
+        breakables: Option<&BreakableState>,
+    ) -> Vec<usize> {
+        if !self.has_breakables
+            || !radius.is_finite()
+            || radius <= 0.0
+            || !center.into_iter().all(f64::is_finite)
+        {
+            return Vec::new();
+        }
+        let r2 = radius * radius;
+        let mut found = BTreeSet::new();
+        for &(prop, source, breakable) in &self.round_props {
+            if !breakable {
+                continue;
+            }
+            let StaticRaySource::Placement { index, .. } = source else {
+                continue;
+            };
+            if breakables.is_some_and(|state| state.is_broken(index)) || found.contains(&index) {
+                continue;
+            }
+            if round_prop_near_sphere(prop, center, radius) {
+                found.insert(index);
+            }
+        }
+        let mut prev_end = 0usize;
+        for &(end_tri, source, breakable) in &self.triangle_sources {
+            let start_tri = prev_end;
+            prev_end = end_tri;
+            if !breakable {
+                continue;
+            }
+            let StaticRaySource::Placement { index, .. } = source else {
+                continue;
+            };
+            if breakables.is_some_and(|state| state.is_broken(index)) || found.contains(&index) {
+                continue;
+            }
+            for tri_idx in start_tri..end_tri {
+                if self
+                    .triangles
+                    .triangle_aabb_within_radius(tri_idx, center, r2)
+                {
+                    found.insert(index);
+                    break;
+                }
+            }
+        }
+        found.into_iter().collect()
+    }
+
+    fn cast_ray_filtered<FT, FR>(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        length: f64,
+        category: u16,
+        allow_triangle: FT,
+        allow_round: FR,
+    ) -> Result<Option<RayHit>, IndexError>
+    where
+        FT: Fn(u32) -> bool,
+        FR: Fn(usize) -> bool,
+    {
+        let mut hit = self.triangles.cast_ray_filtered(
+            origin,
+            direction,
+            length,
+            category,
+            allow_triangle,
+        )?;
         let mut best = hit.map_or(length, |hit| hit.distance);
-        for (index, (prop, _)) in self.round_props.iter().enumerate() {
-            if prop.mask & category == 0 {
+        for (index, (prop, _, _)) in self.round_props.iter().enumerate() {
+            if prop.mask & category == 0 || !allow_round(index) {
                 continue;
             }
             let Some(surface) = round_hit(origin, direction, best, prop.a, prop.b, prop.radius)
@@ -317,16 +582,52 @@ impl CollisionScene {
         Ok(hit)
     }
 
+    fn triangle_source_entry(&self, index: u32) -> Option<(StaticRaySource, bool)> {
+        let span = self
+            .triangle_sources
+            .partition_point(|&(end, _, _)| end <= index as usize);
+        self.triangle_sources
+            .get(span)
+            .map(|&(_, source, breakable)| (source, breakable))
+    }
+
+    fn triangle_breakable_placement(&self, index: u32) -> Option<usize> {
+        let (source, breakable) = self.triangle_source_entry(index)?;
+        if !breakable {
+            return None;
+        }
+        match source {
+            StaticRaySource::Placement { index, .. } => Some(index),
+            _ => None,
+        }
+    }
+
+    fn round_breakable_placement(&self, index: usize) -> Option<usize> {
+        let &(_, source, breakable) = self.round_props.get(index)?;
+        if !breakable {
+            return None;
+        }
+        match source {
+            StaticRaySource::Placement { index, .. } => Some(index),
+            _ => None,
+        }
+    }
+
     /// Resolve a hit from this scene to its source mesh, hull or map placement.
     pub fn ray_source(&self, hit: RayHit) -> Option<StaticRaySource> {
         match hit.primitive {
-            RayPrimitive::Round(index) => self.round_props.get(index).map(|&(_, source)| source),
+            RayPrimitive::Round(index) => self.round_props.get(index).map(|&(_, source, _)| source),
             RayPrimitive::Triangle(index) => {
-                let span = self
-                    .triangle_sources
-                    .partition_point(|&(end, _)| end <= index as usize);
-                self.triangle_sources.get(span).map(|&(_, source)| source)
+                self.triangle_source_entry(index).map(|(source, _)| source)
             }
+        }
+    }
+
+    /// Return the placement index if `hit` struck a breakable prop shape.
+    pub fn ray_hit_breakable_placement(&self, hit: RayHit) -> Option<usize> {
+        match hit.primitive {
+            RayPrimitive::Round(index) => self.round_breakable_placement(index),
+            RayPrimitive::Triangle(index) => self.triangle_breakable_placement(index),
         }
     }
 }
@@ -335,9 +636,10 @@ fn model_triangles(
     model: &[Shape],
     surfaces: bool,
     analytic: bool,
-) -> Result<Vec<SceneTriangle>, SceneError> {
-    let mut triangles = Vec::new();
-    for shape in model {
+) -> Result<Vec<(usize, Vec<SceneTriangle>)>, SceneError> {
+    let mut slots = Vec::with_capacity(model.len());
+    for (slot, shape) in model.iter().enumerate() {
+        let mut triangles = Vec::new();
         match shape {
             Shape::Mesh { mesh, .. } => append_mesh(&mut triangles, mesh, surfaces)?,
             Shape::Hull(hull) => append_hull(&mut triangles, hull)?,
@@ -347,8 +649,9 @@ fn model_triangles(
                 append_prism(&mut triangles, round)?;
             }
         }
+        slots.push((slot, triangles));
     }
-    Ok(triangles)
+    Ok(slots)
 }
 
 fn append_mesh(
@@ -432,6 +735,26 @@ fn push(
         surface,
     });
     Ok(())
+}
+
+fn round_prop_near_sphere(prop: RoundProp, center: Vec3, radius: f64) -> bool {
+    let ab: Vec3 = std::array::from_fn(|i| prop.b[i] - prop.a[i]);
+    let ab_len2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+    let t = if ab_len2 <= 1e-12 {
+        0.0
+    } else {
+        let ac: Vec3 = std::array::from_fn(|i| center[i] - prop.a[i]);
+        ((ac[0] * ab[0] + ac[1] * ab[1] + ac[2] * ab[2]) / ab_len2).clamp(0.0, 1.0)
+    };
+    let closest: Vec3 = std::array::from_fn(|i| prop.a[i] + t * ab[i]);
+    let dist2: f64 = (0..3)
+        .map(|i| {
+            let d = center[i] - closest[i];
+            d * d
+        })
+        .sum();
+    let total = radius + prop.radius;
+    dist2 <= total * total
 }
 
 #[derive(Clone, Copy)]
@@ -867,5 +1190,48 @@ mod tests {
             transform.place([1.0, 2.0, 3.0]),
             [15.999_999_657_714_582, 11.0, 4.000_000_479_199_585]
         );
+    }
+
+    #[test]
+    fn weapon_ray_pierces_breakable_panels_until_solid_wall_and_tracks_broken_state() {
+        let mut cache = fixture(true);
+        cache.header.breakable_model_shapes.insert(0, vec![0]);
+        cache.meshes = vec![wall(0.0, 6.0, TEAM0, 7)];
+        cache.models = vec![vec![
+            Shape::Mesh {
+                mesh: wall(0.0, 0.0, TEAM0, 1),
+                mask: TEAM0,
+            },
+            Shape::Mesh {
+                mesh: wall(3.0, 0.5, TEAM0, 2),
+                mask: TEAM0,
+            },
+        ]];
+        cache.placements = vec![placement(0, [1.0; 3])];
+        let scene = CollisionScene::expanded_rays(&cache, &BTreeSet::new(), identity()).unwrap();
+        let state = BreakableState::new();
+
+        let hit = scene
+            .cast_weapon_ray(ORIGIN, FORWARD, 10.0, TEAM0, Some(&state))
+            .unwrap();
+        assert_eq!(hit.breakables, vec![(3.0, 0)]);
+        let solid = hit.wall.expect("solid wall behind breakable");
+        assert!((solid.distance - 6.0).abs() < 1e-6);
+
+        assert!(state.mark_broken(0));
+        assert!(!state.mark_broken(0));
+        assert_eq!(state.broken_count(), 1);
+
+        let after_break = scene
+            .cast_weapon_ray(ORIGIN, FORWARD, 10.0, TEAM0, Some(&state))
+            .unwrap();
+        assert!(after_break.breakables.is_empty());
+        assert!((after_break.wall.unwrap().distance - 6.0).abs() < 1e-6);
+
+        let ray = scene
+            .cast_ray_with_breakables(ORIGIN, FORWARD, 10.0, TEAM0, Some(&state))
+            .unwrap()
+            .unwrap();
+        assert!((ray.distance - 6.0).abs() < 1e-6);
     }
 }

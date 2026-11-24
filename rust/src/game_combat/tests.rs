@@ -3777,6 +3777,7 @@ fn spatial_frame_honors_weapon_terrain_category() {
         )]),
         player_wires: HashMap::new(),
         ground,
+        breakables: None,
         actor_voice: None,
         #[cfg(any(test, feature = "inspector"))]
         captured_tick: 1,
@@ -3807,4 +3808,164 @@ fn spatial_frame_honors_weapon_terrain_category() {
         .unwrap()
         .unwrap();
     assert_eq!(actor_hit.entity, target);
+}
+
+#[test]
+fn hitscan_pierces_and_breaks_breakable_placement_then_clears_projectile_sweeps() {
+    use crate::collision_cache::{
+        CollisionCache, Mesh, Placement, RAY_GEOMETRY, RAY_PROP_SCOPE, RayCacheIdentity, Shape,
+        Triangle, chunk_guid,
+    };
+    use crate::collision_scene::BreakableState;
+    use crate::game_hitscan::{DamageTags, HurtVolumeCatalog};
+    use crate::mover_settings::{MoverCatalog, MoverSettings};
+    use std::collections::BTreeSet;
+
+    let map = 0x0800_0000_0000_4242;
+    let identity = RayCacheIdentity {
+        map_guid: map,
+        collision_ckey: "synthetic-map",
+        placement_ckey: None,
+        prop_records_sha256: None,
+    };
+    let glass = Mesh {
+        vertices: vec![[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 2.5, 0.0]],
+        triangles: vec![Triangle {
+            corners: [0, 1, 2],
+            wings: [-1; 3],
+            mask: MOVER_CATEGORY,
+            surface: 0,
+        }],
+    };
+    let cache = CollisionCache {
+        header: serde_json::from_value(serde_json::json!({
+            "meshes": [],
+            "hulls": 0,
+            "models": 1,
+            "placements": 1,
+            "identifiers": [],
+            "geometry": RAY_GEOMETRY,
+            "category_mask": 0xffff,
+            "prop_scope": RAY_PROP_SCOPE,
+            "map": format!("0x{map:016X}"),
+            "chunk": format!("0x{:016X}", chunk_guid(map)),
+            "ckey": "synthetic-map",
+            "breakable_model_shapes": { "0": [0] },
+        }))
+        .unwrap(),
+        meshes: vec![],
+        hulls: vec![],
+        models: vec![vec![Shape::Mesh {
+            mesh: glass,
+            mask: MOVER_CATEGORY,
+        }]],
+        placements: vec![Placement {
+            model: 0,
+            group: 0,
+            translation: [0.0, 0.0, 2.0],
+            scale: [1.0; 3],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+        }],
+    };
+    let rays = Arc::new(CollisionScene::expanded_rays(&cache, &BTreeSet::new(), identity).unwrap());
+    let sweeps = Arc::new(
+        crate::contact_world::ContactWorld::from_expanded_ray_cache(
+            cache,
+            &BTreeSet::new(),
+            identity,
+        )
+        .unwrap(),
+    );
+    let breakables = Arc::new(BreakableState::new());
+    let bots = crate::game_bots::BotCatalog::from_json(
+        r#"{
+            "heroes":{"0x01":{"name":"Test bot","body":"0x02","health":200}},
+            "maps":{"0x03":{"hints":{},"spawners":[
+                {"hero":"0x01","team":1,"position":[0,0,4],"rotation":[0,0,0,1],"graphs":[]}
+            ]}}
+        }"#,
+    )
+    .unwrap()
+    .make(3, |_| crate::game_bots::BotWalk::default());
+    let bot_entity = bots[0].entity;
+    let mut room = RoomSimulation::new(bots).unwrap();
+    room.enable_spatial_queries(false, Arc::clone(&rays), RoomSpatialNeeds::Queries);
+    room.set_breakables(Arc::clone(&breakables));
+    let movers =
+        MoverCatalog::from_json(r#"{"0x02":{"stand_height":2.0,"stand_radius":0.5}}"#).unwrap();
+    let hurt_volumes = HurtVolumeCatalog::default();
+    let queries = BotQueries::new(false, &movers, &rays, None)
+        .with_combat_geometry(&rays, Some(&sweeps))
+        .with_breakables(&breakables)
+        .with_hurt_volumes(&hurt_volumes);
+
+    let owner = BodyId {
+        entity: 0xa000_0100,
+        generation: 1,
+    };
+    let mover = crate::mover::Mover::new(
+        MoverSettings::default(),
+        Arc::clone(&sweeps),
+        [0.0, 0.0, 0.0],
+        0,
+        0x18,
+    )
+    .unwrap();
+    room.spawn_player_body(PlayerBodyState::new(
+        owner, 1, 0, 0, SOLDIER, mover, None, 1, None,
+    ))
+    .unwrap();
+
+    // First projectile hits the unbroken breakable panel and shatters it.
+    assert!(
+        queries
+            .projectile_wall([0.0, 1.0, 0.0], [0.0, 0.0, 1.0], 5.0, 0.0)
+            .unwrap()
+            .is_some()
+    );
+    assert!(breakables.is_broken(0));
+    assert!(
+        queries
+            .projectile_wall([0.0, 1.0, 0.0], [0.0, 0.0, 1.0], 5.0, 0.0)
+            .unwrap()
+            .is_none()
+    );
+
+    // Reset breakable state, then verify hitscan pierces the intact panel, hits the bot, and breaks it.
+    breakables.clear();
+    assert!(!breakables.is_broken(0));
+    let shot = PosedHitscan {
+        source: owner.entity,
+        origin: [0.0, 1.0, 0.0],
+        direction: [0.0, 0.0, 1.0],
+        command: crate::commands::Command {
+            frame: 1,
+            ..Default::default()
+        },
+        shot_frame: 1,
+        reach: 20.0,
+        hit: HitDefinition {
+            tags: DamageTags::EMPTY,
+            amount: 20.0,
+            loadout: None,
+            critical: 1.0,
+            falloff: None,
+        },
+    };
+    let hit = room
+        .hitscan(
+            &queries,
+            shot,
+            ShotContext {
+                team: 0,
+                quanta: 16,
+                tick: 1,
+                now: Duration::ZERO,
+            },
+            |_| true,
+        )
+        .unwrap();
+    assert!(hit.is_some());
+    assert!(breakables.is_broken(0));
+    assert_eq!(room.body_healths().unwrap()[&bot_entity], 180.0);
 }

@@ -176,6 +176,7 @@ pub(super) struct BodyWorld {
     pub(super) deadeye_scene: DeadeyeScene,
     pub(super) velocity_changes: Vec<(u32, crate::mover::VelocityChange)>,
     pub(super) scripted_motion: Option<(u32, ScriptedMotion)>,
+    pub(super) voice_variant_counter: usize,
 }
 
 impl World for BodyWorld {
@@ -235,9 +236,77 @@ impl World for BodyWorld {
     }
 
     fn voice_context(&mut self, site: Site) -> Option<bool> {
-        // This body has no native voice manager. Authored room cues use
-        // the separate room request path.
-        self.is_player_site(site).then_some(false)
+        self.is_player_site(site)
+            .then(|| self.actor_voice_available(site))
+    }
+
+    fn voice_manager(&mut self, site: Site) -> Option<bool> {
+        self.voice_context(site)
+    }
+
+    fn voice_clock(&mut self, site: Site, now_ms: u64) -> Option<f64> {
+        self.voice_context(site)
+            .filter(|&ok| ok)
+            .map(|_| now_ms as f64 / 1000.0)
+    }
+
+    fn voice_stimulus(
+        &mut self,
+        site: Site,
+        guid: u64,
+    ) -> Option<Option<crate::script_voice::Stimulus>> {
+        if !self.actor_voice_available(site) {
+            return None;
+        }
+        let playable = self
+            .spatial_frame
+            .as_deref()
+            .is_some_and(|frame| frame.actor_voice_has_stimulus(site.entity, guid));
+        Some(playable.then_some(crate::script_voice::Stimulus {
+            guid,
+            playable: true,
+            mode: false,
+        }))
+    }
+
+    fn voice_allow(&mut self, site: Site, stimulus: crate::script_voice::Stimulus) -> Option<bool> {
+        self.actor_voice_available(site)
+            .then_some(stimulus.playable)
+    }
+
+    fn voice_submit(
+        &mut self,
+        site: Site,
+        stimulus: crate::script_voice::Stimulus,
+        targets: &[u32],
+        _actor: Option<&Value>,
+    ) -> Result<Option<u32>, &'static str> {
+        if !self.actor_voice_available(site) {
+            return Ok(None);
+        }
+        if !targets.is_empty() && !targets.contains(&site.entity) {
+            return Ok(Some(0));
+        }
+        let pick = self.voice_variant_counter;
+        self.voice_variant_counter = self.voice_variant_counter.wrapping_add(1);
+        let Some((cue, listeners)) = self.spatial_frame.as_deref().and_then(|frame| {
+            frame.actor_voice_request(
+                site.entity,
+                crate::game_combat::ActorVoiceQuery::Stimulus(stimulus.guid),
+                &mut |count| pick % count,
+            )
+        }) else {
+            return Ok(Some(0));
+        };
+        Ok(Some(u32::from(self.queue_room_cue(site, &listeners, cue))))
+    }
+
+    fn voice_duration(&mut self, site: Site, handle: u32, _guid: u64, _mode: bool) -> Option<f64> {
+        (self.actor_voice_available(site) && handle != 0).then_some(1.0)
+    }
+
+    fn voice_part(&mut self, site: Site, _number: u16) -> Option<f64> {
+        self.actor_voice_available(site).then_some(0.0)
     }
 
     fn team_members(&self, team: u8) -> Option<u32> {
@@ -637,10 +706,21 @@ impl World for BodyWorld {
         criterion: u64,
         choose: &mut dyn FnMut(usize) -> usize,
     ) {
+        self.queue_actor_voice_with_audience(site, criterion, None, choose);
+    }
+
+    fn queue_actor_voice_with_audience(
+        &mut self,
+        site: Site,
+        criterion: u64,
+        audience: Option<&[u32]>,
+        choose: &mut dyn FnMut(usize) -> usize,
+    ) {
         if let Some((cue, listeners)) = self.spatial_frame.as_deref().and_then(|frame| {
-            frame.actor_voice_request(
+            frame.actor_voice_request_with_audience(
                 site.entity,
                 crate::game_combat::ActorVoiceQuery::Criterion(criterion),
+                audience,
                 choose,
             )
         }) {

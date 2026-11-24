@@ -33,6 +33,7 @@ pub(super) struct RoomScriptTarget {
 pub(crate) enum ActorVoiceQuery {
     Criterion(u64),
     EquippedEffect(u64),
+    Stimulus(u64),
 }
 
 impl RoomSpatialFrame {
@@ -44,10 +45,33 @@ impl RoomSpatialFrame {
                 .is_some_and(|body| body.voice.is_some())
     }
 
+    pub(crate) fn actor_voice_has_stimulus(&self, source: u32, stimulus: u64) -> bool {
+        let Some(catalog) = self.actor_voice.as_ref() else {
+            return false;
+        };
+        let Some((_, source_body)) = self.actor_sample(source) else {
+            return false;
+        };
+        let Some((hero, skin)) = source_body.voice else {
+            return false;
+        };
+        catalog.stimulus_options(hero, skin, stimulus).is_some()
+    }
+
     pub(crate) fn actor_voice_request(
         &self,
         source: u32,
         query: ActorVoiceQuery,
+        choose: &mut dyn FnMut(usize) -> usize,
+    ) -> Option<(RoomCue, Vec<u32>)> {
+        self.actor_voice_request_with_audience(source, query, None, choose)
+    }
+
+    pub(crate) fn actor_voice_request_with_audience(
+        &self,
+        source: u32,
+        query: ActorVoiceQuery,
+        explicit_audience: Option<&[u32]>,
         choose: &mut dyn FnMut(usize) -> usize,
     ) -> Option<(RoomCue, Vec<u32>)> {
         let catalog = self.actor_voice.as_ref()?;
@@ -56,22 +80,40 @@ impl RoomSpatialFrame {
         let options = match query {
             ActorVoiceQuery::Criterion(criterion) => catalog.options(hero, skin, criterion),
             ActorVoiceQuery::EquippedEffect(effect) => catalog.equipped_options(hero, skin, effect),
+            ActorVoiceQuery::Stimulus(stimulus) => catalog.stimulus_options(hero, skin, stimulus),
         }?;
-        let team_only = matches!(query, ActorVoiceQuery::Criterion(_));
-        let listeners: Vec<_> = self
-            .candidates
-            .iter()
-            .filter(|listener| {
-                (!team_only
-                    || listener.entity == source
-                    || actor.team.is_some() && actor.team == listener.team)
-                    && self
-                        .script_targets
-                        .get(&listener.entity)
-                        .is_some_and(|body| body.cue_listener)
-            })
-            .map(|listener| listener.entity)
-            .collect();
+        let listeners: Vec<_> = match explicit_audience.filter(|items| !items.is_empty()) {
+            Some(audience) => {
+                let mut seen = HashSet::with_capacity(audience.len());
+                audience
+                    .iter()
+                    .copied()
+                    .filter(|entity| {
+                        seen.insert(*entity)
+                            && self
+                                .script_targets
+                                .get(entity)
+                                .is_some_and(|body| body.cue_listener)
+                    })
+                    .collect()
+            }
+            None => {
+                let team_only = matches!(query, ActorVoiceQuery::Criterion(_));
+                self.candidates
+                    .iter()
+                    .filter(|listener| {
+                        (!team_only
+                            || listener.entity == source
+                            || actor.team.is_some() && actor.team == listener.team)
+                            && self
+                                .script_targets
+                                .get(&listener.entity)
+                                .is_some_and(|body| body.cue_listener)
+                    })
+                    .map(|listener| listener.entity)
+                    .collect()
+            }
+        };
         if listeners.is_empty() || listeners.len() > RoomCue::MAX_TARGETS {
             return None;
         }
@@ -316,6 +358,22 @@ impl RoomSimulation {
             for request in requests {
                 self.settle_script_request(request, source, tick, now)?;
             }
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn settle_test_script_requests(
+        &mut self,
+        source_wire: u32,
+        requests: Vec<RoomScriptRequest>,
+        tick: u32,
+    ) -> Result<(), CombatError> {
+        let Some(source) = self.sample_health_body(source_wire) else {
+            return Ok(());
+        };
+        for request in requests {
+            self.settle_script_request(request, source, tick, Duration::ZERO)?;
         }
         Ok(())
     }
@@ -865,6 +923,7 @@ mod tests {
             ]),
             player_wires: HashMap::new(),
             ground: Arc::new(fixture_ground()),
+            breakables: None,
             actor_voice: None,
             captured_tick: 0,
             debug_rays: Arc::default(),

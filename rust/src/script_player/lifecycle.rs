@@ -439,6 +439,9 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                 .advance_unposed(command.frame, boundary, &mut self.world)
                 .map_err(unsupported)?;
         }
+        self.component
+            .poll_voice(&mut self.world)
+            .map_err(unsupported)?;
         if step != BodyStep::UnposedTimer {
             self.modifiers = self
                 .component

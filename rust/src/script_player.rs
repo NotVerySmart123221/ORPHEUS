@@ -271,6 +271,7 @@ impl PlayerBodyFactory {
             deadeye_scene: DeadeyeScene::default(),
             velocity_changes: Vec::new(),
             scripted_motion: None,
+            voice_variant_counter: 0,
         };
         let mut component = Component::start(
             Arc::clone(&self.graphs),

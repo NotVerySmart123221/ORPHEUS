@@ -7,6 +7,7 @@ use std::{collections::HashSet, fmt, sync::Arc};
 
 use crate::{
     collision_grid::ColumnRange,
+    collision_scene::BreakableState,
     contact_cache::{CapsulePose, LOOSE, ProxyContact, encloses},
     contact_gjk::{PointSetSize, SimplexCache, gjk, sweep::MeshProbe},
     contact_hull::HullContactError,
@@ -39,6 +40,7 @@ pub struct SweepClip {
 
 pub struct CharacterBody {
     world: Arc<ContactWorld>,
+    breakables: Option<Arc<BreakableState>>,
     pose: CapsulePose,
     category: u16,
     fat: ContactBounds,
@@ -64,6 +66,7 @@ impl CharacterBody {
     pub fn new(world: Arc<ContactWorld>, pose: CapsulePose, category: u16) -> Self {
         Self {
             world,
+            breakables: None,
             pose,
             category,
             fat: expanded(pose.bounds(), PROXY_MARGIN),
@@ -74,6 +77,10 @@ impl CharacterBody {
             constraints: Vec::new(),
             planes: Vec::new(),
         }
+    }
+
+    pub fn set_breakables(&mut self, breakables: Arc<BreakableState>) {
+        self.breakables = Some(breakables);
     }
 
     pub fn position(&self) -> Vec3 {
@@ -94,14 +101,16 @@ impl CharacterBody {
 
     /// Create the same capsule at a new origin with fresh contact state.
     pub fn fresh_at(&self, position: Vec3) -> Self {
-        Self::new(
+        let mut body = Self::new(
             Arc::clone(&self.world),
             CapsulePose {
                 position,
                 ..self.pose
             },
             self.category,
-        )
+        );
+        body.breakables = self.breakables.clone();
+        body
     }
 
     /// Relocate to a clear capsule origin without sweeping the intervening path.
@@ -124,7 +133,10 @@ impl CharacterBody {
         }
         let capsule = candidate.world_capsule();
         let bounds = candidate.bounds();
-        for id in self.world.query(bounds) {
+        for id in self
+            .world
+            .query_with_breakables(bounds, self.breakables.as_deref())
+        {
             let shape = &self.world.shapes()[id as usize];
             if shape.geometry().mask() & self.category != 0
                 && penetrates_shape(shape, capsule, self.category)?
@@ -150,13 +162,16 @@ impl CharacterBody {
 
     /// Query the same upright capsule and mask without changing its contact state.
     pub fn sweep(&self, start: Vec3, end: Vec3) -> Result<Option<WorldHit>, PointSetSize> {
-        self.world.scene_sweep(MeshProbe {
-            points: &[[0.0, self.pose.radius, 0.0], [0.0, self.pose.top, 0.0]],
-            radius: self.pose.radius,
-            start,
-            end,
-            category: self.category,
-        })
+        self.world.scene_sweep_with_breakables(
+            MeshProbe {
+                points: &[[0.0, self.pose.radius, 0.0], [0.0, self.pose.top, 0.0]],
+                radius: self.pose.radius,
+                start,
+                end,
+                category: self.category,
+            },
+            self.breakables.as_deref(),
+        )
     }
 
     pub fn teleport(&mut self, position: Vec3) {
@@ -195,7 +210,10 @@ impl CharacterBody {
         }
         .world_capsule();
         let bounds = segment_bounds(capsule.a, capsule.b, reach);
-        for id in self.world.query(bounds) {
+        for id in self
+            .world
+            .query_with_breakables(bounds, self.breakables.as_deref())
+        {
             let shape = &self.world.shapes()[id as usize];
             if shape.geometry().mask() & self.category != 0
                 && overlaps_segment(shape, [capsule.a, capsule.b], reach, self.category)?
@@ -349,11 +367,27 @@ impl CharacterBody {
     }
 
     fn update_pairs(&mut self) {
+        if let Some(breakables) = self.breakables.as_deref() {
+            if breakables.broken_count() > 0 {
+                self.contacts.retain(|(id, _)| {
+                    let keep = self.world.shapes()[*id as usize]
+                        .breakable_placement()
+                        .is_none_or(|placement| !breakables.is_broken(placement));
+                    if !keep {
+                        self.pairs.remove(id);
+                    }
+                    keep
+                });
+            }
+        }
         if !std::mem::take(&mut self.proxy_moved) {
             return;
         }
         let before = self.contacts.len();
-        for id in self.world.query(self.fat) {
+        for id in self
+            .world
+            .query_with_breakables(self.fat, self.breakables.as_deref())
+        {
             let shape = &self.world.shapes()[id as usize];
             if shape.geometry().mask() & self.category != 0 && self.pairs.insert(id) {
                 self.contacts

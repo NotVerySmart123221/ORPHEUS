@@ -1218,6 +1218,17 @@ pub trait World {
     ) {
     }
 
+    /// Resolve a criterion to a cue for the actor and an optional explicit audience.
+    fn queue_actor_voice_with_audience(
+        &mut self,
+        site: Site,
+        criterion: u64,
+        _audience: Option<&[u32]>,
+        choose: &mut dyn FnMut(usize) -> usize,
+    ) {
+        self.queue_actor_voice(site, criterion, choose);
+    }
+
     /// The world owns delivery outside the current body.
     fn send_message(
         &mut self,
