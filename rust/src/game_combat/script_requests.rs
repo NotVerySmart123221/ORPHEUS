@@ -17,6 +17,48 @@ use std::{collections::HashSet, time::Duration};
 
 pub(super) const MAX_BODY_SCRIPT_REQUESTS: usize = 64;
 
+#[derive(Clone, Copy)]
+pub(super) struct ActorHealthSnapshot {
+    pub(super) total: f64,
+    pub(super) max_total: f64,
+    pub(super) health: f64,
+    pub(super) max_health: f64,
+    pub(super) armour: f64,
+    pub(super) max_armour: f64,
+    pub(super) shields: f64,
+    pub(super) max_shields: f64,
+}
+
+impl ActorHealthSnapshot {
+    pub(super) fn from_vitals(vitals: &crate::vitals::Vitals) -> Self {
+        use crate::vitals::PoolKind;
+        Self {
+            total: vitals.total(),
+            max_total: vitals.maximum(),
+            health: vitals.amount(Some(PoolKind::Health), false),
+            max_health: vitals.amount(Some(PoolKind::Health), true),
+            armour: vitals.amount(Some(PoolKind::Armour), false),
+            max_armour: vitals.amount(Some(PoolKind::Armour), true),
+            shields: vitals.amount(Some(PoolKind::Shields), false),
+            max_shields: vitals.amount(Some(PoolKind::Shields), true),
+        }
+    }
+
+    pub(super) fn amount(self, kind: Option<crate::vitals::PoolKind>, maximum: bool) -> f64 {
+        use crate::vitals::PoolKind;
+        match (kind, maximum) {
+            (None, false) => self.total,
+            (None, true) => self.max_total,
+            (Some(PoolKind::Health), false) => self.health,
+            (Some(PoolKind::Health), true) => self.max_health,
+            (Some(PoolKind::Armour), false) => self.armour,
+            (Some(PoolKind::Armour), true) => self.max_armour,
+            (Some(PoolKind::Shields), false) => self.shields,
+            (Some(PoolKind::Shields), true) => self.max_shields,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct RoomScriptTarget {
     pub(super) entity: Entity,
@@ -25,6 +67,7 @@ pub(super) struct RoomScriptTarget {
     pub(super) eye_position: Option<Vec3>,
     pub(super) filter_flags: Option<u64>,
     pub(super) health: bool,
+    pub(super) health_snapshot: Option<ActorHealthSnapshot>,
     pub(super) messages: bool,
     pub(super) cue_listener: bool,
     pub(super) voice: Option<(u64, u64)>,
@@ -943,6 +986,7 @@ mod tests {
             eye_position: None,
             filter_flags: None,
             health,
+            health_snapshot: None,
             messages,
             cue_listener: health,
             voice: None,

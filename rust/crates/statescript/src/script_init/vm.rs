@@ -313,12 +313,19 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         if self.machine.control_blocked {
             command.buttons = 0;
             command.action = 0;
+            command.forward = 0;
+            command.right = 0;
         }
+        let next_directions = crate::script_runtime::direction_bits(command.forward, command.right);
         let edges: Vec<_> = button_edges(
             self.machine.command_buttons,
             command.buttons,
             command.action,
         )
+        .chain(crate::script_runtime::direction_edges(
+            self.machine.command_directions,
+            next_directions,
+        ))
         .collect();
         self.machine
             .queues
@@ -331,6 +338,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
         }
         self.machine.command_buttons = command.buttons;
+        self.machine.command_directions = next_directions;
         Ok(())
     }
 

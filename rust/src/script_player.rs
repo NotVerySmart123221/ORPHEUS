@@ -150,7 +150,21 @@ impl PlayerBodyFactory {
             }
         }
         let health = pools.unwrap_or(FALLBACK_POOLS).total();
-        let variables = crate::script_init::player_entity_variables(body, health, health);
+        let mut variables = crate::script_init::player_entity_variables(body, health, health);
+        // Pilot D.Va (0x040A) graph 0x026A fades the screen to black (UXPresenter_175)
+        // while awaiting STU_B6E3C77D possession transfer to MEKA (0x0407) unless
+        // retail shared_var[12428] ("Spawn Without Mech") is set. When the runtime
+        // bundle does not contain MEKA 0x0407, set shared_var[12428] = true so D.Va
+        // spawns cleanly as Pilot D.Va instead of locking in a permanent black screen.
+        const DVA_PILOT_BODY: u64 = 0x0400_0000_0000_040a;
+        const DVA_MEKA_BODY: u64 = 0x0400_0000_0000_0407;
+        const DVA_SPAWN_WITHOUT_MECH_VAR: u32 = 12_428;
+        if hero.body == DVA_PILOT_BODY && graphs.entity_body(DVA_MEKA_BODY).is_none() {
+            variables.insert(
+                DVA_SPAWN_WITHOUT_MECH_VAR,
+                crate::script_wire::Value::Bool(true),
+            );
+        }
         let target_tags = body.target_tags.clone();
         let charge_route = charge::ChargeRoute::prepare(body, mode, &roots)?;
         Ok(Self {

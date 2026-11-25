@@ -3772,6 +3772,7 @@ fn spatial_frame_honors_weapon_terrain_category() {
                 entity: Entity::from_raw(target),
                 candidate_index: 0,
                 health: true,
+                health_snapshot: None,
                 angles: [0, 0],
                 eye_position: Some([0.0, 1.5, 4.0]),
                 filter_flags: Some(0),

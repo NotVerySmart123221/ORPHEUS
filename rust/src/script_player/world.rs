@@ -585,13 +585,23 @@ impl World for BodyWorld {
             return Some(Value::Null);
         }
         if entity != GAME_MODE_ENTITY {
-            return self
+            if let Some(target) = self
                 .deadeye_scene
                 .targets
                 .iter()
-                .find(|target| target.entity == entity)?
-                .script_state
-                .read(id);
+                .find(|target| target.entity == entity)
+            {
+                return target.script_state.read(id);
+            }
+            if self.spatial_frame.as_deref().is_some_and(|frame| {
+                frame
+                    .candidates()
+                    .iter()
+                    .any(|candidate| candidate.entity == entity)
+            }) {
+                return Some(Value::Null);
+            }
+            return None;
         }
         self.graphs
             .mode_variables(self.mode)
@@ -656,16 +666,36 @@ impl World for BodyWorld {
                 None => None,
             };
         }
-        (valid_entity(entity) && (entity == self.entity || entity == self.controller))
-            .then_some(true)
+        if valid_entity(entity)
+            && (entity == self.entity
+                || entity == self.controller
+                || self.spatial_frame.as_deref().is_some_and(|frame| {
+                    frame
+                        .candidates()
+                        .iter()
+                        .any(|candidate| candidate.entity == entity)
+                }))
+        {
+            return Some(true);
+        }
+        None
     }
 
     fn entity_team(&self, site: Site, entity: u32) -> Option<i8> {
-        if !self.is_player_site(site) || entity != self.entity {
+        if !self.is_player_site(site) {
             return None;
         }
-        let team = crate::match_scene::team_from_spawn_filter(self.body_filter)?;
-        i8::try_from(team).ok()
+        if entity == self.entity {
+            let team = crate::match_scene::team_from_spawn_filter(self.body_filter)?;
+            return i8::try_from(team).ok();
+        }
+        self.spatial_frame
+            .as_deref()?
+            .candidates()
+            .iter()
+            .find(|candidate| candidate.entity == entity)
+            .and_then(|candidate| candidate.team)
+            .and_then(|team| i8::try_from(team).ok())
     }
 
     fn queue_health_change(&mut self, site: Site, target: u32, delta: f64) -> bool {
@@ -1101,6 +1131,11 @@ impl World for BodyWorld {
                     .find(|target| target.entity == entity)
                     .map(|target| target.health)
             })
+            .or_else(|| {
+                self.spatial_frame
+                    .as_deref()
+                    .and_then(|frame| frame.actor_health(entity, None, false))
+            })
             .map_or(HealthQuery::Unavailable, HealthQuery::Present)
     }
 
@@ -1127,6 +1162,11 @@ impl World for BodyWorld {
                     .find(|target| target.entity == entity)
                     .map_or(0.0, |target| target.health),
             );
+        }
+        if self.is_player_site(site) {
+            if let Some(frame) = self.spatial_frame.as_deref() {
+                return Some(frame.actor_health(entity, kind, maximum).unwrap_or(0.0));
+            }
         }
         None
     }
@@ -1242,13 +1282,17 @@ impl World for BodyWorld {
         if !self.is_player_site(site) || !radius.is_finite() || radius <= 0.0 {
             return None;
         }
-        let origin_pos = self.authored_position(origin)?;
+        let centre = if origin == 0 {
+            offset
+        } else {
+            let origin_pos = self.authored_position(origin)?;
+            [
+                origin_pos[0] + offset[0],
+                origin_pos[1] + offset[1],
+                origin_pos[2] + offset[2],
+            ]
+        };
         let frame = self.spatial_frame.as_deref()?;
-        let centre = [
-            origin_pos[0] + offset[0],
-            origin_pos[1] + offset[1],
-            origin_pos[2] + offset[2],
-        ];
         let own_team = crate::match_scene::team_from_spawn_filter(self.body_filter);
         let relation = filter.get("m_66747E7D").and_then(Json::as_u64).unwrap_or(0);
         let max_sq = radius * radius;

@@ -293,7 +293,7 @@ use health::HealthEffect;
 use health_events::{HealthDamageEvidence, HealthEventContext, SampledBody};
 pub(crate) use observed_projectiles::{ObservedProjectileEvent, ObservedShot};
 pub(crate) use player::{PlayerBodyEvent, PlayerBodyHandle, PlayerBodyState, PlayerDeath};
-use script_requests::{PlayerRoomCue, RoomScriptTarget};
+use script_requests::{ActorHealthSnapshot, PlayerRoomCue, RoomScriptTarget};
 pub(crate) use script_requests::{RoomScriptRequest, RoomScriptRequests};
 
 #[derive(Component)]
@@ -375,6 +375,20 @@ impl RoomSpatialFrame {
 
     pub(crate) fn actor_filter_flags(&self, entity: u32) -> Option<u64> {
         self.actor_sample(entity)?.1.filter_flags
+    }
+
+    pub(crate) fn actor_health(
+        &self,
+        entity: u32,
+        kind: Option<crate::vitals::PoolKind>,
+        maximum: bool,
+    ) -> Option<f64> {
+        let amount = self
+            .actor_sample(entity)?
+            .1
+            .health_snapshot?
+            .amount(kind, maximum);
+        (amount.is_finite() && amount >= 0.0).then_some(amount)
     }
 
     /// Opaque room-local identity from the same frozen actor admission as queries.
@@ -1523,6 +1537,7 @@ impl RoomSimulation {
                         eye_position: None,
                         filter_flags: state.native_filter_flags(),
                         health: true,
+                        health_snapshot: Some(ActorHealthSnapshot::from_vitals(&state.vitals)),
                         messages: state.enemy.as_ref().is_some_and(|enemy| {
                             enemy.fault.is_none() && !enemy.scripts.retirement_requested
                         }) || state
@@ -1581,6 +1596,7 @@ impl RoomSimulation {
                         eye_position: state.script_eye_position(),
                         filter_flags: state.native_filter_flags(),
                         health: state.vitals().is_some(),
+                        health_snapshot: state.vitals().map(ActorHealthSnapshot::from_vitals),
                         messages: state.runtime.is_some(),
                         cue_listener: true,
                         voice: actor_voice.as_ref().map(|_| {
@@ -2568,7 +2584,9 @@ impl RoomSimulation {
                 }
                 Ok(Some(end)) => {
                     if end.impact {
-                        queries.break_in_sphere(end.point, blast_radius.max(1.0));
+                        if blast_radius > 0.0 {
+                            queries.break_in_sphere(end.point, blast_radius);
+                        }
                         self.interactive_props.hit_props_in_sphere(
                             end.point,
                             blast_radius.max(1.5),
@@ -3460,7 +3478,7 @@ impl RoomSimulation {
                 &candidates,
                 shooter_pose,
                 |origin, direction, reach, radius| {
-                    queries.projectile_wall(origin, direction, reach, radius)
+                    queries.projectile_wall_readonly(origin, direction, reach, radius)
                 },
             );
             let mut prop_blast_point = None;
@@ -3471,7 +3489,9 @@ impl RoomSimulation {
                 }
                 Ok(Some(end)) => {
                     if end.impact {
-                        queries.break_in_sphere(end.point, blast_radius.max(1.0));
+                        if blast_radius > 0.0 {
+                            queries.break_in_sphere(end.point, blast_radius);
+                        }
                         prop_blast_point = Some(end.point);
                     }
                     let source = projectile.source;

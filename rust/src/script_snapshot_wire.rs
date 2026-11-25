@@ -258,7 +258,9 @@ impl ProjectedSnapshot {
             }
         }
         let shot_ms = i64::try_from(event.time_ms).ok();
+        let frame_ms = i64::try_from(crate::script_runtime::FRAME_MS).unwrap_or(16);
         if let Some(shot_ms) = shot_ms {
+            let frame_end_ms = shot_ms.saturating_add(frame_ms);
             for (&raw, candidate) in &instance.states {
                 if raw == event.raw_state
                     || !candidate.active
@@ -266,9 +268,15 @@ impl ProjectedSnapshot {
                 {
                     continue;
                 }
-                if candidate.payload.get("last") == Some(&Value::Integer(shot_ms))
-                    && candidate.payload.contains_key("cur")
-                {
+                let recent_chase = matches!(
+                    candidate.payload.get("last"),
+                    Some(&Value::Integer(last)) if last >= shot_ms && last < frame_end_ms
+                );
+                let freshly_reset = matches!(
+                    candidate.payload.get("cur"),
+                    Some(&Value::Float(cur)) if cur >= 0.0 && cur <= 0.1
+                );
+                if recent_chase && freshly_reset {
                     extra_states.push((raw, candidate.clone()));
                 }
             }

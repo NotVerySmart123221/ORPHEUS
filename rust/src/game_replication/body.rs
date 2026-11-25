@@ -158,6 +158,7 @@ impl BodyScript {
     ) -> io::Result<()> {
         if command.frame > *buffers.frame {
             if let Err(error) = runtime.advance(command, mover, step) {
+                mover.set_cinematic_aim(None);
                 mover.set_authored_facing(None);
                 return Err(error);
             }
@@ -167,6 +168,7 @@ impl BodyScript {
         match runtime.snapshot() {
             Some(snapshot) if snapshot.initialization_complete() => {}
             Some(snapshot) => {
+                mover.set_cinematic_aim(None);
                 mover.set_authored_facing(None);
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -177,6 +179,7 @@ impl BodyScript {
                 ));
             }
             None => {
+                mover.set_cinematic_aim(None);
                 mover.set_authored_facing(None);
                 return Err(invalid("body VM has no snapshot"));
             }

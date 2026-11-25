@@ -1327,15 +1327,55 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
-            _ => {
-                self.report_diagnostic(
-                    self.site(id, node),
-                    Issue::UnsupportedAction(node.class.clone()),
-                    registration.rejected(),
-                );
-                Ok(false)
+            _ => self.execute_generic_or_unsupported_action(
+                id,
+                node,
+                caller,
+                depth,
+                registration.rejected(),
+            ),
+        }
+    }
+
+    #[inline(never)]
+    fn execute_generic_or_unsupported_action(
+        &mut self,
+        id: u16,
+        node: &Node,
+        caller: Option<StateKey>,
+        depth: usize,
+        registration_rejected: bool,
+    ) -> Result<bool, InitFault> {
+        if node.is_action()
+            && self
+                .world
+                .admits_generic_player_runtime(self.site(id, node))
+        {
+            match node.class.as_str() {
+                "STU_100EF8C2" => {
+                    let _ = self.capture_frame_action(id, node);
+                    self.follow(id, node, "m_outPlug", caller, depth)?;
+                    return Ok(true);
+                }
+                "STU_9F3FE778" => {
+                    self.follow(id, node, "m_outPlug", None, depth)?;
+                    return Ok(true);
+                }
+                "STU_A90C5991" | "STU_A1DF3B2D" | "STU_D6EB7F8D" | "STU_74B41EA0"
+                | "STU_3E5D9838" | "STU_3218BAEB" | "STU_5EAA04BB" | "STU_DC33334B"
+                | "STU_85438EDF" | "STU_9D4A25D1" | "STU_7EBA8E5E" | "STU_6E18DEA0" => {
+                    self.follow(id, node, "m_outPlug", caller, depth)?;
+                    return Ok(true);
+                }
+                _ => {}
             }
         }
+        self.report_diagnostic(
+            self.site(id, node),
+            Issue::UnsupportedAction(node.class.clone()),
+            registration_rejected,
+        );
+        Ok(false)
     }
 
     fn cycle_index(&mut self, id: u16, node: &Node, depth: usize) -> Result<bool, InitFault> {
@@ -1981,6 +2021,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 wave_bonus = true;
                 StateKind::HealthPool { pool: None }
             }
+            "STUStatescriptStateHealthPool"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node))
+                    && node.is_state() =>
+            {
+                StateKind::Plain
+            }
             "STU_B7D2C9C0" => StateKind::DisplayName { binding: None },
             "STU_E56BA8D8" if registration.shape(node.is_networked() && node.remote == -1) => {
                 StateKind::TargetTag { effect: None }
@@ -2401,6 +2449,52 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             | "STU_582E0D5F"
             | "STU_D09BD154"
             | "STUStatescriptStatePhysicsExplosion"
+            | "STU_798B41F4"
+            | "STU_92ED01D0"
+            | "STU_0DB9E66B"
+            | "STU_72DDE005"
+            | "STU_757BBC46"
+            | "STU_3716E1D4"
+            | "STU_550D0C5C"
+            | "STU_41484EE1"
+            | "STU_61FE0F01"
+            | "STU_7D71FDF3"
+            | "STU_353AF1A9"
+            | "STU_746F8777"
+            | "STU_FAC489FF"
+            | "STU_85124386"
+            | "STU_C168636D"
+            | "STU_54A1A6B6"
+            | "STU_B63ECEB8"
+            | "STU_45D3C742"
+            | "STU_1E0773EB"
+            | "STU_57BDCAB6"
+            | "STU_41B3FC2B"
+            | "STU_1F5ED928"
+            | "STU_9163D489"
+            | "STU_875C9635"
+            | "STU_D75CDECC"
+            | "STU_A103C85E"
+            | "STU_A6F5A33A"
+            | "STU_6C7C71D8"
+            | "STU_96DB5529"
+            | "STU_C3CA88AA"
+            | "STU_6154B909"
+            | "STU_BEAB146F"
+            | "STU_C18969E1"
+            | "STU_CB6C0ED7"
+            | "STU_75C1D62C"
+            | "STU_8B4B379C"
+            | "STU_4DCDA966"
+            | "STU_15F1260F"
+            | "STU_51BBFB1B"
+            | "STU_94DAAA8C"
+            | "STU_9700865B"
+            | "STU_2D5C4AF5"
+            | "STU_EF4C12FB"
+            | "STU_FA98335E"
+            | "STU_75DE77A6"
+            | "STU_E3C424E1"
                 if self
                     .world
                     .admits_generic_player_runtime(self.site(id, node))

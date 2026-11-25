@@ -653,15 +653,23 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let id = key.instance;
         let site = self.site(id, node);
         let origin_field = field(&node.fields, "m_8DCA77B6");
+        let offset_field = field(&node.fields, "m_05BE62DD");
+        // In retail 1.74, when `m_8DCA77B6` (origin entity) is null and `m_05BE62DD` is
+        // present (e.g. Brigitte Flail, Mercy Staff, Moira Grasp, D.Va Call Mech),
+        // `m_05BE62DD` is an absolute world-space position rather than a local offset.
+        // Pass `origin = 0` so `World::tracked_targets` uses `offset` directly as centre.
         let origin = if origin_field.is_null() {
-            site.entity
+            if offset_field.is_null() {
+                site.entity
+            } else {
+                0
+            }
         } else {
             match self.evaluate(id, node, origin_field, None) {
                 Some(Value::Entity(entity)) if script_expr::valid_entity(entity) => entity,
                 _ => return self.publish_tracked_targets(key, node, Vec::new()),
             }
         };
-        let offset_field = field(&node.fields, "m_05BE62DD");
         let offset = if offset_field.is_null() {
             [0.0; 3]
         } else {

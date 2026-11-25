@@ -747,6 +747,19 @@ impl<W: World> Context for InstanceContext<'_, W> {
         self.world.entity_component92(self.site, entity)
     }
 
+    fn button_held(&mut self, entity: u32, button: u8) -> Option<bool> {
+        self.read_native = true;
+        if entity == self.site.entity {
+            Some(
+                !self.machine.control_blocked
+                    && self.machine.button_blocks[usize::from(button)] == 0
+                    && self.machine.held_buttons.contains(&button),
+            )
+        } else {
+            Some(false)
+        }
+    }
+
     fn related_entity(&mut self, relation: EntityRelation, entity: u32) -> Option<u32> {
         self.read_native = true;
         self.world.related_entity(self.site, relation, entity)

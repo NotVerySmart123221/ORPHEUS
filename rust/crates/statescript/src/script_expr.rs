@@ -464,6 +464,10 @@ pub trait Context {
         None
     }
 
+    fn button_held(&mut self, _entity: u32, _button: u8) -> Option<bool> {
+        None
+    }
+
     /// None leaves a tag fact unknown for this entity.
     fn has_target_tag(&mut self, _entity: u32, _tag: u64) -> Option<bool> {
         None

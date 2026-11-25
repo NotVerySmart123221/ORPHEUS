@@ -54,6 +54,33 @@ const INPUTS: [(u32, u8); 17] = [
     (0x040, 115),
 ];
 
+const DIRECTION_INPUTS: [(u8, u8); 4] = [
+    (0x01, 7),  // FORWARD
+    (0x02, 8),  // BACK
+    (0x04, 9),  // LEFT
+    (0x08, 10), // RIGHT
+];
+
+/// Pack signed forward/right throttles into 4 directional held-button bits.
+pub fn direction_bits(forward: i8, right: i8) -> u8 {
+    u8::from(forward > 0)
+        | (u8::from(forward < 0) << 1)
+        | (u8::from(right < 0) << 2)
+        | (u8::from(right > 0) << 3)
+}
+
+/// Logical edges for WASD/directional throttle inputs (buttons 7..=10).
+pub fn direction_edges(previous: u8, current: u8) -> impl Iterator<Item = ButtonEdge> {
+    DIRECTION_INPUTS
+        .into_iter()
+        .filter_map(move |(mask, button)| {
+            ((previous ^ current) & mask != 0).then_some(ButtonEdge {
+                button,
+                pressed: current & mask != 0,
+            })
+        })
+}
+
 /// Input record mask that can hold this logical button.
 pub fn held_button_mask(button: u8) -> Option<u32> {
     INPUTS

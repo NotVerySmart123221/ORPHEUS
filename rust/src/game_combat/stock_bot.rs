@@ -836,9 +836,55 @@ impl StockBotScript {
                                 .ok()
                         })
                         .as_ref()?;
+                    let mut presentation = report.presentation;
+                    if let Some(graph) = self.graphs.graph(shot.graph) {
+                        if let Some(inst) = snapshot.instances.get(&shot.instance) {
+                            let shot_ms = i64::try_from(shot.time_ms).ok();
+                            let frame_ms =
+                                i64::try_from(crate::script_runtime::FRAME_MS).unwrap_or(16);
+                            if let Some(shot_ms) = shot_ms {
+                                let frame_end_ms = shot_ms.saturating_add(frame_ms);
+                                for (&raw, candidate) in &inst.states {
+                                    if !candidate.active {
+                                        continue;
+                                    }
+                                    let recent = matches!(
+                                        candidate.payload.get("last"),
+                                        Some(&Value::Integer(last))
+                                            if last >= shot_ms && last < frame_end_ms
+                                    );
+                                    let fresh_cur = match candidate.payload.get("cur") {
+                                        Some(&Value::Float(cur)) if (0.0..=0.1).contains(&cur) => {
+                                            Some(cur)
+                                        }
+                                        _ => None,
+                                    };
+                                    let Some(cur) = fresh_cur.filter(|_| recent) else {
+                                        continue;
+                                    };
+                                    let Some(chase_node) = graph.state(usize::from(raw)) else {
+                                        continue;
+                                    };
+                                    if chase_node.class != "STUStatescriptStateChaseVar" {
+                                        continue;
+                                    }
+                                    if let Ok(Some(var)) = crate::script_expr::lvalue(
+                                        chase_node.fields.get("m_out_Var").unwrap_or(&Json::Null),
+                                    ) {
+                                        if !presentation
+                                            .iter()
+                                            .any(|(existing, _)| *existing == var)
+                                        {
+                                            presentation.push((var, Value::Float(cur)));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     let volley = snapshot.freeze_volley_with_states(
                         shot,
-                        report.presentation,
+                        presentation,
                         &report.presentation_states,
                     )?;
                     Some(ObservedShot::new(

@@ -1988,3 +1988,152 @@ fn practice_range_stock_bots_drive_overhead_nameplates_through_death_and_respawn
     assert!(fresh_projected.has_graph(0x0c18));
     assert!(fresh_projected.has_graph(0x0d24));
 }
+
+#[test]
+#[ignore = "requires prepared external 104319 Practice Range runtime"]
+fn prepared_practice_railings_block_player_mover() {
+    use crate::{
+        collision_cache::read_movement_cache, commands::Command, game_clock::TICK_PERIOD,
+        game_heroes::SOLDIER,
+    };
+
+    let runtime = PathBuf::from(
+        std::env::var_os("ORPHEUS_RUNTIME_DIR").expect("ORPHEUS_RUNTIME_DIR is required"),
+    );
+    let assets = SceneAssets::load(&runtime).unwrap();
+    let scene = assets.prepare(GameMap::practice_range()).unwrap();
+
+    let cache = read_movement_cache(BufReader::new(
+        File::open(runtime.join("collision/0688.col")).unwrap(),
+    ))
+    .unwrap();
+    let contacts = scene.contacts.as_ref().expect("Practice Range contacts");
+    let breakable_shapes: Vec<_> = contacts
+        .shapes()
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, shape)| {
+            let placement = shape.breakable_placement()?;
+            let p = cache.placements[placement];
+            let bounds = shape.fat_bounds()?;
+            Some((
+                idx,
+                placement,
+                p.model,
+                shape.geometry().mask(),
+                p.translation,
+                bounds,
+            ))
+        })
+        .collect();
+    assert!(
+        breakable_shapes.len() >= 148,
+        "expected Practice Range breakable railings in ContactWorld"
+    );
+
+    let soldier_body = scene.heroes.get(SOLDIER).unwrap().body;
+    let settings = *scene.movers.for_body(Some(soldier_body));
+    let category = mover_category(scene.map(), 0);
+    let dt = TICK_PERIOD.as_secs_f64();
+
+    // Walking straight into intact axis-aligned railing placement 10 must stop at the railing.
+    let (_, _, _, _, tr, bounds) = breakable_shapes
+        .iter()
+        .find(|(_, placement, _, _, _, _)| *placement == 10)
+        .copied()
+        .expect("placement 10 railing");
+    let cx = f64::from(bounds.low[0] + bounds.high[0]) * 0.5;
+    let cz = f64::from(bounds.low[2] + bounds.high[2]) * 0.5;
+    let floor_y = f64::from(tr[1]);
+    let mut mover = Mover::new(
+        settings,
+        Arc::clone(contacts),
+        [cx + 1.5, floor_y, cz],
+        -16384,
+        category,
+    )
+    .unwrap();
+    mover.set_breakables(Arc::clone(&scene.breakables));
+    for frame in 1..=60u32 {
+        mover
+            .step(
+                scene.movement_index(),
+                Command {
+                    frame,
+                    yaw: -16384,
+                    pitch: 0,
+                    forward: 127,
+                    right: 0,
+                    buttons: 0,
+                    ..Command::default()
+                },
+                dt,
+                |_, _| {},
+            )
+            .unwrap();
+    }
+    assert!(
+        mover.pose().position[0] > cx + 0.35,
+        "player mover walked through intact railing placement 10: pos={:?} cx={cx:.2}",
+        mover.pose().position
+    );
+
+    // Every model 0 and model 2 railing placement must block a team-0 player capsule sweep.
+    let mut swept_hits = 0usize;
+    let mut swept_misses = 0usize;
+    for &(_, placement, model, _, str_pos, sbounds) in &breakable_shapes {
+        if model != 0 && model != 2 {
+            continue;
+        }
+        let p = cache.placements[placement];
+        let q = p.rotation;
+        let lx = [
+            1.0 - 2.0 * (q[1] * q[1] + q[2] * q[2]),
+            2.0 * (q[0] * q[1] + q[2] * q[3]),
+            2.0 * (q[0] * q[2] - q[1] * q[3]),
+        ];
+        let lz = [
+            2.0 * (q[0] * q[2] + q[1] * q[3]),
+            2.0 * (q[1] * q[2] - q[0] * q[3]),
+            1.0 - 2.0 * (q[0] * q[0] + q[1] * q[1]),
+        ];
+        let center = [
+            (sbounds.low[0] + sbounds.high[0]) * 0.5,
+            str_pos[1],
+            (sbounds.low[2] + sbounds.high[2]) * 0.5,
+        ];
+        let hit_axis = |axis: [f32; 3]| {
+            contacts
+                .scene_sweep_with_breakables(
+                    crate::contact_gjk::sweep::MeshProbe {
+                        points: &[[0.0, 0.5, 0.0], [0.0, 1.5, 0.0]],
+                        radius: 0.5,
+                        start: [
+                            center[0] - axis[0] * 1.5,
+                            center[1],
+                            center[2] - axis[2] * 1.5,
+                        ],
+                        end: [
+                            center[0] + axis[0] * 1.5,
+                            center[1],
+                            center[2] + axis[2] * 1.5,
+                        ],
+                        category,
+                    },
+                    Some(&scene.breakables),
+                )
+                .unwrap()
+                .is_some()
+        };
+        if hit_axis(lx) || hit_axis(lz) {
+            swept_hits += 1;
+        } else {
+            swept_misses += 1;
+        }
+    }
+    assert_eq!(swept_hits, 148);
+    assert_eq!(
+        swept_misses, 0,
+        "all model 0/2 railings must block capsule sweep"
+    );
+}

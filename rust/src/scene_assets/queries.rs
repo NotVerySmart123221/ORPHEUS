@@ -316,6 +316,29 @@ impl<'a> BotQueries<'a> {
         reach: f64,
         radius: f32,
     ) -> Result<Option<SurfaceHit>, IndexError> {
+        self.projectile_wall_inner(origin, direction, reach, radius, true)
+    }
+
+    /// Sweep terrain without breaking map breakables on the server (used for
+    /// NPC projectiles whose impacts are not replicated as client break events).
+    pub(crate) fn projectile_wall_readonly(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        reach: f64,
+        radius: f32,
+    ) -> Result<Option<SurfaceHit>, IndexError> {
+        self.projectile_wall_inner(origin, direction, reach, radius, false)
+    }
+
+    fn projectile_wall_inner(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        reach: f64,
+        radius: f32,
+        break_on_hit: bool,
+    ) -> Result<Option<SurfaceHit>, IndexError> {
         if reach <= 0.0 {
             return Ok(None);
         }
@@ -338,8 +361,10 @@ impl<'a> BotQueries<'a> {
                 )
                 .map(|hit| {
                     hit.map(|result| {
-                        if let Some(placement) = world.shape_breakable_placement(result.shape) {
-                            self.mark_breakable(placement);
+                        if break_on_hit {
+                            if let Some(placement) = world.shape_breakable_placement(result.shape) {
+                                self.mark_breakable(placement);
+                            }
                         }
                         SurfaceHit {
                             distance: reach * f64::from(result.hit.fraction),
@@ -351,8 +376,10 @@ impl<'a> BotQueries<'a> {
         }
         self.combat_wall(origin, direction, reach).map(|hit| {
             hit.map(|hit| {
-                if let Some(placement) = self.combat_rays.ray_hit_breakable_placement(hit) {
-                    self.mark_breakable(placement);
+                if break_on_hit {
+                    if let Some(placement) = self.combat_rays.ray_hit_breakable_placement(hit) {
+                        self.mark_breakable(placement);
+                    }
                 }
                 SurfaceHit {
                     distance: hit.distance,

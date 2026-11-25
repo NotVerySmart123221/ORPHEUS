@@ -621,6 +621,34 @@ impl Evaluator {
             "STUConfigVarLogicalButton" => {
                 Value::Integer(integer(child(config, "m_logicalButton"))?)
             }
+            "STU_A2A35433" if native_fields(config, &["m_entity", "m_logicalButton"]) => {
+                let target = self.scalar_config(
+                    child(config, "m_entity"),
+                    context,
+                    nested,
+                    Value::Entity(0),
+                )?;
+                let button = self.scalar_config(
+                    child(config, "m_logicalButton"),
+                    context,
+                    nested,
+                    Value::Integer(0),
+                )?;
+                let Some(Value::Entity(entity)) = first_scalar(&target) else {
+                    return Ok(Value::Bool(false));
+                };
+                if !valid_entity(*entity) {
+                    return Ok(Value::Bool(false));
+                }
+                let Ok(button) = u8::try_from(to_int(&button, -1)) else {
+                    return Ok(Value::Bool(false));
+                };
+                Value::Bool(
+                    context
+                        .button_held(*entity, button)
+                        .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
+                )
+            }
             "STU_BD6CC023" if native_shape(config, class, Some("m_6CE7A900")) => {
                 let team = child(config, "m_6CE7A900");
                 Value::Integer(if team.is_null() {
@@ -1191,8 +1219,28 @@ impl Evaluator {
                         .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?
                 }
             }
-            "STUConfigVarBone" => literal_asset(config, class, "m_bone", 0x0880)
-                .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
+            "STUConfigVarBone"
+                if native_fields(config, &["m_bone", "m_resourceKey"])
+                    && child(config, "m_resourceKey").is_null() =>
+            {
+                if child(config, "m_bone").is_null() {
+                    Value::Asset(0)
+                } else {
+                    literal_asset(config, class, "m_bone", 0x0880)
+                        .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?
+                }
+            }
+            // Fixed simulation step duration in seconds (16ms retail tick = 0.016s).
+            // Verified in Moira 0F76 (`3.0 * STU_4B02509E() / 0.016`) and Brigitte 1248
+            // (`Wait(var[10349] + STU_4B02509E())`).
+            "STU_4B02509E" if native_shape(config, class, None) => Value::Float(0.016),
+            // Target stealth/invisibility check against observer (`IsStealthedFrom(entity, observer)`).
+            // Used by Zenyatta Discord Orb (0176) and targeted abilities to ignore invisible enemies.
+            "STU_7C005F8F" if native_fields(config, &["m_entity", "m_82B6345B"]) => {
+                let _ = self.config(child(config, "m_entity"), context, nested)?;
+                let _ = self.config(child(config, "m_82B6345B"), context, nested)?;
+                Value::Bool(false)
+            }
             "STU_1A3FA5B0" if native_shape(config, class, Some("m_entity")) => {
                 match self.config(child(config, "m_entity"), context, nested)? {
                     Value::Entity(entity) if valid_entity(entity) => Value::Asset(
@@ -1704,8 +1752,14 @@ impl Evaluator {
             }
             "STU_783B4CF0" | "STU_68883EAC" => {
                 let unsupported = || EvalError::UnsupportedConfig(class.into());
+                let shield_id = child(config, "m_7BE02F89");
+                let empty_shield_id = shield_id.is_null()
+                    || (self::class(shield_id) == Some("STUConfigVarIdentifier")
+                        && native_fields(shield_id, &["m_identifier", "m_resourceKey"])
+                        && child(shield_id, "m_identifier").is_null()
+                        && child(shield_id, "m_resourceKey").is_null());
                 if !native_fields(config, &["m_entity", "m_7E8B666C", "m_7BE02F89"])
-                    || !child(config, "m_7BE02F89").is_null()
+                    || !empty_shield_id
                 {
                     return Err(unsupported());
                 }

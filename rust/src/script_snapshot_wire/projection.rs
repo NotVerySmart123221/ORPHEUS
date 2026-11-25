@@ -687,7 +687,7 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
         ]),
         (StateKind::Plain | StateKind::PhaseScriptList, Some("hits"))
         | (StateKind::PhaseTransition, Some("bit"))
-        | (StateKind::Plain, Some("blink"))
+        | (StateKind::Plain, Some("blink" | "time16+s64" | "two_vectors+s64"))
         | (StateKind::Plain | StateKind::PlacementSelector { .. }, Some("none+u8")) => {
             StatePayload::new()
         }

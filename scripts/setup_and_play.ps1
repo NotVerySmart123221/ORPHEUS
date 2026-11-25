@@ -474,6 +474,12 @@ try {
     Add-Type -TypeDefinition $RelayInjectorCode -Language CSharp
 
     $ServerLog = Join-Path $DataDir "orpheus_server.log"
+    if (Test-Path $ServerLog) {
+        $PrevLog = Join-Path $DataDir "orpheus_server.prev.log"
+        try {
+            Copy-Item -Path $ServerLog -Destination $PrevLog -Force -ErrorAction SilentlyContinue
+        } catch {}
+    }
     $StartInfo = New-Object System.Diagnostics.ProcessStartInfo
     $StartInfo.FileName = $ServerExe
     $StartInfo.WorkingDirectory = $RepoRoot
@@ -492,8 +498,10 @@ try {
     $ServerProc.StartInfo = $StartInfo
     [void]$ServerProc.Start()
 
-    $LogWriter = New-Object System.IO.StreamWriter($ServerLog, $false, [System.Text.Encoding]::UTF8)
+    $LogWriter = New-Object System.IO.StreamWriter($ServerLog, $true, [System.Text.Encoding]::UTF8)
     $LogWriter.AutoFlush = $true
+    $LogWriter.WriteLine("")
+    $LogWriter.WriteLine("=== ORPHEUS session started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ===")
     $OutJob = Register-ObjectEvent -InputObject $ServerProc -EventName OutputDataReceived -Action {
         if ($EventArgs.Data -ne $null) {
             $Event.MessageData.WriteLine($EventArgs.Data)
