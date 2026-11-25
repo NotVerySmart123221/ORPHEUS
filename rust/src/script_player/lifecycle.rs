@@ -414,8 +414,9 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                     }
                     let ballistics =
                         ProjectileBallistics::from_authored(node, &mut evaluate).ok()??;
-                    let definition = ballistics.definition?;
-                    self.leases.entity(definition, shot.frame, 0)?;
+                    if let Some(definition) = ballistics.definition {
+                        self.leases.entity(definition, shot.frame, 0)?;
+                    }
                     if ballistics.direct.is_some_and(|hit| hit.amount < 0.0)
                         || ballistics
                             .blast

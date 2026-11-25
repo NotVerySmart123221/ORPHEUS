@@ -223,17 +223,20 @@ impl BodyScript {
         projectile: PosedProjectile,
         launches: &mut Vec<AdmittedFlight>,
     ) {
-        let Some((projectiles, definition)) = self
-            .projectiles
-            .as_mut()
-            .zip(projectile.ballistics.definition)
-        else {
-            #[cfg(feature = "inspector")]
-            crate::owner_trace::playtest(format_args!(
-                "projectile event=launch-rejected shot={:?} reason=no-definition-or-tracker",
-                projectile.shot
-            ));
-            return;
+        let definition = projectile.ballistics.definition;
+        let tracker = match definition {
+            Some(definition) => {
+                let Some(projectiles) = self.projectiles.as_mut() else {
+                    #[cfg(feature = "inspector")]
+                    crate::owner_trace::playtest(format_args!(
+                        "projectile event=launch-rejected shot={:?} reason=no-tracker",
+                        projectile.shot
+                    ));
+                    return;
+                };
+                Some((projectiles, definition))
+            }
+            None => None,
         };
         let bound = (projectile.ballistics.lifetime / TICK_PERIOD.as_secs_f64()).ceil() as u32;
         #[cfg(feature = "inspector")]
@@ -256,27 +259,36 @@ impl BodyScript {
         } else {
             flight
         };
-        if let Some(token) = projectiles.admit(projectile.shot, definition, bound) {
-            #[cfg(feature = "inspector")]
-            crate::owner_trace::playtest(format_args!(
-                "projectile event=launched token={token:?} shot={:?} definition={definition:016x} origin={:?} aim={:?} radius={radius}",
-                projectile.shot, projectile.origin, projectile.direction
-            ));
-            launches.push(AdmittedFlight {
-                token,
-                flight,
-                stun: projectile.stun,
-                hit_effect: projectile
-                    .stun
-                    .and_then(|_| LEGACY_PROJECTILE_CONTROL.flight_site(&projectile.shot)),
-            });
-        } else {
-            #[cfg(feature = "inspector")]
-            crate::owner_trace::playtest(format_args!(
-                "projectile event=launch-rejected shot={:?} definition={definition:016x} reason=not-admitted",
-                projectile.shot
-            ));
-        }
+        let token = match tracker {
+            Some((projectiles, definition)) => {
+                let Some(token) = projectiles.admit(projectile.shot, definition, bound) else {
+                    #[cfg(feature = "inspector")]
+                    crate::owner_trace::playtest(format_args!(
+                        "projectile event=launch-rejected shot={:?} definition={definition:016x} reason=not-admitted",
+                        projectile.shot
+                    ));
+                    return;
+                };
+                Some(token)
+            }
+            None => None,
+        };
+        #[cfg(feature = "inspector")]
+        crate::owner_trace::playtest(format_args!(
+            "projectile event=launched token={token:?} shot={:?} definition={:016x} origin={:?} aim={:?} radius={radius}",
+            projectile.shot,
+            definition.unwrap_or(0),
+            projectile.origin,
+            projectile.direction
+        ));
+        launches.push(AdmittedFlight {
+            token,
+            flight,
+            stun: projectile.stun,
+            hit_effect: projectile
+                .stun
+                .and_then(|_| LEGACY_PROJECTILE_CONTROL.flight_site(&projectile.shot)),
+        });
     }
 
     pub(super) fn next_record(

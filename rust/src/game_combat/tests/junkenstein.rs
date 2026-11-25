@@ -888,7 +888,7 @@ pub(super) fn normal_encounter_first_reaper_finishes_intro_and_pursues_live_defe
                 flight
             };
             admitted.push(AdmittedFlight {
-                token,
+                token: Some(token),
                 flight,
                 stun: projectile.stun,
                 hit_effect: Some(crate::script_init::Site {

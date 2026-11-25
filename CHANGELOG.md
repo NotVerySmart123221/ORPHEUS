@@ -4,6 +4,10 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ## Unreleased
 
+### 2026-11-25
+
+- Evaluate explicitly null `STU_8556841E` entity-definition configurations as the zero asset, allow damaging player projectiles without a leased entity definition to run server-side flight and impact settlement without projectile-delivery outcomes, and include Pharah's Practice Range clip-size compatibility rules. Focused synthetic coverage exercises tokenless impact and health settlement. On an earlier candidate, a prepared 104319 probe observed Pharah ammo consumption and damage alongside Soldier Helix lease delivery, and an original-client session observed damage but no rocket or wall-impact visuals. The final candidate's client presentation remains unresolved.
+
 ### 2026-11-22
 
 - Integrate the Practice Range combat changes and keep shared health settlement responsible for contact, NPC attribution, and settled impact metadata. Keep projectile distance falloff and critical scaling in the same calculation. Prepared 104319 probes cover NPC firing and projectile damage with the firing-graph runtime pack. Original-client animation and audio acceptance remain pending.

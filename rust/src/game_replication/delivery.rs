@@ -1619,7 +1619,6 @@ impl WorldDelivery {
         simulation: &mut RoomSimulation,
     ) -> Option<(BodyId, Vec<AdmittedFlight>)> {
         let script = self.body_script.as_ref()?;
-        script.projectiles.as_ref()?;
         let launches = simulation.take_player_projectile_launches(script.id)?;
         Some((script.id, launches))
     }

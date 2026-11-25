@@ -297,7 +297,7 @@ pub(crate) use script_requests::{RoomScriptRequest, RoomScriptRequests};
 pub(crate) struct AdmittedFlight {
     pub stun: Option<Stun>,
     pub hit_effect: Option<crate::script_init::Site>,
-    pub token: ProjectileToken,
+    pub token: Option<ProjectileToken>,
     pub flight: ProjectileFlight,
 }
 
@@ -2295,11 +2295,13 @@ impl RoomSimulation {
                             hits.push(hit);
                         }
                     }
-                    outcomes.push(FlightOutcome::Ended {
-                        token,
-                        travelled: end.travelled,
-                        impact: end.impact,
-                    });
+                    if let Some(token) = token {
+                        outcomes.push(FlightOutcome::Ended {
+                            token,
+                            travelled: end.travelled,
+                            impact: end.impact,
+                        });
+                    }
                 }
                 // A query exceeding the bounded ray budget cancels only this
                 // flight. Broken geometry and ECS ownership are room faults.
@@ -2310,7 +2312,9 @@ impl RoomSimulation {
                         owner.entity, context.tick
                     ));
                     if matches!(error, IndexError::RayTraversalLimit) {
-                        outcomes.push(FlightOutcome::Failed(token));
+                        if let Some(token) = token {
+                            outcomes.push(FlightOutcome::Failed(token));
+                        }
                     } else {
                         return Err(error.into());
                     }
@@ -2345,6 +2349,18 @@ impl RoomSimulation {
         for entity in self.projectiles.drain().flat_map(|(_, batch)| batch.order) {
             self.world.despawn(entity);
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn projectile_handles(&self, connection: u32) -> Vec<Entity> {
+        self.projectiles
+            .get(&connection)
+            .map_or_else(Vec::new, |batch| batch.order.clone())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_admitted_flight(&self, entity: Entity) -> bool {
+        self.world.get::<AdmittedFlight>(entity).is_some()
     }
 
     fn apply_bot_impact(

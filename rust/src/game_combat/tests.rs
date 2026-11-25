@@ -2266,11 +2266,66 @@ pub(super) fn flight_fixture(owner: BodyId, speed: f64) -> AdmittedFlight {
     )
     .unwrap();
     AdmittedFlight {
-        token,
+        token: Some(token),
         flight,
         stun: None,
         hit_effect: None,
     }
+}
+
+#[test]
+fn tokenless_projectile_settles_damage_without_delivery_outcome() {
+    use crate::mover_settings::MoverCatalog;
+
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/projectile-tokenless-v1.json"
+    ))
+    .unwrap();
+    let ballistics = ProjectileBallistics::from_fields(&fixture["fields"], |config| {
+        crate::script_expr::evaluate(config, &mut crate::script_expr::EmptyContext)
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(ballistics.definition, None);
+    let bots = fixture_bots();
+    let victim = bots[0].entity;
+    let mut room = RoomSimulation::new(bots).unwrap();
+    let health_before = state(&room, victim).unwrap().vitals.total();
+    assert_eq!(health_before, 100.0);
+    let owner = BodyId {
+        entity: 0xa000_0101,
+        generation: 1,
+    };
+    let flight = ProjectileFlight::new(ballistics, [0.0, 1.0, 0.0], [1.0, 0.0, 0.0], None).unwrap();
+    let ground = fixture_ground();
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, &ground, None);
+    let (outcomes, hits) = room
+        .advance_projectiles(
+            &queries,
+            7,
+            owner,
+            vec![AdmittedFlight {
+                token: None,
+                flight,
+                stun: None,
+                hit_effect: None,
+            }],
+            FIXTURE_CONTEXT,
+        )
+        .unwrap();
+    assert!(outcomes.is_empty());
+    assert_eq!(hits.len(), 1);
+    assert_eq!(
+        hits[0].damage.amount,
+        fixture["expected_damage"].as_f64().unwrap()
+    );
+    assert_eq!(hits[0].health.entity, victim);
+    assert_eq!(
+        state(&room, victim).unwrap().vitals.total(),
+        health_before - fixture["expected_damage"].as_f64().unwrap()
+    );
+    assert!(room.projectiles.is_empty());
 }
 
 #[test]
@@ -2495,8 +2550,8 @@ fn projectile_flights_keep_peer_generation_and_report_terminal_outcomes() {
     };
     let first = flight_fixture(owner, 1.0);
     let second = flight_fixture(other, 1.0);
-    let token = first.token;
-    assert_eq!(token, second.token);
+    let token = first.token.unwrap();
+    assert_eq!(Some(token), second.token);
     for (connection, owner, flight) in [(7, owner, first), (8, other, second)] {
         let (outcomes, hits) = simulation
             .advance_projectiles(&queries, connection, owner, vec![flight], context)

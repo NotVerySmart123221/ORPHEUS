@@ -2,7 +2,7 @@
 
 use crate::{
     game_content::{PRACTICE_RANGE_MODE, is_junkenstein_mode},
-    game_heroes::{CASSIDY, SOLDIER},
+    game_heroes::{CASSIDY, PHARAH, SOLDIER},
     junkenstein_navigation::{REAPER, ROADHOG, SUMMONER, WITCH},
     script_expr::EngineSetting,
     script_graph::GraphStore,
@@ -49,6 +49,11 @@ const COMPATIBILITY: &[Profile] = &[
             (0x32e8, Value::Float(1.0)),
             (0x32e9, Value::Bool(false)),
         ],
+    },
+    Profile {
+        mode: ModeScope::Exact(PRACTICE_RANGE_MODE),
+        actors: &[(ActorKind::Player, &[PHARAH])],
+        settings: &[(0x2819, Value::Float(1.0)), (0x281a, Value::Bool(false))],
     },
     // The Cassidy overrides are from 104319 schemas 001B/0026 and Python e1128509.
     Profile {
@@ -185,6 +190,15 @@ mod tests {
             assert_eq!(get(PRACTICE_RANGE_MODE, SOLDIER, Npc, id), None);
             assert_eq!(get(PRACTICE_RANGE_MODE, CASSIDY, Player, id), None);
         }
+        assert_eq!(
+            get(PRACTICE_RANGE_MODE, PHARAH, Player, 0x2819),
+            Some(Value::Float(1.0))
+        );
+        assert_eq!(
+            get(PRACTICE_RANGE_MODE, PHARAH, Player, 0x281a),
+            Some(Value::Bool(false))
+        );
+        assert_eq!(get(PRACTICE_RANGE_MODE, PHARAH, Npc, 0x2819), None);
         for mode in [JUNKENSTEIN_REVENGE, JUNKENSTEIN_ENDLESS] {
             for (hero, actor, scale, fan) in [
                 (CASSIDY, Player, true, true),

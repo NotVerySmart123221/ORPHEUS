@@ -11,6 +11,7 @@ use crate::accounts::parse_guid;
 
 pub const SOLDIER: u64 = 0x02e0_0000_0000_006e;
 pub(crate) const CASSIDY: u64 = 0x02e0_0000_0000_0042;
+pub(crate) const PHARAH: u64 = 0x02e0_0000_0000_0008;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Hero {

@@ -2473,7 +2473,7 @@ fn room_flight_outcomes_release_only_the_current_owner_alias() {
         let [launch] = launches.as_slice() else {
             panic!("one accepted flight");
         };
-        let token = launch.token;
+        let token = launch.token.unwrap();
         assert!(
             world
                 .take_projectile_launches(&mut simulation)
@@ -2527,6 +2527,111 @@ fn room_flight_outcomes_release_only_the_current_owner_alias() {
             assert_eq!(reader.var_b().unwrap(), 138 + 4096 + 1);
         }
     }
+}
+
+#[test]
+fn unleased_projectile_launches_without_token_or_outcomes() {
+    use crate::{
+        game_combat::ShotContext,
+        game_heroes::PHARAH,
+        game_hitscan::{DamageTags, HitDefinition},
+        mover_settings::MoverCatalog,
+        projectile_flight::ProjectileBallistics,
+        scene_assets::BotQueries,
+        script_init::ShotEvent,
+    };
+
+    let id = avatar(1, 2);
+    let mut world = WorldDelivery::new(OWNER);
+    let mut simulation = RoomSimulation::new(Vec::new()).unwrap();
+    world.started = Some(100);
+    activate_script(&mut world, &mut simulation, id, PHARAH, Arc::default());
+    let script = world.body_script.as_mut().unwrap();
+    assert!(script.projectiles.is_none());
+    let launches = &mut simulation.player_body_mut(id).unwrap().launches;
+    script.launch_projectile(
+        PosedProjectile {
+            stun: None,
+            gravity: None,
+            shot: ShotEvent {
+                entity: id.entity,
+                instance: 1,
+                graph: 42,
+                raw_state: 0,
+                frame: 101,
+                time_ms: 101 * FRAME_MS,
+                activation: 1,
+                activation_ms: 101 * FRAME_MS,
+                ordinal: 0,
+            },
+            ballistics: ProjectileBallistics {
+                speed: 35.0,
+                lifetime: 0.02,
+                max_distance: None,
+                terrain_rebound: None,
+                terrain_radius: 0.0,
+                radius: 0.0,
+                definition: None,
+                direct: Some(HitDefinition {
+                    tags: DamageTags::EMPTY,
+                    amount: 120.0,
+                    loadout: None,
+                    critical: 1.0,
+                    falloff: None,
+                }),
+                blast: None,
+            },
+            origin: [0.0, 1.5, 0.0],
+            direction: [1.0, 0.0, 0.0],
+        },
+        launches,
+    );
+    let (owner, launches) = world.take_projectile_launches(&mut simulation).unwrap();
+    assert_eq!(owner, id);
+    assert_eq!(launches.len(), 1);
+    assert!(launches[0].token.is_none());
+
+    let ground = fixture_ground();
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, &ground, None);
+    let context = ShotContext {
+        team: 1,
+        quanta: RETAIL_QUANTA,
+        tick: 133,
+        now: Duration::from_secs(1),
+    };
+    let (outcomes, hits) = simulation
+        .advance_projectiles(&queries, 7, owner, launches, context)
+        .unwrap();
+    assert!(outcomes.is_empty());
+    assert!(hits.is_empty());
+    let handles = simulation.projectile_handles(7);
+    assert_eq!(handles.len(), 1);
+    let handle = handles[0];
+    assert!(simulation.has_admitted_flight(handle));
+
+    let (next_owner, next_launches) = world.take_projectile_launches(&mut simulation).unwrap();
+    assert_eq!(next_owner, id);
+    assert!(next_launches.is_empty());
+    let (outcomes, hits) = simulation
+        .advance_projectiles(
+            &queries,
+            7,
+            next_owner,
+            next_launches,
+            ShotContext {
+                tick: 134,
+                now: Duration::from_millis(1016),
+                ..context
+            },
+        )
+        .unwrap();
+    assert!(outcomes.is_empty());
+    assert!(hits.is_empty());
+    assert!(simulation.projectile_handles(7).is_empty());
+    assert!(!simulation.has_admitted_flight(handle));
+    world.finish_projectiles(owner, 134, outcomes).unwrap();
+    assert!(world.queued.is_empty());
 }
 
 #[test]
@@ -3304,7 +3409,7 @@ fn fixture_projectile_flight(
     let flight =
         ProjectileFlight::new(posed.ballistics, posed.origin, posed.direction, None).unwrap();
     AdmittedFlight {
-        token,
+        token: Some(token),
         flight,
         stun: None,
         hit_effect: None,

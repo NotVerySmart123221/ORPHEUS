@@ -21,6 +21,15 @@ The [pinned Python → Rust parity matrix](https://github.com/leafall903/ORPHEUS
 
 ## Practice Range playtest follow-up
 
+On an earlier local Pharah candidate, a prepared 104319 probe observed ammunition
+consumption and server-side projectile impact damage without a projectile
+delivery token. An original-client session confirmed damage to a bot, but
+the rocket and wall-impact presentation were absent. A separate local-only
+experiment substituting a candidate projectile definition showed a visible
+rocket and wall impact; its rocket visually passed through a damaged bot.
+That substitution is not part of this change and does not establish the
+original client's projectile-definition selection or impact semantics.
+
 The prepared 104319 regression reproduced a public StateScript diagnostic
 several frames after a training bot died. The room now keeps projecting the
 corpse through those frames and admits the replacement on schedule. A

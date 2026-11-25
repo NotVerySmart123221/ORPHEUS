@@ -87,12 +87,22 @@ impl ProjectileBallistics {
         if !lifetime.is_finite() || lifetime <= 0.0 || !reach.is_finite() || reach < 0.0 {
             return Ok(None);
         }
-        let definition = match field("m_projectileEntity.m_entityDef") {
-            Some(config) => match evaluate(config)? {
-                Value::Asset(definition) => Some(definition),
-                _ => None,
-            },
-            None => None,
+        let config = field("m_projectileEntity.m_entityDef")
+            .ok_or(EvalError::MalformedConfig("projectile entity definition"))?;
+        let definition = match evaluate(config)? {
+            Value::Asset(0)
+                if config["$"] == "STU_8556841E"
+                    && config.get("m_entityDef") == Some(&Json::Null)
+                    && config.get("m_resourceKey") == Some(&Json::Null)
+                    && crate::script_expr::native_fields(
+                        config,
+                        &["m_entityDef", "m_resourceKey"],
+                    ) =>
+            {
+                None
+            }
+            Value::Asset(definition) if definition != 0 => Some(definition),
+            _ => return Err(EvalError::MalformedConfig("projectile entity definition")),
         };
         let radius = authored_number(field("m_6396149F.m_57DAE1B5"), 0.0, &mut evaluate)?;
         let radius = if radius.is_finite() && radius > 0.0 {
@@ -760,6 +770,73 @@ mod tests {
 
     const LOADOUT: u64 = 0x0b90_0000_0000_008e;
 
+    fn synthetic_ballistics(
+        fields: &Json,
+        mut evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
+    ) -> Result<Option<ProjectileBallistics>, EvalError> {
+        let mut fields = fields.clone();
+        let definition =
+            serde_json::json!({"$":"STU_8556841E","m_entityDef":null,"m_resourceKey":null});
+        fields["m_projectileEntity"] = serde_json::json!({"m_entityDef":definition});
+        ProjectileBallistics::from_fields(&fields, |config| {
+            if config == &definition {
+                Ok(Value::Asset(0))
+            } else {
+                evaluate(config)
+            }
+        })
+    }
+
+    #[test]
+    fn projectile_definition_requires_explicit_null_or_asset() {
+        let fixture: Json = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/projectile-tokenless-v1.json"
+        ))
+        .unwrap();
+        let evaluate = |config: &Json| {
+            crate::script_expr::evaluate(config, &mut crate::script_expr::EmptyContext)
+        };
+        let fields = fixture["fields"].clone();
+        assert_eq!(
+            ProjectileBallistics::from_fields(&fields, evaluate)
+                .unwrap()
+                .unwrap()
+                .definition,
+            None
+        );
+        for definition in [
+            serde_json::json!(null),
+            serde_json::json!(42),
+            serde_json::json!({"$":"STUConfigVarInt","m_value":0}),
+            serde_json::json!({"$":"STU_8556841E","m_entityDef":null}),
+            serde_json::json!({"$":"STU_8556841E","m_resourceKey":null}),
+            serde_json::json!({"$":"STU_8556841E","m_entityDef":null,"m_resourceKey":null,"extra":1}),
+        ] {
+            let mut invalid = fields.clone();
+            invalid["m_projectileEntity"]["m_entityDef"] = definition;
+            assert!(
+                ProjectileBallistics::from_fields(&invalid, evaluate).is_err(),
+                "{invalid}"
+            );
+        }
+        let mut missing = fields.clone();
+        missing
+            .as_object_mut()
+            .unwrap()
+            .remove("m_projectileEntity");
+        assert!(ProjectileBallistics::from_fields(&missing, evaluate).is_err());
+        let mut leased = fields;
+        leased["m_projectileEntity"]["m_entityDef"]["m_entityDef"] =
+            serde_json::json!("0x040000000000072C");
+        assert_eq!(
+            ProjectileBallistics::from_fields(&leased, evaluate)
+                .unwrap()
+                .unwrap()
+                .definition,
+            Some(0x0400_0000_0000_072c)
+        );
+    }
+
     fn helix() -> ProjectileBallistics {
         let hit = HitDefinition {
             tags: crate::game_hitscan::DamageTags::EMPTY,
@@ -826,7 +903,7 @@ mod tests {
                     .unwrap()
                     .remove("m_157E5BC5");
             }
-            let profile = ProjectileBallistics::from_fields(&fields, |value| {
+            let profile = synthetic_ballistics(&fields, |value| {
                 crate::script_expr::evaluate(value, &mut crate::script_expr::EmptyContext)
             })
             .unwrap()
@@ -961,9 +1038,7 @@ mod tests {
                 let evaluate = |value: &Json| {
                     crate::script_expr::evaluate(value, &mut crate::script_expr::EmptyContext)
                 };
-                let data = ProjectileBallistics::from_fields(&fields, evaluate)
-                    .unwrap()
-                    .unwrap();
+                let data = synthetic_ballistics(&fields, evaluate).unwrap().unwrap();
                 let gravity = authored_gravity(&fields, evaluate).unwrap().unwrap();
                 let direction =
                     lifted_direction([0.0, 0.0, 1.0], input["lift"].as_f64().unwrap()).unwrap();
@@ -1157,9 +1232,7 @@ mod tests {
         let occluded = expected["occluded_target"].as_u64().unwrap() as u32;
         let targets = [(exposed, target(0.25, 1.2)), (occluded, target(1.75, 0.25))];
 
-        let profile = ProjectileBallistics::from_fields(&fields, evaluate)
-            .unwrap()
-            .unwrap();
+        let profile = synthetic_ballistics(&fields, evaluate).unwrap().unwrap();
         let mut flight = ProjectileFlight::new(profile, origin, direction, Some(0)).unwrap();
         let mut radii = Vec::new();
         let end = flight
@@ -1184,9 +1257,7 @@ mod tests {
         // With the same motion and no declared terrain hull, first contact
         // with this wall occurs in the next tick at the centreline crossing.
         fields["m_8236947A"] = Json::Null;
-        let profile = ProjectileBallistics::from_fields(&fields, evaluate)
-            .unwrap()
-            .unwrap();
+        let profile = synthetic_ballistics(&fields, evaluate).unwrap().unwrap();
         let mut flight = ProjectileFlight::new(profile, origin, direction, Some(0)).unwrap();
         let wall = |origin, direction, reach, radius| {
             queries.projectile_wall(origin, direction, reach, radius)
@@ -1244,9 +1315,7 @@ mod tests {
         let evaluate = |value: &Json| {
             crate::script_expr::evaluate(value, &mut crate::script_expr::EmptyContext)
         };
-        let profile = ProjectileBallistics::from_fields(&fields, evaluate)
-            .unwrap()
-            .unwrap();
+        let profile = synthetic_ballistics(&fields, evaluate).unwrap().unwrap();
         let no_targets: [(u32, TargetPose); 0] = [];
         let mut flight = ProjectileFlight::new(profile.clone(), start, direction, Some(0)).unwrap();
         assert!(
@@ -1315,9 +1384,7 @@ mod tests {
         );
 
         fields["m_E365DB20"]["m_D9EFD182"]["m_value"] = serde_json::json!(0);
-        let disabled = ProjectileBallistics::from_fields(&fields, evaluate)
-            .unwrap()
-            .unwrap();
+        let disabled = synthetic_ballistics(&fields, evaluate).unwrap().unwrap();
         let mut flight = ProjectileFlight::new(disabled, start, direction, Some(0)).unwrap();
         let end = flight
             .advance_combat(1, &no_targets, None, wall)
@@ -1358,7 +1425,7 @@ mod tests {
                 "m_0D30E40C": [{"m_radius": 2.0, "m_B399CACB": 1.0}]
             }
         });
-        let profile = ProjectileBallistics::from_fields(&fields, |value| {
+        let profile = synthetic_ballistics(&fields, |value| {
             crate::script_expr::evaluate(value, &mut crate::script_expr::EmptyContext)
         })
         .unwrap()
@@ -1424,7 +1491,7 @@ mod tests {
         let shooter = (1, target(0.0, 0.0).into());
         let targets = [(2, target(1.2, 0.75))];
         let fire = |fields: &Json, obstructed: bool| {
-            let profile = ProjectileBallistics::from_fields(fields, |config| {
+            let profile = synthetic_ballistics(fields, |config| {
                 Ok(config.as_f64().map_or(Value::Null, Value::Float))
             })
             .unwrap()
@@ -1491,7 +1558,7 @@ mod tests {
                 }
             }
         });
-        let authored = ProjectileBallistics::from_fields(&fields, |config| {
+        let authored = synthetic_ballistics(&fields, |config| {
             Ok(config.as_f64().map_or(Value::Null, Value::Float))
         })
         .unwrap()
