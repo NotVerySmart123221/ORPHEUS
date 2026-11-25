@@ -2250,7 +2250,6 @@ impl RoomSimulation {
         self.push_player_hitscan_candidates(
             shot.source,
             context.team,
-            ffa,
             queries,
             view,
             &visible,

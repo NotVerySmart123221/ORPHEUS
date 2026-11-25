@@ -267,11 +267,10 @@ impl PlayerBodyFactory {
             target_tags: self.target_tags.clone(),
             command_views: Default::default(),
             wheel_cosmetics: Default::default(),
-            model_hardpoints: self
-                .graphs
-                .bodies()
-                .get(&self.body)
-                .and_then(|body| body.model_hardpoints(spawn.skin)),
+            model_hardpoints: self.graphs.bodies().get(&self.body).and_then(|body| {
+                body.model_hardpoints(spawn.skin)
+                    .or_else(|| (!body.has_model_hardpoints()).then(Arc::default))
+            }),
             target_tag_effects: TargetTagEffects::default(),
             controller_on_fire: self.controller_on_fire,
             defenders: Arc::default(),

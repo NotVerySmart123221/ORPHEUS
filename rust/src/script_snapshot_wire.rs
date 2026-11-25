@@ -212,6 +212,7 @@ impl ProjectedSnapshot {
             .map(|volley| volley.identity)
     }
 
+    #[cfg(test)]
     pub(crate) fn freeze_volley(
         &self,
         event: ShotEvent,

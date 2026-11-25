@@ -1416,6 +1416,10 @@ impl Body {
     pub fn model_hardpoints(&self, skin: u64) -> Option<Arc<BTreeSet<u64>>> {
         self.model_hardpoints.get(&skin).cloned()
     }
+
+    pub fn has_model_hardpoints(&self) -> bool {
+        !self.model_hardpoints.is_empty()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2368,9 +2372,9 @@ impl GraphStore {
 
     /// Whether the graph exists and every node in it executes only on the client.
     pub fn is_client_only_graph(&self, index: u32) -> bool {
-        self.graphs
-            .get(&index)
-            .is_some_and(|graph| !graph.nodes.is_empty() && graph.nodes.iter().all(|n| !n.runs_on_server()))
+        self.graphs.get(&index).is_some_and(|graph| {
+            !graph.nodes.is_empty() && graph.nodes.iter().all(|n| !n.runs_on_server())
+        })
     }
 
     /// Inspect local graph structure on demand. Unresolved null links and links

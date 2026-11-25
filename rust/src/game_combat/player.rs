@@ -1013,12 +1013,15 @@ impl RoomSimulation {
         &self,
         source: u32,
         team: u8,
-        free_for_all: bool,
         queries: &crate::scene_assets::BotQueries<'_>,
         view: ViewFrame,
         visible: &impl Fn(u32) -> bool,
         candidates: &mut Vec<(u32, HurtPose)>,
     ) {
+        #[cfg(feature = "lua-mods")]
+        let free_for_all = queries.free_for_all() || self.mod_friendly_fire();
+        #[cfg(not(feature = "lua-mods"))]
+        let free_for_all = queries.free_for_all();
         for &entity in self.players_by_wire.values() {
             let Some(state) = self.world.get::<PlayerBodyState>(entity) else {
                 continue;

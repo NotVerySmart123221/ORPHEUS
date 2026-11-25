@@ -602,11 +602,9 @@ impl World for BodyWorld {
         if entity != self.entity || !self.is_player_site(site) {
             return None;
         }
-        Some(
-            self.model_hardpoints
-                .as_ref()
-                .is_some_and(|hardpoints| hardpoints.contains(&hardpoint)),
-        )
+        self.model_hardpoints
+            .as_ref()
+            .map(|hardpoints| hardpoints.contains(&hardpoint))
     }
 
     fn body_angle(
@@ -1339,8 +1337,7 @@ impl World for BodyWorld {
         if !self.is_player_site(site) {
             return None;
         }
-        let (Some(frame), Some(origin)) = (self.spatial_frame.as_deref(), self.eye_position)
-        else {
+        let (Some(frame), Some(origin)) = (self.spatial_frame.as_deref(), self.eye_position) else {
             return Some(crate::script_init::BeamContact::default());
         };
         let direction = direction_for_angles(self.movement.yaw, self.movement.pitch);
