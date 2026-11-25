@@ -30,6 +30,7 @@ pub enum CombatNotice {
         dealt: f32,
         origin: Option<Vec3>,
         normal: Option<Vec3>,
+        contact_set: u16,
     },
     Death {
         source: u32,
@@ -117,6 +118,7 @@ impl CombatNotice {
                 dealt,
                 origin,
                 normal,
+                contact_set,
             } => {
                 let vector = |xyz: Option<Vec3>| {
                     let [x, y, z] = xyz
@@ -141,7 +143,7 @@ impl CombatNotice {
                         (0xc0, Value::Float32(dealt)),
                         (0xc4, Value::Unsigned(0)),
                         (0xc8, Value::Unsigned(0)),
-                        (0xca, Value::Unsigned(0)),
+                        (0xca, Value::Unsigned(u64::from(contact_set))),
                         (0xcc, Value::Float32(0.0)),
                         (0xd0, Value::Bool(false)),
                         (

@@ -96,7 +96,9 @@ impl HitDefinition {
             number(field(config, "m_157E5BC5")?),
             number(field(config, "m_72A81154")?),
         ) {
-            (Some(start), Some(end), Some(floor)) if start < end => {
+            (Some(start), Some(end), Some(floor))
+                if start >= 0.0 && start < end && (0.0..=1.0).contains(&floor) =>
+            {
                 Some(DamageFalloff { start, end, floor })
             }
             _ => None,
@@ -450,6 +452,26 @@ mod tests {
             .unwrap()
             .unwrap();
             assert_eq!(hit.critical, expected);
+        }
+        // Retail falloff bands (12-20m, 20-40m, 30-50m at 0.3 floor) and invalid bounds rejection.
+        for (start, end, floor, valid) in [
+            (12, 20, 0.3, true),
+            (20, 40, 0.3, true),
+            (30, 50, 0.3, true),
+            (-5, 20, 0.3, false),
+            (30, 20, 0.3, false),
+            (20, 40, 1.5, false),
+        ] {
+            let cfg = json!({
+                "m_EAD7F104": int(start),
+                "m_157E5BC5": int(end),
+                "m_72A81154": {"$": "STUConfigVarFloat", "m_value": floor},
+            });
+            let parsed =
+                HitDefinition::from_authored(&cfg, |value| evaluate(value, &mut EmptyContext))
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(parsed.falloff.is_some(), valid);
         }
     }
 

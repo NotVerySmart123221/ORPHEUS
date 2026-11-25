@@ -6,10 +6,11 @@ use serde::Serialize;
 
 use crate::{
     collision_scene::CollisionScene,
+    contact_gjk::sweep::MeshProbe,
     contact_mesh::ContactBounds,
     contact_world::{ContactWorld, StaticGeometry},
     game_content::GameMap,
-    static_ray::Vec3,
+    static_ray::{Vec3, along, norm},
 };
 
 const HALF_EXTENTS: Vec3 = [24.0, 16.0, 24.0];
@@ -31,6 +32,53 @@ impl GeometryRegion {
         .then_some(Self {
             center,
             half_extent,
+        })
+    }
+}
+
+pub(crate) struct CollisionCompareQuery {
+    pub origin: Vec3,
+    pub direction: Vec3,
+    pub length: f64,
+    pub mask: Option<u16>,
+    pub radius: f32,
+    pub top: f32,
+}
+
+impl CollisionCompareQuery {
+    pub(crate) fn new(
+        origin: Vec3,
+        direction: Vec3,
+        length: f64,
+        mask: Option<u16>,
+        radius: f32,
+        top: f32,
+    ) -> Option<Self> {
+        if !origin
+            .into_iter()
+            .all(|axis| axis.is_finite() && (-COORDINATE_LIMIT..=COORDINATE_LIMIT).contains(&axis))
+            || !direction.into_iter().all(f64::is_finite)
+            || !length.is_finite()
+            || !(0.01..=256.0).contains(&length)
+            || !radius.is_finite()
+            || !(0.01..=4.0).contains(&radius)
+            || !top.is_finite()
+            || !(0.0..=8.0).contains(&top)
+        {
+            return None;
+        }
+        let mag = norm(direction);
+        if !mag.is_finite() || mag <= 1.0e-6 {
+            return None;
+        }
+        let unit = direction.map(|axis| axis / mag);
+        Some(Self {
+            origin,
+            direction: unit,
+            length,
+            mask,
+            radius,
+            top,
         })
     }
 }
@@ -78,6 +126,89 @@ impl DebugGeometry {
 
     pub(crate) fn region(&self, region: GeometryRegion) -> DebugGeometryView {
         self.sample(region.center, [region.half_extent; 3], "requested-center")
+    }
+
+    pub(crate) fn compare_collision(&self, query: CollisionCompareQuery) -> CollisionCompareView {
+        let mask = query.mask.unwrap_or(self.category_mask);
+        let scene_ray = self
+            .ground
+            .checked_cast_ray(query.origin, query.direction, query.length, mask)
+            .flatten()
+            .map(|hit| DebugSceneRayHit {
+                distance: hit.distance,
+                point: hit.point,
+                normal: hit.normal,
+                mask: hit.mask,
+                surface: hit.surface,
+            });
+        let end = along(query.origin, query.direction, query.length);
+        let start_f = query.origin.map(|axis| axis as f32);
+        let end_f = end.map(|axis| axis as f32);
+        let points = [
+            [0.0, query.radius, 0.0],
+            [0.0, query.radius + query.top, 0.0],
+        ];
+        let probe = MeshProbe {
+            points: &points,
+            radius: query.radius,
+            start: start_f,
+            end: end_f,
+            category: mask,
+        };
+        let contact_sweep = self.contacts.as_ref().and_then(|world| {
+            world.scene_sweep(probe).ok().flatten().map(|hit| {
+                let shape_kind = match world.shapes()[hit.shape as usize].geometry() {
+                    StaticGeometry::Mesh(_) => "mesh",
+                    StaticGeometry::Hull(_) => "hull",
+                    StaticGeometry::Round { .. } => "round",
+                };
+                let shape_mask = world.shapes()[hit.shape as usize].geometry().mask();
+                let distance = f64::from(hit.hit.fraction) * query.length;
+                DebugContactSweepHit {
+                    fraction: hit.hit.fraction,
+                    distance,
+                    point: hit.hit.point.map(f64::from),
+                    normal: hit.hit.normal.map(f64::from),
+                    shape_id: hit.shape,
+                    shape_kind,
+                    shape_mask,
+                    triangle: hit.triangle,
+                }
+            })
+        });
+        let min = query.origin.map(|axis| axis - 2.0);
+        let max = query.origin.map(|axis| axis + 2.0);
+        let nearby_triangles = self
+            .ground
+            .triangles()
+            .nearby_limited(min, max, mask, TRIANGLE_LIMIT + 1)
+            .len();
+        let nearby_proxies = self.contact_proxies(min, max).len();
+        let contacts_available = self.contacts.is_some();
+        let diverges = contacts_available
+            && match (&scene_ray, &contact_sweep) {
+                (None, None) => false,
+                (Some(ray), Some(sweep)) => {
+                    (ray.distance - sweep.distance).abs() > f64::from(query.radius) + 0.25
+                }
+                _ => true,
+            };
+        CollisionCompareView {
+            origin: query.origin,
+            direction: query.direction,
+            length: query.length,
+            mask,
+            radius: query.radius,
+            top: query.top,
+            contacts_available,
+            diverges,
+            nearby_counts: DebugLayers {
+                triangles: nearby_triangles,
+                proxies: nearby_proxies,
+            },
+            scene_ray,
+            contact_sweep,
+        }
     }
 
     fn sample(
@@ -231,6 +362,42 @@ struct DebugProxy {
     max: [f32; 3],
     kind: &'static str,
     mask: u16,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CollisionCompareView {
+    pub origin: Vec3,
+    pub direction: Vec3,
+    pub length: f64,
+    pub mask: u16,
+    pub radius: f32,
+    pub top: f32,
+    pub contacts_available: bool,
+    pub diverges: bool,
+    nearby_counts: DebugLayers<usize>,
+    pub scene_ray: Option<DebugSceneRayHit>,
+    pub contact_sweep: Option<DebugContactSweepHit>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct DebugSceneRayHit {
+    pub distance: f64,
+    pub point: Vec3,
+    pub normal: Vec3,
+    pub mask: u16,
+    pub surface: u16,
+}
+
+#[derive(Serialize)]
+pub(crate) struct DebugContactSweepHit {
+    pub fraction: f32,
+    pub distance: f64,
+    pub point: Vec3,
+    pub normal: Vec3,
+    pub shape_id: u32,
+    pub shape_kind: &'static str,
+    pub shape_mask: u16,
+    pub triangle: Option<u32>,
 }
 
 #[cfg(test)]
@@ -418,5 +585,71 @@ mod tests {
         assert_eq!(view.sources.movement_cache, "0688.col");
         assert!(view.counts.triangles > 0 && !view.truncated.triangles);
         assert!(view.counts.proxies > 0 && !view.truncated.proxies);
+    }
+
+    #[test]
+    fn compare_collision_reports_aligned_hit_and_corner_mask_divergence() {
+        let map = GameMap::practice_range();
+        let wall_mesh = Mesh {
+            vertices: vec![[-2.0, 0.0, 5.0], [2.0, 0.0, 5.0], [0.0, 4.0, 5.0]],
+            triangles: vec![Triangle {
+                corners: [0, 1, 2],
+                wings: [-1; 3],
+                mask: TEAM0,
+                surface: 3,
+            }],
+        };
+        let cache = CollisionCache {
+            header: serde_json::from_value(json!({
+                "meshes": [[3, 1]], "hulls": 0, "models": 0, "placements": 0, "identifiers": [],
+            }))
+            .unwrap(),
+            meshes: vec![wall_mesh],
+            hulls: vec![],
+            models: vec![],
+            placements: vec![],
+        };
+        let groups = BTreeSet::new();
+        let ground = Arc::new(CollisionScene::movement_probe(&cache, &groups).unwrap());
+        // ContactWorld::from_movement_cache assigns u16::MAX mask to top-level meshes,
+        // while CollisionScene keeps the per-triangle mask (TEAM0).
+        let contacts = Arc::new(ContactWorld::from_movement_cache(cache, &groups).unwrap());
+        let geometry = DebugGeometry::new(
+            &map,
+            "0688.col".into(),
+            TEAM0 | TEAM1,
+            ground,
+            Some(contacts),
+        );
+        let aligned = geometry.compare_collision(
+            CollisionCompareQuery::new(
+                [0.0, 0.5, 0.0],
+                [0.0, 0.0, 1.0],
+                10.0,
+                Some(TEAM0),
+                0.3,
+                1.0,
+            )
+            .unwrap(),
+        );
+        assert!(aligned.contacts_available);
+        assert!(!aligned.diverges);
+        assert!(aligned.scene_ray.is_some());
+        assert!(aligned.contact_sweep.is_some());
+
+        let diverged = geometry.compare_collision(
+            CollisionCompareQuery::new(
+                [2.0, 0.5, 0.0],
+                [0.0, 0.0, 1.0],
+                10.0,
+                Some(TEAM0),
+                0.5,
+                1.0,
+            )
+            .unwrap(),
+        );
+        assert!(diverged.diverges);
+        assert!(diverged.scene_ray.is_none());
+        assert!(diverged.contact_sweep.is_some());
     }
 }

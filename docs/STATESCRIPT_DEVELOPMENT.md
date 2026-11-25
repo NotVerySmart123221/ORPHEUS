@@ -1236,9 +1236,14 @@ It passes the position through when the transform cannot be resolved.
 The headless room has the world contact point. The exact local transform
 and its sampling frame need to be established before filling that field.
 
-The 104319 victim event also has a compact contact-set operand. The
+The 104319 victim event also has a compact contact-set operand (`@0xca`). The
 client expands it to a `.049` asset and carries it into its contact effect
-request. This is a contact-set selector. The local `STUContactSet` schema
+request. The shared contact-set graph (`67`) declares `0x0D800000000002A3`
+schema entries per body (`STUConfigVarContactSet.m_contactSet`, e.g. `0x01200000000005EE`
+or `0x01200000000000D5`), which the server now propagates to `25000` `@0xca`.
+Shared presenter graph `64` also reads `0x0240000000000012` (`0x724 = 1.0` default ->
+`0x030000000000183B` crit / `0x0300000000000206` normal) and `0x0240000000000093`
+(`0x03000000000000EE` final blow). This is a contact-set selector. The local `STUContactSet` schema
 maps contact type and material to authored responses, and actor and
 projectile components use contact sets for different purposes. A body's
 default set alone does not identify the material or the contact response

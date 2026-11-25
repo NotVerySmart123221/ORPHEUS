@@ -1889,18 +1889,30 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             (ammo0 / per_shot).min(i64::from(maximum)) as u32
         };
         let launch = field(&node.fields, "m_5EC1EB38");
-        let spread_ramp = if launch["$"] == "STU_239B571E" && field(launch, "m_23C72C36").is_null()
-        {
+        let (spread_ramp, spread_delay_ms) = if launch["$"] == "STU_239B571E" {
+            let delay = field(launch, "m_23C72C36");
+            let delay_ms = if delay.is_null() {
+                Some(0)
+            } else {
+                self.evaluate(id, node, delay, None)
+                    .map(|value| script_expr::to_float(&value))
+                    .filter(|secs| secs.is_finite() && *secs >= 0.0)
+                    .map(|secs| (secs * 1000.0).round() as u64)
+            };
             let config = field(launch, "m_AC20B1C1");
-            if config.is_null() {
+            let ramp = if config.is_null() {
                 Some(0.0)
             } else {
                 self.evaluate(id, node, config, None)
                     .map(|value| script_expr::to_float(&value) as f32)
                     .filter(|ramp| ramp.is_finite() && *ramp >= 0.0)
+            };
+            match (ramp, delay_ms) {
+                (Some(ramp), Some(delay_ms)) => (Some(ramp), delay_ms),
+                _ => (None, 0),
             }
         } else {
-            None
+            (None, 0)
         };
         let start_ms = self.machine.now_ms;
         self.state_mut(key).expect("active volley").kind = StateKind::WeaponVolley {
@@ -1918,6 +1930,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 rate,
                 spread,
                 spread_ramp,
+                spread_delay_ms,
                 planned,
                 reported: 0,
                 unposed_rounds: 0,
@@ -2018,7 +2031,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let mut ordinal = volley.reported;
         let planned = volley.planned;
         let mut presentation = None;
-        let spread = (volley.spread, volley.spread_ramp);
+        let spread = (volley.spread, volley.spread_ramp, volley.spread_delay_ms);
         while ordinal < planned {
             let time_ms = start_ms.saturating_add(shot_delay(ordinal, rate));
             if time_ms > self.machine.now_ms {
@@ -2044,6 +2057,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 normalized_spread: Volley::normalized_shot_spread(
                     spread.0,
                     spread.1,
+                    spread.2,
                     time_ms - start_ms,
                     rate,
                 ),

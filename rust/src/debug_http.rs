@@ -11,7 +11,7 @@ use std::{
 use serde::Deserialize;
 
 use crate::{
-    debug_geometry::{DebugGeometry, GeometryRegion},
+    debug_geometry::{CollisionCompareQuery, DebugGeometry, GeometryRegion},
     game_debug::{MAX_DEBUG_STEP_BUDGET, RoomControlCommand, RoomControlStatus, Snapshot},
     service_tcp::{PeerStream, PeerWorkers, accept},
 };
@@ -21,6 +21,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_PEERS: usize = 8;
 const MAX_REQUEST_BYTES: usize = 8192;
 const MAX_REGION_QUERY_BYTES: usize = 128;
+const MAX_COMPARE_QUERY_BYTES: usize = 256;
 const MAX_CONTROL_BODY_BYTES: usize = 256;
 const HTML: &str = include_str!("../assets/inspector/index.html");
 const CSS: &str = include_str!("../assets/inspector/debug.css");
@@ -251,6 +252,17 @@ fn serve_peer(mut socket: PeerStream, endpoint: &Endpoint) -> io::Result<()> {
                         .map_err(io::Error::other)?;
                     respond(&mut socket, "200 OK", "application/json", &body)
                 }
+                ("/api/debug/v1/collision-compare", Some(query)) => {
+                    let Some(compare) = parse_collision_compare(query) else {
+                        return error_response(&mut socket, "400 Bad Request");
+                    };
+                    let body = serde_json::to_vec(&endpoint.geometry.compare_collision(compare))
+                        .map_err(io::Error::other)?;
+                    respond(&mut socket, "200 OK", "application/json", &body)
+                }
+                ("/api/debug/v1/collision-compare", None) => {
+                    error_response(&mut socket, "400 Bad Request")
+                }
                 ("/api/debug/v1/state", None) => {
                     let Ok(state) = (endpoint.state)() else {
                         return error_response(&mut socket, "503 Service Unavailable");
@@ -338,7 +350,11 @@ fn serve_peer(mut socket: PeerStream, endpoint: &Endpoint) -> io::Result<()> {
 fn is_read_only_get_route(route: &str) -> bool {
     matches!(
         route,
-        "/" | "/debug.css" | "/debug.js" | "/api/debug/v1/geometry" | "/api/debug/v1/state"
+        "/" | "/debug.css"
+            | "/debug.js"
+            | "/api/debug/v1/geometry"
+            | "/api/debug/v1/collision-compare"
+            | "/api/debug/v1/state"
     )
 }
 
@@ -408,6 +424,56 @@ fn parse_geometry_region(query: &str) -> Option<GeometryRegion> {
         return None;
     }
     GeometryRegion::new(center, half_extent?)
+}
+
+fn parse_vec3_param(value: &str) -> Option<[f64; 3]> {
+    let mut axes = value.split(',');
+    let vec = [
+        axes.next()?.parse().ok()?,
+        axes.next()?.parse().ok()?,
+        axes.next()?.parse().ok()?,
+    ];
+    axes.next().is_none().then_some(vec)
+}
+
+fn parse_mask_param(value: &str) -> Option<u16> {
+    if let Some(hex) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
+        u16::from_str_radix(hex, 16).ok()
+    } else {
+        value.parse().ok()
+    }
+}
+
+fn parse_collision_compare(query: &str) -> Option<CollisionCompareQuery> {
+    if query.len() > MAX_COMPARE_QUERY_BYTES {
+        return None;
+    }
+    let (mut origin, mut direction, mut length, mut mask, mut radius, mut top) =
+        (None, None, None, None, None, None);
+    for parameter in query.split('&') {
+        match parameter.split_once('=')? {
+            ("origin", value) if origin.is_none() => origin = Some(parse_vec3_param(value)?),
+            ("direction", value) if direction.is_none() => {
+                direction = Some(parse_vec3_param(value)?)
+            }
+            ("length", value) if length.is_none() => length = Some(value.parse().ok()?),
+            ("mask", value) if mask.is_none() => mask = Some(parse_mask_param(value)?),
+            ("radius", value) if radius.is_none() => radius = Some(value.parse().ok()?),
+            ("top", value) if top.is_none() => top = Some(value.parse().ok()?),
+            _ => return None,
+        }
+    }
+    CollisionCompareQuery::new(
+        origin?,
+        direction?,
+        length?,
+        mask,
+        radius.unwrap_or(0.5),
+        top.unwrap_or(1.0),
+    )
 }
 
 fn parse_headers(headers: &[httparse::Header<'_>], endpoint: &Endpoint) -> Option<ParsedHeaders> {
@@ -1277,6 +1343,58 @@ mod tests {
             assert!(!response.contains("private worker failure"));
         }
 
+        http.stop().unwrap();
+    }
+
+    #[test]
+    fn collision_compare_route_returns_json_and_rejects_invalid_queries() {
+        let map = GameMap::practice_range();
+        let ground = Arc::new(
+            crate::collision_scene::CollisionScene::movement_probe(
+                &crate::collision_cache::CollisionCache {
+                    header: serde_json::from_value(serde_json::json!({
+                        "meshes": [], "hulls": 0, "models": 0, "placements": 0, "identifiers": [],
+                    }))
+                    .unwrap(),
+                    meshes: vec![],
+                    hulls: vec![],
+                    models: vec![],
+                    placements: vec![],
+                },
+                &std::collections::BTreeSet::new(),
+            )
+            .unwrap(),
+        );
+        let geometry = DebugGeometry::new(&map, "0688.col".into(), 0x18, ground, None);
+        let mut http = DebugHttp::bind(0, geometry, || {
+            Ok(Snapshot {
+                tick: 0,
+                rooms: vec![],
+                truncated: false,
+                control_enabled: false,
+                timing: None,
+                ai_policy: None,
+                faults: vec![],
+            })
+        })
+        .unwrap();
+        let addr = http.addr();
+        let ok = request(
+            addr,
+            &format!(
+                "GET /api/debug/v1/collision-compare?origin=0,1,0&direction=0,0,1&length=10&mask=0x18 HTTP/1.1\r\nHost: {addr}\r\n\r\n"
+            ),
+        );
+        assert!(ok.starts_with("HTTP/1.1 200 OK\r\n"), "{ok}");
+        assert!(ok.contains("\"contacts_available\":false"), "{ok}");
+
+        let bad = request(
+            addr,
+            &format!(
+                "GET /api/debug/v1/collision-compare?origin=0,1,0&direction=0,0,0&length=10 HTTP/1.1\r\nHost: {addr}\r\n\r\n"
+            ),
+        );
+        assert!(bad.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{bad}");
         http.stop().unwrap();
     }
 }

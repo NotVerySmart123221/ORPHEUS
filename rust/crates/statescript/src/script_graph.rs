@@ -2339,6 +2339,50 @@ impl GraphStore {
         self.entities.get(&guid)
     }
 
+    /// Extract the authored `0x0120...` contact-set index from a body or entity's graph schema entries (`0x0D800000000002A3`).
+    pub fn body_contact_set(&self, body_guid: u64) -> Option<u16> {
+        let body = self
+            .bodies
+            .get(&body_guid)
+            .or_else(|| self.entities.get(&body_guid))?;
+        for binding in body.graphs.iter().chain(body.server_graphs.iter()) {
+            let Some(entries) = &binding.sync else {
+                continue;
+            };
+            for entry in entries {
+                if entry.get("m_0D09D2D9").and_then(Value::as_str) != Some("0x0D800000000002A3") {
+                    continue;
+                }
+                let Some(val) = entry.get("m_value") else {
+                    continue;
+                };
+                if val.get("$").and_then(Value::as_str) != Some("STUConfigVarContactSet") {
+                    continue;
+                }
+                if let Some(guid) = val
+                    .get("m_contactSet")
+                    .and_then(Value::as_str)
+                    .and_then(parse_guid)
+                {
+                    let index = (guid & 0xffff) as u16;
+                    if index != 0 {
+                        return Some(index);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    pub fn body_contact_sets(&self) -> BTreeMap<u64, u16> {
+        self.bodies
+            .keys()
+            .chain(self.entities.keys())
+            .copied()
+            .filter_map(|guid| self.body_contact_set(guid).map(|cs| (guid, cs)))
+            .collect()
+    }
+
     pub fn enemy_pair(&self, hero: u64) -> Option<EnemyPair> {
         self.enemies
             .pairs
@@ -2823,6 +2867,45 @@ mod tests {
                 io::ErrorKind::InvalidData
             );
         }
+    }
+
+    #[test]
+    fn body_contact_set_extracts_authored_index_or_returns_none() {
+        let mut data = fixture();
+        data["bodies"]["0x0400000000000001"] = json!({
+            "hero": null, "name": "Human", "manager": null, "weapons": [],
+            "graphs": [{
+                "graph": 42,
+                "m_1EB5A024": [{
+                    "$": "STUStatescriptSchemaEntry",
+                    "m_0D09D2D9": "0x0D800000000002A3",
+                    "m_value": {"$": "STUConfigVarContactSet", "m_contactSet": "0x01200000000005EE"}
+                }],
+                "m_75408640": 0
+            }]
+        });
+        data["bodies"]["0x0400000000000002"] = json!({
+            "hero": null, "name": "Omnic", "manager": null, "weapons": [],
+            "graphs": [{
+                "graph": 42,
+                "m_1EB5A024": [{
+                    "$": "STUStatescriptSchemaEntry",
+                    "m_0D09D2D9": "0x0D800000000002A3",
+                    "m_value": {"$": "STUConfigVarContactSet", "m_contactSet": "0x01200000000000D5"}
+                }],
+                "m_75408640": 0
+            }]
+        });
+        let catalog = GraphStore::from_json(data.to_string().as_bytes()).unwrap();
+        assert_eq!(
+            catalog.body_contact_set(0x0400_0000_0000_0001),
+            Some(0x05ee)
+        );
+        assert_eq!(
+            catalog.body_contact_set(0x0400_0000_0000_0002),
+            Some(0x00d5)
+        );
+        assert_eq!(catalog.body_contact_set(0x0400_0000_0000_0099), None);
     }
 
     #[test]

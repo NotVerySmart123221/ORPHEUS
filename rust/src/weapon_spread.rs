@@ -139,10 +139,6 @@ pub(crate) fn for_each_authored_hitscan_direction(
         }
         return;
     }
-    let Some(normalized) = shot.normalized_spread else {
-        emit(forward);
-        return;
-    };
     let mut degrees = |key: &str| {
         node.field(key)
             .filter(|value| !value.is_null())
@@ -156,7 +152,14 @@ pub(crate) fn for_each_authored_hitscan_direction(
         emit(forward);
         return;
     };
-    let spread = low + (high - low) * normalized;
+    let spread = match shot.normalized_spread {
+        Some(normalized) => low + (high - low) * normalized,
+        None if low > 0.0 && (high - low).abs() <= 1.0e-6 => low,
+        None => {
+            emit(forward);
+            return;
+        }
+    };
     if !(0.0..90.0).contains(&spread) {
         emit(forward);
         return;
@@ -240,6 +243,55 @@ mod tests {
     use super::*;
     use crate::script_init::ShotEvent;
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn constant_cone_without_normalized_spread_uses_authored_angle() {
+        let node: Node = serde_json::from_value(serde_json::json!({
+            "pos": 1,
+            "uid": 0,
+            "rid": 0,
+            "remote": -1,
+            "state": null,
+            "class": "STUStatescriptStateWeaponVolley",
+            "client_only": 0,
+            "server_only": 0,
+            "fields": {
+                "m_5EC1EB38": {
+                    "$": "STU_239B571E",
+                    "m_7F0FED02": {"$": "STUConfigVarFloat", "m_value": 6.0},
+                    "m_429A6C85": {"$": "STUConfigVarFloat", "m_value": 6.0}
+                }
+            }
+        }))
+        .unwrap();
+        let shot = ReportedShot {
+            event: ShotEvent {
+                entity: 0xa000_0101,
+                instance: 1,
+                graph: 1,
+                raw_state: 1,
+                frame: 10,
+                time_ms: 160,
+                activation: 1,
+                activation_ms: 160,
+                ordinal: 0,
+            },
+            presentation: Vec::new(),
+            normalized_spread: None,
+        };
+        let forward = [0.0, 0.0, 1.0];
+        let mut dirs = Vec::new();
+        for_each_authored_hitscan_direction(
+            &node,
+            &shot,
+            forward,
+            |v| crate::script_expr::evaluate(v, &mut crate::script_expr::EmptyContext),
+            |dir| dirs.push(dir),
+        );
+        assert_eq!(dirs.len(), 1);
+        assert_ne!(dirs[0], forward);
+        assert!(dirs[0][2] >= 6.0_f64.to_radians().cos() - 1e-6);
+    }
 
     #[test]
     fn direct_launch_cone_matches_the_reference_using_the_raw_state_slot() {

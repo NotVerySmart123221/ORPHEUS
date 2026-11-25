@@ -531,6 +531,12 @@ impl RoomSimulation {
         let origin = geometry
             .map(ImpactGeometry::origin)
             .or_else(|| source.position(&self.world));
+        let contact_set = self
+            .players_by_wire
+            .get(&victim.entity)
+            .and_then(|&entity| self.world.get::<PlayerBodyState>(entity))
+            .and_then(|state| self.body_contact_sets.get(&state.body_template).copied())
+            .unwrap_or(0);
         self.player_cues.push(PlayerRoomCue {
             owner,
             listener: victim,
@@ -541,6 +547,7 @@ impl RoomSimulation {
                 dealt,
                 origin,
                 normal: geometry.and_then(ImpactGeometry::surface_normal),
+                contact_set,
             },
         });
     }

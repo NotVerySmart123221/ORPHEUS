@@ -693,6 +693,7 @@ pub(crate) struct RoomSimulation {
     team_member_counts: Option<crate::game_instance::TeamMemberCounts>,
     free_for_all: bool,
     combat_voice: Arc<crate::combat_voice::CombatVoiceCatalog>,
+    body_contact_sets: BTreeMap<u64, u16>,
     received_damage_feedback: bool,
     hurt_voice_history: HashMap<u32, (u32, usize)>,
     spatial_queries: Option<RoomSpatialQueries>,
@@ -1167,6 +1168,7 @@ impl RoomSimulation {
             team_member_counts: None,
             free_for_all: false,
             combat_voice: Arc::default(),
+            body_contact_sets: BTreeMap::new(),
             received_damage_feedback: false,
             hurt_voice_history: HashMap::new(),
             spatial_queries: None,
@@ -1230,6 +1232,10 @@ impl RoomSimulation {
         catalog: Arc<crate::combat_voice::CombatVoiceCatalog>,
     ) {
         self.combat_voice = catalog;
+    }
+
+    pub(crate) fn set_body_contact_sets(&mut self, sets: BTreeMap<u64, u16>) {
+        self.body_contact_sets = sets;
     }
 
     pub(crate) fn enable_spatial_queries(

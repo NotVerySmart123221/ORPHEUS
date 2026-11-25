@@ -584,6 +584,7 @@ fn check_practice_firing_lane(
                 dealt,
                 origin: Some(origin),
                 normal: Some(normal),
+                ..
             } = cue.notice
             else {
                 panic!("expected a damage cue with the settled NPC hit geometry");

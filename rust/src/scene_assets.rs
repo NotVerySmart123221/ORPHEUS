@@ -504,6 +504,7 @@ impl SceneAssets {
         simulation.set_free_for_all(map.free_for_all);
         simulation.load_bot_target_tags(&self.graphs);
         simulation.set_combat_voice(Arc::clone(&self.combat_voice));
+        simulation.set_body_contact_sets(self.graphs.body_contact_sets());
         if std::env::var_os("ORPHEUS_PLAYTEST_RECEIVED_DAMAGE").is_none_or(|value| value != "0") {
             simulation.enable_received_damage_feedback();
         }
