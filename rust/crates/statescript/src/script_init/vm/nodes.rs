@@ -5,7 +5,7 @@ use serde_json::Value as Json;
 use crate::{
     script_expr::{self, EntityRelation, EvalError, equal, truthy},
     script_graph::{Node, asset_guid},
-    script_runtime::{ENCOUNTER_RESULT, FRAME_MS, POST_MATCH_COMPLETE},
+    script_runtime::{FRAME_MS, POST_MATCH_COMPLETE},
     script_wire::Value,
 };
 
@@ -434,7 +434,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         && field(&node.fields, "m_dataFlow").is_null()) =>
             {
                 let effect = field(&node.fields, "m_effect");
-                if field(&node.fields, "m_37B02425").is_null()
+                let legacy_self_effect = field(&node.fields, "m_37B02425").is_null()
                     && script_expr::native_shape(
                         field(&node.fields, "m_3E3E203A"),
                         "STU_B5A0CAF0",
@@ -444,8 +444,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     && script_expr::native_fields(effect, &["m_effect", "m_resourceKey"])
                     && field(effect, "m_resourceKey").is_null()
                     && asset_guid(field(effect, "m_effect"))
-                        .is_some_and(|guid| guid >> 48 == 0x0300)
-                {
+                        .is_some_and(|guid| guid >> 48 == 0x0300);
+                if legacy_self_effect || (node.remote >= 0 && node.is_networked()) {
                     self.capture_frame_action(id, node);
                 }
                 self.follow(id, node, "m_outPlug", None, depth)?;
@@ -480,8 +480,6 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 let message = node
                     .field("m_gameMessage.m_gameMessage")
                     .and_then(asset_guid);
-                let result =
-                    (site.graph, node.pos, message) == (0x0c8c, 84, Some(ENCOUNTER_RESULT));
                 if !field(&node.fields, "m_8B34E9C3").is_null() {
                     self.report(site, Issue::UnsupportedField("routed game message targets"));
                     return Ok(false);
@@ -494,20 +492,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     return Ok(false);
                 };
                 let routed = self.world.route_game_message(site, message, &parameters);
-                // A parameterless notification can feed a listener on this
-                // component even when there is no external route.
-                let local = if (result && routed) || (!routed && parameters.is_empty()) {
-                    self.machine.queue_entries_from(
-                        self.graphs,
-                        None,
-                        Some(site.entity),
-                        message,
-                        parameters,
-                        self.machine.now_ms,
-                    )? != 0
-                } else {
-                    false
-                };
+                let local = self.machine.queue_entries_from(
+                    self.graphs,
+                    None,
+                    Some(site.entity),
+                    message,
+                    parameters,
+                    self.machine.now_ms,
+                )? != 0;
                 if !routed && !local {
                     self.report(site, Issue::UnsupportedField("routed game message targets"));
                     return Ok(false);

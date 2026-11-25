@@ -312,14 +312,107 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         self.post_after(key.instance, milliseconds as u64, Event::Timer(key.raw, 1))
     }
 
+    pub(in crate::script_init) fn resolve_anim_key(
+        &mut self,
+        id: u16,
+        node: &Node,
+    ) -> Option<(u64, u64, u64)> {
+        let alias_field = field(&node.fields, "m_11E0A658");
+        let alias = if alias_field.is_null() {
+            return None;
+        } else {
+            match self.evaluate(id, node, alias_field, None)? {
+                Value::Asset(guid) => guid,
+                Value::Integer(0) | Value::Null => 0,
+                Value::Float(0.0) => 0,
+                _ => return None,
+            }
+        };
+        if alias == 0 {
+            return Some((0, 0, 0));
+        }
+        let category = match field(&node.fields, "m_22326315") {
+            field if field.is_null() => 0,
+            field => match self.evaluate(id, node, field, None)? {
+                Value::Asset(guid) => guid,
+                _ => 0,
+            },
+        };
+        let mut blend_tree = 0u64;
+        if let Some(instance) = self.machine.snapshot.instances.get(&id) {
+            let active_trees: Vec<(u16, &Node)> = instance
+                .states
+                .iter()
+                .filter_map(|(&raw, state)| {
+                    if !state.active || state.ending {
+                        return None;
+                    }
+                    let candidate = self.graph(id).state(usize::from(raw))?;
+                    (candidate.class == "STU_A875CA49").then_some((raw, candidate))
+                })
+                .collect();
+            if let Some((_, tree_node)) = active_trees.last() {
+                if let Some(Value::Asset(guid)) =
+                    self.evaluate(id, tree_node, field(&tree_node.fields, "m_65D335ED"), None)
+                {
+                    blend_tree = guid;
+                }
+            }
+        }
+        Some((blend_tree, alias, category))
+    }
+
     pub(in crate::script_init) fn arm_animation(
         &mut self,
         key: StateKey,
         node: &Node,
     ) -> Result<(), InitFault> {
         let id = key.instance;
-        let duration = field(&node.fields, "m_86701C3E");
-        if duration.is_null() {
+        let looping = field(&node.fields, "m_37EE887D");
+        if !looping.is_null() {
+            if let Some(value) = self.evaluate(id, node, looping, None) {
+                if truthy(&value) {
+                    return Ok(());
+                }
+            } else {
+                return Ok(());
+            }
+        }
+        let duration_field = field(&node.fields, "m_86701C3E");
+        let mut authored_seconds = if duration_field.is_null() {
+            None
+        } else {
+            let Some(seconds) = self.evaluate(id, node, duration_field, None) else {
+                return Ok(());
+            };
+            Some(script_expr::to_float(&seconds))
+        };
+        if authored_seconds.is_none_or(|s| s < f64::from(f32::from_bits(0x38FA_0000))) {
+            if let Some((blend_tree, alias, category)) = self.resolve_anim_key(id, node) {
+                let site = self.site(id, node);
+                if let Some(resolved) = self
+                    .world
+                    .animation_duration(site, blend_tree, alias, category)
+                {
+                    let speed_field = field(&node.fields, "m_speedScalar");
+                    let scalar = if speed_field.is_null() {
+                        1.0
+                    } else {
+                        let Some(val) = self.evaluate(id, node, speed_field, None) else {
+                            return Ok(());
+                        };
+                        script_expr::to_float(&val)
+                    };
+                    let seconds = if scalar > 0.0 {
+                        resolved / scalar
+                    } else {
+                        resolved
+                    };
+                    authored_seconds = Some(f64::from(seconds as f32));
+                }
+            }
+        }
+        let Some(seconds) = authored_seconds else {
             let client_removes_zombardier_animation = (self.graph(id).index, node.pos)
                 == (0x0ca1, 58)
                 && field(&node.fields, "m_154DBA91")["$"] == "STUConfigVarBool"
@@ -341,11 +434,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 );
             }
             return Ok(());
-        }
-        let Some(seconds) = self.evaluate(id, node, duration, None) else {
-            return Ok(());
         };
-        let delay = ((script_expr::to_float(&seconds) * 1000.0) as f32).round();
+        let delay = ((seconds * 1000.0) as f32).round();
         if !delay.is_finite() {
             self.report(
                 self.site(id, node),
@@ -732,7 +822,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             let graph = self.graph(key.instance);
             if let Some(node) = graph.state(usize::from(key.raw)) {
                 if state.kind == StateKind::Anim
-                    || (graph.index == 0x0c8c && matches!(node.pos, 33 | 275))
+                    || !array_field(&node.fields, "m_transitionPlug").is_empty()
                 {
                     self.try_complete(key, node, 0)?;
                 }

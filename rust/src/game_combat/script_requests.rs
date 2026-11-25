@@ -265,6 +265,22 @@ impl RoomScriptRequests {
         self.queue(frame, wire, ScriptEffect::Message(message))
     }
 
+    pub(crate) fn queue_broadcast_others(
+        &mut self,
+        frame: &RoomSpatialFrame,
+        exclude_wire: u32,
+        message: RoomMessage,
+    ) {
+        if message.id == 0 {
+            return;
+        }
+        for &wire in frame.script_targets.keys() {
+            if wire != exclude_wire {
+                let _ = self.queue_message(frame, wire, message.clone());
+            }
+        }
+    }
+
     pub(crate) fn queue_cue(
         &mut self,
         frame: &RoomSpatialFrame,

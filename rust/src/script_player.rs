@@ -70,6 +70,7 @@ pub(crate) struct PlayerBodyFactory {
     target_tags: Option<BTreeSet<u64>>,
     controller_on_fire: bool,
     charge_route: charge::ChargeRoute,
+    anim_timing: Option<Arc<crate::anim_timing::AnimationTiming>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -164,7 +165,16 @@ impl PlayerBodyFactory {
             target_tags,
             controller_on_fire,
             charge_route,
+            anim_timing: None,
         })
+    }
+
+    pub(crate) fn with_anim_timing(
+        mut self,
+        anim_timing: Option<Arc<crate::anim_timing::AnimationTiming>>,
+    ) -> Self {
+        self.anim_timing = anim_timing;
+        self
     }
 
     pub(crate) fn probe_startup(
@@ -246,6 +256,8 @@ impl PlayerBodyFactory {
             throttles: [0; 2],
             mode: self.mode,
             hero: self.hero,
+            body_definition: self.body,
+            anim_timing: self.anim_timing.clone(),
             vitals: if has_authored_pools {
                 Vitals::empty()
             } else {
@@ -273,7 +285,7 @@ impl PlayerBodyFactory {
             scripted_motion: None,
             voice_variant_counter: 0,
         };
-        let mut component = Component::start(
+        let mut component = Component::start_with_public_schema(
             Arc::clone(&self.graphs),
             spawn.entity,
             self.variables.clone(),

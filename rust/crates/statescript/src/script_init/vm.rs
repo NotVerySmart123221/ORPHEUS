@@ -392,6 +392,33 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.set_button_down(key, node, edge.pressed, 0)?;
             }
         }
+        if edge.pressed {
+            let mut recheck = Vec::new();
+            for condition in &self.graph(id).nodes {
+                if condition.class != "STU_7DEB522D" || !configured(condition, "m_00994FF0") {
+                    continue;
+                }
+                if self.logical_button_id(id, condition, None) != Some(edge.button) {
+                    continue;
+                }
+                for target in array_field(&condition.fields, "m_122DF0CA") {
+                    if let Some(raw) = target.as_u64().and_then(|value| u16::try_from(value).ok()) {
+                        recheck.push(raw);
+                    }
+                }
+            }
+            for raw in recheck {
+                let key = StateKey { instance: id, raw };
+                if self
+                    .state(key)
+                    .is_some_and(|state| state.active && !state.ending)
+                {
+                    if let Some(node) = self.graph(id).state(usize::from(raw)) {
+                        self.try_complete(key, node, 0)?;
+                    }
+                }
+            }
+        }
         Ok(())
     }
 

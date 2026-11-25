@@ -136,7 +136,7 @@ fn practice_owner_selector(
 }
 
 #[derive(Debug, thiserror::Error)]
-enum SceneOwnerPreparationError {
+pub(crate) enum SceneOwnerPreparationError {
     #[error("the owner statescript codec table is unavailable")]
     Codecs,
     #[error("the controller's initial on-fire flag is unavailable")]
@@ -182,6 +182,7 @@ pub struct SceneAssets {
     movers: Arc<MoverCatalog>,
     hurt_volumes: Arc<HurtVolumeCatalog>,
     actor_voice: Option<Arc<ActorVoiceCatalog>>,
+    anim_timing: Option<Arc<crate::anim_timing::AnimationTiming>>,
     combat_voice: Arc<CombatVoiceCatalog>,
     stats: StatsCatalog,
     heroes: Arc<HeroCatalog>,
@@ -235,6 +236,7 @@ impl SceneAssets {
             movers: Arc::new(MoverCatalog::load(data.join("game_movers_174.json"))?),
             hurt_volumes: Arc::new(HurtVolumeCatalog::load(&runtime.join(COMBAT_HURT_VOLUMES))?),
             actor_voice: ActorVoiceCatalog::load(&runtime.join(ACTOR_VOICE_CATALOG))?.map(Arc::new),
+            anim_timing: crate::anim_timing::AnimationTiming::load(&data)?.map(Arc::new),
             combat_voice: Arc::new(combat_voice),
             stats: StatsCatalog::load(data.join("game_stats_174.json"))?,
             heroes: Arc::new(HeroCatalog::load(data.join("game_heroes_174.json"))?),
@@ -738,7 +740,12 @@ impl SceneAssets {
         (!factories.is_empty()).then(|| practice_owner_selector(factories))
     }
 
-    fn compile_owner_factory(
+    #[cfg(test)]
+    pub(crate) fn test_actor_voice(&self) -> Option<Arc<ActorVoiceCatalog>> {
+        self.actor_voice.as_ref().map(Arc::clone)
+    }
+
+    pub(crate) fn compile_owner_factory(
         &self,
         scene: &PreparedScene,
         hero: &Hero,
@@ -757,6 +764,7 @@ impl SceneAssets {
             self.pools.hero_pools(hero.guid),
             controller_on_fire,
         )
+        .map(|factory| factory.with_anim_timing(self.anim_timing.clone()))
         .map_err(|source| SceneOwnerPreparationError::Body(Box::new(source)))
     }
 

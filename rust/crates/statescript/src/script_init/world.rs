@@ -1209,6 +1209,17 @@ pub trait World {
         false
     }
 
+    /// Resolve an animation duration in seconds when `m_playOverDuration` is omitted.
+    fn animation_duration(
+        &mut self,
+        _site: Site,
+        _blend_tree: u64,
+        _alias: u64,
+        _category: u64,
+    ) -> Option<f64> {
+        None
+    }
+
     /// Resolve a criterion to a cue for the actor and its audience.
     fn queue_actor_voice(
         &mut self,

@@ -46,6 +46,11 @@ impl PreparedScene {
     }
 
     #[cfg(test)]
+    pub(crate) fn test_combat_rays(&self) -> Arc<CollisionScene> {
+        Arc::clone(&self.combat_rays)
+    }
+
+    #[cfg(test)]
     pub(crate) fn fixture_enable_room_health_scripts(&mut self) {
         self.simulation.enable_host_health_events();
         self.simulation.enable_spatial_queries(

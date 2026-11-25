@@ -3466,6 +3466,8 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
         throttles: [0; 2],
         mode: PRACTICE_RANGE_MODE,
         hero: SOLDIER,
+        body_definition: 0,
+        anim_timing: None,
         vitals: Vitals::empty(),
         pool_types_known: true,
         target_tags: tagged.then(|| body.target_tags.clone().unwrap()),
@@ -4815,6 +4817,8 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             throttles: [0; 2],
             mode: PRACTICE_RANGE_MODE,
             hero,
+            body_definition: 0,
+            anim_timing: None,
             vitals: Vitals::empty(),
             pool_types_known: true,
             target_tags: body.target_tags.clone(),
@@ -5024,6 +5028,8 @@ fn voice_stimulus_state_and_array_criteria_emit_room_cues() {
         throttles: [0; 2],
         mode: PRACTICE_RANGE_MODE,
         hero: SOLDIER,
+        body_definition: 0,
+        anim_timing: None,
         vitals: Vitals::empty(),
         pool_types_known: true,
         target_tags: None,
@@ -5075,5 +5081,188 @@ fn voice_stimulus_state_and_array_criteria_emit_room_cues() {
             (0x0EE0_0000_0000_0042, 0x0760_0000_0000_1002),
         ],
         "diagnostics: {diag:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires separately prepared 104319 runtime"]
+fn prepared_soldier_emote_and_need_healing_close_cleanly() {
+    use crate::{
+        commands::Command, game_clock::FIRST_TICK, game_combat::RoomSimulation,
+        game_combat_messages::CombatNotice, game_content::GameMap,
+        game_parameters::ClientWheelAction, game_replication::BodyId, scene_assets::SceneAssets,
+        script_graph::RoomSpatialNeeds,
+    };
+    use std::path::PathBuf;
+
+    let runtime_dir = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let assets = SceneAssets::load(&runtime_dir).unwrap();
+    let map = GameMap::practice_range();
+    let scene = assets.prepare(map).unwrap();
+    let hero = assets.heroes().find_hero("Soldier: 76").unwrap().clone();
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    let owner = BodyId {
+        entity: 0xa000_0101,
+        generation: 1,
+    };
+    let mover = scene.player_spawn_mover(hero.body, 0).unwrap();
+    room.spawn_player_body(crate::game_combat::PlayerBodyState::new(
+        owner, 1, 0, 0, hero.guid, mover, None, 1, None,
+    ))
+    .unwrap();
+    room.enable_spatial_queries(false, scene.test_combat_rays(), RoomSpatialNeeds::Queries);
+    if let Some(voice) = assets.test_actor_voice() {
+        room.enable_actor_voice(voice);
+    }
+    room.prepare_spatial_frame(FIRST_TICK).unwrap();
+
+    let mut player = assets
+        .compile_owner_factory(&scene, &hero)
+        .unwrap()
+        .start_with_setup(
+            OwnerBodySpawn {
+                controller: 0xa000_0100,
+                entity: owner.entity,
+                body_filter: crate::match_scene::team_bit(0).unwrap(),
+                slot: 0,
+                frame: FIRST_TICK,
+                pose: Movement::default(),
+                eye_position: None,
+                quanta: RETAIL_QUANTA,
+                skin: 0,
+            },
+            OwnerBodySetup {
+                spatial_frame: room.spatial_frame(),
+                ..OwnerBodySetup::default()
+            },
+        )
+        .unwrap();
+
+    // 1. Verify 004B m_publicSchema camera defaults (2286 = 3.0, 2296 = 0x0880000000000003)
+    let snap0 = player.component.snapshot().unwrap();
+    let body_inst = snap0
+        .instances
+        .values()
+        .find(|inst| inst.graph == 0x004b)
+        .expect("004B body graph");
+    assert_eq!(body_inst.variables.get(&2286), Some(&Value::Float(3.0)));
+    assert_eq!(
+        body_inst.variables.get(&2296),
+        Some(&Value::Asset(0x0880_0000_0000_0003))
+    );
+
+    // 2. Equip a non-looping emote (0x0C8000000000045C, blend 0x0040000000000644, 4.5s) and trigger it
+    player.set_wheel_cosmetics(crate::match_scene::WheelCosmetics {
+        emote_aliases: [0x0c80_0000_0000_045c, 0, 0, 0],
+        emote_blend_trees: [0x0040_0000_0000_0644, 0, 0, 0],
+        ..Default::default()
+    });
+    let step_mover = scene.player_spawn_mover(hero.body, 0).unwrap();
+    let mut frame = FIRST_TICK + 20;
+    for f in FIRST_TICK + 1..=frame {
+        player
+            .advance(
+                Command {
+                    frame: f,
+                    ..Command::default()
+                },
+                &step_mover,
+                BodyStep::Posed,
+            )
+            .unwrap();
+    }
+    let wheel_req = |action: u64| {
+        ClientWheelAction::read(&crate::game_messages::Message {
+            id: crate::game_parameters::CLIENT_WHEEL_ACTION,
+            fields: BTreeMap::from([
+                (0x78, crate::jam_codec::Value::Unsigned(action)),
+                (0x80, crate::jam_codec::Value::Bool(true)),
+            ]),
+        })
+        .unwrap()
+    };
+    let emote_req = wheel_req(0x0a90_0000_0000_0172);
+    assert_eq!(player.queue_wheel_selection(emote_req, None).unwrap(), 2);
+    assert!(
+        player.cinematic_aim().is_some(),
+        "emote must engage cinematic aim"
+    );
+
+    // Advance enough frames for 023A emote to finish naturally via AnimationTiming
+    for _ in 0..400 {
+        frame += 1;
+        player
+            .advance(
+                Command {
+                    frame,
+                    ..Command::default()
+                },
+                &step_mover,
+                BodyStep::Posed,
+            )
+            .unwrap();
+    }
+    let after_emote = player.component.snapshot().unwrap();
+    assert!(
+        !after_emote
+            .instances
+            .values()
+            .any(|inst| inst.graph == 0x023a),
+        "emote graph 023A should exit after duration/cancel"
+    );
+    assert_eq!(
+        player.cinematic_aim(),
+        None,
+        "cinematic aim must clear when returning to first-person"
+    );
+
+    // 3. Trigger Need Healing (0x0A90_0000_0000_016C) and verify both 0686:40 action + Voice cue
+    let before_actions = after_emote
+        .frame_actions
+        .back()
+        .map_or(0, |a| a.callout.serial);
+    let _ = player.take_script_requests();
+    let heal_req = wheel_req(0x0a90_0000_0000_016c);
+    assert!(player.queue_wheel_selection(heal_req, None).unwrap() > 0);
+    for _ in 0..5 {
+        frame += 1;
+        player
+            .advance(
+                Command {
+                    frame,
+                    ..Command::default()
+                },
+                &step_mover,
+                BodyStep::Posed,
+            )
+            .unwrap();
+    }
+    let after_heal = player.component.snapshot().unwrap();
+    assert!(
+        after_heal
+            .frame_actions
+            .iter()
+            .any(|a| a.callout.serial > before_actions),
+        "Need Healing must capture a replicated frame action (0686:40 / 05AD:166)"
+    );
+    let requests = player.take_script_requests();
+    room.settle_test_script_requests(owner.entity, requests, frame)
+        .unwrap();
+    let cues: Vec<_> = room
+        .take_player_cues()
+        .into_iter()
+        .filter(|cue| {
+            matches!(
+                cue.notice,
+                CombatNotice::Voice {
+                    stimulus: 0x0ee0_0000_0000_0045,
+                    ..
+                }
+            )
+        })
+        .collect();
+    assert!(
+        !cues.is_empty(),
+        "Need Healing must emit a CombatNotice::Voice cue with stimulus 0x0ee0_0000_0000_0045"
     );
 }

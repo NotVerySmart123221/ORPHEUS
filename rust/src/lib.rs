@@ -17,6 +17,7 @@ pub mod accounts;
 mod actor_voice;
 #[cfg(feature = "lua-debug")]
 mod ai_script;
+mod anim_timing;
 pub mod battle_tag_query;
 pub mod bnet_protocol;
 pub mod bnet_rpc;

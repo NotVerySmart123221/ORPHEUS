@@ -159,6 +159,8 @@ pub(super) struct BodyWorld {
     pub(super) throttles: [i8; 2],
     pub(super) mode: u64,
     pub(super) hero: u64,
+    pub(super) body_definition: u64,
+    pub(super) anim_timing: Option<Arc<crate::anim_timing::AnimationTiming>>,
     pub(super) vitals: Vitals,
     pub(super) pool_types_known: bool,
     pub(super) target_tags: Option<BTreeSet<u64>>,
@@ -316,10 +318,23 @@ impl World for BodyWorld {
     fn route_game_message(
         &mut self,
         site: Site,
-        _message: u64,
-        _parameters: &crate::script_wire::Variables,
+        message: u64,
+        parameters: &crate::script_wire::Variables,
     ) -> bool {
-        self.is_player_site(site)
+        if !self.is_player_site(site) {
+            return false;
+        }
+        if let Some(frame) = self.spatial_frame.as_deref() {
+            self.script_requests.queue_broadcast_others(
+                frame,
+                self.entity,
+                RoomMessage {
+                    id: message,
+                    parameters: parameters.clone(),
+                },
+            );
+        }
+        true
     }
 
     fn engine_setting(&self, _site: Site, key: u32) -> crate::script_expr::EngineSetting {
@@ -698,6 +713,19 @@ impl World for BodyWorld {
                 .spatial_frame
                 .as_deref()
                 .is_some_and(|frame| frame.actor_voice_available(site.entity))
+    }
+
+    fn animation_duration(
+        &mut self,
+        site: Site,
+        blend_tree: u64,
+        alias: u64,
+        category: u64,
+    ) -> Option<f64> {
+        self.is_player_site(site).then_some(())?;
+        self.anim_timing
+            .as_deref()?
+            .duration(self.body_definition, blend_tree, alias, category)
     }
 
     fn queue_actor_voice(
