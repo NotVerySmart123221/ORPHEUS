@@ -2085,7 +2085,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             if self.machine.shots.len() == MAX_PENDING_SHOTS {
                 return Err(InitFault::PendingShots);
             }
-            let presentation = presentation.get_or_insert_with(|| self.volley_presentation(key));
+            let (presentation, presentation_states) =
+                presentation.get_or_insert_with(|| self.volley_presentation(key));
             self.machine.shots.push(ReportedShot {
                 event: ShotEvent {
                     entity: self.machine.snapshot.entity,
@@ -2099,6 +2100,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     ordinal,
                 },
                 presentation: presentation.clone(),
+                presentation_states: presentation_states.clone(),
                 normalized_spread: Volley::normalized_shot_spread(
                     spread.0,
                     spread.1,
@@ -2117,14 +2119,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         Ok(())
     }
 
-    fn volley_presentation(&self, key: StateKey) -> Vec<(Variable, Value)> {
+    fn volley_presentation(&self, key: StateKey) -> (Vec<(Variable, Value)>, Vec<u16>) {
         let instance = &self.machine.snapshot.instances[&key.instance];
         if instance.is_server_only() {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         }
         let graph = self.graph(key.instance);
         let Some(volley_node) = graph.state(usize::from(key.raw)) else {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         };
         let is_synced = |variable: &Variable| {
             let scope = u8::from(variable.scope == Scope::Entity);
@@ -2140,6 +2142,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 && !graph.server_only_variables().any(|id| id == variable.id)
         };
         let mut presented = Vec::new();
+        let mut presented_states = Vec::new();
         let mut seen = std::collections::BTreeSet::new();
         let mut push_var = |variable: Variable, value: Value| {
             if seen.insert((matches!(variable.scope, Scope::Entity), variable.id)) {
@@ -2156,6 +2159,16 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     let Some(node) = graph.state(usize::from(raw)) else {
                         continue;
                     };
+                    if raw_indices(children).any(|child| child == raw)
+                        && node.is_networked()
+                        && graph.remote_positions().contains(&node.pos)
+                        && matches!(
+                            node.class.as_str(),
+                            "STUStatescriptStateStack" | "STUStatescriptStateDataFlowMapping"
+                        )
+                    {
+                        presented_states.push(raw);
+                    }
                     let var_field = match node.class.as_str() {
                         "STUStatescriptStateDataFlowMapping"
                             if node.is_networked()
@@ -2203,7 +2216,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 }
             }
         }
-        presented
+        (presented, presented_states)
     }
 
     pub(in crate::script_init) fn finish_volley(

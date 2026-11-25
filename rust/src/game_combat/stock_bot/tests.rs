@@ -747,6 +747,16 @@ fn check_stock_bot_firing(catalog: &StockBotCatalog, bot: &Bot) {
                             || projected.instances[&instance].variables.bindings.is_empty()),
                     "View::Observer volley retention must preserve bindings.is_empty()"
                 );
+                assert!(
+                    projected.instances[&instance]
+                        .states
+                        .values()
+                        .filter(|state| state.active)
+                        .count()
+                        >= 2,
+                    "volley retention should preserve active remote subgraph Stack/ChaseVar states for team {}",
+                    bot.spawn.team
+                );
                 assert!(projected.has_volley(&presentation.volley));
                 let delta = projection
                     .encoder

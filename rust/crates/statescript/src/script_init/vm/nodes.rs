@@ -1431,6 +1431,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             if kind == StateKind::ChaseVar && configured(node, "m_9FF96195") {
                 self.finish_chase(key, depth)?;
+                let now = self.machine.now_ms;
+                if let Some(state) = self.state_mut(key) {
+                    state.start_ms = now;
+                    state.activation = state.activation.wrapping_add(1);
+                }
                 self.begin_chase(key, node, depth)?;
             }
             return Ok(());

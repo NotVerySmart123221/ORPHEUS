@@ -217,6 +217,15 @@ impl ProjectedSnapshot {
         event: ShotEvent,
         presentation: Vec<(Variable, Value)>,
     ) -> Option<FrozenVolley> {
+        self.freeze_volley_with_states(event, presentation, &[])
+    }
+
+    pub(crate) fn freeze_volley_with_states(
+        &self,
+        event: ShotEvent,
+        presentation: Vec<(Variable, Value)>,
+        presentation_states: &[u16],
+    ) -> Option<FrozenVolley> {
         let instance = self.instances.get(&event.instance)?;
         let state = instance.states.get(&event.raw_state)?;
         let identity = state.volley?.identity;
@@ -230,6 +239,39 @@ impl ProjectedSnapshot {
         let Value::Integer(count) = state.payload.get("volleys")? else {
             return None;
         };
+        let mut extra_states = Vec::new();
+        for &raw in presentation_states {
+            if raw == event.raw_state {
+                continue;
+            }
+            if !extra_states.iter().any(|(existing, _)| *existing == raw) {
+                extra_states.push((
+                    raw,
+                    ProjectedState {
+                        active: true,
+                        payload: StatePayload::new(),
+                        link: None,
+                        volley: None,
+                    },
+                ));
+            }
+        }
+        let shot_ms = i64::try_from(event.time_ms).ok();
+        if let Some(shot_ms) = shot_ms {
+            for (&raw, candidate) in &instance.states {
+                if raw == event.raw_state
+                    || !candidate.active
+                    || extra_states.iter().any(|(existing, _)| *existing == raw)
+                {
+                    continue;
+                }
+                if candidate.payload.get("last") == Some(&Value::Integer(shot_ms))
+                    && candidate.payload.contains_key("cur")
+                {
+                    extra_states.push((raw, candidate.clone()));
+                }
+            }
+        }
         Some(FrozenVolley {
             event,
             parent: instance.parent,
@@ -243,6 +285,7 @@ impl ProjectedSnapshot {
                             && self.entity_exclusions.contains(&variable.id))
                 })
                 .collect(),
+            extra_states,
         })
     }
 
@@ -260,6 +303,9 @@ impl ProjectedSnapshot {
             instance
                 .states
                 .insert(volley.event.raw_state, volley.state.clone());
+            for (raw, extra) in &volley.extra_states {
+                instance.states.insert(*raw, extra.clone());
+            }
             for (variable, value) in &volley.presentation {
                 let variables = match variable.scope {
                     Scope::Entity => &mut self.variables,
@@ -284,6 +330,10 @@ impl ProjectedSnapshot {
                 })
                 .is_some_and(|instance| {
                     instance.states.get(&event.raw_state) == Some(&volley.state)
+                        && volley
+                            .extra_states
+                            .iter()
+                            .all(|(raw, extra)| instance.states.get(raw) == Some(extra))
                         && volley.presentation.iter().all(|(variable, value)| {
                             let variables = match variable.scope {
                                 Scope::Entity => &self.variables,
@@ -376,6 +426,7 @@ pub(crate) struct FrozenVolley {
     parent: Option<(u16, u16)>,
     state: ProjectedState,
     presentation: Vec<(Variable, Value)>,
+    extra_states: Vec<(u16, ProjectedState)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

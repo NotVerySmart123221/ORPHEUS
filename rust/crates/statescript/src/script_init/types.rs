@@ -641,6 +641,8 @@ pub struct ShotEvent {
 pub struct ReportedShot {
     pub event: ShotEvent,
     pub presentation: Vec<(Variable, Value)>,
+    /// Active remote-networked `m_subgraphPlug` child state slots of the volley at fire time.
+    pub presentation_states: Vec<u16>,
     /// Normalized spread for the authored direct-launch ramp at this round.
     pub normalized_spread: Option<f32>,
 }

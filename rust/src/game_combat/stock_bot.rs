@@ -836,7 +836,11 @@ impl StockBotScript {
                                 .ok()
                         })
                         .as_ref()?;
-                    let volley = snapshot.freeze_volley(shot, report.presentation)?;
+                    let volley = snapshot.freeze_volley_with_states(
+                        shot,
+                        report.presentation,
+                        &report.presentation_states,
+                    )?;
                     Some(ObservedShot::new(
                         volley, definition, origin, forward, tick, lifetime,
                     ))

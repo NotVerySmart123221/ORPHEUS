@@ -277,6 +277,7 @@ mod tests {
                 ordinal: 0,
             },
             presentation: Vec::new(),
+            presentation_states: Vec::new(),
             normalized_spread: None,
         };
         let forward = [0.0, 0.0, 1.0];
