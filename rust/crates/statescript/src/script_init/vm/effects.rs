@@ -478,6 +478,51 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         self.publish_health_totals(site)
     }
 
+    pub(in crate::script_init) fn refresh_ground_ray(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        let site = self.site(key.instance, node);
+        let fields = &node.fields;
+        let segment = &fields["m_F5732403"];
+        let origin = self.evaluate_at(site, &fields["m_3BC31C57"], None);
+        let direction = self.evaluate_at(site, &segment["m_direction"], None);
+        let length = self
+            .evaluate_at(site, &segment["m_6A79BD98"], None)
+            .and_then(pool_number);
+        let (Some(Value::Vector(origin)), Some(Value::Vector(direction)), Some(length)) =
+            (origin, direction, length)
+        else {
+            self.report(site, Issue::UnsupportedField("ground ray geometry"));
+            return Ok(());
+        };
+        if !length.is_finite() || length <= 0.0 || direction != [0.0, -1.0, 0.0] {
+            self.report(site, Issue::UnsupportedField("ground ray segment"));
+            return Ok(());
+        }
+        let Some(hit) =
+            self.world
+                .ability_ground_ray(site, self.machine.frame, origin, direction, length)
+        else {
+            self.report(site, Issue::UnsupportedField("ground ray collision scene"));
+            return Ok(());
+        };
+        let output = |field: &str| {
+            let variable = script_expr::lvalue(&fields["m_target"][field])
+                .ok()
+                .flatten()
+                .expect("ground ray output");
+            source_key(key.instance, variable)
+        };
+        if let Some(contact) = hit.as_ref() {
+            self.write(output("m_5ED803CF"), Value::Vector(contact.point))?;
+        }
+        self.write(output("m_7BA44A69"), Value::Bool(hit.is_some()))?;
+        self.register_tick(key, self.machine.now_ms);
+        Ok(())
+    }
+
     pub(in crate::script_init) fn refresh_summoner_beam_ray(
         &mut self,
         key: StateKey,
@@ -2489,6 +2534,19 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .ok()
             .flatten()
             .is_some();
+        if has_target
+            && !immediate
+            && node
+                .fields
+                .get("m_04F3240D")
+                .and_then(|v| v.get("m_value"))
+                .and_then(|v| v.as_i64())
+                == Some(1)
+            && !field(&node.fields, "m_05BE62DD").is_null()
+            && !field(&node.fields, "m_D59188D5").is_null()
+        {
+            return self.begin_ground_wave(key, node);
+        }
         if (site.graph, node.pos) == (0x0B27, 95)
             && has_target
             && field(&node.fields, "m_04F3240D").is_null()
@@ -2501,6 +2559,81 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             self.register_tick(key, self.machine.now_ms);
         } else {
             self.report(site, Issue::UnsupportedField("shockwave service"));
+        }
+        Ok(())
+    }
+
+    fn begin_ground_wave(&mut self, key: StateKey, node: &Node) -> Result<(), InitFault> {
+        use crate::script_expr::EvalError;
+        use crate::script_init::GroundWave;
+
+        let site = self.site(key.instance, node);
+        let fields = &node.fields;
+        let get_profile = |field: &str| {
+            fields[field]["m_C1903771"]
+                .get("m_C1903771")
+                .and_then(asset_guid)
+        };
+        if fields["m_04F3240D"]["m_value"] != 1
+            || get_profile("m_3D667CE3") != Some(0x0690_0000_0000_002d)
+            || get_profile("m_9A8CA980") != Some(0x0690_0000_0000_012d)
+            || fields["m_filter"]["m_4EA686DB"] != 20
+            || fields["m_filter"]["m_84065FD1"] != 64
+            || fields["m_filter"]["m_89831602"] != 1
+            || fields["m_filter"]["m_condition"].is_null()
+        {
+            self.report(
+                site,
+                Issue::UnsupportedField("ground wave collision profile"),
+            );
+            return Ok(());
+        }
+        let wave = self.with_instance_context(site, None, |context| {
+            let mut vector = |name| match script_expr::evaluate(&fields[name], context)? {
+                Value::Vector(xyz) if xyz.into_iter().all(f64::is_finite) => Ok(xyz),
+                _ => Err(EvalError::MalformedConfig("ground wave position")),
+            };
+            let centre = vector("m_05BE62DD")?;
+            let sight_origin = vector("m_D59188D5")?;
+            let mut scalar = |name| {
+                pool_number(script_expr::evaluate(&fields[name], context)?)
+                    .filter(|v| v.is_finite())
+                    .ok_or(EvalError::MalformedConfig("ground wave scalar"))
+            };
+            let wave = GroundWave {
+                centre,
+                sight_origin,
+                yaw: scalar("m_D45E22FA")?,
+                aperture: scalar("m_A30B383E")?,
+                distance: scalar("m_6A79BD98")?,
+                speed: scalar("m_speed")?,
+                max_rise: scalar("m_E81B2985")?,
+                max_drop: scalar("m_FF3B7DF2")?,
+                ground_range: scalar("m_525E5A40")?,
+            };
+            if wave.speed <= 0.0
+                || wave.distance <= 0.0
+                || !(0.0..=360.0).contains(&wave.aperture)
+                || [wave.max_rise, wave.max_drop, wave.ground_range]
+                    .into_iter()
+                    .any(|v| v < 0.0)
+            {
+                return Err(EvalError::MalformedConfig("ground wave bounds"));
+            }
+            Ok(wave)
+        });
+        match wave {
+            Ok(wave) => self.state_mut(key).expect("wave state").ground_wave = Some(Box::new(wave)),
+            Err(error) => {
+                self.report(site, Issue::Expression(error));
+                return Ok(());
+            }
+        }
+        if self.collect_shockwave(key, node, 0.0)? {
+            self.state_mut(key).expect("wave state").kind = StateKind::Shockwave { managed: true };
+            self.register_tick(key, self.machine.now_ms);
+        } else {
+            self.report(site, Issue::UnsupportedField("ground wave room sample"));
         }
         Ok(())
     }
@@ -2518,8 +2651,40 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         else {
             return Ok(false);
         };
-        let Some(bodies) = self.world.shockwave_targets(site, reach) else {
-            return Ok(false);
+        let wave = self
+            .state(key)
+            .and_then(|state| state.ground_wave.as_deref())
+            .copied();
+        let bodies = if let Some(wave) = wave {
+            let Some(candidates) = self.world.ground_wave_targets(site, &wave, reach) else {
+                return Ok(false);
+            };
+            let mut accepted = Vec::new();
+            for candidate in candidates {
+                self.spend("ground wave candidate")?;
+                let previous = self
+                    .parameters
+                    .replace(Arc::new(Variables::from([(8, Value::Entity(candidate))])));
+                let condition = self.evaluate(
+                    key.instance,
+                    node,
+                    &node.fields["m_filter"]["m_condition"],
+                    None,
+                );
+                self.parameters = previous;
+                let Some(condition) = condition else {
+                    return Ok(false);
+                };
+                if truthy(&condition) {
+                    accepted.push(candidate);
+                }
+            }
+            accepted
+        } else {
+            let Some(candidates) = self.world.shockwave_targets(site, reach) else {
+                return Ok(false);
+            };
+            candidates
         };
         let var_key = source_key(key.instance, target);
         let mut items = match self.machine.value(var_key, None) {
@@ -2553,6 +2718,24 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .graph(key.instance)
             .state(usize::from(key.raw))
             .expect("shockwave state");
+        if let Some(state) = self.state(key) {
+            if let Some(wave) = state.ground_wave.as_deref() {
+                let elapsed = self.machine.now_ms.saturating_sub(state.start_ms);
+                let reach = wave.reach(elapsed);
+                let finished = reach >= wave.distance;
+                if !self.collect_shockwave(key, node, reach)? {
+                    self.report(
+                        self.site(key.instance, node),
+                        Issue::UnsupportedField("ground wave room sample"),
+                    );
+                    return Ok(());
+                }
+                if finished {
+                    self.post(key.instance, Event::Finish(key.raw))?;
+                }
+                return Ok(());
+            }
+        }
         let reach = self
             .evaluate(key.instance, node, field(&node.fields, "m_6A79BD98"), None)
             .and_then(|value| match value {

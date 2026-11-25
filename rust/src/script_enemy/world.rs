@@ -470,7 +470,7 @@ impl World for EnemyWorld<'_> {
                 .push(parameters.clone());
             return true;
         }
-        if message == junkenstein_messages::FLASHBANG_HIT
+        if message == crate::pve_encounter::messages::FLASHBANG_HIT
             && site.entity == self.binding.body
             && is_junkenstein_mode(self.binding.mode)
             && self.control_records.defenders.contains(&target)
@@ -738,7 +738,8 @@ impl World for EnemyWorld<'_> {
         guid: u64,
     ) -> Option<Option<crate::script_voice::Stimulus>> {
         self.voice_context(site)?;
-        let kind = junkenstein_voice::boss_speech(self.binding.hero, self.binding.skin, guid)?;
+        let kind =
+            crate::pve_encounter::voice::boss_speech(self.binding.hero, self.binding.skin, guid)?;
         Some(Some(crate::script_voice::Stimulus {
             guid,
             playable: true,
@@ -747,18 +748,25 @@ impl World for EnemyWorld<'_> {
     }
     fn voice_allow(&mut self, site: Site, stimulus: crate::script_voice::Stimulus) -> Option<bool> {
         self.voice_context(site)?;
-        let kind =
-            junkenstein_voice::boss_speech(self.binding.hero, self.binding.skin, stimulus.guid)?;
-        junkenstein_voice::speech_allowed(
+        let kind = crate::pve_encounter::voice::boss_speech(
+            self.binding.hero,
+            self.binding.skin,
+            stimulus.guid,
+        )?;
+        crate::pve_encounter::voice::speech_allowed(
             kind,
             self.binding.mode_voice_set,
-            junkenstein_voice::body_voice_set(self.binding.hero, self.binding.skin),
+            crate::pve_encounter::voice::body_voice_set(self.binding.hero, self.binding.skin),
         )
     }
     fn voice_actor_required(&self, _site: Site, stimulus: crate::script_voice::Stimulus) -> bool {
         matches!(
-            junkenstein_voice::boss_speech(self.binding.hero, self.binding.skin, stimulus.guid),
-            Some(junkenstein_voice::BossSpeech::Defeat(_))
+            crate::pve_encounter::voice::boss_speech(
+                self.binding.hero,
+                self.binding.skin,
+                stimulus.guid
+            ),
+            Some(crate::pve_encounter::voice::BossSpeech::Defeat(_))
         )
     }
     fn voice_submit(
@@ -768,13 +776,15 @@ impl World for EnemyWorld<'_> {
         targets: &[u32],
         actor: Option<&Value>,
     ) -> Result<Option<u32>, &'static str> {
-        use junkenstein_voice::BossSpeech;
+        use crate::pve_encounter::voice::BossSpeech;
         if self.voice_context(site).is_none() {
             return Ok(None);
         }
-        let Some(kind) =
-            junkenstein_voice::boss_speech(self.binding.hero, self.binding.skin, stimulus.guid)
-        else {
+        let Some(kind) = crate::pve_encounter::voice::boss_speech(
+            self.binding.hero,
+            self.binding.skin,
+            stimulus.guid,
+        ) else {
             return Ok(None);
         };
         let hero = if matches!(kind, BossSpeech::Defeat(_)) {
@@ -800,12 +810,21 @@ impl World for EnemyWorld<'_> {
             None
         };
         let draw = if kind.needs_draw() {
-            junkenstein_voice::voice_draw(site.entity, &mut self.control_records.voice_variation)
+            crate::pve_encounter::voice::voice_draw(
+                site.entity,
+                &mut self.control_records.voice_variation,
+            )
         } else {
             0.0
         };
-        let (handle, request) =
-            junkenstein_voice::speech_submission(site, kind, stimulus.guid, hero, targets, draw)?;
+        let (handle, request) = crate::pve_encounter::voice::speech_submission(
+            site,
+            kind,
+            stimulus.guid,
+            hero,
+            targets,
+            draw,
+        )?;
         if let Some(request) = request {
             if self.control_records.voice_requests.len() >= MAX_INIT_WORK {
                 return Ok(None);
@@ -816,14 +835,14 @@ impl World for EnemyWorld<'_> {
     }
     fn voice_duration(&mut self, site: Site, handle: u32, guid: u64, mode: bool) -> Option<f64> {
         self.voice_context(site)?;
-        junkenstein_voice::boss_duration(handle, guid, mode)
+        crate::pve_encounter::voice::boss_duration(handle, guid, mode)
     }
     fn voice_part(&mut self, site: Site, _number: u16) -> Option<f64> {
         self.voice_context(site).map(|_| 0.0)
     }
 
     fn boss_intro_cue(&self, node: &crate::script_graph::Node) -> Option<IntroCue> {
-        junkenstein_voice::intro_cue(node)
+        crate::pve_encounter::voice::intro_cue(node)
     }
 
     fn play_boss_intro_voice(&mut self, site: Site, cue: IntroCue) -> Option<u64> {
@@ -835,8 +854,9 @@ impl World for EnemyWorld<'_> {
         {
             return None;
         }
-        let lines = junkenstein_voice::intro_lines(cue, self.binding.hero, self.binding.skin);
-        let Some((line, duration_ms)) = junkenstein_voice::select_line(
+        let lines =
+            crate::pve_encounter::voice::intro_lines(cue, self.binding.hero, self.binding.skin);
+        let Some((line, duration_ms)) = crate::pve_encounter::voice::select_line(
             lines,
             site.entity,
             &mut self.control_records.voice_variation,
@@ -1663,16 +1683,16 @@ impl World for EnemyWorld<'_> {
             if matches!(
                 (site.graph, site.node),
                 (0x01ca, Some(126)) | (0x00cb | 0x14b1, _)
-            ) && junkenstein_messages::sighting_selector(config)
+            ) && crate::pve_encounter::messages::sighting_selector(config)
             {
-                return Some(junkenstein_messages::recipients(
+                return Some(crate::pve_encounter::messages::recipients(
                     &self.control_records.defenders,
                 ));
             }
             if matches!(
                 (site.graph, site.node),
                 (0x01ca, Some(127)) | (0x00cb | 0x14b1, _)
-            ) && junkenstein_messages::self_team_query(config)
+            ) && crate::pve_encounter::messages::self_team_query(config)
             {
                 return Some(Value::Integer(i64::from(self.binding.team)));
             }

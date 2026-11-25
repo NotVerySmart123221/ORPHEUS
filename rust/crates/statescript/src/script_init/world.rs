@@ -972,6 +972,18 @@ pub trait World {
         None
     }
 
+    /// Profile 002C selects static ability collision in build 104319.
+    fn ability_ground_ray(
+        &self,
+        _site: Site,
+        _frame: u32,
+        _origin: [f64; 3],
+        _direction: [f64; 3],
+        _length: f64,
+    ) -> Option<Option<script_expr::SpatialRayHit>> {
+        None
+    }
+
     /// None is unavailable, Some(None) is an available miss.
     fn spatial_ray_cast(
         &self,
@@ -1269,6 +1281,15 @@ pub trait World {
         _parameters: &Variables,
     ) -> bool {
         false
+    }
+
+    fn ground_wave_targets(
+        &self,
+        _site: Site,
+        _wave: &GroundWave,
+        _reach: f64,
+    ) -> Option<Vec<u32>> {
+        None
     }
 
     fn shockwave_targets(&mut self, _site: Site, _reach: f64) -> Option<Vec<u32>> {

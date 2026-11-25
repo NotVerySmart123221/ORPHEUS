@@ -103,6 +103,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             .expect("Summoner beam ray");
                         self.refresh_summoner_beam_ray(key, node)?;
                     }
+                    Some(StateKind::GroundRay) => {
+                        let node = self.graph(id).state(usize::from(raw)).expect("ground ray");
+                        self.refresh_ground_ray(key, node)?;
+                    }
                     Some(StateKind::SummonerBeamDamage) => {
                         self.tick_summoner_beam_damage(key, elapsed_ms)?
                     }
@@ -1708,6 +1712,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             StateKind::Shockwave { .. } => {
                 if let Some(state) = self.state_mut(key) {
+                    state.ground_wave = None;
                     state.kind = StateKind::Shockwave { managed: false };
                 }
             }

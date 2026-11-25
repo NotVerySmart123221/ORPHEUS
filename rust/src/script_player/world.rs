@@ -15,8 +15,8 @@ use crate::{
     game_hitscan::{TargetPose, aim_direction, direction_for_angles},
     game_instance::TeamMemberCounts,
     game_replication::OwnerRoomActivity,
-    junkenstein_messages::{self, DefenderSighting, SIGHTING, SIGHTING_TAGS, SightingSource},
     mover::{VelocityChange, sample_movement_flags},
+    pve_encounter::messages::{DefenderSighting, SIGHTING, SIGHTING_TAGS, SightingSource},
     script_expr::{EntityRelation, OnFire, RoomEntityFacts, native_shape, valid_entity},
     script_graph::GraphStore,
     script_init::{
@@ -617,6 +617,20 @@ impl World for BodyWorld {
             .is_some_and(|frame| self.script_requests.queue_health_changes(frame, changes))
     }
 
+    fn ground_wave_targets(
+        &self,
+        site: Site,
+        wave: &crate::script_init::GroundWave,
+        reach: f64,
+    ) -> Option<Vec<u32>> {
+        if !self.is_player_site(site) || self.vitals.death().is_some() {
+            return None;
+        }
+        self.spatial_frame
+            .as_deref()?
+            .ground_wave_targets(site.entity, wave, reach)
+    }
+
     fn contact_volume_targets(
         &self,
         site: Site,
@@ -802,6 +816,19 @@ impl World for BodyWorld {
 
     fn spatial_line_clear(&self, origin: [f64; 3], target: [f64; 3]) -> Option<bool> {
         self.spatial_frame.as_deref()?.line_clear(origin, target)
+    }
+
+    fn ability_ground_ray(
+        &self,
+        site: Site,
+        frame: u32,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        length: f64,
+    ) -> Option<Option<crate::script_expr::SpatialRayHit>> {
+        self.spatial_frame
+            .as_deref()?
+            .profile_ray_cast(site, frame, origin, direction, length, 0x1fdf)
     }
 
     fn spatial_ray_cast(
@@ -1188,7 +1215,7 @@ impl World for BodyWorld {
         }
         let left = self.own_filter_flags();
         let right = target.filter_flags?;
-        crate::junkenstein_host::ordinary_hostility(left, right)
+        crate::pve_encounter::host::ordinary_hostility(left, right)
     }
 
     fn body_on_fire(&mut self, site: Site, entity: u32) -> Option<OnFire> {
@@ -1278,14 +1305,14 @@ impl World for BodyWorld {
         }
         if self.is_player_site(site) && is_junkenstein_mode(self.mode) {
             if (site.graph, site.node) == (0x01ca, Some(126))
-                && junkenstein_messages::sighting_selector(config)
+                && crate::pve_encounter::messages::sighting_selector(config)
             {
-                return Some(junkenstein_messages::recipients(&self.defenders));
+                return Some(crate::pve_encounter::messages::recipients(&self.defenders));
             }
             if matches!(
                 (site.graph, site.node),
                 (0x01ca, Some(11 | 127)) | (0x0ca5, Some(77))
-            ) && junkenstein_messages::self_team_query(config)
+            ) && crate::pve_encounter::messages::self_team_query(config)
             {
                 let team = (self.body_filter >> 23) & 31;
                 return Some(Value::Integer(if team == 0 {

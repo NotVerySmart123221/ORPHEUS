@@ -436,7 +436,7 @@ fn practice_owner_selector_starts_the_validated_actor_definition() {
 #[test]
 #[ignore = "requires separately prepared 104319 Junkenstein runtime"]
 fn normal_cassidy_primary_and_fan_damage_all_boss_bodies() {
-    use crate::junkenstein_navigation::{JUNKRAT, REAPER, ROADHOG, SUMMONER, WITCH};
+    use crate::pve_encounter::navigation::{JUNKRAT, REAPER, ROADHOG, SUMMONER, WITCH};
     junkenstein::verify_normal_cassidy_damage_and_charge(
         &[REAPER, ROADHOG, JUNKRAT, WITCH, SUMMONER],
         &[(false, false), (false, true), (true, true)],
@@ -802,7 +802,7 @@ fn prepared_cassidy_fan_uses_authored_cone_and_falloff() {
 #[test]
 #[ignore = "requires separately prepared 104319 Junkenstein runtime"]
 fn normal_cassidy_common_npc_damage_charge_and_retirement() {
-    use crate::junkenstein_navigation::{SHOCK_TIRE, ZOMBARDIER};
+    use crate::pve_encounter::navigation::{SHOCK_TIRE, ZOMBARDIER};
     const ZOMNIC: u64 = 0x02e0_0000_0000_0175;
     junkenstein::verify_normal_cassidy_damage_and_charge(
         &[ZOMNIC, ZOMBARDIER, SHOCK_TIRE],

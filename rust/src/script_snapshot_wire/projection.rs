@@ -408,7 +408,7 @@ impl<'a> SnapshotEncoder<'a> {
                         && raw != 21
                         && state.kind
                             != StateKind::PersistentSend(
-                                crate::junkenstein_messages::POST_MATCH_SIGNAL,
+                                crate::pve_encounter::messages::POST_MATCH_SIGNAL,
                             ))
                 {
                     continue;

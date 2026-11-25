@@ -1,5 +1,4 @@
 //! Ground continuity and visibility for travelling ground-wave placements.
-#![allow(dead_code)] // Wired into generic StateScript GroundRay in Phase 6.
 
 use super::{RoomSpatialFrame, Vec3, script_requests::MAX_BODY_SCRIPT_REQUESTS};
 use crate::{collision_scene::CollisionScene, script_init::GroundWave};

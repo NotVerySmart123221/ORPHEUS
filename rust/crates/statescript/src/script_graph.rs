@@ -181,6 +181,37 @@ impl Node {
             .filter(|&guid| guid >> 48 == 0x0120 && guid & 0x0000_ffff_ffff_ffff != 0)
     }
 
+    pub(crate) fn tracks_ground_contact(&self) -> bool {
+        let f = &self.fields;
+        let segment = &f["m_F5732403"];
+        let filter = &f["m_filter"];
+        let target = &f["m_target"];
+        let configured_fields = |config: &Value, supported: &[&str]| {
+            config.as_object().is_some_and(|fields| {
+                fields.iter().all(|(name, value)| {
+                    name == "$"
+                        || supported.contains(&name.as_str())
+                        || value.is_null()
+                        || value.as_u64() == Some(0)
+                })
+            })
+        };
+        self.class == "STUStatescriptStateTrackRay"
+            && segment["$"] == "STU_9E9028E6"
+            && native_shape(&f["m_3BC31C57"], "STU_8CBDD81C", Some("m_entity"))
+            && native_shape(&f["m_3BC31C57"]["m_entity"], "STU_B5A0CAF0", None)
+            && filter["$"] == "STUConfigVarFilter"
+            && configured_fields(filter, &["m_C1903771"])
+            && asset_guid(&filter["m_C1903771"]["m_C1903771"]) == Some(0x0690_0000_0000_002c)
+            && f["m_57DAE1B5"].is_null()
+            && f["m_ignoreEntities"].is_null()
+            && target["$"] == "STU_404DE6D3"
+            && configured_fields(target, &["m_5ED803CF", "m_7BA44A69"])
+            && ["m_5ED803CF", "m_7BA44A69"]
+                .into_iter()
+                .all(|name| crate::script_expr::lvalue(&target[name]).is_ok_and(|v| v.is_some()))
+    }
+
     pub fn is_state(&self) -> bool {
         self.state_behavior.is_some() || self.fields.get("m_2BBEEAB8").is_some_and(truthy)
     }

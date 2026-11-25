@@ -124,7 +124,7 @@ impl<'a> BotQueries<'a> {
 
     pub(crate) fn step_gate_approach(
         &self,
-        approach: &mut crate::junkenstein_navigation::GateApproach,
+        approach: &mut crate::pve_encounter::navigation::GateApproach,
         bot: &mut Bot,
         tick: u32,
         speed_scale: f64,
@@ -140,7 +140,7 @@ impl<'a> BotQueries<'a> {
 
     pub(crate) fn step_reaper_exit(
         &self,
-        exit: &mut crate::junkenstein_navigation::ReaperExit,
+        exit: &mut crate::pve_encounter::navigation::ReaperExit,
         bot: &mut Bot,
         tick: u32,
         can_walk: bool,
@@ -163,12 +163,12 @@ impl<'a> BotQueries<'a> {
 
     pub(crate) fn step_boss_pursuit(
         &self,
-        pursuit: &mut crate::junkenstein_navigation::BossPursuit,
+        pursuit: &mut crate::pve_encounter::navigation::BossPursuit,
         bot: &mut Bot,
         tick: u32,
         defenders: &[crate::script_enemy::EnemyTarget],
-        arc: Option<crate::junkenstein_navigation::GrenadeArc>,
-    ) -> Option<crate::junkenstein_navigation::BossTarget> {
+        arc: Option<crate::pve_encounter::navigation::GrenadeArc>,
+    ) -> Option<crate::pve_encounter::navigation::BossTarget> {
         pursuit.step(
             bot,
             tick,
@@ -184,7 +184,7 @@ impl<'a> BotQueries<'a> {
 
     pub(crate) fn pursue_caster_target(
         &self,
-        pursuit: &mut crate::junkenstein_navigation::BossPursuit,
+        pursuit: &mut crate::pve_encounter::navigation::BossPursuit,
         bot: &mut Bot,
         tick: u32,
         target: &crate::script_enemy::EnemyTarget,

@@ -854,7 +854,7 @@ impl EnemyScripts {
         frame: u32,
     ) -> Result<(), String> {
         if !is_junkenstein_mode(binding.mode)
-            || !crate::junkenstein_host::common_corpse_due(
+            || !crate::pve_encounter::host::common_corpse_due(
                 binding.hero,
                 vitals.death().map(|death| death.frame),
                 frame,

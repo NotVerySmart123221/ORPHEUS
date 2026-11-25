@@ -827,21 +827,19 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", caller, depth)
             }
             "STU_FF3471E9"
-                if registration
-                    .permits(self.graph(id).index == 0x01f0 && matches!(node.pos, 8 | 11 | 17)) =>
+                if registration.shape({
+                    let rows = array_field(&node.fields, "m_BC5E91CF");
+                    matches!(rows, [row] if matches!(
+                        row.get("$").and_then(Json::as_str),
+                        Some("STU_748FC65A" | "STU_95A10547")
+                    ) && field(row, "m_priority").is_null())
+                }) =>
             {
                 let rows = array_field(&node.fields, "m_BC5E91CF");
                 let [row] = rows else { return Ok(false) };
-                let cap = node.pos == 17;
-                let (class, selector) = if cap {
-                    ("STU_748FC65A", "m_A9561CA0")
-                } else {
-                    ("STU_95A10547", "m_CFEC5F76")
-                };
-                if row.get("$").and_then(Json::as_str) != Some(class)
-                    || row.get(selector).and_then(Json::as_u64) != Some(1)
-                    || !field(row, "m_priority").is_null()
-                {
+                let cap = row.get("$").and_then(Json::as_str) == Some("STU_748FC65A");
+                let selector = if cap { "m_A9561CA0" } else { "m_CFEC5F76" };
+                if row.get(selector).and_then(Json::as_u64) != Some(1) {
                     return Ok(false);
                 }
                 let Some(value) = self.evaluate(id, node, field(row, "m_9B7A63EA"), None) else {
@@ -856,27 +854,23 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", caller, depth)
             }
             "STU_D087B558"
-                if registration.permits(matches!(
-                    (self.graph(id).index, node.pos),
-                    (0x022f, 121) | (0x01f0, 43)
-                )) && is_self_target(node, "m_target")
-                    && field(&node.fields, "m_instigator").is_null()
-                    && node.field("m_D7DDEEAD.m_value").and_then(Json::as_u64)
-                        == Some(if self.graph(id).index == 0x01f0 {
-                            120
-                        } else {
-                            40
-                        }) =>
+                if registration.shape(
+                    is_self_target(node, "m_target")
+                        && field(&node.fields, "m_instigator").is_null()
+                        && node
+                            .field("m_D7DDEEAD.m_value")
+                            .and_then(Json::as_u64)
+                            .is_some(),
+                ) =>
             {
                 // Continue through this authored action as the reference fallback does.
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
             "STU_6FEE499E"
-                if registration.permits((self.graph(id).index, node.pos) == (0x01f0, 31))
-                    && field(&node.fields, "m_93CDFD2F").as_u64() == Some(1) =>
+                if registration.shape(field(&node.fields, "m_93CDFD2F").as_u64() == Some(1)) =>
             {
-                // Pinned Python Roll fallback; the native service remains unverified.
+                // Pinned Roll fallback; the native service remains unverified.
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }
@@ -1936,6 +1930,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             {
                 StateKind::WitchStaffHealing
             }
+            "STUStatescriptStateTrackRay" if registration.shape(node.tracks_ground_contact()) => {
+                StateKind::GroundRay
+            }
             "STUStatescriptStateTrackRay"
                 if registration
                     .permits(self.graph(id).index == 0x157c && matches!(node.pos, 202 | 203))
@@ -2103,6 +2100,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 }
             }
             StateKind::DeadeyeEffects => self.refresh_deadeye_effects(key, node)?,
+            StateKind::GroundRay => self.refresh_ground_ray(key, node)?,
             StateKind::WitchStaffEffect | StateKind::WitchStaffHealing => {
                 self.register_tick(key, self.machine.now_ms)
             }

@@ -8,11 +8,11 @@ use crate::{
     commands::Command,
     game_bots::Bot,
     game_hitscan::TargetHistory,
-    junkenstein_navigation::{
+    mover::VelocityChange,
+    pve_encounter::navigation::{
         BossPursuit, BossTarget, GateApproach, JUNKRAT, REAPER, ROADHOG, ReaperExit, SUMMONER,
         WITCH,
     },
-    mover::VelocityChange,
     scene_assets::BotQueries,
     static_ray::norm,
     vitals::Vitals,

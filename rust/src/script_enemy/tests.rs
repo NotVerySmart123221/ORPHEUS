@@ -609,7 +609,7 @@ fn shared_flashbang_targeted_message_contract() {
         assert!(!world.send_message(
             invalid_site,
             invalid_target,
-            junkenstein_messages::FLASHBANG_HIT,
+            crate::pve_encounter::messages::FLASHBANG_HIT,
             &invalid_params
         ));
     }
@@ -617,7 +617,12 @@ fn shared_flashbang_targeted_message_contract() {
         MAX_INIT_WORK,
         DefenderMessage::flashbang(site, target, &params).unwrap(),
     );
-    assert!(!world.send_message(site, target, junkenstein_messages::FLASHBANG_HIT, &params));
+    assert!(!world.send_message(
+        site,
+        target,
+        crate::pve_encounter::messages::FLASHBANG_HIT,
+        &params
+    ));
     world.control_records.defender_messages.truncate(1);
     let request = world.control_records.defender_messages.pop().unwrap();
     assert_eq!(request.source, source);
@@ -751,7 +756,7 @@ fn shared_self_damage_clock_contract() {
             ("corpse_due_frames", true),
         ] {
             assert_eq!(
-                crate::junkenstein_host::common_corpse_due(
+                crate::pve_encounter::host::common_corpse_due(
                     0x02e0_0000_0000_0175,
                     world.vitals.death().map(|death| death.frame),
                     frame + contract[key].as_u64().unwrap() as u32,
@@ -1453,7 +1458,10 @@ fn authored_boss_intro_end_releases_the_paired_controller_facing() {
             .collect::<Vec<_>>(),
         [
             (binding.body, BOSS_INTRO_ENDED),
-            (binding.body, junkenstein_messages::RESET_HIGHLIGHTS)
+            (
+                binding.body,
+                crate::pve_encounter::messages::RESET_HIGHLIGHTS
+            )
         ],
     );
     scripts.advance(&graphs, &binding, &mut vitals, 5).unwrap();

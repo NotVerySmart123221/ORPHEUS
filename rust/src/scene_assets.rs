@@ -62,7 +62,7 @@ use crate::{
 use crate::{
     game_heroes::SOLDIER,
     game_service::player_entity,
-    junkenstein_messages::DefenderMessage,
+    pve_encounter::messages::DefenderMessage,
     script_init::{Site, World},
     script_snapshot_wire::{CountdownFrame, ProjectedSnapshot},
     world::GAME_MODE_ENTITY,
@@ -168,7 +168,7 @@ struct CollisionKey {
 }
 
 pub struct SceneAssets {
-    junkenstein_validation: Option<crate::junkenstein_validation::JunkensteinValidation>,
+    junkenstein_validation: Option<crate::pve_encounter::validation::JunkensteinValidation>,
     collision: PathBuf,
     junkenstein_map_world: PathBuf,
     last_collision: Mutex<Option<(CollisionKey, MapCollision)>>,
@@ -204,7 +204,7 @@ pub(crate) use self::queries::BotQueries;
 impl SceneAssets {
     pub(crate) fn set_junkenstein_validation(
         &mut self,
-        settings: crate::junkenstein_validation::JunkensteinValidation,
+        settings: crate::pve_encounter::validation::JunkensteinValidation,
     ) {
         self.junkenstein_validation = Some(settings);
     }
@@ -385,7 +385,7 @@ impl SceneAssets {
             })
             .filter(|node| node.fields["m_DA4846A5"]["$"] == "STUConfigVoiceDefinition")
             .and_then(|node| asset_guid(&node.fields["m_DA4846A5"]["m_C6C61CB0"]))
-            .filter(|&guid| guid == crate::junkenstein_voice::ENCOUNTER_VOICE_SET)
+            .filter(|&guid| guid == crate::pve_encounter::voice::ENCOUNTER_VOICE_SET)
             .ok_or_else(|| invalid("Junkenstein narrator voice-set binding is unavailable"))?;
         let npcs = match crate::npc_catalog::NpcCatalog::load(
             self.collision

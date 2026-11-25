@@ -12,11 +12,11 @@ use crate::{
     game_bots::Bot,
     game_clock::TICK_PERIOD,
     game_hitscan::{TargetPose, aim_direction},
-    junkenstein_spawn::walk_edge,
     mover::{Mover, VelocityChange},
     mover_posture::IN_AIR,
     mover_settings::MoverSettings,
     projectile_flight::{gravity_step, launch_velocity},
+    pve_encounter::spawn::walk_edge,
     static_ray::{along, capsule_entry_distance, norm},
 };
 

@@ -306,7 +306,7 @@ fn junkenstein_presentation_instances(
                         && node
                             .field("m_gameMessage.m_gameMessage")
                             .and_then(crate::script_graph::asset_guid)
-                            == Some(crate::junkenstein_messages::POST_MATCH_PHASE)
+                            == Some(crate::pve_encounter::messages::POST_MATCH_PHASE)
                 })
                 .ok_or_else(|| invalid("missing Junkenstein post-match listener"))?;
             if !instance

@@ -1,5 +1,8 @@
 use super::*;
-use crate::{game_content::GameMap, game_instance::RETAIL_QUANTA, scene_assets::SceneAssets};
+use crate::{
+    game_content::GameMap, game_heroes::SOLDIER, game_instance::RETAIL_QUANTA,
+    scene_assets::SceneAssets,
+};
 
 const SCRIPT_RAY_SITE: crate::script_init::Site = crate::script_init::Site {
     entity: 91,
@@ -1775,7 +1778,7 @@ fn authored_zomnic_attack_updates_gate_damage_and_retires_the_pair() {
     stream.arrived(hit.last);
     assert_eq!(
         scene.take_encounter_voice_requests(),
-        [crate::junkenstein_voice::VoiceRequest {
+        [crate::pve_encounter::voice::VoiceRequest {
             anchor: 0x8000_0032,
             speaker: crate::world::GAME_MODE_ENTITY,
             stimulus: 0x0ee0_0000_0000_06c7,
@@ -1923,7 +1926,7 @@ fn authored_zomnic_attack_updates_gate_damage_and_retires_the_pair() {
     assert_eq!(
         handoff.kind,
         crate::script_init::StateKind::PersistentSend(
-            crate::junkenstein_messages::POST_MATCH_PHASE
+            crate::pve_encounter::messages::POST_MATCH_PHASE
         ),
     );
     let phase = scene.encounter_post_match_wire().unwrap().unwrap();
@@ -1977,7 +1980,9 @@ fn authored_zomnic_attack_updates_gate_damage_and_retires_the_pair() {
     assert_eq!(results.states[&2].activation, 1);
     assert_eq!(
         results.states[&2].kind,
-        crate::script_init::StateKind::PersistentSend(crate::junkenstein_messages::RESULT_SUMMARY),
+        crate::script_init::StateKind::PersistentSend(
+            crate::pve_encounter::messages::RESULT_SUMMARY
+        ),
     );
     assert_eq!(mode.variables[&8525], Value::Integer(0));
     let payload = scene.encounter_result_wire().unwrap().unwrap();
@@ -2010,7 +2015,7 @@ fn authored_zomnic_attack_updates_gate_damage_and_retires_the_pair() {
         .0
         .take_defender_messages()
         .into_iter()
-        .filter(|message| message.message == crate::junkenstein_messages::ENCOUNTER_RESULT)
+        .filter(|message| message.message == crate::pve_encounter::messages::ENCOUNTER_RESULT)
         .collect();
     let [result] = messages.as_slice() else {
         panic!("expected one authored match result, received {messages:?}");
@@ -2117,7 +2122,7 @@ fn authored_zomnic_attack_updates_gate_damage_and_retires_the_pair() {
                 assert_eq!(
                     instance.states[&4].kind,
                     crate::script_init::StateKind::PersistentSend(
-                        crate::junkenstein_messages::POST_MATCH_SIGNAL
+                        crate::pve_encounter::messages::POST_MATCH_SIGNAL
                     )
                 );
                 assert!(projection.instance_states(manager).unwrap().contains(&4));

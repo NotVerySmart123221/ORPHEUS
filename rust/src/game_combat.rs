@@ -21,19 +21,18 @@ use crate::{
     commands::Command,
     game_bots::{BOT_ENTITY, BOT_RECORD_DELAY, BOT_RESPAWN_TIME, Bot},
     game_combat_messages::CombatNotice,
-    game_heroes::SOLDIER,
     game_hitscan::{
         HitDefinition, HitscanShot, HurtPose, Impact, TargetHistory, TargetPose, ViewFrame,
     },
     game_projectiles::ProjectileToken,
     game_replication::BodyId,
-    junkenstein_messages::DefenderMessage,
-    junkenstein_navigation::{
-        GateApproach, JUNKRAT, REAPER, ROADHOG, ReaperExit, SUMMONER, WITCH, ZOMBARDIER,
-    },
     match_scene::bot_create,
     mover::Mover,
     projectile_flight::{ProjectileBallistics, ProjectileFlight},
+    pve_encounter::messages::DefenderMessage,
+    pve_encounter::navigation::{
+        GateApproach, JUNKRAT, REAPER, ROADHOG, ReaperExit, SUMMONER, WITCH, ZOMBARDIER,
+    },
     scene_assets::BotQueries,
     script_expr::{RoomEntityFacts, SpatialCandidate},
     script_graph::RoomSpatialNeeds,
@@ -101,12 +100,8 @@ pub enum CombatError {
     InvalidEncounter(&'static str),
 }
 
-pub(crate) fn eye_height(hero: u64, crouched: bool) -> f64 {
-    match (crouched, hero) {
-        (false, _) => 1.55,
-        (true, SOLDIER) => 1.085,
-        (true, _) => 1.15,
-    }
+pub(crate) fn eye_height(_hero: u64, crouched: bool) -> f64 {
+    if crouched { 1.085 } else { 1.55 }
 }
 
 pub(crate) fn script_eye_position(hero: u64, mover: &Mover) -> Option<[f64; 3]> {
@@ -505,6 +500,51 @@ impl RoomSpatialFrame {
         direction: Vec3,
         max_distance: f64,
     ) -> Option<Option<crate::script_expr::SpatialRayHit>> {
+        self.profile_ray_cast(
+            site,
+            vm_frame,
+            origin,
+            direction,
+            max_distance,
+            self.terrain_category(),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hostile_sphere_candidates(
+        &self,
+        source: u32,
+        centre: Vec3,
+        radius: f64,
+    ) -> Option<Vec<u32>> {
+        if !radius.is_finite() || radius < 0.0 || !centre.into_iter().all(f64::is_finite) {
+            return None;
+        }
+        let team = self.actor_sample(source)?.0.team;
+        let poses = self.actor_capsules.as_ref()?;
+        let mut result = Vec::new();
+        for actor in &self.candidates {
+            if actor.entity == source || team.is_some_and(|t| actor.team == Some(t)) {
+                continue;
+            }
+            let capsule = poses.get(&actor.entity)?;
+            let [a, b] = capsule.segment();
+            if crate::static_ray::segment_distance(centre, a, b) <= radius + capsule.radius {
+                result.push(actor.entity);
+            }
+        }
+        Some(result)
+    }
+
+    pub(crate) fn profile_ray_cast(
+        &self,
+        site: crate::script_init::Site,
+        vm_frame: u32,
+        origin: Vec3,
+        direction: Vec3,
+        max_distance: f64,
+        category: u16,
+    ) -> Option<Option<crate::script_expr::SpatialRayHit>> {
         #[cfg(not(any(test, feature = "inspector")))]
         let _ = (site, vm_frame);
         let result = self
@@ -513,7 +553,7 @@ impl RoomSpatialFrame {
                 origin,
                 direction,
                 max_distance,
-                self.terrain_category(),
+                category,
                 self.breakables.as_deref(),
             )
             .map(|hit| {
@@ -708,7 +748,7 @@ pub(crate) struct RoomSimulation {
     next_bot: u32,
     combat_active: bool,
     player_targets_active: bool,
-    cassidy_protected: bool,
+    protected_hero: Option<u64>,
     created: Vec<EntityUpdate>,
     player_events: Vec<PlayerBodyEvent>,
     player_deaths: Vec<player::PlayerDeath>,
@@ -720,7 +760,7 @@ pub(crate) struct RoomSimulation {
     retired_enemies: Vec<u32>,
     retired_entity_ids: Arc<std::collections::BTreeSet<u32>>,
     defender_messages: Vec<DefenderMessage>,
-    mode_voice_requests: Vec<crate::junkenstein_voice::VoiceRequest>,
+    mode_voice_requests: Vec<crate::pve_encounter::voice::VoiceRequest>,
     player_cues: Vec<PlayerRoomCue>,
     mode_voice_set: Option<u64>,
     mode_boss_pause: bool,
@@ -1182,7 +1222,7 @@ impl RoomSimulation {
             next_bot,
             combat_active: false,
             player_targets_active: false,
-            cassidy_protected: false,
+            protected_hero: None,
             created: Vec::new(),
             player_events: Vec::new(),
             player_deaths: Vec::new(),
@@ -1913,7 +1953,7 @@ impl RoomSimulation {
 
     pub(crate) fn take_defender_sightings(
         &mut self,
-    ) -> Vec<crate::junkenstein_messages::DefenderSighting> {
+    ) -> Vec<crate::pve_encounter::messages::DefenderSighting> {
         self.by_wire
             .values()
             .filter_map(|&handle| {
@@ -1956,7 +1996,7 @@ impl RoomSimulation {
             }) {
                 if let Err(error) = body.queue_entity_message_from(
                     crate::world::GAME_MODE_ENTITY,
-                    crate::junkenstein_messages::ENCOUNTER_RESULT,
+                    crate::pve_encounter::messages::ENCOUNTER_RESULT,
                     parameters.clone(),
                 ) {
                     eprintln!(
@@ -1983,13 +2023,13 @@ impl RoomSimulation {
         messages
     }
 
-    pub(crate) fn queue_mode_voice(&mut self, request: crate::junkenstein_voice::VoiceRequest) {
+    pub(crate) fn queue_mode_voice(&mut self, request: crate::pve_encounter::voice::VoiceRequest) {
         self.mode_voice_requests.push(request);
     }
 
     pub(crate) fn take_encounter_voice_requests(
         &mut self,
-    ) -> Vec<crate::junkenstein_voice::VoiceRequest> {
+    ) -> Vec<crate::pve_encounter::voice::VoiceRequest> {
         let mut requests = self.take_gate_voice_requests();
         requests.extend(std::mem::take(&mut self.mode_voice_requests));
         requests.extend(
@@ -3408,7 +3448,7 @@ impl RoomSimulation {
         self.next_bot = BOT_ENTITY;
         self.combat_active = false;
         self.player_targets_active = false;
-        self.cassidy_protected = false;
+        self.protected_hero = None;
         self.created.clear();
         self.player_events.clear();
         self.player_deaths.clear();

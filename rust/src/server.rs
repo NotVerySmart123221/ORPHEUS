@@ -145,7 +145,7 @@ impl Server {
         let mut assets = SceneAssets::load(&config.runtime)?;
         if let Some(path) = &config.junkenstein_validation {
             assets.set_junkenstein_validation(
-                crate::junkenstein_validation::JunkensteinValidation::load(path)?,
+                crate::pve_encounter::validation::JunkensteinValidation::load(path)?,
             );
         }
         if config.debug_port.is_some() {

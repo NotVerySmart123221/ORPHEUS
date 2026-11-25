@@ -2,8 +2,6 @@
 
 use crate::{
     game_content::{PRACTICE_RANGE_MODE, is_junkenstein_mode},
-    game_heroes::{CASSIDY, SOLDIER},
-    junkenstein_navigation::{REAPER, ROADHOG, SUMMONER, WITCH},
     script_expr::EngineSetting,
     script_graph::GraphStore,
     script_wire::Value,
@@ -31,15 +29,15 @@ impl ModeScope {
 
 struct Profile {
     mode: ModeScope,
-    actors: &'static [(ActorKind, &'static [u64])],
+    actors: &'static [ActorKind],
     settings: &'static [(u32, Value)],
 }
 
 const COMPATIBILITY: &[Profile] = &[
-    // Startup defaults from ow174/game/script/rulesets.py.
+    // Startup defaults from ow174/game/script/rulesets.py (generic across all playable heroes).
     Profile {
         mode: ModeScope::Exact(PRACTICE_RANGE_MODE),
-        actors: &[(ActorKind::Player, &[SOLDIER])],
+        actors: &[ActorKind::Player],
         settings: &[
             (0x2538, Value::Float(1.0)),
             (0x260f, Value::Bool(true)),
@@ -50,22 +48,10 @@ const COMPATIBILITY: &[Profile] = &[
             (0x32e9, Value::Bool(false)),
         ],
     },
-    // The Cassidy overrides are from 104319 schemas 001B/0026 and Python e1128509.
     Profile {
         mode: ModeScope::Junkenstein,
-        actors: &[
-            (ActorKind::Player, &[CASSIDY]),
-            (ActorKind::Npc, &[REAPER, ROADHOG, WITCH, SUMMONER]),
-        ],
-        settings: &[(0x2819, Value::Float(1.0))],
-    },
-    Profile {
-        mode: ModeScope::Junkenstein,
-        actors: &[
-            (ActorKind::Player, &[CASSIDY]),
-            (ActorKind::Npc, &[ROADHOG, SUMMONER]),
-        ],
-        settings: &[(0x290c, Value::Bool(true))],
+        actors: &[ActorKind::Player, ActorKind::Npc],
+        settings: &[(0x2819, Value::Float(1.0)), (0x290c, Value::Bool(true))],
     },
 ];
 
@@ -79,13 +65,7 @@ pub(crate) fn get(
     graphs.mode_ruleset_value(mode, hero, id).or_else(|| {
         COMPATIBILITY
             .iter()
-            .filter(|profile| {
-                profile.mode.contains(mode)
-                    && profile
-                        .actors
-                        .iter()
-                        .any(|(kind, heroes)| *kind == actor && heroes.contains(&hero))
-            })
+            .filter(|profile| profile.mode.contains(mode) && profile.actors.contains(&actor))
             .flat_map(|profile| profile.settings)
             .find_map(|(key, value)| (*key == id).then(|| value.clone()))
     })
@@ -94,7 +74,7 @@ pub(crate) fn get(
 pub(crate) fn engine_setting(graphs: &GraphStore, mode: u64, key: u32) -> EngineSetting {
     graphs.mode_engine_setting(mode, key).unwrap_or_else(|| {
         if is_junkenstein_mode(mode) {
-            crate::junkenstein_host::engine_setting(key)
+            crate::pve_encounter::host::engine_setting(key)
         } else {
             EngineSetting::Unavailable
         }
@@ -105,6 +85,8 @@ pub(crate) fn engine_setting(graphs: &GraphStore, mode: u64, key: u32) -> Engine
 mod tests {
     use super::{ActorKind::*, *};
     use crate::game_content::{JUNKENSTEIN_ENDLESS, JUNKENSTEIN_REVENGE};
+    use crate::game_heroes::{CASSIDY, SOLDIER};
+    use crate::pve_encounter::navigation::{REAPER, ROADHOG, SUMMONER, WITCH};
 
     #[test]
     fn authored_null_stops_native_compatibility_fallback() {
@@ -180,30 +162,25 @@ mod tests {
         ] {
             assert_eq!(
                 get(PRACTICE_RANGE_MODE, SOLDIER, Player, id),
+                Some(expected.clone())
+            );
+            assert_eq!(
+                get(PRACTICE_RANGE_MODE, CASSIDY, Player, id),
                 Some(expected)
             );
             assert_eq!(get(PRACTICE_RANGE_MODE, SOLDIER, Npc, id), None);
-            assert_eq!(get(PRACTICE_RANGE_MODE, CASSIDY, Player, id), None);
         }
         for mode in [JUNKENSTEIN_REVENGE, JUNKENSTEIN_ENDLESS] {
-            for (hero, actor, scale, fan) in [
-                (CASSIDY, Player, true, true),
-                (SOLDIER, Player, false, false),
-                (ROADHOG, Player, false, false),
-                (CASSIDY, Npc, false, false),
-                (REAPER, Npc, true, false),
-                (ROADHOG, Npc, true, true),
-                (WITCH, Npc, true, false),
-                (SUMMONER, Npc, true, true),
+            for (hero, actor) in [
+                (CASSIDY, Player),
+                (SOLDIER, Player),
+                (REAPER, Npc),
+                (ROADHOG, Npc),
+                (WITCH, Npc),
+                (SUMMONER, Npc),
             ] {
-                assert_eq!(
-                    get(mode, hero, actor, 0x2819),
-                    scale.then_some(Value::Float(1.0))
-                );
-                assert_eq!(
-                    get(mode, hero, actor, 0x290c),
-                    fan.then_some(Value::Bool(true))
-                );
+                assert_eq!(get(mode, hero, actor, 0x2819), Some(Value::Float(1.0)));
+                assert_eq!(get(mode, hero, actor, 0x290c), Some(Value::Bool(true)));
                 assert_eq!(get(mode, hero, actor, 0x290b), None);
             }
         }

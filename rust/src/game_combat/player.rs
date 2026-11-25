@@ -15,8 +15,8 @@ use crate::{
     game_instance::TeamMemberCounts,
     game_projectiles::ProjectileToken,
     game_replication::{BodyId, OwnerBodyRuntime, OwnerRoomActivity},
-    junkenstein_messages::{DefenderMessage, DefenderSighting},
     mover::Mover,
+    pve_encounter::messages::{DefenderMessage, DefenderSighting},
     script_enemy::EnemyTarget,
     script_init::HealthTargetFacts,
     script_snapshot_wire::SceneProjection,
@@ -325,8 +325,8 @@ impl RoomSimulation {
             .ok_or_else(|| invalid("player body lifetime exhausted"))
     }
 
-    pub(crate) fn set_cassidy_protected(&mut self, protected: bool) {
-        self.cassidy_protected = protected;
+    pub(crate) fn set_protected_hero(&mut self, protected: Option<u64>) {
+        self.protected_hero = protected;
     }
 
     pub(crate) fn spawn_player_body(
@@ -825,9 +825,9 @@ impl RoomSimulation {
         source: Death,
         impact: Option<(&Impact, &HealthTargetFacts)>,
     ) -> Option<(u32, Damage, Option<EntityUpdate>)> {
-        let cassidy_protected = self.cassidy_protected;
+        let protected_hero = self.protected_hero;
         let state = self.player_body_mut(id)?;
-        if cassidy_protected && state.hero == crate::game_heroes::CASSIDY {
+        if protected_hero == Some(state.hero) {
             return None;
         }
         let owner = state.owner;
@@ -1063,7 +1063,7 @@ impl RoomSimulation {
                 .get(&id.entity)
                 .expect("checked wire handle"),
         })?;
-        if (self.cassidy_protected && state.hero == crate::game_heroes::CASSIDY) || !state.alive() {
+        if self.protected_hero == Some(state.hero) || !state.alive() {
             return Ok(None);
         }
         let victim_team = state.team;

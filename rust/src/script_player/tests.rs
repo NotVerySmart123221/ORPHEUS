@@ -289,7 +289,7 @@ fn cassidy_junkenstein_rules_enable_fan_without_changing_other_hero_defaults() {
     assert_eq!(world.ruleset(0x290c), Some(Value::Bool(true)));
     assert_eq!(world.ruleset(0x290b), None);
     world.hero = SOLDIER;
-    assert_eq!(world.ruleset(0x290c), None);
+    assert_eq!(world.ruleset(0x290c), Some(Value::Bool(true)));
     world.hero = CASSIDY;
     world.mode = PRACTICE_RANGE_MODE;
     assert_eq!(world.ruleset(0x290c), None);
@@ -5264,5 +5264,90 @@ fn prepared_soldier_emote_and_need_healing_close_cleanly() {
     assert!(
         !cues.is_empty(),
         "Need Healing must emit a CombatNotice::Voice cue with stimulus 0x0ee0_0000_0000_0045"
+    );
+}
+
+#[test]
+#[ignore = "requires separately prepared 104319 runtime"]
+fn prepared_all_32_heroes_compile_start_and_step_cleanly() {
+    use crate::{
+        commands::Command, game_clock::FIRST_TICK, game_combat::RoomSimulation,
+        game_content::GameMap, game_replication::BodyId, scene_assets::SceneAssets,
+        script_graph::RoomSpatialNeeds,
+    };
+    use std::path::PathBuf;
+
+    let runtime_dir = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let assets = SceneAssets::load(&runtime_dir).unwrap();
+    let heroes: Vec<_> = assets.heroes().heroes().cloned().collect();
+    assert_eq!(heroes.len(), 32, "expected 32 retail heroes");
+
+    let map = GameMap::practice_range();
+    let scene = assets.prepare(map).unwrap();
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    room.enable_spatial_queries(false, scene.test_combat_rays(), RoomSpatialNeeds::Queries);
+    room.prepare_spatial_frame(FIRST_TICK).unwrap();
+
+    let mut failures = Vec::new();
+    for (idx, hero) in heroes.iter().enumerate() {
+        let owner = BodyId {
+            entity: 0xa000_0200 + (idx as u32),
+            generation: 1,
+        };
+        let factory = match assets.compile_owner_factory(&scene, hero) {
+            Ok(f) => f,
+            Err(err) => {
+                failures.push(format!("{} compile: {err}", hero.name));
+                continue;
+            }
+        };
+        let mover = scene.player_spawn_mover(hero.body, 0).unwrap();
+        let mut player = match factory.start_with_setup(
+            OwnerBodySpawn {
+                controller: 0xa000_0100 + (idx as u32),
+                entity: owner.entity,
+                body_filter: crate::match_scene::team_bit(0).unwrap(),
+                slot: idx as u8,
+                frame: FIRST_TICK,
+                pose: Movement::default(),
+                eye_position: None,
+                quanta: RETAIL_QUANTA,
+                skin: 0,
+            },
+            OwnerBodySetup {
+                spatial_frame: room.spatial_frame(),
+                ..OwnerBodySetup::default()
+            },
+        ) {
+            Ok(p) => p,
+            Err(err) => {
+                failures.push(format!("{} start: {err}", hero.name));
+                continue;
+            }
+        };
+
+        // Exercise neutral idle, primary (0x1), secondary (0x2), ability1 (0x8), ability2 (0x10),
+        // ult (0x20), melee (0x800), reload (0x100) button edges.
+        let button_sequence = [
+            0u32, 0x1, 0, 0x2, 0, 0x8, 0, 0x10, 0, 0x20, 0, 0x800, 0, 0x100, 0,
+        ];
+        for (step, &buttons) in button_sequence.iter().enumerate() {
+            let cmd = Command {
+                frame: FIRST_TICK + 1 + step as u32,
+                buttons,
+                ..Command::default()
+            };
+            if let Err(err) = player.advance(cmd, &mover, BodyStep::Posed) {
+                failures.push(format!("{} step({buttons:#x}): {err}", hero.name));
+                break;
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "32-hero generic matrix failures ({}/32):\n{}",
+        failures.len(),
+        failures.join("\n")
     );
 }

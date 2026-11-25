@@ -11,9 +11,9 @@ use crate::{
     game_combat::{CombatError, RoomSimulation},
     game_heroes::HeroCatalog,
     game_service::player_entity,
-    junkenstein_messages::{DefenderMessage, POST_MATCH_PHASE},
-    junkenstein_spawn::SpawnSearches,
     mover_settings::{MoverCatalog, MoverSettings},
+    pve_encounter::messages::{DefenderMessage, POST_MATCH_PHASE},
+    pve_encounter::spawn::SpawnSearches,
     scene_assets::{JunkensteinGate, SpawnAnchors},
     script_codecs::CodecTable,
     script_expr::{EntityRelation, native_shape},
@@ -120,7 +120,7 @@ impl GateHealth {
 pub(crate) struct GateState {
     pub(crate) team: Option<i8>,
     pub(crate) messages: Vec<crate::script_enemy::SceneMessage>,
-    pub(crate) voice_requests: Vec<crate::junkenstein_voice::VoiceRequest>,
+    pub(crate) voice_requests: Vec<crate::pve_encounter::voice::VoiceRequest>,
     pub(crate) voice_variation: u64,
 }
 
@@ -261,11 +261,11 @@ impl World for EncounterWorld<'_> {
     }
 
     fn is_victory_voice(&self, node: &crate::script_graph::Node) -> bool {
-        crate::junkenstein_voice::victory_cue(node)
+        crate::pve_encounter::voice::victory_cue(node)
     }
 
     fn play_victory_voice(&mut self, site: Site, actor: &Value) -> Option<u64> {
-        use crate::junkenstein_voice::{VICTORY_CUE, VoiceRequest, victory_line};
+        use crate::pve_encounter::voice::{VICTORY_CUE, VoiceRequest, victory_line};
 
         if (site.entity, site.graph, site.node) != (GAME_MODE_ENTITY, 0x0c8c, Some(221)) {
             return None;
@@ -315,7 +315,7 @@ impl World for EncounterWorld<'_> {
     }
 
     fn route_game_message(&mut self, site: Site, message: u64, parameters: &Variables) -> bool {
-        use crate::junkenstein_messages::{ENCOUNTER_RESULT, POST_MATCH_COMPLETE};
+        use crate::pve_encounter::messages::{ENCOUNTER_RESULT, POST_MATCH_COMPLETE};
 
         if let Some(request) = DefenderMessage::victory_view(site, message, parameters) {
             return self.bodies.queue_defender_message(request);
@@ -618,11 +618,11 @@ impl World for GateWorld<'_> {
     }
 
     fn gate_voice_cue(&self, node: &crate::script_graph::Node) -> Option<u64> {
-        crate::junkenstein_voice::gate_cue(node)
+        crate::pve_encounter::voice::gate_cue(node)
     }
 
     fn play_gate_voice(&mut self, site: Site, stimulus: u64, attacker: Option<u32>) -> Option<u64> {
-        use crate::junkenstein_voice::{VoiceRequest, gate_lines, select_line};
+        use crate::pve_encounter::voice::{VoiceRequest, gate_lines, select_line};
 
         if site.entity != self.entity
             || site.graph != 0x0ca7
@@ -951,7 +951,7 @@ impl RoomSimulation {
 
     pub(crate) fn take_gate_voice_requests(
         &mut self,
-    ) -> Vec<crate::junkenstein_voice::VoiceRequest> {
+    ) -> Vec<crate::pve_encounter::voice::VoiceRequest> {
         let Some(handle) = self.gate_handle else {
             return Vec::new();
         };
@@ -1196,7 +1196,7 @@ impl RoomSimulation {
     }
 
     pub(crate) fn encounter_result_wire(&self) -> io::Result<Option<BitWriter>> {
-        use crate::junkenstein_messages::RESULT_SUMMARY;
+        use crate::pve_encounter::messages::RESULT_SUMMARY;
         use crate::script_init::StateKind;
 
         let Some(encounter) = self.encounter_component() else {
@@ -1438,7 +1438,7 @@ impl RoomSimulation {
             encounter.script.queue_frame_message_from(
                 frame,
                 body,
-                crate::junkenstein_messages::BOSS_INTRO_STARTED,
+                crate::pve_encounter::messages::BOSS_INTRO_STARTED,
                 parameters,
             )?;
         }

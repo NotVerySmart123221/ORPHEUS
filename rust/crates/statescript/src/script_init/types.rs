@@ -53,6 +53,7 @@ pub enum StateKind {
     WitchStaffEffect,
     WitchStaffHealing,
     SummonerBeamRay,
+    GroundRay,
     SummonerBeamDamage,
     ModifyHealth,
     ShieldRecharge,
@@ -197,6 +198,7 @@ pub(super) struct BufferedPress {
 #[derive(Clone, Debug)]
 pub struct State {
     pub tracked_targets: Vec<u32>,
+    pub(super) ground_wave: Option<Box<super::world::GroundWave>>,
     pub(super) target_children: BTreeMap<u32, u16>,
     pub active: bool,
     pub activation: u16,
@@ -242,6 +244,7 @@ impl State {
     pub(super) fn dormant(kind: StateKind) -> Self {
         Self {
             tracked_targets: Vec::new(),
+            ground_wave: None,
             target_children: BTreeMap::new(),
             active: false,
             activation: 0,

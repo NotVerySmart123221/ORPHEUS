@@ -3,7 +3,8 @@
 use super::*;
 
 pub struct PreparedScene {
-    pub(super) junkenstein_validation: Option<crate::junkenstein_validation::JunkensteinValidation>,
+    pub(super) junkenstein_validation:
+        Option<crate::pve_encounter::validation::JunkensteinValidation>,
     pub(super) map: GameMap,
     #[cfg(any(test, feature = "inspector"))]
     pub(super) movement_cache: String,
@@ -150,7 +151,7 @@ impl PreparedScene {
     #[cfg(test)]
     pub(crate) fn take_encounter_voice_requests(
         &mut self,
-    ) -> Vec<crate::junkenstein_voice::VoiceRequest> {
+    ) -> Vec<crate::pve_encounter::voice::VoiceRequest> {
         self.simulation.take_encounter_voice_requests()
     }
     pub fn map(&self) -> &GameMap {
@@ -485,8 +486,10 @@ impl PreparedScene {
     }
 
     pub(crate) fn bot_simulation(&mut self) -> (&mut RoomSimulation, BotQueries<'_>) {
-        self.simulation
-            .set_cassidy_protected(self.protects_cassidy(Some(crate::game_heroes::CASSIDY)));
+        let protected = self
+            .protects_cassidy(Some(crate::game_heroes::CASSIDY))
+            .then_some(crate::game_heroes::CASSIDY);
+        self.simulation.set_protected_hero(protected);
         (
             &mut self.simulation,
             BotQueries::new(
