@@ -468,6 +468,71 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
+            "STU_CAE23847" => Ok(false),
+            "STU_3A276B3A" => {
+                let condition = field(&node.fields, "m_condition");
+                let allowed = if condition.is_null() {
+                    true
+                } else {
+                    let Some(value) = self.evaluate(id, node, condition, caller) else {
+                        return Ok(false);
+                    };
+                    truthy(&value)
+                };
+                if allowed && !self.send_game_message(id, node)? {
+                    return Ok(false);
+                }
+                self.follow(id, node, "m_outPlug", caller, depth)?;
+                Ok(true)
+            }
+            "STU_D137ECA0" => {
+                let condition = field(&node.fields, "m_D10618D1");
+                let passed = if condition.is_null() {
+                    true
+                } else {
+                    let Some(value) = self.evaluate(id, node, condition, caller) else {
+                        return Ok(false);
+                    };
+                    truthy(&value)
+                };
+                if passed {
+                    let target = field(&node.fields, "m_out_Var");
+                    let value_expr = field(&node.fields, "m_value");
+                    if !target.is_null() && !value_expr.is_null() {
+                        if let Ok(Some(var)) = script_expr::lvalue(target) {
+                            if let Some(value) = self.evaluate(id, node, value_expr, caller) {
+                                self.write(source_key(id, var), value)?;
+                            } else {
+                                return Ok(false);
+                            }
+                        }
+                    }
+                    self.follow(id, node, "m_outPlug", caller, depth)
+                } else {
+                    self.follow(id, node, "m_08FBE734", caller, depth)
+                }
+            }
+            "STU_008D30B1" | "STU_621AF478" | "STU_1F2DB0E9" => {
+                for key in [
+                    "m_targets",
+                    "m_amount",
+                    "m_1AC61055",
+                    "m_20100AF4",
+                    "m_DB744C76",
+                    "m_16432044",
+                    "m_6447237A",
+                    "m_B384134B",
+                    "m_AF872E86",
+                    "m_E3798C00",
+                ] {
+                    let cfg = field(&node.fields, key);
+                    if !cfg.is_null() && self.evaluate(id, node, cfg, caller).is_none() {
+                        return Ok(false);
+                    }
+                }
+                self.follow(id, node, "m_outPlug", caller, depth)?;
+                Ok(true)
+            }
             "STUStatescriptActionSendGameMessage" => {
                 if !self.send_game_message(id, node)? {
                     return Ok(false);
@@ -1391,6 +1456,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let kind = match node.class.as_str() {
             // These client presentation states use the base state lifecycle on the server.
             "STUStatescriptState"
+            | "STUStatescriptStateCreateEntity"
+            | "STU_0C3A5D53"
+            | "STU_B1FA9C2A"
+            | "STU_63D801B1"
+            | "STU_49FE0019"
             | "STU_9D7BF987"
             | "STU_B4CD94F4"
             | "STU_90C3BCEA"

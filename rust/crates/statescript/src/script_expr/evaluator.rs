@@ -601,6 +601,12 @@ impl Evaluator {
             "STUConfigVarBool" => Value::Bool(json_truthy(value)),
             "STUConfigVarInt" => Value::Integer(i64::from(integer(value)? as i32)),
             "STUConfigVarFloat" => Value::Float(rounded(number(value)?)),
+            "STU_BD2D717B" if native_shape(config, class, Some("m_B257A3A4")) => {
+                Value::Bool(integer(child(config, "m_B257A3A4"))? != 0)
+            }
+            "STU_8529C204" if native_fields(config, &["m_out_Var", "m_value"]) => {
+                self.config(child(config, "m_value"), context, nested)?
+            }
             "STU_0762B33A"
                 if native_fields(
                     config,
@@ -651,15 +657,17 @@ impl Evaluator {
             {
                 Value::Array(Vec::new())
             }
-            "STU_B3E67A36"
+            "STU_B3E67A36" | "STU_EB216A0B"
                 if native_fields(
                     config,
                     &["m_filter", "m_9C7BD8B8", "m_B486603E", "m_8B2A4DF3"],
                 ) && !child(config, "m_filter").is_null()
-                    && child(config, "m_B486603E").is_null()
+                    && (class == "STU_EB216A0B" || child(config, "m_B486603E").is_null())
                     && child(config, "m_8B2A4DF3").is_null()
                     && (child(child(config, "m_filter"), "m_9C7BD8B8").is_null()
-                        && target_tag_config(child(config, "m_9C7BD8B8")).is_some()
+                        && (target_tag_config(child(config, "m_9C7BD8B8")).is_some()
+                            || (class == "STU_EB216A0B"
+                                && target_tag_config(child(config, "m_B486603E")).is_some()))
                         || child(config, "m_9C7BD8B8").is_null()
                             && context
                                 .scene_filter_policy(child(config, "m_filter"))
@@ -679,6 +687,8 @@ impl Evaluator {
                 }
                 if !child(config, "m_9C7BD8B8").is_null() {
                     filter["m_9C7BD8B8"] = child(config, "m_9C7BD8B8").clone();
+                } else if class == "STU_EB216A0B" && !child(config, "m_B486603E").is_null() {
+                    filter["m_B486603E"] = child(config, "m_B486603E").clone();
                 }
                 let candidates = context.combat_targets(config).ok_or_else(unsupported)?;
                 let mut selected = 0;
@@ -690,7 +700,7 @@ impl Evaluator {
                         });
                     }
                     self.steps += 1;
-                    match self.filter_entity(&filter, entity, context, nested, "STU_B3E67A36")? {
+                    match self.filter_entity(&filter, entity, context, nested, class)? {
                         Value::Bool(true) => {
                             selected = entity;
                             break;
@@ -701,7 +711,7 @@ impl Evaluator {
                 }
                 Value::Entity(selected)
             }
-            "STU_B3E67A36"
+            "STU_B3E67A36" | "STU_EB216A0B"
                 if native_fields(
                     config,
                     &["m_filter", "m_9C7BD8B8", "m_B486603E", "m_8B2A4DF3"],
@@ -713,19 +723,21 @@ impl Evaluator {
                 }
                 let primary = child(config, "m_9C7BD8B8");
                 let required = child(config, "m_B486603E");
-                let tag = match (primary.is_null(), required.is_null()) {
+                let operand = match (primary.is_null(), required.is_null()) {
                     (false, true) => primary,
                     (true, false) => required,
                     _ => return Err(EvalError::UnsupportedConfig(class.into())),
                 };
-                let Value::Asset(tag) = self.config(tag, context, nested)? else {
-                    return Err(EvalError::UnsupportedConfig(class.into()));
-                };
-                let entity = (tag >> 48 == 0x0d60)
-                    .then(|| context.static_target(tag))
-                    .flatten()
-                    .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?;
-                Value::Entity(entity)
+                match self.config(operand, context, nested)? {
+                    Value::Asset(tag) if tag >> 48 == 0x0d60 => {
+                        let entity = context
+                            .static_target(tag)
+                            .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?;
+                        Value::Entity(entity)
+                    }
+                    value if class == "STU_EB216A0B" && !primary.is_null() => value,
+                    _ => return Err(EvalError::UnsupportedConfig(class.into())),
+                }
             }
             "EntityPosition" | "EntityDirection" => {
                 let operand = fields

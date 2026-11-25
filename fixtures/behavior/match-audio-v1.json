@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "case_id": "match-audio",
+  "target_build": 104319,
+  "source": "Synthetic match clocks and stages for ow174.game.match_audio",
+  "evidence": "synthetic-reference",
+  "client_acceptance": "pending",
+  "input": {
+    "escort": [
+      {"phase": "WAITING", "seconds": 0},
+      {"phase": "ASSEMBLE", "seconds": 30},
+      {"phase": "ASSEMBLE", "seconds": 5},
+      {"phase": "SETUP", "seconds": 45},
+      {"phase": "SETUP", "seconds": 30},
+      {"phase": "SETUP", "seconds": 30},
+      {"phase": "SETUP", "seconds": 20},
+      {"phase": "SETUP", "seconds": 15},
+      {"phase": "SETUP", "seconds": 5},
+      {"phase": "SETUP", "seconds": 4},
+      {"phase": "SETUP", "seconds": 3},
+      {"phase": "SETUP", "seconds": 2},
+      {"phase": "SETUP", "seconds": 1},
+      {"phase": "ACTIVE", "seconds": 240},
+      {"phase": "ACTIVE", "seconds": 60},
+      {"phase": "ACTIVE", "seconds": 30},
+      {"phase": "ACTIVE", "seconds": 10},
+      {"phase": "ACTIVE", "seconds": 0, "overtime": true},
+      {"phase": "ACTIVE", "seconds": 0, "overtime": true},
+      {"phase": "ACTIVE", "seconds": 150, "stage": 1},
+      {"phase": "ACTIVE", "seconds": 240, "stage": 2},
+      {"phase": "ACTIVE", "seconds": 100, "stage": 2, "near_finish": true},
+      {"phase": "ACTIVE", "seconds": 99, "stage": 2, "near_finish": true},
+      {"phase": "ACTIVE", "seconds": 98, "stage": 2},
+      {"phase": "ACTIVE", "seconds": 97, "stage": 2, "near_finish": true},
+      {"phase": "ACTIVE", "seconds": 96, "stage": 2},
+      {"phase": "ACTIVE", "seconds": 0, "stage": 2, "overtime": true, "near_finish": true},
+      {"phase": "COMPLETE", "seconds": 0, "stage": 2, "winner": 0}
+    ],
+    "assembly_playback": [[0, false], [0.016, false], [1, true], [2.999, true], [3, true]],
+    "capture_playback": [[1, false], [4.5, false], [6, true], [9.499, true], [9.5, true]],
+    "finish_distances": [[true, 15], [true, 14.99], [true, 0.01], [true, 0], [false, 3], [true, 16]],
+    "mode_deltas": [
+      ["ASSEMBLE", 10.25, 10, 0, 0, false, false],
+      ["SETUP", 15.25, 15, 0, 0, false, false],
+      ["SETUP", 6, 5, 0, 0, false, false],
+      ["SETUP", 5, 4.75, 0, 0, false, false],
+      ["SETUP", 5, 2, 0, 0, false, false],
+      ["ACTIVE", 30.25, 30, 0, 0, false, false],
+      ["ACTIVE", 31, 28, 0, 1, false, false],
+      ["ACTIVE", 1, 0, 1, 1, false, true],
+      ["ACTIVE", 0, 0, 1, 1, true, true],
+      ["ACTIVE", 0, 90, 1, 2, true, false]
+    ]
+  },
+  "expected": {
+    "escort_defense": [
+      [], ["05DB", "0646"], [], [], ["05E0"], [], [], [],
+      ["05EC"], ["05EB"], ["05EA"], ["05E9"], ["05E7"],
+      ["05F2", "0620"], ["0622"], ["0623"], ["0624"], ["0625"], [],
+      ["061D"], ["061D"], ["061C"], [], [], ["061C"], [], ["0625", "061C"], ["0627"]
+    ],
+    "escort_attack": [
+      [], ["05DA", "0646"], [], [], ["05DF"], [], [], [],
+      ["05EC"], ["05EB"], ["05EA"], ["05E9"], ["05E7"],
+      ["05F1", "0619"], ["0622"], ["0623"], ["0624"], ["0625"], [],
+      ["061D"], ["061D"], ["061C"], [], [], ["061C"], [], ["0625", "061C"], ["0628"]
+    ],
+    "assault_attack_a": ["05F1", "05F5"],
+    "assault_defense_b": ["0613", "05FA"],
+    "hybrid_attack_start": ["05F1", "05F5"],
+    "control_start": ["7B53"],
+    "assembly_playback": [["05DA"], [], [], [], ["0646"]],
+    "capture_playback": [["060D"], [], [], [], ["05F6"]],
+    "finish_near": [false, true, true, false, false, false],
+    "checkpoint_effects": ["0D4C", "0B45"],
+    "mode_actions": [469, 470, 529, null, 532, 472, null, 471, null, 473]
+  }
+}

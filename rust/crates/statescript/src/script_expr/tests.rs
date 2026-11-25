@@ -4308,3 +4308,67 @@ fn ray_cast_distinguishes_hits_misses_invalid_inputs_and_unavailable_geometry() 
     ));
     assert!(host.calls.is_empty());
 }
+
+#[test]
+fn track_b2_config_vars_evaluate_generically() {
+    struct Host;
+    impl Context for Host {
+        fn static_target(&mut self, tag: u64) -> Option<u32> {
+            (tag == 0x0D60_0000_0000_02AD).then_some(77)
+        }
+        fn variable(&mut self, variable: Variable) -> Value {
+            if variable.id == 61 {
+                Value::Integer(42)
+            } else {
+                Value::Null
+            }
+        }
+    }
+    let mut host = Host;
+    assert_eq!(
+        evaluate(
+            &json!({"$": "STUConfigVarAnimAlias", "m_animAlias": "0x0C800000000000A9"}),
+            &mut host
+        ),
+        Ok(Value::Asset(0x0C80_0000_0000_00A9))
+    );
+    assert_eq!(
+        evaluate(
+            &json!({"$": "STUConfigVarDataFlow", "m_5A6D4FBD": "0x04800000000005E2"}),
+            &mut host
+        ),
+        Ok(Value::Asset(0x0480_0000_0000_05E2))
+    );
+    assert_eq!(
+        evaluate(&json!({"$": "STU_BD2D717B", "m_B257A3A4": 1}), &mut host),
+        Ok(Value::Bool(true))
+    );
+    assert_eq!(
+        evaluate(&json!({"$": "STU_BD2D717B", "m_B257A3A4": 0}), &mut host),
+        Ok(Value::Bool(false))
+    );
+    assert_eq!(
+        evaluate(
+            &json!({
+                "$": "STU_8529C204",
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 61},
+                "m_value": {"$": "STUConfigVarInt", "m_value": 9}
+            }),
+            &mut host
+        ),
+        Ok(Value::Integer(9))
+    );
+    assert_eq!(
+        evaluate(
+            &json!({
+                "$": "STU_EB216A0B",
+                "m_filter": null,
+                "m_8B2A4DF3": null,
+                "m_9C7BD8B8": null,
+                "m_B486603E": {"$": "STU_357DABBB", "m_7D7C86A1": "0x0D600000000002AD"}
+            }),
+            &mut host
+        ),
+        Ok(Value::Entity(77))
+    );
+}

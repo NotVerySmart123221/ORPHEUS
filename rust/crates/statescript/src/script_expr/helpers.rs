@@ -334,6 +334,8 @@ pub(super) fn resource_field(class: &str) -> Option<&'static str> {
     match class {
         "STUConfigVarIdentifier" => Some("m_identifier"),
         "STUConfigVarGameMessage" => Some("m_gameMessage"),
+        "STUConfigVarAnimAlias" => Some("m_animAlias"),
+        "STUConfigVarDataFlow" => Some("m_5A6D4FBD"),
         "STUConfigVarUXDisplayText" => Some("m_displayText"),
         "STUConfigVarVoiceStimulus" => Some("m_voiceStimulus"),
         "STUConfigVarContactSet" => Some("m_contactSet"),
@@ -343,6 +345,7 @@ pub(super) fn resource_field(class: &str) -> Option<&'static str> {
         "STUConfigVarGameMode" => Some("m_gamemode"),
         "STU_BCD1C634" => Some("m_id"),
         "STU_8A491388" => Some("m_priority"),
+        "STU_357DABBB" => Some("m_7D7C86A1"),
         _ => None,
     }
 }
@@ -377,7 +380,7 @@ pub(super) fn reference_native_class(config: &Json) -> Option<&str> {
         | "SegmentClear"
         | "RayCast"
         | "EntityRayCast" => false,
-        "STU_B40ACFBA" | "STU_4BD39CFD" => false,
+        "STU_B40ACFBA" | "STU_4BD39CFD" | "STU_8529C204" | "STU_BD2D717B" | "STU_EB216A0B" => false,
         "STU_45EDF12D" if child(config, "m_key").is_null() => false,
         "STUConfigVarTexture" | "STU_08305297" if child(config, "m_resourceKey").is_null() => false,
         "STUConfigVarVoiceStimulus" => {
