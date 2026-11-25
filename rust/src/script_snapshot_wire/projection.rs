@@ -701,18 +701,16 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             | StateKind::GenericTrackedTargets
             | StateKind::ViewTargets { .. },
             Some("targets"),
-        ) => {
-            StatePayload::from([(
-                "targets".into(),
-                Value::Array(
-                    state
-                        .tracked_targets
-                        .iter()
-                        .map(|entity| Value::Array(vec![Value::Entity(*entity), Value::Integer(0)]))
-                        .collect(),
-                ),
-            )])
-        }
+        ) => StatePayload::from([(
+            "targets".into(),
+            Value::Array(
+                state
+                    .tracked_targets
+                    .iter()
+                    .map(|entity| Value::Array(vec![Value::Entity(*entity), Value::Integer(0)]))
+                    .collect(),
+            ),
+        )]),
         (StateKind::SprayPlacement(placement), Some("861D9015")) => {
             let Some((unlock, hit)) = placement else {
                 return Some(StatePayload::new());

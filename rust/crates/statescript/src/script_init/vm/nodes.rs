@@ -286,24 +286,38 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
-            "STU_523EE38D" if self.world.admits_generic_player_runtime(self.site(id, node)) => {
+            "STU_523EE38D"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node)) =>
+            {
                 if let Some(Value::Entity(entity)) =
                     self.creation_scalar(id, node, field(&node.fields, "m_entity"), Value::Null)?
                 {
                     if script_expr::valid_entity(entity) {
-                        let _ = self
-                            .world
-                            .request_corpse_retirement(self.site(id, node), entity, false);
+                        let _ = self.world.request_corpse_retirement(
+                            self.site(id, node),
+                            entity,
+                            false,
+                        );
                     }
                 }
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }
-            "STU_064A9E0D" if self.world.admits_generic_player_runtime(self.site(id, node)) => {
+            "STU_064A9E0D"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node)) =>
+            {
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }
-            "STU_AFBB59E9" if self.world.admits_generic_player_runtime(self.site(id, node)) => {
+            "STU_AFBB59E9"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node)) =>
+            {
                 let site = self.site(id, node);
                 let target_field = field(&node.fields, "m_0F99C09F");
                 let targets_self = target_field.is_null()
@@ -327,7 +341,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }
-            "STU_A807207A" if self.world.admits_generic_player_runtime(self.site(id, node)) => {
+            "STU_A807207A"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node)) =>
+            {
                 let site = self.site(id, node);
                 if let Some(distance) = self
                     .evaluate(id, node, field(&node.fields, "m_6A79BD98"), caller)
@@ -341,7 +359,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }
-            "STU_CFCE55DC" if self.world.admits_generic_player_runtime(self.site(id, node)) => {
+            "STU_CFCE55DC"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node)) =>
+            {
                 let site = self.site(id, node);
                 let target_field = field(&node.fields, "m_target");
                 let targets_self = target_field.is_null()
@@ -367,7 +389,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }
-            "STU_B6E3C77D" if self.world.admits_generic_player_runtime(self.site(id, node)) => {
+            "STU_B6E3C77D"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node)) =>
+            {
                 if let Ok(Some(output)) = script_expr::lvalue(field(&node.fields, "m_B3019338")) {
                     let target = source_key(id, output);
                     if stored(&self.machine.snapshot, target) == Value::Null {
@@ -377,7 +403,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }
-            "STU_08D6BA6E" if self.world.admits_generic_player_runtime(self.site(id, node)) => {
+            "STU_08D6BA6E"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node)) =>
+            {
                 self.run_authored_raycast(id, node, caller)?;
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
@@ -549,7 +579,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             "STUStatescriptActionEffect"
-                if self.world.admits_generic_player_runtime(self.site(id, node)) =>
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node)) =>
             {
                 if node.remote >= 0 && node.is_networked() {
                     self.capture_frame_action(id, node);
@@ -960,9 +992,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         return Ok(false);
                     }
                     let op = match (value, cap) {
-                        (Value::Vector(v), false)
-                            if v.iter().all(|a| (*a as f32).is_finite()) =>
-                        {
+                        (Value::Vector(v), false) if v.iter().all(|a| (*a as f32).is_finite()) => {
                             Some(VelocityOp::SetVector(v))
                         }
                         (Value::Float(max), true) if (max as f32).is_finite() && max >= 0.0 => {
@@ -985,7 +1015,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 }
                 self.follow(id, node, "m_outPlug", caller, depth)
             }
-            "STU_FF3471E9" if self.world.admits_generic_player_runtime(self.site(id, node)) => {
+            "STU_FF3471E9"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node)) =>
+            {
                 let rows = array_field(&node.fields, "m_BC5E91CF");
                 let mut ops = Vec::with_capacity(rows.len());
                 for row in rows {
@@ -1087,7 +1121,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
-            "STU_D087B558" if self.world.admits_generic_player_runtime(self.site(id, node)) => {
+            "STU_D087B558"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node)) =>
+            {
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }
@@ -1775,7 +1813,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             "STU_9935FBC8"
                 if registration.shape(registered_state(self.graph(id), node).is_some())
-                    || (self.world.admits_generic_player_runtime(self.site(id, node))
+                    || (self
+                        .world
+                        .admits_generic_player_runtime(self.site(id, node))
                         && node.is_networked()
                         && node.is_state()) =>
             {
@@ -2064,7 +2104,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     && field(&node.fields, "m_069C6F7E").as_u64() == Some(1)
                     && field(&node.fields, "m_54613F6A").as_u64()
                         == Some(u64::from(node.pos == 22)))
-                    || (self.world.admits_generic_player_runtime(self.site(id, node))
+                    || (self
+                        .world
+                        .admits_generic_player_runtime(self.site(id, node))
                         && node.is_networked()
                         && node.is_state()) =>
             {
@@ -2072,7 +2114,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::RollMovementParameter
             }
             "STU_3BC72DE1"
-                if self.world.admits_generic_player_runtime(self.site(id, node))
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node))
                     && node.is_networked()
                     && node.is_state() =>
             {
@@ -2300,19 +2344,25 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 ammo_var: None,
             },
             "STUStatescriptStateTrackTargets"
-                if self.world.admits_generic_player_runtime(self.site(id, node))
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node))
                     && node.is_state() =>
             {
                 StateKind::GenericTrackedTargets
             }
             "STUStatescriptStateTrackRay"
-                if self.world.admits_generic_player_runtime(self.site(id, node))
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node))
                     && node.is_state() =>
             {
                 StateKind::SummonerBeamRay
             }
             "STUStatescriptStateModifyHealth"
-                if self.world.admits_generic_player_runtime(self.site(id, node))
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node))
                     && node.is_state() =>
             {
                 StateKind::GenericModifyHealth {
@@ -2351,7 +2401,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             | "STU_582E0D5F"
             | "STU_D09BD154"
             | "STUStatescriptStatePhysicsExplosion"
-                if self.world.admits_generic_player_runtime(self.site(id, node))
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node))
                     && node.is_state() =>
             {
                 StateKind::Plain
@@ -2448,9 +2500,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             {
                                 let damage = field(effect, "m_93CDFD2F").as_u64() == Some(1);
                                 let delta = if damage { -amount } else { amount };
-                                let _ = self
-                                    .world
-                                    .queue_health_change(self.site(id, node), target, delta);
+                                let _ = self.world.queue_health_change(
+                                    self.site(id, node),
+                                    target,
+                                    delta,
+                                );
                             }
                         }
                     }

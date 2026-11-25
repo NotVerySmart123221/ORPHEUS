@@ -1348,7 +1348,9 @@ impl Evaluator {
                     OnFire::NoStats => initial,
                 }
             }
-            "STU_4A101787" | "STU_E95A9C77" | "STU_555DD49F" if native_shape(config, class, None) => {
+            "STU_4A101787" | "STU_E95A9C77" | "STU_555DD49F"
+                if native_shape(config, class, None) =>
+            {
                 // The retail classes share a native evaluator that writes a typed false.
                 Value::Bool(false)
             }

@@ -2617,7 +2617,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Some("STU_C61711C8") => (Operation::Minimum, f64::from(f32::MAX)),
                 Some("STU_F197CFBF") => (Operation::Maximum, f64::from(f32::MIN_POSITIVE)),
                 Some("STU_ED2B22BD" | "STU_09F9B1FE")
-                    if self.world.admits_generic_player_runtime(self.site(id, node)) =>
+                    if self
+                        .world
+                        .admits_generic_player_runtime(self.site(id, node)) =>
                 {
                     continue;
                 }
@@ -3062,18 +3064,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 _ => return Ok(()),
             }
         };
-        let destination = match self.evaluate(
-            key.instance,
-            node,
-            field(&node.fields, "m_865F3D01"),
-            None,
-        ) {
-            Some(Value::Vector(destination)) => destination,
-            _ => match entity_dest {
-                Some(destination) => destination,
-                None => return Ok(()),
-            },
-        };
+        let destination =
+            match self.evaluate(key.instance, node, field(&node.fields, "m_865F3D01"), None) {
+                Some(Value::Vector(destination)) => destination,
+                _ => match entity_dest {
+                    Some(destination) => destination,
+                    None => return Ok(()),
+                },
+            };
         let speed = match self.evaluate(key.instance, node, speed_config, None) {
             Some(Value::Integer(n)) => n as f64,
             Some(Value::Float(f)) => f,

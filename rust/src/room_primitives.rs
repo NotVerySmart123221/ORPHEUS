@@ -720,12 +720,7 @@ pub struct ResetButtonProp {
 }
 
 impl ResetButtonProp {
-    pub fn new(
-        entity: u32,
-        position: [f64; 3],
-        linked_props: Vec<u32>,
-        reset_cue_id: u64,
-    ) -> Self {
+    pub fn new(entity: u32, position: [f64; 3], linked_props: Vec<u32>, reset_cue_id: u64) -> Self {
         Self {
             entity,
             position,

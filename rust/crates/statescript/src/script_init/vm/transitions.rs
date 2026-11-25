@@ -443,7 +443,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             // client-removed firing animation when they have no timer links.
             if (!field(&node.fields, "m_154DBA91").is_null()
                 && !client_removes_zombardier_animation
-                && !self.world.admits_generic_player_runtime(self.site(id, node)))
+                && !self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node)))
                 || !is_unlinked_plug(&node.fields, "m_A3B86BB0", "STUStatescriptOutputPlug")
                 || !is_unlinked_plug(&node.fields, "m_onFinishedPlug", "STUStatescriptOutputPlug")
             {

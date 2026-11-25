@@ -5375,21 +5375,21 @@ fn prepared_all_32_heroes_compile_start_and_step_cleanly() {
         let mut frame = FIRST_TICK;
         let phases: &[(u32, u32, i8)] = &[
             (0x0, 2, 0),
-            (0x1, 6, 0),    // primary fire hold
-            (0x0, 4, 0),    // release
-            (0x2, 6, 0),    // secondary fire hold
+            (0x1, 6, 0), // primary fire hold
+            (0x0, 4, 0), // release
+            (0x2, 6, 0), // secondary fire hold
             (0x0, 4, 0),
-            (0x8, 6, 127),  // ability 1 (with forward throttle for dash/blink/roll)
+            (0x8, 6, 127), // ability 1 (with forward throttle for dash/blink/roll)
             (0x0, 6, 0),
             (0x10, 6, 127), // ability 2
             (0x0, 6, 0),
-            (0x20, 6, 0),   // ultimate
+            (0x20, 6, 0), // ultimate
             (0x0, 6, 0),
-            (0x800, 4, 0),  // quick melee
+            (0x800, 4, 0), // quick melee
             (0x0, 4, 0),
-            (0x4, 4, 127),  // jump / double-jump / hover
+            (0x4, 4, 127), // jump / double-jump / hover
             (0x0, 4, 0),
-            (0x100, 4, 0),  // reload
+            (0x100, 4, 0), // reload
             (0x0, 4, 0),
         ];
         let mut total_shots = 0usize;

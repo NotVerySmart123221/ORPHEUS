@@ -525,10 +525,23 @@ pub enum VelocityAxis {
 pub enum VelocityOp {
     AddVector([f64; 3]),
     SetVector([f64; 3]),
-    SetSpeed { axis: VelocityAxis, value: f64 },
-    CapSpeed { axis: VelocityAxis, max: f64 },
-    ScaleSpeed { axis: VelocityAxis, factor: f64 },
-    ClampSpeed { axis: VelocityAxis, min: f64, max: f64 },
+    SetSpeed {
+        axis: VelocityAxis,
+        value: f64,
+    },
+    CapSpeed {
+        axis: VelocityAxis,
+        max: f64,
+    },
+    ScaleSpeed {
+        axis: VelocityAxis,
+        factor: f64,
+    },
+    ClampSpeed {
+        axis: VelocityAxis,
+        min: f64,
+        max: f64,
+    },
 }
 
 /// Geometry captured once when a travelling ground wave begins.
