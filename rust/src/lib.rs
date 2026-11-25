@@ -76,6 +76,8 @@ pub mod lobby_transport;
 mod map_environment;
 pub mod match_handoff;
 pub mod match_scene;
+#[cfg(feature = "lua-mods")]
+pub mod mod_script;
 pub mod mover;
 pub mod mover_correction;
 pub mod mover_ground;

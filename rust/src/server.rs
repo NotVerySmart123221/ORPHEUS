@@ -67,6 +67,7 @@ pub struct ServerConfig {
     pub debug_control: bool,
     pub junkenstein_validation: Option<PathBuf>,
     pub ai_script: Option<PathBuf>,
+    pub mod_script: Option<PathBuf>,
 }
 
 impl ServerConfig {
@@ -83,6 +84,7 @@ impl ServerConfig {
             debug_control: false,
             junkenstein_validation: None,
             ai_script: None,
+            mod_script: None,
         }
     }
 }
@@ -95,6 +97,8 @@ pub struct Server {
     bnet: BnetService,
     game: Option<Arc<GameService>>,
     ai_script: Option<PathBuf>,
+    #[cfg(feature = "lua-mods")]
+    mod_host: Option<Arc<Mutex<crate::mod_script::ModHost>>>,
     #[cfg(feature = "inspector")]
     debug: Option<DebugHttp>,
 }
@@ -106,6 +110,13 @@ impl Server {
         #[cfg(not(feature = "lua-debug"))]
         if config.ai_script.is_some() {
             return Err(crate::game_service::lua_debug_required());
+        }
+        #[cfg(not(feature = "lua-mods"))]
+        if config.mod_script.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "--mod-script requires a build with --features lua-mods",
+            ));
         }
         if config.debug_port.is_some() && !cfg!(feature = "inspector") {
             return Err(io::Error::new(
@@ -264,6 +275,24 @@ impl Server {
                 }
             },
         )?;
+        #[cfg(feature = "lua-mods")]
+        let mod_host = match &config.mod_script {
+            Some(path) => {
+                let host = crate::mod_script::ModHost::from_file(path)?;
+                let status = host.status(false);
+                eprintln!(
+                    "[mod] loaded {} v{} by {} (abi v{}, gen {}, sha256 {})",
+                    status.name,
+                    status.version,
+                    status.author,
+                    status.abi_version,
+                    status.generation,
+                    status.digest
+                );
+                Some(Arc::new(Mutex::new(host)))
+            }
+            None => None,
+        };
         let shared = Arc::new(Lobby {
             signing_key,
             schemas,
@@ -282,6 +311,8 @@ impl Server {
             local,
             active: Mutex::new(HashMap::new()),
             game: Arc::clone(&game),
+            #[cfg(feature = "lua-mods")]
+            mod_host: mod_host.clone(),
         });
         let (stop_lobby, shutdown) = mpsc::channel();
         let lobby = thread::Builder::new()
@@ -295,6 +326,8 @@ impl Server {
             bnet,
             game: Some(game),
             ai_script: config.ai_script,
+            #[cfg(feature = "lua-mods")]
+            mod_host,
             #[cfg(feature = "inspector")]
             debug,
         })
@@ -352,6 +385,22 @@ impl Server {
             ));
         };
         game.ai_policy_status()
+    }
+
+    #[cfg(feature = "lua-mods")]
+    pub fn mod_status(&self) -> Option<crate::mod_script::ModStatus> {
+        self.mod_host
+            .as_ref()
+            .map(|host| host.lock().expect("mod host lock").status(false))
+    }
+
+    #[cfg(feature = "lua-mods")]
+    pub fn reload_mod_script(&self) -> io::Result<Option<crate::mod_script::ModStatus>> {
+        let Some(host) = &self.mod_host else {
+            return Ok(None);
+        };
+        let mut guard = host.lock().expect("mod host lock");
+        guard.reload_file().map(Some)
     }
 
     pub fn stop(&mut self) -> io::Result<()> {
@@ -433,6 +482,8 @@ struct Lobby {
     local: Arc<Account>,
     active: Mutex<HashMap<u32, ActiveLobbyPeer>>,
     game: Arc<GameService>,
+    #[cfg(feature = "lua-mods")]
+    mod_host: Option<Arc<Mutex<crate::mod_script::ModHost>>>,
 }
 
 struct ActiveLobbyPeer {
@@ -571,6 +622,44 @@ impl Lobby {
                     peers,
                     lobby_chat::post(channel.clone(), sender.member.clone(), text, flags),
                 );
+                #[cfg(feature = "lua-mods")]
+                if let Some(mod_host) = &self.mod_host {
+                    let ctx = crate::mod_script::ModRoomContext {
+                        tick: 0,
+                        elapsed_secs: 0.0,
+                        map_guid: 0,
+                        mode_guid: 0,
+                        player_count: active.len(),
+                    };
+                    let sender_name = lease.account.profile().player_name.clone();
+                    let result = mod_host.lock().expect("mod host lock").script().on_chat(
+                        &ctx,
+                        &sender_name,
+                        text,
+                    );
+                    match result {
+                        Ok(actions) => {
+                            for action in actions {
+                                if let crate::mod_script::ModAction::BroadcastChat { text: reply } =
+                                    action
+                                {
+                                    let channel_peers =
+                                        active.values().filter(|peer| &peer.channel == channel);
+                                    queue_chat(
+                                        channel_peers,
+                                        lobby_chat::post(
+                                            channel.clone(),
+                                            sender.member.clone(),
+                                            &reply,
+                                            0,
+                                        ),
+                                    );
+                                }
+                            }
+                        }
+                        Err(error) => eprintln!("[mod] on_chat error: {error}"),
+                    }
+                }
             }
         }
         Ok(true)

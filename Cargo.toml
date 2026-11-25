@@ -110,7 +110,8 @@ criterion = { version = "=0.7.0", default-features = false, features = ["cargo_b
 
 [features]
 default = []
-lua-debug = ["dep:mlua"]
+lua-mods = ["dep:mlua"]
+lua-debug = ["lua-mods"]
 inspector = ["dep:httparse", "orpheus-statescript/node-observations"]
 script-coverage = ["inspector", "orpheus-statescript/extended-node-observations"]
 
@@ -123,7 +124,7 @@ hmac = "0.12"
 httparse = { version = "1", optional = true }
 indexmap = { version = "2", features = ["serde"] }
 mio = { version = "1.1.1", features = ["net", "os-poll"] }
-mlua = { version = "=0.11.6", default-features = false, features = ["lua54", "vendored"], optional = true }
+mlua = { version = "=0.11.6", default-features = false, features = ["lua54", "vendored", "send"], optional = true }
 orpheus-collision = { path = "rust/crates/collision" }
 orpheus-runtime = { path = "rust/crates/runtime" }
 orpheus-statescript = { path = "rust/crates/statescript" }
