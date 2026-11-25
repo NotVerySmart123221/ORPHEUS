@@ -289,7 +289,9 @@ impl Server {
                     status.generation,
                     status.digest
                 );
-                Some(Arc::new(Mutex::new(host)))
+                let host = Arc::new(Mutex::new(host));
+                game.set_mod_host(Arc::clone(&host))?;
+                Some(host)
             }
             None => None,
         };

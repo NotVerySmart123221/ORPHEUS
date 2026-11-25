@@ -564,6 +564,10 @@ impl ModHost {
     pub fn script(&self) -> &ModScript {
         &self.active
     }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
 }
 
 fn read_bounded_source(path: &Path) -> io::Result<String> {

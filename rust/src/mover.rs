@@ -31,12 +31,28 @@ pub enum VelocityChange {
     Delta([f64; 3]),
     Impulse([f64; 3]),
     HorizontalCap(f64),
-    VerticalImpulse { vertical: f64, delta: [f64; 3] },
+    VerticalImpulse {
+        vertical: f64,
+        delta: [f64; 3],
+    },
     SetVelocity([f64; 3]),
-    SetAxisSpeed { axis: VelocityAxis, value: f64 },
-    CapAxisSpeed { axis: VelocityAxis, max: f64 },
-    ScaleAxisSpeed { axis: VelocityAxis, factor: f64 },
-    ClampAxisSpeed { axis: VelocityAxis, min: f64, max: f64 },
+    SetAxisSpeed {
+        axis: VelocityAxis,
+        value: f64,
+    },
+    CapAxisSpeed {
+        axis: VelocityAxis,
+        max: f64,
+    },
+    ScaleAxisSpeed {
+        axis: VelocityAxis,
+        factor: f64,
+    },
+    ClampAxisSpeed {
+        axis: VelocityAxis,
+        min: f64,
+        max: f64,
+    },
 }
 
 impl VelocityChange {
@@ -244,6 +260,10 @@ pub struct Mover {
     last_command: Option<Command>,
     last_input: Option<u32>,
     pose: Movement,
+    #[cfg(feature = "lua-mods")]
+    mod_gravity_scale: f64,
+    #[cfg(feature = "lua-mods")]
+    mod_speed_scale: f64,
     #[cfg(any(test, feature = "inspector"))]
     last_ground_probe: Option<crate::game_debug::DebugGroundProbe>,
     #[cfg(any(test, feature = "inspector"))]
@@ -281,6 +301,10 @@ impl Mover {
                 gravity: base.gravity_scale,
                 ..Movement::default()
             },
+            #[cfg(feature = "lua-mods")]
+            mod_gravity_scale: 1.0,
+            #[cfg(feature = "lua-mods")]
+            mod_speed_scale: 1.0,
             #[cfg(any(test, feature = "inspector"))]
             last_ground_probe: None,
             #[cfg(any(test, feature = "inspector"))]
@@ -301,6 +325,22 @@ impl Mover {
         breakables: Arc<crate::collision_scene::BreakableState>,
     ) {
         self.body.set_breakables(breakables);
+    }
+
+    #[cfg(feature = "lua-mods")]
+    pub(crate) fn set_mod_scales(&mut self, gravity_scale: f64, speed_scale: f64) {
+        if gravity_scale.is_finite() && gravity_scale > 0.0 {
+            self.mod_gravity_scale = gravity_scale.clamp(0.05, 10.0);
+            self.pose.gravity = self.base.gravity_scale * self.mod_gravity_scale;
+        }
+        if speed_scale.is_finite() && speed_scale > 0.0 {
+            self.mod_speed_scale = speed_scale.clamp(0.1, 10.0);
+        }
+    }
+
+    #[cfg(all(test, feature = "lua-mods"))]
+    pub(crate) fn mod_scales(&self) -> (f64, f64) {
+        (self.mod_gravity_scale, self.mod_speed_scale)
     }
 
     #[cfg(any(test, feature = "inspector"))]
@@ -514,6 +554,23 @@ impl Mover {
         blockers: &[CapsulePose],
     ) -> Result<(), HullContactError> {
         let active = self.modifiers.at(command.frame);
+        #[cfg(feature = "lua-mods")]
+        let settings = {
+            let mut settings = active.settings(&self.base);
+            if (self.mod_gravity_scale - 1.0).abs() > 1e-6 {
+                settings.gravity_scale *= self.mod_gravity_scale;
+            }
+            if (self.mod_speed_scale - 1.0).abs() > 1e-6 {
+                settings.run_forward *= self.mod_speed_scale;
+                settings.run_backward *= self.mod_speed_scale;
+                settings.run_strafe *= self.mod_speed_scale;
+                settings.crouch_forward *= self.mod_speed_scale;
+                settings.crouch_backward *= self.mod_speed_scale;
+                settings.crouch_strafe *= self.mod_speed_scale;
+            }
+            settings
+        };
+        #[cfg(not(feature = "lua-mods"))]
         let settings = active.settings(&self.base);
         let blockers = if settings.character_collision != 0 {
             blockers

@@ -420,6 +420,21 @@ impl RoomSimulation {
                 damage,
                 impulse,
             } => {
+                #[cfg(feature = "lua-mods")]
+                let damage = if damage > 0.0 {
+                    self.mod_evaluate_damage(
+                        source.wire,
+                        request.wire,
+                        damage,
+                        false,
+                        true,
+                        -1,
+                        tick,
+                        now,
+                    )
+                } else {
+                    damage
+                };
                 if damage > 0.0 {
                     let settled = self.apply_health(
                         request.wire,
@@ -436,6 +451,10 @@ impl RoomSimulation {
                             -outcome.delta,
                             outcome.killed,
                         );
+                        #[cfg(feature = "lua-mods")]
+                        if outcome.killed {
+                            self.mod_on_kill(source.wire, request.wire, false, tick, now);
+                        }
                     }
                 }
                 if let Some(delta) = impulse {

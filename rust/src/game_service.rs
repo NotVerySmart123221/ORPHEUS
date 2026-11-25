@@ -155,6 +155,11 @@ enum Request {
     AiPolicyStatus {
         reply: mpsc::SyncSender<AiPolicyStatus>,
     },
+    #[cfg(feature = "lua-mods")]
+    SetModHost {
+        host: Arc<std::sync::Mutex<crate::mod_script::ModHost>>,
+        reply: mpsc::SyncSender<()>,
+    },
     #[cfg(any(test, feature = "inspector"))]
     Debug {
         reply: mpsc::SyncSender<io::Result<game_debug::Snapshot>>,
@@ -383,6 +388,14 @@ impl GameService {
             skin,
             reply,
         })
+    }
+
+    #[cfg(feature = "lua-mods")]
+    pub fn set_mod_host(
+        &self,
+        host: Arc<std::sync::Mutex<crate::mod_script::ModHost>>,
+    ) -> io::Result<()> {
+        self.request(|reply| Request::SetModHost { host, reply })
     }
 
     #[cfg(feature = "lua-debug")]

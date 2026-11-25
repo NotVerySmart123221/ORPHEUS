@@ -4050,7 +4050,8 @@ fn live_room_interactive_props_authored_blast_breakables_and_pvp_objective() {
             },
         ],
     };
-    let scene = Arc::new(CollisionScene::expanded_rays(&cache, &BTreeSet::new(), identity).unwrap());
+    let scene =
+        Arc::new(CollisionScene::expanded_rays(&cache, &BTreeSet::new(), identity).unwrap());
     let breakables = Arc::new(BreakableState::new());
     let movers = MoverCatalog::default();
     let queries = BotQueries::new(false, &movers, &scene, None)
@@ -4222,5 +4223,235 @@ fn live_room_interactive_props_authored_blast_breakables_and_pvp_objective() {
     assert!(
         breakables.is_broken(0),
         "projectile splash must smash breakables within its authored 3.0m blast radius"
+    );
+}
+
+#[cfg(feature = "lua-mods")]
+#[test]
+fn live_room_lua_mods_apply_rules_hooks_actions_and_hot_reload() {
+    use crate::{
+        commands::JUMP,
+        contact_world::ContactWorld,
+        game_hitscan::DamageTags,
+        mod_script::ModHost,
+        mover::Mover,
+        mover_settings::{MoverCatalog, MoverSettings},
+        room_primitives::PhysicsProp,
+        vitals::Vitals,
+    };
+    use std::sync::Mutex;
+
+    let low_grav_src = include_str!("../../scripts/mods/low_gravity_arena.lua");
+    let headshot_src = include_str!("../../scripts/mods/headshot_only_practice.lua");
+
+    let host = Arc::new(Mutex::new(
+        ModHost::from_source("low_gravity_arena.lua", low_grav_src).unwrap(),
+    ));
+
+    let bots = fixture_bots();
+    let bot_entity = bots[0].entity;
+    let mut room = RoomSimulation::new(bots).unwrap();
+    let ground = Arc::new(fixture_ground());
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, &ground, None);
+    room.enable_spatial_queries(false, Arc::clone(&ground), RoomSpatialNeeds::Queries);
+    room.attach_mod_host(
+        Arc::clone(&host),
+        0x0800_0000_0000_0688,
+        0x0230_0000_0000_0012,
+    );
+
+    // Spawn a living player body with vitals so heal actions can be observed.
+    let owner = BodyId {
+        entity: 0xa000_0100,
+        generation: 1,
+    };
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        [0.0, 0.0, 0.0],
+        0,
+        0x08,
+    )
+    .unwrap();
+    let mut player_state = PlayerBodyState::new(owner, 1, 0, 0, SOLDIER, mover, None, 1, None);
+    let mut vitals = Vitals::new(200.0, 0.0, 0.0);
+    vitals.damage(
+        50.0,
+        Death {
+            time: 0.0,
+            frame: 1,
+            killer: 0,
+        },
+    );
+    assert_eq!(vitals.total(), 150.0);
+    player_state.set_test_halted_vitals(vitals);
+    room.spawn_player_body(player_state).unwrap();
+
+    // Verify Low-Gravity Arena rules immediately synced to Mover!
+    assert_eq!(room.mod_active_rules().gravity_scale, 0.45);
+    assert_eq!(room.mod_active_rules().speed_scale, 1.2);
+    assert_eq!(
+        room.player_body(owner).unwrap().mover.mod_scales(),
+        (0.45, 1.2)
+    );
+    assert!((room.player_body(owner).unwrap().mover.pose().gravity - 1.75 * 0.45).abs() < 1e-6);
+
+    // Step first tick -> triggers on_room_start + Jump button impulse!
+    room.player_body_mut(owner).unwrap().pending_pressed_buttons = JUMP;
+    room.finish_tick(&queries, 2, Duration::from_secs(1))
+        .unwrap();
+    assert!(
+        room.mod_broadcast_log()
+            .iter()
+            .any(|msg| msg.contains("Low-Gravity Arena active")),
+        "on_room_start broadcast missing: {:?}",
+        room.mod_broadcast_log()
+    );
+
+    // Verify Jump button queued vertical impulse onto Mover (+4.5 m/s).
+    let mut poses = crate::mover_kinematics::poses(
+        None,
+        crate::commands::Command {
+            frame: 2,
+            ..Default::default()
+        },
+    );
+    room.player_body_mut(owner)
+        .unwrap()
+        .mover
+        .step_pending(ground.triangles(), &mut poses, 0.016, 1, || &[], |_, _| {})
+        .unwrap();
+    assert!(
+        room.player_body(owner).unwrap().mover.pose().velocity[1] > 3.5,
+        "Jump on_button impulse must launch player upward, got {:?}",
+        room.player_body(owner).unwrap().mover.pose().velocity
+    );
+
+    // Chat command !help works live.
+    room.mod_dispatch_chat("Player", "!help", 3, Duration::from_secs(2));
+    assert!(
+        room.mod_broadcast_log()
+            .iter()
+            .any(|msg| msg.contains("!grav")),
+        "on_chat !help broadcast missing"
+    );
+
+    // Hot-reload shared ModHost to Headshot-Only Practice!
+    let status = host
+        .lock()
+        .unwrap()
+        .reload_source("headshot_only_practice.lua", headshot_src)
+        .unwrap();
+    assert!(status.changed);
+    assert_eq!(status.generation, 2);
+
+    // Next finish_tick automatically detects generation 2, resets Mover scales to 1.0, and runs on_room_start.
+    room.finish_tick(&queries, 4, Duration::from_secs(3))
+        .unwrap();
+    assert_eq!(
+        room.player_body(owner).unwrap().mover.mod_scales(),
+        (1.0, 1.0)
+    );
+    assert!(
+        room.mod_broadcast_log()
+            .iter()
+            .any(|msg| msg.contains("Headshot-Only Practice enabled"))
+    );
+
+    // Bodyshot on bot -> Headshot-Only mod reduces damage to 0.0!
+    let bodyshot = Impact {
+        entity: bot_entity,
+        distance: 1.0,
+        damage: 60.0,
+        critical: false,
+        loadout: None,
+        tags: DamageTags::EMPTY,
+        geometry: None,
+        impulse: None,
+    };
+    let hit = room
+        .apply_bot_impact(
+            owner.entity,
+            4,
+            ShotContext {
+                team: 0,
+                quanta: 16,
+                tick: 4,
+                now: Duration::from_secs(3),
+            },
+            &bodyshot,
+        )
+        .unwrap();
+    assert!(
+        hit.is_none(),
+        "bodyshot must deal 0 damage under Headshot-Only mod"
+    );
+    assert_eq!(room.body_healths().unwrap()[&bot_entity], 100.0);
+
+    // Headshot on bot (100 damage -> kill!) -> kills bot, heals attacker +25 HP (150 -> 175), broadcasts kill!
+    let headshot = Impact {
+        entity: bot_entity,
+        distance: 1.0,
+        damage: 100.0,
+        critical: true,
+        loadout: None,
+        tags: DamageTags::EMPTY,
+        geometry: None,
+        impulse: None,
+    };
+    let hit = room
+        .apply_bot_impact(
+            owner.entity,
+            5,
+            ShotContext {
+                team: 0,
+                quanta: 16,
+                tick: 5,
+                now: Duration::from_secs(4),
+            },
+            &headshot,
+        )
+        .unwrap();
+    assert!(hit.is_some(), "headshot must deal full damage and kill");
+    assert_eq!(
+        room.player_body(owner).unwrap().vitals().unwrap().total(),
+        175.0,
+        "headshot mod must heal attacker +25 HP (150 -> 175)"
+    );
+    assert!(
+        room.mod_broadcast_log()
+            .iter()
+            .any(|msg| msg.contains("Crisp headshot! Total headshot eliminations: 1"))
+    );
+
+    // Verify ResetInteractiveProp action works cleanly against RoomSimulation interactive props.
+    room.interactive_props_mut()
+        .props
+        .insert(77, PhysicsProp::new(77, [1.0, 2.0, 3.0], 0.2));
+    room.interactive_props_mut()
+        .props
+        .get_mut(&77)
+        .unwrap()
+        .position = [9.0, 9.0, 9.0];
+    host.lock()
+        .unwrap()
+        .reload_source(
+            "prop_reset.lua",
+            r#"
+            return {
+                abi = 1,
+                on_room_start = function(ctx)
+                    return { { kind = "reset_interactive_prop", prop_id = 77 } }
+                end,
+            }
+            "#,
+        )
+        .unwrap();
+    room.finish_tick(&queries, 6, Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(
+        room.interactive_props().props[&77].position,
+        [1.0, 2.0, 3.0]
     );
 }

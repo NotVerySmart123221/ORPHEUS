@@ -25,6 +25,8 @@ pub(super) struct State {
     pub(super) next_connection: u32,
     pub(super) next_input_peer: Option<u32>,
     pub(super) recent_faults: VecDeque<FaultRecord>,
+    #[cfg(feature = "lua-mods")]
+    pub(super) mod_host: Option<Arc<std::sync::Mutex<crate::mod_script::ModHost>>>,
     #[cfg(any(test, feature = "inspector"))]
     pub(super) debug_control_enabled: bool,
 }
@@ -75,6 +77,8 @@ impl State {
             next_connection: 1,
             next_input_peer: None,
             recent_faults: VecDeque::new(),
+            #[cfg(feature = "lua-mods")]
+            mod_host: None,
             #[cfg(any(test, feature = "inspector"))]
             debug_control_enabled: false,
         }
@@ -127,6 +131,8 @@ impl State {
         let active_source = self.active_patrol_source.clone();
         #[cfg(any(test, feature = "inspector", feature = "lua-debug"))]
         let patrol_generation = self.patrol_reload_generation;
+        #[cfg(feature = "lua-mods")]
+        let mod_host = self.mod_host.clone();
         let schemas = Arc::clone(&self.schemas);
         let prepared = guard_room(&mut room, RoomStage::Admission, |room| {
             if let Some(WorldStart { mut scene, card }) = world {
@@ -147,6 +153,14 @@ impl State {
                 scene
                     .simulation_mut()
                     .seat_bots(&room.map, room.players.len());
+                #[cfg(feature = "lua-mods")]
+                if let Some(host) = mod_host {
+                    scene.simulation_mut().attach_mod_host(
+                        host,
+                        room.map.map_guid,
+                        room.map.mode_guid,
+                    );
+                }
                 room.world = Some(RoomWorld {
                     scene,
                     card,
@@ -440,6 +454,20 @@ impl State {
             }
             Request::AiPolicyStatus { reply } => {
                 let _ = reply.send(self.ai_policy_status());
+            }
+            #[cfg(feature = "lua-mods")]
+            Request::SetModHost { host, reply } => {
+                self.mod_host = Some(Arc::clone(&host));
+                for room in self.rooms.values_mut() {
+                    if let Some(world) = &mut room.world {
+                        world.scene.simulation_mut().attach_mod_host(
+                            Arc::clone(&host),
+                            room.map.map_guid,
+                            room.map.mode_guid,
+                        );
+                    }
+                }
+                let _ = reply.send(());
             }
             #[cfg(any(test, feature = "inspector"))]
             Request::Debug { reply } => {

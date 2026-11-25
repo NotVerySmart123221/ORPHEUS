@@ -272,6 +272,8 @@ mod environment;
 mod ground_wave;
 mod health;
 mod health_events;
+#[cfg(feature = "lua-mods")]
+mod mod_bridge;
 mod movement;
 pub(crate) use movement::MovementContactFrame;
 mod observed_projectiles;
@@ -777,6 +779,10 @@ pub(crate) struct RoomSimulation {
     interactive_props: crate::room_primitives::InteractivePropRuntime,
     interactive_prop_floor_y: f64,
     pvp_objective: Option<crate::pvp_mode::PvpObjectiveRuntime>,
+    #[cfg(feature = "lua-mods")]
+    mod_host: Option<Arc<std::sync::Mutex<crate::mod_script::ModHost>>>,
+    #[cfg(feature = "lua-mods")]
+    mod_state: mod_bridge::RoomModState,
     #[cfg(any(test, feature = "inspector"))]
     debug_rays: Arc<crate::game_debug::DebugRayHistory>,
 }
@@ -1253,6 +1259,10 @@ impl RoomSimulation {
             interactive_props: crate::room_primitives::InteractivePropRuntime::default(),
             interactive_prop_floor_y: 0.0,
             pvp_objective: None,
+            #[cfg(feature = "lua-mods")]
+            mod_host: None,
+            #[cfg(feature = "lua-mods")]
+            mod_state: mod_bridge::RoomModState::default(),
             #[cfg(any(test, feature = "inspector"))]
             debug_rays: Arc::default(),
         })
@@ -1292,56 +1302,78 @@ impl RoomSimulation {
         self.pvp_objective = Some(runtime);
     }
 
-    fn step_interactive_props_and_pvp(&mut self, now: Duration) {
+    fn step_interactive_props_and_pvp(&mut self, tick: u32, now: Duration) {
         const MELEE_BUTTON_BIT: u32 = 0x0800;
         let now_secs = now.as_secs_f64();
-        if !self.interactive_props.props.is_empty() || !self.interactive_props.buttons.is_empty() {
-            let mut interact_positions = Vec::new();
-            let mut melee_centers = Vec::new();
-            for &entity in self.players_by_wire.values() {
+        let mut interact_positions = Vec::new();
+        let mut melee_centers = Vec::new();
+        #[cfg(feature = "lua-mods")]
+        let mut pressed_players = Vec::new();
+        let has_props =
+            !self.interactive_props.props.is_empty() || !self.interactive_props.buttons.is_empty();
+        #[cfg(feature = "lua-mods")]
+        let has_mods = self.mod_host.is_some();
+        #[cfg(not(feature = "lua-mods"))]
+        let has_mods = false;
+        if has_props || has_mods {
+            for (&wire, &entity) in &self.players_by_wire {
                 if let Some(mut state) = self.world.get_mut::<PlayerBodyState>(entity) {
                     let pressed = std::mem::take(&mut state.pending_pressed_buttons);
                     if pressed == 0 || !state.alive() {
                         continue;
                     }
-                    let pose = state.mover.pose();
-                    if pressed & crate::room_primitives::INTERACT_BUTTON_BIT != 0 {
-                        interact_positions.push(pose.position);
-                    }
-                    if pressed & MELEE_BUTTON_BIT != 0 {
-                        let [fx, fy, fz] =
-                            crate::game_hitscan::aim_direction(&crate::commands::Command {
-                                yaw: pose.yaw,
-                                pitch: pose.pitch,
-                                ..Default::default()
-                            });
-                        let eye = [
-                            pose.position[0],
-                            pose.position[1] + eye_height(state.hero, state.mover.crouched()),
-                            pose.position[2],
-                        ];
-                        melee_centers.push([
-                            eye[0] + fx * 1.5,
-                            eye[1] + fy * 1.5,
-                            eye[2] + fz * 1.5,
-                        ]);
+                    #[cfg(feature = "lua-mods")]
+                    pressed_players.push((wire, pressed));
+                    #[cfg(not(feature = "lua-mods"))]
+                    let _ = wire;
+                    if has_props {
+                        let pose = state.mover.pose();
+                        if pressed & crate::room_primitives::INTERACT_BUTTON_BIT != 0 {
+                            interact_positions.push(pose.position);
+                        }
+                        if pressed & MELEE_BUTTON_BIT != 0 {
+                            let [fx, fy, fz] =
+                                crate::game_hitscan::aim_direction(&crate::commands::Command {
+                                    yaw: pose.yaw,
+                                    pitch: pose.pitch,
+                                    ..Default::default()
+                                });
+                            let eye = [
+                                pose.position[0],
+                                pose.position[1] + eye_height(state.hero, state.mover.crouched()),
+                                pose.position[2],
+                            ];
+                            melee_centers.push([
+                                eye[0] + fx * 1.5,
+                                eye[1] + fy * 1.5,
+                                eye[2] + fz * 1.5,
+                            ]);
+                        }
                     }
                 }
             }
-            for center in melee_centers {
-                self.interactive_props
-                    .hit_props_in_sphere(center, 2.0, 11.0);
+            if has_props {
+                for center in melee_centers {
+                    self.interactive_props
+                        .hit_props_in_sphere(center, 2.0, 11.0);
+                }
+                if !self.interactive_props.props.is_empty() {
+                    self.interactive_props.step(
+                        crate::game_clock::TICK_PERIOD.as_secs_f64(),
+                        self.interactive_prop_floor_y,
+                        &[],
+                    );
+                }
+                for pos in interact_positions {
+                    self.interactive_props.press_nearby_button(pos, now_secs);
+                }
             }
-            if !self.interactive_props.props.is_empty() {
-                self.interactive_props.step(
-                    crate::game_clock::TICK_PERIOD.as_secs_f64(),
-                    self.interactive_prop_floor_y,
-                    &[],
-                );
+            #[cfg(feature = "lua-mods")]
+            if has_mods {
+                self.step_mod_host(&pressed_players, tick, now);
             }
-            for pos in interact_positions {
-                self.interactive_props.press_nearby_button(pos, now_secs);
-            }
+            #[cfg(not(feature = "lua-mods"))]
+            let _ = tick;
         }
         if let Some(pvp) = &mut self.pvp_objective {
             let mut actors = Vec::with_capacity(self.players_by_wire.len() + self.by_wire.len());
@@ -2197,11 +2229,15 @@ impl RoomSimulation {
         let view = ViewFrame::from_command(&shot.command, context.quanta);
         let ray = HitscanShot::with_direction(shot.origin, shot.direction, shot.reach, shot.hit);
         // Scene order breaks exact ray ties.
+        #[cfg(feature = "lua-mods")]
+        let ffa = queries.free_for_all() || self.mod_friendly_fire();
+        #[cfg(not(feature = "lua-mods"))]
+        let ffa = queries.free_for_all();
         let mut candidates = Vec::with_capacity(self.by_wire.len() + self.players_by_wire.len());
         for state in self.states() {
             let state = state?;
             let bot = &state.bot;
-            if !eligible_bot(bot, shot.source, context.team, queries.free_for_all())
+            if !eligible_bot(bot, shot.source, context.team, ffa)
                 || !bot.spawn_hitbox_ready(context.tick)
                 || !visible(bot.entity)
             {
@@ -2214,6 +2250,7 @@ impl RoomSimulation {
         self.push_player_hitscan_candidates(
             shot.source,
             context.team,
+            ffa,
             queries,
             view,
             &visible,
@@ -2331,6 +2368,8 @@ impl RoomSimulation {
         let source = field_owner
             .filter(|&id| self.player_body(id).is_some())
             .and_then(|id| self.sample_health_body(id.entity));
+        #[cfg(feature = "lua-mods")]
+        let healing_scale = self.mod_healing_scale();
         for (&wire, &entity) in &self.by_wire {
             let state = self
                 .world
@@ -2343,6 +2382,8 @@ impl RoomSimulation {
                 continue;
             }
             let amount = HealingPulse::total_at(pulses, queries.target(bot));
+            #[cfg(feature = "lua-mods")]
+            let amount = amount * healing_scale;
             let healed = state.vitals.heal(amount);
             if healed <= 0.0 {
                 continue;
@@ -2472,13 +2513,15 @@ impl RoomSimulation {
         let mut continuing = Vec::with_capacity(order.len());
         for entity in order {
             // An earlier flight may have killed a target in this same tick.
+            #[cfg(feature = "lua-mods")]
+            let ffa = queries.free_for_all() || self.mod_friendly_fire();
+            #[cfg(not(feature = "lua-mods"))]
+            let ffa = queries.free_for_all();
             let candidates: Vec<_> = self
                 .weapon_targets(queries, context.tick)?
                 .iter()
                 .filter(|target| visible(target.wire))
-                .filter_map(|target| {
-                    target.hostile_to(owner.entity, context.team, queries.free_for_all())
-                })
+                .filter_map(|target| target.hostile_to(owner.entity, context.team, ffa))
                 .collect();
             // The shooter can receive splash but never blocks its own flight.
             let shooter = if self
@@ -2673,14 +2716,33 @@ impl RoomSimulation {
         context: ShotContext,
         impact: &Impact,
     ) -> Result<Option<BotHit>, CombatError> {
-        let Some(state) = self.state_mut(impact.entity)? else {
+        if self.state_mut(impact.entity)?.is_none() {
             // An impact carrying a retired wire identity must not damage its
             // replacement body.
+            return Ok(None);
+        }
+        #[cfg(feature = "lua-mods")]
+        let damage_amount = self.mod_evaluate_damage(
+            source,
+            impact.entity,
+            impact.damage,
+            impact.critical,
+            false,
+            0,
+            context.tick,
+            context.now,
+        );
+        #[cfg(not(feature = "lua-mods"))]
+        let damage_amount = impact.damage;
+        if damage_amount <= 0.0 {
+            return Ok(None);
+        }
+        let Some(state) = self.state_mut(impact.entity)? else {
             return Ok(None);
         };
         let Some(result) = Self::damage_bot_with_hit(
             state,
-            impact.damage,
+            damage_amount,
             Death {
                 time: context.now.as_secs_f64(),
                 frame: context.tick,
@@ -2739,6 +2801,8 @@ impl RoomSimulation {
         );
         if result.killed {
             self.record_enemy_elimination(source, entity, victim_team, context.tick);
+            #[cfg(feature = "lua-mods")]
+            self.mod_on_kill(source, entity, impact.critical, context.tick, context.now);
         }
         Ok(Some(hit))
     }
@@ -2829,7 +2893,7 @@ impl RoomSimulation {
             self.collect_local_health_events();
             self.settle_authored_requests(tick, now)?;
             self.settle_environment(tick, now)?;
-            self.step_interactive_props_and_pvp(now);
+            self.step_interactive_props_and_pvp(tick, now);
             self.flush_health_events();
             return self.respawn_due(tick, now);
         }
@@ -3268,7 +3332,7 @@ impl RoomSimulation {
             self.collect_local_health_events();
         }
         self.settle_environment(tick, now)?;
-        self.step_interactive_props_and_pvp(now);
+        self.step_interactive_props_and_pvp(tick, now);
         let replacements = self.respawn_due(tick, now);
         self.record_poses(queries, tick)?;
         let replacements = replacements?;
@@ -3610,6 +3674,11 @@ impl RoomSimulation {
         self.interactive_props = Default::default();
         self.interactive_prop_floor_y = 0.0;
         self.pvp_objective = None;
+        #[cfg(feature = "lua-mods")]
+        {
+            self.mod_host = None;
+            self.mod_state = mod_bridge::RoomModState::default();
+        }
         #[cfg(any(test, feature = "inspector"))]
         {
             self.debug_rays.clear();

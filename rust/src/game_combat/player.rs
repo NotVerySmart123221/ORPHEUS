@@ -126,6 +126,11 @@ impl PlayerBodyState {
         self
     }
 
+    #[cfg(all(test, feature = "lua-mods"))]
+    pub(crate) fn set_test_halted_vitals(&mut self, vitals: Vitals) {
+        self.halted_vitals = Some(vitals);
+    }
+
     pub(crate) fn alive(&self) -> bool {
         self.vitals().is_none_or(|vitals| vitals.death().is_none())
     }
@@ -384,6 +389,7 @@ impl RoomSimulation {
             state.mover.set_authored_facing(runtime.authored_facing());
         }
         let observer_create = state.observer_create.take();
+        let spawn_frame = state.frame;
         let entity = self.world.spawn(state).id();
         let handle = PlayerBodyHandle { entity, id };
         self.players_by_wire.insert(id.entity, entity);
@@ -396,6 +402,10 @@ impl RoomSimulation {
                 update: Box::new(update),
             });
         }
+        #[cfg(feature = "lua-mods")]
+        self.mod_on_player_spawn(id, spawn_frame);
+        #[cfg(not(feature = "lua-mods"))]
+        let _ = spawn_frame;
         self.debug_assert_player_invariants();
         Ok(handle)
     }
@@ -1003,6 +1013,7 @@ impl RoomSimulation {
         &self,
         source: u32,
         team: u8,
+        free_for_all: bool,
         queries: &crate::scene_assets::BotQueries<'_>,
         view: ViewFrame,
         visible: &impl Fn(u32) -> bool,
@@ -1018,7 +1029,7 @@ impl RoomSimulation {
                 state.team,
                 source,
                 team,
-                queries.free_for_all(),
+                free_for_all,
             ) || !visible(state.id.entity)
             {
                 continue;
@@ -1073,9 +1084,25 @@ impl RoomSimulation {
         let victim_team = state.team;
         let fallback_health = state.vitals().map(Vitals::cumulative_component);
         let target_facts = state.health_target_facts();
+        #[cfg(feature = "lua-mods")]
+        let damage_amount = self.mod_evaluate_damage(
+            source,
+            impact.entity,
+            impact.damage,
+            impact.critical,
+            false,
+            0,
+            context.tick,
+            context.now,
+        );
+        #[cfg(not(feature = "lua-mods"))]
+        let damage_amount = impact.damage;
+        if damage_amount <= 0.0 {
+            return Ok(None);
+        }
         let Some((owner, outcome, health)) = self.damage_player_body_by_wire(
             id,
-            impact.damage,
+            damage_amount,
             Death {
                 time: context.now.as_secs_f64(),
                 frame: context.tick,
@@ -1117,6 +1144,14 @@ impl RoomSimulation {
                 killed_by: !self_hit,
             });
             self.record_enemy_elimination(source, id.entity, victim_team, context.tick);
+            #[cfg(feature = "lua-mods")]
+            self.mod_on_kill(
+                source,
+                id.entity,
+                impact.critical,
+                context.tick,
+                context.now,
+            );
         }
         if self_hit {
             return Ok(None);
@@ -1152,6 +1187,8 @@ impl RoomSimulation {
         source: Option<SampledBody>,
         pulses: &[HealingPulse],
     ) {
+        #[cfg(feature = "lua-mods")]
+        let healing_scale = self.mod_healing_scale();
         for (&wire, &entity) in &self.players_by_wire {
             if Some(wire) == skip_wire {
                 continue;
@@ -1164,6 +1201,8 @@ impl RoomSimulation {
                 continue;
             }
             let amount = HealingPulse::total_at(pulses, state.target_pose());
+            #[cfg(feature = "lua-mods")]
+            let amount = amount * healing_scale;
             if amount <= 0.0 {
                 continue;
             }
