@@ -43,37 +43,56 @@ The [contribution guide](CONTRIBUTING.md) covers Clippy, the optional Inspector 
 
 ---
 
-## Run the Native Server
+## Run the Native Server (One-Click Unified Launcher)
 
-Starting the native server requires a prepared **base 104319 Practice Range** runtime pack (optionally enriched with Junkenstein data). See [data/README.md](data/README.md) for the full input checklist and packing steps.
+Starting the native server requires a single unified **1.74.0.0.104319** runtime pack sourced strictly from your own local game files (never commit game clients, commercial assets, or keys). See [data/README.md](data/README.md) for the input checklist.
 
-```powershell
-$env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\authorized-base-runtime'
-cargo run --locked --bin orpheus_server -- --check-runtime
-cargo run --locked --bin orpheus_server -- --data-dir 'C:\path\to\local-state'
-```
-
-### Live Web Scene Inspector
-
-Enable the optional loopback Inspector with `--features inspector`.
+Use the unified launcher to pack (if `-SourceDir` is supplied), build `orpheus_server` (`inspector` + `lua-mods`), run `--check-runtime`, and launch with persistent saves (`%LOCALAPPDATA%\ORPHEUS\state`):
 
 ```powershell
-cargo run --locked --features inspector --bin orpheus_server -- --data-dir 'C:\path\to\local-state' --debug-port 3726
-```
+# Double-click scripts\PLAY_ORPHEUS.cmd, or run:
+powershell -ExecutionPolicy Bypass -File scripts\setup_and_play.ps1 -RuntimeDir 'C:\path\to\orpheus-runtime-104319'
 
-Then open `http://127.0.0.1:3726/` to view live room actors, sampled collision geometry, bot patrol clips, worker timing percentiles, and room-fault records.
+# Launch with a Lua 5.4 Workshop Mod:
+powershell -ExecutionPolicy Bypass -File scripts\setup_and_play.ps1 -RuntimeDir 'C:\path\to\orpheus-runtime-104319' -ModScript rust\scripts\mods\low_gravity_arena.lua
+```
 
 <details>
-<summary>Local Junkenstein validation overrides (Normal Cassidy, card 0x3C)</summary>
+<summary>Manual CLI & Live Web Scene Inspector</summary>
 
-For isolated Normal Revenge (`0x3C`) acceptance runs, pass `--junkenstein-validation <path.json>` before startup:
+```powershell
+$env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\orpheus-runtime-104319'
+cargo run --locked --bin orpheus_server -- --check-runtime
+cargo run --locked --features inspector,lua-mods --bin orpheus_server -- --data-dir 'C:\path\to\local-state' --debug-port 3726
+```
 
-- **High-capacity gate victory check:** `{"invulnerable_cassidy": true, "gate_capacity": 1000000000}`
-- **Destructible-gate defeat check:** `{"invulnerable_cassidy": true}`
-
-These overrides apply only to card `0x3C` and do not affect default runs or other heroes/cards. Keep local profile files outside the repository.
+Open `http://127.0.0.1:3726/` for the live Web Scene Inspector (actors, routes, dual-collision `/api/debug/v1/collision-compare`, worker timing percentiles, and room-fault records).
 
 </details>
+
+---
+
+## Lua 5.4 Mod & Workshop Scripting
+
+Build with `--features lua-mods` (or `inspector,lua-mods`) and pass `--mod-script <file.lua>` to customize gameplay rules and react to room events in a **sandboxed Lua 5.4 VM** (`StdLib::NONE`, 256 KiB memory cap, bounded instruction hooks, zero filesystem/OS/network access, and atomic `reload` rollback):
+
+- **Rules:** `damage_scale`, `healing_scale`, `gravity_scale`, `speed_scale`, `ult_charge_scale`, `cooldown_scale`, `friendly_fire`
+- **Event Hooks:** `on_room_start`, `on_player_spawn`, `on_damage`, `on_kill`, `on_button`, `on_chat`, `on_tick`
+- **Included Examples:** [`rust/scripts/mods/low_gravity_arena.lua`](rust/scripts/mods/low_gravity_arena.lua) · [`rust/scripts/mods/headshot_only_practice.lua`](rust/scripts/mods/headshot_only_practice.lua)
+
+```lua
+return {
+    abi = 1,
+    info = { name = "Headshot-Only Practice", version = "1.0.0", author = "ORPHEUS" },
+    on_damage = function(ctx, event)
+        if not event.headshot and not event.melee then
+            return { damage = 0.0, actions = {} }
+        end
+    end,
+}
+```
+
+Type `reload` + Enter in the server console to hot-reload your mod without restarting the server.
 
 ---
 
@@ -82,9 +101,9 @@ These overrides apply only to card `0x3C` and do not affect default runs or othe
 | Area | Implemented (`rust`) | Next Steps |
 | --- | --- | --- |
 | **Login, Profiles & Gallery** | Native Battle.net RPC, JAM lobby, profile settings persistence (`profile-settings-v1`), and Hero Gallery loadout previews (including 23 NPC previews). | Expand lobby flows and polish Hero Gallery framing. |
-| **Practice Range & Combat** | Local UDP rooms use Bevy ECS to simulate bots and projectiles. StateScript drives patrol decisions and supported weapon and ability behavior. | Expand hero ability coverage, improve movement and ammo synchronization, and refine upstairs navigation. |
-| **Junkenstein's Revenge** | All 14 cards load. Headless replays cover supported combat abilities, ultimate charge (`0B8B`), team score, boss speech (`40E05F6B`), and gate stages. | Expand the PvE hero roster and refine boss intro cameras, pursuit, and end-of-match flows. |
-| **Architecture & Isolation** | Independent `orpheus-wire`, `orpheus-collision`, `orpheus-runtime`, and `orpheus-statescript` workspace crates, plus modularized `game_combat/`, `scene_assets/`, and `game_service/` with room-level fault and panic isolation. | Extend cross-map navigation and multi-map simulation support. |
+| **Practice Range & Combat** | Local UDP rooms use Bevy ECS to simulate bots, breakable props/hollow railings (`STU_E62A2EFC`), interactive props (`room_primitives.rs`), voice/emote/Need Healing cues, and 32/32 generic retail hero startup. | Expand live-client ability acceptance across all 32 heroes and multi-client matches. |
+| **PvE & PvP Modes** | Consolidated `pve_encounter/` (all 14 Junkenstein cards) and composable PvP mode contracts (`pvp_mode.rs`: Escort, Assault, Hybrid, Control). | Expand PvE hero roster and live multi-player PvP match flow. |
+| **Architecture & Modding** | Independent `orpheus-wire`, `orpheus-collision`, `orpheus-runtime`, and `orpheus-statescript` crates, Inspector dual-collision compare, and sandboxed Lua 5.4 Mod API (`mod_script.rs`). | Extend Lua Mod actions into live room entity/physics hooks. |
 
 See the [architecture](docs/NATIVE_SERVER_ARCHITECTURE.md), [evidence and status](docs/STATE.md), [behavior contracts](docs/BEHAVIOR_CONTRACTS.md), and [roadmap](docs/ROADMAP.md).
 

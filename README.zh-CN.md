@@ -43,37 +43,56 @@ cargo test --locked --workspace --all-targets
 
 ---
 
-## 启动原生服务端
+## 启动原生服务端（一键整合启动脚本）
 
-启动原生服务端需要先准备一份**基础 104319 靶场运行包**（可选包含怪鼠复仇数据），文件清单与打包步骤见 [data/README.md](data/README.md)。
+启动原生服务端只需要一份来自你本地合法客户端文件的完整 **1.74.0.0.104319** 运行包（严禁向仓库提交游戏客户端、暴雪资源或密钥）。文件清单见 [data/README.md](data/README.md)。
 
-```powershell
-$env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\authorized-base-runtime'
-cargo run --locked --bin orpheus_server -- --check-runtime
-cargo run --locked --bin orpheus_server -- --data-dir 'C:\path\to\local-state'
-```
-
-### 实时网页场景检查器
-
-使用 `--features inspector` 启用本地检查器。
+使用整合脚本可一键完成打包（若提供 `-SourceDir`）、编译发布版 `orpheus_server`（含 `inspector` 与 `lua-mods`）、运行 `--check-runtime` 自检，并自动将玩家皮肤、战利品箱和设置持久化到 `%LOCALAPPDATA%\ORPHEUS\state`：
 
 ```powershell
-cargo run --locked --features inspector --bin orpheus_server -- --data-dir 'C:\path\to\local-state' --debug-port 3726
-```
+# 双击 scripts\PLAY_ORPHEUS.cmd，或在终端运行：
+powershell -ExecutionPolicy Bypass -File scripts\setup_and_play.ps1 -RuntimeDir 'C:\path\to\orpheus-runtime-104319'
 
-启动后访问 `http://127.0.0.1:3726/`，即可查看实时实体、碰撞网格、机器人巡逻线路与阻挡位置、Tick 耗时分位数以及房间异常故障隔离记录。
+# 加载 Lua 5.4 工坊 Mod 启动：
+powershell -ExecutionPolicy Bypass -File scripts\setup_and_play.ps1 -RuntimeDir 'C:\path\to\orpheus-runtime-104319' -ModScript rust\scripts\mods\low_gravity_arena.lua
+```
 
 <details>
-<summary>本地怪鼠复仇验收配置（普通难度卡西迪，卡牌 0x3C）</summary>
+<summary>手动命令行与实时网页场景检查器</summary>
 
-仅在本地做普通难度复仇（`0x3C`）验收测试时，可通过 `--junkenstein-validation <path.json>` 加载本地规则覆盖：
+```powershell
+$env:ORPHEUS_RUNTIME_DIR = 'C:\path\to\orpheus-runtime-104319'
+cargo run --locked --bin orpheus_server -- --check-runtime
+cargo run --locked --features inspector,lua-mods --bin orpheus_server -- --data-dir 'C:\path\to\local-state' --debug-port 3726
+```
 
-- **城门超高血量胜利测试**：`{"invulnerable_cassidy": true, "gate_capacity": 1000000000}`
-- **可摧毁城门失败测试**：`{"invulnerable_cassidy": true}`
-
-该配置仅对 `0x3C` 卡牌生效，不影响默认启动或其它英雄/难度，测试配置文件请保存在仓库外。
+启动后访问 `http://127.0.0.1:3726/`，即可查看实时实体、碰撞网格（含 `/api/debug/v1/collision-compare` 双碰撞对比）、机器人巡逻线路、Tick 耗时分位数以及房间故障隔离记录。
 
 </details>
+
+---
+
+## Lua 5.4 Mod 与工坊脚本支持
+
+使用 `--features lua-mods`（或 `inspector,lua-mods`）编译并传入 `--mod-script <file.lua>`，即可在**沙盒化 Lua 5.4 虚拟机**（`StdLib::NONE`、256 KiB 内存上限、指令预算限制、禁止文件系统/系统/网络访问，支持 `reload` 原子回滚热重载）中自定义游戏规则与事件响应：
+
+- **房间规则：** `damage_scale`、`healing_scale`、`gravity_scale`、`speed_scale`、`ult_charge_scale`、`cooldown_scale`、`friendly_fire`
+- **事件钩子：** `on_room_start`、`on_player_spawn`、`on_damage`、`on_kill`、`on_button`、`on_chat`、`on_tick`
+- **内置示例：** [`rust/scripts/mods/low_gravity_arena.lua`](rust/scripts/mods/low_gravity_arena.lua) · [`rust/scripts/mods/headshot_only_practice.lua`](rust/scripts/mods/headshot_only_practice.lua)
+
+```lua
+return {
+    abi = 1,
+    info = { name = "Headshot-Only Practice", version = "1.0.0", author = "ORPHEUS" },
+    on_damage = function(ctx, event)
+        if not event.headshot and not event.melee then
+            return { damage = 0.0, actions = {} }
+        end
+    end,
+}
+```
+
+服务端控制台输入 `reload` + 回车即可无重启热重载 Mod。
 
 ---
 
@@ -82,9 +101,9 @@ cargo run --locked --features inspector --bin orpheus_server -- --data-dir 'C:\p
 | 模块 | 已实现（`rust`） | 下一步 |
 | --- | --- | --- |
 | **登录、存档与画廊** | 原生 Battle.net RPC、JAM 大厅、玩家设置持久化（`profile-settings-v1`），以及英雄画廊装备预览（含 23 个 NPC 预览）。 | 扩展大厅流程，优化英雄画廊的镜头构图。 |
-| **靶场与战斗** | 本地 UDP 房间通过 Bevy ECS 模拟机器人和投射物。StateScript 驱动巡逻决策以及已支持的武器和技能行为。 | 扩大英雄技能覆盖，改善移动和弹药同步，完善二楼导航。 |
-| **怪鼠复仇** | 支持加载全部 14 张卡牌。无客户端回放覆盖已支持的战斗技能、终极技能充能（`0B8B`）、队伍计分、Boss 语音（`40E05F6B`）和城门阶段。 | 扩大 PvE 英雄阵容，完善 Boss 登场镜头、追击和对局结算。 |
-| **底层架构与隔离** | `orpheus-wire`、`orpheus-collision`、`orpheus-runtime` 和 `orpheus-statescript` 独立成 crate。`game_combat/`、`scene_assets/` 和 `game_service/` 已模块化，支持房间级错误与 panic 隔离。 | 扩展跨地图导航和多地图模拟。 |
+| **靶场与战斗** | Bevy ECS 模拟机器人与投射物、镂空栏杆与可破坏物体（`STU_E62A2EFC`）、可互动物体（`room_primitives.rs`）、语音/表情/需要治疗与默认战斗音效，以及全部 32/32 英雄通用启动。 | 推进全部 32 名英雄与多人对局的实机客户端验收。 |
+| **PvE 与 PvP 模式** | 统一 `pve_encounter/` 模块（全部 14 张怪鼠复仇卡牌）与可组合 PvP 模式契约（`pvp_mode.rs`：运载/攻防/混合/占领）。 | 扩展 PvE 英雄阵容与联机 PvP 流程。 |
+| **底层架构与 Mod 扩展** | `orpheus-wire`/`collision`/`runtime`/`statescript` 独立 crate、Inspector 双碰撞对比接口与沙盒化 Lua 5.4 Mod API（`mod_script.rs`）。 | 将更多 Lua Mod 动作直接接入房间实时物理与技能钩子。 |
 
 更多详情见 [架构与迁移](docs/NATIVE_SERVER_ARCHITECTURE.md) · [进度与对等状态](docs/STATE.md) · [行为契约](docs/BEHAVIOR_CONTRACTS.md) · [路线图](docs/ROADMAP.md)。
 

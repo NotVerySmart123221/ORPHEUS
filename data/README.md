@@ -1,6 +1,8 @@
 # Runtime Data Guide (`rust`)
 
-Public Rust tests use synthetic JSON fixtures and run without game data. Starting `orpheus_server` or running `--ignored` prepared-runtime tests requires an authorized **1.74.0.0.104319 base Practice Range** pack (`ORPHEUS_RUNTIME_DIR`).
+Public Rust tests use synthetic JSON fixtures and run without game data. Starting `orpheus_server` or running `--ignored` prepared-runtime tests requires a unified **1.74.0.0.104319** runtime pack (`ORPHEUS_RUNTIME_DIR`) sourced strictly from your own local game installation.
+
+For one-click packing, preflight, and persistent-save launch, use [`scripts/setup_and_play.ps1`](../scripts/setup_and_play.ps1) (or double-click [`scripts/PLAY_ORPHEUS.cmd`](../scripts/PLAY_ORPHEUS.cmd)).
 
 Keep extracted game assets, XML dumps, keys, and generated packs out of Git.
 
