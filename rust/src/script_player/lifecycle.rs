@@ -13,7 +13,6 @@ use crate::{
         PosedShot, Stun, eye_height, script_eye_position,
     },
     game_content::is_junkenstein_mode,
-    game_heroes::CASSIDY,
     game_hitscan::{HitDefinition, aim_direction},
     game_instance::TeamMemberCounts,
     game_parameters::{ClientWheelAction, ClientWheelUse},
@@ -544,13 +543,9 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                         .cloned()
                 })
                 .flatten();
-            // Python e1128509 declares this primary-only implicit policy;
-            // it is not a recovered global native critical default.
-            let default_critical = if (hero, shot.graph, node.pos) == (CASSIDY, 0x01d2, 31) {
-                2.0
-            } else {
-                1.0
-            };
+            // In retail 104319 data, every non-headshotting weapon explicitly sets
+            // `m_A872C70E = 1`, while headshotting weapons omit it and default to 2.0x.
+            let default_critical = 2.0;
             let mut evaluate = |config: &Json| {
                 self.component
                     .evaluate_shot_config(&shot, config, &mut self.world)
@@ -575,19 +570,18 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
             let speed = node.field("m_projectileSpeed").unwrap_or(&Json::Null);
             if !speed.is_null() && to_float(&evaluate(speed).ok()?) != 0.0 {
                 let gravity = authored_gravity(&node.fields, &mut evaluate).ok()?;
-                if !node.is_networked()
-                    || !local_prediction(node)
-                    || !predicted_sync(node, &mut evaluate).ok()?
-                    || authored_number(node.field("m_numProjectilesPerShot"), 1.0, &mut evaluate)
-                        .ok()?
-                        != 1.0
-                {
+                let count =
+                    authored_number(node.field("m_numProjectilesPerShot"), 1.0, &mut evaluate)
+                        .ok()?;
+                if !count.is_finite() || count < 1.0 || count > 32.0 {
                     return None;
                 }
-                let ballistics =
-                    ProjectileBallistics::from_authored(node, &mut evaluate).ok()??;
-                let definition = ballistics.definition?;
-                self.leases.entity(definition, shot.frame, 0)?;
+                let ballistics = ProjectileBallistics::from_authored_with_critical(
+                    node,
+                    default_critical,
+                    &mut evaluate,
+                )
+                .ok()??;
                 if ballistics.direct.is_some_and(|hit| hit.amount < 0.0)
                     || ballistics
                         .blast
@@ -604,8 +598,13 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                 {
                     return None;
                 }
-                let direction =
-                    posed_projectile_direction(node, aim_direction(&command), &mut evaluate)?;
+                let predicted = node.is_networked()
+                    && local_prediction(node)
+                    && predicted_sync(node, &mut evaluate).ok()?
+                    && count == 1.0
+                    && ballistics
+                        .definition
+                        .is_some_and(|def| self.leases.entity(def, shot.frame, 0).is_some());
                 let stun = if flashbang {
                     let effect = node.field("m_D2D11CE9.m_modifyHealth.m_277A4ECA")?;
                     if !LEGACY_PROJECTILE_CONTROL.has_effect_marker(&evaluate(effect).ok()?) {
@@ -617,14 +616,40 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                 } else {
                     None
                 };
-                posed.push(PosedShot::Projectile(Box::new(PosedProjectile {
-                    stun,
-                    shot,
-                    ballistics,
-                    origin,
-                    direction,
-                    gravity,
-                })));
+                if count == 1.0 {
+                    let direction =
+                        posed_projectile_direction(node, aim_direction(&command), &mut evaluate)?;
+                    posed.push(PosedShot::Projectile(Box::new(PosedProjectile {
+                        stun,
+                        shot,
+                        ballistics,
+                        origin,
+                        direction,
+                        gravity,
+                        predicted,
+                    })));
+                } else {
+                    if !node.field("m_5EC1EB38").is_some_and(Json::is_object) {
+                        return None;
+                    }
+                    for_each_authored_hitscan_direction(
+                        node,
+                        &report,
+                        aim_direction(&command),
+                        &mut evaluate,
+                        |direction| {
+                            posed.push(PosedShot::Projectile(Box::new(PosedProjectile {
+                                stun,
+                                shot,
+                                ballistics: ballistics.clone(),
+                                origin,
+                                direction,
+                                gravity,
+                                predicted: false,
+                            })));
+                        },
+                    );
+                }
                 return Some(());
             }
             let hit = HitDefinition::from_authored_with_critical(

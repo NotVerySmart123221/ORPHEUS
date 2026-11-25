@@ -568,6 +568,7 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             StateKind::Plain
             | StateKind::ForCode
             | StateKind::ModifyHealth
+            | StateKind::GenericModifyHealth { .. }
             | StateKind::Shockwave { .. }
             | StateKind::PlacementSelector { .. }
             | StateKind::MoveTo { .. }
@@ -602,6 +603,7 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             | StateKind::Watch
             | StateKind::Switch { .. }
             | StateKind::ActiveQuery
+            | StateKind::Defer
             | StateKind::GamePadVibration,
             Some("none"),
         ) if codec.empty() => StatePayload::new(),
@@ -622,7 +624,8 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             Value::Integer(i64::from(child.unwrap_or_default())),
         )]),
         (
-            StateKind::ButtonBlock(_)
+            StateKind::Plain
+            | StateKind::ButtonBlock(_)
             | StateKind::OutgoingDamageFilter { .. }
             | StateKind::RollMovementParameter,
             Some("link"),
@@ -683,9 +686,22 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             ),
         ]),
         (StateKind::Plain | StateKind::PhaseScriptList, Some("hits"))
-        | (StateKind::PhaseTransition, Some("bit")) => StatePayload::new(),
+        | (StateKind::PhaseTransition, Some("bit"))
+        | (StateKind::Plain, Some("blink"))
+        | (StateKind::Plain | StateKind::PlacementSelector { .. }, Some("none+u8")) => {
+            StatePayload::new()
+        }
+        (StateKind::Plain, Some("start")) => StatePayload::from([(
+            "start".into(),
+            Value::Integer(i64::try_from(state.start_ms).ok()?),
+        )]),
         (StateKind::EmptyTargets, Some("targets")) => StatePayload::new(),
-        (StateKind::TrackedTargets | StateKind::ViewTargets { .. }, Some("targets")) => {
+        (
+            StateKind::TrackedTargets
+            | StateKind::GenericTrackedTargets
+            | StateKind::ViewTargets { .. },
+            Some("targets"),
+        ) => {
             StatePayload::from([(
                 "targets".into(),
                 Value::Array(

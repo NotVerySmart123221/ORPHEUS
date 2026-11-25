@@ -656,5 +656,7 @@ fn state_kind_summary(kind: StateKind) -> (&'static str, Option<u8>) {
         StateKind::MoveTo { .. } => ("MoveTo", None),
         StateKind::WeaponVolley { .. } => ("WeaponVolley", None),
         StateKind::GroundRay => ("GroundRay", None),
+        StateKind::GenericTrackedTargets => ("GenericTrackedTargets", None),
+        StateKind::GenericModifyHealth { .. } => ("GenericModifyHealth", None),
     }
 }

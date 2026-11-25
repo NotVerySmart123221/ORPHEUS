@@ -147,6 +147,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             .expect("modify health state");
                         self.world.modify_health(self.site(id, node), elapsed_ms);
                     }
+                    Some(StateKind::GenericModifyHealth { continuous: true }) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("generic modify health state");
+                        self.apply_generic_modify_health(key, node, Some(elapsed_ms))?;
+                    }
                     Some(StateKind::PlacementSelector { .. }) => {
                         self.tick_placement_selector(key)?
                     }
@@ -163,6 +170,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             .state(usize::from(raw))
                             .expect("tracked target state");
                         self.refresh_tracked_targets(key, node)?;
+                    }
+                    Some(StateKind::GenericTrackedTargets) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("generic tracked target state");
+                        self.refresh_generic_tracked_targets(key, node)?;
                     }
                     Some(StateKind::ViewTargets { next_sample })
                         if self.machine.frame >= next_sample =>
@@ -428,7 +442,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             // parent ends it. Accept the untimed idle shape and Zombardier's
             // client-removed firing animation when they have no timer links.
             if (!field(&node.fields, "m_154DBA91").is_null()
-                && !client_removes_zombardier_animation)
+                && !client_removes_zombardier_animation
+                && !self.world.admits_generic_player_runtime(self.site(id, node)))
                 || !is_unlinked_plug(&node.fields, "m_A3B86BB0", "STUStatescriptOutputPlug")
                 || !is_unlinked_plug(&node.fields, "m_onFinishedPlug", "STUStatescriptOutputPlug")
             {
@@ -1514,8 +1529,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         node: &Node,
     ) -> Result<(), InitFault> {
         let site = self.site(key.instance, node);
-        let entry =
-            registered_state(self.graph(key.instance), node).expect("validated linked state");
+        let entry = registered_state(self.graph(key.instance), node).unwrap_or(
+            super::super::machine::RegisteredState {
+                class: RegisteredClass::EntityControl,
+                server_only: node.server_only,
+                suppresses_model: false,
+            },
+        );
         if entry.suppresses_model && !self.world.set_encounter_model_enabled(site, false) {
             self.report(site, Issue::UnsupportedField("encounter model control"));
             return Ok(());

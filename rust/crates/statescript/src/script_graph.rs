@@ -2352,6 +2352,27 @@ impl GraphStore {
         self.projected_message_topics.contains(&id)
     }
 
+    /// Whether any loaded graph declares a server-executed receiver for `topic`.
+    pub fn has_server_message_receiver(&self, topic: u64) -> bool {
+        self.graphs.values().any(|graph| {
+            graph.nodes.iter().any(|node| {
+                node.runs_on_server()
+                    && matches!(
+                        node.class.as_str(),
+                        "STUStatescriptEntryGameMessage" | "STUStatescriptStateGameMessageEntry"
+                    )
+                    && node.game_message_id() == Some(topic)
+            })
+        })
+    }
+
+    /// Whether the graph exists and every node in it executes only on the client.
+    pub fn is_client_only_graph(&self, index: u32) -> bool {
+        self.graphs
+            .get(&index)
+            .is_some_and(|graph| !graph.nodes.is_empty() && graph.nodes.iter().all(|n| !n.runs_on_server()))
+    }
+
     /// Inspect local graph structure on demand. Unresolved null links and links
     /// to declared containers are valid and do not appear in this report.
     pub fn dangling_links(&self) -> impl Iterator<Item = DanglingLink> + '_ {

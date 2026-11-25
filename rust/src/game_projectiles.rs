@@ -228,6 +228,13 @@ fn projectile_definitions(value: &Json, out: &mut Vec<u64>) {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProjectileToken(u64);
 
+impl ProjectileToken {
+    /// Allocate a non-predicted server-authoritative token outside the predicted counter range.
+    pub(crate) const fn server_only(seq: u64) -> Self {
+        Self(seq | (1u64 << 63))
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct OwnerReport {
     frame: u32,

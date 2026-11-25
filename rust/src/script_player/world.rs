@@ -359,6 +359,72 @@ impl World for BodyWorld {
         self.queue_velocity_change(frame, change)
     }
 
+    fn apply_velocity_ops(
+        &mut self,
+        site: Site,
+        frame: u32,
+        ops: &[crate::script_init::VelocityOp],
+    ) -> bool {
+        use crate::script_init::VelocityOp;
+        if !self.is_player_site(site) || self.vitals.death().is_some() {
+            return false;
+        }
+        let mut applied = false;
+        for &op in ops {
+            let change = match op {
+                VelocityOp::AddVector(delta) => VelocityChange::Impulse(delta),
+                VelocityOp::SetVector(target) => VelocityChange::SetVelocity(target),
+                VelocityOp::SetSpeed { axis, value } => {
+                    VelocityChange::SetAxisSpeed { axis, value }
+                }
+                VelocityOp::CapSpeed { axis, max } => VelocityChange::CapAxisSpeed { axis, max },
+                VelocityOp::ScaleSpeed { axis, factor } => {
+                    VelocityChange::ScaleAxisSpeed { axis, factor }
+                }
+                VelocityOp::ClampSpeed { axis, min, max } => {
+                    VelocityChange::ClampAxisSpeed { axis, min, max }
+                }
+            };
+            applied |= self.queue_velocity_change(frame, change);
+        }
+        applied
+    }
+
+    fn queue_blink(&mut self, site: Site, frame: u32, distance: f64) -> bool {
+        if !self.is_player_site(site)
+            || self.vitals.death().is_some()
+            || !distance.is_finite()
+            || distance <= 0.0
+        {
+            return false;
+        }
+        let yaw = f64::from(self.movement.yaw) * std::f64::consts::TAU / 65_536.0;
+        let (sin, cos) = yaw.sin_cos();
+        let forward = [sin, 0.0, cos];
+        let right = [cos, 0.0, -sin];
+        let [t_right, t_forward] = self.throttles.map(f64::from);
+        let dir = if t_right != 0.0 || t_forward != 0.0 {
+            let raw = [
+                forward[0] * t_forward + right[0] * t_right,
+                0.0,
+                forward[2] * t_forward + right[2] * t_right,
+            ];
+            let len = raw[0].hypot(raw[2]);
+            if len > 1e-6 {
+                [raw[0] / len, 0.0, raw[2] / len]
+            } else {
+                forward
+            }
+        } else {
+            forward
+        };
+        let delta = [dir[0] * distance, 0.0, dir[2] * distance];
+        let Some(displacement) = crate::script_init::SweptDisplacement::new(delta) else {
+            return false;
+        };
+        self.queue_scripted_motion(site, frame, ScriptedMotion::Sweep(displacement)) == Some(true)
+    }
+
     fn cap_horizontal_velocity(&mut self, site: Site, frame: u32, cap: f64) -> bool {
         self.is_player_site(site)
             && self.queue_velocity_change(frame, VelocityChange::HorizontalCap(cap))
@@ -515,6 +581,9 @@ impl World for BodyWorld {
         {
             return source.target.script_state.read(id);
         }
+        if entity == self.controller && self.spatial_frame.is_some() {
+            return Some(Value::Null);
+        }
         if entity != GAME_MODE_ENTITY {
             return self
                 .deadeye_scene
@@ -533,9 +602,11 @@ impl World for BodyWorld {
         if entity != self.entity || !self.is_player_site(site) {
             return None;
         }
-        self.model_hardpoints
-            .as_ref()
-            .map(|hardpoints| hardpoints.contains(&hardpoint))
+        Some(
+            self.model_hardpoints
+                .as_ref()
+                .is_some_and(|hardpoints| hardpoints.contains(&hardpoint)),
+        )
     }
 
     fn body_angle(
@@ -600,12 +671,21 @@ impl World for BodyWorld {
     }
 
     fn queue_health_change(&mut self, site: Site, target: u32, delta: f64) -> bool {
-        if !self.is_player_site(site) {
+        if !self.is_player_site(site) || !delta.is_finite() || delta == 0.0 {
             return false;
         }
-        self.spatial_frame
+        if self
+            .spatial_frame
             .as_deref()
             .is_some_and(|frame| self.script_requests.queue_health(frame, target, delta))
+        {
+            return true;
+        }
+        if target == self.entity && delta > 0.0 && self.vitals.death().is_none() {
+            self.vitals.heal(delta);
+            return true;
+        }
+        false
     }
 
     fn queue_health_changes(&mut self, site: Site, changes: &[(u32, f64)]) -> bool {
@@ -1135,6 +1215,200 @@ impl World for BodyWorld {
         Some(self.target_tags.as_ref()?.contains(&tag))
     }
 
+    fn targets_with_tag(&self, site: Site, tag: u64, excluded: u64) -> Option<Vec<u32>> {
+        if !self.is_player_site(site) {
+            return None;
+        }
+        let Some(entities) = self.room_entities() else {
+            return Some(Vec::new());
+        };
+        let matches = entities
+            .iter()
+            .filter_map(|(&entity, facts)| {
+                (facts.tags.presence(tag) == Some(true)
+                    && facts.tags.presence(excluded) != Some(true))
+                .then_some(entity)
+            })
+            .collect();
+        Some(matches)
+    }
+
+    fn tracked_targets(
+        &mut self,
+        site: Site,
+        origin: u32,
+        offset: [f64; 3],
+        radius: f64,
+        filter: &Json,
+    ) -> Option<Vec<u32>> {
+        if !self.is_player_site(site) || !radius.is_finite() || radius <= 0.0 {
+            return None;
+        }
+        let origin_pos = self.authored_position(origin)?;
+        let frame = self.spatial_frame.as_deref()?;
+        let centre = [
+            origin_pos[0] + offset[0],
+            origin_pos[1] + offset[1],
+            origin_pos[2] + offset[2],
+        ];
+        let own_team = crate::match_scene::team_from_spawn_filter(self.body_filter);
+        let relation = filter.get("m_66747E7D").and_then(Json::as_u64).unwrap_or(0);
+        let max_sq = radius * radius;
+        let mut matches: Vec<(f64, u32)> = frame
+            .candidates()
+            .iter()
+            .filter(|c| match relation {
+                1 => own_team.is_some() && c.team == own_team,
+                2 => c.entity != self.entity && (own_team.is_none() || c.team != own_team),
+                _ => c.entity != self.entity,
+            })
+            .filter_map(|c| {
+                let dx = c.position[0] - centre[0];
+                let dy = c.position[1] - centre[1];
+                let dz = c.position[2] - centre[2];
+                let dist_sq = dx * dx + dy * dy + dz * dz;
+                (dist_sq <= max_sq).then_some((dist_sq, c.entity))
+            })
+            .collect();
+        matches.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        Some(matches.into_iter().map(|(_, e)| e).collect())
+    }
+
+    fn generic_beam_contact(
+        &self,
+        site: Site,
+        origin: Option<[f64; 3]>,
+        direction: Option<[f64; 3]>,
+        length: Option<f64>,
+    ) -> Option<crate::script_init::GenericBeamContact> {
+        if !self.is_player_site(site) {
+            return None;
+        }
+        let Some(frame) = self.spatial_frame.as_deref() else {
+            return Some(crate::script_init::GenericBeamContact::default());
+        };
+        let Some(origin) = origin.or(self.eye_position) else {
+            return Some(crate::script_init::GenericBeamContact::default());
+        };
+        let direction = direction
+            .and_then(|d| {
+                let len = d[0].hypot(d[1]).hypot(d[2]);
+                (len > 1e-6).then(|| d.map(|a| a / len))
+            })
+            .unwrap_or_else(|| direction_for_angles(self.movement.yaw, self.movement.pitch));
+        let reach = length.filter(|l| l.is_finite() && *l > 0.0).unwrap_or(15.0);
+        let candidates: Vec<u32> = frame
+            .candidates()
+            .iter()
+            .map(|c| c.entity)
+            .filter(|&e| e != self.entity)
+            .collect();
+        let vm_frame = self.movement.frame.unwrap_or(0);
+        let actor_hit = frame
+            .actor_ray_cast(site, vm_frame, origin, direction, reach, &candidates)
+            .flatten();
+        let world_hit = frame
+            .ray_cast(site, vm_frame, origin, direction, reach)
+            .flatten();
+        match (actor_hit, world_hit) {
+            (Some(actor), Some(world)) if actor.distance <= world.distance => {
+                Some(crate::script_init::GenericBeamContact {
+                    entity: Some(actor.entity),
+                    hit: true,
+                    point: Some(crate::static_ray::along(origin, direction, actor.distance)),
+                    normal: Some(actor.normal),
+                })
+            }
+            (Some(actor), None) => Some(crate::script_init::GenericBeamContact {
+                entity: Some(actor.entity),
+                hit: true,
+                point: Some(crate::static_ray::along(origin, direction, actor.distance)),
+                normal: Some(actor.normal),
+            }),
+            (_, Some(world)) => Some(crate::script_init::GenericBeamContact {
+                entity: None,
+                hit: true,
+                point: Some(world.point),
+                normal: Some(world.normal),
+            }),
+            (None, None) => Some(crate::script_init::GenericBeamContact::default()),
+        }
+    }
+
+    fn summoner_beam_contact(&self, site: Site) -> Option<crate::script_init::BeamContact> {
+        if !self.is_player_site(site) {
+            return None;
+        }
+        let (Some(frame), Some(origin)) = (self.spatial_frame.as_deref(), self.eye_position)
+        else {
+            return Some(crate::script_init::BeamContact::default());
+        };
+        let direction = direction_for_angles(self.movement.yaw, self.movement.pitch);
+        let candidates: Vec<u32> = frame
+            .candidates()
+            .iter()
+            .map(|c| c.entity)
+            .filter(|&e| e != self.entity)
+            .collect();
+        let vm_frame = self.movement.frame.unwrap_or(0);
+        if let Some(Some(hit)) =
+            frame.actor_ray_cast(site, vm_frame, origin, direction, 12.0, &candidates)
+        {
+            return Some(crate::script_init::BeamContact {
+                entity: Some(hit.entity),
+                hit: true,
+            });
+        }
+        Some(crate::script_init::BeamContact::default())
+    }
+
+    fn play_script(
+        &mut self,
+        site: Site,
+        _target: u32,
+        request: crate::script_init::PlayScript,
+    ) -> bool {
+        self.is_player_site(site)
+            && (self.graphs.is_client_only_graph(request.graph)
+                || self.graphs.graph(request.graph).is_some())
+    }
+
+    fn admits_generic_player_runtime(&self, site: Site) -> bool {
+        self.is_player_site(site)
+    }
+
+    fn accepts_client_self_message(&self, site: Site, topic: u64) -> bool {
+        self.is_player_site(site) && !self.graphs.has_server_message_receiver(topic)
+    }
+
+    fn witch_staff_targets(&self, site: Site, radius: f64) -> Option<Vec<u32>> {
+        if !self.is_player_site(site) {
+            return None;
+        }
+        let Some(frame) = self.spatial_frame.as_deref() else {
+            return Some(Vec::new());
+        };
+        let own_team = crate::match_scene::team_from_spawn_filter(self.body_filter);
+        let max_sq = radius * radius;
+        let targets = frame
+            .candidates()
+            .iter()
+            .filter(|c| c.entity != self.entity && own_team.is_some() && c.team == own_team)
+            .filter(|c| {
+                let dx = c.position[0] - self.position[0];
+                let dy = c.position[1] - self.position[1];
+                let dz = c.position[2] - self.position[2];
+                dx * dx + dy * dy + dz * dz <= max_sq
+            })
+            .map(|c| c.entity)
+            .collect();
+        Some(targets)
+    }
+
+    fn set_witch_staff_effect(&mut self, site: Site, _effect: Option<(u32, f64)>) -> bool {
+        self.is_player_site(site)
+    }
+
     fn set_target_tag_effect(&mut self, site: Site, effect: TargetTagEffect, active: bool) -> bool {
         if !self.is_player_site(site) || effect.entity != self.entity {
             return false;
@@ -1251,10 +1525,7 @@ impl World for BodyWorld {
     }
 
     fn native(&mut self, site: Site, config: &Json) -> Option<Value> {
-        if self.hero == CASSIDY
-            && self.is_player_site(site)
-            && site.graph == 0x01f0
-            && matches!(site.node, Some(8 | 11 | 19))
+        if self.is_player_site(site)
             && config
                 .get("m_entity")
                 .is_some_and(|entity| native_shape(entity, "STU_B5A0CAF0", None))
@@ -1264,7 +1535,7 @@ impl World for BodyWorld {
             let vector = match config.get("$").and_then(Json::as_str) {
                 Some("STU_021D01CD") => Some([sin, 0.0, cos]),
                 Some("STU_66F3B89E") => Some([cos, 0.0, -sin]),
-                Some("STU_2200A66D") if site.node == Some(19) => Some(aim_direction(&Command {
+                Some("STU_2200A66D") => Some(aim_direction(&Command {
                     yaw: self.movement.yaw,
                     pitch: self.movement.pitch,
                     ..Command::default()

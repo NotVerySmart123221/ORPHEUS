@@ -1662,6 +1662,38 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     return Ok(false);
                 }
             }
+            Value::Array(targets) if self.world.admits_generic_player_runtime(site) => {
+                let Some(params) = self.play_parameters(id, node)? else {
+                    return Ok(false);
+                };
+                let source = match self
+                    .machine
+                    .value(VarKey::Instance(id, SCRIPT_SOURCE), None)
+                {
+                    Value::Entity(source) if script_expr::valid_entity(source) => source,
+                    _ => site.entity,
+                };
+                for item in targets {
+                    if let Value::Entity(target) = item {
+                        if !script_expr::valid_entity(target) {
+                            continue;
+                        }
+                        let request = PlayScript {
+                            policy,
+                            overrides: overrides.clone(),
+                            graph,
+                            source,
+                            parameters: params.clone(),
+                            auto_retire,
+                        };
+                        if target == site.entity {
+                            self.start_loaded_script(site, &request)?;
+                        } else {
+                            let _ = self.world.play_script(site, target, request);
+                        }
+                    }
+                }
+            }
             _ => {
                 self.report(site, Issue::UnsupportedField("PlayScript target component"));
                 return Ok(false);

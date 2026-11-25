@@ -505,6 +505,32 @@ pub struct BeamContact {
     pub hit: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GenericBeamContact {
+    pub entity: Option<u32>,
+    pub hit: bool,
+    pub point: Option<[f64; 3]>,
+    pub normal: Option<[f64; 3]>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VelocityAxis {
+    All,
+    Horizontal,
+    Vertical,
+    VerticalUp,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum VelocityOp {
+    AddVector([f64; 3]),
+    SetVector([f64; 3]),
+    SetSpeed { axis: VelocityAxis, value: f64 },
+    CapSpeed { axis: VelocityAxis, max: f64 },
+    ScaleSpeed { axis: VelocityAxis, factor: f64 },
+    ClampSpeed { axis: VelocityAxis, min: f64, max: f64 },
+}
+
 /// Geometry captured once when a travelling ground wave begins.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GroundWave {
@@ -548,7 +574,27 @@ pub trait World {
         false
     }
 
+    /// Queue an ordered list of authored `STU_FF3471E9` velocity operations.
+    fn apply_velocity_ops(&mut self, _site: Site, _frame: u32, _ops: &[VelocityOp]) -> bool {
+        false
+    }
+
+    /// Queue a horizontal swept blink along current movement throttle (or facing).
+    fn queue_blink(&mut self, _site: Site, _frame: u32, _distance: f64) -> bool {
+        false
+    }
+
     fn summoner_beam_contact(&self, _site: Site) -> Option<BeamContact> {
+        None
+    }
+
+    fn generic_beam_contact(
+        &self,
+        _site: Site,
+        _origin: Option<[f64; 3]>,
+        _direction: Option<[f64; 3]>,
+        _length: Option<f64>,
+    ) -> Option<GenericBeamContact> {
         None
     }
 
@@ -1302,6 +1348,18 @@ pub trait World {
 
     fn select_landing(&mut self, _site: Site) -> LandingSelection {
         LandingSelection::Unhandled
+    }
+
+    /// Whether this host runs live player bodies that admit generic verified-codec
+    /// retail states and actions beyond strict synthetic test fixtures.
+    fn admits_generic_player_runtime(&self, _site: Site) -> bool {
+        false
+    }
+
+    /// Whether a state-managed self-targeted `STU_38EE1100` registration for `topic`
+    /// has only client-side receivers and should be projected as `ProjectedSelfSend`.
+    fn accepts_client_self_message(&self, _site: Site, _topic: u64) -> bool {
+        false
     }
 }
 

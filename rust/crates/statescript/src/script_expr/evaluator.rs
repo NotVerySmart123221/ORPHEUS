@@ -629,6 +629,42 @@ impl Evaluator {
                     i64::from(integer(team)? as i32)
                 })
             }
+            "STU_038C32E8" if native_shape(config, class, Some("m_3CE40E49")) => {
+                let variant = child(config, "m_3CE40E49");
+                Value::Integer(if variant.is_null() {
+                    0
+                } else {
+                    i64::from(integer(variant)? as i32)
+                })
+            }
+            "STU_ED807E07" if native_shape(config, class, Some("m_entity")) => {
+                let target = self.scalar_config(
+                    child(config, "m_entity"),
+                    context,
+                    nested,
+                    Value::Entity(0),
+                )?;
+                match first_scalar(&target) {
+                    Some(Value::Entity(entity)) if valid_entity(*entity) => {
+                        context.native(config).unwrap_or(Value::Float(1.0))
+                    }
+                    _ => Value::Float(0.0),
+                }
+            }
+            "STU_082FA44E" if native_fields(config, &["m_entity", "m_DBF61E9A"]) => {
+                let target = self.scalar_config(
+                    child(config, "m_entity"),
+                    context,
+                    nested,
+                    Value::Entity(0),
+                )?;
+                match first_scalar(&target) {
+                    Some(Value::Entity(entity)) if valid_entity(*entity) => {
+                        context.native(config).unwrap_or(Value::Float(0.0))
+                    }
+                    _ => Value::Float(0.0),
+                }
+            }
             "STU_D289FA32" if native_shape(config, class, Some("m_team")) => {
                 let Value::Integer(team @ 0..=4) =
                     self.config(child(config, "m_team"), context, nested)?
@@ -651,11 +687,42 @@ impl Evaluator {
                 // The native predicate tests whether the child produced a non-null value tag.
                 Value::Bool(self.config(value, context, nested)? != Value::Null)
             }
-            "STU_06610EBC"
-                if native_shape(config, class, Some("m_configVars"))
-                    && child(config, "m_configVars").is_null() =>
-            {
-                Value::Array(Vec::new())
+            "STU_06610EBC" if native_shape(config, class, Some("m_configVars")) => {
+                let mut items = Vec::new();
+                self.collect_group(config, context, nested, &mut items)?;
+                Value::Array(items)
+            }
+            "STU_6EDA44A7" if native_fields(config, &["m_entity", "m_BD631144", "m_height"]) => {
+                let target = self.scalar_config(
+                    child(config, "m_entity"),
+                    context,
+                    nested,
+                    Value::Entity(0),
+                )?;
+                let Some(Value::Entity(entity)) = first_scalar(&target) else {
+                    return Ok(Value::Vector([0.0; 3]));
+                };
+                if !valid_entity(*entity) {
+                    return Ok(Value::Vector([0.0; 3]));
+                }
+                let origin = context.authored_position(*entity).unwrap_or([0.0; 3]);
+                let [fx, _, fz] = context.authored_forward(*entity).unwrap_or([0.0, 0.0, 1.0]);
+                let planar = fx.hypot(fz);
+                let (fx, fz) = if planar > 1e-6 {
+                    (fx / planar, fz / planar)
+                } else {
+                    (0.0, 1.0)
+                };
+                let (rx, rz) = (fz, -fx);
+                let offset = match self.config(child(config, "m_BD631144"), context, nested)? {
+                    Value::Vector(v) => v,
+                    _ => [0.0; 3],
+                };
+                Value::Vector([
+                    rounded(origin[0] + rx * offset[0] + fx * offset[2]),
+                    rounded(origin[1] + offset[1]),
+                    rounded(origin[2] + rz * offset[0] + fz * offset[2]),
+                ])
             }
             "STU_B3E67A36" | "STU_EB216A0B"
                 if native_fields(
@@ -1281,7 +1348,7 @@ impl Evaluator {
                     OnFire::NoStats => initial,
                 }
             }
-            "STU_4A101787" | "STU_E95A9C77" if native_shape(config, class, None) => {
+            "STU_4A101787" | "STU_E95A9C77" | "STU_555DD49F" if native_shape(config, class, None) => {
                 // The retail classes share a native evaluator that writes a typed false.
                 Value::Bool(false)
             }
@@ -1546,12 +1613,55 @@ impl Evaluator {
             "STU_32E6E4D8" | "STU_7D7D2470" => {
                 let target = child(config, "m_entity");
                 let value = self.config(target, context, nested)?;
-                let health = first_scalar(&value)
-                    .and_then(|value| {
-                        health_amount(target, value, None, class == "STU_7D7D2470", context)
-                    })
-                    .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?;
+                let health = match &value {
+                    Value::Array(items)
+                        if items.is_empty()
+                            && matches!(dynamic(target), Ok(Some(variable)) if variable.id != 0) =>
+                    {
+                        0.0
+                    }
+                    _ => first_scalar(&value)
+                        .and_then(|value| {
+                            health_amount(target, value, None, class == "STU_7D7D2470", context)
+                        })
+                        .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
+                };
                 Value::Float(health)
+            }
+            "STU_9D240539" => {
+                let _ = self.config(child(config, "m_entity"), context, nested)?;
+                Value::Null
+            }
+            "STU_C1F83245" => {
+                let target = child(config, "m_entity");
+                let value = self.config(target, context, nested)?;
+                let entity = match first_scalar(&value) {
+                    Some(Value::Entity(entity)) if valid_entity(*entity) => Some(*entity),
+                    _ => None,
+                };
+                let pos = entity
+                    .and_then(|entity| {
+                        context
+                            .body_eye_position(entity)
+                            .or_else(|| context.authored_position(entity))
+                    })
+                    .unwrap_or([0.0; 3]);
+                Value::Vector(pos)
+            }
+            "STU_D0E0DA18" => {
+                let value = self.config(child(config, "m_3ABD589C"), context, nested)?;
+                let degrees = match value {
+                    Value::Vector(v) if v.iter().all(|a| a.is_finite()) => {
+                        let len = v[0].hypot(v[1]).hypot(v[2]);
+                        if len > 1e-9 {
+                            rounded((v[1] / len).clamp(-1.0, 1.0).asin().to_degrees())
+                        } else {
+                            0.0
+                        }
+                    }
+                    _ => 0.0,
+                };
+                Value::Float(degrees)
             }
             "STU_93DCDDFD"
                 if native_fields(config, &["m_entity", "m_resourceKey"])

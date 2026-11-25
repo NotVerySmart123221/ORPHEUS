@@ -223,6 +223,7 @@ pub(crate) struct PosedProjectile {
     pub ballistics: ProjectileBallistics,
     pub origin: [f64; 3],
     pub direction: [f64; 3],
+    pub predicted: bool,
 }
 
 #[derive(Clone, Copy)]

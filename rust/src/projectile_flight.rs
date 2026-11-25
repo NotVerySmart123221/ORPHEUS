@@ -63,11 +63,27 @@ impl ProjectileBallistics {
         node: &Node,
         evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
     ) -> Result<Option<Self>, EvalError> {
-        Self::from_fields(&node.fields, evaluate)
+        Self::from_fields_with_critical(&node.fields, 1.0, evaluate)
+    }
+
+    pub(crate) fn from_authored_with_critical(
+        node: &Node,
+        default_critical: f64,
+        evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
+    ) -> Result<Option<Self>, EvalError> {
+        Self::from_fields_with_critical(&node.fields, default_critical, evaluate)
     }
 
     pub(crate) fn from_fields(
         fields: &Json,
+        evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
+    ) -> Result<Option<Self>, EvalError> {
+        Self::from_fields_with_critical(fields, 1.0, evaluate)
+    }
+
+    fn from_fields_with_critical(
+        fields: &Json,
+        default_critical: f64,
         mut evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
     ) -> Result<Option<Self>, EvalError> {
         let field = |path| crate::script_graph::field_at(fields, path);
@@ -107,8 +123,9 @@ impl ProjectileBallistics {
         if !terrain_radius.is_finite() || terrain_radius < 0.0 {
             return Err(EvalError::MalformedConfig("projectile terrain radius"));
         }
-        let direct = HitDefinition::from_authored(
+        let direct = HitDefinition::from_authored_with_critical(
             field("m_6396149F").unwrap_or(&Json::Null),
+            default_critical,
             &mut evaluate,
         )?;
         let config = field("m_D2D11CE9").unwrap_or(&Json::Null);

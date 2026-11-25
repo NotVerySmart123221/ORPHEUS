@@ -18,7 +18,7 @@ use crate::{
         CROUCHED, IN_AIR, JUMPED, NOT_GROUND_UNDER, Posture, PostureStep, TOUCHING, snap,
     },
     mover_settings::MoverSettings,
-    script_init::{Relocation, ScriptedMotion, SweptDisplacement},
+    script_init::{Relocation, ScriptedMotion, SweptDisplacement, VelocityAxis},
     world::{Movement, NO_INPUT},
 };
 
@@ -32,6 +32,11 @@ pub enum VelocityChange {
     Impulse([f64; 3]),
     HorizontalCap(f64),
     VerticalImpulse { vertical: f64, delta: [f64; 3] },
+    SetVelocity([f64; 3]),
+    SetAxisSpeed { axis: VelocityAxis, value: f64 },
+    CapAxisSpeed { axis: VelocityAxis, max: f64 },
+    ScaleAxisSpeed { axis: VelocityAxis, factor: f64 },
+    ClampAxisSpeed { axis: VelocityAxis, min: f64, max: f64 },
 }
 
 impl VelocityChange {
@@ -68,20 +73,128 @@ impl VelocityChange {
                     return next[1] > 0.0;
                 }
             }
+            Self::SetVelocity(target) => {
+                let next = target.map(|axis| f64::from(axis as f32));
+                if next.iter().all(|axis| axis.is_finite()) {
+                    *velocity = next;
+                    return next[1] > 0.0;
+                }
+            }
+            Self::SetAxisSpeed { axis, value } => match axis {
+                VelocityAxis::All => {
+                    let speed = velocity[0].hypot(velocity[1]).hypot(velocity[2]);
+                    if speed > 1e-6 {
+                        let scale = value / speed;
+                        for comp in velocity.iter_mut() {
+                            *comp = f64::from((*comp * scale) as f32);
+                        }
+                    }
+                }
+                VelocityAxis::Horizontal => {
+                    let speed = velocity[0].hypot(velocity[2]);
+                    if speed > 1e-6 {
+                        let scale = value / speed;
+                        for idx in [0, 2] {
+                            velocity[idx] = f64::from((velocity[idx] * scale) as f32);
+                        }
+                    }
+                }
+                VelocityAxis::Vertical => {
+                    velocity[1] = f64::from(value as f32);
+                    return velocity[1] > 0.0;
+                }
+                VelocityAxis::VerticalUp => {
+                    let next = f64::from(value as f32);
+                    if next > velocity[1] {
+                        velocity[1] = next;
+                        return velocity[1] > 0.0;
+                    }
+                }
+            },
+            Self::CapAxisSpeed { axis, max } => match axis {
+                VelocityAxis::All => {
+                    let speed = velocity[0].hypot(velocity[1]).hypot(velocity[2]);
+                    if speed > max && speed > 0.0 {
+                        let scale = max / speed;
+                        for comp in velocity.iter_mut() {
+                            *comp = f64::from((*comp * scale) as f32);
+                        }
+                    }
+                }
+                VelocityAxis::Horizontal => {
+                    Self::HorizontalCap(max).apply(velocity);
+                }
+                VelocityAxis::Vertical | VelocityAxis::VerticalUp => {
+                    if velocity[1].abs() > max {
+                        velocity[1] = f64::from((velocity[1].signum() * max) as f32);
+                    }
+                }
+            },
+            Self::ScaleAxisSpeed { axis, factor } => match axis {
+                VelocityAxis::All => {
+                    for comp in velocity.iter_mut() {
+                        *comp = f64::from((*comp * factor) as f32);
+                    }
+                }
+                VelocityAxis::Horizontal => {
+                    for idx in [0, 2] {
+                        velocity[idx] = f64::from((velocity[idx] * factor) as f32);
+                    }
+                }
+                VelocityAxis::Vertical | VelocityAxis::VerticalUp => {
+                    velocity[1] = f64::from((velocity[1] * factor) as f32);
+                }
+            },
+            Self::ClampAxisSpeed { axis, min, max } => match axis {
+                VelocityAxis::All => {
+                    let speed = velocity[0].hypot(velocity[1]).hypot(velocity[2]);
+                    if speed > 1e-6 {
+                        let clamped = speed.clamp(min, max);
+                        if (clamped - speed).abs() > 1e-9 {
+                            let scale = clamped / speed;
+                            for comp in velocity.iter_mut() {
+                                *comp = f64::from((*comp * scale) as f32);
+                            }
+                        }
+                    }
+                }
+                VelocityAxis::Horizontal => {
+                    let speed = velocity[0].hypot(velocity[2]);
+                    if speed > 1e-6 {
+                        let clamped = speed.clamp(min, max);
+                        if (clamped - speed).abs() > 1e-9 {
+                            let scale = clamped / speed;
+                            for idx in [0, 2] {
+                                velocity[idx] = f64::from((velocity[idx] * scale) as f32);
+                            }
+                        }
+                    }
+                }
+                VelocityAxis::Vertical | VelocityAxis::VerticalUp => {
+                    velocity[1] = f64::from(velocity[1].clamp(min, max) as f32);
+                }
+            },
         }
         false
     }
 
     pub(crate) fn valid(self) -> bool {
         match self {
-            Self::Delta(delta) | Self::Impulse(delta) => {
+            Self::Delta(delta) | Self::Impulse(delta) | Self::SetVelocity(delta) => {
                 delta.iter().all(|value| (*value as f32).is_finite())
             }
-            Self::HorizontalCap(cap) => (cap as f32).is_finite() && cap >= 0.0,
+            Self::HorizontalCap(cap) | Self::CapAxisSpeed { max: cap, .. } => {
+                (cap as f32).is_finite() && cap >= 0.0
+            }
             Self::VerticalImpulse { vertical, delta } => {
                 (vertical as f32).is_finite()
                     && Self::Delta(delta).valid()
                     && (vertical as f32 + delta[1] as f32).is_finite()
+            }
+            Self::SetAxisSpeed { value, .. } => (value as f32).is_finite(),
+            Self::ScaleAxisSpeed { factor, .. } => (factor as f32).is_finite() && factor >= 0.0,
+            Self::ClampAxisSpeed { min, max, .. } => {
+                (min as f32).is_finite() && (max as f32).is_finite() && min <= max
             }
         }
     }

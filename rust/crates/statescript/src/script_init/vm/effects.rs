@@ -296,13 +296,20 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             value => vec![value],
         };
         let mut entities = Vec::with_capacity(targets.len());
+        let generic_player = self.world.admits_generic_player_runtime(site);
         for value in targets {
             self.spend("contact effect target")?;
             let Value::Entity(entity) = value else {
+                if generic_player {
+                    continue;
+                }
                 self.report(site, Issue::UnsupportedField("contact effect target"));
                 return Ok(());
             };
             if !script_expr::valid_entity(entity) {
+                if generic_player {
+                    continue;
+                }
                 self.report(site, Issue::UnsupportedField("contact effect target"));
                 return Ok(());
             }
@@ -529,17 +536,39 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         node: &Node,
     ) -> Result<(), InitFault> {
         let site = self.site(key.instance, node);
-        let Some(contact) = self.world.summoner_beam_contact(site) else {
+        let segment = field(&node.fields, "m_F5732403");
+        let origin = self
+            .evaluate(key.instance, node, field(&node.fields, "m_3BC31C57"), None)
+            .and_then(|v| match v {
+                Value::Vector(pos) if pos.iter().all(|a| a.is_finite()) => Some(pos),
+                _ => None,
+            });
+        let direction = self
+            .evaluate(key.instance, node, field(segment, "m_direction"), None)
+            .and_then(|v| match v {
+                Value::Vector(dir) if dir.iter().all(|a| a.is_finite()) => Some(dir),
+                _ => None,
+            });
+        let length = self
+            .evaluate(key.instance, node, field(segment, "m_6A79BD98"), None)
+            .and_then(pool_number)
+            .filter(|len| len.is_finite() && *len > 0.0);
+        let generic = self
+            .world
+            .generic_beam_contact(site, origin, direction, length);
+        let (entity, hit, point, normal) = if let Some(contact) = generic {
+            (contact.entity, contact.hit, contact.point, contact.normal)
+        } else if let Some(contact) = self.world.summoner_beam_contact(site) {
+            (contact.entity, contact.hit, None, None)
+        } else {
             self.report(site, Issue::UnsupportedField("Summoner beam ray service"));
             return Ok(());
         };
         let outputs = field(&node.fields, "m_target");
         for (name, value) in [
-            (
-                "m_692DFF72",
-                contact.entity.map_or(Value::Null, Value::Entity),
-            ),
-            ("m_750377AA", Value::Bool(contact.hit)),
+            ("m_692DFF72", entity.map_or(Value::Null, Value::Entity)),
+            ("m_750377AA", Value::Bool(hit)),
+            ("m_7BA44A69", Value::Bool(hit)),
         ] {
             if let Some(output) = script_expr::lvalue(field(outputs, name))
                 .map_err(|_| InitFault::InvalidRoot(key.instance))?
@@ -547,8 +576,137 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.write(source_key(key.instance, output), value)?;
             }
         }
+        if let Some(point) = point {
+            if let Some(output) = script_expr::lvalue(field(outputs, "m_5ED803CF"))
+                .map_err(|_| InitFault::InvalidRoot(key.instance))?
+            {
+                self.write(source_key(key.instance, output), Value::Vector(point))?;
+            }
+        }
+        if let Some(normal) = normal {
+            if let Some(output) = script_expr::lvalue(field(outputs, "m_F2F8606D"))
+                .map_err(|_| InitFault::InvalidRoot(key.instance))?
+            {
+                self.write(source_key(key.instance, output), Value::Vector(normal))?;
+            }
+        }
         self.register_tick(key, self.machine.now_ms);
         Ok(())
+    }
+
+    pub(in crate::script_init) fn apply_generic_modify_health(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+        elapsed_ms: Option<u64>,
+    ) -> Result<(), InitFault> {
+        if self.machine.owner_dead || elapsed_ms == Some(0) {
+            return Ok(());
+        }
+        let id = key.instance;
+        let site = self.site(id, node);
+        let effect = field(&node.fields, "m_modifyHealth");
+        let Some(mut amount) = self
+            .evaluate(id, node, field(effect, "m_amount"), None)
+            .and_then(pool_number)
+            .filter(|amount| amount.is_finite() && *amount > 0.0)
+        else {
+            return Ok(());
+        };
+        if let Some(ms) = elapsed_ms {
+            amount = f64::from((amount * (ms as f64 / 1000.0)) as f32);
+            if !amount.is_finite() || amount <= 0.0 {
+                return Ok(());
+            }
+        }
+        let target_field = field(&node.fields, "m_FA3ECC43");
+        let target_value = if target_field.is_null() {
+            Value::Entity(site.entity)
+        } else {
+            match self.evaluate(id, node, target_field, None) {
+                Some(value) => value,
+                None => return Ok(()),
+            }
+        };
+        let damage = field(effect, "m_93CDFD2F").as_u64() == Some(1);
+        let delta = if damage { -amount } else { amount };
+        let targets = match target_value {
+            Value::Array(items) => items,
+            Value::Null => Vec::new(),
+            other => vec![other],
+        };
+        for item in targets {
+            if let Value::Entity(target) = item {
+                if script_expr::valid_entity(target) {
+                    let _ = self.world.queue_health_change(site, target, delta);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(in crate::script_init) fn refresh_generic_tracked_targets(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        let id = key.instance;
+        let site = self.site(id, node);
+        let origin_field = field(&node.fields, "m_8DCA77B6");
+        let origin = if origin_field.is_null() {
+            site.entity
+        } else {
+            match self.evaluate(id, node, origin_field, None) {
+                Some(Value::Entity(entity)) if script_expr::valid_entity(entity) => entity,
+                _ => return self.publish_tracked_targets(key, node, Vec::new()),
+            }
+        };
+        let offset_field = field(&node.fields, "m_05BE62DD");
+        let offset = if offset_field.is_null() {
+            [0.0; 3]
+        } else {
+            match self.evaluate(id, node, offset_field, None) {
+                Some(Value::Vector(v)) if v.iter().all(|a| a.is_finite()) => v,
+                _ => [0.0; 3],
+            }
+        };
+        let radius = self
+            .evaluate(id, node, field(&node.fields, "m_radius"), None)
+            .and_then(pool_number)
+            .filter(|r| r.is_finite() && *r > 0.0)
+            .unwrap_or(0.0);
+        if radius <= 0.0 {
+            return self.publish_tracked_targets(key, node, Vec::new());
+        }
+        let filter = field(&node.fields, "m_filter");
+        let Some(candidates) = self
+            .world
+            .tracked_targets(site, origin, offset, radius, filter)
+        else {
+            return self.publish_tracked_targets(key, node, Vec::new());
+        };
+        let mut targets = Vec::with_capacity(candidates.len());
+        let condition = field(filter, "m_condition");
+        for candidate in candidates {
+            self.spend("generic tracked target condition")?;
+            if !script_expr::valid_entity(candidate) {
+                continue;
+            }
+            let accepted = if condition.is_null() {
+                true
+            } else {
+                let previous = self
+                    .parameters
+                    .replace(Arc::new(Variables::from([(8, Value::Entity(candidate))])));
+                let value = self.evaluate(id, node, condition, None);
+                self.parameters = previous;
+                value.is_some_and(|v| truthy(&v))
+            };
+            if accepted {
+                targets.push(candidate);
+            }
+        }
+        self.publish_tracked_targets(key, node, targets)
     }
 
     pub(in crate::script_init) fn tick_summoner_beam_damage(
@@ -2458,6 +2616,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Some("STU_56DEE1BB") => (Operation::Set, 0.0),
                 Some("STU_C61711C8") => (Operation::Minimum, f64::from(f32::MAX)),
                 Some("STU_F197CFBF") => (Operation::Maximum, f64::from(f32::MIN_POSITIVE)),
+                Some("STU_ED2B22BD" | "STU_09F9B1FE")
+                    if self.world.admits_generic_player_runtime(self.site(id, node)) =>
+                {
+                    continue;
+                }
                 _ => {
                     self.report(
                         self.site(id, node),
@@ -2773,6 +2936,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
     ) -> Result<(), InitFault> {
         let site = self.site(key.instance, node);
         if (site.graph, node.pos) != (0x0B27, 15) {
+            if self.world.admits_generic_player_runtime(site) {
+                return Ok(());
+            }
             self.report(site, Issue::UnsupportedState(node.class.clone()));
             return Ok(());
         }
@@ -2880,15 +3046,33 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             return Ok(());
         }
         let entity_config = field(&node.fields, "m_destinationEntity");
-        if !entity_config.is_null()
-            && self.evaluate(key.instance, node, entity_config, None) != Some(Value::Entity(0))
-        {
-            return Ok(());
-        }
-        let Some(Value::Vector(destination)) =
-            self.evaluate(key.instance, node, field(&node.fields, "m_865F3D01"), None)
-        else {
-            return Ok(());
+        let entity_dest = if entity_config.is_null() {
+            None
+        } else {
+            match self.evaluate(key.instance, node, entity_config, None) {
+                Some(Value::Entity(0)) => None,
+                Some(Value::Entity(entity))
+                    if script_expr::valid_entity(entity)
+                        && self
+                            .world
+                            .admits_generic_player_runtime(self.site(key.instance, node)) =>
+                {
+                    self.world.authored_position(entity)
+                }
+                _ => return Ok(()),
+            }
+        };
+        let destination = match self.evaluate(
+            key.instance,
+            node,
+            field(&node.fields, "m_865F3D01"),
+            None,
+        ) {
+            Some(Value::Vector(destination)) => destination,
+            _ => match entity_dest {
+                Some(destination) => destination,
+                None => return Ok(()),
+            },
         };
         let speed = match self.evaluate(key.instance, node, speed_config, None) {
             Some(Value::Integer(n)) => n as f64,

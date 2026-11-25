@@ -3425,7 +3425,6 @@ fn unsupported_projectile_modes_do_not_become_hitscan_or_straight_damage() {
         ..Command::default()
     };
     for (field, value) in [
-        ("m_45271E8C", json!(false)),
         ("m_projectileMotions", json!([{"$":"STU_E1A5B579"}])),
         ("m_numProjectilesPerShot", json!(2)),
         ("m_6396149F", json!({"m_modifyHealth":{"m_amount":-1.0}})),
@@ -3438,6 +3437,19 @@ fn unsupported_projectile_modes_do_not_become_hitscan_or_straight_damage() {
         runtime.advance(fire, &mover, BodyStep::Posed).unwrap();
         assert!(runtime.take_shots(Some(fire), &mover).is_empty(), "{field}");
     }
+    // Unpredicted projectiles emit server-authoritative Projectile shots (never hitscan).
+    let mut unpredicted = fixture_projectile_fields(40.0);
+    unpredicted["m_45271E8C"] = json!(false);
+    let mut runtime = fixture_volley_factory(29, true, unpredicted)
+        .start(spawn)
+        .unwrap();
+    runtime.advance(fire, &mover, BodyStep::Posed).unwrap();
+    let shots = runtime.take_shots(Some(fire), &mover);
+    assert!(
+        matches!(shots.as_slice(), [PosedShot::Projectile(p)] if !p.predicted),
+        "expected unpredicted projectile shot, got {} shots",
+        shots.len()
+    );
 }
 
 fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Component, BodyWorld) {
@@ -5310,13 +5322,14 @@ fn prepared_all_32_heroes_compile_start_and_step_cleanly() {
                 slot: idx as u8,
                 frame: FIRST_TICK,
                 pose: Movement::default(),
-                eye_position: None,
+                eye_position: Some([0.0, crate::game_combat::eye_height(hero.guid, false), 0.0]),
                 quanta: RETAIL_QUANTA,
                 skin: 0,
             },
             OwnerBodySetup {
                 spatial_frame: room.spatial_frame(),
-                ..OwnerBodySetup::default()
+                team_member_counts: Some(TeamMemberCounts::from_teams(false, [0])),
+                room_activity: Some(scene.owner_room_activity()),
             },
         ) {
             Ok(p) => p,
@@ -5326,22 +5339,108 @@ fn prepared_all_32_heroes_compile_start_and_step_cleanly() {
             }
         };
 
-        // Exercise neutral idle, primary (0x1), secondary (0x2), ability1 (0x8), ability2 (0x10),
-        // ult (0x20), melee (0x800), reload (0x100) button edges.
-        let button_sequence = [
-            0u32, 0x1, 0, 0x2, 0, 0x8, 0, 0x10, 0, 0x20, 0, 0x800, 0, 0x100, 0,
-        ];
-        for (step, &buttons) in button_sequence.iter().enumerate() {
-            let cmd = Command {
-                frame: FIRST_TICK + 1 + step as u32,
-                buttons,
-                ..Command::default()
-            };
-            if let Err(err) = player.advance(cmd, &mover, BodyStep::Posed) {
-                failures.push(format!("{} step({buttons:#x}): {err}", hero.name));
-                break;
+        // Strict live-server baseline check: Owner + Observer projection AND full wire encode
+        // (this is the exact check that rejects a hero in live `WorldDelivery::start_owner_body`).
+        let snapshot = player.snapshot().expect("started hero snapshot");
+        let encoder = player.encoder();
+        match encoder.project(snapshot, View::Owner) {
+            Ok(projected) => {
+                if let Err(err) = encoder.full(&projected) {
+                    failures.push(format!("{} owner-wire: {err}", hero.name));
+                    continue;
+                }
+            }
+            Err(err) => {
+                failures.push(format!("{} owner-baseline: {err}", hero.name));
+                continue;
             }
         }
+        match encoder.project(snapshot, View::Observer) {
+            Ok(projected) => {
+                if let Err(err) = encoder.full(&projected) {
+                    failures.push(format!("{} observer-wire: {err}", hero.name));
+                    continue;
+                }
+            }
+            Err(err) => {
+                failures.push(format!("{} observer-baseline: {err}", hero.name));
+                continue;
+            }
+        }
+
+        // Deep multi-frame exercise across EVERY combat & mobility input:
+        // primary (0x1), secondary (0x2), jump (0x4), ability1 (0x8), ability2 (0x10),
+        // ult (0x20), reload (0x100), melee (0x800). Hold each for multiple frames + release
+        // so delayed states, velocity impulses, blinks, beams, heals, and multi-pellet volleys run.
+        let mut frame = FIRST_TICK;
+        let phases: &[(u32, u32, i8)] = &[
+            (0x0, 2, 0),
+            (0x1, 6, 0),    // primary fire hold
+            (0x0, 4, 0),    // release
+            (0x2, 6, 0),    // secondary fire hold
+            (0x0, 4, 0),
+            (0x8, 6, 127),  // ability 1 (with forward throttle for dash/blink/roll)
+            (0x0, 6, 0),
+            (0x10, 6, 127), // ability 2
+            (0x0, 6, 0),
+            (0x20, 6, 0),   // ultimate
+            (0x0, 6, 0),
+            (0x800, 4, 0),  // quick melee
+            (0x0, 4, 0),
+            (0x4, 4, 127),  // jump / double-jump / hover
+            (0x0, 4, 0),
+            (0x100, 4, 0),  // reload
+            (0x0, 4, 0),
+        ];
+        let mut total_shots = 0usize;
+        let mut total_vel = 0usize;
+        let mut total_motion = 0usize;
+        'hero_loop: for &(buttons, ticks, forward) in phases {
+            for _ in 0..ticks {
+                frame += 1;
+                let cmd = Command {
+                    frame,
+                    buttons,
+                    forward,
+                    ..Command::default()
+                };
+                if let Err(err) = player.advance(cmd, &mover, BodyStep::Posed) {
+                    failures.push(format!("{} step({buttons:#x}@f{frame}): {err}", hero.name));
+                    break 'hero_loop;
+                }
+                total_shots += player.take_shots(Some(cmd), &mover).len();
+                total_vel += player.take_velocity_changes().len();
+                if player.take_scripted_motion().is_some() {
+                    total_motion += 1;
+                }
+                let snap = player.snapshot().expect("stepped hero snapshot");
+                if !snap.initialization_complete() {
+                    failures.push(format!(
+                        "{} step({buttons:#x}@f{frame}) diags: {:?}",
+                        hero.name, snap.diagnostics
+                    ));
+                    break 'hero_loop;
+                }
+                if let Err(err) = player.encoder().project(snap, View::Owner) {
+                    failures.push(format!(
+                        "{} step({buttons:#x}@f{frame}) owner-proj: {err}",
+                        hero.name
+                    ));
+                    break 'hero_loop;
+                }
+                if let Err(err) = player.encoder().project(snap, View::Observer) {
+                    failures.push(format!(
+                        "{} step({buttons:#x}@f{frame}) observer-proj: {err}",
+                        hero.name
+                    ));
+                    break 'hero_loop;
+                }
+            }
+        }
+        eprintln!(
+            "  hero {:<16} shots={:<3} vel_ops={:<3} motions={:<2}",
+            hero.name, total_shots, total_vel, total_motion
+        );
     }
 
     assert!(

@@ -503,8 +503,9 @@ pub(super) fn is_self_stat_timer(node: &Node) -> bool {
         is_stat(stat) && stat_list.is_null()
     } else {
         node.is_networked()
-            && stat.is_null()
-            && matches!(stat_list.as_array().map(Vec::as_slice), Some([entry]) if is_stat(entry))
+            && ((is_stat(stat) && stat_list.is_null())
+                || (stat.is_null()
+                    && matches!(stat_list.as_array().map(Vec::as_slice), Some([entry]) if is_stat(entry))))
     }
 }
 
@@ -567,6 +568,12 @@ pub(super) fn is_stat_action(node: &Node) -> bool {
                 "m_2BBEEAB8" | "m_A2287776" | "m_AED90719" => neutral_flag(value),
                 "m_ADEB6E05" => value.as_bool() == Some(true) || value.as_u64() == Some(1),
                 "m_amount" | "m_inPlug" | "m_outPlug" | "m_stat" | "m_stats" | "m_targets" => true,
+                "m_D32CB484" => {
+                    value.is_null()
+                        || value
+                            .as_array()
+                            .is_some_and(|items| items.iter().all(is_stat))
+                }
                 _ => value.is_null(),
             })
         })
@@ -685,10 +692,13 @@ pub(super) fn is_static_map_explosion(graph: &Graph, node: &Node, state: u16) ->
         && (direction.is_null() || explosion_direction(direction))
         && number(field(fields, "m_radius"))
         && explosion_float(field(fields, "m_65438EEB"))
-        && native_integer_operand(field(fields, "m_66D29548"))
+        && (native_integer_operand(field(fields, "m_66D29548"))
+            || native_dynamic_operand(field(fields, "m_66D29548")))
         && {
             let strength = field(fields, "m_6EFD110C");
-            native_integer_operand(strength) || native_expression_operand(strength)
+            native_integer_operand(strength)
+                || explosion_float(strength)
+                || native_expression_operand(strength)
         }
         && number(scalar)
         && (extra_scalar.is_null() || literal_number(extra_scalar))

@@ -519,6 +519,9 @@ enum Family {
     Counter2,
     Pulser,
     SprayPlacement,
+    Blink,
+    Start,
+    NoneU8,
 }
 
 impl Family {
@@ -546,6 +549,9 @@ impl Family {
             "counter2" => Self::Counter2,
             "pulser" => Self::Pulser,
             "861D9015" => Self::SprayPlacement,
+            "blink" => Self::Blink,
+            "start" => Self::Start,
+            "none+u8" => Self::NoneU8,
             _ => return None,
         })
     }
@@ -640,6 +646,26 @@ fn project(
         Family::Pulser => {
             fields.insert("fresh", Value::Bool(vm.flag("fresh")).into());
             fields.insert("count", Value::Integer(vm.integer("count", 0)?).into());
+        }
+        Family::Blink if !owner => {
+            fields.insert("value", Value::Integer(vm.integer("value", 0)?).into());
+        }
+        Family::Blink => {}
+        Family::Start if owner => {
+            if let PayloadMode::Owner { frame_time, .. } = mode {
+                let start = vm.integer("start", frame_time)?;
+                let elapsed = frame_time
+                    .checked_sub(start)
+                    .ok_or(PayloadError::TimeRange)?;
+                fields.insert("t", Value::Integer(elapsed).into());
+            }
+        }
+        Family::Start => {}
+        Family::NoneU8 => {
+            fields.insert(
+                "m_B4802CE3",
+                Value::Integer(vm.integer("m_B4802CE3", 0)?).into(),
+            );
         }
     }
     Ok(fields)

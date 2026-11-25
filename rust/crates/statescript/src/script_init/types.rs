@@ -46,6 +46,7 @@ pub enum StateKind {
     RollMovementParameter,
     ExplosionContact,
     TrackedTargets,
+    GenericTrackedTargets,
     ViewTargets {
         next_sample: u32,
     },
@@ -56,6 +57,9 @@ pub enum StateKind {
     GroundRay,
     SummonerBeamDamage,
     ModifyHealth,
+    GenericModifyHealth {
+        continuous: bool,
+    },
     ShieldRecharge,
     NamedShieldDecay,
     ForCode,
