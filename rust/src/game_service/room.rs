@@ -766,13 +766,15 @@ impl Room {
             )
         };
         for death in deaths {
+            if let Some(delay) = respawn_delay {
+                world
+                    .scene
+                    .simulation_mut()
+                    .schedule_player_respawn(death.body, now.saturating_add(delay));
+            }
             for member in self.members.values_mut() {
                 if let Some(peer) = &mut member.peer {
                     peer.queue_player_death(death);
-                    if let Some(delay) = respawn_delay {
-                        peer.world
-                            .schedule_player_respawn(death.body, now.saturating_add(delay));
-                    }
                 }
             }
         }
@@ -857,7 +859,10 @@ impl Room {
                 let Some(peer) = &mut member.peer else {
                     continue;
                 };
-                let Some((victim, due)) = peer.world.pending_player_respawn() else {
+                let Some(victim) = peer.world.active_body_id() else {
+                    continue;
+                };
+                let Some(due) = world.scene.simulation().pending_player_respawn(victim) else {
                     continue;
                 };
                 // Keep the victim notice eligible until reliable admission.

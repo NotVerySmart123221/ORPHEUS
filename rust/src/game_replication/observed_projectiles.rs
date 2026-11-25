@@ -343,11 +343,20 @@ impl WorldDelivery {
                 Phase::Visible { sent_at } => {
                     // The client can start tracing the projectile on receipt,
                     // before this room processes the packet acknowledgement.
+                    // Align retirement to SEND_EVERY boundaries so a projectile
+                    // that impacts before the next flush stops instead of
+                    // visually passing through an ally target.
                     if tick > sent_at {
+                        let lookahead = if tick % crate::game_clock::SEND_EVERY == 0 {
+                            crate::game_clock::SEND_EVERY - 1
+                        } else {
+                            0
+                        };
                         let through = view
                             .shot
                             .launched
-                            .saturating_add(tick.saturating_sub(sent_at));
+                            .saturating_add(tick.saturating_sub(sent_at))
+                            .saturating_add(lookahead);
                         view.retire(through, false, &mut queue);
                     }
                     false
@@ -764,5 +773,94 @@ mod tests {
         world.advance_observed_projectiles(retire + 1).unwrap();
         assert!(world.observed_projectiles.views.is_empty());
         assert!(world.observed_projectiles.reserved.is_empty());
+    }
+
+    #[test]
+    fn visible_flight_retires_at_send_every_boundary_before_overshoot() {
+        let input = Input {
+            source: 0xc000_0001,
+            graph: 0x0ba3,
+            instance: 1,
+            state: 28,
+            activation: 1,
+            launch: 100,
+            flight_ticks: 10,
+            early_contact_ticks: 1,
+            count: 1,
+            presentation_variable: 233,
+            presentation_value: true,
+        };
+        let mut snap = project(&input, 1);
+        let event = ShotEvent {
+            entity: input.source,
+            instance: input.instance,
+            raw_state: input.state,
+            graph: input.graph,
+            frame: input.launch,
+            time_ms: u64::from(input.launch) * crate::script_runtime::FRAME_MS,
+            activation: input.activation,
+            activation_ms: u64::from(input.launch) * crate::script_runtime::FRAME_MS,
+            ordinal: 0,
+        };
+        let var = Variable {
+            scope: Scope::Instance,
+            id: input.presentation_variable,
+        };
+        let volley = snap
+            .freeze_volley(event, vec![(var, Value::Bool(true))])
+            .unwrap();
+        snap.instances
+            .get_mut(&input.instance)
+            .unwrap()
+            .variables
+            .values
+            .insert(var.id, Value::Bool(true));
+
+        let mut world = WorldDelivery::new(103);
+        world.started = Some(100);
+        world
+            .bots
+            .insert(input.source, super::super::BotLifetime::Live);
+        let mut source = BodyStream::new(input.source);
+        source.create_arrived();
+        let chunk = source.full(&BitWriter::new(), snap).unwrap();
+        assert!(source.arrived(chunk.last).advanced);
+        world.scene_views.insert(input.source, source);
+
+        world.observe_projectiles(&[
+            ObservedProjectileEvent::Launched {
+                id: 7,
+                presentation: Arc::new(ObservedShot {
+                    volley,
+                    definition: 0x0400_0000_0000_00ab,
+                    origin: [0.0; 3],
+                    direction: [0.0, 0.0, 1.0],
+                    launched: 100,
+                    lifetime_ticks: 10,
+                }),
+                count: 1,
+            },
+            // Completes at tick 102 (1 tick before SEND_EVERY=3 tick 102? Wait: 102 % 3 == 0,
+            // or completes at 103 when sent_at=101 and 102 % 3 == 0).
+            ObservedProjectileEvent::Completed {
+                id: 7,
+                ordinal: 0,
+                frame: 102,
+            },
+        ]);
+        world.advance_observed_projectiles(100).unwrap();
+        let creates = outgoing(&mut world);
+        acknowledge(&mut world, creates, true);
+        world.advance_observed_projectiles(101).unwrap();
+        let launch_rec = send_launch(&mut world, 101, 1);
+        acknowledge(&mut world, vec![launch_rec], true);
+        // At tick 102 (102 % SEND_EVERY == 0), sent_at == 101, launched + 1 + 2 = 103 >= 102 -> retires!
+        world.advance_observed_projectiles(102).unwrap();
+        let destroys = outgoing(&mut world);
+        assert_eq!(destroys.len(), 1);
+        assert!(matches!(
+            destroys[0].update.operation,
+            Some(Operation::Destroy)
+        ));
     }
 }

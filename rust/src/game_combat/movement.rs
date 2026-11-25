@@ -42,9 +42,55 @@ impl MovementContactFrame {
             .collect()
     }
 
+    pub(crate) fn ally_separation(&self, source: u32, team: u8, pose: CapsulePose) -> [f64; 2] {
+        let mut push = [0.0f64; 2];
+        for (&entity, &(other_team, other_pose)) in &self.actors {
+            if entity == source || other_team != Some(team) {
+                continue;
+            }
+            let self_top = pose.position[1] + pose.top + 2.0 * pose.radius;
+            let other_top = other_pose.position[1] + other_pose.top + 2.0 * other_pose.radius;
+            if pose.position[1] > other_top || other_pose.position[1] > self_top {
+                continue;
+            }
+            let dx = f64::from(pose.position[0] - other_pose.position[0]);
+            let dz = f64::from(pose.position[2] - other_pose.position[2]);
+            let min_dist = f64::from(pose.radius + other_pose.radius);
+            let dist = dx.hypot(dz);
+            if dist >= min_dist || min_dist <= 0.0 {
+                continue;
+            }
+            let overlap = (min_dist - dist) / min_dist;
+            let (nx, nz) = if dist > 1.0e-5 {
+                (dx / dist, dz / dist)
+            } else if source < entity {
+                (1.0, 0.0)
+            } else {
+                (-1.0, 0.0)
+            };
+            push[0] += nx * overlap;
+            push[1] += nz * overlap;
+        }
+        let mag = push[0].hypot(push[1]);
+        let max_step = 1.5 * crate::game_clock::TICK_PERIOD.as_secs_f64();
+        if mag > 1.0e-6 {
+            let step = (mag * max_step).min(max_step);
+            [push[0] / mag * step, push[1] / mag * step]
+        } else {
+            [0.0; 2]
+        }
+    }
+
     pub(crate) fn stage_bot(&self, bot: &mut Bot, tick: u32) {
         if !bot.dead && !bot.has_movement_blockers(tick) {
             let blockers = if self.actors.contains_key(&bot.entity) {
+                if let Some((_, pose)) = self.actors.get(&bot.entity) {
+                    bot.set_ally_separation(self.ally_separation(
+                        bot.entity,
+                        bot.spawn.team,
+                        *pose,
+                    ));
+                }
                 self.blockers(bot.entity, bot.spawn.team)
             } else {
                 Vec::new()

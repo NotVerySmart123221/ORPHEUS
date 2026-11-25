@@ -1,10 +1,12 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use super::super::{PlayerBodyState, RoomSimulation, tests::fixture_bots};
+use super::MovementContactFrame;
 use crate::{
     collision_index::TriangleIndex,
     commands::Command,
     contact_body::CharacterBody,
+    contact_cache::CapsulePose,
     contact_triangle::{SKIN, TOUCH},
     contact_world::ContactWorld,
     game_replication::BodyId,
@@ -236,4 +238,34 @@ fn movement_snapshot_honors_base_and_next_pose_contact_participation() {
     assert!(!blockers.contains(&disabled_npc));
     // A same-team observer sees only the opposing source body.
     assert_eq!(restored.blockers(999, 1), [source_capsule]);
+}
+
+#[test]
+fn ally_separation_pushes_same_floor_allies_and_ignores_different_heights() {
+    let mut actors = BTreeMap::new();
+    let base = CapsulePose {
+        position: [0.0, 0.0, 0.0],
+        radius: 0.5,
+        top: 1.0,
+    };
+    let overlapping_ally = CapsulePose {
+        position: [0.2, 0.0, 0.0],
+        radius: 0.5,
+        top: 1.0,
+    };
+    let upper_floor_ally = CapsulePose {
+        position: [0.0, 5.0, 0.0],
+        radius: 0.5,
+        top: 1.0,
+    };
+    actors.insert(1, (Some(0), base));
+    actors.insert(2, (Some(0), overlapping_ally));
+    actors.insert(3, (Some(0), upper_floor_ally));
+    let frame = MovementContactFrame { actors };
+    let push = frame.ally_separation(1, 0, base);
+    assert!(push[0] < 0.0, "{push:?}");
+    assert_eq!(push[1], 0.0);
+
+    let isolated = frame.ally_separation(3, 0, upper_floor_ally);
+    assert_eq!(isolated, [0.0, 0.0]);
 }

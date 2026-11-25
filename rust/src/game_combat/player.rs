@@ -1,6 +1,6 @@
 //! Room-authoritative player bodies and generation-checked lifecycle in `RoomSimulation`.
 
-use std::{collections::BTreeMap, io, sync::Arc};
+use std::{collections::BTreeMap, io, sync::Arc, time::Duration};
 
 use bevy_ecs::component::Component;
 
@@ -78,6 +78,7 @@ pub(crate) struct PlayerBodyState {
     pub(crate) launches: Vec<AdmittedFlight>,
     pub(crate) hitscan: Vec<PosedHitscan>,
     pub(crate) observer_create: Option<EntityUpdate>,
+    pub(crate) respawn_at: Option<Duration>,
 }
 
 impl PlayerBodyState {
@@ -110,6 +111,7 @@ impl PlayerBodyState {
             launches: Vec::new(),
             hitscan: Vec::new(),
             observer_create,
+            respawn_at: None,
         }
     }
 
@@ -548,6 +550,31 @@ impl RoomSimulation {
 
     pub(crate) fn take_observer_player_health(&mut self) -> Vec<(u32, EntityUpdate)> {
         std::mem::take(&mut self.observer_player_health)
+    }
+
+    pub(crate) fn schedule_player_respawn(&mut self, body: BodyId, due: Duration) {
+        if let Some(state) = self.player_body_mut(body) {
+            if !state.alive() && state.respawn_at.is_none() {
+                state.respawn_at = Some(due);
+            }
+        }
+    }
+
+    pub(crate) fn pending_player_respawn(&self, body: BodyId) -> Option<Duration> {
+        self.player_body(body)
+            .filter(|state| !state.alive())
+            .and_then(|state| state.respawn_at)
+    }
+
+    pub(crate) fn is_player_respawn_due(&self, body: BodyId, now: Duration) -> bool {
+        self.pending_player_respawn(body)
+            .is_some_and(|due| now >= due)
+    }
+
+    pub(crate) fn clear_player_respawn(&mut self, body: BodyId) {
+        if let Some(state) = self.player_body_mut(body) {
+            state.respawn_at = None;
+        }
     }
 
     pub(crate) fn player_has_deadeye(&self, id: BodyId) -> bool {

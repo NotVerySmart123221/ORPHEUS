@@ -2547,7 +2547,7 @@ fn npc_weapons_share_calibrated_body_contact_and_target_admission() {
         let origin = [0.0, case.height, 0.0];
         let direction = [1.0, 0.0, 0.0];
         let hitscan = HitscanShot::with_direction(origin, direction, 8.0, definition);
-        let selected = room.npc_weapon_targets(&queries).unwrap();
+        let selected = room.npc_weapon_targets(&queries, 0).unwrap();
         let contacts = selected
             .iter()
             .filter_map(|candidate| candidate.hostile_to(source, 1, case.free_for_all));

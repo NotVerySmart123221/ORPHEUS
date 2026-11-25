@@ -93,7 +93,6 @@ impl WorldDelivery {
             encounter_outcome_queued: false,
             select_open: true,
             body: None,
-            player_respawn: None,
             bound: None,
             generation: 0,
             bodies: HashMap::new(),
@@ -120,7 +119,6 @@ impl WorldDelivery {
     }
 
     pub(crate) fn clear(&mut self) {
-        self.player_respawn = None;
         self.queued.clear();
         self.created.clear();
         self.bots.clear();
@@ -2095,20 +2093,6 @@ impl WorldDelivery {
         Ok((used, complete))
     }
 
-    pub(crate) fn schedule_player_respawn(&mut self, body: BodyId, due: Duration) {
-        if self.active_body_id() == Some(body)
-            && self
-                .player_respawn
-                .is_none_or(|(scheduled, _)| scheduled != body)
-        {
-            self.player_respawn = Some((body, due));
-        }
-    }
-
-    pub(crate) fn pending_player_respawn(&self) -> Option<(BodyId, Duration)> {
-        self.player_respawn
-    }
-
     pub(crate) fn advance_player_respawn(
         &mut self,
         scene: &mut PreparedScene,
@@ -2117,22 +2101,10 @@ impl WorldDelivery {
         quanta: u32,
         now: Duration,
     ) -> io::Result<()> {
-        let Some((dead_body, due)) = self.player_respawn else {
+        let Some(body) = self.body else {
             return Ok(());
         };
-        let Some(body) = self.body.filter(|body| body.id == dead_body) else {
-            self.player_respawn = None;
-            return Ok(());
-        };
-        if scene
-            .simulation()
-            .player_body(dead_body)
-            .is_none_or(PlayerBodyState::alive)
-        {
-            self.player_respawn = None;
-            return Ok(());
-        }
-        if now < due
+        if !scene.simulation().is_player_respawn_due(body.id, now)
             || self.input.work.iter().any(|work| {
                 // A partial command encodes work for the old mover. Ordered
                 // messages and skin choices get a chance to replace that body.
@@ -2145,8 +2117,8 @@ impl WorldDelivery {
             return Ok(());
         };
         // A startup attempt is transactional. A rejected body leaves the
-        // corpse and its selection in place.
-        self.player_respawn = None;
+        // corpse and its selection in place without repeating startup.
+        scene.simulation_mut().clear_player_respawn(body.id);
         let hero = scene
             .heroes()
             .get(body.hero)
@@ -2296,7 +2268,6 @@ impl WorldDelivery {
         self.bodies.insert(entity, (generation, Lifetime::Live));
         self.created.remove(&entity);
         let old = self.body.replace(body);
-        self.player_respawn = None;
         self.cancel_body_script(None);
         self.body_script = script;
         self.bound = None;

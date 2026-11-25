@@ -409,7 +409,22 @@ mod tests {
         assert_eq!(hit_frames.len(), 2);
         assert_eq!(displaced_frames, hit_frames);
         assert_eq!(room.body_healths().unwrap()[&target], health - 60.0);
-        let cues = room.take_player_cues();
+        let all_cues = room.take_player_cues();
+        let cues: Vec<_> = all_cues
+            .into_iter()
+            .filter(|cue| {
+                if matches!(cue.notice, CombatNotice::Hit { .. }) {
+                    true
+                } else {
+                    assert!(
+                        matches!(cue.notice, CombatNotice::Voice { .. }),
+                        "unexpected non-hit cue: {:?}",
+                        cue.notice
+                    );
+                    false
+                }
+            })
+            .collect();
         assert_eq!(cues.len(), hit_frames.len());
         for (cue, shot_frame) in cues.into_iter().zip(hit_frames) {
             assert_eq!(cue.owner, owner);

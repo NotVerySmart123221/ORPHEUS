@@ -2064,55 +2064,87 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             return Vec::new();
         }
         let graph = self.graph(key.instance);
-        let Some(plug) = graph
-            .state(usize::from(key.raw))
-            .and_then(|node| node.field("m_subgraphPlug"))
-        else {
+        let Some(volley_node) = graph.state(usize::from(key.raw)) else {
             return Vec::new();
         };
-        let children = array_field(plug, SUBGRAPH_STATES);
-        if children.is_empty() {
-            return Vec::new();
-        }
-        instance
-            .states
-            .iter()
-            .filter(|(_, state)| state.active)
-            .filter_map(|(&raw, _)| graph.state(usize::from(raw)))
-            .filter(|node| {
-                node.class == "STUStatescriptStateDataFlowMapping"
-                    && node.is_networked()
-                    && graph.remote_positions().contains(&node.pos)
-            })
-            .filter_map(|node| {
-                script_expr::lvalue(field(&node.fields, "m_answer"))
-                    .ok()
-                    .flatten()
-            })
-            .filter(|variable| {
-                let scope = u8::from(variable.scope == Scope::Entity);
-                graph
-                    .sync_vars
-                    .iter()
-                    .any(|sync| sync.0 == Some(variable.id) && sync.1 == scope)
-                    && (variable.scope == Scope::Entity
-                        || graph
-                            .owner_only_instance_vars()
-                            .binary_search(&variable.id)
-                            .is_err())
-                    && !graph.server_only_variables().any(|id| id == variable.id)
-            })
-            .filter_map(|variable| {
-                let source = source_key(key.instance, variable);
-                let top = self.machine.links.get(&source)?.last()?;
-                if top.state.instance != key.instance
-                    || !raw_indices(children).any(|raw| raw == top.state.raw)
-                {
-                    return None;
+        let is_synced = |variable: &Variable| {
+            let scope = u8::from(variable.scope == Scope::Entity);
+            graph
+                .sync_vars
+                .iter()
+                .any(|sync| sync.0 == Some(variable.id) && sync.1 == scope)
+                && (variable.scope == Scope::Entity
+                    || graph
+                        .owner_only_instance_vars()
+                        .binary_search(&variable.id)
+                        .is_err())
+                && !graph.server_only_variables().any(|id| id == variable.id)
+        };
+        let mut presented = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut push_var = |variable: Variable, value: Value| {
+            if seen.insert((matches!(variable.scope, Scope::Entity), variable.id)) {
+                presented.push((variable, value));
+            }
+        };
+        if let Some(plug) = volley_node.field("m_subgraphPlug") {
+            let children = array_field(plug, SUBGRAPH_STATES);
+            if !children.is_empty() {
+                for (&raw, state) in &instance.states {
+                    if !state.active {
+                        continue;
+                    }
+                    let Some(node) = graph.state(usize::from(raw)) else {
+                        continue;
+                    };
+                    let var_field = match node.class.as_str() {
+                        "STUStatescriptStateDataFlowMapping"
+                            if node.is_networked()
+                                && graph.remote_positions().contains(&node.pos) =>
+                        {
+                            "m_answer"
+                        }
+                        "STUStatescriptStateStack"
+                            if node.is_networked()
+                                && graph.remote_positions().contains(&node.pos) =>
+                        {
+                            "m_out_Var"
+                        }
+                        _ => continue,
+                    };
+                    let Ok(Some(variable)) = script_expr::lvalue(field(&node.fields, var_field))
+                    else {
+                        continue;
+                    };
+                    if !is_synced(&variable) {
+                        continue;
+                    }
+                    let source = source_key(key.instance, variable);
+                    let Some(top) = self.machine.links.get(&source).and_then(|list| list.last())
+                    else {
+                        continue;
+                    };
+                    if top.state.instance != key.instance
+                        || !raw_indices(children).any(|child| child == top.state.raw)
+                    {
+                        continue;
+                    }
+                    push_var(variable, self.machine.value(source, None));
                 }
-                Some((variable, self.machine.value(source, None)))
-            })
-            .collect()
+            }
+        }
+        if let Some(sync_vars) = volley_node.frame_action_variables() {
+            for variable in sync_vars {
+                if !is_synced(&variable) {
+                    continue;
+                }
+                let value = self.machine.value(source_key(key.instance, variable), None);
+                if !matches!(value, Value::Null) {
+                    push_var(variable, value);
+                }
+            }
+        }
+        presented
     }
 
     pub(in crate::script_init) fn finish_volley(

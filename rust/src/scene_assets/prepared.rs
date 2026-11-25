@@ -531,7 +531,7 @@ impl PreparedScene {
             let combat_motion = bot.has_combat_motion();
             if let Some(contacts) = contacts
                 .as_ref()
-                .filter(|_| bot.patrol_active() || combat_motion)
+                .filter(|_| bot.patrol_active() || combat_motion || bot.has_anchor_return())
             {
                 contacts.stage_bot(bot, tick);
             }

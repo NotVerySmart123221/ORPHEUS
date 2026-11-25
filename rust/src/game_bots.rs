@@ -427,6 +427,8 @@ pub struct Bot {
     stunned_until: u32,
     velocity_changes: Vec<(u32, crate::mover::VelocityChange)>,
     combat_motion_tick: Option<u32>,
+    anchor_return: Option<[f64; 3]>,
+    ally_separation: [f64; 2],
 }
 
 impl Bot {
@@ -505,6 +507,8 @@ impl Bot {
             stunned_until: 0,
             velocity_changes: Vec::new(),
             combat_motion_tick: None,
+            anchor_return: None,
+            ally_separation: [0.0; 2],
             spawn,
         }
     }
@@ -723,7 +727,44 @@ impl Bot {
         script: &PatrolScript,
         mut ground: impl FnMut(f64, f64, f64, f64) -> Option<f64>,
     ) -> io::Result<()> {
+        let sep = std::mem::take(&mut self.ally_separation);
+        if !self.dead && sep != [0.0; 2] && (self.patrol_active() || self.has_anchor_return()) {
+            let dt = TICK_PERIOD.as_secs_f64();
+            let [x, y, z] = self.position;
+            let nx = x + sep[0];
+            let nz = z + sep[1];
+            let ny = ground(nx, nz, y + STEP_UP, y - DROP).unwrap_or(y);
+            let intended = [nx, ny, nz];
+            let after = self.collision.as_mut().map_or(intended, |collision| {
+                collision.advance(tick, self.position, intended, dt, &[])
+            });
+            if after != self.position {
+                self.position = after;
+                self.moved_tick = Some(tick);
+            }
+        }
         if !self.patrol_active() {
+            if !self.dead && self.anchor_return.is_some() && self.walk_route.is_none() {
+                if self.is_stunned(tick) {
+                    self.last_tick = Some(tick);
+                    self.stop_objective(tick);
+                    return Ok(());
+                }
+                let ticks = self
+                    .last_tick
+                    .map_or(1, |last| tick.saturating_sub(last))
+                    .min(CATCH_UP)
+                    .min(if self.stunned_until == 0 {
+                        u32::MAX
+                    } else {
+                        tick.saturating_sub(self.stunned_until.saturating_sub(1))
+                    });
+                if ticks == 0 {
+                    return Ok(());
+                }
+                self.last_tick = Some(tick);
+                self.step_anchor_return(tick, ticks, &mut ground);
+            }
             return Ok(());
         }
         if self.is_stunned(tick) {
@@ -1036,12 +1077,26 @@ impl Bot {
         self.dead = true;
         self.walk_route = None;
         self.patrol_rejoin = None;
+        self.anchor_return = None;
+        self.ally_separation = [0.0; 2];
         self.movement_blockers = None;
         self.clear_velocity_changes();
         self.keys = false;
         self.held = [0; 2];
         self.stand();
         self.moved_tick = Some(tick);
+    }
+
+    pub(crate) fn spawn_hitbox_ready(&self, tick: u32) -> bool {
+        !self.dead && self.records_from.is_none_or(|ready| tick >= ready)
+    }
+
+    pub(crate) fn set_ally_separation(&mut self, delta: [f64; 2]) {
+        self.ally_separation = delta;
+    }
+
+    pub(crate) fn has_anchor_return(&self) -> bool {
+        !self.dead && self.anchor_return.is_some()
     }
 
     pub fn respawned(&self, entity: u32, records_from: u32) -> Self {
@@ -1090,7 +1145,13 @@ impl Bot {
         &mut self,
         changes: Vec<(u32, crate::mover::VelocityChange)>,
     ) {
-        self.velocity_changes.extend(changes);
+        for (frame, change) in changes {
+            crate::mover::Mover::push_merged_velocity_change(
+                &mut self.velocity_changes,
+                frame,
+                change,
+            );
+        }
     }
 
     /// Cancel pending movement edits when this body dies.
@@ -1223,6 +1284,11 @@ impl Bot {
                 // the position the bot was holding before the impulse.
                 let destination = self.target.map_or(from, |_| self.spawn.route[self.index]);
                 self.patrol_rejoin.get_or_insert(destination);
+            } else if !self.dead
+                && self.spawn.placement_graphs.is_empty()
+                && planar_distance(after, self.spawn.position) > ARRIVED
+            {
+                self.anchor_return = Some(self.spawn.position);
             }
         }
         // The solver may move an overlapping capsule sideways to separate it.
@@ -1237,12 +1303,94 @@ impl Bot {
         true
     }
 
+    fn step_anchor_return(
+        &mut self,
+        tick: u32,
+        ticks: u32,
+        ground: &mut impl FnMut(f64, f64, f64, f64) -> Option<f64>,
+    ) {
+        let blockers = self.movement_blocker_snapshot(tick);
+        let blockers = blockers.as_deref().unwrap_or(&[]);
+        let dt = TICK_PERIOD.as_secs_f64();
+        for at in tick - (ticks - 1)..=tick {
+            let before = (self.position, self.yaw.round_ties_even());
+            self.held = [0; 2];
+            if self.target.is_some() {
+                let mut offset = self.to_target();
+                let mut distance = offset[0].hypot(offset[1]);
+                if distance <= ARRIVED {
+                    if let Some(goal) = self.waypoints.pop_front() {
+                        self.target = Some(goal);
+                        self.start = self.position;
+                        offset = self.to_target();
+                        distance = offset[0].hypot(offset[1]);
+                    }
+                }
+                if distance <= ARRIVED {
+                    self.stand();
+                    self.keys = false;
+                } else {
+                    let pace = self.walk.speed.min(self.pace + self.walk.acceleration * dt);
+                    let stride = (pace * dt).min(distance);
+                    self.direction = offset.map(|axis| axis / distance);
+                    self.turn(dt);
+                    self.pace = pace;
+                    self.held = throttles(self.yaw, self.direction);
+                    self.last_held = self.held;
+                    self.input_tick = Some(at);
+                    let moved = self.advance(at, stride, distance, ground, blockers);
+                    if moved <= EPSILON {
+                        self.stand();
+                        self.keys = false;
+                        self.held = [0; 2];
+                    }
+                }
+            } else {
+                let target_yaw = f64::from(self.spawn.yaw);
+                let left = s16(target_yaw - self.yaw);
+                let units = TURN_RATE * dt;
+                if left.abs() <= units + EPSILON {
+                    self.yaw = s16(target_yaw);
+                    self.anchor_return = None;
+                } else {
+                    self.yaw = s16(self.yaw + left.clamp(-units, units));
+                }
+            }
+            if (self.position, self.yaw.round_ties_even()) != before {
+                self.moved_tick = Some(at);
+            }
+            if self.anchor_return.is_none() {
+                break;
+            }
+        }
+    }
+
     pub(crate) fn rejoin_patrol(
         &mut self,
         tick: u32,
         plan: impl FnOnce([f64; 3], [f64; 3]) -> PathQuery,
     ) {
         if self.has_combat_motion() || self.is_stunned(tick) {
+            return;
+        }
+        if !self.patrol_active() {
+            if !self.dead && self.spawn.placement_graphs.is_empty() && self.target.is_none() {
+                let Some(destination) = self.anchor_return else {
+                    return;
+                };
+                if planar_distance(self.position, destination) > ARRIVED {
+                    if let PathQuery::Found(path) = plan(self.position, destination) {
+                        self.waypoints = path.into_iter().skip(1).collect();
+                        self.target = Some(self.waypoints.pop_front().unwrap_or(destination));
+                    } else {
+                        self.waypoints.clear();
+                        self.target = Some(destination);
+                    }
+                    self.start = self.position;
+                    self.keys = true;
+                    self.turning = 0.0;
+                }
+            }
             return;
         }
         let Some(destination) = self.patrol_rejoin.take() else {
@@ -2672,4 +2820,70 @@ fn bot_contact_separation_does_not_become_knockback_velocity() {
         "{:?}",
         bot.position
     );
+}
+
+#[test]
+fn stationary_bot_returns_to_anchor_and_restores_spawn_yaw_after_impulse() {
+    let mut bot = tests::walker([0.0, 0.0, 10.0]);
+    Arc::get_mut(&mut bot.spawn).unwrap().route.clear();
+    let settings = MoverSettings::default();
+    let mut floor = |_, _, top, bottom| (bottom <= 0.0 && 0.0 <= top).then_some(0.0);
+    bot.attach_collision(
+        &settings,
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        0x08,
+        floor,
+    );
+    bot.queue_velocity_changes(vec![(12, VelocityChange::Impulse([6.0, 0.0, 0.0]))]);
+    for tick in 12..=40 {
+        if !bot.step_combat_motion(tick, &settings, &mut floor) {
+            break;
+        }
+    }
+    assert!(bot.has_anchor_return());
+    assert!(planar_distance(bot.position, bot.spawn.position) > ARRIVED);
+
+    let patrol = PatrolScript::load().unwrap();
+    let mut tick = 41;
+    while bot.has_anchor_return() && tick < 200 {
+        bot.rejoin_patrol(tick, |start, destination| {
+            PathQuery::Found(vec![start, destination])
+        });
+        bot.step(tick, &patrol, &mut floor).unwrap();
+        tick += 1;
+    }
+    assert!(!bot.has_anchor_return());
+    assert!(planar_distance(bot.position, bot.spawn.position) <= ARRIVED);
+    assert!((bot.yaw - f64::from(bot.spawn.yaw)).abs() <= EPSILON);
+}
+
+#[test]
+fn respawned_bot_delays_hitbox_until_records_from() {
+    let bot = tests::walker([0.0, 0.0, 10.0]);
+    assert!(bot.spawn_hitbox_ready(0));
+    let respawned = bot.respawned(BOT_ENTITY + 1, 50);
+    assert!(!respawned.spawn_hitbox_ready(49));
+    assert!(respawned.spawn_hitbox_ready(50));
+    assert!(respawned.spawn_hitbox_ready(51));
+}
+
+#[test]
+fn same_tick_helix_impulses_merge_without_stacking() {
+    let mut bot = tests::walker([0.0, 0.0, 10.0]);
+    let settings = MoverSettings::default();
+    let mut floor = |_, _, top, bottom| (bottom <= 0.0 && 0.0 <= top).then_some(0.0);
+    bot.attach_collision(
+        &settings,
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        0x08,
+        floor,
+    );
+    bot.queue_velocity_changes(vec![
+        (12, VelocityChange::Impulse([4.0, 6.0, 0.0])),
+        (12, VelocityChange::Impulse([4.0, 6.0, 0.0])),
+        (12, VelocityChange::Impulse([4.0, 6.0, 0.0])),
+    ]);
+    assert!(bot.step_combat_motion(12, &settings, &mut floor));
+    assert!(bot.velocity[0] <= 4.0 + 1.0e-4, "{:?}", bot.velocity);
+    assert!(bot.velocity[1] <= 6.0 + 1.0e-4, "{:?}", bot.velocity);
 }

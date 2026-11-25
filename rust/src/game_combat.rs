@@ -2013,7 +2013,7 @@ impl RoomSimulation {
                 .get_mut::<BotState>(entity)
                 .ok_or(CombatError::MissingBot { wire, entity })?;
             check_bot_identity(wire, &state)?;
-            if !state.bot.dead {
+            if state.bot.spawn_hitbox_ready(tick) {
                 let state = state.into_inner();
                 state.history.record(tick, queries.target(&state.bot));
             }
@@ -2037,6 +2037,7 @@ impl RoomSimulation {
             let state = state?;
             let bot = &state.bot;
             if !eligible_bot(bot, shot.source, context.team, queries.free_for_all())
+                || !bot.spawn_hitbox_ready(context.tick)
                 || !visible(bot.entity)
             {
                 continue;
@@ -2199,11 +2200,15 @@ impl RoomSimulation {
         Ok(())
     }
 
-    fn weapon_targets(&self, queries: &BotQueries<'_>) -> Result<Vec<WeaponTarget>, CombatError> {
+    fn weapon_targets(
+        &self,
+        queries: &BotQueries<'_>,
+        tick: u32,
+    ) -> Result<Vec<WeaponTarget>, CombatError> {
         let mut targets = Vec::with_capacity(self.by_wire.len() + self.players_by_wire.len());
         for state in self.states() {
             let bot = &state?.bot;
-            if !bot.dead {
+            if bot.spawn_hitbox_ready(tick) {
                 targets.push(WeaponTarget {
                     wire: bot.entity,
                     team: bot.spawn.team,
@@ -2218,8 +2223,9 @@ impl RoomSimulation {
     fn npc_weapon_targets(
         &self,
         queries: &BotQueries<'_>,
+        tick: u32,
     ) -> Result<Vec<WeaponTarget>, CombatError> {
-        let targets = self.weapon_targets(queries)?;
+        let targets = self.weapon_targets(queries, tick)?;
         #[cfg(test)]
         let targets = {
             let mut targets = targets;
@@ -2298,7 +2304,7 @@ impl RoomSimulation {
         for entity in order {
             // An earlier flight may have killed a target in this same tick.
             let candidates: Vec<_> = self
-                .weapon_targets(queries)?
+                .weapon_targets(queries, context.tick)?
                 .iter()
                 .filter(|target| visible(target.wire))
                 .filter_map(|target| {
@@ -2680,7 +2686,7 @@ impl RoomSimulation {
             });
         let npc_hitscan_targets = if has_roster && states.iter().any(|state| state.enemy.is_some())
         {
-            self.npc_weapon_targets(queries)?
+            self.npc_weapon_targets(queries, tick)?
         } else {
             Vec::new()
         };
@@ -3171,7 +3177,7 @@ impl RoomSimulation {
         if self.enemy_projectiles.is_empty() {
             return Ok(());
         }
-        let targets = self.npc_weapon_targets(queries)?;
+        let targets = self.npc_weapon_targets(queries, tick)?;
         let mut children = Vec::new();
         let mut impulses = Vec::new();
         let mut candidates = Vec::with_capacity(targets.len());

@@ -251,9 +251,31 @@ impl Mover {
     }
 
     pub(crate) fn queue_velocity_change(&mut self, frame: u32, change: VelocityChange) {
-        if change.valid() {
-            self.velocity_changes.push((frame, change));
+        Self::push_merged_velocity_change(&mut self.velocity_changes, frame, change);
+    }
+
+    pub(crate) fn push_merged_velocity_change(
+        queue: &mut Vec<(u32, VelocityChange)>,
+        frame: u32,
+        change: VelocityChange,
+    ) {
+        if !change.valid() {
+            return;
         }
+        if let VelocityChange::Impulse(incoming) = change {
+            if let Some((_, VelocityChange::Impulse(existing))) = queue
+                .iter_mut()
+                .find(|(due, queued)| *due == frame && matches!(queued, VelocityChange::Impulse(_)))
+            {
+                for axis in 0..3 {
+                    if incoming[axis].abs() > existing[axis].abs() {
+                        existing[axis] = incoming[axis];
+                    }
+                }
+                return;
+            }
+        }
+        queue.push((frame, change));
     }
 
     /// Keep the first request until its first actual pose at or after `frame`.

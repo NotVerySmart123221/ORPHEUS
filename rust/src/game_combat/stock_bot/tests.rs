@@ -729,6 +729,24 @@ fn check_stock_bot_firing(catalog: &StockBotCatalog, bot: &Bot) {
                 assert!(stream.arrived(full.last).advanced);
                 assert!(projected.retain_volley(&presentation.volley));
                 assert_eq!(firing_value(&projected), Some(Value::Bool(true)));
+                assert_eq!(
+                    projected.variables.values.get(&233),
+                    Some(&Value::Bool(true))
+                );
+                assert!(
+                    projected
+                        .instance_variables(instance)
+                        .and_then(|vars| vars.get(&6973))
+                        .is_some(),
+                    "alternating muzzle variable 6973 should be preserved in volley presentation"
+                );
+                assert!(
+                    projected
+                        .instance_variables(instance)
+                        .is_none_or(|vars| vars.is_empty()
+                            || projected.instances[&instance].variables.bindings.is_empty()),
+                    "View::Observer volley retention must preserve bindings.is_empty()"
+                );
                 assert!(projected.has_volley(&presentation.volley));
                 let delta = projection
                     .encoder
