@@ -64,6 +64,7 @@ mod junkenstein_voice;
 mod linked_aim;
 pub mod lobby_arcade;
 pub mod lobby_celebrations;
+mod lobby_chat;
 pub mod lobby_clock;
 mod lobby_gallery;
 pub mod lobby_login;

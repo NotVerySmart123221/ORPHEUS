@@ -505,6 +505,26 @@ pub struct BeamContact {
     pub hit: bool,
 }
 
+/// Geometry captured once when a travelling ground wave begins.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GroundWave {
+    pub centre: [f64; 3],
+    pub sight_origin: [f64; 3],
+    pub yaw: f64,
+    pub aperture: f64,
+    pub distance: f64,
+    pub speed: f64,
+    pub max_rise: f64,
+    pub max_drop: f64,
+    pub ground_range: f64,
+}
+
+impl GroundWave {
+    pub fn reach(&self, elapsed_ms: u64) -> f64 {
+        (self.speed * elapsed_ms as f64 / 1000.0).min(self.distance)
+    }
+}
+
 /// External authored queries for this initialization. The caller owns mode,
 /// ruleset, and entity data and can decline a query without guessing its value.
 pub trait World {

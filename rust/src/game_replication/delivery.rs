@@ -1484,10 +1484,13 @@ impl WorldDelivery {
                     .get(&hero.guid)
                     .copied()
                     .unwrap_or_default();
-                if self
-                    .body
-                    .is_some_and(|body| (body.hero, body.skin) == (hero.guid, skin))
-                {
+                if self.body.is_some_and(|body| {
+                    (body.hero, body.skin) == (hero.guid, skin)
+                        && !scene
+                            .simulation()
+                            .player_body(body.id)
+                            .is_some_and(PlayerBodyState::needs_runtime_restart)
+                }) {
                     self.queue_controller(scene, tick, false, Some(hero.guid))?;
                 } else if let Some(entity) = self.next_body(now) {
                     self.switch(scene, viewer, tick, quanta, entity, (&hero, skin))?;

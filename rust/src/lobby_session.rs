@@ -131,8 +131,10 @@ impl<'a> LobbySession<'a> {
         self.schemas
             .fields(OUT_CONNECT, LOGIN_MESSAGE)
             .map_err(invalid)?;
-        let Some((_, _, fields)) =
-            self.receive_matching(|crc, id| (crc, id) == (OUT_CONNECT, LOGIN_MESSAGE), || true)?
+        let Some((_, _, fields)) = self.receive_matching(
+            |crc, id| (crc, id) == (OUT_CONNECT, LOGIN_MESSAGE),
+            |_| Ok(true),
+        )?
         else {
             return Ok(LoginRequest::Disconnected);
         };
@@ -158,12 +160,12 @@ impl<'a> LobbySession<'a> {
     /// Receive the next valid client message after accepting the session login.
     /// Client messages use the single-byte group offset.
     pub fn receive_message(&mut self) -> io::Result<Option<LobbyMessage>> {
-        self.receive_message_until(|| true)
+        self.receive_message_until(|_| Ok(true))
     }
 
     pub(crate) fn receive_message_until(
         &mut self,
-        keep_receiving: impl Fn() -> bool,
+        poll: impl FnMut(&mut LobbyTransport) -> io::Result<bool>,
     ) -> io::Result<Option<LobbyMessage>> {
         if !self.authenticated {
             return Err(io::Error::new(
@@ -171,15 +173,15 @@ impl<'a> LobbySession<'a> {
                 "lobby session has not accepted a login",
             ));
         }
-        self.receive_matching(|_, _| true, keep_receiving)
+        self.receive_matching(|_, _| true, poll)
     }
 
     fn receive_matching(
         &mut self,
         accept: impl Fn(u32, u32) -> bool,
-        keep_receiving: impl Fn() -> bool,
+        mut poll: impl FnMut(&mut LobbyTransport) -> io::Result<bool>,
     ) -> io::Result<Option<LobbyMessage>> {
-        while let Some(event) = self.transport.receive_until(&keep_receiving)? {
+        while let Some(event) = self.transport.receive_until(&mut poll)? {
             let Event::Message { crc, offset, body } = event else {
                 continue;
             };

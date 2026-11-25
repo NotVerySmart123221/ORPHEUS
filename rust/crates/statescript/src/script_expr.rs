@@ -474,6 +474,11 @@ pub trait Context {
         None
     }
 
+    fn optional_ruleset(&mut self, id: u32) -> Option<Value> {
+        let value = self.ruleset(id);
+        (value != Value::Null).then_some(value)
+    }
+
     /// None leaves candidate flags unknown. A known absence can report zero.
     fn entity_filter_flags(&mut self, _entity: u32) -> Option<u64> {
         None

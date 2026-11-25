@@ -6,7 +6,68 @@ use serde_json::json;
 use crate::script_graph::GraphStore;
 
 mod degree_trigonometry;
+mod direction_limits;
 mod entity_ray_cast;
+
+#[test]
+fn charge_cone_atan2_uses_y_then_x_and_returns_degrees() {
+    for (y, x, expected) in [(0.0, 1.0, 0.0), (1.0, 0.0, 90.0), (-1.0, 0.0, -90.0)] {
+        let config = expression(json!([6, 0, 6, 1, 49, 0]), &[], &[y, x], &[]);
+        assert_eq!(
+            evaluate(&config, &mut Vars::default()).unwrap(),
+            Value::Float(expected)
+        );
+    }
+}
+
+#[test]
+fn barrier_health_scale_uses_the_actor_ruleset() {
+    struct Rules {
+        key: u32,
+        value: Value,
+    }
+    impl Context for Rules {
+        fn ruleset(&mut self, id: u32) -> Value {
+            assert_eq!(id, self.key);
+            self.value.clone()
+        }
+    }
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../../../fixtures/behavior/statescript-barrier-health-scale-v1.json"
+    ))
+    .unwrap();
+    let key = fixture["input"]["rule"]
+        .as_u64()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let config = json!({"$": "STU_295F1CDE", "m_EE729DCB": 0});
+    let values = fixture["input"]["values"].as_array().unwrap();
+    let expected = fixture["expected"].as_array().unwrap();
+    assert_eq!(values.len(), expected.len());
+    for (value, expected) in values.iter().zip(expected) {
+        let value = match value {
+            Json::Null => Value::Null,
+            Json::Number(value) => value
+                .as_i64()
+                .map_or_else(|| Value::Float(value.as_f64().unwrap()), Value::Integer),
+            Json::Bool(value) => Value::Bool(*value),
+            _ => panic!("unexpected ruleset test value"),
+        };
+        let result = evaluate(&config, &mut Rules { key, value });
+        if let Some(expected) = expected.as_f64() {
+            assert_eq!(result, Ok(Value::Float(expected)));
+        } else {
+            assert_eq!(
+                result,
+                Err(EvalError::MalformedConfig(
+                    "invalid barrier health multiplier"
+                ))
+            );
+        }
+    }
+}
 
 #[test]
 fn wheel_selection_resolves_authored_slot_and_equipped_spray() {

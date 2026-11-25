@@ -72,6 +72,7 @@ pub(crate) struct PlayerBodyState {
     pub(crate) mover: Mover,
     pub(crate) history: TargetHistory,
     pub(crate) runtime: Option<Box<dyn OwnerBodyRuntime>>,
+    runtime_halted: bool,
     halted_vitals: Option<Vitals>,
     pub(crate) frame: u32,
     pub(crate) fields: Vec<(ProjectileToken, BioticField)>,
@@ -105,6 +106,7 @@ impl PlayerBodyState {
             mover,
             history: TargetHistory::new(None),
             runtime,
+            runtime_halted: false,
             halted_vitals: None,
             frame,
             fields: Vec::new(),
@@ -122,6 +124,10 @@ impl PlayerBodyState {
 
     pub(crate) fn alive(&self) -> bool {
         self.vitals().is_none_or(|vitals| vitals.death().is_none())
+    }
+
+    pub(crate) fn needs_runtime_restart(&self) -> bool {
+        self.runtime_halted && self.alive()
     }
 
     pub(crate) fn vitals(&self) -> Option<&Vitals> {
@@ -472,6 +478,7 @@ impl RoomSimulation {
         state.mover.set_authored_facing(None);
         state.mover.clear_pending_script_motion();
         if let Some(mut runtime) = state.runtime.take() {
+            state.runtime_halted = true;
             state.halted_vitals = runtime.take_vitals();
             if let Some(vitals) = &mut state.halted_vitals {
                 vitals.clear_temporary_shields();

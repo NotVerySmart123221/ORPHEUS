@@ -11,7 +11,7 @@ use std::{
         mpsc,
     },
     thread::{self, JoinHandle},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use crate::{
@@ -23,20 +23,24 @@ use crate::{
     collection::Collection,
     game_content::{GameMap, JUNKENSTEIN_MAP, MapCatalog},
     game_service::{AiPolicyStatus, AiReloadReport, GameService},
-    jam_codec::Schemas,
+    jam_codec::{Fields, Schemas, Value},
     lobby_arcade::Arcade,
     lobby_celebrations::Celebrations,
+    lobby_chat::{self, ChatRequest},
     lobby_gallery::EquipRequest,
-    lobby_login::SIGNED_IN_ELSEWHERE,
+    lobby_login::{Identity, SIGNED_IN_ELSEWHERE},
     lobby_lootbox::{LootBoxEngine, OpenBoxRequest, PurchaseRequest},
     lobby_menu::{MenuHero, extra_preload_themes},
     lobby_mode_rules::{CareerProfileRequest, owl_live_reply, player_names_reply},
-    lobby_player_messages::SettingsRequest,
+    lobby_player_messages::{self as player, SettingsRequest},
     lobby_practice::{self, SoloPracticeHandoff},
     lobby_presence::{PRO_ACCOUNT_BITS, Presence},
     lobby_ranked::{LeaderboardPlaces, Ranked},
     lobby_session::{LobbySession, LoginContent, LoginRequest, SoloLoginParty},
-    match_handoff::{LobbySeat, general_channel, join_chat_channel},
+    lobby_transport::{LobbyMessage, LobbyTransport},
+    match_handoff::{
+        LobbySeat, general_channel, join_chat_channel, leave_chat_channel, match_channel,
+    },
     retail_templates::RetailTemplates,
     runtime::{BNET_DESCRIPTORS, check_practice_runtime},
     scene_assets::{PreparedScene, SceneAssets},
@@ -48,6 +52,8 @@ use crate::debug_http::DebugHttp;
 
 const MAX_LOBBY_PEERS: usize = 32;
 const ACCEPT_POLL: Duration = Duration::from_millis(10);
+const CHAT_QUEUE_LIMIT: usize = 64;
+const CHAT_FEATURE_RETRIES: [Duration; 2] = [Duration::from_secs(3), Duration::from_secs(10)];
 
 pub struct ServerConfig {
     pub runtime: PathBuf,
@@ -425,8 +431,15 @@ struct Lobby {
     first_scene: Mutex<Option<PreparedScene>>,
     accounts: Accounts,
     local: Arc<Account>,
-    active: Mutex<HashMap<u32, Arc<AtomicBool>>>,
+    active: Mutex<HashMap<u32, ActiveLobbyPeer>>,
     game: Arc<GameService>,
+}
+
+struct ActiveLobbyPeer {
+    replaced: Arc<AtomicBool>,
+    channel: Fields,
+    member: Value,
+    outgoing: mpsc::SyncSender<Arc<LobbyMessage>>,
 }
 
 struct LoginLease<'a> {
@@ -434,14 +447,32 @@ struct LoginLease<'a> {
     account: Arc<Account>,
     replaced: Arc<AtomicBool>,
     seat: Option<LobbySeat>,
+    incoming: mpsc::Receiver<Arc<LobbyMessage>>,
+    next_seat_check: Instant,
 }
 
 impl<'a> LoginLease<'a> {
-    fn new(lobby: &'a Lobby, account: Arc<Account>) -> Self {
+    fn new(lobby: &'a Lobby, account: Arc<Account>, identity: Identity, wall_time: u64) -> Self {
         let replaced = Arc::new(AtomicBool::new(false));
+        let member = {
+            let profile = account.profile();
+            lobby_chat::member(player::record(
+                &profile,
+                identity,
+                lobby.collection.portrait_frame(&profile),
+                wall_time,
+            ))
+        };
+        let (outgoing, incoming) = mpsc::sync_channel(CHAT_QUEUE_LIMIT);
+        let peer = ActiveLobbyPeer {
+            replaced: Arc::clone(&replaced),
+            channel: general_channel(),
+            member,
+            outgoing,
+        };
         let mut active = lobby.active.lock().expect("lobby accounts");
-        if let Some(previous) = active.insert(account.account_lo, Arc::clone(&replaced)) {
-            previous.store(true, Ordering::Release);
+        if let Some(previous) = active.insert(account.account_lo, peer) {
+            previous.replaced.store(true, Ordering::Release);
         }
         account.set_status(1);
         Self {
@@ -449,11 +480,50 @@ impl<'a> LoginLease<'a> {
             account,
             replaced,
             seat: None,
+            incoming,
+            next_seat_check: Instant::now(),
         }
     }
 
     fn current(&self) -> bool {
         !self.replaced.load(Ordering::Acquire)
+    }
+
+    fn channel(&self) -> Fields {
+        self.seat
+            .as_ref()
+            .map_or_else(general_channel, |seat| match_channel(seat.handoff.match_id))
+    }
+
+    fn set_seat(&mut self, seat: Option<LobbySeat>) {
+        self.seat = seat;
+        let mut active = self.lobby.active.lock().expect("lobby accounts");
+        if let Some(peer) = active
+            .get_mut(&self.account.account_lo)
+            .filter(|peer| Arc::ptr_eq(&peer.replaced, &self.replaced))
+        {
+            peer.channel = self.channel();
+        }
+    }
+
+    fn poll_chat(&mut self, transport: &mut LobbyTransport, now: Instant) -> io::Result<()> {
+        let schemas = &self.lobby.schemas;
+        if let Some(seat) = self.seat.as_ref().filter(|_| now >= self.next_seat_check) {
+            self.next_seat_check = now + Duration::from_secs(1);
+            if !self.lobby.game.seat_exists(&seat.handoff)? {
+                let old_channel = self.channel();
+                self.set_seat(None);
+                transport.send_message(schemas, &leave_chat_channel(old_channel))?;
+                transport.send_message(schemas, &join_chat_channel(general_channel()))?;
+            }
+        }
+        let channel = Value::Struct(self.channel());
+        for message in self.incoming.try_iter().take(CHAT_QUEUE_LIMIT) {
+            if message.2.get(&0x78) == Some(&channel) {
+                transport.send_message(schemas, &message)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -465,7 +535,7 @@ impl Drop for LoginLease<'_> {
         let mut active = self.lobby.active.lock().expect("lobby accounts");
         if active
             .get(&self.account.account_lo)
-            .is_some_and(|current| Arc::ptr_eq(current, &self.replaced))
+            .is_some_and(|current| Arc::ptr_eq(&current.replaced, &self.replaced))
         {
             active.remove(&self.account.account_lo);
             self.account.set_status(0);
@@ -474,6 +544,38 @@ impl Drop for LoginLease<'_> {
 }
 
 impl Lobby {
+    fn chat_request(
+        &self,
+        lease: &LoginLease<'_>,
+        request: &LobbyMessage,
+        session: &mut LobbySession<'_>,
+    ) -> io::Result<bool> {
+        let Some((channel, request)) = ChatRequest::read(request) else {
+            return Ok(false);
+        };
+        let active = self.active.lock().expect("lobby accounts");
+        let Some(sender) = active.get(&lease.account.account_lo).filter(|peer| {
+            Arc::ptr_eq(&peer.replaced, &lease.replaced) && &peer.channel == channel
+        }) else {
+            return Ok(true);
+        };
+        let peers = active.values().filter(|peer| &peer.channel == channel);
+        match request {
+            ChatRequest::Members => {
+                let members: Vec<_> = peers.map(|peer| peer.member.clone()).collect();
+                drop(active);
+                session.send(&lobby_chat::members(channel.clone(), members))?;
+            }
+            ChatRequest::Post { text, flags } => {
+                queue_chat(
+                    peers,
+                    lobby_chat::post(channel.clone(), sender.member.clone(), text, flags),
+                );
+            }
+        }
+        Ok(true)
+    }
+
     fn serve_peer(&self, stream: PeerStream, id: u32) -> io::Result<()> {
         let Some(mut session) = LobbySession::accept_peer(
             stream,
@@ -493,7 +595,6 @@ impl Lobby {
             }
             LoginRequest::Disconnected => return Ok(()),
         };
-        let mut lease = LoginLease::new(self, Arc::clone(&login.account));
         let wall_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(io::Error::other)?
@@ -515,6 +616,8 @@ impl Lobby {
             (menu, members)
         };
         login.account.save()?;
+        let mut lease =
+            LoginLease::new(self, Arc::clone(&login.account), login.identity, wall_time);
         let messages = login.available_messages(
             &self.schemas,
             &self.templates,
@@ -545,7 +648,30 @@ impl Lobby {
         if lease.current() {
             session.send(&join_chat_channel(general_channel()))?;
         }
-        while let Some(request) = session.receive_message_until(|| lease.current())? {
+        let menu_start = Instant::now();
+        let mut retries = CHAT_FEATURE_RETRIES.into_iter().peekable();
+        while let Some(request) = session.receive_message_until(|transport| {
+            if !lease.current() {
+                return Ok(false);
+            }
+            let now = Instant::now();
+            // On a cold launch the client can drop the permissions sent during login.
+            if retries
+                .peek()
+                .is_some_and(|delay| now.duration_since(menu_start) >= *delay)
+            {
+                transport.send_message(
+                    &self.schemas,
+                    &(player::PERMISSIONS, 55500, player::features()),
+                )?;
+                retries.next();
+            }
+            lease.poll_chat(transport, now)?;
+            Ok(true)
+        })? {
+            if self.chat_request(&lease, &request, &mut session)? {
+                continue;
+            }
             if let Some(settings) = SettingsRequest::read(&request) {
                 if let Err(error) = settings.apply(&login.account) {
                     eprintln!("[lobby] ignoring invalid settings update: {error}");
@@ -637,7 +763,7 @@ impl Lobby {
                         |message| session.send(message),
                     );
                     match result {
-                        Ok(seat) => lease.seat = Some(seat),
+                        Ok(seat) => lease.set_seat(Some(seat)),
                         Err(error)
                             if matches!(
                                 error.kind(),
@@ -653,7 +779,7 @@ impl Lobby {
                 }
                 continue;
             }
-            lease.seat = lobby_practice::dispatch_scene(
+            let seat = lobby_practice::dispatch_scene(
                 &request,
                 &login,
                 &self.game,
@@ -665,11 +791,19 @@ impl Lobby {
                 },
                 |message| session.send(message),
             )?;
+            lease.set_seat(seat);
         }
         if !lease.current() {
             session.send_disconnect(SIGNED_IN_ELSEWHERE)?;
         }
         Ok(())
+    }
+}
+
+fn queue_chat<'a>(peers: impl Iterator<Item = &'a ActiveLobbyPeer>, message: LobbyMessage) {
+    let message = Arc::new(message);
+    for peer in peers {
+        let _ = peer.outgoing.try_send(Arc::clone(&message));
     }
 }
 

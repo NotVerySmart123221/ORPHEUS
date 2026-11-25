@@ -6,6 +6,7 @@ ORPHEUS builds on community Overwatch 1.74 research, preservation tooling, and o
 
 - **[leafall903](https://github.com/leafall903)** — maintainer, native Rust server architecture/port, Python server & infrastructure.
 - **[zichao-zhou](https://github.com/zichao-zhou)** — Rialto PvE and McCree combat foundation, Archives/Junkenstein entrance work, and scoped Python hero contributions ([PR #16](https://github.com/leafall903/ORPHEUS/pull/16)).
+- **memcpy** (`capetalista2026@gmail.com`) — General and Match lobby text chat, tank/StateScript direction-limit and ground-wave primitives, and owner hero reselection retry.
 - Upstream lobby, runtime, and research contributors preserved in Git history and commit trailers (`Assisted-by:`).
 
 ## Upstream Foundations & Protocol Research

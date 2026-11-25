@@ -273,6 +273,7 @@ pub(crate) struct SeatedBotInfo {
 mod encounter;
 mod enemy;
 mod environment;
+mod ground_wave;
 mod health;
 mod health_events;
 mod movement;

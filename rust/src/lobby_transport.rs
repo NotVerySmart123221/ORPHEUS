@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::jam_cipher::Jam;
-use crate::jam_codec::Fields;
+use crate::jam_codec::{Fields, Schemas};
 use crate::jam_framing::{self, FrameReader};
 use crate::jam_handshake::Channel;
 use crate::service_tcp::PeerStream;
@@ -71,17 +71,37 @@ impl LobbyTransport {
         jam_framing::send_frame(&mut self.stream, &mut self.tx, payload)
     }
 
+    pub(crate) fn send_message(
+        &mut self,
+        schemas: &Schemas,
+        (crc, id, fields): &LobbyMessage,
+    ) -> io::Result<bool> {
+        let Some(wire) = self.wire_for(*crc) else {
+            return Ok(false);
+        };
+        let mut frame = schemas
+            .header(*crc, wire, *id)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        frame.extend(
+            schemas
+                .encode(*crc, *id, fields)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
+        );
+        self.send(&frame)?;
+        Ok(true)
+    }
+
     /// Handle control traffic in frame order and return the next lobby event.
     pub fn receive(&mut self) -> io::Result<Option<Event>> {
-        self.receive_until(|| true)
+        self.receive_until(|_| Ok(true))
     }
 
     pub(crate) fn receive_until(
         &mut self,
-        keep_receiving: impl Fn() -> bool,
+        mut poll: impl FnMut(&mut Self) -> io::Result<bool>,
     ) -> io::Result<Option<Event>> {
         let mut data = [0; 65_536];
-        while keep_receiving() {
+        while poll(self)? {
             while let Some(frame) = self.pending.pop_front() {
                 if let Some(event) = self.handle_frame(frame)? {
                     return Ok(Some(event));

@@ -15,19 +15,19 @@ pub const HANDOFF: u32 = 0x074d_ad18;
 pub const HANDOFF_MESSAGE: u32 = 20600;
 pub const FOUND_DELAY: Duration = Duration::from_secs(4);
 const AWAY_DELAY: Duration = Duration::from_secs(1);
-const CHAT_IN: u32 = 0x5f91_3f6b;
-const MATCH_LOBBY: u32 = 0x1cfb_43cd;
+pub(crate) const CHAT_IN: u32 = 0x5f91_3f6b;
+pub(crate) const MATCH_LOBBY: u32 = 0x1cfb_43cd;
 const QUEUE: u32 = 0xb4f8_bc62;
 const QUEUE_POPPED: u64 = 1;
 const GAME_QUEUE: u64 = 4;
 const GAME_FOUND: i64 = 4;
 const GENERAL_CHANNEL: [u64; 2] = [0x8b0c, 0xcccc_0000_0f99_5be6];
 
-fn chat_channel(id: [u64; 2], kind: u64) -> Fields {
+fn chat_channel(id: [u64; 2], kind: i64) -> Fields {
     Fields::from([
         (0, Value::Struct(id16(id[0], id[1]))),
-        (0x10, Value::Unsigned(kind)),
-        (0x14, Value::Unsigned(0)),
+        (0x10, Value::Signed(kind)),
+        (0x14, Value::Signed(0)),
     ])
 }
 
@@ -43,6 +43,14 @@ pub fn join_chat_channel(channel: Fields) -> LobbyMessage {
     (
         CHAT_IN,
         20402,
+        Fields::from([(0x78, Value::Struct(channel))]),
+    )
+}
+
+pub(crate) fn leave_chat_channel(channel: Fields) -> LobbyMessage {
+    (
+        CHAT_IN,
+        20404,
         Fields::from([(0x78, Value::Struct(channel))]),
     )
 }
@@ -194,11 +202,7 @@ pub fn enter_game(
     port: u16,
 ) -> io::Result<[LobbyMessage; 3]> {
     Ok([
-        (
-            CHAT_IN,
-            20404,
-            Fields::from([(0x78, Value::Struct(general))]),
-        ),
+        leave_chat_channel(general),
         join_chat_channel(match_channel),
         (HANDOFF, HANDOFF_MESSAGE, handoff.fields(host, port)?),
     ])

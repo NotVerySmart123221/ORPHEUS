@@ -601,6 +601,14 @@ impl Evaluator {
             "STUConfigVarBool" => Value::Bool(json_truthy(value)),
             "STUConfigVarInt" => Value::Integer(i64::from(integer(value)? as i32)),
             "STUConfigVarFloat" => Value::Float(rounded(number(value)?)),
+            "STU_0762B33A"
+                if native_fields(
+                    config,
+                    &["m_32B00625", "m_3661BC45", "m_5023B9B0", "m_E26E5E09"],
+                ) =>
+            {
+                self.clamp_direction(config, context, nested)?
+            }
             // Build 104319 selects the failed base evaluator for this class;
             // a fresh destination remains null and the operand is never read.
             "STU_B40ACFBA" if native_fields(config, &["m_52EA7AB9"]) => Value::Null,
@@ -774,6 +782,24 @@ impl Evaluator {
                         .ok_or(EvalError::UnavailableEntityDirection(entity))?,
                 )
             }
+            "STU_8CBDD81C" => {
+                let operand = native_entity_operand(config, class).ok_or(
+                    EvalError::MalformedConfig("expected one native body position operand"),
+                )?;
+                self.charge()?;
+                let Value::Entity(entity) = self.config(operand, context, nested)? else {
+                    return Err(EvalError::MalformedConfig("expected a bound entity"));
+                };
+                if !valid_entity(entity) {
+                    return Err(EvalError::MalformedConfig("expected a bound entity"));
+                }
+                Value::Vector(
+                    context
+                        .authored_position(entity)
+                        .filter(|pos| pos.iter().all(|axis| axis.is_finite()))
+                        .ok_or(EvalError::UnavailableEntityPosition(entity))?,
+                )
+            }
             "STU_21A13145" => {
                 let operand = native_entity_operand(config, class).ok_or(
                     EvalError::MalformedConfig("expected one native eye position entity operand"),
@@ -872,6 +898,21 @@ impl Evaluator {
                     }
                     _ => return Err(EvalError::UnsupportedConfig(class.into())),
                 }
+            }
+            "STU_66F3B89E" if native_shape(config, class, Some("m_entity")) => {
+                let entity = self.config(child(config, "m_entity"), context, nested)?;
+                let Some(Value::Entity(entity)) = first_scalar(&entity) else {
+                    return Ok(Value::Null);
+                };
+                let [x, _, z] = context
+                    .forward(*entity)
+                    .ok_or(EvalError::UnavailableEntityDirection(*entity))?;
+                let planar = x.hypot(z);
+                if !planar.is_finite() || planar == 0.0 {
+                    return Err(EvalError::UnavailableEntityDirection(*entity));
+                }
+                // The authored right vector uses body yaw, independent of pitch.
+                Value::Vector([rounded(z / planar), 0.0, rounded(-x / planar)])
             }
             "STU_021D01CD" | "STU_C8C4C20D" if native_shape(config, class, Some("m_entity")) => {
                 if let Some(value) = context.native(config) {
@@ -1584,6 +1625,23 @@ impl Evaluator {
                     .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?;
                 Value::Float(scale)
             }
+            "STU_295F1CDE" if native_shape(config, class, None) => {
+                // 104319 CC9A80/C1BBB0: barrier health multiplier for this actor's ruleset.
+                self.charge()?;
+                match context.optional_ruleset(0x254b) {
+                    None | Some(Value::Null) => Value::Float(1.0),
+                    Some(value @ (Value::Integer(_) | Value::Float(_)))
+                        if rounded(to_float(&value)).is_finite() =>
+                    {
+                        Value::Float(rounded(to_float(&value)))
+                    }
+                    _ => {
+                        return Err(EvalError::MalformedConfig(
+                            "invalid barrier health multiplier",
+                        ));
+                    }
+                }
+            }
             "STU_3832D36C" => {
                 let key = match dynamic(value)? {
                     Some(variable) => Some(variable.id),
@@ -2019,6 +2077,62 @@ impl Evaluator {
         let target = self.segment_endpoint(target, context, depth)?;
         self.spatial_line_clear(context, origin, target)
             .map(Value::Bool)
+    }
+
+    fn clamp_direction(
+        &mut self,
+        config: &Json,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<Value, EvalError> {
+        let mut angles = [[0.0; 2]; 2];
+        for (field, limit_basis) in ["m_32B00625", "m_3661BC45"].into_iter().zip(&mut angles) {
+            let Value::Vector([x, y, z]) = self.config(child(config, field), context, depth)?
+            else {
+                return Ok(Value::Null);
+            };
+            let norm_squared = x * x + y * y + z * z;
+            if ![x, y, z].into_iter().all(f64::is_finite)
+                || norm_squared <= 100.0 * f64::from(f32::MIN_POSITIVE)
+            {
+                return Ok(Value::Null);
+            }
+            // Match the Python reference's near-unit normalization threshold.
+            let y = if (norm_squared - 1.0).abs() > 0.008 {
+                rounded(y / norm_squared.sqrt())
+            } else {
+                y
+            };
+            *limit_basis = [rounded(x.atan2(z)), rounded((-y).clamp(-1.0, 1.0).asin())];
+        }
+
+        let limits = [
+            self.config(child(config, "m_5023B9B0"), context, depth)?,
+            self.config(child(config, "m_E26E5E09"), context, depth)?,
+        ];
+        let [mut direction, reference] = angles;
+        for ((angle, center), limit) in direction.iter_mut().zip(reference).zip(limits) {
+            let degrees = match limit {
+                Value::Integer(value @ 0..) => value as f64,
+                Value::Float(value) if value.is_finite() && value >= 0.0 => value,
+                _ => return Ok(Value::Null),
+            };
+            let limit = degrees.to_radians();
+            let delta = *angle - center;
+            let turn = std::f64::consts::TAU;
+            let shortest = delta - turn * (delta / turn).round_ties_even();
+            if shortest.abs() > limit {
+                *angle = rounded(center + limit.copysign(shortest));
+            }
+        }
+
+        let [yaw, pitch] = direction;
+        let horizontal = pitch.cos();
+        Ok(Value::Vector([
+            rounded(yaw.sin() * horizontal),
+            rounded(-pitch.sin()),
+            rounded(yaw.cos() * horizontal),
+        ]))
     }
 
     fn ray_cast(
@@ -2631,6 +2745,10 @@ impl Evaluator {
                         _ => unreachable!(),
                     };
                     Value::Float(rounded(value))
+                }
+                49 => {
+                    let (y, x) = pair(&mut stack, pc)?;
+                    Value::Float(rounded(to_float(&y).atan2(to_float(&x)).to_degrees()))
                 }
                 50 | 51 => {
                     let value = pop(&mut stack, pc)?;
