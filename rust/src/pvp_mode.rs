@@ -916,6 +916,68 @@ impl ControlRound {
     }
 }
 
+/// Unified data-driven PvP objective runtime selectable purely by mode GUID
+/// (`MODE_ASSAULT`, `MODE_ESCORT`, `MODE_HYBRID`, `MODE_CONTROL`).
+#[derive(Clone, Debug)]
+pub enum PvpObjectiveRuntime {
+    Assault(AssaultRound),
+    Escort(EscortRound),
+    Hybrid(HybridRound),
+    Control(ControlRound),
+}
+
+impl PvpObjectiveRuntime {
+    pub fn mode_guid(&self) -> u64 {
+        match self {
+            Self::Assault(_) => MODE_ASSAULT,
+            Self::Escort(_) => MODE_ESCORT,
+            Self::Hybrid(_) => MODE_HYBRID,
+            Self::Control(_) => MODE_CONTROL,
+        }
+    }
+
+    pub fn phase(&self) -> MatchPhase {
+        match self {
+            Self::Assault(round) => round.phase,
+            Self::Escort(round) => round.phase,
+            Self::Hybrid(round) => round.escort.phase,
+            Self::Control(round) => round.phase,
+        }
+    }
+
+    pub fn winner(&self) -> Option<u8> {
+        match self {
+            Self::Assault(round) => round.winner,
+            Self::Escort(round) => round.winner,
+            Self::Hybrid(round) => round.escort.winner,
+            Self::Control(round) => round.winner,
+        }
+    }
+
+    pub fn movement_scale(&self) -> f64 {
+        match self {
+            Self::Control(round) => round.movement_scale(),
+            _ => 1.0,
+        }
+    }
+
+    pub fn in_healing_room(&self, team: u8, pos: [f64; 3]) -> bool {
+        match self {
+            Self::Control(round) => round.in_healing_room(team, pos),
+            _ => false,
+        }
+    }
+
+    pub fn advance(&mut self, now: f64, actors: &[ActorSample]) {
+        match self {
+            Self::Assault(round) => round.advance(now, actors),
+            Self::Escort(round) => round.advance(now, actors),
+            Self::Hybrid(round) => round.advance(now, actors),
+            Self::Control(round) => round.advance(now, actors),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 8. MatchAudioScheduler
 // ---------------------------------------------------------------------------

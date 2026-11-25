@@ -698,12 +698,44 @@ pub struct TriggerGoal {
     pub triggered_entities: BTreeSet<u32>,
 }
 
+/// Retail 1.74 logical button bit for Interact (`Button(30, "Interact")` in `05800000000023b0`).
+pub const INTERACT_BUTTON_BIT: u32 = 1 << 30;
+
+/// Retail 1.74 reset button cooldown (`Wait_14 after(2.5)` in `05800000000023b0`).
+pub const DEFAULT_RESET_BUTTON_COOLDOWN_SECS: f64 = 2.5;
+
+/// Default interact reach for reset buttons when no custom radius is specified.
+pub const DEFAULT_RESET_BUTTON_RADIUS: f64 = 2.5;
+
 /// Data-driven reset button linked to one or more `PhysicsProp` entities.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ResetButtonProp {
     pub entity: u32,
+    pub position: [f64; 3],
+    pub interact_radius: f64,
+    pub cooldown_secs: f64,
+    pub last_pressed_at: Option<f64>,
     pub linked_props: Vec<u32>,
     pub reset_cue_id: u64,
+}
+
+impl ResetButtonProp {
+    pub fn new(
+        entity: u32,
+        position: [f64; 3],
+        linked_props: Vec<u32>,
+        reset_cue_id: u64,
+    ) -> Self {
+        Self {
+            entity,
+            position,
+            interact_radius: DEFAULT_RESET_BUTTON_RADIUS,
+            cooldown_secs: DEFAULT_RESET_BUTTON_COOLDOWN_SECS,
+            last_pressed_at: None,
+            linked_props,
+            reset_cue_id,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -732,16 +764,108 @@ impl InteractivePropRuntime {
         }
     }
 
+    /// Reset a single `PhysicsProp` to its authored spawn position and clear goal triggers.
+    pub fn reset_prop(&mut self, prop_entity: u32) -> bool {
+        let Some(prop) = self.props.get_mut(&prop_entity) else {
+            return false;
+        };
+        prop.reset();
+        for goal in &mut self.goals {
+            goal.triggered_entities.remove(&prop_entity);
+        }
+        true
+    }
+
+    /// Intersect a weapon ray against all active `PhysicsProp` spheres and impart impulse to the nearest hit.
+    pub fn hit_prop_by_ray(
+        &mut self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+        impulse: f64,
+    ) -> Option<u32> {
+        if self.props.is_empty()
+            || !max_distance.is_finite()
+            || max_distance <= 0.0
+            || !impulse.is_finite()
+            || impulse <= 0.0
+        {
+            return None;
+        }
+        let mut nearest: Option<(u32, f64)> = None;
+        for (&entity, prop) in &self.props {
+            if !prop.active || prop.radius <= 0.0 {
+                continue;
+            }
+            let oc = [
+                origin[0] - prop.position[0],
+                origin[1] - prop.position[1],
+                origin[2] - prop.position[2],
+            ];
+            let b = oc[0] * direction[0] + oc[1] * direction[1] + oc[2] * direction[2];
+            let c = oc[0] * oc[0] + oc[1] * oc[1] + oc[2] * oc[2] - prop.radius * prop.radius;
+            let disc = b * b - c;
+            if disc < 0.0 {
+                continue;
+            }
+            let root = disc.sqrt();
+            let t = if -b - root >= 0.0 {
+                -b - root
+            } else if -b + root >= 0.0 {
+                0.0
+            } else {
+                continue;
+            };
+            if t <= max_distance && nearest.is_none_or(|(_, best)| t < best) {
+                nearest = Some((entity, t));
+            }
+        }
+        let (entity, _) = nearest?;
+        let lift_dir = [direction[0], (direction[1] + 0.25).max(0.15), direction[2]];
+        self.apply_hit_impulse(entity, lift_dir, impulse);
+        Some(entity)
+    }
+
+    /// Impart a radial impulse to all active `PhysicsProp` spheres overlapping a blast or melee sphere.
+    pub fn hit_props_in_sphere(&mut self, center: [f64; 3], radius: f64, impulse: f64) -> usize {
+        if self.props.is_empty()
+            || !radius.is_finite()
+            || radius <= 0.0
+            || !impulse.is_finite()
+            || impulse <= 0.0
+        {
+            return 0;
+        }
+        let mut count = 0usize;
+        for prop in self.props.values_mut() {
+            if !prop.active {
+                continue;
+            }
+            let dx = prop.position[0] - center[0];
+            let dy = prop.position[1] - center[1];
+            let dz = prop.position[2] - center[2];
+            let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+            let reach = radius + prop.radius.max(0.0);
+            if dist <= reach {
+                let falloff = (1.0 - dist / reach.max(1e-6)).clamp(0.25, 1.0);
+                let dir = if dist > 1e-6 {
+                    [dx / dist, (dy / dist + 0.35).max(0.2), dz / dist]
+                } else {
+                    [0.0, 1.0, 0.0]
+                };
+                prop.apply_impulse(dir, impulse * falloff);
+                count += 1;
+            }
+        }
+        count
+    }
+
     pub fn press_button(&mut self, button_entity: u32) -> bool {
         let Some(button) = self.buttons.get(&button_entity).cloned() else {
             return false;
         };
         for prop_id in &button.linked_props {
-            if let Some(prop) = self.props.get_mut(prop_id) {
-                prop.reset();
-                for goal in &mut self.goals {
-                    goal.triggered_entities.remove(prop_id);
-                }
+            if self.reset_prop(*prop_id) {
                 self.emitted_cues.push(PropCueEvent {
                     source_entity: button_entity,
                     prop_entity: *prop_id,
@@ -750,6 +874,39 @@ impl InteractivePropRuntime {
             }
         }
         true
+    }
+
+    /// Press a reset button while enforcing its retail cooldown (e.g. 2.5s in `05800000000023b0`).
+    pub fn press_button_at(&mut self, button_entity: u32, now_secs: f64) -> bool {
+        let Some(button) = self.buttons.get_mut(&button_entity) else {
+            return false;
+        };
+        if let Some(last) = button.last_pressed_at {
+            if now_secs < last + button.cooldown_secs {
+                return false;
+            }
+        }
+        button.last_pressed_at = Some(now_secs);
+        self.press_button(button_entity)
+    }
+
+    /// Press the closest reset button within its `interact_radius` of `pos` if off cooldown.
+    pub fn press_nearby_button(&mut self, pos: [f64; 3], now_secs: f64) -> Option<u32> {
+        let candidate = self
+            .buttons
+            .iter()
+            .filter_map(|(&entity, button)| {
+                let d = dist3(pos, button.position);
+                (d <= button.interact_radius).then_some((entity, d))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)))
+            .map(|(entity, _)| entity)?;
+        self.press_button_at(candidate, now_secs)
+            .then_some(candidate)
+    }
+
+    pub fn take_emitted_cues(&mut self) -> Vec<PropCueEvent> {
+        std::mem::take(&mut self.emitted_cues)
     }
 
     /// Advance all active physics props against a floor height & optional contact plane list.

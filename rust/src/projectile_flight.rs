@@ -327,6 +327,15 @@ impl ProjectileFlight {
             .is_some_and(Blast::affects_shooter)
     }
 
+    pub(crate) fn blast_radius(&self) -> f64 {
+        self.ballistics
+            .blast
+            .as_ref()
+            .and_then(|blast| blast.rings.last().map(|&(radius, _)| radius))
+            .filter(|radius| radius.is_finite() && *radius > 0.0)
+            .unwrap_or(0.0)
+    }
+
     pub fn new(
         ballistics: ProjectileBallistics,
         position: Vec3,

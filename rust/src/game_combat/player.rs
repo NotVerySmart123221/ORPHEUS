@@ -80,6 +80,8 @@ pub(crate) struct PlayerBodyState {
     pub(crate) hitscan: Vec<PosedHitscan>,
     pub(crate) observer_create: Option<EntityUpdate>,
     pub(crate) respawn_at: Option<Duration>,
+    pub(crate) last_buttons: u32,
+    pub(crate) pending_pressed_buttons: u32,
 }
 
 impl PlayerBodyState {
@@ -114,6 +116,8 @@ impl PlayerBodyState {
             hitscan: Vec::new(),
             observer_create,
             respawn_at: None,
+            last_buttons: 0,
+            pending_pressed_buttons: 0,
         }
     }
 

@@ -3974,3 +3974,253 @@ fn hitscan_pierces_and_breaks_breakable_placement_then_clears_projectile_sweeps(
     assert!(breakables.is_broken(0));
     assert_eq!(room.body_healths().unwrap()[&bot_entity], 180.0);
 }
+
+#[test]
+fn live_room_interactive_props_authored_blast_breakables_and_pvp_objective() {
+    use crate::{
+        collision_cache::{
+            CollisionCache, Placement, RAY_GEOMETRY, RAY_PROP_SCOPE, RayCacheIdentity, Shape,
+            chunk_guid,
+        },
+        collision_scene::{BreakableState, CollisionScene},
+        contact_world::ContactWorld,
+        game_hitscan::DamageTags,
+        mover::Mover,
+        mover_settings::{MoverCatalog, MoverSettings},
+        projectile_flight::{Blast, ProjectileBallistics, ProjectileFlight},
+        pvp_mode::{AssaultRound, CapturePointSpec, MatchPhase, PvpObjectiveRuntime},
+        room_primitives::{INTERACT_BUTTON_BIT, ObbTrigger, ObbZone, PhysicsProp, ResetButtonProp},
+    };
+    const TEST_MOVER_CATEGORY: u16 = 0x0018;
+    use std::collections::BTreeSet;
+
+    let map = 0x0800_0000_0000_4243;
+    let identity = RayCacheIdentity {
+        map_guid: map,
+        collision_ckey: "synthetic-blast-map",
+        placement_ckey: None,
+        prop_records_sha256: None,
+    };
+    let cache = CollisionCache {
+        header: serde_json::from_value(serde_json::json!({
+            "meshes": [],
+            "hulls": 0,
+            "models": 2,
+            "placements": 2,
+            "identifiers": [],
+            "geometry": RAY_GEOMETRY,
+            "category_mask": 0xffff,
+            "prop_scope": RAY_PROP_SCOPE,
+            "map": format!("0x{map:016X}"),
+            "chunk": format!("0x{:016X}", chunk_guid(map)),
+            "ckey": "synthetic-blast-map",
+            "breakable_model_shapes": { "0": [0] },
+        }))
+        .unwrap(),
+        meshes: Vec::new(),
+        hulls: Vec::new(),
+        models: vec![
+            vec![Shape::Sphere {
+                center: [0.0, 0.0, 0.0],
+                radius: 0.4,
+                mask: TEST_MOVER_CATEGORY,
+            }],
+            vec![Shape::Sphere {
+                center: [0.0, 0.0, 0.0],
+                radius: 0.5,
+                mask: TEST_MOVER_CATEGORY,
+            }],
+        ],
+        placements: vec![
+            // Placement 0: breakable prop 2.4m to the right of projectile wall impact
+            Placement {
+                model: 0,
+                group: 0,
+                translation: [2.4, 1.0, 5.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0, 1.0, 1.0],
+            },
+            // Placement 1: solid wall hit by projectile at z=5.0
+            Placement {
+                model: 1,
+                group: 0,
+                translation: [0.0, 1.0, 5.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0, 1.0, 1.0],
+            },
+        ],
+    };
+    let scene = Arc::new(CollisionScene::expanded_rays(&cache, &BTreeSet::new(), identity).unwrap());
+    let breakables = Arc::new(BreakableState::new());
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, &scene, None)
+        .with_combat_geometry(&scene, None)
+        .with_breakables(&breakables);
+
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    room.enable_spatial_queries(false, Arc::clone(&scene), RoomSpatialNeeds::Queries);
+    room.set_breakables(Arc::clone(&breakables));
+
+    // Register a basketball prop, reset button, and Assault capture point.
+    room.set_interactive_prop_floor_y(0.0);
+    room.interactive_props_mut()
+        .props
+        .insert(9001, PhysicsProp::new(9001, [0.0, 1.0, 2.0], 0.2));
+    room.interactive_props_mut().buttons.insert(
+        9002,
+        ResetButtonProp::new(9002, [0.0, 0.0, 0.5], vec![9001], 0x0300_0000_0000_BEEF),
+    );
+    let mut assault = AssaultRound::new(
+        vec![CapturePointSpec {
+            placeable: 1,
+            position: [0.0, 0.0, 0.0],
+            zone: ObbZone::new(vec![ObbTrigger::from_raw([
+                0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 4.0, 4.0, 4.0,
+            ])]),
+            round_seconds: 240.0,
+            capture_seconds: 10.0,
+            segments: 3,
+        }],
+        1.0,
+    );
+    assault.phase = MatchPhase::Active;
+    assault.deadline = 300.0;
+    assault.last_update = 0.0;
+    room.set_pvp_objective(PvpObjectiveRuntime::Assault(assault));
+
+    let owner = BodyId {
+        entity: 0xa000_0100,
+        generation: 1,
+    };
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        [0.0, 0.0, 0.0],
+        0,
+        0x08,
+    )
+    .unwrap();
+    room.spawn_player_body(PlayerBodyState::new(
+        owner, 1, 0, 1, SOLDIER, mover, None, 1, None,
+    ))
+    .unwrap();
+
+    // 1. Hitscan ray shoots the basketball prop -> imparts velocity.
+    let shot = PosedHitscan {
+        source: owner.entity,
+        origin: [0.0, 1.0, 0.0],
+        direction: [0.0, 0.0, 1.0],
+        command: crate::commands::Command {
+            frame: 1,
+            ..Default::default()
+        },
+        shot_frame: 1,
+        reach: 20.0,
+        hit: HitDefinition {
+            tags: DamageTags::EMPTY,
+            amount: 20.0,
+            loadout: None,
+            critical: 1.0,
+            falloff: None,
+        },
+    };
+    let _ = room
+        .hitscan(
+            &queries,
+            shot,
+            ShotContext {
+                team: 1,
+                quanta: 16,
+                tick: 1,
+                now: Duration::from_secs(1),
+            },
+            |_| true,
+        )
+        .unwrap();
+    assert!(room.interactive_props().props[&9001].velocity[2] > 0.0);
+
+    // 2. Finish tick steps interactive props AND advances Assault capture point progress!
+    room.finish_tick(&queries, 2, Duration::from_secs(2))
+        .unwrap();
+    assert_ne!(
+        room.interactive_props().props[&9001].position,
+        [0.0, 1.0, 2.0]
+    );
+    match room.pvp_objective().unwrap() {
+        PvpObjectiveRuntime::Assault(round) => {
+            assert!(
+                round.current().progress > 0.0,
+                "live attacker inside Assault OBB must advance capture progress"
+            );
+        }
+        _ => panic!("expected Assault PvP objective"),
+    }
+
+    // 3. Player presses Interact button near reset button -> resets basketball cleanly.
+    room.player_body_mut(owner).unwrap().pending_pressed_buttons = INTERACT_BUTTON_BIT;
+    room.finish_tick(&queries, 3, Duration::from_secs(3))
+        .unwrap();
+    assert_eq!(
+        room.interactive_props().props[&9001].position,
+        [0.0, 1.0, 2.0]
+    );
+    assert!(!room.take_prop_cues().is_empty());
+
+    // 4. Projectile with authored 3.0m blast radius detonates on wall at z=5.0 -> smashes breakable 2.4m away!
+    let flight = ProjectileFlight::new(
+        ProjectileBallistics {
+            speed: 400.0,
+            lifetime: 2.0,
+            max_distance: None,
+            radius: 0.1,
+            terrain_radius: 0.0,
+            definition: None,
+            direct: None,
+            blast: Some(Blast {
+                hit: HitDefinition {
+                    tags: DamageTags::EMPTY,
+                    amount: 80.0,
+                    loadout: None,
+                    critical: 1.0,
+                    falloff: None,
+                },
+                rings: vec![(0.5, 1.0), (3.0, 0.5)],
+                self_damage_scale: 0.0,
+                self_knockback_scale: 0.0,
+                knockback: None,
+                detonate_on_expiry: false,
+            }),
+            terrain_rebound: None,
+        },
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        Some(3),
+    )
+    .unwrap();
+    assert!(!breakables.is_broken(0));
+    let (outcomes, _) = room
+        .advance_projectiles(
+            &queries,
+            1,
+            owner,
+            vec![AdmittedFlight {
+                token: crate::game_projectiles::ProjectileToken::server_only(1),
+                flight,
+                stun: None,
+                hit_effect: None,
+            }],
+            ShotContext {
+                team: 1,
+                quanta: 16,
+                tick: 4,
+                now: Duration::from_secs(4),
+            },
+            |_| true,
+        )
+        .unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert!(
+        breakables.is_broken(0),
+        "projectile splash must smash breakables within its authored 3.0m blast radius"
+    );
+}

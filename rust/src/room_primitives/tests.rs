@@ -71,11 +71,7 @@ fn interactive_prop_basketball_bounces_scores_and_resets() {
     });
     rt.buttons.insert(
         3001,
-        ResetButtonProp {
-            entity: 3001,
-            linked_props: vec![1001],
-            reset_cue_id: 0x0300_0000_0000_BEEF,
-        },
+        ResetButtonProp::new(3001, [0.5, 1.0, 0.0], vec![1001], 0x0300_0000_0000_BEEF),
     );
 
     // Hit ball toward hoop (vx=2.0, vy=5.5 -> descends through [1.3, 1.2, 0.0] around t=0.65s)
@@ -105,6 +101,22 @@ fn interactive_prop_basketball_bounces_scores_and_resets() {
             .iter()
             .any(|c| c.source_entity == 3001 && c.cue_id == 0x0300_0000_0000_BEEF)
     );
+
+    // Ray hit imparts impulse; nearby interact button respects retail 2.5s cooldown.
+    assert_eq!(
+        rt.hit_prop_by_ray([-2.0, 1.0, 0.0], [1.0, 0.0, 0.0], 10.0, 8.0),
+        Some(1001)
+    );
+    assert!(rt.props[&1001].velocity[0] > 0.0);
+    rt.step(0.1, 0.0, &[]);
+    assert_ne!(rt.props[&1001].position, [0.0, 1.0, 0.0]);
+
+    assert_eq!(rt.press_nearby_button([0.6, 1.0, 0.0], 10.0), Some(3001));
+    assert_eq!(rt.props[&1001].position, [0.0, 1.0, 0.0]);
+    // Within 2.5s cooldown: rejected
+    assert_eq!(rt.press_nearby_button([0.6, 1.0, 0.0], 11.5), None);
+    // After 2.5s cooldown: accepted again
+    assert_eq!(rt.press_nearby_button([0.6, 1.0, 0.0], 12.6), Some(3001));
 }
 
 #[test]

@@ -774,6 +774,9 @@ pub(crate) struct RoomSimulation {
     enemy_projectiles: Vec<Entity>,
     projectile_reports: observed_projectiles::RoomProjectileReports,
     witch_staff_links: IndexMap<u32, (u32, u16)>,
+    interactive_props: crate::room_primitives::InteractivePropRuntime,
+    interactive_prop_floor_y: f64,
+    pvp_objective: Option<crate::pvp_mode::PvpObjectiveRuntime>,
     #[cfg(any(test, feature = "inspector"))]
     debug_rays: Arc<crate::game_debug::DebugRayHistory>,
 }
@@ -1247,9 +1250,123 @@ impl RoomSimulation {
             enemy_projectiles: Vec::new(),
             projectile_reports: Default::default(),
             witch_staff_links: IndexMap::new(),
+            interactive_props: crate::room_primitives::InteractivePropRuntime::default(),
+            interactive_prop_floor_y: 0.0,
+            pvp_objective: None,
             #[cfg(any(test, feature = "inspector"))]
             debug_rays: Arc::default(),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn interactive_props(&self) -> &crate::room_primitives::InteractivePropRuntime {
+        &self.interactive_props
+    }
+
+    #[cfg(any(test, feature = "lua-mods"))]
+    pub(crate) fn interactive_props_mut(
+        &mut self,
+    ) -> &mut crate::room_primitives::InteractivePropRuntime {
+        &mut self.interactive_props
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_interactive_prop_floor_y(&mut self, floor_y: f64) {
+        if floor_y.is_finite() {
+            self.interactive_prop_floor_y = floor_y;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_prop_cues(&mut self) -> Vec<crate::room_primitives::PropCueEvent> {
+        self.interactive_props.take_emitted_cues()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pvp_objective(&self) -> Option<&crate::pvp_mode::PvpObjectiveRuntime> {
+        self.pvp_objective.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_pvp_objective(&mut self, runtime: crate::pvp_mode::PvpObjectiveRuntime) {
+        self.pvp_objective = Some(runtime);
+    }
+
+    fn step_interactive_props_and_pvp(&mut self, now: Duration) {
+        const MELEE_BUTTON_BIT: u32 = 0x0800;
+        let now_secs = now.as_secs_f64();
+        if !self.interactive_props.props.is_empty() || !self.interactive_props.buttons.is_empty() {
+            let mut interact_positions = Vec::new();
+            let mut melee_centers = Vec::new();
+            for &entity in self.players_by_wire.values() {
+                if let Some(mut state) = self.world.get_mut::<PlayerBodyState>(entity) {
+                    let pressed = std::mem::take(&mut state.pending_pressed_buttons);
+                    if pressed == 0 || !state.alive() {
+                        continue;
+                    }
+                    let pose = state.mover.pose();
+                    if pressed & crate::room_primitives::INTERACT_BUTTON_BIT != 0 {
+                        interact_positions.push(pose.position);
+                    }
+                    if pressed & MELEE_BUTTON_BIT != 0 {
+                        let [fx, fy, fz] =
+                            crate::game_hitscan::aim_direction(&crate::commands::Command {
+                                yaw: pose.yaw,
+                                pitch: pose.pitch,
+                                ..Default::default()
+                            });
+                        let eye = [
+                            pose.position[0],
+                            pose.position[1] + eye_height(state.hero, state.mover.crouched()),
+                            pose.position[2],
+                        ];
+                        melee_centers.push([
+                            eye[0] + fx * 1.5,
+                            eye[1] + fy * 1.5,
+                            eye[2] + fz * 1.5,
+                        ]);
+                    }
+                }
+            }
+            for center in melee_centers {
+                self.interactive_props
+                    .hit_props_in_sphere(center, 2.0, 11.0);
+            }
+            if !self.interactive_props.props.is_empty() {
+                self.interactive_props.step(
+                    crate::game_clock::TICK_PERIOD.as_secs_f64(),
+                    self.interactive_prop_floor_y,
+                    &[],
+                );
+            }
+            for pos in interact_positions {
+                self.interactive_props.press_nearby_button(pos, now_secs);
+            }
+        }
+        if let Some(pvp) = &mut self.pvp_objective {
+            let mut actors = Vec::with_capacity(self.players_by_wire.len() + self.by_wire.len());
+            for (&wire, &entity) in &self.players_by_wire {
+                if let Some(state) = self.world.get::<PlayerBodyState>(entity) {
+                    actors.push(crate::room_primitives::ActorSample {
+                        entity: wire,
+                        team: state.team,
+                        position: state.mover.pose().position,
+                        alive: state.alive(),
+                    });
+                }
+            }
+            for (&wire, &entity) in &self.by_wire {
+                if let Some(state) = self.world.get::<BotState>(entity) {
+                    actors.push(crate::room_primitives::ActorSample {
+                        entity: wire,
+                        team: state.bot.spawn.team,
+                        position: state.bot.position,
+                        alive: !state.bot.dead && state.vitals.death().is_none(),
+                    });
+                }
+            }
+            pvp.advance(now_secs, &actors);
+        }
     }
 
     #[cfg(test)]
@@ -2156,9 +2273,13 @@ impl RoomSimulation {
                     script: None,
                 });
             }
-            let _ = wall;
+            let prop_reach = wall.map_or(ray.reach, |surface| surface.distance);
+            self.interactive_props
+                .hit_prop_by_ray(ray.origin, ray.direction, prop_reach, 12.0);
             return Ok(None);
         };
+        self.interactive_props
+            .hit_prop_by_ray(ray.origin, ray.direction, impact.distance, 12.0);
         for (dist, placement) in breakable_hits {
             if dist <= impact.distance {
                 queries.mark_breakable(placement);
@@ -2376,11 +2497,12 @@ impl RoomSimulation {
             } else {
                 None
             };
-            let (token, stun, hit_effect, result) = {
+            let (token, stun, hit_effect, blast_radius, result) = {
                 let mut active = self
                     .world
                     .get_mut::<AdmittedFlight>(entity)
                     .ok_or(CombatError::MissingFlight { connection, entity })?;
+                let blast_radius = active.flight.blast_radius();
                 let result = active.flight.advance_combat(
                     context.tick,
                     &candidates,
@@ -2389,7 +2511,13 @@ impl RoomSimulation {
                         queries.projectile_wall(origin, direction, reach, radius)
                     },
                 );
-                (active.token, active.stun, active.hit_effect, result)
+                (
+                    active.token,
+                    active.stun,
+                    active.hit_effect,
+                    blast_radius,
+                    result,
+                )
             };
             match result {
                 Ok(None) => {
@@ -2398,7 +2526,12 @@ impl RoomSimulation {
                 }
                 Ok(Some(end)) => {
                     if end.impact {
-                        queries.break_in_sphere(end.point, 1.0);
+                        queries.break_in_sphere(end.point, blast_radius.max(1.0));
+                        self.interactive_props.hit_props_in_sphere(
+                            end.point,
+                            blast_radius.max(1.5),
+                            14.0,
+                        );
                     }
                     #[cfg(feature = "inspector")]
                     {
@@ -2696,6 +2829,7 @@ impl RoomSimulation {
             self.collect_local_health_events();
             self.settle_authored_requests(tick, now)?;
             self.settle_environment(tick, now)?;
+            self.step_interactive_props_and_pvp(now);
             self.flush_health_events();
             return self.respawn_due(tick, now);
         }
@@ -3134,6 +3268,7 @@ impl RoomSimulation {
             self.collect_local_health_events();
         }
         self.settle_environment(tick, now)?;
+        self.step_interactive_props_and_pvp(now);
         let replacements = self.respawn_due(tick, now);
         self.record_poses(queries, tick)?;
         let replacements = replacements?;
@@ -3256,21 +3391,25 @@ impl RoomSimulation {
                 .world
                 .get_mut::<EnemyProjectile>(handle)
                 .expect("live enemy projectile");
-            match projectile.flight.advance_combat(
+            let blast_radius = projectile.flight.blast_radius();
+            let advanced = projectile.flight.advance_combat(
                 tick,
                 &candidates,
                 shooter_pose,
                 |origin, direction, reach, radius| {
                     queries.projectile_wall(origin, direction, reach, radius)
                 },
-            ) {
+            );
+            let mut prop_blast_point = None;
+            match advanced {
                 Ok(None) => {
                     self.enemy_projectiles.push(handle);
                     continue;
                 }
                 Ok(Some(end)) => {
                     if end.impact {
-                        queries.break_in_sphere(end.point, 1.0);
+                        queries.break_in_sphere(end.point, blast_radius.max(1.0));
+                        prop_blast_point = Some(end.point);
                     }
                     let source = projectile.source;
                     let team = projectile.team;
@@ -3320,6 +3459,10 @@ impl RoomSimulation {
             }
             self.complete_observed_projectile(handle, tick);
             self.world.despawn(handle);
+            if let Some(point) = prop_blast_point {
+                self.interactive_props
+                    .hit_props_in_sphere(point, blast_radius.max(1.5), 14.0);
+            }
         }
         self.enemy_projectiles.extend(
             children
@@ -3464,6 +3607,9 @@ impl RoomSimulation {
         self.mode_voice_requests.clear();
         self.player_cues.clear();
         self.witch_staff_links.clear();
+        self.interactive_props = Default::default();
+        self.interactive_prop_floor_y = 0.0;
+        self.pvp_objective = None;
         #[cfg(any(test, feature = "inspector"))]
         {
             self.debug_rays.clear();

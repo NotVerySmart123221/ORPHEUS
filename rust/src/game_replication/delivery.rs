@@ -2079,6 +2079,13 @@ impl WorldDelivery {
             },
         );
         let complete = pending.poses.len() == 0;
+        if complete && alive {
+            if let Some(state) = simulation.player_body_mut(id) {
+                let pressed = command.buttons & !state.last_buttons;
+                state.last_buttons = command.buttons;
+                state.pending_pressed_buttons |= pressed;
+            }
+        }
         if let Some((frame, step, error)) = fault {
             eprintln!("body owner statescript stopped at frame {frame} during {step:?}: {error}");
             #[cfg(test)]
