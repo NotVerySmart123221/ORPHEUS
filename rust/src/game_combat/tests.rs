@@ -3824,6 +3824,7 @@ fn spatial_frame_honors_weapon_terrain_category() {
         ground,
         breakables: None,
         actor_voice: None,
+        map_guid: None,
         retired: Arc::default(),
         #[cfg(any(test, feature = "inspector"))]
         captured_tick: 1,

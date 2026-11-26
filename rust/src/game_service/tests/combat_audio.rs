@@ -533,6 +533,8 @@ fn assert_native_received_damage(
             normal,
             contact_set: 0,
             critical: false,
+            armor_or_shield: false,
+            special_vfx: false,
         }]
     );
     peer.flush_combat(schemas, (tick + 4) * TICK_PERIOD, Some(simulation))

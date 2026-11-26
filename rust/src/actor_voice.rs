@@ -92,6 +92,27 @@ impl RawVoiceLine {
         }
     }
 
+    fn has_specific_condition(&self) -> bool {
+        let Self::Rich(meta) = self else {
+            return false;
+        };
+        meta.conditions.map.is_some()
+            || meta.conditions.target_hero.is_some()
+            || meta.conditions.required_ally_hero.is_some()
+    }
+
+    fn matches_target_hero(&self, target_hero: u64, deprecated: &BTreeSet<Guid>) -> bool {
+        if deprecated.contains(&self.guid()) {
+            return false;
+        }
+        let Self::Rich(meta) = self else {
+            return false;
+        };
+        !meta.conditions.deprecated
+            && self.weight() > 0.0
+            && meta.conditions.target_hero == Some(target_hero)
+    }
+
     fn matches(&self, ctx: &VoiceContext<'_>, deprecated: &BTreeSet<Guid>) -> bool {
         if deprecated.contains(&self.guid()) {
             return false;
@@ -180,6 +201,46 @@ impl VoiceOptions<'_> {
         }
         // Prefer conditional easter-egg lines when their specific map/target/ally
         // condition matched, while preserving weighted selection across candidates.
+        let specific: Vec<&RawVoiceLine> = eligible
+            .iter()
+            .copied()
+            .filter(|entry| entry.has_specific_condition())
+            .collect();
+        let pool = if !specific.is_empty() {
+            &specific
+        } else {
+            &eligible
+        };
+        self.pick_weighted(pool, choose)
+    }
+
+    /// Select ONLY a line whose `conditions.target_hero` explicitly matched `target_hero`
+    /// (for rival kill/interaction easter eggs without overriding generic StateScript cues).
+    pub(crate) fn choose_rival_line(
+        &self,
+        target_hero: u64,
+        ctx: &VoiceContext<'_>,
+        choose: &mut dyn FnMut(usize) -> usize,
+    ) -> Option<(u64, u64)> {
+        let matched: Vec<&RawVoiceLine> = self
+            .lines
+            .iter()
+            .filter(|entry| {
+                entry.matches_target_hero(target_hero, self.deprecated)
+                    && entry.matches(ctx, self.deprecated)
+            })
+            .collect();
+        if matched.is_empty() {
+            return None;
+        }
+        self.pick_weighted(&matched, choose)
+    }
+
+    fn pick_weighted(
+        &self,
+        eligible: &[&RawVoiceLine],
+        choose: &mut dyn FnMut(usize) -> usize,
+    ) -> Option<(u64, u64)> {
         let total_weight: f64 = eligible.iter().map(|entry| entry.weight()).sum();
         if eligible.len() == 1 || total_weight <= 0.0 {
             return Some((self.stimulus.0, eligible[0].guid().0));
@@ -194,7 +255,7 @@ impl VoiceOptions<'_> {
         let buckets = 1000usize;
         let roll = (choose(buckets) as f64 / buckets as f64) * total_weight;
         let mut acc = 0.0;
-        for entry in &eligible {
+        for entry in eligible {
             acc += entry.weight();
             if roll <= acc {
                 return Some((self.stimulus.0, entry.guid().0));
@@ -422,5 +483,68 @@ mod tests {
                 .count()
                 > 1
         );
+    }
+
+    #[test]
+    fn prefers_contextual_map_and_rival_easter_eggs_and_reads_durations() {
+        let data = serde_json::json!({
+            "criteria": {},
+            "heroes": { "0x02E0000000000029": "0x07A0000000000054" },
+            "sets": {
+                "0x07A0000000000054": {
+                    "0x0EE000000000000B": [
+                        "0x0760000000000001",
+                        {
+                            "guid": "0x0760000000000002",
+                            "weight": 1.0,
+                            "conditions": { "target_hero": 0x02E0000000000005_u64 }
+                        },
+                        {
+                            "guid": "0x0760000000000003",
+                            "weight": 1.0,
+                            "conditions": { "map": 0x08000000000000D4_u64 }
+                        }
+                    ]
+                }
+            },
+            "durations": {
+                "0x0760000000000002": 2.415
+            }
+        });
+        let catalog: ActorVoiceCatalog = serde_json::from_value(data).unwrap();
+        let opts = catalog
+            .stimulus_options(0x02E0_0000_0000_0029, 0, 0x0EE0_0000_0000_000B)
+            .unwrap();
+        // Generic context falls back to unconditional line.
+        let generic = opts.choose_with_context(&VoiceContext::default(), &mut |_| 0);
+        assert_eq!(
+            generic,
+            Some((0x0EE0_0000_0000_000B, 0x0760_0000_0000_0001))
+        );
+        // Rival target_hero matches easter egg specifically.
+        let rival_ctx = VoiceContext {
+            map: None,
+            target_hero: Some(0x02E0_0000_0000_0005),
+            ally_heroes: &[],
+        };
+        assert_eq!(
+            opts.choose_rival_line(0x02E0_0000_0000_0005, &rival_ctx, &mut |_| 0),
+            Some((0x0EE0_0000_0000_000B, 0x0760_0000_0000_0002))
+        );
+        assert_eq!(
+            opts.choose_rival_line(0x02E0_0000_0000_0009, &VoiceContext::default(), &mut |_| 0),
+            None
+        );
+        // Map context prefers the King's Row line over the generic line.
+        let map_ctx = VoiceContext {
+            map: Some(0x0800_0000_0000_00D4),
+            target_hero: None,
+            ally_heroes: &[],
+        };
+        assert_eq!(
+            opts.choose_with_context(&map_ctx, &mut |_| 0),
+            Some((0x0EE0_0000_0000_000B, 0x0760_0000_0000_0003))
+        );
+        assert!((catalog.line_duration(0x0760_0000_0000_0002) - 2.415).abs() < 1e-9);
     }
 }

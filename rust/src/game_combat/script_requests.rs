@@ -163,7 +163,18 @@ impl RoomSpatialFrame {
         if listeners.is_empty() || listeners.len() > RoomCue::MAX_TARGETS {
             return None;
         }
-        let (stimulus, line) = options.choose(choose)?;
+        let ally_heroes: Vec<u64> = self
+            .candidates
+            .iter()
+            .filter(|cand| cand.entity != source && actor.team.is_some() && actor.team == cand.team)
+            .filter_map(|cand| self.script_targets.get(&cand.entity)?.voice.map(|(h, _)| h))
+            .collect();
+        let ctx = crate::actor_voice::VoiceContext {
+            map: self.map_guid,
+            target_hero: None,
+            ally_heroes: &ally_heroes,
+        };
+        let (stimulus, line) = options.choose_with_context(&ctx, choose)?;
         Some((
             RoomCue {
                 stimulus,
@@ -638,6 +649,9 @@ impl RoomSimulation {
                                     source.wire,
                                     dealt as f32,
                                     None,
+                                    false,
+                                    false,
+                                    false,
                                 );
                             }
                         }
@@ -813,6 +827,7 @@ impl RoomSimulation {
             }));
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn record_received_damage(
         &mut self,
         owner: u32,
@@ -820,6 +835,9 @@ impl RoomSimulation {
         source: u32,
         dealt: f32,
         geometry: Option<ImpactGeometry>,
+        critical: bool,
+        armor_or_shield: bool,
+        special_vfx: bool,
     ) {
         if !self.received_damage_feedback
             || victim.entity == source
@@ -851,7 +869,9 @@ impl RoomSimulation {
                 origin,
                 normal: geometry.and_then(ImpactGeometry::surface_normal),
                 contact_set,
-                critical: false,
+                critical,
+                armor_or_shield,
+                special_vfx,
             },
         });
     }
@@ -859,6 +879,7 @@ impl RoomSimulation {
     /// Broadcast victim contact feedback (`25000`) to the attacking player when
     /// damaging an NPC/bot so all weapons trigger retail hit/bleed/spark/shock
     /// reactions on Training Bots and PvE enemies (not just player-vs-player).
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn record_bot_damage_feedback(
         &mut self,
         source_wire: u32,
@@ -866,6 +887,8 @@ impl RoomSimulation {
         bot_body: u64,
         dealt: f32,
         critical: bool,
+        armor_or_shield: bool,
+        special_vfx: bool,
         geometry: Option<ImpactGeometry>,
     ) {
         if !self.received_damage_feedback || !dealt.is_finite() || dealt <= 0.0 {
@@ -896,8 +919,42 @@ impl RoomSimulation {
                 normal: geometry.and_then(ImpactGeometry::surface_normal),
                 contact_set,
                 critical,
+                armor_or_shield,
+                special_vfx,
             },
         });
+    }
+
+    /// Trigger a client-side `25000` (`@0xd0 = true`) status hit reaction on a
+    /// stunned/slept/frozen/anti-healed victim so both players and bots display
+    /// immediate impact VFX/flinch feedback on status application.
+    pub(super) fn emit_status_vfx_feedback(&mut self, source_wire: u32, target_wire: u32) {
+        if !self.received_damage_feedback || source_wire == target_wire {
+            return;
+        }
+        if let Some(id) = self.player_handle_for_wire(target_wire) {
+            if let Some(owner) = self.player_body(id).map(|p| p.owner) {
+                self.record_received_damage(owner, id, source_wire, 1.0, None, false, false, true);
+            }
+        } else if let Some(&entity) = self.by_wire.get(&target_wire) {
+            if let Some(bot_body) = self
+                .world
+                .get::<BotState>(entity)
+                .filter(|s| !s.bot.dead)
+                .map(|s| s.bot.spawn.body)
+            {
+                self.record_bot_damage_feedback(
+                    source_wire,
+                    target_wire,
+                    bot_body,
+                    1.0,
+                    false,
+                    false,
+                    true,
+                    None,
+                );
+            }
+        }
     }
 
     pub(crate) fn room_cue_source_current(&self, source: RoomBodyIdentity) -> bool {
@@ -1030,6 +1087,70 @@ impl RoomSimulation {
         }
         let owner = player.owner;
         let listener = player.id;
+        let killer_hero = player.hero;
+        let killer_skin = 0;
+        let killer_team = player.team;
+        let victim_hero = self
+            .by_wire
+            .get(&victim_wire)
+            .and_then(|&e| self.world.get::<BotState>(e))
+            .map(|s| s.bot.spawn.hero)
+            .or_else(|| {
+                self.players_by_wire
+                    .get(&victim_wire)
+                    .and_then(|&e| self.world.get::<PlayerBodyState>(e))
+                    .map(|p| p.hero)
+            });
+        if let (Some(victim_hero), Some(catalog)) = (
+            victim_hero,
+            self.spatial_queries
+                .as_ref()
+                .and_then(|q| q.actor_voice.as_deref()),
+        ) {
+            let ally_heroes: Vec<u64> = self
+                .players_by_wire
+                .values()
+                .filter_map(|&e| self.world.get::<PlayerBodyState>(e))
+                .filter(|p| p.id != listener && p.team == killer_team)
+                .map(|p| p.hero)
+                .collect();
+            let ctx = crate::actor_voice::VoiceContext {
+                map: self.map_guid,
+                target_hero: Some(victim_hero),
+                ally_heroes: &ally_heroes,
+            };
+            let mut pick = (frame as usize).wrapping_add(victim_wire as usize);
+            let rival_line = [
+                0x0EE0_0000_0000_000B,
+                0x0EE0_0000_0000_000C,
+                0x0EE0_0000_0000_0019,
+            ]
+            .into_iter()
+            .find_map(|stim| {
+                catalog
+                    .stimulus_options(killer_hero, killer_skin, stim)?
+                    .choose_rival_line(victim_hero, &ctx, &mut |count| {
+                        pick = pick.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                        pick % count
+                    })
+            });
+            if let (Some((stimulus, line)), Some(source_body)) =
+                (rival_line, self.sample_health_body(killer_wire))
+            {
+                self.player_cues.push(PlayerRoomCue {
+                    owner,
+                    listener,
+                    source: source_body.identity(),
+                    notice: CombatNotice::Voice {
+                        anchor: killer_wire,
+                        speaker: killer_wire,
+                        listener: killer_wire,
+                        stimulus,
+                        line,
+                    },
+                });
+            }
+        }
         let now_secs = f64::from(frame) * crate::game_clock::TICK_PERIOD.as_secs_f64();
         let on_objective = self
             .pvp_objective
@@ -1365,6 +1486,7 @@ mod tests {
             ground: Arc::new(fixture_ground()),
             breakables: None,
             actor_voice: None,
+            map_guid: None,
             retired: Arc::default(),
             captured_tick: 0,
             debug_rays: Arc::default(),

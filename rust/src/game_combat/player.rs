@@ -970,6 +970,10 @@ impl RoomSimulation {
         }
         let owner = state.owner;
         let entity = state.id.entity;
+        let had_armor_or_shield = state.vitals().is_some_and(|v| {
+            v.amount(Some(crate::vitals::PoolKind::Armour), false) > 0.0
+                || v.amount(Some(crate::vitals::PoolKind::Shields), false) > 0.0
+        });
         let outcome = state.receive_damage(amount, source);
         let health = state.take_health_update().map(|component| EntityUpdate {
             entity,
@@ -1003,12 +1007,18 @@ impl RoomSimulation {
             }),
         );
         if !outcome.killed {
+            let critical = impact.is_some_and(|(impact, _)| impact.critical);
+            let armor_or_shield =
+                had_armor_or_shield || outcome.named_pool_losses.iter().any(|l| l.amount > 0.0);
             self.record_received_damage(
                 owner,
                 id,
                 source.killer,
                 outcome.dealt as f32,
                 impact.and_then(|(impact, _)| impact.geometry),
+                critical,
+                armor_or_shield,
+                false,
             );
         }
         if let Some(error) = death_script_fault {
@@ -1174,12 +1184,28 @@ impl RoomSimulation {
             if let Some(pose) = state.history.at(view, state.target_pose()) {
                 let m_pose = state.mover.pose();
                 let speed = m_pose.velocity[0].hypot(m_pose.velocity[2]);
+                const BASTION_BODY: u64 = 0x0400_0000_0000_01FD;
+                const WRECKING_BALL_BODY: u64 = 0x0400_0000_0000_200B;
+                let is_ball_roll = (state.body_template == WRECKING_BALL_BODY
+                    || pose.radius >= 0.68)
+                    && pose.height <= 2.05
+                    && speed > 8.5;
+                let posture = if is_ball_roll {
+                    crate::game_hitscan::HurtPosture::Ball
+                } else if state.body_template == BASTION_BODY
+                    && state.mover.crouched()
+                    && speed < 0.05
+                {
+                    crate::game_hitscan::HurtPosture::Sentry
+                } else {
+                    crate::game_hitscan::HurtPosture::Standard
+                };
                 let stance = crate::game_hitscan::SkeletalStance {
                     yaw: m_pose.yaw,
                     speed,
                     crouched: state.mover.crouched(),
-                    // Wrecking Ball in Roll form (wide radius + high speed) protects head critbox.
-                    head_protected: pose.radius >= 0.68 && pose.height <= 2.05 && speed > 8.5,
+                    head_protected: is_ball_roll,
+                    posture,
                 };
                 candidates.push((
                     state.id.entity,

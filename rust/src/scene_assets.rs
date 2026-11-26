@@ -561,6 +561,7 @@ impl SceneAssets {
         if std::env::var_os("ORPHEUS_PLAYTEST_ELIMINATION").is_none_or(|value| value != "0") {
             simulation.enable_authored_elimination_feedback();
         }
+        simulation.set_map_guid(map.map_guid);
         simulation.set_environment(self.environment.for_map(map.map_guid));
         if let Some(pvp) = crate::pvp_mode::PvpObjectiveRuntime::from_game_map(&map) {
             simulation.set_pvp_objective(pvp);

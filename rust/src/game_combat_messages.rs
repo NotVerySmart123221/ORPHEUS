@@ -51,6 +51,8 @@ pub enum CombatNotice {
         normal: Option<Vec3>,
         contact_set: u16,
         critical: bool,
+        armor_or_shield: bool,
+        special_vfx: bool,
     },
     Death {
         source: u32,
@@ -237,6 +239,8 @@ impl CombatNotice {
                 normal,
                 contact_set,
                 critical,
+                armor_or_shield,
+                special_vfx,
             } => {
                 let vector = |xyz: Option<Vec3>| {
                     let [x, y, z] = xyz
@@ -261,22 +265,22 @@ impl CombatNotice {
                             0xa8,
                             Value::Array(vec![
                                 Value::Unsigned(u64::from(critical)),
-                                Value::Unsigned(0),
-                                Value::Unsigned(0),
+                                Value::Unsigned(u64::from(armor_or_shield)),
+                                Value::Unsigned(u64::from(special_vfx)),
                             ]),
                         ),
                         (0xc0, Value::Float32(dealt)),
-                        (0xc4, Value::Unsigned(0)),
+                        (0xc4, Value::Unsigned(u64::from(armor_or_shield))),
                         (0xc8, Value::Unsigned(0)),
                         (0xca, Value::Unsigned(u64::from(contact_set))),
-                        (0xcc, Value::Float32(0.0)),
-                        (0xd0, Value::Bool(false)),
+                        (0xcc, Value::Float32(dealt.clamp(0.0, 300.0))),
+                        (0xd0, Value::Bool(critical || special_vfx)),
                         (
                             0xd8,
                             Value::Array(vec![Value::Float32(dealt), Value::Float32(1.0)]),
                         ),
                         (0xf0, Value::Array(Vec::new())),
-                        (0x108, Value::Bool(false)),
+                        (0x108, Value::Bool(armor_or_shield)),
                     ]),
                 )
             }

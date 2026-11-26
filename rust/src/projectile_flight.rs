@@ -509,7 +509,7 @@ impl ProjectileFlight {
         })
     }
 
-    pub(crate) fn advance_combat<T: Copy + Into<HurtPose>>(
+    pub(crate) fn advance_combat<T: Clone + Into<HurtPose>>(
         &mut self,
         tick: u32,
         targets: &[(u32, T)],
@@ -531,7 +531,7 @@ impl ProjectileFlight {
         )
     }
 
-    fn advance_with_wall<T: Copy + Into<HurtPose>>(
+    fn advance_with_wall<T: Clone + Into<HurtPose>>(
         &mut self,
         tick: u32,
         targets: &[(u32, T)],
@@ -550,8 +550,8 @@ impl ProjectileFlight {
         if let Some(mut stuck) = self.stuck {
             let dt = f64::from(elapsed) * seconds;
             if let Some((anchor_entity, offset)) = stuck.anchor {
-                if let Some(&(_, pose)) = targets.iter().find(|&&(e, _)| e == anchor_entity) {
-                    let feet = pose.into().feet();
+                if let Some((_, pose)) = targets.iter().find(|(e, _)| *e == anchor_entity) {
+                    let feet = pose.clone().into().feet();
                     self.position = [
                         feet[0] + offset[0],
                         feet[1] + offset[1],
@@ -602,7 +602,7 @@ impl ProjectileFlight {
                 if kinetic && speed > EPSILON {
                     self.direction = velocity.map(|axis| axis / speed);
                 }
-                match self.advance_segment(duration, speed, targets, shooter, &mut wall)? {
+                match self.advance_segment(duration, speed, targets, shooter.clone(), &mut wall)? {
                     Segment::Complete => {
                         if self.stuck.is_some() {
                             return Ok(None);
@@ -618,7 +618,7 @@ impl ProjectileFlight {
         Ok(None)
     }
 
-    fn advance_segment<T: Copy + Into<HurtPose>>(
+    fn advance_segment<T: Clone + Into<HurtPose>>(
         &mut self,
         duration: f64,
         speed: f64,
@@ -634,8 +634,8 @@ impl ProjectileFlight {
         let reach = range_left.map_or(step, |range| step.min(range));
         let mut closest = None;
         if !self.piercing {
-            for &(entity, target) in targets {
-                if let Some(contact) = target.into().contact(
+            for (entity, target) in targets {
+                if let Some(contact) = target.clone().into().contact(
                     self.position,
                     self.direction,
                     reach,
@@ -643,7 +643,7 @@ impl ProjectileFlight {
                 ) {
                     let distance = contact.hit.distance;
                     if closest.as_ref().is_none_or(|(best, _)| distance < *best) {
-                        closest = Some((distance, Some((entity, contact))));
+                        closest = Some((distance, Some((*entity, contact))));
                     }
                 }
             }
@@ -663,11 +663,11 @@ impl ProjectileFlight {
         if self.piercing {
             let actor_limit = wall_hit.map_or(reach, |hit| hit.distance);
             if let Some(direct) = self.ballistics.direct.filter(|hit| hit.amount > 0.0) {
-                for &(entity, target) in targets {
+                for &(entity, ref target) in targets {
                     if self.hit_actors.contains(&entity) {
                         continue;
                     }
-                    if let Some(contact) = target.into().contact(
+                    if let Some(contact) = target.clone().into().contact(
                         self.position,
                         self.direction,
                         actor_limit,
@@ -789,9 +789,9 @@ impl ProjectileFlight {
             let anchor = target.as_ref().and_then(|(entity, _)| {
                 targets
                     .iter()
-                    .find(|&&(e, _)| e == *entity)
-                    .map(|&(_, pose)| {
-                        let feet = pose.into().feet();
+                    .find(|(e, _)| *e == *entity)
+                    .map(|(_, pose)| {
+                        let feet = pose.clone().into().feet();
                         (
                             *entity,
                             [point[0] - feet[0], point[1] - feet[1], point[2] - feet[2]],
@@ -846,7 +846,7 @@ impl ProjectileFlight {
         )))
     }
 
-    fn splash<T: Copy + Into<HurtPose>>(
+    fn splash<T: Clone + Into<HurtPose>>(
         &self,
         point: Vec3,
         origin: Vec3,
@@ -863,7 +863,7 @@ impl ProjectileFlight {
         {
             let targets = targets
                 .iter()
-                .map(|&(entity, pose)| (entity, pose.into(), 1.0, 1.0));
+                .map(|(entity, pose)| (*entity, pose.clone().into(), 1.0, 1.0));
             let shooter = shooter
                 .filter(|_| blast.affects_shooter())
                 .map(|(entity, pose)| {
@@ -1755,21 +1755,26 @@ mod tests {
             let mut flight =
                 ProjectileFlight::new(profile, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], None).unwrap();
             flight
-                .advance_with_wall(1, &targets, Some(shooter), |_, direction, reach, _| {
-                    if direction == [0.0, 0.0, 1.0] && reach >= 0.75 {
-                        Ok(Some(WallContact {
-                            distance: 0.75,
-                            normal: None,
-                        }))
-                    } else if obstructed && direction[2] < -0.9 {
-                        Ok(Some(WallContact {
-                            distance: reach / 2.0,
-                            normal: None,
-                        }))
-                    } else {
-                        Ok(None)
-                    }
-                })
+                .advance_with_wall(
+                    1,
+                    &targets,
+                    Some(shooter.clone()),
+                    |_, direction, reach, _| {
+                        if direction == [0.0, 0.0, 1.0] && reach >= 0.75 {
+                            Ok(Some(WallContact {
+                                distance: 0.75,
+                                normal: None,
+                            }))
+                        } else if obstructed && direction[2] < -0.9 {
+                            Ok(Some(WallContact {
+                                distance: reach / 2.0,
+                                normal: None,
+                            }))
+                        } else {
+                            Ok(None)
+                        }
+                    },
+                )
                 .unwrap()
                 .unwrap()
         };

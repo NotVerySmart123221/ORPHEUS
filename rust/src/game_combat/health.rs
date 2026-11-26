@@ -508,6 +508,7 @@ impl RoomSimulation {
             } if !is_ally => {
                 let ticks = secs_to_ticks(authored_secs(wrapper_graph, fallback_secs));
                 self.apply_actor_stun(target_wire, tick, ticks);
+                self.emit_status_vfx_feedback(source_wire, target_wire);
             }
             EffectBehavior::Sleep {
                 wrapper_graph,
@@ -520,6 +521,7 @@ impl RoomSimulation {
                         .entry(target_wire)
                         .or_default()
                         .sleep_until = Some(tick.saturating_add(sleep_ticks));
+                    self.emit_status_vfx_feedback(source_wire, target_wire);
                 }
             }
             EffectBehavior::ChillFreeze {
@@ -539,6 +541,7 @@ impl RoomSimulation {
                         let freeze_ticks =
                             secs_to_ticks(authored_secs(wrapper_graph, fallback_secs));
                         self.apply_actor_stun(target_wire, tick, freeze_ticks);
+                        self.emit_status_vfx_feedback(source_wire, target_wire);
                     }
                 }
             }
@@ -550,6 +553,7 @@ impl RoomSimulation {
                     entry.heal_boost_until = Some(until);
                 } else {
                     entry.anti_heal_until = Some(until);
+                    self.emit_status_vfx_feedback(source_wire, target_wire);
                 }
             }
             EffectBehavior::HoT {

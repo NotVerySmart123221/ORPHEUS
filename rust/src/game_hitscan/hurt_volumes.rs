@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fs, io, path::Path};
+use std::{collections::BTreeMap, fs, io, path::Path, sync::Arc};
 
 use serde::Deserialize;
 
@@ -8,21 +8,33 @@ use crate::{
     static_ray::{SurfaceHit, Vec3, capsule_entry_hit, norm, segment_separation},
 };
 
-/// Live skeletal posture inputs used to articulate multi-region hurtboxes for
-/// hero bodies that do not carry a separate static calibration entry.
+/// Active articulated posture selector for heroes with transformable hurtboxes
+/// (e.g. Bastion Sentry rear weakspot core, Wrecking Ball roll sphere).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum HurtPosture {
+    #[default]
+    Standard,
+    Sentry,
+    Ball,
+}
+
+/// Live skeletal posture inputs used to articulate multi-region hurtboxes.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SkeletalStance {
     pub yaw: i32,
     pub speed: f64,
     pub crouched: bool,
     pub head_protected: bool,
+    pub posture: HurtPosture,
 }
 
 /// Sampled movement pose plus an optional combat profile for that posture.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct HurtPose {
     movement: TargetPose,
     calibrated: Option<HurtProfile>,
+    sentry: Option<HurtProfile>,
+    ball: Option<HurtProfile>,
     stance: Option<SkeletalStance>,
 }
 
@@ -31,6 +43,8 @@ impl From<TargetPose> for HurtPose {
         Self {
             movement,
             calibrated: None,
+            sentry: None,
+            ball: None,
             stance: None,
         }
     }
@@ -42,13 +56,13 @@ impl HurtPose {
         self
     }
 
-    pub(crate) fn feet(self) -> Vec3 {
+    pub(crate) fn feet(&self) -> Vec3 {
         self.movement.feet
     }
 
     #[cfg(test)]
-    pub(crate) fn head_probe_height(self) -> Option<f64> {
-        let offset = match self.calibrated {
+    pub(crate) fn head_probe_height(&self) -> Option<f64> {
+        let offset = match self.active_profile() {
             Some(profile) => {
                 let head = profile.head?;
                 head.lower.midpoint(head.upper)
@@ -58,7 +72,15 @@ impl HurtPose {
         Some(self.movement.feet[1] + offset)
     }
 
-    fn capsules(self) -> impl Iterator<Item = (Capsule, bool)> {
+    fn active_profile(&self) -> Option<&HurtProfile> {
+        match self.stance.map(|s| s.posture).unwrap_or_default() {
+            HurtPosture::Sentry if self.sentry.is_some() => self.sentry.as_ref(),
+            HurtPosture::Ball if self.ball.is_some() => self.ball.as_ref(),
+            _ => self.calibrated.as_ref(),
+        }
+    }
+
+    fn for_each_capsule(&self, mut visit: impl FnMut(Capsule, bool)) {
         let [x, y, z] = self.movement.feet;
         let (sin, cos) = self
             .stance
@@ -67,7 +89,7 @@ impl HurtPose {
                 rad.sin_cos()
             })
             .unwrap_or((0.0, 1.0));
-        let world = |shape: LocalCapsule, head| {
+        let world_legacy = |shape: LocalCapsule, head| {
             let fwd = shape.forward_offset;
             let cx = x + sin * fwd;
             let cz = z + cos * fwd;
@@ -79,38 +101,68 @@ impl HurtPose {
                 head,
             )
         };
-        let regions = match (self.calibrated, self.stance) {
-            (Some(profile), stance) => {
-                let head_protected = stance.is_some_and(|s| s.head_protected);
-                [
-                    Some(world(profile.body, false)),
-                    (!head_protected)
-                        .then_some(profile.head)
-                        .flatten()
-                        .map(|shape| world(shape, true)),
-                    None,
-                ]
-            }
-            (None, Some(stance)) => {
-                let h = self.movement.height.max(0.8);
-                let r = self.movement.radius.max(0.25);
-                let rad = f64::from(stance.yaw) * std::f64::consts::TAU / 65_536.0;
-                let (sin, cos) = rad.sin_cos();
-                let lean = if stance.crouched {
-                    0.09
-                } else {
-                    (stance.speed / 8.0).clamp(0.0, 1.0) * 0.08
+        if let Some(profile) = self.active_profile() {
+            let head_protected = self.stance.is_some_and(|s| s.head_protected);
+            if let Some(engine_caps) = &profile.capsules {
+                let run_lean = self.stance.map_or(0.0, |s| {
+                    if s.crouched {
+                        0.0
+                    } else {
+                        (s.speed / 8.0).clamp(0.0, 1.0) * 0.06
+                    }
+                });
+                let to_world = |p: [f64; 3]| {
+                    let lz = p[2] + if p[1] > 0.9 { run_lean } else { 0.0 };
+                    [
+                        x + cos * p[0] + sin * lz,
+                        y + p[1],
+                        z - sin * p[0] + cos * lz,
+                    ]
                 };
-                let legs_r = (r * 0.62).max(0.18);
-                let legs_top = (h * 0.46).max(legs_r + 0.05);
-                let legs = Capsule {
+                for cap in engine_caps.iter() {
+                    let is_crit = cap.critical && !head_protected;
+                    visit(
+                        Capsule {
+                            ends: [to_world(cap.a), to_world(cap.b)],
+                            radius: cap.radius,
+                        },
+                        is_crit,
+                    );
+                }
+                return;
+            }
+            let (body_cap, _) = world_legacy(profile.body, false);
+            visit(body_cap, false);
+            if !head_protected {
+                if let Some(shape) = profile.head {
+                    let (head_cap, _) = world_legacy(shape, true);
+                    visit(head_cap, true);
+                }
+            }
+            return;
+        }
+        if let Some(stance) = self.stance {
+            let h = self.movement.height.max(0.8);
+            let r = self.movement.radius.max(0.25);
+            let lean = if stance.crouched {
+                0.09
+            } else {
+                (stance.speed / 8.0).clamp(0.0, 1.0) * 0.08
+            };
+            let legs_r = (r * 0.62).max(0.18);
+            let legs_top = (h * 0.46).max(legs_r + 0.05);
+            visit(
+                Capsule {
                     ends: [[x, y + legs_r, z], [x, y + legs_top, z]],
                     radius: legs_r,
-                };
-                let torso_r = (r * 0.94).max(0.24);
-                let torso_low = (h * 0.46).max(torso_r);
-                let torso_high = (h * 0.78).max(torso_low + 0.05);
-                let torso = Capsule {
+                },
+                false,
+            );
+            let torso_r = (r * 0.94).max(0.24);
+            let torso_low = (h * 0.46).max(torso_r);
+            let torso_high = (h * 0.78).max(torso_low + 0.05);
+            visit(
+                Capsule {
                     ends: [
                         [
                             x + sin * (lean * 0.4),
@@ -120,39 +172,35 @@ impl HurtPose {
                         [x + sin * lean, y + torso_high, z + cos * lean],
                     ],
                     radius: torso_r,
-                };
-                let head = (!stance.head_protected).then(|| {
-                    let head_r = (r * 0.42).clamp(0.18, 0.28);
-                    let head_y = (self.movement.eye + 0.04).clamp(torso_high, h - head_r * 0.5);
-                    let head_fwd = lean * 1.35;
-                    let center = [x + sin * head_fwd, y + head_y, z + cos * head_fwd];
-                    (
-                        Capsule {
-                            ends: [center, center],
-                            radius: head_r,
-                        },
-                        true,
-                    )
-                });
-                [Some((legs, false)), Some((torso, false)), head]
-            }
-            (None, None) => [
-                Some((
+                },
+                false,
+            );
+            if !stance.head_protected {
+                let head_r = (r * 0.42).clamp(0.18, 0.28);
+                let head_y = (self.movement.eye + 0.04).clamp(torso_high, h - head_r * 0.5);
+                let head_fwd = lean * 1.35;
+                let center = [x + sin * head_fwd, y + head_y, z + cos * head_fwd];
+                visit(
                     Capsule {
-                        ends: self.movement.segment(),
-                        radius: self.movement.radius,
+                        ends: [center, center],
+                        radius: head_r,
                     },
-                    false,
-                )),
-                None,
-                None,
-            ],
-        };
-        regions.into_iter().flatten()
+                    true,
+                );
+            }
+            return;
+        }
+        visit(
+            Capsule {
+                ends: self.movement.segment(),
+                radius: self.movement.radius,
+            },
+            false,
+        );
     }
 
     pub(crate) fn contact(
-        self,
+        &self,
         origin: Vec3,
         direction: Vec3,
         reach: f64,
@@ -160,7 +208,7 @@ impl HurtPose {
     ) -> Option<HurtContact> {
         let mut best_body: Option<HurtContact> = None;
         let mut best_head: Option<HurtContact> = None;
-        for (capsule, head) in self.capsules() {
+        self.for_each_capsule(|capsule, head| {
             let [a, b] = capsule.ends;
             if let Some(hit) =
                 capsule_entry_hit(origin, direction, reach, a, b, capsule.radius + padding)
@@ -174,7 +222,7 @@ impl HurtPose {
                     *slot = Some(candidate);
                 }
             }
-        }
+        });
         let mut contact = match (best_head, best_body) {
             (Some(head), Some(body)) => {
                 // When a ray/projectile intersects both the head sphere and a wider
@@ -192,7 +240,7 @@ impl HurtPose {
             (None, Some(body)) => body,
             (None, None) => return None,
         };
-        if self.calibrated.is_none() {
+        if self.active_profile().is_none() {
             // Compatibility for bodies that have no separately measured combat profile.
             let impact_y = origin[1] + direction[1] * contact.hit.distance;
             contact.head = impact_y >= self.movement.feet[1] + self.movement.eye - HEAD_BELOW_EYE;
@@ -200,15 +248,16 @@ impl HurtPose {
         Some(contact)
     }
 
-    pub(crate) fn nearest_surface(self, point: Vec3, origin: Vec3) -> Option<Surface> {
-        let (distance, capsule) = self
-            .capsules()
-            .map(|(capsule, _)| {
-                let [a, b] = capsule.ends;
-                let distance = (norm(segment_separation(point, a, b)) - capsule.radius).max(0.0);
-                (distance, capsule)
-            })
-            .min_by(|(a, _), (b, _)| a.total_cmp(b))?;
+    pub(crate) fn nearest_surface(&self, point: Vec3, origin: Vec3) -> Option<Surface> {
+        let mut best: Option<(f64, Capsule)> = None;
+        self.for_each_capsule(|capsule, _| {
+            let [a, b] = capsule.ends;
+            let distance = (norm(segment_separation(point, a, b)) - capsule.radius).max(0.0);
+            if best.as_ref().is_none_or(|(prev, _)| distance < *prev) {
+                best = Some((distance, capsule));
+            }
+        });
+        let (distance, capsule) = best?;
         let [a, b] = capsule.ends;
         let from_axis = segment_separation(origin, a, b);
         let axis_distance = norm(from_axis);
@@ -264,7 +313,7 @@ struct Capsule {
     radius: f64,
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LocalCapsule {
     /// Endpoints of a vertical capsule axis, in metres above the feet.
@@ -288,25 +337,77 @@ impl LocalCapsule {
     }
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct EngineCapsule {
+    a: [f64; 3],
+    b: [f64; 3],
+    radius: f64,
+    #[serde(default)]
+    critical: bool,
+}
+
+impl EngineCapsule {
+    fn valid(self) -> bool {
+        self.a.into_iter().all(f64::is_finite)
+            && self.b.into_iter().all(f64::is_finite)
+            && self.radius.is_finite()
+            && self.radius > 0.0
+    }
+}
+
+#[derive(Clone, Debug)]
 struct HurtProfile {
     body: LocalCapsule,
     head: Option<LocalCapsule>,
+    capsules: Option<Arc<[EngineCapsule]>>,
 }
 
-impl HurtProfile {
-    fn valid(&self) -> bool {
-        self.body.valid() && self.head.is_none_or(LocalCapsule::valid)
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawHurtProfile {
+    body: LocalCapsule,
+    head: Option<LocalCapsule>,
+    #[serde(default)]
+    capsules: Vec<EngineCapsule>,
+}
+
+impl RawHurtProfile {
+    fn into_profile(self) -> Option<HurtProfile> {
+        if !self.body.valid()
+            || self.head.is_some_and(|head| !head.valid())
+            || self.capsules.iter().any(|cap| !cap.valid())
+        {
+            return None;
+        }
+        let capsules = (!self.capsules.is_empty()).then(|| Arc::from(self.capsules));
+        Some(HurtProfile {
+            body: self.body,
+            head: self.head,
+            capsules,
+        })
     }
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct BodyProfiles {
+struct RawBodyProfiles {
     body: LocalCapsule,
     head: Option<LocalCapsule>,
+    #[serde(default)]
+    capsules: Vec<EngineCapsule>,
+    crouched: Option<RawHurtProfile>,
+    #[serde(default)]
+    sentry: Option<RawHurtProfile>,
+    #[serde(default)]
+    ball: Option<RawHurtProfile>,
+}
+
+struct BodyProfiles {
+    standing: HurtProfile,
     crouched: Option<HurtProfile>,
+    sentry: Option<HurtProfile>,
+    ball: Option<HurtProfile>,
 }
 
 #[derive(Default)]
@@ -328,7 +429,7 @@ impl HurtVolumeCatalog {
         #[serde(deny_unknown_fields)]
         struct Data {
             version: u32,
-            bodies: BTreeMap<String, BodyProfiles>,
+            bodies: BTreeMap<String, RawBodyProfiles>,
         }
 
         let invalid = |message: &str| io::Error::new(io::ErrorKind::InvalidData, message);
@@ -338,16 +439,44 @@ impl HurtVolumeCatalog {
             return Err(invalid("unsupported combat hurt volume catalog version"));
         }
         let mut by_body = BTreeMap::new();
-        for (key, profile) in data.bodies {
+        for (key, raw) in data.bodies {
             let body = parse_guid(&key)
                 .filter(|body| *body != 0)
                 .ok_or_else(|| invalid("invalid combat hurt volume body GUID"))?;
-            if !profile.body.valid()
-                || profile.head.is_some_and(|head| !head.valid())
-                || profile.crouched.as_ref().is_some_and(|pose| !pose.valid())
-            {
-                return Err(invalid("invalid combat hurt volume capsule"));
+            let standing = RawHurtProfile {
+                body: raw.body,
+                head: raw.head,
+                capsules: raw.capsules,
             }
+            .into_profile()
+            .ok_or_else(|| invalid("invalid combat hurt volume capsule"))?;
+            let crouched = match raw.crouched {
+                Some(pose) => Some(
+                    pose.into_profile()
+                        .ok_or_else(|| invalid("invalid combat hurt volume capsule"))?,
+                ),
+                None => None,
+            };
+            let sentry = match raw.sentry {
+                Some(pose) => Some(
+                    pose.into_profile()
+                        .ok_or_else(|| invalid("invalid combat hurt volume capsule"))?,
+                ),
+                None => None,
+            };
+            let ball = match raw.ball {
+                Some(pose) => Some(
+                    pose.into_profile()
+                        .ok_or_else(|| invalid("invalid combat hurt volume capsule"))?,
+                ),
+                None => None,
+            };
+            let profile = BodyProfiles {
+                standing,
+                crouched,
+                sentry,
+                ball,
+            };
             if by_body.insert(body, profile).is_some() {
                 return Err(invalid("duplicate combat hurt volume body GUID"));
             }
@@ -356,19 +485,21 @@ impl HurtVolumeCatalog {
     }
 
     pub(crate) fn pose(&self, body: u64, movement: TargetPose, crouched: bool) -> HurtPose {
-        let calibrated = self.by_body.get(&body).and_then(|profiles| {
+        let profiles = self.by_body.get(&body);
+        let calibrated = profiles.and_then(|p| {
             if crouched {
-                profiles.crouched
+                p.crouched.clone()
             } else {
-                Some(HurtProfile {
-                    body: profiles.body,
-                    head: profiles.head,
-                })
+                Some(p.standing.clone())
             }
         });
+        let sentry = profiles.and_then(|p| p.sentry.clone());
+        let ball = profiles.and_then(|p| p.ball.clone());
         HurtPose {
             movement,
             calibrated,
+            sentry,
+            ball,
             stance: None,
         }
     }
@@ -460,25 +591,25 @@ mod tests {
             let origin = serde_json::from_value(case["origin"].clone()).unwrap();
             let critical = case["critical"].as_bool();
             let shot = HitscanShot::with_direction(origin, direction, 10.0, hit);
-            let resolve = |target| {
+            let resolve = |target: HurtPose| {
                 shot.resolve_combat([(1, target)], |_, _, _| Ok(None))
                     .unwrap()
             };
             assert_eq!(
-                resolve(target).map(|impact| (impact.critical, impact.damage)),
+                resolve(target.clone()).map(|impact| (impact.critical, impact.damage)),
                 critical.map(|head| (head, if head { 40.0 } else { 20.0 })),
                 "{}",
                 case["name"]
             );
             match case["name"].as_str().unwrap() {
                 "head-above-mover" | "side-outside-mover" => {
-                    assert!(resolve(compatibility).is_none());
+                    assert!(resolve(compatibility.clone()).is_none());
                 }
-                "chest-below-head" => assert!(resolve(compatibility).unwrap().critical),
+                "chest-below-head" => assert!(resolve(compatibility.clone()).unwrap().critical),
                 _ => {}
             }
             assert!(
-                shot.resolve_combat([(1, target)], |_, _, _| Ok(Some(1.0)))
+                shot.resolve_combat([(1, target.clone())], |_, _, _| Ok(Some(1.0)))
                     .unwrap()
                     .is_none()
             );
@@ -509,7 +640,7 @@ mod tests {
                 )
                 .unwrap();
                 let impact = flight
-                    .advance_combat(1, &[(1, target)], None, |_, _, _, _| Ok(None))
+                    .advance_combat(1, &[(1, target.clone())], None, |_, _, _, _| Ok(None))
                     .unwrap()
                     .map(|end| (end.impacts[0].critical, end.impacts[0].damage));
                 assert_eq!(impact, expected, "{} ({multiplier})", case["name"]);
@@ -607,5 +738,86 @@ mod tests {
             });
             assert_eq!(observed, sample.critical, "frame {}", sample.frame);
         }
+    }
+
+    #[test]
+    fn engine_multi_capsule_3d_rotation_and_sentry_ball_postures() {
+        let data = serde_json::json!({
+            "version": 1,
+            "bodies": {
+                "0x04000000000001FD": {
+                    "body": {"lower": 0.4, "upper": 1.4, "radius": 0.4},
+                    "head": {"lower": 1.85, "upper": 1.85, "radius": 0.2},
+                    "capsules": [
+                        {"a": [0.0, 0.5, 0.0], "b": [0.0, 1.4, 0.0], "radius": 0.35},
+                        {"a": [0.5, 1.2, 0.0], "b": [0.5, 0.8, 0.0], "radius": 0.12},
+                        {"a": [0.0, 1.85, 0.0], "b": [0.0, 1.85, 0.0], "radius": 0.2, "critical": true}
+                    ],
+                    "sentry": {
+                        "body": {"lower": 0.38, "upper": 1.05, "radius": 0.56},
+                        "head": {"lower": 0.92, "upper": 0.96, "radius": 0.22, "forward_offset": -0.48},
+                        "capsules": [
+                            {"a": [0.0, 0.38, 0.0], "b": [0.0, 1.05, 0.05], "radius": 0.56},
+                            {"a": [0.0, 0.92, -0.44], "b": [0.0, 0.96, -0.52], "radius": 0.22, "critical": true}
+                        ]
+                    },
+                    "ball": {
+                        "body": {"lower": 0.78, "upper": 0.78, "radius": 0.78},
+                        "head": null,
+                        "capsules": [
+                            {"a": [0.0, 0.78, 0.0], "b": [0.0, 0.78, 0.0], "radius": 0.78}
+                        ]
+                    }
+                }
+            }
+        });
+        let catalog = HurtVolumeCatalog::from_json(&data.to_string()).unwrap();
+        let movement = TargetPose {
+            feet: [0.0, 0.0, 0.0],
+            height: 2.0,
+            radius: 0.5,
+            eye: 1.7,
+        };
+        // Standard posture: arm capsule at local +X=0.5m is hittable from front, head is critical.
+        let standard = catalog.pose(0x0400_0000_0000_01FD, movement, false);
+        let arm_hit = standard
+            .contact([0.5, 1.0, -3.0], [0.0, 0.0, 1.0], 10.0, 0.0)
+            .unwrap();
+        assert!(!arm_hit.head);
+        let head_hit = standard
+            .contact([0.0, 1.85, -3.0], [0.0, 0.0, 1.0], 10.0, 0.0)
+            .unwrap();
+        assert!(head_hit.head);
+
+        // Sentry posture: shot from behind (-Z) hits rear glowing core critically; front head height misses.
+        let sentry = standard.clone().with_stance(SkeletalStance {
+            yaw: 0,
+            speed: 0.0,
+            crouched: true,
+            head_protected: false,
+            posture: HurtPosture::Sentry,
+        });
+        assert!(
+            sentry
+                .contact([0.0, 1.85, -3.0], [0.0, 0.0, 1.0], 10.0, 0.0)
+                .is_none()
+        );
+        let rear_crit = sentry
+            .contact([0.0, 0.94, -3.0], [0.0, 0.0, 1.0], 10.0, 0.0)
+            .unwrap();
+        assert!(rear_crit.head);
+
+        // Ball posture: pure sphere with zero critical hits.
+        let ball = standard.with_stance(SkeletalStance {
+            yaw: 0,
+            speed: 10.0,
+            crouched: false,
+            head_protected: true,
+            posture: HurtPosture::Ball,
+        });
+        let ball_hit = ball
+            .contact([0.0, 0.78, -3.0], [0.0, 0.0, 1.0], 10.0, 0.0)
+            .unwrap();
+        assert!(!ball_hit.head);
     }
 }

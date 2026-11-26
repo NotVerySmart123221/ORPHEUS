@@ -407,6 +407,7 @@ pub(crate) struct RoomSpatialFrame {
     ground: Arc<CollisionScene>,
     breakables: Option<Arc<crate::collision_scene::BreakableState>>,
     actor_voice: Option<Arc<ActorVoiceCatalog>>,
+    map_guid: Option<u64>,
     retired: Arc<std::collections::BTreeSet<u32>>,
     #[cfg(any(test, feature = "inspector"))]
     captured_tick: u32,
@@ -1007,6 +1008,7 @@ pub(crate) struct RoomSimulation {
     players_by_owner: IndexMap<u32, PlayerBodyHandle>,
     team_member_counts: Option<crate::game_instance::TeamMemberCounts>,
     free_for_all: bool,
+    map_guid: Option<u64>,
     combat_voice: Arc<crate::combat_voice::CombatVoiceCatalog>,
     body_contact_sets: BTreeMap<u64, u16>,
     received_damage_feedback: bool,
@@ -1522,6 +1524,7 @@ impl RoomSimulation {
             players_by_owner: IndexMap::new(),
             team_member_counts: None,
             free_for_all: false,
+            map_guid: None,
             combat_voice: Arc::default(),
             body_contact_sets: BTreeMap::new(),
             received_damage_feedback: false,
@@ -1998,7 +2001,7 @@ impl RoomSimulation {
             .map(|p| p.hero)
             .collect();
         let ctx = crate::actor_voice::VoiceContext {
-            map: None,
+            map: self.map_guid,
             target_hero: None,
             ally_heroes: &ally_heroes,
         };
@@ -2202,6 +2205,10 @@ impl RoomSimulation {
         if let Some(queries) = &mut self.spatial_queries {
             queries.breakables = Some(breakables);
         }
+    }
+
+    pub(crate) fn set_map_guid(&mut self, map: u64) {
+        self.map_guid = Some(map);
     }
 
     pub(crate) fn enable_actor_voice(&mut self, catalog: Arc<ActorVoiceCatalog>) {
@@ -2424,6 +2431,7 @@ impl RoomSimulation {
             ground: Arc::clone(&queries.ground),
             breakables: queries.breakables.as_ref().map(Arc::clone),
             actor_voice,
+            map_guid: self.map_guid,
             retired: Arc::clone(&self.retired_entity_ids),
             #[cfg(any(test, feature = "inspector"))]
             captured_tick: frame,
@@ -3568,7 +3576,7 @@ impl RoomSimulation {
                     policy.affects_enemies
                 };
                 if allowed {
-                    candidates.push((target.wire, target.pose));
+                    candidates.push((target.wire, target.pose.clone()));
                 }
             }
             // The shooter can receive splash (or self-heal splash) without blocking its own flight.
@@ -4125,12 +4133,19 @@ impl RoomSimulation {
                 context.now.as_secs_f64(),
             );
         }
+        let armor_or_shield = hit
+            .damage
+            .named_pool_losses
+            .iter()
+            .any(|loss| loss.amount > 0.0);
         self.record_bot_damage_feedback(
             source,
             entity,
             bot_body,
             result.dealt as f32,
             impact.critical,
+            armor_or_shield,
+            false,
             impact.geometry,
         );
         self.record_health_applied(
@@ -5164,7 +5179,7 @@ impl WeaponTarget {
         free_for_all: bool,
     ) -> Option<(u32, crate::game_hitscan::HurtPose)> {
         eligible_target(self.wire, true, self.team, source, team, free_for_all)
-            .then_some((self.wire, self.pose))
+            .then(|| (self.wire, self.pose.clone()))
     }
 }
 

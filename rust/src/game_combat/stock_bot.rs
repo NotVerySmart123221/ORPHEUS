@@ -325,8 +325,16 @@ impl World for StockBotWorld {
         Ok(Some(u32::from(self.queue_room_cue(site, &listeners, cue))))
     }
 
-    fn voice_duration(&mut self, site: Site, handle: u32, _guid: u64, _mode: bool) -> Option<f64> {
-        (self.actor_voice_available(site) && handle != 0).then_some(1.0)
+    fn voice_duration(&mut self, site: Site, handle: u32, guid: u64, _mode: bool) -> Option<f64> {
+        if !self.actor_voice_available(site) || handle == 0 {
+            return None;
+        }
+        Some(
+            self.spatial_frame
+                .as_deref()
+                .and_then(|frame| frame.voice_line_duration(guid))
+                .unwrap_or(1.0),
+        )
     }
 
     fn voice_part(&mut self, site: Site, _number: u16) -> Option<f64> {

@@ -9,23 +9,106 @@ use crate::accounts::parse_guid;
 const MAX_LETHAL_VOLUMES: usize = 64;
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+enum LethalVolume {
+    Aabb(AabbVolume),
+    Obb(ObbVolume),
+}
+
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct LethalVolume {
+struct AabbVolume {
     min: [f64; 3],
     max: [f64; 3],
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObbVolume {
+    center: [f64; 3],
+    half_extents: [f64; 3],
+    /// Unit quaternion `[x, y, z, w]` rotating local box axes into world space.
+    rotation: [f64; 4],
+}
+
 impl LethalVolume {
     fn valid(&self) -> bool {
-        (0..3).all(|axis| {
-            self.min[axis].is_finite()
-                && self.max[axis].is_finite()
-                && self.min[axis] < self.max[axis]
-        })
+        match self {
+            Self::Aabb(b) => (0..3).all(|axis| {
+                b.min[axis].is_finite() && b.max[axis].is_finite() && b.min[axis] < b.max[axis]
+            }),
+            Self::Obb(o) => {
+                let q_norm_sq = o.rotation.iter().map(|v| v * v).sum::<f64>();
+                o.center.into_iter().all(f64::is_finite)
+                    && o.half_extents.into_iter().all(|h| h.is_finite() && h > 0.0)
+                    && o.rotation.into_iter().all(f64::is_finite)
+                    && q_norm_sq.is_finite()
+                    && q_norm_sq > 1e-12
+            }
+        }
     }
 
     fn contains(&self, feet: [f64; 3]) -> bool {
-        (0..3).all(|axis| self.min[axis] <= feet[axis] && feet[axis] <= self.max[axis])
+        match self {
+            Self::Aabb(b) => {
+                (0..3).all(|axis| b.min[axis] <= feet[axis] && feet[axis] <= b.max[axis])
+            }
+            Self::Obb(o) => {
+                let dx = feet[0] - o.center[0];
+                let dy = feet[1] - o.center[1];
+                let dz = feet[2] - o.center[2];
+                let norm = o.rotation.iter().map(|v| v * v).sum::<f64>().sqrt();
+                if !norm.is_finite() || norm <= 1e-12 {
+                    return false;
+                }
+                // Rotate delta by conjugate of unit quaternion to transform into local box space.
+                let qx = -o.rotation[0] / norm;
+                let qy = -o.rotation[1] / norm;
+                let qz = -o.rotation[2] / norm;
+                let qw = o.rotation[3] / norm;
+                let tx = 2.0 * (qy * dz - qz * dy);
+                let ty = 2.0 * (qz * dx - qx * dz);
+                let tz = 2.0 * (qx * dy - qy * dx);
+                let lx = dx + qw * tx + (qy * tz - qz * ty);
+                let ly = dy + qw * ty + (qz * tx - qx * tz);
+                let lz = dz + qw * tz + (qx * ty - qy * tx);
+                lx.abs() <= o.half_extents[0]
+                    && ly.abs() <= o.half_extents[1]
+                    && lz.abs() <= o.half_extents[2]
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MovingPlatformSpec {
+    pub start: [f64; 3],
+    pub end: [f64; 3],
+    pub half_extents: [f64; 3],
+    pub period_secs: f64,
+}
+
+impl MovingPlatformSpec {
+    pub(crate) fn valid(&self) -> bool {
+        self.start.into_iter().all(f64::is_finite)
+            && self.end.into_iter().all(f64::is_finite)
+            && self
+                .half_extents
+                .into_iter()
+                .all(|h| h.is_finite() && h > 0.0)
+            && self.period_secs.is_finite()
+            && self.period_secs > 0.0
+    }
+
+    pub(crate) fn position_at(&self, time_secs: f64) -> [f64; 3] {
+        let phase = (std::f64::consts::TAU * time_secs / self.period_secs).cos();
+        let t = 0.5 - 0.5 * phase;
+        [
+            self.start[0] + (self.end[0] - self.start[0]) * t,
+            self.start[1] + (self.end[1] - self.start[1]) * t,
+            self.start[2] + (self.end[2] - self.start[2]) * t,
+        ]
     }
 }
 
@@ -80,6 +163,7 @@ pub(crate) struct MapEnvironment {
     player_respawns: HashMap<u64, Duration>,
     health_packs: Vec<HealthPackSpec>,
     jump_pads: Vec<JumpPadSpec>,
+    moving_platforms: Vec<MovingPlatformSpec>,
 }
 
 impl MapEnvironment {
@@ -98,6 +182,10 @@ impl MapEnvironment {
 
     pub(crate) fn jump_pads(&self) -> &[JumpPadSpec] {
         &self.jump_pads
+    }
+
+    pub(crate) fn moving_platforms(&self) -> &[MovingPlatformSpec] {
+        &self.moving_platforms
     }
 
     /// Box faces count as inside. Invalid poses do not imply a gameplay death.
@@ -127,6 +215,8 @@ struct MapEnvironmentData {
     health_packs: Vec<HealthPackSpec>,
     #[serde(default)]
     jump_pads: Vec<JumpPadSpec>,
+    #[serde(default)]
+    moving_platforms: Vec<MovingPlatformSpec>,
 }
 
 #[derive(Deserialize)]
@@ -207,11 +297,17 @@ impl EnvironmentCatalog {
                     "map {key:?} contains invalid jump pad spec"
                 )));
             }
+            if data.moving_platforms.iter().any(|plat| !plat.valid()) {
+                return Err(invalid(format!(
+                    "map {key:?} contains invalid moving platform spec"
+                )));
+            }
             let environment = MapEnvironment {
                 lethal_volumes: data.lethal_volumes,
                 player_respawns,
                 health_packs: data.health_packs,
                 jump_pads: data.jump_pads,
+                moving_platforms: data.moving_platforms,
             };
             if maps.insert(map, environment).is_some() {
                 return Err(invalid(format!("duplicate environment map GUID {key:?}")));
@@ -440,5 +536,44 @@ mod tests {
                 .for_map(MAP)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn rotated_obb_lethal_volume_and_moving_platform_cycle() {
+        // 45-degree Y-axis rotation: sin(22.5 deg), cos(22.5 deg)
+        let angle = std::f64::consts::FRAC_PI_4;
+        let qy = (angle * 0.5).sin();
+        let qw = (angle * 0.5).cos();
+        let data = json!({
+            "version": 1,
+            "maps": {
+                (format!("0x{MAP:016X}")): {
+                    "lethal_volumes": [{
+                        "center": [10.0, -5.0, 0.0],
+                        "half_extents": [2.0, 1.0, 0.5],
+                        "rotation": [0.0, qy, 0.0, qw]
+                    }],
+                    "moving_platforms": [{
+                        "start": [0.0, 2.0, 0.0],
+                        "end": [10.0, 2.0, 0.0],
+                        "half_extents": [2.0, 0.3, 2.0],
+                        "period_secs": 8.0
+                    }]
+                }
+            }
+        });
+        let env = EnvironmentCatalog::from_json(&data.to_string())
+            .unwrap()
+            .for_map(MAP);
+        // Point along rotated local X axis (+1.5m along 45 deg diagonal) is inside.
+        let diag = 1.5 * std::f64::consts::FRAC_1_SQRT_2;
+        assert!(env.lethal_at([10.0 + diag, -5.0, -diag]));
+        // Point perpendicular to rotated box (+1.5m along local Z) is outside half_extents.z=0.5.
+        assert!(!env.lethal_at([10.0 + diag, -5.0, diag]));
+        assert_eq!(env.moving_platforms().len(), 1);
+        let plat = env.moving_platforms()[0];
+        assert!((plat.position_at(0.0)[0] - 0.0).abs() < 1e-9);
+        assert!((plat.position_at(4.0)[0] - 10.0).abs() < 1e-9);
+        assert!((plat.position_at(8.0)[0] - 0.0).abs() < 1e-9);
     }
 }

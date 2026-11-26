@@ -193,6 +193,48 @@ impl RoomSimulation {
                 self.queue_combat_impulse(wire, tick, vel)?;
             }
         }
+        let platforms: Vec<_> = self.environment.moving_platforms().to_vec();
+        if !platforms.is_empty() {
+            let dt = crate::game_clock::TICK_PERIOD.as_secs_f64();
+            let now_secs = now.as_secs_f64();
+            let prev_secs = (now_secs - dt).max(0.0);
+            let mut carries = Vec::new();
+            for (&wire, &entity) in &self.players_by_wire {
+                let Some(p) = self.world.get::<PlayerBodyState>(entity) else {
+                    continue;
+                };
+                if !p.alive() {
+                    continue;
+                }
+                let pos = p.mover.pose().position;
+                for plat in &platforms {
+                    let prev_c = plat.position_at(prev_secs);
+                    let cur_c = plat.position_at(now_secs);
+                    let top_y = prev_c[1] + plat.half_extents[1];
+                    if (pos[0] - prev_c[0]).abs() <= plat.half_extents[0] + 0.35
+                        && (pos[2] - prev_c[2]).abs() <= plat.half_extents[2] + 0.35
+                        && (pos[1] - top_y).abs() <= 0.55
+                    {
+                        let vel = [
+                            (cur_c[0] - prev_c[0]) / dt,
+                            (cur_c[1] - prev_c[1]) / dt,
+                            (cur_c[2] - prev_c[2]) / dt,
+                        ];
+                        if vel[0].abs() + vel[1].abs() + vel[2].abs() > 1e-3 {
+                            carries.push((wire, vel));
+                        }
+                        break;
+                    }
+                }
+            }
+            for (wire, vel) in carries {
+                let _ = self.queue_combat_impulse(
+                    wire,
+                    tick,
+                    [vel[0] * 0.06, vel[1] * 0.06, vel[2] * 0.06],
+                );
+            }
+        }
         Ok(())
     }
 }
