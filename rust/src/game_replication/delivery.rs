@@ -1621,7 +1621,10 @@ impl WorldDelivery {
         self.body_script.is_some()
     }
 
-    pub(crate) fn take_hitscan(&self, simulation: &mut RoomSimulation) -> Vec<PosedHitscan> {
+    pub(crate) fn take_hitscan(
+        &self,
+        simulation: &mut RoomSimulation,
+    ) -> Vec<(PosedHitscan, crate::game_hitscan::HitTargetPolicy)> {
         let Some(id) = self.active_body_id() else {
             return Vec::new();
         };
@@ -1922,15 +1925,6 @@ impl WorldDelivery {
                     command,
                     mut pending,
                 } => {
-                    if let Some(id) = self.body_script.as_ref().map(|script| script.id) {
-                        if scene.simulation().player_has_deadeye(id) {
-                            let deadeye =
-                                scene.deadeye_scene(viewer.team).map_err(io::Error::other)?;
-                            scene
-                                .simulation_mut()
-                                .set_player_deadeye_targets(id, deadeye);
-                        }
-                    }
                     let (used, complete) =
                         self.advance_command(scene, command, &mut pending, quanta, remaining)?;
                     remaining -= used;

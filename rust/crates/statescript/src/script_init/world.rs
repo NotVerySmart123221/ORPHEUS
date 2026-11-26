@@ -511,6 +511,7 @@ pub struct GenericBeamContact {
     pub hit: bool,
     pub point: Option<[f64; 3]>,
     pub normal: Option<[f64; 3]>,
+    pub distance: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -522,9 +523,17 @@ pub enum VelocityAxis {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PetSpawn {
+    pub definition: u64,
+    pub attach: Option<u32>,
+    pub position: Option<[f64; 3]>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum VelocityOp {
     AddVector([f64; 3]),
     SetVector([f64; 3]),
+    SetHorizontalVector([f64; 2]),
     SetSpeed {
         axis: VelocityAxis,
         value: f64,
@@ -607,8 +616,32 @@ pub trait World {
         _origin: Option<[f64; 3]>,
         _direction: Option<[f64; 3]>,
         _length: Option<f64>,
+        _radius: f64,
+        _filter: &Json,
     ) -> Option<GenericBeamContact> {
         None
+    }
+
+    fn queue_modify_health(
+        &mut self,
+        site: Site,
+        target: u32,
+        delta: f64,
+        _impulse: Option<[f64; 3]>,
+    ) -> bool {
+        if delta != 0.0 {
+            self.queue_health_change(site, target, delta)
+        } else {
+            false
+        }
+    }
+
+    fn spawn_pet(&mut self, _site: Site, _spawn: PetSpawn) -> Option<u32> {
+        None
+    }
+
+    fn despawn_pet(&mut self, _site: Site, _entity: u32) -> bool {
+        false
     }
 
     fn summoner_beam_damage(&mut self, _site: Site, _target: u32, _amount: f64) -> bool {
@@ -652,11 +685,20 @@ pub trait World {
     ) -> bool {
         false
     }
-    fn deadeye_targets(&self, _site: Site, _radius: f64, _angle: f64) -> Option<Vec<u32>> {
+    fn cone_targets(
+        &self,
+        _site: Site,
+        _origin: u32,
+        _offset: [f64; 3],
+        _radius: f64,
+        _angle: f64,
+        _visible: bool,
+        _filter: &Json,
+    ) -> Option<Vec<u32>> {
         None
     }
 
-    fn deadeye_target_alive(&self, _site: Site, _entity: u32) -> bool {
+    fn entity_alive(&self, _site: Site, _entity: u32) -> bool {
         false
     }
 

@@ -259,6 +259,111 @@ impl Evaluator {
         self.insert_authored_map(buckets, key, value)
     }
 
+    fn filter_array(
+        &mut self,
+        config: &Json,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<Value, EvalError> {
+        let mut items = Vec::new();
+        self.collect_group(child(config, "m_814F8EC3"), context, depth, &mut items)?;
+        let condition = child(config, "m_condition");
+        let mut filtered = Vec::with_capacity(items.len());
+        for item in items {
+            self.charge()?;
+            if condition.is_null() {
+                filtered.push(item);
+                continue;
+            }
+            self.scoped_parameters.push((142, item.clone()));
+            let result = self.scalar_config(condition, context, depth + 1, Value::Bool(false));
+            self.scoped_parameters.pop();
+            if truthy(&result?) {
+                filtered.push(item);
+            }
+        }
+        Ok(Value::Array(filtered))
+    }
+
+    fn transform_entity_vector(
+        &mut self,
+        config: &Json,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<Value, EvalError> {
+        let entity =
+            self.scalar_config(child(config, "m_entity"), context, depth, Value::Entity(0))?;
+        let vector = match self.scalar_config(
+            child(config, "m_64E06CA4"),
+            context,
+            depth,
+            Value::Vector([0.0; 3]),
+        )? {
+            Value::Vector(v) => v,
+            Value::Null => [0.0; 3],
+            _ => return Err(EvalError::MalformedConfig("STU_588FF314 vector operand")),
+        };
+        let to_world = truthy(&self.scalar_config(
+            child(config, "m_1FDD7084"),
+            context,
+            depth,
+            Value::Bool(false),
+        )?);
+        let include_position = child(config, "m_AEE599AA").as_u64() == Some(1);
+        let forward_raw = match entity {
+            Value::Entity(id) if valid_entity(id) => context.authored_forward(id),
+            _ => None,
+        }
+        .unwrap_or([0.0, 0.0, 1.0]);
+        let horiz_len = forward_raw[0].hypot(forward_raw[2]);
+        let (fx, fz) = if horiz_len > 1e-6 {
+            (forward_raw[0] / horiz_len, forward_raw[2] / horiz_len)
+        } else {
+            (0.0, 1.0)
+        };
+        // Orthonormal yaw basis matching STU_021D01CD (forward=[sin,0,cos]) and STU_66F3B89E (right=[cos,0,-sin]).
+        let right = [fz, 0.0, -fx];
+        let forward = [fx, 0.0, fz];
+        let transformed = if to_world {
+            let mut out = [
+                vector[0] * right[0] + vector[2] * forward[0],
+                vector[1],
+                vector[0] * right[2] + vector[2] * forward[2],
+            ];
+            if include_position {
+                if let Value::Entity(id) = entity {
+                    if valid_entity(id) {
+                        if let Some(pos) = context.authored_position(id) {
+                            for axis in 0..3 {
+                                out[axis] += pos[axis];
+                            }
+                        }
+                    }
+                }
+            }
+            out
+        } else {
+            let mut rel = vector;
+            if include_position {
+                if let Value::Entity(id) = entity {
+                    if valid_entity(id) {
+                        if let Some(pos) = context.authored_position(id) {
+                            for axis in 0..3 {
+                                rel[axis] -= pos[axis];
+                            }
+                        }
+                    }
+                }
+            }
+            [
+                rel[0] * right[0] + rel[2] * right[2],
+                rel[1],
+                rel[0] * forward[0] + rel[2] * forward[2],
+            ]
+        };
+        Ok(Value::Vector(transformed.map(|c| f64::from(c as f32))))
+    }
+
     fn fold_array(
         &mut self,
         config: &Json,
@@ -1360,6 +1465,23 @@ impl Evaluator {
             {
                 self.fold_array(config, context, nested)?
             }
+            "STU_951CAB4C" if native_fields(config, &["m_814F8EC3", "m_condition"]) => {
+                self.filter_array(config, context, nested)?
+            }
+            "STU_588FF314"
+                if native_fields(
+                    config,
+                    &[
+                        "m_entity",
+                        "m_64E06CA4",
+                        "m_1FDD7084",
+                        "m_AEE599AA",
+                        "m_hardPoint",
+                    ],
+                ) =>
+            {
+                self.transform_entity_vector(config, context, nested)?
+            }
             "STU_7757D403" => self.authored_pairs(config, context, nested)?,
             "STU_B5A0CAF0" => context.owner(),
             "STU_25ECB55F" => {
@@ -1950,7 +2072,7 @@ impl Evaluator {
         }) {
             return Ok(Value::Bool(false));
         }
-        if let Some(policy) = policy {
+        if let Some(policy) = policy.filter(|policy| policy.relation != FilterRelation::Any) {
             let Value::Entity(owner) = context.owner() else {
                 return Err(unsupported());
             };
@@ -1965,6 +2087,7 @@ impl Evaluator {
             }
             let friendly = source.trailing_zeros() == target.trailing_zeros();
             if match policy.relation {
+                FilterRelation::Any => false,
                 FilterRelation::Hostile => friendly,
                 FilterRelation::Friendly => !friendly,
                 FilterRelation::FriendlyOther => !friendly || entity == owner,

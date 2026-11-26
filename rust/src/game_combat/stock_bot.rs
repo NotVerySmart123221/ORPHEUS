@@ -613,36 +613,14 @@ impl StockBotScript {
             weapon_inputs,
             faulted: false,
         };
-        let queued = match entry {
-            // The replacement's body, including its private placement
-            // behavior, receives the authored reset before publication.
-            BodyEntry::Respawn => script.component.queue_entity_message_from(
-                bot.entity,
-                RESET_MESSAGE,
-                Variables::new(),
-            ),
-            BodyEntry::Initial => {
-                let placements = script
-                    .component
-                    .snapshot()
-                    .into_iter()
-                    .flat_map(|snapshot| {
-                        snapshot.instances.iter().filter_map(|(&id, instance)| {
-                            (instance.is_server_only()
-                                && instance.parent.is_none()
-                                && script.world.placement_graphs.contains(&instance.graph))
-                            .then_some(id)
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                placements.into_iter().try_fold(0, |total, id| {
-                    script
-                        .component
-                        .queue_message(id, RESET_MESSAGE, Variables::new())
-                        .map(|queued| total + queued)
-                })
-            }
-        };
+        // Both initial spawns and respawns deliver RESET_MESSAGE (0x13) to the
+        // full body entity so 0BA8:8 sets shared_var[1226] (combat anim layer)
+        // and placement graphs (0B92) arm cleanly on both teams.
+        let _ = entry;
+        let queued =
+            script
+                .component
+                .queue_entity_message_from(bot.entity, RESET_MESSAGE, Variables::new());
         let result = queued.and_then(|count| {
             if count == 0 {
                 Ok(())
@@ -836,55 +814,9 @@ impl StockBotScript {
                                 .ok()
                         })
                         .as_ref()?;
-                    let mut presentation = report.presentation;
-                    if let Some(graph) = self.graphs.graph(shot.graph) {
-                        if let Some(inst) = snapshot.instances.get(&shot.instance) {
-                            let shot_ms = i64::try_from(shot.time_ms).ok();
-                            let frame_ms =
-                                i64::try_from(crate::script_runtime::FRAME_MS).unwrap_or(16);
-                            if let Some(shot_ms) = shot_ms {
-                                let frame_end_ms = shot_ms.saturating_add(frame_ms);
-                                for (&raw, candidate) in &inst.states {
-                                    if !candidate.active {
-                                        continue;
-                                    }
-                                    let recent = matches!(
-                                        candidate.payload.get("last"),
-                                        Some(&Value::Integer(last))
-                                            if last >= shot_ms && last < frame_end_ms
-                                    );
-                                    let fresh_cur = match candidate.payload.get("cur") {
-                                        Some(&Value::Float(cur)) if (0.0..=0.1).contains(&cur) => {
-                                            Some(cur)
-                                        }
-                                        _ => None,
-                                    };
-                                    let Some(cur) = fresh_cur.filter(|_| recent) else {
-                                        continue;
-                                    };
-                                    let Some(chase_node) = graph.state(usize::from(raw)) else {
-                                        continue;
-                                    };
-                                    if chase_node.class != "STUStatescriptStateChaseVar" {
-                                        continue;
-                                    }
-                                    if let Ok(Some(var)) = crate::script_expr::lvalue(
-                                        chase_node.fields.get("m_out_Var").unwrap_or(&Json::Null),
-                                    ) {
-                                        if !presentation
-                                            .iter()
-                                            .any(|(existing, _)| *existing == var)
-                                        {
-                                            presentation.push((var, Value::Float(cur)));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
                     let volley = snapshot.freeze_volley_with_states(
                         shot,
-                        presentation,
+                        report.presentation,
                         &report.presentation_states,
                     )?;
                     Some(ObservedShot::new(

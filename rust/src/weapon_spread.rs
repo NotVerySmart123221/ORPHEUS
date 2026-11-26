@@ -139,6 +139,56 @@ pub(crate) fn for_each_authored_hitscan_direction(
         }
         return;
     }
+    if let Some(fan) = launch.filter(|launch| launch["$"] == "STU_1145C42E") {
+        let count = node
+            .field("m_numProjectilesPerShot")
+            .filter(|value| !value.is_null())
+            .map_or(1, |value| {
+                evaluate(value).map_or(1, |value| to_int(&value, 1))
+            });
+        let spread = fan
+            .get("m_spread")
+            .filter(|value| !value.is_null())
+            .and_then(|value| evaluate(value).ok())
+            .map_or(0.0, |value| to_float(&value));
+        let roll_deg = fan
+            .get("m_A2A9890A")
+            .filter(|value| !value.is_null())
+            .and_then(|value| evaluate(value).ok())
+            .map_or(90.0, |value| to_float(&value));
+        if (1..=32).contains(&count) {
+            let count = count as usize;
+            if count == 1 || !spread.is_finite() || spread <= 0.0 || spread >= 180.0 {
+                emit(forward);
+                return;
+            }
+            let right = cross(forward, [0.0, 1.0, 0.0]);
+            let rlen = norm(right);
+            let right = if rlen > 1e-6 {
+                right.map(|axis| axis / rlen)
+            } else {
+                [1.0, 0.0, 0.0]
+            };
+            let up = cross(right, forward);
+            // Roll = 90 deg rotates the fan plane into the horizontal (yaw) plane.
+            let roll = roll_deg.to_radians();
+            let axis = std::array::from_fn(|i| up[i] * roll.sin() + right[i] * roll.cos());
+            let alen = norm(axis);
+            let axis = if alen > 1e-6 {
+                axis.map(|a| a / alen)
+            } else {
+                up
+            };
+            let half = spread.to_radians() * 0.5;
+            for pellet in 0..count {
+                let frac = (pellet as f64) / ((count - 1) as f64);
+                let angle = -half + spread.to_radians() * frac;
+                let dir = rotate(forward, axis, angle).map(|v| f64::from(v as f32));
+                emit(dir);
+            }
+        }
+        return;
+    }
     let mut degrees = |key: &str| {
         node.field(key)
             .filter(|value| !value.is_null())
@@ -370,5 +420,58 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn fan_spread_emits_symmetric_horizontal_directions() {
+        let node: Node = serde_json::from_value(serde_json::json!({
+            "pos": 29,
+            "uid": 0,
+            "rid": 0,
+            "remote": -1,
+            "state": null,
+            "class": "STUStatescriptStateWeaponVolley",
+            "client_only": 0,
+            "server_only": 0,
+            "fields": {
+                "m_numProjectilesPerShot": {"$": "STUConfigVarInt", "m_value": 3},
+                "m_5EC1EB38": {
+                    "$": "STU_1145C42E",
+                    "m_spread": {"$": "STUConfigVarFloat", "m_value": 9.0},
+                    "m_A2A9890A": {"$": "STUConfigVarFloat", "m_value": 90.0}
+                }
+            }
+        }))
+        .unwrap();
+        let shot = ReportedShot {
+            event: ShotEvent {
+                entity: 0xa000_0101,
+                instance: 1,
+                graph: 0x0304,
+                raw_state: 29,
+                frame: 10,
+                time_ms: 160,
+                activation: 1,
+                activation_ms: 160,
+                ordinal: 0,
+            },
+            presentation: Vec::new(),
+            presentation_states: Vec::new(),
+            normalized_spread: None,
+        };
+        let mut dirs = Vec::new();
+        for_each_authored_hitscan_direction(
+            &node,
+            &shot,
+            [0.0, 0.0, 1.0],
+            |v| crate::script_expr::evaluate(v, &mut crate::script_expr::EmptyContext),
+            |dir| dirs.push(dir),
+        );
+        assert_eq!(dirs.len(), 3);
+        // Center direction straight ahead, left and right symmetric at ±4.5° yaw (9° total fan)
+        assert!(dirs[1][0].abs() < 1e-6 && (dirs[1][2] - 1.0).abs() < 1e-6);
+        assert!((dirs[0][0] + dirs[2][0]).abs() < 1e-6);
+        assert!((dirs[0][0].abs() - 4.5_f64.to_radians().sin()).abs() < 1e-5);
+        assert!(dirs[0][1].abs() < 1e-6 && dirs[2][1].abs() < 1e-6);
     }
 }

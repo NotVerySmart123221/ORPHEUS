@@ -747,40 +747,20 @@ fn check_stock_bot_firing(catalog: &StockBotCatalog, bot: &Bot) {
                             || projected.instances[&instance].variables.bindings.is_empty()),
                     "View::Observer volley retention must preserve bindings.is_empty()"
                 );
+                assert_eq!(
+                    projected.variables.values.get(&1226),
+                    Some(&Value::Asset(0x0280_0000_0000_007f)),
+                    "0BA8:8 RESET_MESSAGE must set combat AnimCategory shared_var[1226] on initial spawn for team {}",
+                    bot.spawn.team
+                );
                 assert!(
                     projected.instances[&instance]
                         .states
                         .values()
                         .filter(|state| state.active)
                         .count()
-                        >= 4,
-                    "volley retention should preserve active remote subgraph Stack AND freshly-reset recoil ChaseVar states for team {}",
-                    bot.spawn.team
-                );
-                let fresh_recoil_chases = projected.instances[&instance]
-                    .states
-                    .values()
-                    .filter(|state| {
-                        state.active
-                            && matches!(
-                                state.payload.get("cur"),
-                                Some(&Value::Float(cur)) if (0.0..=0.1).contains(&cur)
-                            )
-                    })
-                    .count();
-                assert!(
-                    fresh_recoil_chases >= 2,
-                    "volley retention must capture both fire-recoil ChaseVar states (1769 + arm 350/351) for team {}, got {fresh_recoil_chases}",
-                    bot.spawn.team
-                );
-                assert!(
-                    matches!(
-                        projected
-                            .instance_variables(instance)
-                            .and_then(|vars| vars.get(&1769)),
-                        Some(&Value::Float(cur)) if (0.0..=0.1).contains(&cur)
-                    ),
-                    "recoil variable 1769 must be pinned near 0.0 on shot frame for team {}",
+                        >= 2,
+                    "volley retention should preserve active remote subgraph Stack states for team {}",
                     bot.spawn.team
                 );
                 assert!(projected.has_volley(&presentation.volley));

@@ -1507,7 +1507,7 @@ impl Bot {
     }
 
     pub(crate) fn move_to_objective(&mut self, tick: u32, target: [f64; 3], speed: f64) {
-        self.walk_to(tick, target, speed, true);
+        self.walk_to(tick, target, speed, true, false);
     }
 
     pub(crate) fn follow_walk_request(
@@ -1546,15 +1546,27 @@ impl Bot {
         }
         // The graph's destination remains the last target of the mover.
         let next = route.waypoints.front().copied().unwrap_or(destination);
-        self.walk_to(tick, next, speed, false);
+        self.walk_to(tick, next, speed, true, true);
     }
 
     pub(crate) fn end_walk_request(&mut self, tick: u32) {
         self.walk_route = None;
+        let home_yaw = f64::from(self.spawn.yaw);
+        if (self.yaw - home_yaw).abs() > EPSILON {
+            self.yaw = home_yaw;
+            self.moved_tick = Some(tick);
+        }
         self.stop_objective(tick);
     }
 
-    fn walk_to(&mut self, tick: u32, target: [f64; 3], speed: f64, face_target: bool) {
+    fn walk_to(
+        &mut self,
+        tick: u32,
+        target: [f64; 3],
+        speed: f64,
+        face_target: bool,
+        smooth_turn: bool,
+    ) {
         if self.combat_motion_tick == Some(tick) {
             return;
         }
@@ -1606,7 +1618,15 @@ impl Bot {
         let [dx, _, dz] = delta;
         let horizontal = dx.hypot(dz);
         if face_target && (x != 0.0 || z != 0.0) {
-            self.yaw = heading([x, z]);
+            if smooth_turn {
+                let planar = x.hypot(z);
+                if planar > EPSILON {
+                    self.direction = [x / planar, z / planar];
+                    self.turn(dt);
+                }
+            } else {
+                self.yaw = heading([x, z]);
+            }
         }
         self.held = if (snap(dx), snap(dz)) == (0.0, 0.0) {
             [0; 2]
@@ -2755,7 +2775,7 @@ fn scripted_walk_publishes_locomotion_only_for_horizontal_travel() {
         0x18,
         |_, _, _, _| None,
     );
-    bot.walk_to(10, target, speed, false);
+    bot.walk_to(10, target, speed, false, false);
     let walking = bot.movement(10);
     assert_eq!(walking.yaw, yaw);
     assert_eq!(walking.throttles, throttle);

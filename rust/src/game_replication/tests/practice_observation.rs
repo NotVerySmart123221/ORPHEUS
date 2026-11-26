@@ -318,6 +318,7 @@ fn exercise_final_blow_effect(projectile: bool) {
                         flight,
                         stun: None,
                         hit_effect: None,
+                        impact_spawn: None,
                     }],
                     context,
                     |_| true,
@@ -545,7 +546,7 @@ fn stock_practice_owner_rifle_batched_tap_delivers_terminal_ammo() {
     assert!(!rifle.states[&10].active);
     let shots = world.take_hitscan(scene.simulation_mut());
     assert_eq!(shots.len(), 1);
-    assert_eq!(shots[0].shot_frame, press);
+    assert_eq!(shots[0].0.shot_frame, press);
 
     let (_, sent) = transmit(
         &mut world,
@@ -693,7 +694,7 @@ fn stock_practice_owner_gap_does_not_charge_for_an_unposed_rifle_round() {
     assert_eq!(world.input.processed, Some(next_shot));
     let shots = world.take_hitscan(scene.simulation_mut());
     assert_eq!(shots.len(), 1);
-    assert_eq!(shots[0].shot_frame, next_shot);
+    assert_eq!(shots[0].0.shot_frame, next_shot);
     assert_eq!(ammo(&scene), 11);
 }
 

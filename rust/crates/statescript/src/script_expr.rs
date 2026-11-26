@@ -184,6 +184,7 @@ pub enum HealthQuery {
 /// Relationship selected by the explicitly admitted scene filter.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FilterRelation {
+    Any,
     Hostile,
     Friendly,
     FriendlyOther,

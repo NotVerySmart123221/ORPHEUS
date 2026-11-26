@@ -684,10 +684,12 @@ impl Room {
                 if (!leave && peer.world.combat_body_active()) || settled_shots {
                     let (bots, queries) = world.scene.bot_simulation();
                     bots.activate_combat();
-                    for shot in shots {
-                        if let Some(hit) = bots.hitscan(&queries, shot, context, |entity| {
-                            peer.world.actor_contact_ready(entity)
-                        })? {
+                    for (shot, policy) in shots {
+                        if let Some(hit) =
+                            bots.hitscan_with_policy(&queries, shot, policy, context, |entity| {
+                                peer.world.actor_contact_ready(entity)
+                            })?
+                        {
                             bots.deliver_applied_damage(peer.world.owner(), hit.damage.clone());
                             peer.bot_hit(hit);
                         }
@@ -808,11 +810,10 @@ impl Room {
         }
         if junkenstein {
             if !messages.is_empty() {
-                let deadeye = world.scene.deadeye_scene(0).ok();
                 world
                     .scene
                     .simulation_mut()
-                    .deliver_player_defender_messages(deadeye.as_ref(), &messages);
+                    .deliver_player_defender_messages(None, &messages);
             }
             let voice_targets: Vec<u32> = self
                 .members

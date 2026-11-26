@@ -897,6 +897,7 @@ pub(super) fn normal_encounter_first_reaper_finishes_intro_and_pursues_live_defe
                     graph: projectile.shot.graph,
                     node: Some(7),
                 }),
+                impact_spawn: None,
             });
             launches += 1;
         }

@@ -5,7 +5,7 @@ pub(super) struct StepBuffers<'a> {
     pub(super) frame: &'a mut u32,
     pub(super) fields: &'a mut Vec<(ProjectileToken, BioticField)>,
     pub(super) launches: &'a mut Vec<AdmittedFlight>,
-    pub(super) hitscan: &'a mut Vec<PosedHitscan>,
+    pub(super) hitscan: &'a mut Vec<(PosedHitscan, crate::game_hitscan::HitTargetPolicy)>,
 }
 
 pub(super) fn stage_scripted_motion(runtime: &mut dyn OwnerBodyRuntime, mover: &mut Mover) {
@@ -217,7 +217,12 @@ impl BodyScript {
         }
         for shot in runtime.take_shots((step == BodyStep::Posed).then_some(command), mover) {
             match shot {
-                PosedShot::Hitscan(shot) => buffers.hitscan.push(*shot),
+                PosedShot::Hitscan(shot) => {
+                    buffers
+                        .hitscan
+                        .push((*shot, crate::game_hitscan::HitTargetPolicy::default()));
+                }
+                PosedShot::AllyHitscan(shot, policy) => buffers.hitscan.push((*shot, policy)),
                 PosedShot::Projectile(shot) => self.launch_projectile(*shot, buffers.launches),
                 PosedShot::BioticField(shot) => self.launch_biotic_field(shot, buffers.fields),
             }
@@ -267,6 +272,9 @@ impl BodyScript {
         } else {
             flight
         };
+        let flight = flight
+            .with_target_policy(projectile.target_policy)
+            .with_piercing(projectile.piercing);
         let token = if projectile.predicted {
             let Some((projectiles, def)) = self.projectiles.as_mut().zip(definition) else {
                 #[cfg(feature = "inspector")]
@@ -298,6 +306,7 @@ impl BodyScript {
                 hit_effect: projectile
                     .stun
                     .and_then(|_| LEGACY_PROJECTILE_CONTROL.flight_site(&projectile.shot)),
+                impact_spawn: projectile.impact_spawn,
             });
         } else {
             #[cfg(feature = "inspector")]

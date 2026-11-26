@@ -5,7 +5,6 @@ use std::{
 
 use serde_json::Value as Json;
 
-use super::lifecycle::{DEADEYE_GRAPH, DEADEYE_TARGET_EFFECT};
 use crate::{
     collision_scene::CollisionScene,
     commands::Command,
@@ -179,6 +178,7 @@ pub(super) struct BodyWorld {
     pub(super) velocity_changes: Vec<(u32, crate::mover::VelocityChange)>,
     pub(super) scripted_motion: Option<(u32, ScriptedMotion)>,
     pub(super) voice_variant_counter: usize,
+    pub(super) pet_positions: BTreeMap<u32, ([f64; 3], f64)>,
 }
 
 impl World for BodyWorld {
@@ -374,6 +374,9 @@ impl World for BodyWorld {
             let change = match op {
                 VelocityOp::AddVector(delta) => VelocityChange::Impulse(delta),
                 VelocityOp::SetVector(target) => VelocityChange::SetVelocity(target),
+                VelocityOp::SetHorizontalVector(target) => {
+                    VelocityChange::SetHorizontalVelocity(target)
+                }
                 VelocityOp::SetSpeed { axis, value } => {
                     VelocityChange::SetAxisSpeed { axis, value }
                 }
@@ -458,35 +461,87 @@ impl World for BodyWorld {
                 .queue_velocity_change(frame, VelocityChange::VerticalImpulse { vertical, delta })
     }
 
-    fn deadeye_target_alive(&self, site: Site, entity: u32) -> bool {
-        self.has_deadeye()
-            && site.entity == self.entity
-            && self.vitals.death().is_none()
-            && self
+    fn entity_alive(&self, site: Site, entity: u32) -> bool {
+        if !self.is_player_site(site) || self.vitals.death().is_some() {
+            return false;
+        }
+        if self.pet_positions.contains_key(&entity) {
+            return true;
+        }
+        if self.deadeye_scene.collision.is_some() || !self.deadeye_scene.targets.is_empty() {
+            return self
                 .deadeye_scene
                 .targets
                 .iter()
-                .any(|target| target.entity == entity)
+                .any(|target| target.entity == entity);
+        }
+        self.spatial_frame
+            .as_deref()
+            .is_some_and(|frame| frame.actor_alive(entity))
     }
 
-    fn deadeye_targets(&self, site: Site, radius: f64, angle: f64) -> Option<Vec<u32>> {
-        if !self.has_deadeye() || site.entity != self.entity || site.graph != DEADEYE_GRAPH {
+    fn cone_targets(
+        &self,
+        site: Site,
+        origin: u32,
+        offset: [f64; 3],
+        radius: f64,
+        angle: f64,
+        visible: bool,
+        filter: &Json,
+    ) -> Option<Vec<u32>> {
+        if !self.is_player_site(site) || !radius.is_finite() || radius < 0.0 {
             return None;
         }
-        if self.vitals.death().is_some() || self.graphs.graph(DEADEYE_TARGET_EFFECT).is_none() {
+        if self.vitals.death().is_some() {
             return Some(Vec::new());
         }
-        let [x, y, z] = self.position;
-        let crouched = self.movement.flags & crate::mover_posture::CROUCHED != 0;
-        let origin = [x, y + eye_height(self.hero, crouched), z];
+        let origin_pos = if origin == self.entity && offset == [0.0; 3] {
+            let [x, y, z] = self.position;
+            let crouched = self.movement.flags & crate::mover_posture::CROUCHED != 0;
+            self.eye_position
+                .unwrap_or([x, y + eye_height(self.hero, crouched), z])
+        } else if origin == 0 {
+            offset
+        } else {
+            let base = if origin == self.entity {
+                self.position
+            } else {
+                self.spatial_frame
+                    .as_deref()
+                    .and_then(|frame| frame.actor_pose(origin).map(|(pos, _)| pos))?
+            };
+            [
+                base[0] + offset[0],
+                base[1] + offset[1],
+                base[2] + offset[2],
+            ]
+        };
         let forward = aim_direction(&Command {
             yaw: self.movement.yaw,
             pitch: self.movement.pitch,
             ..Command::default()
         });
-        Some(
-            self.deadeye_scene
-                .select(origin, forward, radius, angle, site.node == Some(86)),
+        if self.deadeye_scene.collision.is_some() || !self.deadeye_scene.targets.is_empty() {
+            return Some(
+                self.deadeye_scene
+                    .select(origin_pos, forward, radius, angle, visible),
+            );
+        }
+        let relation = match filter.get("m_66747E7D").and_then(Json::as_u64).unwrap_or(0) {
+            1 => 1,
+            2 => 2,
+            _ if filter.get("m_89831602").and_then(Json::as_u64) == Some(1) => 2,
+            _ => 0,
+        };
+        self.spatial_frame.as_deref()?.cone_targets(
+            site.entity,
+            origin_pos,
+            forward,
+            radius,
+            angle,
+            visible,
+            relation,
         )
     }
 
@@ -593,13 +648,12 @@ impl World for BodyWorld {
             {
                 return target.script_state.read(id);
             }
-            if self.spatial_frame.as_deref().is_some_and(|frame| {
-                frame
-                    .candidates()
-                    .iter()
-                    .any(|candidate| candidate.entity == entity)
-            }) {
-                return Some(Value::Null);
+            if let Some(value) = self
+                .spatial_frame
+                .as_deref()
+                .and_then(|frame| frame.actor_variable(entity, id))
+            {
+                return Some(value);
             }
             return None;
         }
@@ -650,6 +704,13 @@ impl World for BodyWorld {
         {
             return VelocityQuery::Present(source.velocity);
         }
+        if let Some(velocity) = self
+            .spatial_frame
+            .as_deref()
+            .and_then(|frame| frame.actor_velocity(entity))
+        {
+            return VelocityQuery::Present(velocity);
+        }
         self.deadeye_scene
             .targets
             .iter()
@@ -669,6 +730,7 @@ impl World for BodyWorld {
         if valid_entity(entity)
             && (entity == self.entity
                 || entity == self.controller
+                || self.pet_positions.contains_key(&entity)
                 || self.spatial_frame.as_deref().is_some_and(|frame| {
                     frame
                         .candidates()
@@ -712,6 +774,35 @@ impl World for BodyWorld {
         if target == self.entity && delta > 0.0 && self.vitals.death().is_none() {
             self.vitals.heal(delta);
             return true;
+        }
+        false
+    }
+
+    fn queue_modify_health(
+        &mut self,
+        site: Site,
+        target: u32,
+        delta: f64,
+        impulse: Option<[f64; 3]>,
+    ) -> bool {
+        if !self.is_player_site(site) || !delta.is_finite() {
+            return false;
+        }
+        if delta < 0.0 || impulse.is_some() {
+            let damage = (-delta).max(0.0);
+            let frame_num = self.movement.frame.unwrap_or(0);
+            if let Some(frame) = self.spatial_frame.as_deref() {
+                return self.script_requests.queue_contact_damage(
+                    frame,
+                    frame_num,
+                    damage,
+                    &[(target, impulse)],
+                );
+            }
+            return false;
+        }
+        if delta > 0.0 {
+            return self.queue_health_change(site, target, delta);
         }
         false
     }
@@ -972,7 +1063,11 @@ impl World for BodyWorld {
     }
 
     fn known_position(&self, entity: u32) -> Option<[f64; 3]> {
-        (entity == self.entity).then_some(self.position)
+        if entity == self.entity {
+            Some(self.position)
+        } else {
+            self.pet_positions.get(&entity).map(|(pos, _)| *pos)
+        }
     }
 
     fn position(&mut self, entity: u32) -> Option<[f64; 3]> {
@@ -985,6 +1080,11 @@ impl World for BodyWorld {
                         .view_subjects
                         .get(&entity)
                         .map(|subject| subject.position)
+                })
+                .or_else(|| {
+                    self.spatial_frame
+                        .as_deref()
+                        .and_then(|frame| frame.actor_pose(entity).map(|(pos, _)| pos))
                 })
         })
     }
@@ -1042,6 +1142,16 @@ impl World for BodyWorld {
                 .view_subjects
                 .get(&entity)
                 .map(|subject| subject.forward)
+                .or_else(|| {
+                    self.spatial_frame
+                        .as_deref()
+                        .and_then(|frame| frame.actor_pose(entity))
+                        .map(|(_, [yaw, _])| {
+                            let rad = f64::from(yaw) * std::f64::consts::TAU / 65_536.0;
+                            let (sin, cos) = rad.sin_cos();
+                            [sin, 0.0, cos]
+                        })
+                })
         }
     }
 
@@ -1120,6 +1230,9 @@ impl World for BodyWorld {
         if entity == self.entity {
             return HealthQuery::Present(self.vitals.total());
         }
+        if let Some(&(_, health)) = self.pet_positions.get(&entity) {
+            return HealthQuery::Present(health);
+        }
         self.deadeye_scene
             .health
             .as_ref()
@@ -1149,11 +1262,15 @@ impl World for BodyWorld {
         if entity == self.entity {
             return self.body_health(site, kind, maximum);
         }
-        if self.has_deadeye()
-            && self.is_player_site(site)
-            && site.graph == DEADEYE_TARGET_EFFECT
-            && kind.is_none()
+        if !self.is_player_site(site) {
+            return None;
+        }
+        if let Some(&(_, health)) = self.pet_positions.get(&entity) {
+            return Some(health);
+        }
+        if kind.is_none()
             && !maximum
+            && (self.deadeye_scene.collision.is_some() || !self.deadeye_scene.targets.is_empty())
         {
             return Some(
                 self.deadeye_scene
@@ -1163,10 +1280,8 @@ impl World for BodyWorld {
                     .map_or(0.0, |target| target.health),
             );
         }
-        if self.is_player_site(site) {
-            if let Some(frame) = self.spatial_frame.as_deref() {
-                return Some(frame.actor_health(entity, kind, maximum).unwrap_or(0.0));
-            }
+        if let Some(frame) = self.spatial_frame.as_deref() {
+            return Some(frame.actor_health(entity, kind, maximum).unwrap_or(0.0));
         }
         None
     }
@@ -1322,6 +1437,8 @@ impl World for BodyWorld {
         origin: Option<[f64; 3]>,
         direction: Option<[f64; 3]>,
         length: Option<f64>,
+        radius: f64,
+        filter: &Json,
     ) -> Option<crate::script_init::GenericBeamContact> {
         if !self.is_player_site(site) {
             return None;
@@ -1339,15 +1456,36 @@ impl World for BodyWorld {
             })
             .unwrap_or_else(|| direction_for_angles(self.movement.yaw, self.movement.pitch));
         let reach = length.filter(|l| l.is_finite() && *l > 0.0).unwrap_or(15.0);
+        let radius = if radius.is_finite() && radius > 0.0 {
+            radius
+        } else {
+            0.0
+        };
+        let own_team = crate::match_scene::team_from_spawn_filter(self.body_filter);
+        let team_mode = filter.get("m_66747E7D").and_then(Json::as_u64).unwrap_or(0);
+        let hostile_flag = filter.get("m_89831602").and_then(Json::as_u64).unwrap_or(0);
         let candidates: Vec<u32> = frame
             .candidates()
             .iter()
+            .filter(|c| c.entity != self.entity)
+            .filter(|c| match (team_mode, hostile_flag) {
+                (1, 0) => own_team.is_some() && c.team == own_team,
+                (2, 0) | (0, 1) => own_team.is_none() || c.team != own_team,
+                _ => true,
+            })
             .map(|c| c.entity)
-            .filter(|&e| e != self.entity)
             .collect();
         let vm_frame = self.movement.frame.unwrap_or(0);
         let actor_hit = frame
-            .actor_ray_cast(site, vm_frame, origin, direction, reach, &candidates)
+            .actor_beam_cast(
+                site,
+                vm_frame,
+                origin,
+                direction,
+                reach,
+                radius,
+                &candidates,
+            )
             .flatten();
         let world_hit = frame
             .ray_cast(site, vm_frame, origin, direction, reach)
@@ -1359,6 +1497,7 @@ impl World for BodyWorld {
                     hit: true,
                     point: Some(crate::static_ray::along(origin, direction, actor.distance)),
                     normal: Some(actor.normal),
+                    distance: Some(actor.distance),
                 })
             }
             (Some(actor), None) => Some(crate::script_init::GenericBeamContact {
@@ -1366,14 +1505,22 @@ impl World for BodyWorld {
                 hit: true,
                 point: Some(crate::static_ray::along(origin, direction, actor.distance)),
                 normal: Some(actor.normal),
+                distance: Some(actor.distance),
             }),
             (_, Some(world)) => Some(crate::script_init::GenericBeamContact {
                 entity: None,
                 hit: true,
                 point: Some(world.point),
                 normal: Some(world.normal),
+                distance: Some(world.distance),
             }),
-            (None, None) => Some(crate::script_init::GenericBeamContact::default()),
+            (None, None) => Some(crate::script_init::GenericBeamContact {
+                entity: None,
+                hit: false,
+                point: Some(crate::static_ray::along(origin, direction, reach)),
+                normal: None,
+                distance: Some(reach),
+            }),
         }
     }
 
@@ -1403,15 +1550,63 @@ impl World for BodyWorld {
         Some(crate::script_init::BeamContact::default())
     }
 
+    fn spawn_pet(&mut self, site: Site, spawn: crate::script_init::PetSpawn) -> Option<u32> {
+        if !self.is_player_site(site) || self.vitals.death().is_some() {
+            return None;
+        }
+        let pet_id = crate::game_combat::next_pet_wire_id();
+        let pos = spawn.position.unwrap_or(self.position);
+        let max_health = self
+            .authored_pet_max_health(site.graph)
+            .unwrap_or_else(|| self.vitals.maximum().max(200.0));
+        self.pet_positions.insert(pet_id, (pos, max_health));
+        if let Some(frame) = self.spatial_frame.as_deref() {
+            let _ = self.script_requests.queue_spawn_pet(
+                frame,
+                self.entity,
+                pet_id,
+                spawn.definition,
+                spawn.attach,
+                pos,
+                self.movement.yaw,
+            );
+        }
+        Some(pet_id)
+    }
+
+    fn despawn_pet(&mut self, site: Site, entity: u32) -> bool {
+        if !self.is_player_site(site) {
+            return false;
+        }
+        self.pet_positions.remove(&entity);
+        if let Some(frame) = self.spatial_frame.as_deref() {
+            let _ = self
+                .script_requests
+                .queue_despawn_pet(frame, self.entity, entity);
+        }
+        true
+    }
+
     fn play_script(
         &mut self,
         site: Site,
-        _target: u32,
+        target: u32,
         request: crate::script_init::PlayScript,
     ) -> bool {
-        self.is_player_site(site)
-            && (self.graphs.is_client_only_graph(request.graph)
-                || self.graphs.graph(request.graph).is_some())
+        if !self.is_player_site(site) {
+            return false;
+        }
+        if target != self.entity && valid_entity(target) {
+            if let Some(ticks) =
+                crate::game_combat::extract_play_script_stun_ticks(&self.graphs, &request)
+            {
+                if let Some(frame) = self.spatial_frame.as_deref() {
+                    let _ = self.script_requests.queue_stun(frame, target, ticks);
+                }
+            }
+        }
+        self.graphs.is_client_only_graph(request.graph)
+            || self.graphs.graph(request.graph).is_some()
     }
 
     fn admits_generic_player_runtime(&self, site: Site) -> bool {
@@ -1483,17 +1678,30 @@ impl World for BodyWorld {
         filter: &Json,
     ) -> Option<crate::script_expr::SceneFilterPolicy> {
         use crate::script_expr::{FilterPredicate, FilterRelation, SceneFilterPolicy};
-        if self.is_player_site(site)
-            && filter["m_66747E7D"] == 1
-            && filter
-                .get("m_89831602")
-                .is_none_or(|v| v.is_null() || v == 0)
-            && filter.get("m_condition").is_none_or(Json::is_null)
-        {
-            return Some(SceneFilterPolicy {
-                relation: FilterRelation::Friendly,
-                predicate: FilterPredicate::None,
-            });
+        if self.is_player_site(site) {
+            let team_mode = filter.get("m_66747E7D").and_then(Json::as_u64).unwrap_or(0);
+            let hostile_flag = filter.get("m_89831602").and_then(Json::as_u64).unwrap_or(0);
+            let relation = match (team_mode, hostile_flag) {
+                (1, 0) => Some(FilterRelation::Friendly),
+                (2, 0) | (0, 1) => Some(FilterRelation::Hostile),
+                (0, 0) => Some(FilterRelation::Any),
+                _ => None,
+            };
+            if let Some(relation) = relation {
+                let predicate = if filter.get("m_condition").is_none_or(Json::is_null) {
+                    FilterPredicate::None
+                } else {
+                    FilterPredicate::Target
+                };
+                if (relation == FilterRelation::Any && predicate != FilterPredicate::None)
+                    || (relation != FilterRelation::Any && self.spatial_frame.is_some())
+                {
+                    return Some(SceneFilterPolicy {
+                        relation,
+                        predicate,
+                    });
+                }
+            }
         }
         let source = self.death_source.as_ref()?;
         self.settled_scene_filter_policy(site, filter, &source.target)
@@ -1574,8 +1782,10 @@ impl World for BodyWorld {
             let yaw = f64::from(self.movement.yaw) * std::f64::consts::TAU / 65_536.0;
             let (sin, cos) = yaw.sin_cos();
             let vector = match config.get("$").and_then(Json::as_str) {
-                Some("STU_021D01CD") => Some([sin, 0.0, cos]),
+                Some("STU_021D01CD") | Some("STU_24087C9E") => Some([sin, 0.0, cos]),
                 Some("STU_66F3B89E") => Some([cos, 0.0, -sin]),
+                Some("STU_EE66D6C3") => Some([0.0, 1.0, 0.0]),
+                Some("STU_FC99C77E") => Some(self.eye_position.unwrap_or(self.position)),
                 Some("STU_2200A66D") => Some(aim_direction(&Command {
                     yaw: self.movement.yaw,
                     pitch: self.movement.pitch,
@@ -1588,33 +1798,6 @@ impl World for BodyWorld {
             }
         }
 
-        if self.is_player_site(site) && self.has_deadeye() {
-            match (
-                site.graph,
-                site.node,
-                config.get("$").and_then(Json::as_str),
-            ) {
-                (DEADEYE_GRAPH, Some(84), Some("STU_ED45C5E8"))
-                    if crate::script_expr::is_zeroed_owner_selector(config) =>
-                {
-                    return Some(Value::Null);
-                }
-                (DEADEYE_TARGET_EFFECT, Some(28), Some("STU_7C005F8F"))
-                    if crate::script_expr::native_fields(config, &["m_82B6345B", "m_entity"])
-                        && config
-                            .get("m_82B6345B")
-                            .is_some_and(|owner| native_shape(owner, "STU_B5A0CAF0", None))
-                        && config
-                            .pointer("/m_entity/m_identifier")
-                            .and_then(Json::as_u64)
-                            == Some(536) =>
-                {
-                    // The prepared Junkenstein roster has no Deadeye immunity overrides.
-                    return Some(Value::Bool(false));
-                }
-                _ => (),
-            }
-        }
         if self.is_player_site(site) && is_junkenstein_mode(self.mode) {
             if (site.graph, site.node) == (0x01ca, Some(126))
                 && crate::pve_encounter::messages::sighting_selector(config)
@@ -1711,7 +1894,7 @@ impl World for BodyWorld {
             // selection is unverified.
             "STU_ED45C5E8"
                 if self.is_player_site(site)
-                    && self.mode == PRACTICE_RANGE_MODE
+                    && self.mode != 0
                     && crate::script_expr::is_zeroed_owner_selector(config) =>
             {
                 Some(Value::Null)
@@ -1748,6 +1931,7 @@ impl BodyWorld {
         true
     }
 
+    #[cfg(test)]
     pub(super) fn has_deadeye(&self) -> bool {
         self.hero == CASSIDY && is_junkenstein_mode(self.mode)
     }
@@ -1765,5 +1949,47 @@ impl BodyWorld {
 
     fn is_player_site(&self, site: Site) -> bool {
         site.entity == self.entity && valid_entity(self.entity)
+    }
+
+    fn authored_pet_max_health(&self, graph_index: u32) -> Option<f64> {
+        let graph = self.graphs.graph(graph_index)?;
+        // Retail barrier graphs (0x0095 Rein, 0x0EE3 Brig, 0x1B55 Sigma) declare their
+        // authored barrier max health via a literal assignment into var[587].
+        for node in &graph.nodes {
+            if let Some(entries) = node.fields.get("m_4E87690F").and_then(Json::as_array) {
+                for entry in entries {
+                    if entry
+                        .pointer("/m_out_Var/m_identifier")
+                        .and_then(Json::as_u64)
+                        == Some(587)
+                    {
+                        if let Some(v) = entry
+                            .pointer("/m_value/m_value")
+                            .and_then(Json::as_f64)
+                            .filter(|v| v.is_finite() && *v > 1.0)
+                        {
+                            return Some(v);
+                        }
+                    }
+                }
+            }
+            if node.class == "STUStatescriptActionSetVar"
+                && node
+                    .fields
+                    .pointer("/m_out_Var/m_identifier")
+                    .and_then(Json::as_u64)
+                    == Some(587)
+            {
+                if let Some(v) = node
+                    .fields
+                    .pointer("/m_value/m_value")
+                    .and_then(Json::as_f64)
+                    .filter(|v| v.is_finite() && *v > 1.0)
+                {
+                    return Some(v);
+                }
+            }
+        }
+        None
     }
 }

@@ -8,7 +8,7 @@ use crate::{
     game_combat::{
         AdmittedFlight, AppliedDamage, BioticField, BotHit, CombatError, EliminationStreak,
         HealingPulse, HealthDamageEvidence, HealthEventContext, PosedHitscan, RoomSimulation,
-        SampledBody, eligible_target, eye_height, script_eye_position,
+        SampledBody, eye_height, script_eye_position,
     },
     game_combat_messages::CombatNotice,
     game_hitscan::{HurtPose, Impact, TargetHistory, TargetPose, ViewFrame},
@@ -77,7 +77,7 @@ pub(crate) struct PlayerBodyState {
     pub(crate) frame: u32,
     pub(crate) fields: Vec<(ProjectileToken, BioticField)>,
     pub(crate) launches: Vec<AdmittedFlight>,
-    pub(crate) hitscan: Vec<PosedHitscan>,
+    pub(crate) hitscan: Vec<(PosedHitscan, crate::game_hitscan::HitTargetPolicy)>,
     pub(crate) observer_create: Option<EntityUpdate>,
     pub(crate) respawn_at: Option<Duration>,
     pub(crate) last_buttons: u32,
@@ -453,6 +453,7 @@ impl RoomSimulation {
             self.players_by_owner.shift_remove(&owner);
         }
         Arc::make_mut(&mut self.retired_entity_ids).insert(id.entity);
+        self.retire_owner_pets_and_deployables(id.entity);
         self.world.despawn(handle.entity);
         self.player_events
             .push(PlayerBodyEvent::Retired { owner, id });
@@ -598,25 +599,6 @@ impl RoomSimulation {
         }
     }
 
-    pub(crate) fn player_has_deadeye(&self, id: BodyId) -> bool {
-        self.player_body(id)
-            .and_then(|state| state.runtime.as_ref())
-            .is_some_and(|runtime| runtime.has_deadeye())
-    }
-
-    pub(crate) fn set_player_deadeye_targets(
-        &mut self,
-        id: BodyId,
-        scene: crate::script_player::DeadeyeScene,
-    ) {
-        if let Some(runtime) = self
-            .player_body_mut(id)
-            .and_then(|state| state.runtime.as_mut())
-        {
-            runtime.set_deadeye_targets(scene);
-        }
-    }
-
     pub(crate) fn set_player_activity(&mut self, id: BodyId, activity: OwnerRoomActivity) {
         let Some(runtime) = self
             .player_body_mut(id)
@@ -661,7 +643,10 @@ impl RoomSimulation {
         Some(std::mem::take(&mut state.launches))
     }
 
-    pub(crate) fn take_player_hitscan(&mut self, id: BodyId) -> Vec<PosedHitscan> {
+    pub(crate) fn take_player_hitscan(
+        &mut self,
+        id: BodyId,
+    ) -> Vec<(PosedHitscan, crate::game_hitscan::HitTargetPolicy)> {
         self.player_body_mut(id)
             .map_or_else(Vec::new, |state| std::mem::take(&mut state.hitscan))
     }
@@ -822,12 +807,7 @@ impl RoomSimulation {
                 if !message.accepts_body(id.entity) {
                     continue;
                 }
-                let cloned_deadeye = if self.player_has_deadeye(id) {
-                    deadeye.cloned()
-                } else {
-                    None
-                };
-                self.deliver_player_defender_message(id, cloned_deadeye, message.clone());
+                self.deliver_player_defender_message(id, deadeye.cloned(), message.clone());
             }
         }
     }
@@ -1009,10 +989,11 @@ impl RoomSimulation {
         }
     }
 
-    pub(super) fn push_player_hitscan_candidates(
+    pub(super) fn push_player_hitscan_candidates_with_policy(
         &self,
         source: u32,
         team: u8,
+        policy: crate::game_hitscan::HitTargetPolicy,
         queries: &crate::scene_assets::BotQueries<'_>,
         view: ViewFrame,
         visible: &impl Fn(u32) -> bool,
@@ -1026,15 +1007,16 @@ impl RoomSimulation {
             let Some(state) = self.world.get::<PlayerBodyState>(entity) else {
                 continue;
             };
-            if !eligible_target(
-                state.id.entity,
-                state.alive(),
-                state.team,
-                source,
-                team,
-                free_for_all,
-            ) || !visible(state.id.entity)
-            {
+            if !state.alive() || state.id.entity == source || !visible(state.id.entity) {
+                continue;
+            }
+            let same_team = !free_for_all && state.team == team;
+            let allowed = if same_team {
+                policy.affects_allies
+            } else {
+                policy.affects_enemies
+            };
+            if !allowed {
                 continue;
             }
             if let Some(pose) = state.history.at(view, state.target_pose()) {

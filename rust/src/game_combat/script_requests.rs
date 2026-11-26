@@ -64,8 +64,10 @@ pub(super) struct RoomScriptTarget {
     pub(super) entity: Entity,
     pub(super) candidate_index: usize,
     pub(super) angles: [i32; 2],
+    pub(super) velocity: Vec3,
     pub(super) eye_position: Option<Vec3>,
     pub(super) filter_flags: Option<u64>,
+    pub(super) script_state: crate::script_entity_state::EntityScriptState,
     pub(super) health: bool,
     pub(super) health_snapshot: Option<ActorHealthSnapshot>,
     pub(super) messages: bool,
@@ -182,9 +184,12 @@ impl RoomScriptRequest {
     fn for_target(frame: &RoomSpatialFrame, wire: u32, effect: ScriptEffect) -> Option<Self> {
         let target = frame.script_targets.get(&wire)?;
         let supported = match &effect {
-            ScriptEffect::Health(_) | ScriptEffect::Contact { .. } => target.health,
+            ScriptEffect::Health(_) | ScriptEffect::Contact { .. } | ScriptEffect::Stun { .. } => {
+                target.health
+            }
             ScriptEffect::Message(_) => target.messages,
             ScriptEffect::Cue(_, _) => target.cue_listener,
+            ScriptEffect::SpawnPet { .. } | ScriptEffect::DespawnPet { .. } => true,
         };
         supported.then_some(Self {
             wire,
@@ -203,6 +208,19 @@ enum ScriptEffect {
     },
     Message(RoomMessage),
     Cue(RoomCue, Entity),
+    SpawnPet {
+        pet_id: u32,
+        definition: u64,
+        attach: Option<u32>,
+        position: Vec3,
+        yaw: i32,
+    },
+    DespawnPet {
+        pet_id: u32,
+    },
+    Stun {
+        ticks: u32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -357,6 +375,48 @@ impl RoomScriptRequests {
         true
     }
 
+    pub(crate) fn queue_spawn_pet(
+        &mut self,
+        frame: &RoomSpatialFrame,
+        owner: u32,
+        pet_id: u32,
+        definition: u64,
+        attach: Option<u32>,
+        position: Vec3,
+        yaw: i32,
+    ) -> bool {
+        if definition == 0 || !position.iter().all(|c| c.is_finite()) {
+            return false;
+        }
+        self.queue(
+            frame,
+            owner,
+            ScriptEffect::SpawnPet {
+                pet_id,
+                definition,
+                attach,
+                position,
+                yaw,
+            },
+        )
+    }
+
+    pub(crate) fn queue_despawn_pet(
+        &mut self,
+        frame: &RoomSpatialFrame,
+        owner: u32,
+        pet_id: u32,
+    ) -> bool {
+        self.queue(frame, owner, ScriptEffect::DespawnPet { pet_id })
+    }
+
+    pub(crate) fn queue_stun(&mut self, frame: &RoomSpatialFrame, target: u32, ticks: u32) -> bool {
+        if ticks == 0 {
+            return false;
+        }
+        self.queue(frame, target, ScriptEffect::Stun { ticks })
+    }
+
     fn queue(&mut self, frame: &RoomSpatialFrame, wire: u32, effect: ScriptEffect) -> bool {
         if self.0.len() >= MAX_BODY_SCRIPT_REQUESTS {
             return false;
@@ -413,6 +473,11 @@ impl RoomSimulation {
                 }
             }
         }
+        for (owner, requests) in self.drain_deployable_script_requests() {
+            if let Some(source) = self.sample_health_body(owner) {
+                batches.push((source, requests));
+            }
+        }
         for (source, requests) in batches {
             for request in requests {
                 self.settle_script_request(request, source, tick, now)?;
@@ -463,6 +528,22 @@ impl RoomSimulation {
                 damage,
                 impulse,
             } => {
+                let same_team_other = source.wire != request.wire && {
+                    #[cfg(feature = "lua-mods")]
+                    let ffa = self.free_for_all || self.mod_friendly_fire();
+                    #[cfg(not(feature = "lua-mods"))]
+                    let ffa = self.free_for_all;
+                    if ffa {
+                        false
+                    } else {
+                        let source_team = self.actor_team(source.wire);
+                        let target_team = self.actor_team(request.wire);
+                        source_team.is_some() && source_team == target_team
+                    }
+                };
+                if same_team_other {
+                    return Ok(());
+                }
                 #[cfg(feature = "lua-mods")]
                 let damage = if damage > 0.0 {
                     self.mod_evaluate_damage(
@@ -494,6 +575,17 @@ impl RoomSimulation {
                             -outcome.delta,
                             outcome.killed,
                         );
+                        if let Some(id) = self.player_handle_for_wire(request.wire) {
+                            if let Some(owner) = self.player_body(id).map(|p| p.owner) {
+                                self.record_received_damage(
+                                    owner,
+                                    id,
+                                    source.wire,
+                                    (-outcome.delta) as f32,
+                                    None,
+                                );
+                            }
+                        }
                         #[cfg(feature = "lua-mods")]
                         if outcome.killed {
                             self.mod_on_kill(source.wire, request.wire, false, tick, now);
@@ -506,6 +598,52 @@ impl RoomSimulation {
             }
             ScriptEffect::Message(message) => {
                 self.route_room_message(request.entity, source.wire, message);
+            }
+            ScriptEffect::SpawnPet {
+                pet_id,
+                definition,
+                attach,
+                position,
+                yaw,
+            } => {
+                let team = self.actor_team(source.wire).unwrap_or(0);
+                self.spawn_room_pet(source.wire, team, pet_id, definition, attach, position, yaw);
+            }
+            ScriptEffect::DespawnPet { pet_id } => {
+                self.despawn_room_pet(pet_id);
+            }
+            ScriptEffect::Stun { ticks } => {
+                let same_team_other = source.wire != request.wire && {
+                    #[cfg(feature = "lua-mods")]
+                    let ffa = self.free_for_all || self.mod_friendly_fire();
+                    #[cfg(not(feature = "lua-mods"))]
+                    let ffa = self.free_for_all;
+                    if ffa {
+                        false
+                    } else {
+                        let source_team = self.actor_team(source.wire);
+                        let target_team = self.actor_team(request.wire);
+                        source_team.is_some() && source_team == target_team
+                    }
+                };
+                if same_team_other {
+                    return Ok(());
+                }
+                if let Some(mut state) = self.world.get_mut::<BotState>(request.entity) {
+                    if !state.bot.dead {
+                        state.bot.stun_for(tick, ticks);
+                    }
+                } else if let Some(mut player) =
+                    self.world.get_mut::<PlayerBodyState>(request.entity)
+                {
+                    if player.alive() {
+                        player.mover.clear_pending_script_motion();
+                        player.mover.queue_velocity_change(
+                            tick.saturating_add(1),
+                            crate::mover::VelocityChange::SetHorizontalVelocity([0.0, 0.0]),
+                        );
+                    }
+                }
             }
             ScriptEffect::Cue(cue, source_entity) => {
                 if source_entity != source.entity {
@@ -983,8 +1121,10 @@ mod tests {
             entity: world.spawn_empty().id(),
             candidate_index,
             angles: [0; 2],
+            velocity: [0.0; 3],
             eye_position: None,
             filter_flags: None,
+            script_state: Default::default(),
             health,
             health_snapshot: None,
             messages,

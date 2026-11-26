@@ -658,5 +658,6 @@ fn state_kind_summary(kind: StateKind) -> (&'static str, Option<u8>) {
         StateKind::GroundRay => ("GroundRay", None),
         StateKind::GenericTrackedTargets => ("GenericTrackedTargets", None),
         StateKind::GenericModifyHealth { .. } => ("GenericModifyHealth", None),
+        StateKind::Pet { .. } => ("Pet", None),
     }
 }

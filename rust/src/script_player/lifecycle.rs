@@ -51,7 +51,6 @@ pub(crate) struct PlayerBodyRuntime {
 }
 
 pub(super) const DEADEYE_GRAPH: u32 = 0x022f;
-pub(super) const DEADEYE_TARGET_EFFECT: u32 = 0x01ee;
 
 impl PlayerBodyRuntime {
     fn sync_body_health_logged(&mut self) {
@@ -108,6 +107,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         Some(self.world.own_filter_flags())
     }
 
+    #[cfg(test)]
     fn has_deadeye(&self) -> bool {
         self.world.has_deadeye()
     }
@@ -550,7 +550,8 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                 self.component
                     .evaluate_shot_config(&shot, config, &mut self.world)
             };
-            if ImpactSpawn::from_volley(node, &mut evaluate).ok().flatten()
+            let impact_spawn = ImpactSpawn::from_volley(node, &mut evaluate).ok().flatten();
+            if impact_spawn
                 == Some(ImpactSpawn {
                     definition: BIOTIC_FIELD_ENTITY,
                     on_spawn_graph: None,
@@ -582,6 +583,35 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                     &mut evaluate,
                 )
                 .ok()??;
+                let direct_policy = node
+                    .field("m_6396149F")
+                    .map(crate::game_hitscan::HitTargetPolicy::from_authored);
+                let blast_policy = node
+                    .field("m_D2D11CE9")
+                    .map(crate::game_hitscan::HitTargetPolicy::from_authored);
+                let target_policy = match (
+                    direct_policy.filter(|_| ballistics.direct.is_some_and(|h| h.amount > 0.0)),
+                    blast_policy.filter(|_| {
+                        ballistics
+                            .blast
+                            .as_ref()
+                            .is_some_and(|b| b.hit.amount > 0.0 || b.knockback.is_some())
+                    }),
+                ) {
+                    (Some(d), Some(b)) => d.union(b),
+                    (Some(d), None) => d,
+                    (None, Some(b)) => b,
+                    (None, None) => crate::game_hitscan::HitTargetPolicy::default(),
+                };
+                let piercing = node
+                    .field("m_6396149F.m_0A5ED456")
+                    .filter(|v| !v.is_null())
+                    .and_then(|v| evaluate(v).ok())
+                    .is_some_and(|v| crate::script_expr::truthy(&v))
+                    && ballistics
+                        .blast
+                        .as_ref()
+                        .is_none_or(|b| b.hit.amount <= 0.0 && b.knockback.is_none());
                 if ballistics.direct.is_some_and(|hit| hit.amount < 0.0)
                     || ballistics
                         .blast
@@ -590,7 +620,8 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                 {
                     return None;
                 }
-                if !ballistics.direct.is_some_and(|hit| hit.amount > 0.0)
+                if impact_spawn.is_none()
+                    && !ballistics.direct.is_some_and(|hit| hit.amount > 0.0)
                     && !ballistics
                         .blast
                         .as_ref()
@@ -627,6 +658,9 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                         direction,
                         gravity,
                         predicted,
+                        target_policy,
+                        piercing,
+                        impact_spawn,
                     })));
                 } else {
                     if !node.field("m_5EC1EB38").is_some_and(Json::is_object) {
@@ -646,14 +680,18 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                                 direction,
                                 gravity,
                                 predicted: false,
+                                target_policy,
+                                piercing,
+                                impact_spawn,
                             })));
                         },
                     );
                 }
                 return Some(());
             }
+            let hit_config = node.field("m_6396149F")?;
             let hit = HitDefinition::from_authored_with_critical(
-                node.field("m_6396149F")?,
+                hit_config,
                 default_critical,
                 &mut evaluate,
             )
@@ -661,6 +699,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
             if hit.amount <= 0.0 {
                 return None;
             }
+            let hit_policy = crate::game_hitscan::HitTargetPolicy::from_authored(hit_config);
             let reach = node.field("m_FEC435C6").unwrap_or(&Json::Null);
             let reach = if reach.is_null() {
                 0.0
@@ -668,7 +707,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                 to_float(&evaluate(reach).ok()?)
             };
             let mut push_hitscan = |direction| {
-                posed.push(PosedShot::Hitscan(Box::new(PosedHitscan {
+                let shot_box = Box::new(PosedHitscan {
                     source: shot.entity,
                     origin,
                     direction,
@@ -676,10 +715,14 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                     shot_frame: shot.frame,
                     reach,
                     hit,
-                })));
+                });
+                if hit_policy.affects_allies || hit_policy.healing {
+                    posed.push(PosedShot::AllyHitscan(shot_box, hit_policy));
+                } else {
+                    posed.push(PosedShot::Hitscan(shot_box));
+                }
             };
-            if (shot.graph, node.pos) == (DEADEYE_TARGET_EFFECT, 14) {
-                let snapshot = self.component.snapshot()?;
+            let locked_target = self.component.snapshot().and_then(|snapshot| {
                 let Value::Entity(entity) = *snapshot
                     .instances
                     .get(&shot.instance)?
@@ -691,14 +734,20 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                 let Value::Array(visible) = snapshot.variables.get(&5874)? else {
                     return None;
                 };
-                if !visible.contains(&Value::Entity(entity)) {
-                    return None;
-                }
-                push_hitscan(DeadeyeScene::shot_direction(
-                    &self.world.deadeye_scene,
-                    origin,
-                    entity,
-                )?);
+                visible.contains(&Value::Entity(entity)).then_some(entity)
+            });
+            if let Some(entity) = locked_target {
+                let direction = if self.world.deadeye_scene.collision.is_some()
+                    || !self.world.deadeye_scene.targets.is_empty()
+                {
+                    DeadeyeScene::shot_direction(&self.world.deadeye_scene, origin, entity)?
+                } else {
+                    self.world
+                        .spatial_frame
+                        .as_deref()?
+                        .target_aim_direction(origin, entity)?
+                };
+                push_hitscan(direction);
             } else {
                 for_each_authored_hitscan_direction(
                     node,

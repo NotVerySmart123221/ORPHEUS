@@ -1772,7 +1772,7 @@ fn queued_hitscan_settles_before_a_hero_or_skin_replacement() {
             assert_eq!(world.command_ack(frame), frame);
             assert_eq!(world.active_body_id(), Some(shot_body));
             let shots = world.take_hitscan(scene.simulation_mut());
-            let [shot] = shots.as_slice() else {
+            let [(shot, _)] = shots.as_slice() else {
                 panic!("expected exactly one pending shot from the old player body");
             };
             assert_eq!((shot.source, shot.shot_frame), (shot_body.entity, frame));
@@ -1979,7 +1979,7 @@ fn successful_hitscan_survives_owner_vm_fault_before_body_replacement() {
                 .unwrap();
             assert!((1..=budget).contains(&used));
             assert!(!leave);
-            for shot in world.take_hitscan(scene.simulation_mut()) {
+            for (shot, _) in world.take_hitscan(scene.simulation_mut()) {
                 assert_eq!(world.active_body_id(), Some(shooter));
                 assert_eq!((shot.source, shot.shot_frame), (shooter.entity, shot_frame));
                 let (simulation, queries) = scene.bot_simulation();
@@ -2475,6 +2475,9 @@ fn admitted_owner_projectile_preserves_gravity_and_expiry_blast() {
             direction: lifted_direction([0.0, 0.0, 1.0], 0.05).unwrap(),
             gravity: Some(20.0),
             predicted: true,
+            target_policy: Default::default(),
+            piercing: false,
+            impact_spawn: None,
         },
         launches,
     );
@@ -2563,6 +2566,9 @@ fn room_flight_outcomes_release_only_the_current_owner_alias() {
                 },
                 origin: [0.0; 3],
                 direction: [1.0, 0.0, 0.0],
+                target_policy: Default::default(),
+                piercing: false,
+                impact_spawn: None,
             },
             launches,
         );
@@ -3405,6 +3411,9 @@ fn fixture_projectile_flight(
         },
         origin: [0.0, 1.0, 0.0],
         direction: [1.0, 0.0, 0.0],
+        target_policy: Default::default(),
+        piercing: false,
+        impact_spawn: None,
     };
     let flight =
         ProjectileFlight::new(posed.ballistics, posed.origin, posed.direction, None).unwrap();
@@ -3413,6 +3422,7 @@ fn fixture_projectile_flight(
         flight,
         stun: None,
         hit_effect: None,
+        impact_spawn: None,
     }
 }
 

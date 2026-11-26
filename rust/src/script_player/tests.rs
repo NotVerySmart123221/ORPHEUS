@@ -3498,6 +3498,7 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
         velocity_changes: Vec::new(),
         scripted_motion: None,
         voice_variant_counter: 0,
+        pet_positions: BTreeMap::new(),
     };
     let mut component = Component::start(
         graphs,
@@ -4849,6 +4850,7 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             velocity_changes: Vec::new(),
             scripted_motion: None,
             voice_variant_counter: 0,
+            pet_positions: BTreeMap::new(),
         };
         let component = Component::start(
             Arc::clone(&graphs),
@@ -5060,6 +5062,7 @@ fn voice_stimulus_state_and_array_criteria_emit_room_cues() {
         velocity_changes: Vec::new(),
         scripted_motion: None,
         voice_variant_counter: 0,
+        pet_positions: BTreeMap::new(),
     };
     let mut component = Component::start(
         Arc::clone(&graphs),
@@ -5345,6 +5348,22 @@ fn prepared_all_32_heroes_compile_start_and_step_cleanly() {
         let encoder = player.encoder();
         match encoder.project(snapshot, View::Owner) {
             Ok(projected) => {
+                if matches!(hero.name.as_str(), "Hanzo" | "Baptiste" | "Zarya") {
+                    match projected
+                        .variables
+                        .values
+                        .get(&crate::script_init::OWNER_HEALTH)
+                    {
+                        Some(&Value::Float(hp)) if hp > 0.0 => {}
+                        other => {
+                            failures.push(format!(
+                                "{} owner-crosshair-health-253 missing or zero: {other:?}",
+                                hero.name
+                            ));
+                            continue;
+                        }
+                    }
+                }
                 if let Err(err) = encoder.full(&projected) {
                     failures.push(format!("{} owner-wire: {err}", hero.name));
                     continue;

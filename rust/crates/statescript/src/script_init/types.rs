@@ -60,6 +60,9 @@ pub enum StateKind {
     GenericModifyHealth {
         continuous: bool,
     },
+    Pet {
+        entity: Option<u32>,
+    },
     ShieldRecharge,
     NamedShieldDecay,
     ForCode,

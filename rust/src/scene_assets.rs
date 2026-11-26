@@ -533,15 +533,15 @@ impl SceneAssets {
             simulation.enable_spatial_queries(
                 map.free_for_all,
                 Arc::clone(&combat_rays),
-                self.graphs.room_spatial_needs(),
+                self.graphs
+                    .room_spatial_needs()
+                    .max(crate::script_graph::RoomSpatialNeeds::EntityTags),
             );
             simulation.set_breakables(Arc::clone(&breakables));
             if let Some(catalog) = &self.actor_voice {
                 simulation.enable_actor_voice(Arc::clone(catalog));
             }
-            if self.graphs.uses_spatial_actor_rays() {
-                simulation.enable_spatial_actor_rays(Arc::clone(&self.movers));
-            }
+            simulation.enable_spatial_actor_rays(Arc::clone(&self.movers));
         }
         if contacts.is_some() {
             simulation.enable_movement_contacts(map.free_for_all, Arc::clone(&self.movers));

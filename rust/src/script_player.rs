@@ -14,7 +14,9 @@ use serde_json::Value as Json;
 
 pub(crate) use self::lifecycle::PlayerBodyRuntime;
 use self::world::BodyWorld;
-pub(crate) use self::world::{DeadeyeScene, DeadeyeTarget, ViewSubject};
+pub(crate) use self::world::DeadeyeScene;
+#[cfg(test)]
+pub(crate) use self::world::{DeadeyeTarget, ViewSubject};
 #[cfg(test)]
 use crate::game_content::PRACTICE_RANGE_MODE;
 use crate::{
@@ -297,6 +299,7 @@ impl PlayerBodyFactory {
             velocity_changes: Vec::new(),
             scripted_motion: None,
             voice_variant_counter: 0,
+            pet_positions: Default::default(),
         };
         let mut component = Component::start_with_public_schema(
             Arc::clone(&self.graphs),

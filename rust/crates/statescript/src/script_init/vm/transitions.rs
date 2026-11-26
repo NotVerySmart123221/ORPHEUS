@@ -1762,6 +1762,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     self.publish_health_pool(key, node, current)?;
                 }
             }
+            StateKind::Pet {
+                entity: Some(pet_id),
+            } => {
+                self.end_pet(key, node, pet_id)?;
+            }
             StateKind::BooleanSwitch(branch) => {
                 self.exit_subgraph(id, node, branch_path(branch), depth + 1)?
             }
@@ -1830,6 +1835,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         }
         if matches!(kind, StateKind::HealthPool { .. }) {
             state.kind = StateKind::HealthPool { pool: None };
+        }
+        if matches!(kind, StateKind::Pet { .. }) {
+            state.kind = StateKind::Pet { entity: None };
         }
         if matches!(kind, StateKind::DisplayName { .. }) {
             state.kind = StateKind::DisplayName { binding: None };
@@ -2010,6 +2018,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                                 | StateKind::WeaponVolley { .. }
                                 | StateKind::ButtonBlock(Some(_))
                                 | StateKind::HealthPool { pool: Some(_) }
+                                | StateKind::Pet { entity: Some(_) }
                                 | StateKind::DisplayName { binding: Some(_) }
                                 | StateKind::TargetTag { effect: Some(_) }
                                 | StateKind::AiWeaponOverride { record: Some(_) }
@@ -2123,6 +2132,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     let site = self.site(id, node);
                     self.world.remove_health_pool(site, pool);
                     self.publish_health_totals(site)?;
+                } else if let StateKind::Pet {
+                    entity: Some(pet_id),
+                } = kind
+                {
+                    let node = self.graph(id).state(usize::from(raw)).expect("pet state");
+                    self.world.despawn_pet(self.site(id, node), pet_id);
                 } else if matches!(kind, StateKind::WeaponVolley { .. }) {
                     self.finish_volley(key, 0)?;
                 } else if kind == StateKind::ChaseVar {

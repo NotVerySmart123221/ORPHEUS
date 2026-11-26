@@ -2308,6 +2308,7 @@ pub(super) fn flight_fixture(owner: BodyId, speed: f64) -> AdmittedFlight {
         flight,
         stun: None,
         hit_effect: None,
+        impact_spawn: None,
     }
 }
 
@@ -3774,8 +3775,10 @@ fn spatial_frame_honors_weapon_terrain_category() {
                 health: true,
                 health_snapshot: None,
                 angles: [0, 0],
+                velocity: [0.0; 3],
                 eye_position: Some([0.0, 1.5, 4.0]),
                 filter_flags: Some(0),
+                script_state: Default::default(),
                 messages: false,
                 cue_listener: true,
                 voice: None,
@@ -4210,6 +4213,7 @@ fn live_room_interactive_props_authored_blast_breakables_and_pvp_objective() {
                 flight,
                 stun: None,
                 hit_effect: None,
+                impact_spawn: None,
             }],
             ShotContext {
                 team: 1,

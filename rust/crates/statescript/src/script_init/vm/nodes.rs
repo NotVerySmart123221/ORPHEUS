@@ -2248,8 +2248,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             "STUStatescriptStateTrackTargets"
                 if registration.permits(matches!(
                     (self.graph(id).index, node.pos),
-                    (0x0c89, 47 | 52) | (0x022f, 26 | 86) | (0x006b, 6 | 7 | 121)
-                )) =>
+                    (0x0c89, 47 | 52) | (0x022f, 26 | 86)
+                )) || (registration.permits(
+                    self.graph(id).index == 0x006b && matches!(node.pos, 6 | 7 | 121),
+                ) && !self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node))) =>
             {
                 StateKind::TrackedTargets
             }
@@ -2259,12 +2263,18 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::DeadeyeEffects
             }
             "STU_431F3FCC"
-                if registration.permits((self.graph(id).index, node.pos) == (0x006b, 62)) =>
+                if registration.permits((self.graph(id).index, node.pos) == (0x006b, 62))
+                    && !self
+                        .world
+                        .admits_generic_player_runtime(self.site(id, node)) =>
             {
                 StateKind::WitchStaffEffect
             }
             "STUStatescriptStateModifyHealth"
-                if registration.permits((self.graph(id).index, node.pos) == (0x0079, 0)) =>
+                if registration.permits((self.graph(id).index, node.pos) == (0x0079, 0))
+                    && !self
+                        .world
+                        .admits_generic_player_runtime(self.site(id, node)) =>
             {
                 StateKind::WitchStaffHealing
             }
@@ -2274,13 +2284,19 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             "STUStatescriptStateTrackRay"
                 if registration
                     .permits(self.graph(id).index == 0x157c && matches!(node.pos, 202 | 203))
-                    && node.server_only =>
+                    && node.server_only
+                    && !self
+                        .world
+                        .admits_generic_player_runtime(self.site(id, node)) =>
             {
                 StateKind::SummonerBeamRay
             }
             "STUStatescriptStateModifyHealth"
                 if registration.permits((self.graph(id).index, node.pos) == (0x157c, 170))
-                    && node.server_only =>
+                    && node.server_only
+                    && !self
+                        .world
+                        .admits_generic_player_runtime(self.site(id, node)) =>
             {
                 StateKind::SummonerBeamDamage
             }
@@ -2417,6 +2433,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     continuous: field(&node.fields, "m_7B2B3F5C").as_u64() == Some(1),
                 }
             }
+            "STUStatescriptStatePet"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node))
+                    && node.is_state() =>
+            {
+                StateKind::Pet { entity: None }
+            }
             "STUStatescriptStateBlinkEffect"
             | "STUStatescriptStateRayCast"
             | "STUStatescriptStatePet"
@@ -2549,6 +2573,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     self.apply_generic_modify_health(key, node, None)?;
                 }
             }
+            StateKind::Pet { .. } => self.begin_pet(key, node)?,
             StateKind::Shockwave { .. } => self.begin_shockwave(key, node)?,
             StateKind::PlacementSelector { .. } => self.begin_placement_selector(key, node)?,
             StateKind::SprayPlacement(_) => self.place_spray(key, node, depth)?,
@@ -2780,10 +2805,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     )?;
                 }
                 self.refresh_movement_modifier(key, node)?;
+                let has_forced_velocity = array_field(&node.fields, "m_BC5E91CF")
+                    .iter()
+                    .any(|config| config.get("$").and_then(Json::as_str) == Some("STU_09F9B1FE"));
                 if movement_scale.is_none()
-                    && self
-                        .evaluate(id, node, field(&node.fields, "m_485109CB"), Some(key))
-                        .is_some_and(|value| script_expr::truthy(&value))
+                    && (has_forced_velocity
+                        || self
+                            .evaluate(id, node, field(&node.fields, "m_485109CB"), Some(key))
+                            .is_some_and(|value| script_expr::truthy(&value)))
                 {
                     self.register_tick(key, self.machine.now_ms);
                 }

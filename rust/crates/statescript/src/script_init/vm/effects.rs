@@ -24,8 +24,8 @@ use super::super::{
     },
     types::{ChasePayload, InitFault, Issue, ReportedShot, ShotEvent, StateKind},
     world::{
-        AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, Site, TargetTagEffect,
-        World,
+        AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, PetSpawn, Site,
+        TargetTagEffect, VelocityAxis, VelocityOp, World,
     },
 };
 use super::Vm;
@@ -543,23 +543,64 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Value::Vector(pos) if pos.iter().all(|a| a.is_finite()) => Some(pos),
                 _ => None,
             });
-        let direction = self
-            .evaluate(key.instance, node, field(segment, "m_direction"), None)
-            .and_then(|v| match v {
-                Value::Vector(dir) if dir.iter().all(|a| a.is_finite()) => Some(dir),
-                _ => None,
-            });
-        let length = self
-            .evaluate(key.instance, node, field(segment, "m_6A79BD98"), None)
+        let (direction, length) = if segment.get("$").and_then(Json::as_str) == Some("STU_E5D454BA")
+        {
+            let end_pos =
+                match self.evaluate(key.instance, node, field(segment, "m_BD631144"), None) {
+                    Some(Value::Vector(pos)) if pos.iter().all(|a| a.is_finite()) => Some(pos),
+                    _ => {
+                        match self.evaluate(key.instance, node, field(segment, "m_entity"), None) {
+                            Some(Value::Entity(entity)) if script_expr::valid_entity(entity) => {
+                                self.world.position(entity)
+                            }
+                            _ => None,
+                        }
+                    }
+                };
+            match (origin.or_else(|| self.world.position(site.entity)), end_pos) {
+                (Some(start), Some(end)) => {
+                    let delta = [end[0] - start[0], end[1] - start[1], end[2] - start[2]];
+                    let dist = delta[0].hypot(delta[1]).hypot(delta[2]);
+                    if dist.is_finite() && dist > 1e-6 {
+                        (Some(delta.map(|a| a / dist)), Some(dist))
+                    } else {
+                        (None, None)
+                    }
+                }
+                _ => (None, None),
+            }
+        } else {
+            let direction = self
+                .evaluate(key.instance, node, field(segment, "m_direction"), None)
+                .and_then(|v| match v {
+                    Value::Vector(dir) if dir.iter().all(|a| a.is_finite()) => Some(dir),
+                    _ => None,
+                });
+            let length = self
+                .evaluate(key.instance, node, field(segment, "m_6A79BD98"), None)
+                .and_then(pool_number)
+                .filter(|len| len.is_finite() && *len > 0.0);
+            (direction, length)
+        };
+        let radius = self
+            .evaluate(key.instance, node, field(&node.fields, "m_57DAE1B5"), None)
             .and_then(pool_number)
-            .filter(|len| len.is_finite() && *len > 0.0);
+            .filter(|r| r.is_finite() && *r > 0.0)
+            .unwrap_or(0.0);
+        let filter = field(&node.fields, "m_filter");
         let generic = self
             .world
-            .generic_beam_contact(site, origin, direction, length);
-        let (entity, hit, point, normal) = if let Some(contact) = generic {
-            (contact.entity, contact.hit, contact.point, contact.normal)
+            .generic_beam_contact(site, origin, direction, length, radius, filter);
+        let (entity, hit, point, normal, distance) = if let Some(contact) = generic {
+            (
+                contact.entity,
+                contact.hit,
+                contact.point,
+                contact.normal,
+                contact.distance,
+            )
         } else if let Some(contact) = self.world.summoner_beam_contact(site) {
-            (contact.entity, contact.hit, None, None)
+            (contact.entity, contact.hit, None, None, None)
         } else {
             self.report(site, Issue::UnsupportedField("Summoner beam ray service"));
             return Ok(());
@@ -569,6 +610,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             ("m_692DFF72", entity.map_or(Value::Null, Value::Entity)),
             ("m_750377AA", Value::Bool(hit)),
             ("m_7BA44A69", Value::Bool(hit)),
+            ("m_0CBF2A15", Value::Bool(hit)),
         ] {
             if let Some(output) = script_expr::lvalue(field(outputs, name))
                 .map_err(|_| InitFault::InvalidRoot(key.instance))?
@@ -590,6 +632,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.write(source_key(key.instance, output), Value::Vector(normal))?;
             }
         }
+        if let Some(distance) = distance {
+            if let Some(output) = script_expr::lvalue(field(outputs, "m_98DC2D67"))
+                .map_err(|_| InitFault::InvalidRoot(key.instance))?
+            {
+                self.write(source_key(key.instance, output), Value::Float(distance))?;
+            }
+        }
         self.register_tick(key, self.machine.now_ms);
         Ok(())
     }
@@ -606,18 +655,28 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let id = key.instance;
         let site = self.site(id, node);
         let effect = field(&node.fields, "m_modifyHealth");
-        let Some(mut amount) = self
+        let mut amount = self
             .evaluate(id, node, field(effect, "m_amount"), None)
             .and_then(pool_number)
             .filter(|amount| amount.is_finite() && *amount > 0.0)
-        else {
-            return Ok(());
-        };
+            .unwrap_or(0.0);
         if let Some(ms) = elapsed_ms {
             amount = f64::from((amount * (ms as f64 / 1000.0)) as f32);
             if !amount.is_finite() || amount <= 0.0 {
                 return Ok(());
             }
+        }
+        let knockback = if elapsed_ms.is_none() {
+            crate::script_init::Knockback::from_authored(effect, &mut |cfg| {
+                self.evaluate(id, node, cfg, None).ok_or_else(|| {
+                    script_expr::EvalError::UnsupportedConfig("modify health knockback".into())
+                })
+            })
+        } else {
+            None
+        };
+        if amount <= 0.0 && knockback.is_none() {
+            return Ok(());
         }
         let target_field = field(&node.fields, "m_FA3ECC43");
         let target_value = if target_field.is_null() {
@@ -629,7 +688,42 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
         };
         let damage = field(effect, "m_93CDFD2F").as_u64() == Some(1);
-        let delta = if damage { -amount } else { amount };
+        let delta = if amount > 0.0 {
+            if damage { -amount } else { amount }
+        } else {
+            0.0
+        };
+        let kb_origin = if knockback.is_some() {
+            let origin_field = field(effect, "m_C0139FA6");
+            if origin_field.is_null() {
+                self.world.position(site.entity)
+            } else {
+                match self.evaluate(id, node, origin_field, None) {
+                    Some(Value::Vector(pos)) if pos.iter().all(|a| a.is_finite()) => Some(pos),
+                    Some(Value::Entity(entity)) if script_expr::valid_entity(entity) => {
+                        self.world.position(entity)
+                    }
+                    _ => self.world.position(site.entity),
+                }
+            }
+        } else {
+            None
+        };
+        let kb_mode = if knockback.is_some() {
+            self.evaluate(id, node, field(effect, "m_583C208B"), None)
+                .and_then(|v| match v {
+                    Value::Integer(n) => Some(n),
+                    Value::Float(f) => Some(f as i64),
+                    _ => None,
+                })
+        } else {
+            None
+        };
+        let caster_forward = if knockback.is_some() {
+            self.world.forward(site.entity)
+        } else {
+            None
+        };
         let targets = match target_value {
             Value::Array(items) => items,
             Value::Null => Vec::new(),
@@ -638,7 +732,23 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         for item in targets {
             if let Value::Entity(target) = item {
                 if script_expr::valid_entity(target) {
-                    let _ = self.world.queue_health_change(site, target, delta);
+                    let impulse = knockback.as_ref().and_then(|kb| {
+                        let target_pos = self.world.position(target)?;
+                        let origin = kb_origin.unwrap_or(target_pos);
+                        let dx = target_pos[0] - origin[0];
+                        let dy = target_pos[1] - origin[1];
+                        let dz = target_pos[2] - origin[2];
+                        let dist = dx.hypot(dy).hypot(dz);
+                        if kb_mode == Some(6) || dx.hypot(dz) < 1e-4 {
+                            let fwd = caster_forward.unwrap_or([dx, 0.0, dz]);
+                            kb.radial_delta([fwd[0], fwd[2]], dist, true, 1.0)
+                        } else {
+                            kb.delta(origin, target_pos, dist, true, 1.0)
+                        }
+                    });
+                    if delta != 0.0 || impulse.is_some() {
+                        let _ = self.world.queue_modify_health(site, target, delta, impulse);
+                    }
                 }
             }
         }
@@ -687,11 +797,29 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             return self.publish_tracked_targets(key, node, Vec::new());
         }
         let filter = field(&node.fields, "m_filter");
-        let Some(candidates) = self
-            .world
-            .tracked_targets(site, origin, offset, radius, filter)
-        else {
-            return self.publish_tracked_targets(key, node, Vec::new());
+        let angle_field = field(&node.fields, "m_A30B383E");
+        let candidates = if !angle_field.is_null() {
+            let angle = self
+                .evaluate(id, node, angle_field, None)
+                .and_then(pool_number)
+                .filter(|a| (0.0..=360.0).contains(a))
+                .unwrap_or(360.0);
+            let visible = field(&node.fields, "m_32AFE9AA").as_u64() == Some(1);
+            let Some(candidates) = self
+                .world
+                .cone_targets(site, origin, offset, radius, angle, visible, filter)
+            else {
+                return self.publish_tracked_targets(key, node, Vec::new());
+            };
+            candidates
+        } else {
+            let Some(candidates) = self
+                .world
+                .tracked_targets(site, origin, offset, radius, filter)
+            else {
+                return self.publish_tracked_targets(key, node, Vec::new());
+            };
+            candidates
         };
         let mut targets = Vec::with_capacity(candidates.len());
         let condition = field(filter, "m_condition");
@@ -905,30 +1033,27 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             self.report(site, Issue::UnsupportedField("tracked target radius"));
             return Ok(());
         };
-        if matches!((site.graph, site.node), (0x022f, Some(26 | 86))) {
+        let filter = field(&node.fields, "m_filter");
+        let angle_field = field(&node.fields, "m_A30B383E");
+        if !angle_field.is_null() {
             let Some(angle) = self
-                .creation_scalar(
-                    key.instance,
-                    node,
-                    field(&node.fields, "m_A30B383E"),
-                    Value::Null,
-                )?
+                .creation_scalar(key.instance, node, angle_field, Value::Null)?
                 .and_then(pool_number)
                 .filter(|angle| (0.0..=360.0).contains(angle))
             else {
-                self.report(site, Issue::UnsupportedField("Deadeye target angle"));
+                self.report(site, Issue::UnsupportedField("tracked target angle"));
                 return Ok(());
             };
-            let targets = (origin == site.entity && offset == [0.0; 3])
-                .then(|| self.world.deadeye_targets(site, radius, angle))
-                .flatten();
-            let Some(targets) = targets else {
-                self.report(site, Issue::UnsupportedField("Deadeye target service"));
+            let visible = field(&node.fields, "m_32AFE9AA").as_u64() == Some(1);
+            let Some(targets) = self
+                .world
+                .cone_targets(site, origin, offset, radius, angle, visible, filter)
+            else {
+                self.report(site, Issue::UnsupportedField("tracked target cone service"));
                 return Ok(());
             };
             return self.publish_tracked_targets(key, node, targets);
         }
-        let filter = field(&node.fields, "m_filter");
         let Some(candidates) = self
             .world
             .tracked_targets(site, origin, offset, radius, filter)
@@ -1002,9 +1127,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             Value::Array(values) if self.graphs.graph(TARGET_GRAPH).is_some() => values
                 .into_iter()
                 .filter_map(|value| match value {
-                    Value::Entity(entity) if self.world.deadeye_target_alive(site, entity) => {
-                        Some(entity)
-                    }
+                    Value::Entity(entity) if self.world.entity_alive(site, entity) => Some(entity),
                     _ => None,
                 })
                 .collect::<Vec<_>>(),
@@ -2589,6 +2712,76 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         Ok(())
     }
 
+    #[inline(never)]
+    pub(in crate::script_init) fn begin_pet(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        let id = key.instance;
+        let site = self.site(id, node);
+        let Some(Value::Asset(definition)) = self.evaluate(
+            id,
+            node,
+            field(&node.fields, "m_entityDefinition"),
+            Some(key),
+        ) else {
+            return Ok(());
+        };
+        if definition >> 48 != 0x0400 || definition & 0x0000_ffff_ffff_ffff == 0 {
+            return Ok(());
+        }
+        let attach = match self.evaluate(id, node, field(&node.fields, "m_AA26E7DD"), Some(key)) {
+            Some(Value::Entity(entity)) if script_expr::valid_entity(entity) => Some(entity),
+            _ => None,
+        };
+        let position = match self.evaluate(id, node, field(&node.fields, "m_position"), Some(key)) {
+            Some(Value::Vector(pos)) if pos.iter().all(|c| c.is_finite()) => Some(pos),
+            Some(Value::Entity(entity)) if script_expr::valid_entity(entity) => {
+                self.world.position(entity)
+            }
+            _ => None,
+        };
+        let Some(pet_id) = self.world.spawn_pet(
+            site,
+            PetSpawn {
+                definition,
+                attach,
+                position,
+            },
+        ) else {
+            return Ok(());
+        };
+        if let Some(state) = self.state_mut(key) {
+            state.kind = StateKind::Pet {
+                entity: Some(pet_id),
+            };
+        }
+        if let Ok(Some(target)) = script_expr::lvalue(field(&node.fields, "m_B3019338")) {
+            self.write(source_key(id, target), Value::Entity(pet_id))?;
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(in crate::script_init) fn end_pet(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+        entity: u32,
+    ) -> Result<(), InitFault> {
+        let id = key.instance;
+        let site = self.site(id, node);
+        self.world.despawn_pet(site, entity);
+        if let Ok(Some(target)) = script_expr::lvalue(field(&node.fields, "m_B3019338")) {
+            let var_key = source_key(id, target);
+            if same(&self.machine.value(var_key, None), &Value::Entity(entity)) {
+                self.write(var_key, Value::Null)?;
+            }
+        }
+        Ok(())
+    }
+
     // Publish on activation, dependency changes and explicit polling, rather
     // than rerolling random-valued rows whenever a mover reads its properties.
     pub(in crate::script_init) fn refresh_movement_modifier(
@@ -2624,11 +2817,133 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Some("STU_56DEE1BB") => (Operation::Set, 0.0),
                 Some("STU_C61711C8") => (Operation::Minimum, f64::from(f32::MAX)),
                 Some("STU_F197CFBF") => (Operation::Maximum, f64::from(f32::MIN_POSITIVE)),
-                Some("STU_ED2B22BD" | "STU_09F9B1FE")
+                Some("STU_09F9B1FE")
                     if self
                         .world
                         .admits_generic_player_runtime(self.site(id, node)) =>
                 {
+                    if let Some(value) =
+                        self.evaluate(id, node, field(config, "m_9B7A63EA"), Some(key))
+                    {
+                        let mode = config.get("m_CFEC5F76").and_then(Json::as_u64).unwrap_or(0);
+                        let op = match (mode, value) {
+                            (0, Value::Vector(v)) if v.iter().all(|c| c.is_finite()) => {
+                                Some(VelocityOp::SetVector(v))
+                            }
+                            (0, val @ (Value::Float(_) | Value::Integer(_))) => {
+                                let speed = script_expr::to_float(&val);
+                                speed.is_finite().then(|| {
+                                    if speed == 0.0 {
+                                        VelocityOp::SetVector([0.0; 3])
+                                    } else {
+                                        VelocityOp::SetSpeed {
+                                            axis: VelocityAxis::All,
+                                            value: speed,
+                                        }
+                                    }
+                                })
+                            }
+                            (1, Value::Vector([vx, _, vz])) if vx.is_finite() && vz.is_finite() => {
+                                Some(VelocityOp::SetHorizontalVector([vx, vz]))
+                            }
+                            (1, val @ (Value::Float(_) | Value::Integer(_))) => {
+                                let speed = script_expr::to_float(&val);
+                                speed.is_finite().then(|| {
+                                    if speed == 0.0 {
+                                        VelocityOp::SetHorizontalVector([0.0, 0.0])
+                                    } else {
+                                        VelocityOp::SetSpeed {
+                                            axis: VelocityAxis::Horizontal,
+                                            value: speed,
+                                        }
+                                    }
+                                })
+                            }
+                            (2, Value::Vector([_, vy, _])) if vy.is_finite() => {
+                                Some(VelocityOp::SetSpeed {
+                                    axis: VelocityAxis::Vertical,
+                                    value: vy,
+                                })
+                            }
+                            (2, val @ (Value::Float(_) | Value::Integer(_))) => {
+                                let speed = script_expr::to_float(&val);
+                                speed.is_finite().then_some(VelocityOp::SetSpeed {
+                                    axis: VelocityAxis::Vertical,
+                                    value: speed,
+                                })
+                            }
+                            _ => None,
+                        };
+                        if let Some(op) = op {
+                            self.world.apply_velocity_ops(
+                                self.site(id, node),
+                                self.machine.frame,
+                                &[op],
+                            );
+                        }
+                    }
+                    continue;
+                }
+                Some("STU_ED2B22BD")
+                    if self
+                        .world
+                        .admits_generic_player_runtime(self.site(id, node)) =>
+                {
+                    if let Some(component) = config.get("m_9B7A63EA").filter(|c| {
+                        c.get("$").and_then(Json::as_str) == Some("STUCharacterMoverComponent")
+                    }) {
+                        let priority = self
+                            .movement_number(key, node, field(config, "m_priority"), 0.0)
+                            .unwrap_or(0.0);
+                        let base_slot = 1000usize.saturating_add(slot.saturating_mul(8));
+                        let mut push = |sub: usize, index: u8, operation: Operation, value: f64| {
+                            if value.is_finite() {
+                                modifiers.insert(
+                                    ModifierKey {
+                                        instance: id,
+                                        state: key.raw,
+                                        slot: base_slot + sub,
+                                    },
+                                    Modifier {
+                                        index,
+                                        operation,
+                                        value: narrow(value),
+                                        priority,
+                                    },
+                                );
+                            }
+                        };
+                        if let Some(v) = component.get("m_19452F15").and_then(Json::as_f64) {
+                            if v.is_finite() && v > 0.0 && (v - 5.5).abs() > 1e-4 {
+                                push(0, SPEED_SLOT, Operation::Multiply, v / 5.5);
+                            }
+                        }
+                        if let Some(v) = component.get("m_DAA0618B").and_then(Json::as_f64) {
+                            if v.is_finite() && v >= 0.0 && (v - 35.0).abs() > 1e-4 {
+                                push(1, 1, Operation::Multiply, v / 35.0);
+                            }
+                        }
+                        if let Some(v) = component.get("m_E631BA84").and_then(Json::as_f64) {
+                            if v.is_finite() && v >= 0.0 && (v - 3.5).abs() > 1e-4 {
+                                push(2, 2, Operation::Multiply, v / 3.5);
+                            }
+                        }
+                        if let Some(v) = component.get("m_EC289987").and_then(Json::as_f64) {
+                            if v.is_finite() && v >= 0.0 && (v - 6.0).abs() > 1e-4 {
+                                push(3, 10, Operation::Set, v);
+                            }
+                        }
+                        if let Some(v) = component.get("m_C2C40969").and_then(Json::as_f64) {
+                            if v.is_finite() && (v - 1.75).abs() > 1e-4 {
+                                push(4, 11, Operation::Multiply, v / 1.75);
+                            }
+                        }
+                        if let Some(v) = component.get("m_1FF06061").and_then(Json::as_f64) {
+                            if v == 0.0 {
+                                push(5, 22, Operation::Set, 0.0);
+                            }
+                        }
+                    }
                     continue;
                 }
                 _ => {
@@ -2691,6 +3006,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         }
         let value = self.evaluate(key.instance, node, config, Some(key))?;
         Some(match value {
+            Value::Null => 0.0,
             Value::Bool(_) | Value::Integer(_) | Value::Float(_) => {
                 f64::from(script_expr::to_float(&value) as f32)
             }

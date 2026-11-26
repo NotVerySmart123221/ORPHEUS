@@ -256,7 +256,7 @@ pub use world::{
     AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, ContactTarget,
     ContactVolume, CreationKind, EmptyWorld, EntityCreation, GenericBeamContact, GroundWave,
     HealthTargetFacts, HitTags, HostEvent, HostHealthContext, LandingSelection, MovementSample,
-    NamedPoolLoss, PlayScript, Relocation, RoomBodyIdentity, RoomCue, RoomCueSpeaker,
+    NamedPoolLoss, PetSpawn, PlayScript, Relocation, RoomBodyIdentity, RoomCue, RoomCueSpeaker,
     RoomEntityStatus, RoomMessage, ScriptedMotion, Site, SweptDisplacement, TargetTagEffect,
     TargetTagEffects, TargetTagSnapshot, VelocityAxis, VelocityOp, ViewSightProfile,
     ViewTargetQuery, World, named_pool_records,

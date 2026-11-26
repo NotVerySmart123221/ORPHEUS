@@ -154,6 +154,44 @@ impl Peer {
     }
 
     pub(super) fn queue_shooter_notice(&mut self, body: BodyId, notice: CombatNotice) {
+        if let CombatNotice::Hit {
+            target,
+            dealt,
+            critical,
+            killed,
+            shot_frame,
+        } = notice
+        {
+            if let Some(PendingCombatNotice {
+                notice:
+                    CombatNotice::Hit {
+                        dealt: existing_dealt,
+                        critical: existing_critical,
+                        killed: existing_killed,
+                        ..
+                    },
+                ..
+            }) = self.combat_ui.notices.iter_mut().rev().find(|pending| {
+                matches!(
+                    (&pending.audience, &pending.notice),
+                    (
+                        CombatAudience::Shooter(existing_body),
+                        CombatNotice::Hit {
+                            target: existing_target,
+                            shot_frame: existing_frame,
+                            ..
+                        }
+                    ) if *existing_body == body
+                        && *existing_target == target
+                        && *existing_frame == shot_frame
+                )
+            }) {
+                *existing_dealt += dealt;
+                *existing_critical |= critical;
+                *existing_killed |= killed;
+                return;
+            }
+        }
         self.queue_notice(notice, CombatAudience::Shooter(body));
     }
 
@@ -270,11 +308,13 @@ impl Peer {
                 CombatAudience::Authored(cue) => Some(cue),
                 _ => None,
             };
+            let is_voice = matches!(notice, CombatNotice::Voice { .. });
             if authored.is_some_and(|cue| {
                 !self.world.identity_ready(cue.listener.entity)
-                    || self.authored_cue_ordinal.is_some_and(|ordinal| {
-                        self.egress.oldest_pending_reliable() <= u64::from(ordinal)
-                    })
+                    || (is_voice
+                        && self.authored_cue_ordinal.is_some_and(|ordinal| {
+                            self.egress.oldest_pending_reliable() <= u64::from(ordinal)
+                        }))
             }) {
                 self.combat_ui.notices.push_back(pending);
                 continue;
@@ -290,7 +330,7 @@ impl Peer {
             }
             let bytes = notice.encode(schemas)?;
             let ordinal = self.egress.queue_reliable(bytes)?;
-            if authored.is_some() {
+            if authored.is_some() && is_voice {
                 self.authored_cue_ordinal = Some(ordinal);
             }
             #[cfg(feature = "inspector")]

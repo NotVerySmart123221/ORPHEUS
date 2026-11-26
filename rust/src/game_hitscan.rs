@@ -26,6 +26,52 @@ const HISTORY: usize = 64;
 const HEAD_BELOW_EYE: f64 = 0.2;
 const ANGLE_STEP: f64 = std::f64::consts::TAU / 65536.0;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HitTargetPolicy {
+    pub healing: bool,
+    pub affects_allies: bool,
+    pub affects_enemies: bool,
+}
+
+impl Default for HitTargetPolicy {
+    fn default() -> Self {
+        Self {
+            healing: false,
+            affects_allies: false,
+            affects_enemies: true,
+        }
+    }
+}
+
+impl HitTargetPolicy {
+    pub fn from_authored(config: &Json) -> Self {
+        if !config.is_object() {
+            return Self::default();
+        }
+        let modify = &config["m_modifyHealth"];
+        let healing =
+            modify.is_object() && modify.get("m_93CDFD2F").and_then(Json::as_u64) == Some(0);
+        let ally_flag = config.get("m_09528B11").and_then(Json::as_u64) == Some(1);
+        let ally_heal_flag = config.get("m_50C84E9E").and_then(Json::as_u64) == Some(1);
+        let affects_allies = healing || (ally_flag && ally_heal_flag);
+        let affects_enemies =
+            !healing && config.get("m_3E7A533D").and_then(Json::as_u64).unwrap_or(1) != 0;
+        Self {
+            healing,
+            affects_allies,
+            affects_enemies,
+        }
+    }
+
+    pub fn union(self, other: Self) -> Self {
+        Self {
+            healing: self.healing && other.healing,
+            affects_allies: self.affects_allies || other.affects_allies,
+            affects_enemies: self.affects_enemies || other.affects_enemies,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HitDefinition {
     pub tags: DamageTags,

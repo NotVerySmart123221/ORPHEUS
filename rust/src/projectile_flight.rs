@@ -15,7 +15,7 @@ mod knockback_tests;
 use crate::{
     collision_index::IndexError,
     game_clock::TICK_PERIOD,
-    game_hitscan::{HitDefinition, HurtPose, Impact, ImpactGeometry, TargetPose},
+    game_hitscan::{HitDefinition, HitTargetPolicy, HurtPose, Impact, ImpactGeometry, TargetPose},
     game_projectiles::authored_number,
     script_expr::EvalError,
     script_graph::Node,
@@ -300,6 +300,10 @@ pub struct ProjectileFlight {
     gravity: f32,
     velocity: Vec3,
     terrain_rebounds: u32,
+    piercing: bool,
+    hit_actors: Vec<u32>,
+    piercing_impacts: Vec<Impact>,
+    target_policy: HitTargetPolicy,
 }
 
 #[derive(Debug, PartialEq)]
@@ -325,6 +329,24 @@ impl ProjectileFlight {
             .blast
             .as_ref()
             .is_some_and(Blast::affects_shooter)
+    }
+
+    pub(crate) fn target_policy(&self) -> HitTargetPolicy {
+        self.target_policy
+    }
+
+    pub(crate) fn with_target_policy(mut self, policy: HitTargetPolicy) -> Self {
+        self.target_policy = policy;
+        self
+    }
+
+    pub(crate) fn with_piercing(mut self, piercing: bool) -> Self {
+        self.piercing = piercing;
+        self
+    }
+
+    pub(crate) fn drain_piercing_impacts(&mut self) -> Vec<Impact> {
+        std::mem::take(&mut self.piercing_impacts)
     }
 
     pub(crate) fn blast_radius(&self) -> f64 {
@@ -372,6 +394,10 @@ impl ProjectileFlight {
             expiry_blast,
             gravity: 0.0,
             terrain_rebounds: 0,
+            piercing: false,
+            hit_actors: Vec::new(),
+            piercing_impacts: Vec::new(),
+            target_policy: HitTargetPolicy::default(),
         })
     }
 
@@ -485,15 +511,18 @@ impl ProjectileFlight {
             .map(|range| (range - self.distance_travelled).max(0.0));
         let reach = range_left.map_or(step, |range| step.min(range));
         let mut closest = None;
-        for &(entity, target) in targets {
-            if let Some(contact) =
-                target
-                    .into()
-                    .contact(self.position, self.direction, reach, self.ballistics.radius)
-            {
-                let distance = contact.hit.distance;
-                if closest.as_ref().is_none_or(|(best, _)| distance < *best) {
-                    closest = Some((distance, Some((entity, contact))));
+        if !self.piercing {
+            for &(entity, target) in targets {
+                if let Some(contact) = target.into().contact(
+                    self.position,
+                    self.direction,
+                    reach,
+                    self.ballistics.radius,
+                ) {
+                    let distance = contact.hit.distance;
+                    if closest.as_ref().is_none_or(|(best, _)| distance < *best) {
+                        closest = Some((distance, Some((entity, contact))));
+                    }
                 }
             }
         }
@@ -509,6 +538,42 @@ impl ProjectileFlight {
                     .as_ref()
                     .is_none_or(|(best, _)| hit.distance < *best)
         });
+        if self.piercing {
+            let actor_limit = wall_hit.map_or(reach, |hit| hit.distance);
+            if let Some(direct) = self.ballistics.direct.filter(|hit| hit.amount > 0.0) {
+                for &(entity, target) in targets {
+                    if self.hit_actors.contains(&entity) {
+                        continue;
+                    }
+                    if let Some(contact) = target.into().contact(
+                        self.position,
+                        self.direction,
+                        actor_limit,
+                        self.ballistics.radius,
+                    ) {
+                        let distance = contact.hit.distance;
+                        let point = along(self.position, self.direction, distance);
+                        let critical = contact.head && direct.critical > 1.0;
+                        self.hit_actors.push(entity);
+                        self.piercing_impacts.push(Impact {
+                            tags: direct.tags,
+                            entity,
+                            distance,
+                            damage: direct.damage_at(self.distance_travelled + distance, critical),
+                            critical,
+                            loadout: direct.loadout,
+                            impulse: None,
+                            geometry: Some(ImpactGeometry::Direct {
+                                origin: self.position,
+                                point: contact.point_on_body(point),
+                                direction: self.direction,
+                                normal: contact.hit.normal,
+                            }),
+                        });
+                    }
+                }
+            }
+        }
         if let Some(hit) = wall_hit {
             closest = Some((hit.distance, None));
         }
@@ -689,23 +754,21 @@ impl ProjectileFlight {
     }
 }
 
-/// A direct single shot uses the sampled command pose for the first two
-/// literal aim slots, as in the reference server's posed weapon path.
+/// A direct single shot uses the sampled command pose with any authored lift bias.
 pub(crate) fn posed_projectile_direction(
     node: &Node,
     direction: Vec3,
-    evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
+    mut evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
 ) -> Option<Vec3> {
     let launch = node.field("m_5EC1EB38").filter(|config| !config.is_null());
-    let direct = launch.is_some_and(|config| config["$"] == "STU_239B571E");
-    if launch.is_some() && !direct {
+    let kind = launch.and_then(|config| config["$"].as_str());
+    if launch.is_some() && !matches!(kind, Some("STU_239B571E" | "STU_613BDDB0" | "STU_1145C42E")) {
         return None;
     }
     if let Some(aim) = node.field("m_aimID").filter(|config| !config.is_null()) {
-        if !direct
-            || aim["$"] != "STUConfigVarInt"
-            || !matches!(aim["m_value"].as_i64(), Some(0 | 1))
-        {
+        // Retail 1.74 weapons use aim channels 0..=3 (0/1 primary/alt, 2 thrown abilities
+        // such as Biotic Grenade/Graviton/Barrier/Lamp, 3 secondary ability aim).
+        if !matches!(evaluate(aim).ok()?, Value::Integer(0..=3)) {
             return None;
         }
     }
@@ -767,6 +830,10 @@ pub(crate) fn authored_gravity(
         .ok_or(EvalError::MalformedConfig("projectile motion list"))?;
     let mut gravity = 0.0f32;
     for motion in motions {
+        if motion["$"] == "STU_7A5DFFF8" {
+            // Non-gravity speed/acceleration curve; gravity remains unaffected.
+            continue;
+        }
         if motion["$"] != "STU_E1A5B579" {
             return Err(EvalError::UnsupportedConfig(
                 "projectile motion class".into(),
@@ -1603,5 +1670,83 @@ mod tests {
         assert!(!end.expired);
         assert_eq!(end.impacts.len(), 1);
         assert_eq!((end.impacts[0].entity, end.impacts[0].damage), (1, 40.0));
+    }
+
+    #[test]
+    fn piercing_projectile_hits_multiple_aligned_targets_until_wall() {
+        let fields = serde_json::json!({
+            "m_projectileSpeed": 25.0,
+            "m_projectileLifetime": 2.0,
+            "m_6396149F": {
+                "m_57DAE1B5": 0.4,
+                "m_0A5ED456": 1,
+                "m_modifyHealth": {
+                    "m_amount": 100.0
+                }
+            }
+        });
+        let authored = ProjectileBallistics::from_fields(&fields, |config| {
+            Ok(config.as_f64().map_or(Value::Null, Value::Float))
+        })
+        .unwrap()
+        .unwrap();
+        let targets = [(1, target(0.0, 2.0)), (2, target(0.0, 4.0))];
+        let mut flight =
+            ProjectileFlight::new(authored, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], Some(100))
+                .unwrap()
+                .with_piercing(true);
+        let mut hit_entities = Vec::new();
+        let mut wall_hit = None;
+        for tick in 101..=130 {
+            let end = flight
+                .advance(tick, &targets, |origin, dir, reach| {
+                    let wall_z = 6.0;
+                    if dir[2] > 0.0 && origin[2] <= wall_z && origin[2] + dir[2] * reach >= wall_z {
+                        Ok(Some((wall_z - origin[2]) / dir[2]))
+                    } else {
+                        Ok(None)
+                    }
+                })
+                .unwrap();
+            for impact in flight.drain_piercing_impacts() {
+                hit_entities.push((impact.entity, impact.damage));
+            }
+            if let Some(end) = end {
+                wall_hit = Some(end);
+                break;
+            }
+        }
+        assert_eq!(hit_entities, vec![(1, 100.0), (2, 100.0)]);
+        let end = wall_hit.expect("piercing projectile terminates at wall");
+        assert!(!end.expired);
+        assert!(end.impact);
+        assert_eq!(end.contact, None);
+    }
+
+    #[test]
+    fn hit_target_policy_distinguishes_enemy_pure_heal_and_dual_team_volleys() {
+        use crate::game_hitscan::HitTargetPolicy;
+        // Standard enemy-only volley (default)
+        let enemy = HitTargetPolicy::from_authored(&serde_json::json!({}));
+        assert!(!enemy.healing && !enemy.affects_allies && enemy.affects_enemies);
+        // Pure healing volley (e.g. Baptiste RMB / Moira spray): m_93CDFD2F = 0
+        let pure_heal = HitTargetPolicy::from_authored(&serde_json::json!({
+            "m_modifyHealth": { "m_93CDFD2F": 0 }
+        }));
+        assert!(pure_heal.healing && pure_heal.affects_allies && !pure_heal.affects_enemies);
+        // Dual ally-heal + enemy-damage volley (e.g. Ana Rifle / Biotic Grenade)
+        let dual = HitTargetPolicy::from_authored(&serde_json::json!({
+            "m_09528B11": 1,
+            "m_50C84E9E": 1,
+            "m_3E7A533D": 1
+        }));
+        assert!(!dual.healing && dual.affects_allies && dual.affects_enemies);
+        // Ashe / Wrecking Ball m_09528B11=1 with m_50C84E9E=0 is NOT healing
+        let non_heal = HitTargetPolicy::from_authored(&serde_json::json!({
+            "m_09528B11": 1,
+            "m_50C84E9E": 0,
+            "m_3E7A533D": 1
+        }));
+        assert!(!non_heal.healing && !non_heal.affects_allies && non_heal.affects_enemies);
     }
 }

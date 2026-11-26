@@ -57,6 +57,7 @@ pub(crate) enum ObservedProjectileEvent {
         id: u64,
         ordinal: usize,
         frame: u32,
+        impact: bool,
     },
 }
 
@@ -105,7 +106,12 @@ impl RoomSimulation {
         }
     }
 
-    pub(super) fn complete_observed_projectile(&mut self, entity: Entity, frame: u32) {
+    pub(super) fn complete_observed_projectile(
+        &mut self,
+        entity: Entity,
+        frame: u32,
+        impact: bool,
+    ) {
         let Some(&ObservedFlight { batch, ordinal }) = self.world.get::<ObservedFlight>(entity)
         else {
             return;
@@ -116,6 +122,7 @@ impl RoomSimulation {
                 id: batch,
                 ordinal,
                 frame,
+                impact,
             });
     }
 

@@ -70,16 +70,29 @@ impl<'a> SnapshotEncoder<'a> {
         let mut entity_exclusions = frozen
             .cloned()
             .unwrap_or_else(|| BTreeSet::from([OWNER_HEALTH]));
+        let mut owner_syncs_health = false;
+        let mut server_only_health = false;
         let mut instances = BTreeMap::new();
         for (&id, instance) in &snapshot.instances {
             if instance.is_server_only() || only_instance.is_some_and(|only| id != only) {
                 continue;
             }
             let graph = self.graph(id, instance.graph)?;
-            let exclusions = graph.server_only_variables().collect();
+            let exclusions: BTreeSet<u32> = graph.server_only_variables().collect();
             let variables =
                 self.project_variables(snapshot, id, &instance.variables, &exclusions, view)?;
             if frozen.is_none() {
+                if exclusions.contains(&OWNER_HEALTH) {
+                    server_only_health = true;
+                }
+                if view == View::Owner
+                    && graph
+                        .sync_vars
+                        .iter()
+                        .any(|var| var.0 == Some(OWNER_HEALTH) && var.1 == 1)
+                {
+                    owner_syncs_health = true;
+                }
                 entity_exclusions.extend(exclusions);
             }
             let mut states = BTreeMap::new();
@@ -158,6 +171,9 @@ impl<'a> SnapshotEncoder<'a> {
                     },
                 },
             );
+        }
+        if frozen.is_none() && owner_syncs_health && !server_only_health {
+            entity_exclusions.remove(&OWNER_HEALTH);
         }
         let variables = if let Some(id) = only_instance {
             let graph = self.graph(id, snapshot.instances[&id].graph)?;
@@ -569,6 +585,7 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             | StateKind::ForCode
             | StateKind::ModifyHealth
             | StateKind::GenericModifyHealth { .. }
+            | StateKind::Pet { .. }
             | StateKind::Shockwave { .. }
             | StateKind::PlacementSelector { .. }
             | StateKind::MoveTo { .. }

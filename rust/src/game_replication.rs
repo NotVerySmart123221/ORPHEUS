@@ -181,6 +181,7 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
         None
     }
 
+    #[cfg(test)]
     fn has_deadeye(&self) -> bool {
         false
     }

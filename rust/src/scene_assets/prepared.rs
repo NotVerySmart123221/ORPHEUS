@@ -451,6 +451,7 @@ impl PreparedScene {
         self.simulation.debug_actors()
     }
 
+    #[cfg(test)]
     pub(crate) fn deadeye_scene(
         &self,
         team: u8,

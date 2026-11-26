@@ -412,8 +412,16 @@ fn prepared_world_delivery_emote_completes_and_wasd_cancels() {
     world.present(&scene, frame).unwrap();
     flush_all(&mut world);
 
+    let emote_start_pos = scene
+        .simulation()
+        .player_body(world.body.unwrap().id)
+        .unwrap()
+        .mover
+        .pose()
+        .position;
     let mut saw_023a = false;
     let mut exited_023a = false;
+    let mut max_emote_drift = 0.0_f64;
     for _ in 0..400 {
         frame += 1;
         scene.simulation_mut().prepare_spatial_frame(frame).unwrap();
@@ -421,6 +429,7 @@ fn prepared_world_delivery_emote_completes_and_wasd_cancels() {
             frame,
             &[Command {
                 frame,
+                forward: if saw_023a { 127 } else { 0 },
                 ..Command::default()
             }],
         );
@@ -441,6 +450,10 @@ fn prepared_world_delivery_emote_completes_and_wasd_cancels() {
         let has_023a = snap.instances.values().any(|i| i.graph == 0x023a);
         if has_023a {
             saw_023a = true;
+            let p = actor.mover.pose().position;
+            let drift =
+                ((p[0] - emote_start_pos[0]).powi(2) + (p[2] - emote_start_pos[2]).powi(2)).sqrt();
+            max_emote_drift = max_emote_drift.max(drift);
         } else if saw_023a {
             exited_023a = true;
             break;
@@ -448,6 +461,10 @@ fn prepared_world_delivery_emote_completes_and_wasd_cancels() {
     }
     assert!(saw_023a, "default emote must enter 0x023A");
     assert!(exited_023a, "default emote must exit 0x023A cleanly");
+    assert!(
+        max_emote_drift < 0.05,
+        "holding W during a non-looping emote must lock movement (drifted {max_emote_drift:.3}m)"
+    );
     let id = world.body.unwrap().id;
     let pos_before = scene
         .simulation()
@@ -488,14 +505,17 @@ fn prepared_world_delivery_emote_completes_and_wasd_cancels() {
     );
 
     // Now equip a looping Sit emote (alias 0x0C80000000000476) and verify WASD cancels it!
+    // Pick deterministically by lowest unlock GUID so HashMap order cannot pick an 8.4s intro.
     let sit_bt = items
         .emote_aliases
         .iter()
-        .find_map(|(&unlock, &alias)| {
+        .filter_map(|(&unlock, &alias)| {
             (alias == 0x0c80_0000_0000_0476)
-                .then(|| items.emote_blend_trees.get(&unlock).copied())
+                .then(|| items.emote_blend_trees.get(&unlock).map(|&bt| (unlock, bt)))
                 .flatten()
         })
+        .min_by_key(|&(unlock, _)| unlock)
+        .map(|(_, bt)| bt)
         .expect("sit emote blend tree in catalog");
     scene
         .simulation_mut()
@@ -608,10 +628,41 @@ fn prepared_world_delivery_emote_completes_and_wasd_cancels() {
             break;
         }
     }
-    assert!(
-        cancelled,
-        "pressing W must cancel looping sit emote cleanly"
-    );
+    if !cancelled {
+        let snap = scene
+            .simulation()
+            .player_body(id)
+            .unwrap()
+            .runtime
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .unwrap();
+        let detail: Vec<String> = snap
+            .instances
+            .iter()
+            .filter(|(_, i)| i.graph == 0x023a)
+            .map(|(inst_id, i)| {
+                let active: Vec<u16> = i
+                    .states
+                    .iter()
+                    .filter(|(_, s)| s.active)
+                    .map(|(&raw, _)| raw)
+                    .collect();
+                format!(
+                    "inst={inst_id} active={active:?} v488={:?} v1322={:?} v2101={:?} v681={:?}",
+                    i.variables.get(&488),
+                    i.variables.get(&1322),
+                    i.variables.get(&2101),
+                    i.variables.get(&681)
+                )
+            })
+            .collect();
+        panic!(
+            "pressing W must cancel looping sit emote cleanly: {}",
+            detail.join("; ")
+        );
+    }
 }
 
 #[test]

@@ -40,7 +40,7 @@ enum Phase {
 #[derive(Clone, Copy)]
 enum Flight {
     Active,
-    Finished(u32),
+    Finished { frame: u32, impact: bool },
     Retiring,
 }
 
@@ -93,7 +93,7 @@ impl ProjectileView {
         self.flights
             .iter()
             .try_fold(0, |last, flight| match *flight {
-                Flight::Finished(tick) => Some(last.max(tick)),
+                Flight::Finished { frame, .. } => Some(last.max(frame)),
                 _ => None,
             })
     }
@@ -105,10 +105,12 @@ impl ProjectileView {
         mut queue: impl FnMut(EntityUpdate, ProjectileDelivery),
     ) {
         for (&entity, flight) in self.entities.iter().zip(&mut self.flights) {
-            let due = match *flight {
-                Flight::Retiring => false,
-                Flight::Active => all,
-                Flight::Finished(frame) => all || frame <= through,
+            let (due, impact_frame) = match *flight {
+                Flight::Retiring => (false, None),
+                Flight::Active => (all, None),
+                Flight::Finished { frame, impact } => {
+                    (all || frame <= through, impact.then_some(frame))
+                }
             };
             if due {
                 *flight = Flight::Retiring;
@@ -117,6 +119,9 @@ impl ProjectileView {
                     EntityUpdate {
                         entity,
                         operation: Some(Operation::Destroy),
+                        ch2: impact_frame.and_then(|frame| {
+                            projectile_wire::release(frame.saturating_add(4096), 1).ok()
+                        }),
                         ..Default::default()
                     },
                     ProjectileDelivery::Destroy(entity),
@@ -220,13 +225,21 @@ impl ObservedProjectiles {
                     },
                 );
             }
-            ObservedProjectileEvent::Completed { id, ordinal, frame } => {
+            ObservedProjectileEvent::Completed {
+                id,
+                ordinal,
+                frame,
+                impact,
+            } => {
                 if let Some(flight @ Flight::Active) = self
                     .views
                     .get_mut(id)
                     .and_then(|view| view.flights.get_mut(*ordinal))
                 {
-                    *flight = Flight::Finished(*frame);
+                    *flight = Flight::Finished {
+                        frame: *frame,
+                        impact: *impact,
+                    };
                 }
             }
         }
@@ -680,11 +693,13 @@ mod tests {
                 id,
                 ordinal: 1,
                 frame: launch + input.early_contact_ticks,
+                impact: true,
             },
             ObservedProjectileEvent::Completed {
                 id,
                 ordinal: 0,
                 frame: finished,
+                impact: false,
             },
         ]);
         world.advance_observed_projectiles(finished).unwrap();
@@ -846,6 +861,7 @@ mod tests {
                 id: 7,
                 ordinal: 0,
                 frame: 102,
+                impact: true,
             },
         ]);
         world.advance_observed_projectiles(100).unwrap();

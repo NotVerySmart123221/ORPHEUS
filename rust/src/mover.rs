@@ -36,6 +36,7 @@ pub enum VelocityChange {
         delta: [f64; 3],
     },
     SetVelocity([f64; 3]),
+    SetHorizontalVelocity([f64; 2]),
     SetAxisSpeed {
         axis: VelocityAxis,
         value: f64,
@@ -94,6 +95,14 @@ impl VelocityChange {
                 if next.iter().all(|axis| axis.is_finite()) {
                     *velocity = next;
                     return next[1] > 0.0;
+                }
+            }
+            Self::SetHorizontalVelocity([vx, vz]) => {
+                let nx = f64::from(vx as f32);
+                let nz = f64::from(vz as f32);
+                if nx.is_finite() && nz.is_finite() {
+                    velocity[0] = nx;
+                    velocity[2] = nz;
                 }
             }
             Self::SetAxisSpeed { axis, value } => match axis {
@@ -197,6 +206,9 @@ impl VelocityChange {
     pub(crate) fn valid(self) -> bool {
         match self {
             Self::Delta(delta) | Self::Impulse(delta) | Self::SetVelocity(delta) => {
+                delta.iter().all(|value| (*value as f32).is_finite())
+            }
+            Self::SetHorizontalVelocity(delta) => {
                 delta.iter().all(|value| (*value as f32).is_finite())
             }
             Self::HorizontalCap(cap) | Self::CapAxisSpeed { max: cap, .. } => {
