@@ -225,11 +225,17 @@ impl HurtPose {
         });
         let mut contact = match (best_head, best_body) {
             (Some(head), Some(body)) => {
-                // When a ray/projectile intersects both the head sphere and a wider
-                // chest capsule whose upper dome protrudes slightly further forward,
-                // prioritize the headshot so projectiles and face shots are not stolen
-                // by the torso volume.
-                let front_margin = (body.capsule.radius - head.capsule.radius).max(0.0) + 0.15;
+                // Only allow a slightly recessed head capsule to win over a wider torso
+                // capsule when the ray enters at genuine head height above the neck plane,
+                // preventing chest shots from piercing into lower neck/head hemispheres.
+                let impact_y = origin[1] + direction[1] * head.hit.distance;
+                let head_low_y = head.capsule.ends[0][1].min(head.capsule.ends[1][1]);
+                let neck_plane = head_low_y - head.capsule.radius * 0.25;
+                let front_margin = if impact_y >= neck_plane {
+                    (body.capsule.radius - head.capsule.radius).max(0.0) + 0.12
+                } else {
+                    0.0
+                };
                 if head.hit.distance <= body.hit.distance + front_margin {
                     head
                 } else {
@@ -439,10 +445,36 @@ impl HurtVolumeCatalog {
             return Err(invalid("unsupported combat hurt volume catalog version"));
         }
         let mut by_body = BTreeMap::new();
-        for (key, raw) in data.bodies {
+        for (key, mut raw) in data.bodies {
             let body = parse_guid(&key)
                 .filter(|body| *body != 0)
                 .ok_or_else(|| invalid("invalid combat hurt volume body GUID"))?;
+            // Normalize Wrecking Ball (`0x200B`) bind-pose pilot head capsule from mech origin
+            // up to the cockpit mount so top-of-mech shots crit and belly shots do not.
+            if body == 0x0400_0000_0000_200b {
+                if let Some(head) = &mut raw.head {
+                    if head.upper < 0.8 {
+                        head.lower += 1.32;
+                        head.upper += 1.32;
+                        head.forward_offset += 0.22;
+                    }
+                }
+                for cap in &mut raw.capsules {
+                    if cap.critical && cap.a[1].max(cap.b[1]) < 0.8 {
+                        cap.a[1] += 1.32;
+                        cap.b[1] += 1.32;
+                        cap.a[2] += 0.22;
+                        cap.b[2] += 0.22;
+                    }
+                }
+            }
+            // Tighten Practice Range friendly bot (`0x143E`, `0x146E`) cylinder radius from
+            // 0.64 m to visual torso width (0.42 m) so enemy bolts impact cleanly on the chest.
+            if matches!(body, 0x0400_0000_0000_143e | 0x0400_0000_0000_146e)
+                && raw.body.radius > 0.45
+            {
+                raw.body.radius = 0.42;
+            }
             let standing = RawHurtProfile {
                 body: raw.body,
                 head: raw.head,
@@ -819,5 +851,79 @@ mod tests {
             .contact([0.0, 0.78, -3.0], [0.0, 0.0, 1.0], 10.0, 0.0)
             .unwrap();
         assert!(!ball_hit.head);
+    }
+
+    #[test]
+    fn chest_shot_below_neck_plane_stays_body_while_wrecking_ball_pilot_crit_elevates() {
+        let data = serde_json::json!({
+            "version": 1,
+            "bodies": {
+                "0x0400000000001403": {
+                    "body": {"lower": 0.45, "upper": 1.55, "radius": 0.56},
+                    "head": {"lower": 1.62, "upper": 1.82, "radius": 0.30},
+                    "capsules": [
+                        {"a": [0.0, 0.45, 0.0], "b": [0.0, 1.55, 0.0], "radius": 0.56},
+                        {"a": [0.0, 1.62, 0.0], "b": [0.0, 1.82, 0.0], "radius": 0.30, "critical": true}
+                    ]
+                },
+                "0x040000000000200B": {
+                    "body": {"lower": 0.85, "upper": 1.35, "radius": 0.92},
+                    "head": {"lower": 0.31, "upper": 0.39, "radius": 0.24},
+                    "capsules": [
+                        {"a": [0.0, 0.85, 0.0], "b": [0.0, 1.35, 0.0], "radius": 0.92},
+                        {"a": [0.0, 0.31, 0.02], "b": [0.0, 0.39, 0.02], "radius": 0.24, "critical": true}
+                    ]
+                }
+            }
+        });
+        let catalog = HurtVolumeCatalog::from_json(&data.to_string()).unwrap();
+        let bot_pose = catalog.pose(
+            0x0400_0000_0000_1403,
+            TargetPose {
+                feet: [0.0, 0.0, 0.0],
+                height: 2.0,
+                radius: 0.56,
+                eye: 1.7,
+            },
+            false,
+        );
+        // Chest shot at Y=1.25m must register as body hit, never stolen by head front-margin.
+        let chest = bot_pose
+            .contact([0.0, 1.25, -4.0], [0.0, 0.0, 1.0], 10.0, 0.0)
+            .unwrap();
+        assert!(!chest.head);
+        // True head shot at Y=1.72m registers as critical hit.
+        let head = bot_pose
+            .contact([0.0, 1.72, -4.0], [0.0, 0.0, 1.0], 10.0, 0.0)
+            .unwrap();
+        assert!(head.head);
+
+        // Wrecking Ball (`0x200B`) pilot crit volume is lifted out of the lower hull into the cockpit.
+        let hammond = catalog
+            .pose(
+                0x0400_0000_0000_200B,
+                TargetPose {
+                    feet: [0.0, 0.0, 0.0],
+                    height: 2.1,
+                    radius: 0.92,
+                    eye: 1.65,
+                },
+                false,
+            )
+            .with_stance(SkeletalStance {
+                yaw: 0,
+                speed: 0.0,
+                crouched: false,
+                head_protected: false,
+                posture: HurtPosture::Standard,
+            });
+        let lower_hull = hammond
+            .contact([0.0, 0.95, 4.0], [0.0, 0.0, -1.0], 10.0, 0.0)
+            .unwrap();
+        assert!(!lower_hull.head);
+        let cockpit = hammond
+            .contact([0.0, 1.68, 4.0], [0.0, 0.0, -1.0], 10.0, 0.0)
+            .unwrap();
+        assert!(cockpit.head);
     }
 }

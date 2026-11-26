@@ -736,13 +736,14 @@ impl Mover {
             }
             let step_speed = speed.min(dist / dt.max(1e-4));
             let scale = step_speed / dist;
-            let hop_y =
-                if dist > 2.2 && delta[1].abs() < 0.75 && self.posture.ground() == Ground::Standing
-                {
-                    4.8
-                } else {
-                    delta[1] * scale
-                };
+            let hop_y = if dist > 2.2
+                && (-0.25..0.75).contains(&delta[1])
+                && self.posture.ground() == Ground::Standing
+            {
+                4.8
+            } else {
+                delta[1] * scale
+            };
             Some([delta[0] * scale, hop_y, delta[2] * scale])
         });
         if let Some(mv) = move_to_velocity {

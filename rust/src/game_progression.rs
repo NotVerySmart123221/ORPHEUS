@@ -217,6 +217,7 @@ impl MatchScoreboard {
             if critical {
                 board.critical_hits = board.critical_hits.saturating_add(1);
             }
+            board.on_fire.add_score((amount * 0.5) as f32, now_secs);
             board.dirty = true;
         }
         *self
@@ -538,6 +539,7 @@ mod tests {
         board.register_player(1, 0, 0x10, "Alice".into(), 0.0);
         board.register_player(2, 0, 0x20, "Bob".into(), 0.0);
         board.record_damage(1, 99, 150.0, true, 1.0);
+        assert!(board.player(1).unwrap().on_fire.score >= 75.0);
         board.record_damage(2, 99, 50.0, false, 1.2);
         let awards = board.record_elimination(1, 99, true, 1.5);
         assert_eq!(awards.len(), 2);

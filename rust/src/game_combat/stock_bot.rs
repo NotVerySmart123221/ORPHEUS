@@ -683,13 +683,40 @@ impl StockBotScript {
         }
         let result = self.publish_health(remaining_health).and_then(|()| {
             if dealt > 0.0 && !self.world.dead {
-                // Retail damage-taken message (`0x0240000000000011`, params 0x13=amount, 0x3D=tags):
-                // triggers `0x08B6:6` hurt-flinch `ChaseVar_12` animation on both friendly and enemy bots.
+                // Retail damage-taken message (`0x0240000000000011`, params 0x13=amount,
+                // 0x3D=hurt-flinch tags, 0x65=hit direction vector): drives `0x0E8C:14`
+                // 3rd-person hurt-flinch (`Anim 0x0174`) and `0x08B6:6` wobble without
+                // faulting `0x0E8C:49` (`0x03FA` vector sync var).
                 const DAMAGE_TAKEN_MESSAGE: u64 = 0x0240_0000_0000_0011;
+                const TAG_HURT_FLINCH_ANIM: u64 = 0x0d80_0000_0000_078d;
+                const TAG_HURT_FLINCH_WEIGHT: u64 = 0x0d80_0000_0000_09a5;
+                let default_dir = [-self.world.forward[0], 0.0, -self.world.forward[2]];
+                let hit_dir = self
+                    .world
+                    .spatial_frame
+                    .as_deref()
+                    .and_then(|frame| frame.actor_eye_position(source.killer))
+                    .map(|origin| {
+                        let dx = self.world.position[0] - origin[0];
+                        let dz = self.world.position[2] - origin[2];
+                        let len = (dx * dx + dz * dz).sqrt();
+                        if len > 1e-4 {
+                            [dx / len, 0.0, dz / len]
+                        } else {
+                            default_dir
+                        }
+                    })
+                    .unwrap_or(default_dir);
                 let params = Variables::from([
                     (0x13, Value::Float(f64::from(dealt as f32))),
-                    (0x3d, Value::Array(Vec::new())),
-                    (0x65, Value::Bool(false)),
+                    (
+                        0x3d,
+                        Value::Array(vec![
+                            Value::Asset(TAG_HURT_FLINCH_ANIM),
+                            Value::Asset(TAG_HURT_FLINCH_WEIGHT),
+                        ]),
+                    ),
+                    (0x65, Value::Vector(hit_dir)),
                 ]);
                 if self.component.queue_entity_message_from(
                     source.killer,

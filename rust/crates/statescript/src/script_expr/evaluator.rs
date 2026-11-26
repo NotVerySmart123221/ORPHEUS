@@ -769,15 +769,18 @@ impl Evaluator {
                     Value::Asset(0)
                 }
             }
-            // Entity collision/capsule radius query (`STU_F7FD94F9(m_A83C2C26)`).
-            // Used in Reinhardt Charge/Pin (`pos + fwd * (r_self + r_target)`) and melee reach math.
+            // Entity collision/capsule radius query (`STU_F7FD94F9(m_A83C2C26 | m_entity)`).
+            // Used in Reinhardt Charge/Pin, Doomfist Rocket Punch (`0x0D06:17,156,157`), and melee reach math.
             "STU_F7FD94F9" => {
-                let entity = self.scalar_config(
-                    child(config, "m_A83C2C26"),
-                    context,
-                    nested,
-                    Value::Entity(0),
-                )?;
+                let target_cfg = {
+                    let primary = child(config, "m_A83C2C26");
+                    if !primary.is_null() {
+                        primary
+                    } else {
+                        child(config, "m_entity")
+                    }
+                };
+                let entity = self.scalar_config(target_cfg, context, nested, Value::Entity(0))?;
                 let valid =
                     matches!(first_scalar(&entity), Some(Value::Entity(e)) if valid_entity(*e));
                 Value::Float(if valid { 0.55 } else { 0.0 })
@@ -1757,6 +1760,20 @@ impl Evaluator {
                             .ok_or_else(unsupported)?,
                     ),
                     Value::Entity(_) | Value::Null => Value::Bool(false),
+                    Value::Array(items) => {
+                        let mut any_match = false;
+                        for item in items {
+                            if let Value::Entity(entity) = item {
+                                if valid_entity(entity)
+                                    && context.has_target_tag(entity, tag).unwrap_or(false)
+                                {
+                                    any_match = true;
+                                    break;
+                                }
+                            }
+                        }
+                        Value::Bool(any_match)
+                    }
                     _ => return Err(unsupported()),
                 }
             }

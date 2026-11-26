@@ -2521,6 +2521,50 @@ fn native_pitched_direction_reads_known_entity_pose_without_a_placement_gate() {
 }
 
 #[test]
+fn target_tag_array_and_capsule_radius_m_entity_fallback_evaluate_cleanly() {
+    struct DoomfistHost;
+    impl Context for DoomfistHost {
+        fn owner(&mut self) -> Value {
+            Value::Entity(0xa000_0001)
+        }
+        fn variable(&mut self, variable: Variable) -> Value {
+            match variable.id {
+                10 => Value::Array(vec![Value::Entity(0xa000_0002), Value::Entity(0xa000_0003)]),
+                11 => Value::Array(Vec::new()),
+                _ => Value::Null,
+            }
+        }
+        fn has_target_tag(&mut self, entity: u32, tag: u64) -> Option<bool> {
+            Some(entity == 0xa000_0003 && tag == 0x0d60_0000_0000_003a)
+        }
+    }
+
+    let mut host = DoomfistHost;
+    let radius_cfg = json!({
+        "$": "STU_F7FD94F9",
+        "m_A83C2C26": null,
+        "m_entity": { "$": "STU_B5A0CAF0", "m_EE729DCB": 0 }
+    });
+    assert_eq!(evaluate(&radius_cfg, &mut host), Ok(Value::Float(0.55)));
+
+    let tag_hit = json!({
+        "$": "STU_25ECB55F",
+        "m_entity": { "$": "STUConfigVarDynamic", "m_60DB8F99": 0, "m_identifier": 10 },
+        "m_88B0050A": "0x0D6000000000003A",
+        "m_EE729DCB": 0
+    });
+    assert_eq!(evaluate(&tag_hit, &mut host), Ok(Value::Bool(true)));
+
+    let tag_empty = json!({
+        "$": "STU_25ECB55F",
+        "m_entity": { "$": "STUConfigVarDynamic", "m_60DB8F99": 0, "m_identifier": 11 },
+        "m_88B0050A": "0x0D6000000000003A",
+        "m_EE729DCB": 0
+    });
+    assert_eq!(evaluate(&tag_empty, &mut host), Ok(Value::Bool(false)));
+}
+
+#[test]
 fn native_eye_position_resolves_the_selected_body_and_requires_a_finite_anchor() {
     struct Host {
         owner: u32,

@@ -826,6 +826,25 @@ impl World for BodyWorld {
         delta: f64,
         impulse: Option<[f64; 3]>,
     ) -> bool {
+        self.queue_modify_health_with_meta(
+            site,
+            target,
+            delta,
+            impulse,
+            None,
+            crate::script_init::HitTags::EMPTY,
+        )
+    }
+
+    fn queue_modify_health_with_meta(
+        &mut self,
+        site: Site,
+        target: u32,
+        delta: f64,
+        impulse: Option<[f64; 3]>,
+        loadout: Option<u64>,
+        tags: crate::script_init::HitTags,
+    ) -> bool {
         if !self.is_player_site(site) || !delta.is_finite() {
             return false;
         }
@@ -833,10 +852,12 @@ impl World for BodyWorld {
             let damage = (-delta).max(0.0);
             let frame_num = self.movement.frame.unwrap_or(0);
             if let Some(frame) = self.spatial_frame.as_deref() {
-                return self.script_requests.queue_contact_damage(
+                return self.script_requests.queue_contact_damage_with_meta(
                     frame,
                     frame_num,
                     damage,
+                    loadout,
+                    tags,
                     &[(target, impulse)],
                 );
             }
@@ -1508,11 +1529,6 @@ impl World for BodyWorld {
             if self.spawned_possessables.contains_key(&entity)
                 || self.pet_positions.contains_key(&entity)
                 || entity >= 0xc008_0000
-                || (self.room_entities().is_none()
-                    && self
-                        .spatial_frame
-                        .as_deref()
-                        .is_some_and(|frame| frame.actor_pose(entity).is_some()))
             {
                 return Some(false);
             }
@@ -2202,6 +2218,71 @@ impl World for BodyWorld {
             return false;
         }
         if target != self.entity && valid_entity(target) {
+            // Doomfist Rocket Punch victim script (`0x0D07`, invoked by `0x0D06:16`):
+            // settles initial punch impact (50..100), knockback along `0x6F`, brief stun,
+            // and wall-slam bonus damage (50..150) when a wall sits behind the target.
+            if request.graph == 0x0d07 {
+                let charge_frac = request
+                    .parameters
+                    .iter()
+                    .find(|&&(k, _)| (k & 0xffff_ffff) == 0x2b)
+                    .map(|(_, v)| crate::script_expr::to_float(v))
+                    .filter(|v| v.is_finite())
+                    .unwrap_or(0.0)
+                    .clamp(0.0, 1.0);
+                let raw_dir = match request
+                    .parameters
+                    .iter()
+                    .find(|&&(k, _)| (k & 0xffff_ffff) == 0x6f)
+                    .map(|(_, v)| v)
+                {
+                    Some(&Value::Vector(v))
+                        if v.iter().all(|c| c.is_finite()) && v[0].hypot(v[2]) > 1e-4 =>
+                    {
+                        v
+                    }
+                    _ => self.forward(self.entity).unwrap_or([0.0, 0.0, 1.0]),
+                };
+                let hlen = raw_dir[0].hypot(raw_dir[2]).max(1e-4);
+                let dir = [raw_dir[0] / hlen, 0.0, raw_dir[2] / hlen];
+                let frame_num = self.movement.frame.unwrap_or(0);
+                let mut total_damage = 50.0 + 50.0 * charge_frac;
+                let mut stun_ticks = 12u32;
+                if let Some(tpos) = self.position(target) {
+                    let wall_range = 4.0 + 6.5 * charge_frac;
+                    let wall_hit = self
+                        .spatial_ray_cast(
+                            site,
+                            frame_num,
+                            [tpos[0], tpos[1] + 0.9, tpos[2]],
+                            dir,
+                            wall_range,
+                        )
+                        .flatten()
+                        .is_some_and(|hit| hit.normal[1].abs() < 0.55);
+                    if wall_hit {
+                        total_damage += 50.0 + 100.0 * charge_frac;
+                        stun_ticks = 28;
+                    }
+                }
+                let push_speed = 14.0 + 12.0 * charge_frac;
+                let impulse = Some([dir[0] * push_speed, 2.5, dir[2] * push_speed]);
+                let mut tags = crate::script_init::HitTags::EMPTY;
+                let _ = tags.push(0x0d80_0000_0000_245a);
+                let _ = tags.push(0x0d80_0000_0000_4d2b);
+                if let Some(frame) = self.spatial_frame.as_deref() {
+                    let _ = self.script_requests.queue_stun(frame, target, stun_ticks);
+                    let _ = self.script_requests.queue_contact_damage_with_meta(
+                        frame,
+                        frame_num,
+                        total_damage,
+                        Some(0x0b90_0000_0000_0107),
+                        tags,
+                        &[(target, impulse)],
+                    );
+                }
+                return true;
+            }
             if let Some(ticks) =
                 crate::game_combat::extract_play_script_stun_ticks(&self.graphs, &request)
             {

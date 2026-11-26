@@ -1684,7 +1684,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let site = self.site(key.instance, node);
         let entry = registered_state(self.graph(key.instance), node).unwrap_or(
             super::super::machine::RegisteredState {
-                class: RegisteredClass::EntityControl,
+                class: if node.class == "STU_9935FBC8" {
+                    RegisteredClass::CinematicAim
+                } else {
+                    RegisteredClass::EntityControl
+                },
                 server_only: node.server_only,
                 suppresses_model: false,
             },
@@ -1694,6 +1698,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             return Ok(());
         }
         if entry.class == RegisteredClass::CinematicAim {
+            let is_cone_clamp = ["m_C33684DE", "m_8FA7FF85", "m_D6119DFB", "m_83221709"]
+                .iter()
+                .any(|name| {
+                    let cfg = field(&node.fields, name);
+                    !cfg.is_null() && field(cfg, "m_value").as_i64() != Some(0)
+                });
             let accepted = if captured_aim_lock_shape(node) {
                 let mut degrees = [0.0; 2];
                 for (out, name) in degrees.iter_mut().zip(["m_A53161C8", "m_AB37A892"]) {
@@ -1715,6 +1725,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     };
                 }
                 self.world.set_captured_aim_lock(site, Some(degrees))
+            } else if is_cone_clamp && self.world.admits_generic_player_runtime(site) {
+                // Cone-limited aim (`0x0D06:81` Rocket Punch ±60° yaw / ±30° pitch) must
+                // link in `CinematicAim` without hard-locking server `mover.cinematic_aim`.
+                true
             } else {
                 self.world.set_cinematic_aim_lock(site, true)
             };
@@ -1737,9 +1751,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         };
         if entry.class == RegisteredClass::CinematicAim {
             let site = self.site(key.instance, node);
+            let is_cone_clamp = ["m_C33684DE", "m_8FA7FF85", "m_D6119DFB", "m_83221709"]
+                .iter()
+                .any(|name| {
+                    let cfg = field(&node.fields, name);
+                    !cfg.is_null() && field(cfg, "m_value").as_i64() != Some(0)
+                });
             if captured_aim_lock_shape(node) {
                 self.world.set_captured_aim_lock(site, None);
-            } else {
+            } else if !(is_cone_clamp && self.world.admits_generic_player_runtime(site)) {
                 self.world.set_cinematic_aim_lock(site, false);
             }
         }

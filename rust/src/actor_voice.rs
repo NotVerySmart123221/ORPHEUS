@@ -13,7 +13,7 @@ use serde::{Deserialize, Deserializer, de::Error};
 const MAX_CATALOG_BYTES: u64 = 16 * 1024 * 1024;
 const DEFAULT_VOICE_DURATION_SECS: f64 = 1.8;
 
-pub(crate) const STIMULUS_HERO_SPAWN: u64 = 0x0ee0_0000_0000_000d;
+pub(crate) const STIMULUS_HERO_SPAWN: u64 = 0x0ee0_0000_0000_0020;
 pub(crate) const STIMULUS_HELLO: u64 = 0x0ee0_0000_0000_0007;
 pub(crate) const STIMULUS_THANKS: u64 = 0x0ee0_0000_0000_0008;
 

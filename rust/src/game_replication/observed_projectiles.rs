@@ -118,12 +118,12 @@ impl ProjectileView {
                     impact,
                     point,
                 } => {
-                    let horizon = if impact && point.is_some() {
-                        through.max(real_through)
-                    } else {
-                        through
-                    };
-                    (all || frame <= horizon, impact.then_some((frame, point)))
+                    let boundary_pad =
+                        u32::from(point.is_none() && real_through % super::SEND_EVERY == 0);
+                    (
+                        all || frame <= through.saturating_add(boundary_pad),
+                        impact.then_some((frame, point)),
+                    )
                 }
             };
             if due {
@@ -413,18 +413,11 @@ impl WorldDelivery {
                     // that impacts before the next flush stops instead of
                     // visually passing through an ally target.
                     if tick > sent_at {
-                        let lookahead = if tick % crate::game_clock::SEND_EVERY == 0 {
-                            crate::game_clock::SEND_EVERY - 1
-                        } else {
-                            0
-                        };
                         let through = view
                             .shot
                             .launched
-                            .saturating_add(tick.saturating_sub(sent_at))
-                            .saturating_add(lookahead);
-                        let real_through = tick.saturating_add(lookahead);
-                        view.retire(through, real_through, false, &mut queue);
+                            .saturating_add(tick.saturating_sub(sent_at));
+                        view.retire(through, tick, false, &mut queue);
                     }
                     false
                 }

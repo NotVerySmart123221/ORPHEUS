@@ -219,6 +219,8 @@ enum ScriptEffect {
     Contact {
         source_frame: u32,
         damage: f64,
+        loadout: Option<u64>,
+        tags: crate::script_init::HitTags,
         impulse: Option<Vec3>,
     },
     Message(RoomMessage),
@@ -304,6 +306,25 @@ impl RoomScriptRequests {
         damage: f64,
         changes: &[(u32, Option<Vec3>)],
     ) -> bool {
+        self.queue_contact_damage_with_meta(
+            frame,
+            source_frame,
+            damage,
+            None,
+            crate::script_init::HitTags::EMPTY,
+            changes,
+        )
+    }
+
+    pub(crate) fn queue_contact_damage_with_meta(
+        &mut self,
+        frame: &RoomSpatialFrame,
+        source_frame: u32,
+        damage: f64,
+        loadout: Option<u64>,
+        tags: crate::script_init::HitTags,
+        changes: &[(u32, Option<Vec3>)],
+    ) -> bool {
         if !damage.is_finite() || damage < 0.0 {
             return false;
         }
@@ -322,6 +343,8 @@ impl RoomScriptRequests {
                     ScriptEffect::Contact {
                         source_frame,
                         damage,
+                        loadout,
+                        tags,
                         impulse,
                     },
                 ))
@@ -590,6 +613,8 @@ impl RoomSimulation {
             ScriptEffect::Contact {
                 source_frame,
                 damage,
+                loadout,
+                tags,
                 impulse,
             } => {
                 let same_team_other = source.wire != request.wire && {
@@ -615,12 +640,12 @@ impl RoomSimulation {
                         .sample_health_body(request.wire)
                         .and_then(|body| body.health_target_facts(&self.world));
                     let contact_impact = crate::game_hitscan::Impact {
-                        tags: crate::game_hitscan::DamageTags::EMPTY,
+                        tags,
                         entity: request.wire,
                         distance: 0.0,
                         damage,
                         critical: false,
-                        loadout: None,
+                        loadout,
                         impulse,
                         geometry: None,
                     };
@@ -633,13 +658,29 @@ impl RoomSimulation {
                     )?;
                     if let Some(outcome) = settled.filter(|outcome| outcome.delta < 0.0) {
                         let dealt = -outcome.delta;
+                        // Ensure monotonic non-zero `shot_frame` so client `0x6c3043`
+                        // always processes `CombatNotice::Hit` and reveals overhead healthbars.
+                        let hit_frame = source_frame.max(tick).max(1);
                         self.record_contact_feedback(
                             source,
                             request.wire,
-                            source_frame,
+                            hit_frame,
                             dealt,
                             outcome.killed,
+                            loadout,
                         );
+                        if let Some(attacker_owner) = self
+                            .player_handle_for_wire(source.wire)
+                            .and_then(|id| self.player_body(id).map(|p| p.owner))
+                        {
+                            self.scoreboard.record_damage(
+                                attacker_owner,
+                                request.wire,
+                                dealt,
+                                false,
+                                now.as_secs_f64(),
+                            );
+                        }
                         if source.wire != request.wire {
                             if let Some(mut facts) = target_facts {
                                 if let Some(body) = self.sample_health_body(request.wire) {
@@ -816,6 +857,7 @@ impl RoomSimulation {
         shot_frame: u32,
         dealt: f64,
         killed: bool,
+        loadout: Option<u64>,
     ) {
         let Some(shooter) = self.world.get::<PlayerBodyState>(source.entity) else {
             return;
@@ -832,7 +874,7 @@ impl RoomSimulation {
             killed.then_some(CombatNotice::Elimination {
                 killer: source.wire,
                 victim: target,
-                loadout: 0,
+                loadout: loadout.unwrap_or(0),
                 fire: 100,
                 critical: false,
             }),

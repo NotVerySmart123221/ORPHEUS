@@ -359,6 +359,17 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
 
     fn set_on_fire(&mut self, active: bool) {
         self.world.controller_on_fire = active;
+        // Enable Practice Range On-Fire HUD bar (`0x0D80000000006868` in `0x01CF:74` & `0x20E4:12`).
+        if self.world.mode == crate::game_content::PRACTICE_RANGE_MODE
+            && self
+                .component
+                .snapshot()
+                .is_some_and(|s| s.variables.get(&34841) != Some(&Value::Bool(true)))
+        {
+            let _ = self
+                .component
+                .set_entity_variable(34841, Value::Bool(true), &mut self.world);
+        }
     }
 
     fn vitals(&self) -> Option<&Vitals> {
@@ -440,6 +451,45 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
             if let Err(error) = self.sync_charge_admission(false) {
                 eprintln!("Owner death charge cleanup failed: {error}");
             }
+        } else if result.dealt > 0.0
+            && self.world.spatial_frame.is_some()
+            && crate::script_expr::valid_entity(source.killer)
+        {
+            const DAMAGE_TAKEN_MESSAGE: u64 = 0x0240_0000_0000_0011;
+            const TAG_HURT_FLINCH_ANIM: u64 = 0x0d80_0000_0000_078d;
+            const TAG_HURT_FLINCH_WEIGHT: u64 = 0x0d80_0000_0000_09a5;
+            let hit_dir = self
+                .world
+                .spatial_frame
+                .as_deref()
+                .and_then(|frame| frame.actor_eye_position(source.killer))
+                .map(|origin| {
+                    let dx = self.world.position[0] - origin[0];
+                    let dz = self.world.position[2] - origin[2];
+                    let len = (dx * dx + dz * dz).sqrt();
+                    if len > 1e-4 {
+                        [dx / len, 0.0, dz / len]
+                    } else {
+                        [0.0, 0.0, -1.0]
+                    }
+                })
+                .unwrap_or([0.0, 0.0, -1.0]);
+            let params = crate::script_wire::Variables::from([
+                (0x13, Value::Float(f64::from(result.dealt as f32))),
+                (
+                    0x3d,
+                    Value::Array(vec![
+                        Value::Asset(TAG_HURT_FLINCH_ANIM),
+                        Value::Asset(TAG_HURT_FLINCH_WEIGHT),
+                    ]),
+                ),
+                (0x65, Value::Vector(hit_dir)),
+            ]);
+            let _ = self.component.queue_entity_message_from(
+                source.killer,
+                DAMAGE_TAKEN_MESSAGE,
+                params,
+            );
         }
         Self::sync_body_health_logged(self);
         result

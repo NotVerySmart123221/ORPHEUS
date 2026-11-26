@@ -1367,10 +1367,7 @@ impl RoomSimulation {
                 .get_mut::<BotState>(entity)
                 .expect("live bot handle")
                 .into_inner();
-            if state.enemy.is_some()
-                || (map.mode_guid == crate::game_content::PRACTICE_RANGE_MODE
-                    && state.bot.spawn.team == 0)
-            {
+            if state.enemy.is_some() {
                 continue;
             }
             let seat = first.saturating_add(offset);
@@ -1966,7 +1963,7 @@ impl RoomSimulation {
         if let Some((catalog, mode)) = &self.stats_catalog {
             let updates = self
                 .scoreboard
-                .collect_board_updates(catalog, *mode, tick, 6);
+                .collect_board_updates(catalog, *mode, tick, 2);
             for (_, update) in updates {
                 self.scripted_health.push(update);
             }

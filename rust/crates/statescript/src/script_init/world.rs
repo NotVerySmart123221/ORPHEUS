@@ -948,6 +948,17 @@ pub trait World {
     fn set_captured_aim_lock(&mut self, _site: Site, _degrees: Option<[f64; 2]>) -> bool {
         false
     }
+    fn queue_modify_health_with_meta(
+        &mut self,
+        site: Site,
+        target: u32,
+        delta: f64,
+        impulse: Option<[f64; 3]>,
+        _loadout: Option<u64>,
+        _tags: HitTags,
+    ) -> bool {
+        self.queue_modify_health(site, target, delta, impulse)
+    }
     fn set_same_team_contact_suppressed(&mut self, _site: Site, _suppressed: bool) -> bool {
         false
     }
